@@ -22,6 +22,10 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
       'web-dashboard/leptos',
       // The number layer the status readers compose with is one of their build inputs (L3).
       'crates/aac-num',
+      // So is the one file policy they read the saved Codex login with (L2).
+      'crates/aac-files',
+      'crates/aac-core',
+      'tests/spec/wire-words.json',
     ]) {
       fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
     }

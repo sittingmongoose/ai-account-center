@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // L2 gate (DESIGN-M3-COMPLETE section 2.2): one file policy. Outside crates/aac-files, no Rust
 // source opens, links, renames or writes a file by itself: no O_NOFOLLOW, custom_flags,
-// OpenOptions, File::open, File::create, fs::write, fs::rename or tempfile persist. Readers use
-// aac_files::read, writers aac_files::OwnedStore. Test modules, tests/ and build scripts are not
-// scanned. Each allowlisted file carries its reason, and an entry that no longer matches anything
-// fails the gate, so the list cannot rot. `--self-test` proves the scan catches a planted copy.
+// OpenOptions, File::open, File::create, fs::read, fs::read_to_string, fs::write, fs::rename or
+// tempfile persist (`fs::read` follows links and blocks on a FIFO swapped in after a check).
+// Readers use aac_files::read, writers aac_files::OwnedStore. Test modules, tests/ and build
+// scripts are not scanned. Each allowlisted file carries its reason, and an entry that no longer
+// matches anything fails the gate, so the list cannot rot. `--self-test` proves the scan catches
+// a planted copy.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +19,8 @@ export const PATTERNS = [
   ['OpenOptions', /\bOpenOptions\b/],
   ['File::open', /\bFile::open\s*\(/],
   ['File::create', /\bFile::create\s*\(/],
+  ['fs::read', /\bfs::read\s*\(/],
+  ['fs::read_to_string', /\bfs::read_to_string\s*\(/],
   ['fs::write', /\bfs::write\s*\(/],
   ['fs::rename', /\bfs::rename\s*\(/],
   ['persist', /\.persist(?:_noclobber)?\s*\(/],
@@ -114,10 +118,12 @@ function matching(source, open) {
       if (i <= 0) return source.length - 1;
       continue;
     }
-    if (c === 'r' && /^r#*"/.test(source.slice(i, i + 8)) && !/\w/.test(source[i - 1] ?? '')) {
-      const hashes = /^r(#*)"/.exec(source.slice(i))[1];
-      const end = source.indexOf(`"${hashes}`, i + hashes.length + 2);
-      i = end < 0 ? source.length : end + hashes.length;
+    // A raw string, `r"..."`, `r#"..."#` or the byte form `br"..."` (L2 review L5): no escapes inside.
+    const raw = /^b?r(#*)"/.exec(source.slice(i, i + 9));
+    if ((c === 'r' || c === 'b') && raw && !/\w/.test(source[i - 1] ?? '')) {
+      const quote = i + raw[0].length - 1;
+      const end = source.indexOf(`"${raw[1]}`, quote + 1);
+      i = end < 0 ? source.length : end + raw[1].length;
       continue;
     }
     if (c === '"') {
@@ -193,6 +199,16 @@ function selfTest() {
     ],
     ['crates/aac-files/src/e.rs', 'fn i() { std::fs::File::open("p"); }\n'],
     ['crates/x/src/f.rs', '// File::open( in a comment\nfn j() {}\n'],
+    [
+      'crates/x/src/g.rs',
+      'fn k() { let _ = std::fs::read(p); let _ = fs::read_to_string(p); }\n' +
+        'fn listing() { fs::read_dir(p); fs::read_link(p); }\n',
+    ],
+    // A byte raw string ending in a backslash must not swallow the module's closing brace.
+    [
+      'crates/x/src/h.rs',
+      'fn ok() {}\n#[cfg(test)]\nmod tests {\n    fn t() { let b = br"\\"; let s = "}"; }\n}\nfn after() { fs::read(p); }\n',
+    ],
   ];
   const { violations } = scan(planted, []);
   const expected = [
@@ -202,6 +218,9 @@ function selfTest() {
     'crates/x/src/c.rs:1: fs::rename',
     'crates/x/src/c.rs:1: persist',
     'crates/x/src/d.rs:6: fs::write',
+    'crates/x/src/g.rs:1: fs::read',
+    'crates/x/src/g.rs:1: fs::read_to_string',
+    'crates/x/src/h.rs:6: fs::read',
   ];
   if (JSON.stringify(violations.sort()) !== JSON.stringify(expected))
     throw new Error(`self-test: ${JSON.stringify(violations)}`);
@@ -215,7 +234,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { violations, stale, unexplained } = scan(rustSources());
   for (const v of violations) console.error(`one-file-policy: ${v} (use aac_files)`);
   for (const s of stale) console.error(`one-file-policy: stale allowlist entry ${s}`);
-  for (const u of unexplained) console.error(`one-file-policy: allowlist entry without a reason ${u}`);
+  for (const u of unexplained)
+    console.error(`one-file-policy: allowlist entry without a reason ${u}`);
   if (violations.length || stale.length || unexplained.length) process.exit(1);
-  console.log(`one-file-policy: no file mechanics outside aac-files (${ALLOWLIST.length} allowlisted)`);
+  console.log(
+    `one-file-policy: no file mechanics outside aac-files (${ALLOWLIST.length} allowlisted)`
+  );
 }

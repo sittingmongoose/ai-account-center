@@ -282,7 +282,8 @@ L2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 2.2). No answer 
   readers check) refuse a row TS does not own.
 - **Gate.** `scripts/foundation/one-file-policy.mjs` (in `tests/spec/run.mjs`): outside
   `crates/aac-files`, no Rust source uses `O_NOFOLLOW`, `custom_flags`, `OpenOptions`,
-  `File::open`, `File::create`, `fs::write`, `fs::rename` or a tempfile persist. The
+  `File::open`, `File::create`, `fs::read`, `fs::read_to_string`, `fs::write`, `fs::rename`
+  or a tempfile persist. The
   allowlist names each exception with its reason (the store engine, the scanner, the Cursor key
   module, the service's own image hash) and fails when an entry no longer matches.
 

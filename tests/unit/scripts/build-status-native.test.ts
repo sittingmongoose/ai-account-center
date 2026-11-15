@@ -36,6 +36,16 @@ for (const receipt of ['missing', 'stale']) {
             recursive: true,
           }
         );
+      // So is the one file policy it reads the saved Codex login with (L2).
+      for (const input of [
+        'crates/aac-files/Cargo.toml',
+        'crates/aac-files/src',
+        'crates/aac-core/Cargo.toml',
+        'crates/aac-core/src',
+        'config/private-files.json',
+        'tests/spec/wire-words.json',
+      ])
+        fs.cpSync(path.join(root, input), path.join(fixture, input), { recursive: true });
       const builder = require(path.join(fixture, 'scripts/build-status-native.js'));
       const prebuilt = path.join(fixture, 'native/aac-status/prebuilt');
       const file = path.join(prebuilt, builder.moduleName());

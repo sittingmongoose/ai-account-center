@@ -104,3 +104,90 @@ for line in sys.stdin:
         assert!(!home.join("sent.json").exists(), "no consume for usage {usage_account}");
     }
 }
+
+/// The saved login read (L2 one file policy) keeps its old answers: missing or corrupt is signed
+/// out, a link, FIFO, folder or oversized file is an unsafe profile, and a FIFO never blocks.
+#[cfg(unix)]
+#[test]
+fn codex_saved_login_read_keeps_absence_and_corruption_answers() {
+    use base64::Engine;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    // No app server is ever started: every case below is answered by the saved-login read, and a
+    // good login reaches the (missing) binary.
+    let binary = dir.path().join("no-such-app-server");
+    let read = |home: &std::path::Path| {
+        aac_status::reset_source::codex_with_binary(
+            home.to_str().unwrap(),
+            "exact-profile",
+            "fixture-host",
+            None,
+            &binary,
+        )
+        .unwrap_err()
+    };
+    let profile = |name: &str| {
+        let home = dir.path().join(name);
+        std::fs::create_dir(&home).unwrap();
+        home
+    };
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        json!({"email":"synthetic-principal","https://api.openai.com/auth":{"chatgpt_account_id":"synthetic-account"}})
+            .to_string(),
+    );
+    // Generated protocol material only: not a stored credential fixture.
+    let login =
+        json!({"tokens":{"account_id":"synthetic-account","id_token":format!("e30.{claims}.fixture")}}).to_string();
+
+    let good = profile("good");
+    std::fs::write(good.join("auth.json"), &login).unwrap();
+    assert_eq!(read(&good), "app-server-unavailable");
+
+    assert_eq!(read(&profile("absent")), "signed-out");
+
+    let corrupt = profile("corrupt");
+    std::fs::write(corrupt.join("auth.json"), b"{\"tokens\":").unwrap();
+    assert_eq!(read(&corrupt), "signed-out");
+
+    let linked = profile("linked");
+    std::os::unix::fs::symlink(good.join("auth.json"), linked.join("auth.json")).unwrap();
+    assert_eq!(read(&linked), "unsafe-profile");
+
+    let folder = profile("folder");
+    std::fs::create_dir(folder.join("auth.json")).unwrap();
+    assert_eq!(read(&folder), "unsafe-profile");
+
+    let large = profile("large");
+    std::fs::write(large.join("auth.json"), vec![b' '; 1024 * 1024 + 1]).unwrap();
+    assert_eq!(read(&large), "unsafe-profile");
+    let full = profile("full");
+    let mut padded = login.clone().into_bytes();
+    padded.resize(1024 * 1024, b' ');
+    std::fs::write(full.join("auth.json"), padded).unwrap();
+    assert_eq!(read(&full), "app-server-unavailable");
+
+    let fifo = profile("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(fifo.join("auth.json"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let fifo_home = fifo.clone();
+    let fifo_binary = binary.clone();
+    std::thread::spawn(move || {
+        let answer = aac_status::reset_source::codex_with_binary(
+            fifo_home.to_str().unwrap(),
+            "exact-profile",
+            "fixture-host",
+            None,
+            &fifo_binary,
+        )
+        .unwrap_err();
+        let _ = tx.send(answer);
+    });
+    let answer = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a FIFO at the saved login must not block the read");
+    assert_eq!(answer, "unsafe-profile");
+}

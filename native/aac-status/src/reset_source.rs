@@ -1,6 +1,7 @@
 //! Profile-bound, short-lived Codex app-server transport. No HTTPS consume guess.
 //! Protocol evidence: local t3code-ref generated V2 schema (creditId is mandatory here).
 use crate::reset::{Grant, Identity, Result, Snapshot, Store};
+use aac_files::read::{self as files, ReadPolicy};
 use base64::Engine;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -92,13 +93,34 @@ impl Rpc {
         }
     }
 }
-fn auth(home: &str) -> Result<(String, String, String)> {
-    let path = Path::new(home).join("auth.json");
-    let meta = std::fs::symlink_metadata(&path).map_err(|_| "signed-out")?;
-    if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1024 * 1024 {
-        return Err("unsafe-profile");
+/// The saved login: a regular file of at most 1 MiB, never a link (L2 one file policy).
+const AUTH_POLICY: ReadPolicy<'static> = ReadPolicy::capped(1024 * 1024);
+
+/// The saved login's bytes through the one hardened read (L2): a link, FIFO or other file swapped
+/// in after the check is never opened or followed. Missing or unreadable is `signed-out`; a link,
+/// a non-file or an oversized file is `unsafe-profile`, as before. A file replaced between its check
+/// and its open (Codex rewrites it on refresh) is read again; one that keeps changing is unproved.
+fn auth_bytes(path: &Path) -> Result<Vec<u8>> {
+    let mut outcome = files::Read::Unproved;
+    for _ in 0..3 {
+        outcome = files::read(path, &AUTH_POLICY);
+        if !matches!(outcome, files::Read::Unproved) {
+            break;
+        }
     }
-    let raw = std::fs::read(path).map_err(|_| "signed-out")?;
+    match outcome {
+        files::Read::Bytes(raw, _) => Ok(raw),
+        files::Read::Absent | files::Read::Unreadable(_) => Err("signed-out"),
+        files::Read::Link
+        | files::Read::NotRegular
+        | files::Read::TooLarge
+        | files::Read::Foreign
+        | files::Read::BadMode
+        | files::Read::Unproved => Err("unsafe-profile"),
+    }
+}
+fn auth(home: &str) -> Result<(String, String, String)> {
+    let raw = auth_bytes(&Path::new(home).join("auth.json"))?;
     let v: Value = serde_json::from_slice(&raw).map_err(|_| "signed-out")?;
     let token = v["tokens"]["id_token"].as_str().ok_or("signed-out")?;
     let body = token.split('.').nth(1).ok_or("signed-out")?;
@@ -159,7 +181,7 @@ fn codex_inner(
     binary: &Path,
     context: Option<&ReadContext<'_>>,
 ) -> Result<Value> {
-    let capture = || Ok((auth(home)?, observed_now()?));
+    let capture = || -> Result<_> { Ok((auth(home)?, observed_now()?)) };
     let ((login_capture, observed_at_ms), read_ticket) = if let Some(context) = context {
         let mut store = Store::open(context.db_path)?;
         let (captured, ticket) = store.capture_identity_read(context.route_account, || {
