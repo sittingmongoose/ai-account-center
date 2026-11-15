@@ -257,7 +257,9 @@ fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
         .ancestors(Ancestors::NoLinkBelow(home))
         .owner(Owner::Mine);
     let value = match aac_files::read::read(&path, &policy) {
-        Read::Link => {
+        // A chain may need directory read access on platforms without O_PATH/O_SEARCH.
+        // Its denial cannot prove Python's named read would fail: decline the whole verb.
+        Read::Link | Read::Unproved | Read::Unreadable(std::io::ErrorKind::PermissionDenied) => {
             crate::proof::reject();
             return None;
         }
@@ -268,9 +270,7 @@ fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
         }
         Read::Bytes(bytes, _) => crate::proof::json(&bytes, CAP, true),
         // Present but not one ordinary file of this user, or unreadable: `read_failed()`.
-        Read::Foreign | Read::NotRegular | Read::BadMode | Read::Unreadable(_) | Read::Unproved => {
-            None
-        }
+        Read::Foreign | Read::NotRegular | Read::BadMode | Read::Unreadable(_) => None,
     };
     if !value.as_ref().is_some_and(Value::is_object) {
         *complete = false;

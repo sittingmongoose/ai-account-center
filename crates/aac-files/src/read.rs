@@ -86,6 +86,18 @@ impl Facts for fs::Metadata {
     }
 }
 
+// Share the conversion with a cfg-independent test at both mode_t widths: Darwin uses u16,
+// Linux uses u32. Keep the cast even where it is an identity conversion.
+#[cfg(any(unix, test))]
+macro_rules! mode_bits {
+    ($mode:expr) => {{
+        #[allow(clippy::unnecessary_cast)]
+        {
+            $mode as u32
+        }
+    }};
+}
+
 /// An `fstatat` result: the leaf's facts before it is opened, relative to the pinned parent.
 #[cfg(unix)]
 struct RawStat(libc::stat);
@@ -105,7 +117,7 @@ impl Facts for RawStat {
         self.0.st_uid
     }
     fn bits(&self) -> u32 {
-        self.0.st_mode
+        mode_bits!(self.0.st_mode)
     }
     // dev_t and ino_t are platform-sized (already u64 on Linux, signed on macOS).
     #[allow(clippy::unnecessary_cast)]
@@ -354,9 +366,9 @@ fn open_named(
 /// The leaf relative to a pinned chain of the folders below `base` (Wonder L12). Each folder is
 /// opened `O_NOFOLLOW | O_DIRECTORY` as it is checked, so a later swap of any of them cannot
 /// redirect the leaf's `lstat` or open. `base` itself may be a link: the caller admitted it (the
-/// walk never checked it). A search-only folder (no read bit) is refused here where the path
-/// walk could still `lstat` through it; the private roots are 0700, and a refusal is the safe
-/// direction.
+/// walk never checked it). Search-capable descriptors preserve access through search-only
+/// folders; other platforms retain the read-only open and callers must decline on a chain's
+/// `PermissionDenied` when equivalence with the reference cannot be proved.
 #[cfg(unix)]
 fn open_below(
     base: &Path,
@@ -368,8 +380,7 @@ fn open_below(
         return Err(Read::Unproved);
     };
     let parts: Vec<_> = rest.components().collect();
-    let mut dir =
-        open_at(None, base.as_os_str(), libc::O_RDONLY | libc::O_DIRECTORY).map_err(open_error)?;
+    let mut dir = open_at(None, base.as_os_str(), directory_flags()).map_err(open_error)?;
     for part in parts.iter().take(parts.len().saturating_sub(1)) {
         // Check the name, then pin it: a link is refused before the open, and a swap between
         // the two is caught by the open's own `O_NOFOLLOW | O_DIRECTORY`.
@@ -380,7 +391,7 @@ fn open_below(
         dir = open_at(
             Some(&dir),
             part.as_os_str(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            directory_flags() | libc::O_NOFOLLOW,
         )
         .map_err(|error| match error.raw_os_error() {
             Some(libc::ELOOP) => Read::Link,
@@ -420,6 +431,32 @@ fn open_below(
         }
     })?;
     opened_checks(file, &before, policy)
+}
+
+/// Pin a directory without requiring listing permission where the platform supports it.
+#[cfg(unix)]
+fn directory_flags() -> libc::c_int {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let access = libc::O_PATH;
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "solaris",
+        target_os = "illumos"
+    ))]
+    let access = libc::O_SEARCH;
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "solaris",
+        target_os = "illumos"
+    )))]
+    let access = libc::O_RDONLY;
+    access | libc::O_DIRECTORY
 }
 
 /// The descriptor's own admission: type, identity against the earlier stat, then owner/mode/size.
@@ -626,6 +663,15 @@ mod tests {
 
     fn plain(cap: u64) -> ReadPolicy<'static> {
         ReadPolicy::capped(cap)
+    }
+
+    #[test]
+    fn stat_mode_bits_widen_both_narrow_and_wide_platform_types() {
+        // Removing the shared cast fails to compile this u16 case even on Linux.
+        let narrow: u32 = mode_bits!(0o100600_u16);
+        let wide: u32 = mode_bits!(0o100600_u32);
+        assert_eq!(narrow, wide);
+        assert_eq!(narrow, 0o100600);
     }
 
     #[test]

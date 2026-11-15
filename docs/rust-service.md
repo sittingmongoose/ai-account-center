@@ -281,8 +281,11 @@ L2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 2.2). No answer 
   leaf's own open is `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC`, with a (dev, ino)
   identity check against its lstat. With `Ancestors::Any` the caller admitted the folders (or
   the reference follows them) and the leaf is opened by path; the identity check still holds
-  for the final name. A search-only folder (no read bit) is refused by the chain where the
-  path walk could lstat through it; the private roots are 0700. On Windows the open is the
+  for the final name. Directory descriptors use `O_PATH | O_DIRECTORY` on Linux/Android and
+  `O_SEARCH | O_DIRECTORY` on macOS, FreeBSD, NetBSD, Solaris and illumos, preserving named
+  reads through search-only folders. Other Unix platforms keep `O_RDONLY | O_DIRECTORY`;
+  a chain's `PermissionDenied` declines the whole agent verb to the labelled Python reference
+  (`{"fallback":"python"}`), rather than serving an incomplete inventory. On Windows the open is the
   reference's plain open (owner, mode and identity pass trivially); native qualification is
   an M4 gate item.
 - **One path rule set.** `aac_files::path`: `python::{double_root, canonical_home, normpath}`,
