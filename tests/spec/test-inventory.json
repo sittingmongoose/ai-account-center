@@ -259,6 +259,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/store_host.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/table.rs",
       "kind": "internal",
       "evidence": [],
@@ -313,6 +319,12 @@
       "evidence": [
         "table"
       ]
+    },
+    {
+      "file": "crates/aac-http/tests/store_host.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-num/src/big.rs",
@@ -382,6 +394,255 @@
     },
     {
       "file": "crates/aac-providers/tests/drift.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/computers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/read_context.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/scoreboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/spend.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/ops.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/pinned.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/pins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/remote_pins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset_alias.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset_any_usage.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-status/tests/reset_claude_source.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-status/tests/reset_concurrent.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset_evidence.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset_history_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-status/tests/reset_review_controls.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset_review_grants.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset_source.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-status/tests/reset_source_overlap.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-status/tests/scoreboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/spend.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/status_doc.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/activity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/contract.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/frame.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/msgpack.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/pack.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/run_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-store/src/run_schema.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/src/secret.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-store/tests/activity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/log_recovery.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/replay_memory.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/store_capture.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-store/tests/store_packed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/store_review.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/store_runs.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/store_storage_health.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/store_usage.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-store/tests/zstd_levels.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -488,255 +749,6 @@
     },
     {
       "file": "native/aac-cursor-account/tests/cursor_account.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/src/computers.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/src/read_context.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/src/scoreboard.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/src/spend.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/ops.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/pinned.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/pins.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/remote_pins.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/reset.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/reset_alias.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/reset_any_usage.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "native/aac-status/tests/reset_claude_source.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "native/aac-status/tests/reset_concurrent.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/reset_evidence.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/reset_history_identity.rs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "native/aac-status/tests/reset_review_controls.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/reset_review_grants.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/reset_source.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "native/aac-status/tests/reset_source_overlap.rs",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "native/aac-status/tests/scoreboard.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/spend.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-status/tests/status_doc.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/src/activity.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/src/contract.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/src/frame.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/src/msgpack.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/src/pack.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/src/run_identity.rs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "native/aac-store/src/run_schema.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/src/secret.rs",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "native/aac-store/tests/activity.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/tests/log_recovery.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/tests/replay_memory.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/tests/store_capture.rs",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "native/aac-store/tests/store_packed.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/tests/store_review.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/tests/store_runs.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/tests/store_storage_health.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "native/aac-store/tests/store_usage.rs",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "native/aac-store/tests/zstd_levels.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2213,6 +2225,12 @@
     },
     {
       "file": "tests/unit/store/store-command.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/store-host.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

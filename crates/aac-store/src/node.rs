@@ -18,6 +18,7 @@ pub fn binding_version() -> u32 {
 
 /// Compiled store identity; reading it never opens the store.
 #[napi]
+#[allow(dead_code)]
 pub fn build_identity() -> String {
     crate::build_identity().to_string()
 }
