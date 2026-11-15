@@ -283,24 +283,17 @@ fn checked_round(value: f64) -> Result<i64> {
     }
 }
 
-/// JavaScript's `toFixed(places)` for non-negative values: the integer n whose n/10^places
-/// is closest to the value (ties to the larger n), with the decimals kept ("0.0", not "0").
-/// The comparison divides, as the ECMAScript spec does — multiplying instead turns 4.85
-/// into "4.9" where every JavaScript engine prints "4.8". Scaled units outside the safe
-/// integer range refuse the input.
+/// JavaScript's `value.toFixed(places)`: `aac_num::ecma::to_fixed`, the integer n for which n/10^places is
+/// closest to the exact binary value, the larger n on a tie, with the decimals kept ("0.0", not "0"). The
+/// copy this replaces compared n/10^places with the value in binary64 and misread values beside a tie: 0.185
+/// to two places wrote "0.19" where every JavaScript engine writes "0.18" (L3). The domain is unchanged: a
+/// figure whose scaled units leave the safe integer range refuses the input.
 fn to_fixed(value: f64, places: u32) -> Result<String> {
-    let scale = 10f64.powi(places as i32);
-    let low = (value * scale).floor();
-    let below = (low / scale - value).abs();
-    let above = ((low + 1.0) / scale - value).abs();
-    let units = if above <= below { low + 1.0 } else { low };
+    let units = value * 10f64.powi(places as i32);
     if beyond_safe(units) {
         return Err(out_of_range(units));
     }
-    let units = units as i64;
-    let whole = units / 10i64.pow(places);
-    let part = units % 10i64.pow(places);
-    Ok(format!("{whole}.{part:0places$}", places = places as usize))
+    aac_num::ecma::to_fixed(value, places).ok_or_else(|| out_of_range(value))
 }
 
 fn pct_text(share: f64) -> Result<String> {
