@@ -111,15 +111,14 @@ fn regular(_path: &Path, _optional: bool, _owned: bool) -> Checked<Option<Vec<u8
 }
 
 fn entries(path: &Path, cap: usize) -> Checked<Vec<fs::DirEntry>> {
-    let values: Vec<_> = fs::read_dir(path)
+    // An entry error or more than `cap` entries refuses the listing.
+    let values: Vec<_> = aac_files::read::entries(path, cap)
         .map_err(|_| ())?
-        .take(cap + 1)
         .collect::<Result<_, _>>()
         .map_err(|_| ())?;
-    if values.len() > cap
-        || values
-            .iter()
-            .any(|e| e.file_name().to_str().is_none_or(|s| !proof::ascii(s)))
+    if values
+        .iter()
+        .any(|e| e.file_name().to_str().is_none_or(|s| !proof::ascii(s)))
     {
         return Err(());
     }
@@ -668,7 +667,7 @@ fn mac_native() -> Checked<Value> {
     let archive = root.join("Resources/app.asar");
     directory(archive.parent().ok_or(())?)?;
     // `before` is the descriptor's own metadata: the checked, opened inode.
-    let (mut file, before) = crate::files::open_regular(&archive, 1_000_000_000).map_err(|_| ())?;
+    let (mut file, before) = crate::files::open_regular(&archive, 1_000_000_000).ok_or(())?;
     let mut header = [0u8; 16];
     file.read_exact(&mut header).map_err(|_| ())?;
     let word =

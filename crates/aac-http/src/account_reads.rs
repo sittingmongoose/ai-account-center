@@ -7,17 +7,12 @@
 use serde_json::{Map, Value, json};
 
 type Object = Map<String, Value>;
-use crate::private_file::{Capped, read_capped};
+use aac_files::read::{Leaf, Mode, Read};
 use std::{fs, os::unix::fs::MetadataExt, path::Path};
 // The dashboard providers, usage-log tools, field-mapping keys and the frozen legacy storage
 // hosts are the shared tables' (config/tables, `aac-providers`), which TS reads too.
 use aac_providers::{LEGACY_STORAGE_HOSTS, USAGE_LOG_FIELD_MAPPING, is_dashboard_provider};
 
-const VISIBILITY_FILE: &str = "account-visibility.json";
-const MAX_VISIBILITY_BYTES: u64 = 32 * 1024;
-const PREFERENCES_FILE: &str = "dashboard-preferences.json";
-const EXTRA_SOURCES_FILE: &str = "dashboard-preferences-extra-sources.json";
-const MAX_PREFERENCES_BYTES: u64 = 64 * 1024;
 pub(crate) const COMPUTERS: &str = include_str!("../../../web-dashboard/public/computers.json");
 
 /// IANA zones Rust admits for the saved display zone. `tests/spec/account-read-parity.ts`
@@ -214,8 +209,9 @@ pub(crate) fn visibility(root: &Path) -> Option<Value> {
     let warnings = store_folder(root)?;
     // `readPrivateJsonFile`: absent is empty lists; a symlink, a non-file, an oversized file or
     // one that group/other can read is its `invalid` state (TS answers it).
-    let lists = match read_capped(&root.join(VISIBILITY_FILE), MAX_VISIBILITY_BYTES)? {
-        Capped::Absent => json!({
+    let (file, policy) = crate::registered::file(root, "account-visibility")?;
+    let lists = match aac_files::read::read(&file, &policy.mode(Mode::Private)) {
+        Read::Absent => json!({
             "hiddenProviders": [],
             "hiddenAccountIds": [],
             "trayHiddenProviders": [],
@@ -223,10 +219,8 @@ pub(crate) fn visibility(root: &Path) -> Option<Value> {
         }),
         // serde_json (preserve_order) keeps JSON.parse's duplicate-key answer: the last value at
         // the first position. Lone surrogates and invalid UTF-8 fail here and use the TS reader.
-        Capped::Bytes { bytes, mode } if mode & 0o077 == 0 => {
-            parse_visibility(&serde_json::from_slice(&bytes).ok()?)?
-        }
-        Capped::Symlink | Capped::TooLarge | Capped::Bytes { .. } => return None,
+        Read::Bytes(bytes, _) => parse_visibility(&serde_json::from_slice(&bytes).ok()?)?,
+        _ => return None,
     };
     Some(json!({ "visibility": lists, "folderWarnings": warnings }))
 }
@@ -423,10 +417,11 @@ fn defaults() -> Object {
 fn primary(root: &Path, hosts: &[(String, String)]) -> Option<Object> {
     // Absent or a symlink: the defaults, unlogged. Oversized (TS logs it), a non-file and every
     // unexpected open error: the TS reader.
-    let bytes = match read_capped(&root.join(PREFERENCES_FILE), MAX_PREFERENCES_BYTES)? {
-        Capped::Absent | Capped::Symlink => return Some(defaults()),
-        Capped::TooLarge => return None,
-        Capped::Bytes { bytes, .. } => bytes,
+    let (file, policy) = crate::registered::file(root, "dashboard-preferences")?;
+    let bytes = match aac_files::read::read(&file, &policy.leaf(Leaf::Absent)) {
+        Read::Absent => return Some(defaults()),
+        Read::Bytes(bytes, _) => bytes,
+        _ => return None,
     };
     let value: Value = serde_json::from_slice(&bytes).ok()?;
     let prefs = record(&value)?;
@@ -472,11 +467,11 @@ pub(crate) fn preferences(root: &Path) -> Option<Value> {
     let primary = primary(root, &hosts)?;
     // TS keeps the primary for an absent, symlinked or oversized companion; a non-file or an
     // unexpected open error is left to the TS reader.
-    let bytes = match read_capped(&root.join(EXTRA_SOURCES_FILE), MAX_PREFERENCES_BYTES)? {
-        Capped::Absent | Capped::Symlink | Capped::TooLarge => {
-            return Some(Value::Object(primary));
-        }
-        Capped::Bytes { bytes, .. } => bytes,
+    let (file, policy) = crate::registered::file(root, "dashboard-preferences-extra-sources")?;
+    let bytes = match aac_files::read::read(&file, &policy.leaf(Leaf::Absent)) {
+        Read::Absent | Read::TooLarge => return Some(Value::Object(primary)),
+        Read::Bytes(bytes, _) => bytes,
+        _ => return None,
     };
     // Text JSON.parse accepts but serde_json refuses (lone surrogates, invalid UTF-8): TS decides.
     let value: Value = serde_json::from_slice(&bytes).ok()?;

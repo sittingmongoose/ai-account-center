@@ -1,13 +1,13 @@
 //! Bounded read-only file candidates. The source handle is confined before any bytes are read.
 //! The TS front door keeps MIME/cache/security headers, range policy and the legacy stream for
 //! unsupported hosts or files larger than the private JSON transport's cap.
+use aac_files::read::{ReadPolicy, opened_path};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Seek, SeekFrom},
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -49,20 +49,20 @@ fn confined(root: &Path, base: &str, relative: &str) -> Option<(File, u64)> {
     {
         return None;
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&target)
-        .ok()?;
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() {
-        return None;
-    }
+    let (file, size) = open_resolved(&target)?;
     // Like the share route, require the opened descriptor's exact path. Unsupported hosts
     // delegate to TS rather than substituting a path-only race check.
-    if fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()? != target {
+    if opened_path(&file)? != target {
         return None;
     }
+    Some((file, size))
+}
+
+/// The resolved target through the one hardened open: a regular file, never a link, opened
+/// without blocking, the descriptor proved to be the checked inode. The callers apply their own
+/// size rules (a media type's cap is known only after its header is read).
+fn open_resolved(target: &Path) -> Option<(File, u64)> {
+    let (file, meta) = aac_files::read::open(target, &ReadPolicy::capped(u64::MAX)).ok()?;
     Some((file, meta.len()))
 }
 
@@ -479,20 +479,12 @@ fn confined_media(root: &Path, writer: &str, path: &str) -> Option<(File, u64)> 
     if !target.starts_with(&base) || target == base {
         return None;
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&target)
-        .ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
-    let opened = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()?;
+    let (file, size) = open_resolved(&target)?;
+    let opened = opened_path(&file)?;
     if !opened.starts_with(&base) || opened == base {
         return None;
     }
-    Some((file, metadata.len()))
+    Some((file, size))
 }
 
 #[cfg(test)]

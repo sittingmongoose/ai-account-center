@@ -2,6 +2,7 @@
 mod parse;
 use crate::{files, proof};
 use aac_core::{Cause, Failure, UtcMs};
+use aac_files::read::{Ancestors, ReadPolicy};
 // Plan-common's retry policy, including its invalid-header default, is the table's
 // `planRetryAfter`; the plan providers and their labels are its `quota: true` rows.
 use aac_providers::{PLAN_RETRY_AFTER, ProviderId};
@@ -86,11 +87,8 @@ impl Http for Client {
 /// absent; a link (final or below the home), FIFO, other non-file, oversized or failed read is
 /// unproved and delegates, so Python's own reader decides what that store holds.
 fn load(home: &Path, path: &Path) -> Option<Value> {
-    if files::linked_below(home, path) {
-        proof::reject();
-        return None;
-    }
-    match files::read_regular(path, CAP) {
+    let policy = ReadPolicy::capped(CAP as u64).ancestors(Ancestors::NoLinkBelow(home));
+    match files::read_with(path, &policy) {
         files::Regular::Missing => None,
         files::Regular::Read(bytes, _) => proof::json(&bytes, CAP, false),
         _ => {
@@ -127,12 +125,10 @@ fn key_credential(provider: &str, home: &Path, selector: &Value) -> Value {
         }
         let path = directory.join(format!("{provider}-{id}.json"));
         // Any record that is not one private ordinary file reads as unreadable, as before.
-        let files::Regular::Read(bytes, info) = files::read_regular(&path, 4096) else {
+        let private = ReadPolicy::capped(4096).mode(aac_files::read::Mode::Private);
+        let files::Regular::Read(bytes, _) = files::read_with(&path, &private) else {
             return Value::Null;
         };
-        if info.mode() & 0o077 != 0 {
-            return Value::Null;
-        }
         let Some(record) = proof::json(&bytes, 4096, false) else {
             return Value::Null;
         };

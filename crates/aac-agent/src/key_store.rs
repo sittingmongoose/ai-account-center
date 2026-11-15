@@ -3,7 +3,7 @@ use crate::proof;
 use aac_core::{Cause, Failure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Write, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 fn refused() -> Failure {
     Failure::new(Cause::Refused, "key store could not be written safely")
@@ -48,9 +48,8 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     if !home.is_absolute() || !home.to_str().is_some_and(proof::ascii) {
         return Ok(proof::fallback());
     }
-    let directory = home.join(".ccs/account-usage/keys");
     let name = format!("{provider}-{id}.json");
-    let target = directory.join(&name);
+    let target = home.join(".ccs/account-usage/keys").join(&name);
     if action == "delete" {
         match fs::symlink_metadata(&target) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -97,44 +96,18 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     payload.push(b'\n');
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-        fs::create_dir_all(directory.parent().ok_or_else(refused)?).map_err(|_| refused())?;
-        match fs::DirBuilder::new().mode(0o700).create(&directory) {
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            r => r.map_err(|_| refused())?,
-        }
-        let meta = fs::symlink_metadata(&directory).map_err(|_| refused())?;
-        if !meta.is_dir() || meta.file_type().is_symlink() || meta.uid() != uid() {
-            return Err(refused());
-        }
-        if meta.mode() & 0o077 != 0 {
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        // The registry row `account-keys` (config/private-files.json): `key_store.py`'s folder
+        // rule (parents at the umask, `keys` 0700, a real folder of this user, tightened), a
+        // lease on that folder (a lock file would join the listing Python counts), then one
+        // 0600 file staged with O_EXCL beside the target, fsynced, renamed and the folder synced.
+        let store =
+            aac_files::registry::claim_as_agent("account-keys", &home.join(".ccs"), Some(&name))
                 .map_err(|_| refused())?;
-        }
-        // tempfile uses O_EXCL, mode 0600 and an owned random name; persist is atomic rename.
-        let mut temporary = tempfile::Builder::new()
-            .prefix(&format!(".{name}."))
-            .suffix(".tmp")
-            .tempfile_in(&directory)
-            .map_err(|_| refused())?;
-        temporary.write_all(&payload).map_err(|_| refused())?;
-        temporary
-            .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| refused())?;
-        temporary.as_file().sync_all().map_err(|_| refused())?;
-        temporary.persist(&target).map_err(|_| refused())?;
+        store.write(&payload).map_err(|_| refused())?;
         Ok(json!({"ok":true,"fingerprint":fingerprint,"last4":last4}))
     }
     #[cfg(not(unix))]
     {
         Ok(proof::fallback())
     }
-}
-
-#[cfg(unix)]
-#[allow(unsafe_code)]
-pub(crate) fn uid() -> u32 {
-    // SAFETY: getuid has no arguments, memory access or failure state.
-    unsafe { libc::getuid() }
 }

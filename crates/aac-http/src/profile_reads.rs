@@ -8,22 +8,21 @@
 //! registry and display-safe login fields, collector rows, renewal notes, the Antigravity
 //! runtime). Nothing here scans, refreshes a provider or opens a credential. `None` asks for
 //! the logged TS fallback.
-use crate::private_file::{Capped, read_capped};
+use aac_files::read::Read;
 use aac_status::read_context::Envelope;
 use serde_json::{Value, json};
 use std::path::Path;
 
-const DESKTOP_MANIFEST: &str = "claude-desktop-profiles.json";
-/// TS refuses more than 1 MiB of UTF-16 text; at most 1 MiB of UTF-8 is always within that.
-const MAX_DESKTOP_MANIFEST_BYTES: u64 = 1024 * 1024;
-
 /// `listClaudeDesktopProfileMetadata`'s rows. TS reads through a symlink and may accept a
 /// larger multi-byte manifest, so both stay with the TS reader.
+/// The registry row's 1 MiB cap: TS refuses more than 1 MiB of UTF-16 text, and at most 1 MiB of
+/// UTF-8 is always within that.
 fn desktop_profiles(root: &Path) -> Option<Value> {
-    match read_capped(&root.join(DESKTOP_MANIFEST), MAX_DESKTOP_MANIFEST_BYTES)? {
-        Capped::Absent => Some(json!({ "profiles": [] })),
-        Capped::Bytes { bytes, .. } => aac_views::claude_desktop::profiles(&bytes).ok(),
-        Capped::Symlink | Capped::TooLarge => None,
+    let (file, policy) = crate::registered::file(root, "claude-desktop-profiles")?;
+    match aac_files::read::read(&file, &policy) {
+        Read::Absent => Some(json!({ "profiles": [] })),
+        Read::Bytes(bytes, _) => aac_views::claude_desktop::profiles(&bytes).ok(),
+        _ => None,
     }
 }
 

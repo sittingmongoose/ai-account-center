@@ -377,3 +377,16 @@ Python's answer or the fallback, as listed in `SHAPES`. The two ambient witnesse
 `home`, so the agent reads HOME and the selector from its own environment. `--foreign-root`
 names a folder whose new files have another owner (an NFS export that maps every file to one
 user); without it the owner witness is skipped.
+
+## One file policy (L2)
+
+Every verb reads, lists and writes through `aac-files` (`aac_files::read`, `aac_files::path`,
+`OwnedStore`); `crates/aac-agent/src/files.rs` keeps only the agent's grouping of a `Read`
+outcome (`Regular`) and the decline recorder. Every count above is unchanged.
+
+`key_store_review.py <aac-agent> [--baseline]` runs real key-store puts under `sync-log.c`
+(LD_PRELOAD; Linux and `cc`): the staged file is fsynced and, after the rename, the keys folder
+too; killed at the data fsync the committed key is whole, killed at the folder fsync the new key
+is whole; a held folder lease refuses the write; answers, bytes and modes equal
+`key_store.put`, and no lock file joins the folder. `--baseline` expects the base's
+behaviour (no folder fsync, no lease).
