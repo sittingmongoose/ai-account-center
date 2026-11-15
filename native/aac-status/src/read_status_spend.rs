@@ -149,7 +149,7 @@ fn budget_text(b: &V) -> Option<String> {
 fn labels(i: &Inputs) -> HashMap<String, String> {
     let mut labels = HashMap::new();
     let mut clash = HashSet::new();
-    for row in array(&i.data["reports"]["tasks"]) {
+    for row in rows(&i.data["reports"]["tasks"]) {
         let id = s(&row["doc"]["stream"]).to_owned();
         let label = row["doc"]["streamLabel"].as_str().unwrap_or(&id).to_owned();
         if labels.get(&id).is_some_and(|v| v != &label) {

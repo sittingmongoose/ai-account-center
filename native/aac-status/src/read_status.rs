@@ -1,6 +1,6 @@
 //! Status view composition over collected snapshots. Collectors and guarded write protocols keep
 //! their owners; every value and sentence in the read response is composed here.
-use crate::read_context::{Context, Envelope, age, age_of, array, js_whitespace, number, plural, s};
+use crate::read_context::{Context, Envelope, age, age_of, array, js_whitespace, number, plural, rows, s};
 use aac_num::{ecma, view};
 use serde_json::{Value as V, json};
 use std::collections::{HashMap, HashSet};
@@ -12,12 +12,51 @@ mod panels;
 mod spend;
 #[path = "read_status_strip.rs"]
 mod strip;
-struct Inputs {
-    data: V,
+/// The composer's input object: the presentation envelope's `data` (owned), or R2's fed generations, each a JSON
+/// object of some of its top-level members, borrowed from the generations a request names (no copy per request).
+/// Indexing by a top-level key reads like `Value` indexing: an absent member is `null`.
+pub(crate) enum Data<'a> {
+    Whole(V),
+    Parts(Vec<(&'a str, &'a V)>),
+}
+static NULL: V = V::Null;
+impl Data<'_> {
+    pub(crate) fn get(&self, key: &str) -> Option<&V> {
+        match self {
+            Data::Whole(v) => v.get(key),
+            Data::Parts(parts) => parts.iter().find(|(k, _)| *k == key).map(|(_, v)| *v),
+        }
+    }
+}
+impl std::ops::Index<&str> for Data<'_> {
+    type Output = V;
+    fn index(&self, key: &str) -> &V {
+        self.get(key).unwrap_or(&NULL)
+    }
+}
+struct Inputs<'a> {
+    data: Data<'a>,
     ctx: Context,
     now: i64,
+    /// The writers of open question, judgement and action cards, found once per view (`stale_thread` asks for
+    /// every thread and every card's asker).
+    owner_cards: std::cell::OnceCell<OwnerCards>,
 }
-impl Inputs {
+/// Writer values, compared as `Value`s compare: strings by text, anything else by value.
+#[derive(Default)]
+struct OwnerCards {
+    strings: HashSet<String>,
+    other: Vec<V>,
+}
+impl OwnerCards {
+    fn has(&self, writer: &V) -> bool {
+        match writer.as_str() {
+            Some(text) => self.strings.contains(text),
+            None => self.other.contains(writer),
+        }
+    }
+}
+impl Inputs<'_> {
     fn at(&self, v: &V) -> Option<i64> {
         self.ctx.epoch(v)
     }
@@ -39,11 +78,25 @@ impl Inputs {
             return Some(true);
         }
         let owner = row["doc"]["blockedOn"]["kind"] == "owner"
-            || array(&self.data["reports"]["cards"]).iter().any(|c| {
-                c["writer"] == row["writer"]
-                    && c["doc"]["state"] == "open"
-                    && ["question", "judgement", "action"].contains(&s(&c["doc"]["kind"]))
-            });
+            || self
+                .owner_cards
+                .get_or_init(|| {
+                    let mut found = OwnerCards::default();
+                    for c in rows(&self.data["reports"]["cards"]) {
+                        if c["doc"]["state"] == "open"
+                            && ["question", "judgement", "action"].contains(&s(&c["doc"]["kind"]))
+                        {
+                            match c["writer"].as_str() {
+                                Some(text) => {
+                                    found.strings.insert(text.to_owned());
+                                }
+                                None => found.other.push(c["writer"].clone()),
+                            }
+                        }
+                    }
+                    found
+                })
+                .has(&row["writer"]);
         if owner {
             return Some(false);
         }
@@ -106,11 +159,14 @@ fn span(seconds: f64) -> String {
         format!("{}s", seconds.floor())
     }
 }
+/// status-view-panels.ts `partProblemText`: `${item}: ${reason}`. TS writes any `item` through `String()`
+/// ("undefined" when absent) and throws on a reason that is not a string, so anything but two strings declines
+/// (R2 fuzz: a problem without an item was served as ": ..." where TS writes "undefined: ...").
 fn part_problem(i: &Inputs, p: &V) -> Option<String> {
     Some(format!(
         "{}: {} (since {}).",
-        s(&p["item"]),
-        trim_period(s(&p["reason"])),
+        p["item"].as_str()?,
+        trim_period(p["reason"].as_str()?),
         i.clock(i.at(&p["since"])?)
     ))
 }
@@ -273,8 +329,8 @@ fn reports_source(i: &Inputs) -> Option<V> {
                 "ok",
                 format!(
                     "{} and {} read {}.{limits}",
-                    plural(array(&r["threads"]).len(), "thread"),
-                    plural(array(&r["cards"]).len(), "card"),
+                    plural(rows(&r["threads"]).len(), "thread"),
+                    plural(rows(&r["cards"]).len(), "card"),
                     i.clock(at?)
                 ),
             )
@@ -299,11 +355,11 @@ fn thread_name(row: &V) -> String {
 fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
     let mut rows = Vec::new();
     let mut reporting = HashSet::new();
-    for row in array(&i.data["reports"]["threads"]) {
-        let name = thread_name(&row);
+    for row in crate::read_context::rows(&i.data["reports"]["threads"]) {
+        let name = thread_name(row);
         reporting.insert(name.clone());
         reporting.insert(s(&row["writer"]).split_once('.')?.1.to_owned());
-        let at = i.seen(&row)?;
+        let at = i.seen(row)?;
         if i.now - at > 86_400_000 && row["doc"]["state"] != "blocked" {
             continue;
         }
@@ -311,10 +367,11 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
             - number(&row["firstSeenAt"])?)
             / 1000.0;
         let d = &row["doc"];
-        rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(&row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
+        rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
     }
-    for thread in array(&i.data["registry"]["data"]) {
-        if reporting.contains(s(&thread["name"])) || array(&i.data["hiddenThreadNames"]).contains(&thread["name"]) {
+    let hidden = crate::read_context::rows(&i.data["hiddenThreadNames"]);
+    for thread in crate::read_context::rows(&i.data["registry"]["data"]) {
+        if reporting.contains(s(&thread["name"])) || hidden.contains(&thread["name"]) {
             continue;
         }
         let Some(at) = i.at(&thread["lastSeen"]) else {
@@ -332,7 +389,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
         } else {
             V::Null
         };
-        rows.push(json!({"name":thread["name"],"writer":null,"machine":thread["machine"],"project":null,"stream":null,"state":null,"doing":thread["about"],"blockedOn":null,"progress":null,"model":null,"effort":null,"account":null,"source":"pm-mail","lastSeen":thread["lastSeen"],"ageSeconds":i.age(Some(at)),"stale":!file_problem.is_null()||i.now-at>1_800_000,"clockAheadSeconds":null,"problem":file_problem,"registrySource":part_ref(i,registry,&i.data["registry"],Some(&thread),"Not in the pm-mail registry.")?}));
+        rows.push(json!({"name":thread["name"],"writer":null,"machine":thread["machine"],"project":null,"stream":null,"state":null,"doing":thread["about"],"blockedOn":null,"progress":null,"model":null,"effort":null,"account":null,"source":"pm-mail","lastSeen":thread["lastSeen"],"ageSeconds":i.age(Some(at)),"stale":!file_problem.is_null()||i.now-at>1_800_000,"clockAheadSeconds":null,"problem":file_problem,"registrySource":part_ref(i,registry,&i.data["registry"],Some(thread),"Not in the pm-mail registry.")?}));
     }
     let rank = |r: &V| {
         ["blocked", "waiting", "working", "paused", "idle", "done"]
@@ -380,7 +437,7 @@ fn completion(c: &V) -> Option<V> {
 }
 fn projects(i: &Inputs) -> Option<Vec<V>> {
     let mut groups: Vec<(String, V, Vec<V>)> = Vec::new();
-    let mut tasks = array(&i.data["reports"]["tasks"]);
+    let mut tasks: Vec<&V> = rows(&i.data["reports"]["tasks"]).iter().collect();
     tasks.sort_by(|a, b| {
         i.seen(b)
             .cmp(&i.seen(a))
@@ -409,10 +466,10 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
             }
             item["ageSeconds"] = i.age(i.at(&item["updatedAt"]));
         }
-        let seen = i.seen(&row)?;
+        let seen = i.seen(row)?;
         groups[at].2.push(json!({"id":d["stream"],"label":d.get("streamLabel").filter(|v|!v.is_null()).unwrap_or(&d["stream"]),"owner":d["owner"],"goal":d["goal"],"writer":row["writer"],"board":i.board(&d["board"]),"source":"tasks","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":!row["problem"].is_null()||i.now-seen>86_400_000,"problem":row["problem"]["reason"],"counts":counts,"completion":completion(&counts)?,"items":items}));
     }
-    let mut threads = array(&i.data["reports"]["threads"]);
+    let mut threads: Vec<&V> = rows(&i.data["reports"]["threads"]).iter().collect();
     threads.sort_by_key(|r| std::cmp::Reverse(i.seen(r)));
     for row in threads {
         let d = &row["doc"];
@@ -431,8 +488,8 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
         if groups[at].2.iter().any(|s| s["id"] == d["stream"]) {
             continue;
         }
-        let seen = i.seen(&row)?;
-        groups[at].2.push(json!({"id":d["stream"],"label":d["stream"],"owner":thread_name(&row),"goal":null,"writer":row["writer"],"board":i.board(&link["path"]),"source":"board-only","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":i.stale_thread(&row)?,"problem":row["problem"]["reason"],"counts":null,"completion":null,"items":[]}));
+        let seen = i.seen(row)?;
+        groups[at].2.push(json!({"id":d["stream"],"label":d["stream"],"owner":thread_name(row),"goal":null,"writer":row["writer"],"board":i.board(&link["path"]),"source":"board-only","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":i.stale_thread(row)?,"problem":row["problem"]["reason"],"counts":null,"completion":null,"items":[]}));
     }
     let mut out = Vec::new();
     for (id, label, mut streams) in groups {
@@ -454,49 +511,88 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     }
     let now = envelope.data["now"].as_i64()?;
     let i = Inputs {
-        data: envelope.data,
+        data: Data::Whole(envelope.data),
         ctx: Context::new(envelope.presentation),
         now,
+        owner_cards: std::cell::OnceCell::new(),
     };
+    let view = view(&i)?;
+    i.ctx.valid().then_some(view)
+}
+/// Why a fed composition did not build: a fact it read is missing (a time's words, an epoch, a rank), or an input
+/// it cannot prove (a shape, a number outside the proved domain).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unproven {
+    Facts,
+    Input,
+}
+/// R2: the same view from fed generations. `parts` are the generations' top-level members (each generation
+/// already passed [`fed_part`]); `facts` the facts generation's presentation; `now` the request's clock and its
+/// date facts. Byte-equal to [`compose`] of the envelope those parts and facts make.
+pub fn compose_fed(
+    parts: Vec<(&str, &V)>,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+) -> Result<V, Unproven> {
+    let at = now.0;
+    let i = Inputs {
+        data: Data::Parts(parts),
+        ctx: Context::shared(facts, Some(now)),
+        now: at,
+        owner_cards: std::cell::OnceCell::new(),
+    };
+    let view = view(&i);
+    match view {
+        Some(view) if i.ctx.valid() => Ok(view),
+        _ if !i.ctx.valid() => Err(Unproven::Facts),
+        _ => Err(Unproven::Input),
+    }
+}
+/// R2: one fed generation's data as the composer reads it: a JSON object of top-level members, none of which holds
+/// an `Object.prototype` member name (the envelope's own gate, applied once per generation). None declines it.
+pub fn fed_part(data: &V) -> Option<()> {
+    (data.is_object() && !crate::read_context::proto_named(data)).then_some(())
+}
+fn view(i: &Inputs) -> Option<V> {
     for key in ["threads", "tasks", "cards", "problems"] {
         i.data["reports"][key].as_array()?;
     }
-    let registry = collected_source(&i, "pm-mail", "pm-mail registry", &i.data["registry"], 120, true)?;
+    let registry = collected_source(i, "pm-mail", "pm-mail registry", &i.data["registry"], 120, true)?;
     let browsers = collected_source(
-        &i,
+        i,
         "browsers",
         "Browsers and recordings",
         &i.data["browsers"],
         180,
         false,
     )?;
-    let machines = panels::machines(&i, &browsers)?;
-    let reports = reports_source(&i)?;
-    let quota = spend::source(&i)?;
-    let usage_source = panels::usage_source(&i)?;
+    let machines = panels::machines(i, &browsers)?;
+    let reports = reports_source(i)?;
+    let quota = spend::source(i)?;
+    let usage_source = panels::usage_source(i)?;
     let sources = vec![
         reports,
         registry.clone(),
-        panels::machines_source(&i, &machines)?,
+        panels::machines_source(i, &machines)?,
         browsers,
-        collected_source(&i, "simlock", "Simlock", &i.data["simlock"], 180, false)?,
+        collected_source(i, "simlock", "Simlock", &i.data["simlock"], 180, false)?,
         usage_source.clone(),
         quota,
     ];
-    let mut view = json!({"version":1,"generatedAt":i.iso(Some(now)),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(&i)?});
+    let mut view = json!({"version":1,"generatedAt":i.iso(Some(i.now)),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(i)?});
     if let Some(p) = i.data.get("pinned") {
         view["pinned"] = p.clone();
     }
     if let Some(s) = i.data.get("spendByStream") {
         view["spendByStream"] = s.clone();
     }
-    view["projects"] = json!(projects(&i)?);
-    view["threads"] = json!({"source":"agent-reports","also":["pm-mail"],"rows":threads(&i,&registry)?});
+    view["projects"] = json!(projects(i)?);
+    view["threads"] = json!({"source":"agent-reports","also":["pm-mail"],"rows":threads(i,&registry)?});
     view["machines"] = json!({"source":"machines","also":["browsers"],"rows":machines});
     view["simlock"] = json!({"source":"simlock","capacity":i.data["simlock"]["data"].get("capacity").cloned().unwrap_or(json!([])),"leases":i.data["simlock"]["data"].get("leases").cloned().unwrap_or(json!([]))});
-    view["usage"] = panels::usage(&i, &usage_source)?;
-    view["spend"] = spend::compose(&i)?;
-    let mut view = crate::http_views::status(&view)?;
+    view["usage"] = panels::usage(i, &usage_source)?;
+    view["spend"] = spend::compose(i)?;
+    let mut view = crate::http_views::status_owned(view)?;
     view["headline"]["strip"] = strip::compose(&view)?;
-    i.ctx.valid().then_some(view)
+    Some(view)
 }

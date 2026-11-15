@@ -1,4 +1,7 @@
-/** Native fixture-store HTTP contracts and optional warm-route latency/RSS measurement. */
+/**
+ * Native fixture-store HTTP contracts and optional warm-route latency/RSS measurement. `--measure` also runs R2's
+ * Status measurement under Node on the large fixture (status-measure.mjs) and writes it as `status`.
+ */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -48,6 +51,25 @@ if (worker < 0) {
     if (process.argv.includes('--measure')) {
       const target = process.env.AAC_M3_MEASURE_OUTPUT;
       assert.ok(target, 'provide AAC_M3_MEASURE_OUTPUT for measurement results');
+      // R2: /api/status under Node (the installed runtime) on the large fixture, off, the M3 envelope path and
+      // the fed path in ABAB rounds, each its own process over the real Status owner (status-measure.mjs).
+      const statusFile = path.join(scratch, 'status.json');
+      const measured = spawnSync(
+        'node',
+        [
+          path.join(repo, 'tests/spec/status-measure.mjs'),
+          '--dist',
+          path.join(repo, 'dist'),
+          '--binary',
+          process.env.AAC_RUST_SERVICE_BINARY ?? path.join(repo, 'dist/native/aac-http'),
+          '--out',
+          statusFile,
+        ],
+        { cwd: repo, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
+      );
+      if (measured.status !== 0)
+        throw new Error(measured.stderr || measured.stdout || 'Status measurement failed');
+      process.stdout.write(measured.stdout);
       fs.writeFileSync(
         target,
         JSON.stringify(
@@ -56,6 +78,7 @@ if (worker < 0) {
             host: os.hostname(),
             samples: 40,
             kind: 'warm HTTP requests; existing collectors/store writer retained in TS',
+            status: JSON.parse(fs.readFileSync(statusFile, 'utf8')),
             reports: reports.map(({ mode, metrics, stats, legacyCalls }) => ({
               mode,
               metrics,

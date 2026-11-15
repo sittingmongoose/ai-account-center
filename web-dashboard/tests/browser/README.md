@@ -74,6 +74,12 @@ DOM and pixels). The device fixture proxy takes `AAC_FIXTURE_RUST_HOME=<aac-http
 `AAC_RUST_GROUP_HOME=on`, so the server's own `GET /api/views/home` (the real-wiring check) is answered from fed
 generations; stubbed Home data still goes through the kit's own builder. Without it the group is explicitly off.
 
+**Status fed (R2, opt-in).** `--set rustStatusFed=1` starts the server with `AAC_RUST_SERVICE=on` and
+`AAC_RUST_GROUP_STATUS=on` and the binary in `dist/native/aac-http` (`--set rustBinary=<path>` for another), so the
+server's own `GET /api/status` is answered from fed generations. `status end to end on the server` (the only Status
+check without stubs) then requires the bridge's `/api/status` counters to show fed answers and no decline; with the
+switch off it requires none. Without it the group is explicitly off.
+
 ## Recording, machines and parallel runs
 
 - **Parallel runs:** each gets its own browser, temporary home and reserved port. Use a worktree per candidate or `--set repo=<tree>`: rebuilding `dist/` during a run breaks that run. `--set port=N` fixes the port, so don't use it in parallel.

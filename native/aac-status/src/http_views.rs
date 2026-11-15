@@ -28,6 +28,20 @@ fn owner(update: &V) -> Option<String> {
 /// Rebuild the Status headline from its source panels. Complex strip wording still belongs to
 /// TS; it is retained verbatim until its own port, and equality is checked at the front door.
 pub fn status(snapshot: &V) -> Option<V> {
+    let headline = headline(snapshot)?;
+    let mut result = snapshot.clone();
+    result["headline"] = headline;
+    Some(result)
+}
+
+/// [`status`] on a view the caller owns: the headline is set in place (R2: the copy of the whole view cost about a
+/// millisecond on the large share).
+pub fn status_owned(mut snapshot: V) -> Option<V> {
+    snapshot["headline"] = headline(&snapshot)?;
+    Some(snapshot)
+}
+
+fn headline(snapshot: &V) -> Option<V> {
     if snapshot["version"] != 1 {
         return None;
     }
@@ -161,14 +175,12 @@ pub fn status(snapshot: &V) -> Option<V> {
         || warnings.iter().any(|w| w["tone"] == "bad")
         || over > 0;
     let warn = questions + decisions + stale + warnings.len() + loops.len() + waiting.len() > 0 || blocked > 0;
-    let mut result = snapshot.clone();
-    result["headline"] = json!({
+    Some(json!({
         "tone": if bad { "bad" } else if warn { "warn" } else { "good" },
         "runs": runs,
         "counts": {"openCards":cards.len(),"questions":questions,"decisions":decisions,"blockedItems":blocked,"workingThreads":working,"staleSources":stale,"loopingPinned":loops.len(),"waitingPinned":waiting.len()},
         "strip":snapshot.get("headline")?.get("strip")?
-    });
-    Some(result)
+    }))
 }
 
 /// Recompose the existing native Scoreboard fields from the same immutable base view. When

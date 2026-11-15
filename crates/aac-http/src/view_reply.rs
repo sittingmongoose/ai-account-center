@@ -63,13 +63,19 @@ pub fn respond_bytes(
 ) -> Response {
     let digest = Sha256::digest(identity);
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    respond_tagged(name, version, bytes, &format!("W/\"{hex}\""))
+}
+
+/// R2: [`respond_bytes`] with the ETag already known (Status keeps the last one per generations and second, and
+/// reuses it only for the same identity bytes).
+pub fn respond_tagged(name: &'static str, version: u32, bytes: Vec<u8>, etag: &str) -> Response {
     let mut response = (StatusCode::OK, bytes).into_response();
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json; charset=utf-8"),
     );
-    if let Ok(value) = HeaderValue::from_str(&format!("W/\"{hex}\"")) {
+    if let Ok(value) = HeaderValue::from_str(etag) {
         headers.insert(header::ETAG, value);
     }
     if let Ok(value) = HeaderValue::from_str(&format!("{name}@{version}")) {

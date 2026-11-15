@@ -2,7 +2,7 @@
 //! candidate; they never create a default timestamp, collation order or reading.
 use serde::Deserialize;
 use serde_json::{Value as V, json};
-use std::{cell::Cell, cmp::Ordering, collections::HashMap};
+use std::{cell::Cell, cmp::Ordering, collections::HashMap, sync::Arc};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,7 +19,7 @@ pub struct Presentation {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Date {
+pub struct Date {
     iso: String,
     /// Absent when the caller asked for ISO facts only; reading it then refuses the candidate.
     #[serde(default)]
@@ -27,17 +27,33 @@ struct Date {
     #[serde(default)]
     day: Option<String>,
 }
+impl Date {
+    /// R2: the request's own clock, whose words the front door formats per request (its ISO text is
+    /// `Date#toISOString`, which aac-num writes exactly).
+    pub fn of_now(ms: i64, clock: String, day: String) -> Option<Self> {
+        Some(Self {
+            iso: aac_num::ecma::to_iso_string(ms)?,
+            clock: Some(clock),
+            day: Some(day),
+        })
+    }
+}
 pub struct Context {
-    facts: Presentation,
-    order: HashMap<String, usize>,
+    facts: Arc<Presentation>,
+    /// R2: the request's `now`, which a fed generation's facts cannot hold.
+    now: Option<(i64, Date)>,
     missing: Cell<bool>,
 }
 impl Context {
     pub fn new(facts: Presentation) -> Self {
-        let order = facts.order.clone();
+        Self::shared(Arc::new(facts), None)
+    }
+    /// R2: facts held once per fed generation, shared by every request that names it, plus the
+    /// request's own `now` (its date facts), which is looked up before the generation's.
+    pub fn shared(facts: Arc<Presentation>, now: Option<(i64, Date)>) -> Self {
         Self {
             facts,
-            order,
+            now,
             missing: Cell::new(false),
         }
     }
@@ -70,6 +86,11 @@ impl Context {
         None
     }
     fn date(&self, ms: i64) -> Option<&Date> {
+        if let Some((at, date)) = &self.now
+            && *at == ms
+        {
+            return Some(date);
+        }
         let value = self.facts.dates.get(&ms.to_string());
         if value.is_none() {
             self.missing.set(true);
@@ -97,13 +118,13 @@ impl Context {
     }
     /// The envelope's `localeCompare` rank of a word, without marking it missing when absent.
     pub fn rank(&self, word: &str) -> Option<usize> {
-        self.order.get(word).copied()
+        self.facts.order.get(word).copied()
     }
     pub fn compare(&self, a: &str, b: &str) -> Ordering {
         if a == b {
             return Ordering::Equal;
         }
-        match (self.order.get(a), self.order.get(b)) {
+        match (self.facts.order.get(a), self.facts.order.get(b)) {
             (Some(a), Some(b)) => a.cmp(b),
             _ => {
                 self.missing.set(true);
@@ -167,6 +188,11 @@ pub fn s(v: &V) -> &str {
 }
 pub fn array(v: &V) -> Vec<V> {
     v.as_array().cloned().unwrap_or_default()
+}
+/// [`array`] without the copy: the rows of an array, or none. For rows that are only read (R2: a per-row copy of
+/// every card or thread made the large share's view take 170 ms).
+pub fn rows(v: &V) -> &[V] {
+    v.as_array().map(Vec::as_slice).unwrap_or(&[])
 }
 pub fn number(v: &V) -> Option<f64> {
     v.as_f64().filter(|n| n.is_finite())

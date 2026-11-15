@@ -135,7 +135,7 @@ fn sections(writer: &str, items: &V) -> Option<Vec<V>> {
 }
 fn card(i: &Inputs, doc: &V, hash: &V, problem: V, notes: Vec<V>) -> Option<V> {
     let anchored = doc["kind"] == "judgement" && !doc["recommendation"].is_null();
-    let threads = array(&i.data["reports"]["threads"]);
+    let threads = rows(&i.data["reports"]["threads"]);
     let thread = threads.iter().find(|r| r["writer"] == doc["writer"]);
     let asker = if let Some(row) = thread {
         if i.stale_thread(row)? {

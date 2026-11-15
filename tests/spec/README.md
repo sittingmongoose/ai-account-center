@@ -320,6 +320,22 @@ in progress, on the real binary. With `--ts-only` (off mode) it checks that noth
 The view itself is gated by `crates/aac-views/tests/home_spec.rs`, which runs every case and fuzz seed
 through the fed path too (equal or declined).
 
+## R2: Status, fed
+
+Every Status corpus also runs through the fed path (`status-fed-check.ts`: the production `answerStatusFed`, the
+real service, today's bytes and ETag required): `read-view-parity.ts` sends the 21 raw cases, the 4 board ages and
+the prototype name (declined), with a negative control (the fed facts with AM and PM swapped must fail the check);
+`read-rounding-parity.ts` the 37 numeric admissions (the unproven one declines). `status-fuzz.ts` (in `run.mjs` with
+100 cases a seed; `--seeds 301,302,303,304 --cases 400` is the full run) compares TS, the envelope read and the fed
+path on generated inputs over a real reader's share. `status-read-parity.mjs` (Node, built `dist/`, Nas1-built
+service) runs the real StatusService owner against today's handler over HTTP: changes on the share, the
+collectors, the registry, the quota report and the time zone, then the 304, a push during a request, a restart
+and the negative control. With `--ts-only` it checks nothing is fed by default.
+
+`status-measure.mjs` (with `status-measure-server.cjs`) times `GET /api/status` under Node on the large home: off,
+the M3 envelope path and the fed path, each its own process over the real owner with its scan timers, in ABAB
+rounds, plus a 16-client row; `read-http-parity.ts --measure` runs it and writes it as `status`.
+
 ## L3: one numeric layer (`aac-num`)
 
 `crates/aac-num` is the one implementation of the number and date semantics the Rust side reproduces: ECMAScript

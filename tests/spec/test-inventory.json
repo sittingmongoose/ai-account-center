@@ -253,6 +253,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/status_fed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/table.rs",
       "kind": "internal",
       "evidence": [],
@@ -3475,6 +3481,13 @@
       "evidence": [
         "HTTP",
         "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status-feed.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
       ]
     },
     {

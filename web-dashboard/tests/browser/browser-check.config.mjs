@@ -21,10 +21,14 @@ export default (ctx) => {
 	// then explicitly off, so a shell variable cannot turn it on unseen.
 	// R1: `--set rustHomeFed=1` (with rustHome) also turns the Home group on (AAC_RUST_GROUP_HOME=on): the server's own
 	// GET /api/views/home is answered from fed generations. Off by default, and then explicitly off.
+	// R2: `--set rustStatusFed=1` runs the server with the Rust service on and the Status group on
+	// (AAC_RUST_GROUP_STATUS=on): the server's own GET /api/status is answered from fed generations. Off by default, and
+	// then explicitly off.
 	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
 	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
+	const rustStatusFed = !!ctx.args.rustStatusFed && ctx.args.rustStatusFed !== '0';
 	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
-	if (rustHome && !fs.existsSync(rustBinary)) throw new Error(`rustHome: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
+	if ((rustHome || rustStatusFed) && !fs.existsSync(rustBinary)) throw new Error(`rustHome/rustStatusFed: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
 	let builder = null;
 	/** Per page: the Home inputs a check stubbed (path -> JSON). */
 	const homeStubs = new WeakMap();
@@ -75,7 +79,8 @@ export default (ctx) => {
 				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),
 				...(rustHome
 					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
-					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off' }) }
+					: { AAC_RUST_SERVICE: rustStatusFed ? 'on' : 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off', ...(rustStatusFed ? { AAC_RUST_SERVICE_BINARY: rustBinary } : {}) }),
+				AAC_RUST_GROUP_STATUS: rustStatusFed ? 'on' : 'off' }
 		}),
 		async teardown(_, s) {
 			if (builder) {
