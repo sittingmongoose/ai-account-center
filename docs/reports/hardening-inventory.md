@@ -51,11 +51,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 32.3% (213/659) |
+| typed-error adoption (typed/total throws) | 32.2% (213/662) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
-| files with createLogger | 44/445 |
+| files with createLogger | 44/446 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 61 |
 | files > 600 LOC | 23 |
@@ -87,7 +87,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/status/answers.ts` | 1744 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1658 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
-| `src/antigravity/registry.ts` | 1104 |
+| `src/antigravity/registry.ts` | 1154 |
 | `src/web-server/services/usage-failover-service.ts` | 1053 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/status/status-collectors.ts` | 973 |

@@ -1,7 +1,7 @@
 //! One action slot (Slint `ActionControl`) and the line under a row (`RowLine`).
 //!
 //! A slot is live, off with its reason, "refused" (dimmed but clickable: the click opens the reason under the row
-//! through the `refuse` action) or "coming". A running switch or save (`busy`) holds every live control except the one
+//! through the `refuse` action) or "coming". A running action or save (`busy`) holds every live control except the one
 //! that is itself running. An off control's reason shows on hover (`title`) and, on a tap, under its row.
 
 use super::Page;

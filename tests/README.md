@@ -52,9 +52,9 @@ The full contributor sequence is defined by
 | Area | Paths | Contracts |
 | --- | --- | --- |
 | Commands and package | [command tests](./unit/commands/), [package guide](./npm/README.md) | Product help/version, dashboard aliases, saved-login commands, migration guidance, private-state preservation, package metadata |
-| Dashboard and controls | [web-server tests](./unit/web-server/), [integration tests](./integration/) | Account projections, guarded activation, automatic switching, refresh settings, update jobs, and local HTTP boundaries |
+| Dashboard and controls | [web-server tests](./unit/web-server/), [integration tests](./integration/) | Account projections, add, sign-in again and remove (the live login signs in again in place), refresh settings, update jobs, and local HTTP boundaries |
 | Analytics | [account analytics tests](./unit/web-server/account-analytics-service.test.ts), [history tests](./unit/web-server/account-analytics-history.test.ts), [activity tests](./unit/web-server/account-activity-collector.test.ts) | Observed quotas, unknown values, identity separation, bounded history, and authentic local activity |
-| Dashboard data layer | [dashboard tests](../web-dashboard/tests/) | Data fidelity, activation review, analytics views, the frame's controllers and sign-in session |
+| Dashboard data layer | [dashboard tests](../web-dashboard/tests/) | Data fidelity, account actions, analytics views, the frame's controllers and sign-in session |
 | Shared support | [fixtures and isolation helpers](./shared/), [mocks](./mocks/) | Synthetic state and bounded test doubles |
 | Native bars | [Mac guide](../macos-bar/README.md), [Windows guide](../windows-bar/README.md) | Platform-specific build and verification instructions |
 

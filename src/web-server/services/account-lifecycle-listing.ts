@@ -200,11 +200,13 @@ export function composeRegistryListing(facts: RegistryListingFacts): {
           row,
           null,
           {
-            // Sign in again answers with the terminal command (preflight_failed).
+            // Sign in again answers with the terminal command (preflight_failed). The
+            // live login signs in again in place (account-lifecycle.ts importSignIn);
+            // its account_active refusal is Remove's only.
             signInAgain:
               fact.reason !== 'tool_missing' &&
               fact.reason !== 'not_implemented' &&
-              fact.refusal === null,
+              (fact.refusal === null || fact.refusal === 'account_active'),
             replaceKey: false,
             remove: fact.removeAllowed && fact.refusal !== 'unavailable',
             open: [],

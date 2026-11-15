@@ -1,7 +1,6 @@
-//! The dashboard's data for the frame's pages that take it (Home, Accounts & Settings, Details and the switch approval).
+//! The dashboard's data for the frame's pages that take it (Home, Accounts & Settings and Details).
 //! The frame reads it itself (G5): `public/frame-dashboard.mjs` runs in this window the same server calls, timers,
-//! guards and pure modules bridge.js ran (the accounts controller, the target-bound switch approvals, the one-use
-//! remove and restore tokens), and hands the same versioned views (tests/frame-dashboard-golden.test.mjs replays what
+//! guards and pure modules bridge.js ran (the accounts controller and the one-use remove and restore tokens), and hands the same versioned views (tests/frame-dashboard-golden.test.mjs replays what
 //! bridge.js did). Analytics reads its own (analytics/feed.rs).
 //!
 //! `index.html` installs `window.aacLoadDashboard()` (a dynamic import, started early when the address
@@ -159,8 +158,8 @@ impl DashCtx {
         });
     }
 
-    /// Sign out through the controller (it waits while a switch confirmation is on screen and words a failure). None
-    /// while it has not started: the frame's session signs out itself then.
+    /// Sign out through the controller (it words a failure). None while it has not started: the frame's session signs
+    /// out itself then.
     pub(crate) fn sign_out(&self) -> Option<()> {
         if !self.live.get_untracked() {
             return None;
@@ -456,12 +455,12 @@ mod tests {
     fn toasts_and_the_end_of_a_session_are_read_from_their_json() {
         match note(
             "toast",
-            r#"{"kind":"ok","title":"Codex account switched","body":"b","ms":7000}"#,
+            r#"{"kind":"ok","title":"Codex account added","body":"b","ms":7000}"#,
         ) {
             Some(Note::Toast(kind, title, body, ms)) => {
                 assert_eq!(
                     (kind.as_str(), title.as_str(), body.as_str(), ms),
-                    ("ok", "Codex account switched", "b", 7000)
+                    ("ok", "Codex account added", "b", 7000)
                 );
             }
             _ => panic!("a toast"),

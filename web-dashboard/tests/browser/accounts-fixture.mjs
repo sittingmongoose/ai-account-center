@@ -86,7 +86,8 @@ export function fakeServer(over = {}) {
 	const registry = () => ({
 		providers: [],
 		accounts: dashboard({ rich: s.rich }).accounts.map((a) => regAccount(a.id, a.provider,
-			a.id === 'codex:one' ? { removeRefusal: 'account_active' }
+			// The live logins: only their Remove is refused (they sign in again in place).
+			a.id === 'codex:one' || a.id === 'antigravity:a1' ? { removeRefusal: 'account_active' }
 				: a.provider === 'kimi-code' ? { credential: { kind: 'aac-key', last4: '9f3a' } } : {}))
 			.filter((a) => !s.removed.has(a.id)),
 		jobs: s.runningJobs,
@@ -117,6 +118,14 @@ export function fakeServer(over = {}) {
 			const job = { id: 'job_00000000000000aa', provider: 'codex', kind: 'device-code', mode: 'signin-again', accountId, state: 'starting', profileName: accountId.slice(6), verification: null, result: null, error: null };
 			const waiting = { ...job, state: 'waiting', verification: { url: 'https://auth.openai.com/codex/device', userCode: 'WXYZ-67890', expiresAt: at(14) } };
 			s.jobs.set(job.id, [waiting]);
+			return json(202, { job });
+		}],
+		['POST', /^\/api\/accounts\/(antigravity%3A[^/]+)\/signin-again$/, (_b, m) => {
+			// The live Antigravity login signs in again in place too: a supervised CLI job.
+			const accountId = decodeURIComponent(m[1]);
+			const job = { id: 'job_00000000000000ab', provider: 'antigravity', kind: 'supervised-cli', mode: 'signin-again', accountId, state: 'starting', profileName: 'a1', verification: null, result: null, error: null };
+			const awaiting = { ...job, state: 'awaiting_code', verification: { url: 'https://accounts.google.com/o/oauth2/auth?fixture=a1', userCode: null, expiresAt: at(14) } };
+			s.jobs.set(job.id, [awaiting]);
 			return json(202, { job });
 		}],
 		['GET', /^\/api\/accounts\/signin-jobs\/([^/]+)$/, (_b, m) => {

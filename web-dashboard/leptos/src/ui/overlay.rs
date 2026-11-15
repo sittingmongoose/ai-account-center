@@ -1,5 +1,5 @@
 //! Viewport overlays live under body, outside page containers and entrance transforms. The shared lifetime owns
-//! the scroll lock and focus return, including nested overlays (a switch approval above Details, for example).
+//! the scroll lock and focus return, including nested overlays (a confirmation above Details, for example).
 use leptos::portal::Portal;
 use leptos::prelude::*;
 use std::cell::RefCell;
@@ -397,7 +397,7 @@ pub fn OverlayPortal(
     children: ChildrenFn,
     #[prop(optional)] on_close: Option<Callback<()>>,
     // Told, besides `on_close`, when leaving the owning page retires this opening. An owner whose close can be refused
-    // (a switch approval while its request runs) uses it to close its state once it can, so the hidden, retired
+    // (a confirmation while its request runs) uses it to close its state once it can, so the hidden, retired
     // opening is never updated back into view on another page.
     #[prop(optional)] on_retire: Option<Callback<()>>,
     #[prop(default = true.into(), into)] trap_focus: Signal<bool>,

@@ -33,8 +33,9 @@ import type { NativeCredential } from './types';
  * once it is complete, the CLI is stopped before any task can be typed into
  * it, the credential is verified with the provider and saved as the profile
  * (a new profile for Add, the same Google account for Sign in again), and the
- * isolated home is removed. The live native login, history and settings are
- * never touched.
+ * isolated home is removed. History and settings are never touched; the live
+ * native login is renewed too only when it is this same account
+ * (AntigravityAccountLifecycle.importSignIn).
  */
 export const ANTIGRAVITY_CREDENTIAL_FORMAT = 'antigravity-consumer-json';
 const POLL_MS = 250;
@@ -46,9 +47,10 @@ const TERMINAL_RESET =
   '\x1b[?1049l\x1b[?25h\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<u\r\n';
 
 const FAILURES: Readonly<Record<AntigravityLifecycleCode, string>> = Object.freeze({
-  account_active:
-    'This profile is the live Antigravity login. Switch to another profile first, then sign in again.',
-  activation_running: 'An Antigravity switch is running. Wait for it to finish, then try again.',
+  // Only Remove refuses the live login; a sign-in never ends with this code.
+  account_active: 'This profile is the live Antigravity login, so it cannot be removed.',
+  activation_running:
+    'Another change to the saved Antigravity profiles is running. Wait for it to finish, then try again.',
   signin_running: 'A sign-in for this profile is already running.',
   unknown_account: 'That Antigravity profile no longer exists. Nothing was saved.',
   remove_failed: 'The profile could not be changed safely. Nothing was saved.',
@@ -58,6 +60,8 @@ const FAILURES: Readonly<Record<AntigravityLifecycleCode, string>> = Object.free
   identity_mismatch:
     'You signed in to a different Google account than this profile has. Nothing was saved.',
   write_failed: 'The sign-in could not be verified or saved safely. Nothing was saved.',
+  live_login_not_updated:
+    'The new sign-in was saved to its profile, but the live Antigravity login could not be updated. Sign in again.',
 });
 
 export interface SandboxChild {
@@ -196,18 +200,6 @@ export async function runAntigravityTerminalSignIn(
     if (lifecycle.activationRunning()) return fail(FAILURES.activation_running);
     if (mode === 'add' && lifecycle.profileCount() >= ANTIGRAVITY_MAX_PROFILES)
       return fail(FAILURES.too_many_accounts);
-    if (mode === 'signin-again') {
-      if (lifecycle.runtimeActiveProfileId() === profileId) return fail(FAILURES.account_active);
-      let live: boolean;
-      try {
-        live = await lifecycle.isLiveNativeProfile(profileId);
-      } catch {
-        return fail(
-          'Could not check whether this profile is the live Antigravity login. Nothing was started.'
-        );
-      }
-      if (live) return fail(FAILURES.account_active);
-    }
   } catch {
     return fail('The saved Antigravity profiles could not be read safely. Nothing was started.');
   }
@@ -273,8 +265,8 @@ export async function runAntigravityTerminalSignIn(
         ? `Adding Antigravity profile "${profileId}".`
         : `Signing in again to Antigravity profile "${profileId}".`
     );
-    say('Antigravity starts in a private sign-in home on this computer. Your current login,');
-    say('history and settings are not touched.');
+    say('Antigravity starts in a private sign-in home on this computer. Your history and');
+    say('settings are not touched; if this profile is the live login, it is renewed too.');
     say('1. Choose Google OAuth.');
     say('2. Open the link it shows in your browser and sign in to the Google account for');
     say(`   "${profileId}".`);
@@ -353,6 +345,8 @@ export async function runAntigravityTerminalSignIn(
           ? `Saved Antigravity profile "${profileId}" (${result.email}). It now appears in the dashboard.`
           : `Signed in again: Antigravity profile "${profileId}" (${result.email}) is saved.`
       );
+      if (result.liveRenewed)
+        say('The live Antigravity login was renewed too. Restart an open Antigravity CLI.');
       return 0;
     } catch (error) {
       return fail(

@@ -221,6 +221,8 @@ describe('terminal sign-in', () => {
     const right = await run('party', { write: { content: envelope('party@example.com', 4) } });
     expect(right.code).toBe(0);
     expect(right.output).toContain('Signed in again: Antigravity profile "party"');
+    // No live login in this fixture: only the profile is saved, and the command says nothing more.
+    expect(right.output).not.toContain('live Antigravity login was renewed');
     expect(
       new AntigravityProfileRegistry(ccsDir).readCredential('party', 'ubuntu').credentialRevision
     ).not.toBe(before.credentialRevision);
@@ -292,36 +294,47 @@ describe('terminal sign-in', () => {
     fs.mkdirSync(lock, { mode: 0o700 });
     const locked = await run('party', { write: null });
     expect(locked.code).toBe(1);
-    expect(locked.output).toContain('An Antigravity switch is running.');
+    expect(locked.output).toContain('Another change to the saved Antigravity profiles is running.');
     expect(locked.spawned).toEqual([]);
     expect(stagingLeft()).toEqual([]);
   });
 
-  it('refuses Sign in again for the live login before starting anything', async () => {
+  it('signs the live login in again and renews the live native login too', async () => {
     await save('gmail');
     const liveFile = path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
-    fs.mkdirSync(path.dirname(liveFile), { recursive: true });
-    fs.writeFileSync(liveFile, 'placeholder', { mode: 0o600 });
-    const live = {
-      format: 'antigravity-consumer-json',
-      bytes: Buffer.from(envelope('gmail@example.com', 3)),
-    };
+    fs.mkdirSync(path.dirname(liveFile), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(liveFile, envelope('gmail@example.com', 3), { mode: 0o600 });
+    const installs: string[] = [];
     const result = await run(
       'gmail',
-      { write: null },
+      { write: { content: envelope('gmail@example.com', 9) } },
       {
         lifecycle: new AntigravityAccountLifecycle({
           ccsDir: () => ccsDir,
           home: () => home,
           now: () => NOW,
           validateCredential: async (value) => identityOf(value),
-          readNativeCredential: async () => live,
+          readNativeCredential: async () => ({
+            format: 'antigravity-consumer-json',
+            bytes: fs.readFileSync(liveFile),
+          }),
+          installNativeCredential: async (next, expected) => {
+            installs.push(expected);
+            fs.writeFileSync(`${liveFile}.new`, next.bytes, { mode: 0o600 });
+            fs.renameSync(`${liveFile}.new`, liveFile);
+          },
         }),
       }
     );
-    expect(result.code).toBe(1);
-    expect(result.output).toContain('This profile is the live Antigravity login.');
-    expect(result.spawned).toEqual([]);
+    expect(result.code).toBe(0);
+    expect(result.output).toContain('Signed in again: Antigravity profile "gmail"');
+    expect(result.output).toContain('The live Antigravity login was renewed too.');
+    expect(result.output).not.toContain('Switch to another profile');
+    expect(result.spawned.length).toBe(1);
+    expect(installs.length).toBe(1);
+    expect(fs.readFileSync(liveFile, 'utf8')).toBe(envelope('gmail@example.com', 9));
+    const saved = new AntigravityProfileRegistry(ccsDir).readCredential('gmail', 'ubuntu');
+    expect(saved.credential.bytes.toString('utf8')).toBe(envelope('gmail@example.com', 9));
   });
 });
 

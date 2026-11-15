@@ -36,7 +36,7 @@ interface CredentialRecord {
   savedAt: string;
 }
 
-interface ProfileRecord {
+export interface ProfileRecord {
   id: string;
   email: string;
   identityKey: string;
@@ -63,6 +63,12 @@ interface RegistryState {
   profiles: ProfileRecord[];
   active: ActiveRecord | null;
   transaction: TransactionRecord | null;
+}
+
+/** A saved profile record and its place in the list, as restoreProfile puts it back. */
+export interface SavedProfileSnapshot {
+  readonly index: number;
+  readonly record: ProfileRecord;
 }
 
 interface DirectoryIdentity {
@@ -955,6 +961,50 @@ export class AntigravityProfileRegistry {
     } catch {
       console.warn('antigravity: superseded credential cleanup was skipped for safety');
     }
+  }
+
+  /** A copy of one profile's saved record for restoreProfile; null when it is not saved. */
+  profileSnapshot(profileId: string): SavedProfileSnapshot | null {
+    const profiles = this.readState().profiles;
+    const index = profiles.findIndex((profile) => profile.id === profileId);
+    return index < 0 ? null : { index, record: structuredClone(profiles[index]) };
+  }
+
+  /**
+   * Must be called under withLock: put back the record a saveCredential under the
+   * same lock replaced, when the live-login install paired with it failed. Its
+   * credential generation is the previous one saveCredential keeps, read and
+   * checked here before the record is published. No file is deleted; the newer
+   * generation is pruned by the next save.
+   */
+  restoreProfile(snapshot: SavedProfileSnapshot): void {
+    if (!this.lockHeld) throw new PrivateStorageError('unsafe');
+    const previous = snapshot.record;
+    assertProfileId(previous.id);
+    if (!HASH.test(previous.credential.fingerprint)) throw new PrivateStorageError('unsafe');
+    const state = this.readState();
+    const current = state.profiles.find((profile) => profile.id === previous.id);
+    if (!current || current.identityKey !== previous.identityKey)
+      throw new PrivateStorageError('unsafe');
+    this.instances();
+    const bytes = readPrivateFile(
+      path.join(
+        this.instancesDirectory,
+        previous.id,
+        'ubuntu',
+        `credential-${previous.credential.fingerprint}.bin`
+      ),
+      MAX_NATIVE_BYTES
+    );
+    if (
+      credentialFingerprint({ format: previous.credential.format, bytes }) !==
+      previous.credential.fingerprint
+    )
+      throw new PrivateStorageError('corrupt');
+    const others = state.profiles.filter((profile) => profile.id !== previous.id);
+    const index = Math.max(0, Math.min(snapshot.index, others.length));
+    state.profiles = [...others.slice(0, index), structuredClone(previous), ...others.slice(index)];
+    this.publish(state);
   }
 
   beginTransaction(targetId: string, previousId: string, now: number): void {

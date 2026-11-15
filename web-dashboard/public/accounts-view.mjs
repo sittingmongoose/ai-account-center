@@ -188,7 +188,7 @@ const REMOVE_TIP = {
   app: 'Remove stops reading this account; the app keeps its session.',
 };
 const REFUSAL_TIP = {
-  account_active: 'This is the live login on its computer. Sign in to another account there first.',
+  account_active: 'This is the live login on its computer, so it cannot be removed.',
   account_default: 'This is the default account. Make another account the default first.',
   account_protected: "This is this computer's default Claude profile. It can't be removed here.",
   last_account: 'This is the last account of this provider.',
@@ -221,8 +221,7 @@ function rowActions(provider, account, homeRow, ctx) {
     case 'device': {
       const g = gate(entry, 'signInAgain', provider);
       const fields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
-      // The live login signs in again like any other (the server renews ~/.codex in place):
-      // switching was retired, so there is no other account to move to first.
+      // The live login signs in again like any other: the server renews ~/.codex in place.
       const again = !g.live ? gated(fields, g)
         : reg && reg.actions?.signInAgain === false ? action({ ...fields, enabled: false, tip: 'A sign-in is not possible for this account now.' })
           : action({ ...fields, enabled: true, tip: homeRow?.active
@@ -232,16 +231,14 @@ function rowActions(provider, account, homeRow, ctx) {
     }
     case 'cli': {
       const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
-      // The live Antigravity login cannot sign in again yet (the server refuses it); it gets a
-      // refuse control that says why, not a dead button. The registry's refusal is the signal
-      // (the native-selected flag needs the runtime; without it the registry still records the
-      // live login). Codex rows sign the live login in again in place.
+      // The live login signs in again like any other: the server renews the live Antigravity
+      // login on Ubuntu in place (the registry's refusal or the row's live flag names it).
       const isLive = homeRow?.active === true || reg?.removeRefusal === 'account_active';
-      const signin = isLive
-        ? action({ ...signinFields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the live login on Ubuntu. Sign in to another account there first, then sign in again.' })
-        : !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
-          : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
-            : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command in a panel below.' });
+      const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
+        : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
+          : action({ ...signinFields, enabled: true, tip: isLive
+            ? 'Sign in again on Ubuntu; the live Antigravity login there is renewed too, and its history stays.'
+            : 'Sign in from a terminal on Ubuntu; the dashboard shows the command in a panel below.' });
       return [signin, removeControl(provider, account, reg, entry)];
     }
     case 'apikey': {
@@ -611,8 +608,7 @@ export function lineView(rowId, label, l, ctx = {}) {
   };
 }
 const REFUSAL_LINE = {
-  account_active: 'is the live login on its computer, so it cannot be removed. Sign in to another account there first.',
-  account_active_signin: 'is the live login on its computer, so it cannot sign in again. Sign in to another account there first, then sign in again.',
+  account_active: 'is the live login on its computer, so it cannot be removed.',
   account_default: 'is the saved default. Make another account the default first.',
   account_protected: "is this computer's default Claude profile. It can't be removed here.",
   last_account: 'is the last account of this provider, so it stays.',
@@ -662,7 +658,7 @@ const heldTip = (row) => {
   const held = text(row.heldVersion);
   if (!held || held.length > 64 || !VERSION_WORD.test(held)) return text(row.message);
   const kept = text(row.version);
-  return `Update held: Antigravity ${held} is waiting for a switching review${kept ? `; ${kept} stays installed` : ''}.`;
+  return `Update held: Antigravity ${held} is waiting for a review${kept ? `; ${kept} stays installed` : ''}.`;
 };
 // An Antigravity ACP release a sign-in hold did not install.
 const heldOffer = (row) => {

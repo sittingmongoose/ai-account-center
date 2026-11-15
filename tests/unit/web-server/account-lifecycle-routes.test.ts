@@ -1662,11 +1662,12 @@ describe('Antigravity profiles', () => {
     const listing = await f.request('GET', '/registry');
     const accounts = listing.body.accounts as Array<Record<string, unknown>>;
     const byId = (id: string) => accounts.find((account) => account.id === id);
+    // The live login signs in again in place; only its Remove is refused.
     expect(byId('antigravity:profile:gmail')).toMatchObject({
       provider: 'antigravity',
       credential: null,
       removeRefusal: 'account_active',
-      actions: { signInAgain: false, replaceKey: false, remove: true, open: [], recheck: false },
+      actions: { signInAgain: true, replaceKey: false, remove: true, open: [], recheck: false },
     });
     expect(byId('antigravity:profile:party')).toMatchObject({
       removeRefusal: null,
@@ -1798,13 +1799,20 @@ describe('Antigravity profiles', () => {
     ]);
   });
 
-  it('answers Sign in again with the terminal command, never for the live login', async () => {
+  it('answers Sign in again with the terminal command, for the live login too', async () => {
     const f = await fixture();
     await agyProfile('gmail');
     await agyProfile('party');
     agyLive('gmail');
     const live = await f.request('POST', '/antigravity:profile:gmail/signin-again', {});
-    expect([live.status, live.body.code]).toEqual([409, 'account_active']);
+    expect([live.status, live.body.code, live.body.fallback]).toEqual([
+      409,
+      'preflight_failed',
+      { kind: 'terminal', host: 'ubuntu', command: 'ai-account-center antigravity signin gmail' },
+    ]);
+    // Remove still refuses the live login.
+    const remove = await f.request('POST', '/antigravity:profile:gmail/remove', {});
+    expect([remove.status, remove.body.code]).toEqual([409, 'account_active']);
     const other = await f.request('POST', '/antigravity:profile:party/signin-again', {});
     expect([other.status, other.body.code, other.body.fallback]).toEqual([
       409,
@@ -1849,14 +1857,23 @@ describe('Antigravity profiles', () => {
       },
     });
 
-    // Sign in again: the live login is refused, another saved profile starts a job.
+    // Sign in again: the live login starts a job like any other saved profile.
     const g = await fixture({ antigravityFlow: null });
     await agyProfile('gmail');
     await agyProfile('party');
     agyLive('party');
     const live = await g.request('POST', '/antigravity:profile:party/signin-again', {});
-    expect([live.status, live.body.code]).toEqual([409, 'account_active']);
-    const again = await g.request('POST', '/antigravity:profile:gmail/signin-again', {});
+    expect(live.status).toBe(202);
+    expect(live.body.job).toMatchObject({
+      provider: 'antigravity',
+      mode: 'signin-again',
+      accountId: 'antigravity:profile:party',
+    });
+    const h = await fixture({ antigravityFlow: null });
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('party');
+    const again = await h.request('POST', '/antigravity:profile:gmail/signin-again', {});
     expect(again.status).toBe(202);
     expect(again.body.job).toMatchObject({
       provider: 'antigravity',

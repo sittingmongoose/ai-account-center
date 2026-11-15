@@ -360,7 +360,7 @@ def recover_rebuild(home):
 HINTS = {
     'runtime-native-unreviewed': 'installed CLI is not the reviewed build',
     'runtime-descriptor-stale': 'run: ai-account-center antigravity runtime refresh',
-    'runtime-transaction-active': 'finish or recover the switch first: ai-account-center antigravity recover',
+    'runtime-transaction-active': 'an unfinished switch from an older version needs recovery: ai-account-center antigravity recover',
     'runtime-rebuild-recovery-required': 'review, then: rebuild_bundle.py --recover-rebuild',
     'runtime-bundle-already-present': 'a new bundle already exists; review before retrying',
     'runtime-not-adopted': 'adopt the runtime first',

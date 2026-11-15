@@ -649,8 +649,8 @@ let installs = 0;
 /**
  * Starts the frame's dashboard: `window.aacFrameDashboard` holds the calls (a previous one is stopped) and its `id`
  * (numbered from 1, so a page drives and stops only the controller it installed, dash.rs), and every view
- * is sent as an `aac-dash` event whose detail is `{key, json}`. Details and the switch approval take one Back entry each
- * below 1280 px, as bridge.js gave them; a Back press over one closes it. With `?e2e`, `window.__aacLastAccounts` keeps
+ * is sent as an `aac-dash` event whose detail is `{key, json}`. Details takes one Back entry
+ * below 1280 px, as bridge.js gave it; a Back press over it closes it. With `?e2e`, `window.__aacLastAccounts` keeps
  * the last Accounts view and `window.__aacToasts` every toast (as bridge.js keeps them for the kit).
  */
 export function installFrameDashboard(win = globalThis) {
@@ -718,7 +718,7 @@ export function installFrameDashboard(win = globalThis) {
   const onPop = () => {
     // Our own history.back() consuming a closed overlay's entry: nothing to answer.
     if (consuming) { consuming = false; return; }
-    // A Back press over an open overlay closes the top-most one (the switch dialog is cancelled, Details closes).
+    // A Back press over an open overlay closes the top-most one (Details closes).
     if (depth > 0) { depth--; controller.back(); }
   };
   const onFocus = () => controller.focused();

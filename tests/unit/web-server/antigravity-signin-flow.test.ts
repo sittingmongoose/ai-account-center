@@ -16,6 +16,7 @@ import {
   resetAntigravitySignInFlowCache,
 } from '../../../src/web-server/services/account-lifecycle-runtime';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
+import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import type {
   NativeCredential,
   VerifiedIdentity,
@@ -196,6 +197,81 @@ describe('antigravityJobFlow', () => {
     await expect(flow.complete('job_0000000000000005', { stopped: () => false })).rejects.toMatchObject({
       code: 'duplicate_identity',
     });
+  });
+});
+
+describe('antigravityJobFlow on the live login (switching is gone)', () => {
+  const liveFile = () => path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+  const bytes = (email: string, version: number) =>
+    Buffer.from(
+      JSON.stringify({
+        auth_method: 'consumer',
+        token: { access_token: `access:${email}:${version}`, refresh_token: `refresh:${email}` },
+      })
+    );
+  function liveLifecycle(onInstall?: () => void): AntigravityAccountLifecycle {
+    return new AntigravityAccountLifecycle({
+      ccsDir: () => ccsDir,
+      home: () => home,
+      validateCredential: async (value) => identityOf(value),
+      readNativeCredential: async () => ({
+        format: 'antigravity-consumer-json',
+        bytes: fs.readFileSync(liveFile()),
+      }),
+      installNativeCredential: async (next) => {
+        onInstall?.();
+        fs.writeFileSync(`${liveFile()}.new`, next.bytes, { mode: 0o600 });
+        fs.renameSync(`${liveFile()}.new`, liveFile());
+      },
+    });
+  }
+  async function seedLive(agy: AntigravityAccountLifecycle): Promise<void> {
+    const saved = { format: 'antigravity-consumer-json', bytes: bytes('party', 0) };
+    fs.mkdirSync(path.dirname(liveFile()), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(liveFile(), saved.bytes, { mode: 0o600 });
+    await agy.importSignIn({ profileId: 'party', mode: 'add', credential: saved });
+  }
+
+  it('signs the live profile in again and renews the live native login', async () => {
+    const agy = liveLifecycle();
+    await seedLive(agy);
+    const flow = antigravityJobFlow(agy, ccsDir, home, 'party', 'signin-again', {
+      preflight: () => OK_PREFLIGHT,
+      refreshDescriptor: async () => ({ status: 'no-installation' }),
+    });
+    const command = await flow.prepare('job_0000000000000007');
+    writeToken(command.args[2], 'party');
+    const result = await flow.complete('job_0000000000000007', { stopped: () => false });
+    expect(result).toMatchObject({ accountId: 'antigravity:profile:party' });
+    expect(fs.readFileSync(liveFile()).equals(bytes('party', 1))).toBe(true);
+    expect(
+      new AntigravityProfileRegistry(ccsDir)
+        .readCredential('party', 'ubuntu')
+        .credential.bytes.equals(bytes('party', 1))
+    ).toBe(true);
+    await flow.cleanup('job_0000000000000007');
+  });
+
+  it('maps a live login that could not be updated to live_login_not_updated', async () => {
+    const agy = liveLifecycle(() => {
+      // The previous generation is gone, so the profile cannot be put back either.
+      const directory = path.join(ccsDir, 'antigravity-instances', 'party', 'ubuntu');
+      for (const name of fs.readdirSync(directory))
+        if (!name.includes(new AntigravityProfileRegistry(ccsDir).savedRevision('party')!))
+          fs.rmSync(path.join(directory, name));
+      throw new Error('the guarded store refused');
+    });
+    await seedLive(agy);
+    const flow = antigravityJobFlow(agy, ccsDir, home, 'party', 'signin-again', {
+      preflight: () => OK_PREFLIGHT,
+      refreshDescriptor: async () => ({ status: 'no-installation' }),
+    });
+    const command = await flow.prepare('job_0000000000000008');
+    writeToken(command.args[2], 'party');
+    await expect(
+      flow.complete('job_0000000000000008', { stopped: () => false })
+    ).rejects.toMatchObject({ code: 'live_login_not_updated' });
+    await flow.cleanup('job_0000000000000008');
   });
 });
 

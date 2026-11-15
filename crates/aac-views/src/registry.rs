@@ -240,12 +240,14 @@ fn row_view(fact: &Value, providers: &[Value]) -> Admit<Value> {
         "antigravity" => {
             let reason_blocks =
                 equals(fact, "reason", "tool_missing") || equals(fact, "reason", "not_implemented");
-            let refusal_null = is_null(fact, "refusal");
+            // The live login signs in again in place; account_active is Remove's refusal only.
+            let signin_refusal =
+                !is_null(fact, "refusal") && !equals(fact, "refusal", "account_active");
             account_view(
                 row,
                 Value::Null,
                 actions(
-                    !reason_blocks && refusal_null,
+                    !reason_blocks && !signin_refusal,
                     false,
                     boolean(fact, "removeAllowed")? && !equals(fact, "refusal", "unavailable"),
                     none(),

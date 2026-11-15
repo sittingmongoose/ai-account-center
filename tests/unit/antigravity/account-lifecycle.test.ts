@@ -254,7 +254,12 @@ describe('Antigravity sign-in import', () => {
       mode: 'add',
       credential: credential('party@example.com'),
     });
-    expect(result).toEqual({ profileId: 'party', email: 'party@example.com', plan: null });
+    expect(result).toEqual({
+      profileId: 'party',
+      email: 'party@example.com',
+      plan: null,
+      liveRenewed: false,
+    });
     expect(
       agy
         .listProfiles()
@@ -282,7 +287,7 @@ describe('Antigravity sign-in import', () => {
     expect(agy.profileCount()).toBe(2);
   });
 
-  it('signs in again only to the same Google account and never the live login', async () => {
+  it('signs in again only to the same Google account', async () => {
     await save('gmail');
     await save('party');
     setNative(credential('gmail@example.com'));
@@ -297,15 +302,6 @@ describe('Antigravity sign-in import', () => {
         })
       )
     ).toBe('identity_mismatch');
-    expect(
-      await code(
-        agy.importSignIn({
-          profileId: 'gmail',
-          mode: 'signin-again',
-          credential: credential('gmail@example.com', 5),
-        })
-      )
-    ).toBe('account_active');
     expect(
       new AntigravityProfileRegistry(ccsDir).readCredential('party', 'ubuntu').credentialRevision
     ).toBe(before.credentialRevision);
@@ -351,6 +347,350 @@ describe('Antigravity sign-in import', () => {
         })
       )
     ).toBe('too_many_accounts');
+  });
+});
+
+/**
+ * The live native login as a real file in the injected home (0600), read back
+ * from disk, and an installer that honours the guarded store's contract: it
+ * replaces the file only while it still has the expected fingerprint.
+ */
+interface LiveStore {
+  file: string;
+  installs: Array<{ fingerprint: string; expected: string }>;
+  /** Called instead of installing; may throw to fail the install. */
+  failInstall: ((next: NativeCredential) => void) | null;
+  bytes(): Buffer | null;
+  agy(
+    validate?: (value: NativeCredential) => Promise<VerifiedIdentity>
+  ): AntigravityAccountLifecycle;
+}
+
+function liveStore(initial: NativeCredential | null): LiveStore {
+  const file = path.join(home, ANTIGRAVITY_NATIVE_TOKEN);
+  const write = (value: NativeCredential) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const temporary = `${file}.fixture`;
+    fs.writeFileSync(temporary, value.bytes, { mode: 0o600 });
+    fs.renameSync(temporary, file);
+  };
+  if (initial) write(initial);
+  const store: LiveStore = {
+    file,
+    installs: [],
+    failInstall: null,
+    bytes: () => (fs.existsSync(file) ? fs.readFileSync(file) : null),
+    agy: (validate) =>
+      new AntigravityAccountLifecycle({
+        ccsDir: () => ccsDir,
+        home: () => home,
+        now: () => NOW,
+        validateCredential:
+          validate ??
+          (async (value) => {
+            validations += 1;
+            return identityOf(value);
+          }),
+        readNativeCredential: async () => {
+          if (nativeFails) throw new Error('native store unavailable');
+          return { format: 'antigravity-consumer-json', bytes: fs.readFileSync(file) };
+        },
+        installNativeCredential: async (next, expected) => {
+          store.installs.push({ fingerprint: credentialFingerprint(next), expected });
+          if (store.failInstall) {
+            store.failInstall(next);
+            return;
+          }
+          const current = credentialFingerprint({
+            format: 'antigravity-consumer-json',
+            bytes: fs.readFileSync(file),
+          });
+          if (current !== expected) throw new Error('another process changed the live login');
+          write(next);
+        },
+      }),
+  };
+  return store;
+}
+
+/** A credential of `email` whose Google grant (refresh token) is `grant`. */
+function grantCredential(email: string, version: number, grant: string): NativeCredential {
+  return {
+    format: 'antigravity-consumer-json',
+    bytes: Buffer.from(
+      JSON.stringify({
+        auth_method: 'consumer',
+        token: { access_token: `access:${email}:${version}`, refresh_token: grant },
+      })
+    ),
+  };
+}
+
+function savedRevision(id: string): string {
+  return new AntigravityProfileRegistry(ccsDir).readCredential(id, 'ubuntu').credentialRevision;
+}
+
+describe('Antigravity live sign-in again (switching is gone)', () => {
+  it('the live login signs in again: the profile and the live native login both get the new credential', async () => {
+    await save('gmail');
+    await save('party');
+    const live = liveStore(credential('gmail@example.com'));
+    const agy = live.agy();
+    const before = live.bytes();
+    const fresh = credential('gmail@example.com', 5);
+    const result = await agy.importSignIn({
+      profileId: 'gmail',
+      mode: 'signin-again',
+      credential: fresh,
+    });
+    expect(result).toEqual({
+      profileId: 'gmail',
+      email: 'gmail@example.com',
+      plan: null,
+      liveRenewed: true,
+    });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(fresh));
+    expect(live.bytes()?.equals(fresh.bytes)).toBe(true);
+    expect((fs.statSync(live.file).mode & 0o777).toString(8)).toBe('600');
+    // The install was bound to the live login as it was read under the lock.
+    expect(live.installs).toEqual([
+      {
+        fingerprint: credentialFingerprint(fresh),
+        expected: credentialFingerprint({ format: 'antigravity-consumer-json', bytes: before! }),
+      },
+    ]);
+    // Matched by the saved bytes: no provider call for the live login.
+    expect(validations).toBe(1);
+    // The other profile is untouched.
+    expect(savedRevision('party')).toBe(credentialFingerprint(credential('party@example.com')));
+    // Remove still refuses the live login, at the listing and at the commit.
+    expect(await agy.removeRefusal('gmail', { signinRunning: false, fresh: true })).toBe(
+      'account_active'
+    );
+    expect(await code(agy.remove('gmail'))).toBe('account_active');
+    expect(
+      agy
+        .listProfiles()
+        .map((profile) => profile.id)
+        .sort()
+    ).toEqual(['gmail', 'party']);
+  });
+
+  it('a live login matched by its verified identity after a token refresh is renewed too', async () => {
+    await save('gmail');
+    const live = liveStore(credential('gmail@example.com', 7));
+    const fresh = credential('gmail@example.com', 8);
+    await live.agy().importSignIn({ profileId: 'gmail', mode: 'signin-again', credential: fresh });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(fresh));
+    expect(live.bytes()?.equals(fresh.bytes)).toBe(true);
+    expect(validations).toBe(2);
+  });
+
+  it('a live login Google cannot verify is renewed only when it holds the saved Google grant', async () => {
+    await save('gmail');
+    // Expired or revoked: Google answers for the new sign-in only.
+    const dead = (value: NativeCredential) => value.bytes.toString('utf8').includes(':7"');
+    const validate = async (value: NativeCredential) => {
+      if (dead(value)) throw new Error('needs sign-in');
+      return identityOf(value);
+    };
+    const same = liveStore(grantCredential('gmail@example.com', 7, 'refresh:gmail@example.com'));
+    const fresh = credential('gmail@example.com', 8);
+    await same.agy(validate).importSignIn({
+      profileId: 'gmail',
+      mode: 'signin-again',
+      credential: fresh,
+    });
+    expect(same.bytes()?.equals(fresh.bytes)).toBe(true);
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(fresh));
+
+    // Another grant that Google cannot verify is not known to be this account: left alone.
+    const other = liveStore(grantCredential('gmail@example.com', 7, 'refresh:someone-else'));
+    const unknownBefore = other.bytes();
+    const again = credential('gmail@example.com', 9);
+    await other.agy(validate).importSignIn({
+      profileId: 'gmail',
+      mode: 'signin-again',
+      credential: again,
+    });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(again));
+    expect(other.bytes()?.equals(unknownBefore!)).toBe(true);
+    expect(other.installs).toEqual([]);
+  });
+
+  it('a different identity is refused for the live login and neither store changes', async () => {
+    await save('gmail');
+    await save('party');
+    const live = liveStore(credential('gmail@example.com'));
+    const before = live.bytes();
+    const saved = savedRevision('gmail');
+    for (const email of ['party@example.com', 'other@example.com']) {
+      expect(
+        await code(
+          live.agy().importSignIn({
+            profileId: 'gmail',
+            mode: 'signin-again',
+            credential: credential(email, 4),
+          })
+        )
+      ).toBe('identity_mismatch');
+    }
+    // Same email, another Google person (subject): still refused.
+    const person = live.agy(async (value) => ({ ...identityOf(value), subject: 'another-person' }));
+    expect(
+      await code(
+        person.importSignIn({
+          profileId: 'gmail',
+          mode: 'signin-again',
+          credential: credential('gmail@example.com', 4),
+        })
+      )
+    ).toBe('identity_mismatch');
+    expect(savedRevision('gmail')).toBe(saved);
+    expect(live.bytes()?.equals(before!)).toBe(true);
+    expect(live.installs).toEqual([]);
+    // The same Google account then commits both stores.
+    const same = credential('gmail@example.com', 4);
+    await live.agy().importSignIn({ profileId: 'gmail', mode: 'signin-again', credential: same });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(same));
+    expect(live.bytes()?.equals(same.bytes)).toBe(true);
+  });
+
+  it('a live login of another account, an unreadable one, or none is never written', async () => {
+    await save('gmail');
+    await save('party');
+    // The registry still names gmail from an older switch; the live login is party's now.
+    const registry = new AntigravityProfileRegistry(ccsDir);
+    await registry.withLock(async () =>
+      registry.completeTransaction('gmail', new Date(NOW).toISOString())
+    );
+    const live = liveStore(credential('party@example.com'));
+    const before = live.bytes();
+    const first = credential('gmail@example.com', 3);
+    await live.agy().importSignIn({ profileId: 'gmail', mode: 'signin-again', credential: first });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(first));
+    expect(live.bytes()?.equals(before!)).toBe(true);
+
+    nativeFails = true;
+    const second = credential('gmail@example.com', 4);
+    await live.agy().importSignIn({ profileId: 'gmail', mode: 'signin-again', credential: second });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(second));
+    expect(live.bytes()?.equals(before!)).toBe(true);
+    nativeFails = false;
+
+    fs.rmSync(live.file);
+    const third = credential('gmail@example.com', 5);
+    await live.agy().importSignIn({ profileId: 'gmail', mode: 'signin-again', credential: third });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(third));
+    expect(fs.existsSync(live.file)).toBe(false);
+    expect(live.installs).toEqual([]);
+  });
+
+  it('a failed live install puts the previous profile credential back: write_failed, nothing changed', async () => {
+    await save('gmail');
+    const live = liveStore(credential('gmail@example.com'));
+    const before = live.bytes();
+    const saved = savedRevision('gmail');
+    live.failInstall = () => {
+      throw new Error('the guarded store refused');
+    };
+    const agy = live.agy();
+    expect(
+      await code(
+        agy.importSignIn({
+          profileId: 'gmail',
+          mode: 'signin-again',
+          credential: credential('gmail@example.com', 6),
+        })
+      )
+    ).toBe('write_failed');
+    expect(savedRevision('gmail')).toBe(saved);
+    expect(live.bytes()?.equals(before!)).toBe(true);
+    expect(live.installs.length).toBe(1);
+    // The live login is still this profile's, so Remove still refuses it.
+    expect(await code(agy.remove('gmail'))).toBe('account_active');
+
+    // The live login changed between the read and the install (the CLI refreshed it while
+    // Google checked it): the exchange refuses, and the profile goes back.
+    const refreshed = liveStore(credential('gmail@example.com', 7));
+    const raced = refreshed.agy(async (value) => {
+      if (value.bytes.toString('utf8').includes(':7"')) {
+        fs.writeFileSync(`${refreshed.file}.race`, credential('gmail@example.com', 11).bytes, {
+          mode: 0o600,
+        });
+        fs.renameSync(`${refreshed.file}.race`, refreshed.file);
+      }
+      return identityOf(value);
+    });
+    expect(
+      await code(
+        raced.importSignIn({
+          profileId: 'gmail',
+          mode: 'signin-again',
+          credential: credential('gmail@example.com', 6),
+        })
+      )
+    ).toBe('write_failed');
+    expect(savedRevision('gmail')).toBe(saved);
+    expect(refreshed.bytes()?.equals(credential('gmail@example.com', 11).bytes)).toBe(true);
+    expect(refreshed.installs.length).toBe(1);
+  });
+
+  it('an install that failed after it finished counts: both stores keep the new credential', async () => {
+    await save('gmail');
+    const live = liveStore(credential('gmail@example.com'));
+    live.failInstall = (next) => {
+      fs.writeFileSync(`${live.file}.late`, next.bytes, { mode: 0o600 });
+      fs.renameSync(`${live.file}.late`, live.file);
+      throw new Error('the worker timed out after the exchange');
+    };
+    const fresh = credential('gmail@example.com', 6);
+    await live.agy().importSignIn({ profileId: 'gmail', mode: 'signin-again', credential: fresh });
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(fresh));
+    expect(live.bytes()?.equals(fresh.bytes)).toBe(true);
+  });
+
+  it('reports live_login_not_updated only when the profile cannot be put back either', async () => {
+    await save('gmail');
+    const live = liveStore(credential('gmail@example.com'));
+    const before = live.bytes();
+    const previous = savedRevision('gmail');
+    live.failInstall = () => {
+      // The previous generation disappears, so the profile cannot be put back.
+      fs.rmSync(
+        path.join(ccsDir, 'antigravity-instances', 'gmail', 'ubuntu', `credential-${previous}.bin`)
+      );
+      throw new Error('the guarded store refused');
+    };
+    const fresh = credential('gmail@example.com', 6);
+    expect(
+      await code(
+        live.agy().importSignIn({ profileId: 'gmail', mode: 'signin-again', credential: fresh })
+      )
+    ).toBe('live_login_not_updated');
+    // The profile has the new credential, the live login the old one: the same Google account.
+    expect(savedRevision('gmail')).toBe(credentialFingerprint(fresh));
+    expect(live.bytes()?.equals(before!)).toBe(true);
+  });
+
+  it('a sign-in stopped while the checks ran writes neither store', async () => {
+    await save('gmail');
+    const live = liveStore(credential('gmail@example.com'));
+    const before = live.bytes();
+    const saved = savedRevision('gmail');
+    expect(
+      await code(
+        live.agy().importSignIn({
+          profileId: 'gmail',
+          mode: 'signin-again',
+          credential: credential('gmail@example.com', 6),
+          stopped: () => true,
+        })
+      )
+    ).toBe('write_failed');
+    expect(savedRevision('gmail')).toBe(saved);
+    expect(live.bytes()?.equals(before!)).toBe(true);
+    expect(live.installs).toEqual([]);
   });
 });
 

@@ -252,10 +252,12 @@ test('Codex Add and Sign in again: every refusal ends in plain words, and Cancel
     assert.equal(flow.step, 'name', error.payload.code);
     assert.match(`${flow.error.title} ${flow.error.body}`, words, error.payload.code);
   }
-  // Sign in again on the live active account is refused under the row
+  // Sign in again is never refused under the row for the live login any more (switching is gone);
+  // a server that still answers account_active gets an ordinary failure, not the dead refusal line
   const active = harness({ routes: { 'POST /api/accounts/codex%3Aone/signin-again': refusal(409, 'account_active') }, data: { accounts: [{ id: 'codex:one', provider: 'codex' }], settings: {} } });
   await active.ctl.handle('signin-again', 'codex:one');
-  assert.deepEqual(active.ctl.state.lines['codex:one'], { kind: 'refused', code: 'account_active_signin' });
+  assert.equal(active.ctl.state.lines['codex:one'], undefined);
+  assert.doesNotMatch(JSON.stringify(active.toasts), /another account|switch/i);
   // Cancel: the job is cancelled on the server and the panel closes
   const job = { id: 'job_aaaaaaaaaaaaaaaa', provider: 'codex', kind: 'device-code', mode: 'signin-again', state: 'waiting', verification: null };
   const h = harness({ routes: {

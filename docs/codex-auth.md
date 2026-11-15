@@ -23,8 +23,8 @@ overrides are not renamed with the product.
 
 Removing a saved login shares the Codex login lock and rechecks the native login
 before changing profile files. Every saved alias matching the current native
-account stays protected, including with `--yes` or `--force`; sign `~/.codex` in
-to another account first. Unreadable native authentication or an unverifiable saved
+account stays protected, including with `--yes` or `--force`. Unreadable native
+authentication or an unverifiable saved
 identity also keeps the profile while a native login exists. `--force` only
 overrides the saved-default selection. Confirmation, backup and rollback remain
 part of removal.
@@ -58,7 +58,12 @@ group's own expiration. Reading usage never redeems a reset.
 ## The live login
 
 The account in the shared `~/.codex/auth.json` is shown as **Active on Ubuntu**.
-It is a fact the dashboard reads; AI Account Center never changes it.
+It is a fact the dashboard reads; AI Account Center never moves it to another
+account. Sign in again on the live profile renews both the saved profile and
+`~/.codex/auth.json` with the same account, both or neither; a sign-in to a
+different account is refused (`identity_mismatch`), and Remove still refuses the
+live profile (`account_active`). Restart a Codex app that is open on Ubuntu so it
+reads the renewed login.
 
 The retained account tests, dashboard service and native clients own validation.
 Use offline fixtures and isolated private paths; signing in or live provider

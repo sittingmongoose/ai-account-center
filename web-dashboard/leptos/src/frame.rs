@@ -43,7 +43,7 @@ pub struct FrameCtx {
     pub toasts: RwSignal<Vec<Toast>>,
     pub username: RwSignal<String>,
     next_toast: RwSignal<u64>,
-    /// The dashboard's views for Home, Accounts & Settings, Details and the switch approval, and their way back
+    /// The dashboard's views for Home, Accounts & Settings and Details, and their way back
     /// (dash.rs).
     pub dash: DashCtx,
     /// The theme setting (auto, light or dark): the header's button and Settings' Appearance show the same one.
@@ -157,9 +157,9 @@ impl FrameCtx {
         self.theme.set(mode.to_string());
     }
 
-    /// Sign out. With the dashboard controller started, its own Sign out runs (bridge.js signOut): it waits while an
-    /// account switch is waiting on screen, words a failure, and ends the frame's session when it has signed out.
-    /// Otherwise (not loaded yet, so no switch can be waiting) the frame's session signs out itself.
+    /// Sign out. With the dashboard controller started, its own Sign out runs (bridge.js signOut): it words a failure
+    /// and ends the frame's session when it has signed out. Otherwise (not loaded yet) the frame's session signs out
+    /// itself.
     pub fn sign_out(&self) {
         if self.dash.sign_out().is_none() {
             session::sign_out(*self);

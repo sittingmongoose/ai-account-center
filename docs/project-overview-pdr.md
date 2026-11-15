@@ -41,8 +41,8 @@ Missing history is not interpolated into fabricated activity. Account details
 retain all applicable counters, units, resets, expiration and provenance.
 
 Credentials stay with the host/session that owns them. Authentication,
-origin/session guards, identity-bound caches, target-bound switch approvals,
-migrations and rollback are part of the product behavior. A visible rename does
+origin/session guards, identity-bound caches, removal and reset-claim
+approvals, migrations and rollback are part of the product behavior. A visible rename does
 not rename `~/.ccs/`, session aliases, provider/profile IDs or native host names.
 Nas1 never has account switching, activation, key storage, sign-in or Claude
 desktop flows: the dashboard computer runs only fixed update, hash, extract and

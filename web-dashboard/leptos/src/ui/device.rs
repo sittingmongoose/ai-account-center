@@ -251,13 +251,14 @@ pub fn zoom_only(
 }
 
 /// Whether a reload would steal the screen (review L5): a field has focus, an iframe (a page's media) has focus, or
-/// the frame's switch dialog is open. (The retired Slint dashboard's raised confirmation counted too while it shipped.)
+/// the frame's confirmation dialog (`.adialog`) is open. (The retired Slint dashboard's raised confirmation counted
+/// too while it shipped.)
 pub(crate) fn busy_for_reload(field_typing: bool, iframe_focused: bool, dialog_open: bool) -> bool {
     field_typing || iframe_focused || dialog_open
 }
 
 /// A text field or editable element has the focus (the keyboard is, or is about to be, up), an iframe has the focus,
-/// or the switch dialog is open: a resume reload offers instead of reloading over any of them (review L5).
+/// or the confirmation dialog is open: a resume reload offers instead of reloading over any of them (review L5).
 pub fn typing() -> bool {
     let (field_typing, iframe_focused) = document()
         .active_element()
@@ -802,7 +803,7 @@ mod tests {
         );
         assert!(
             busy_for_reload(false, false, true),
-            "the frame's switch dialog is open"
+            "the frame's confirmation dialog is open"
         );
     }
 }

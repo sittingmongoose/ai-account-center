@@ -76,8 +76,8 @@ or marked "coming" where the server has no flow or route yet.
 | Provider | Add | Sign in again | Remove |
 | --- | --- | --- | --- |
 | Claude | A profile on Mac and Windows, then guided sign-in in the provider app | Guided app sign-in; Open on Mac or Windows from the row | To the 30-day trash, with Restore; a computer's default Claude profile is never offered for removal |
-| Codex | Device code on Ubuntu, with the page, code and Cancel | Device code again; the identity must be unchanged | With confirmation; the active, default and last profiles cannot be removed |
-| Antigravity | Supervised CLI login on the dashboard host (below) | The same supervised login for a saved, non-live profile | Deletes the saved login; no trash |
+| Codex | Device code on Ubuntu, with the page, code and Cancel | Device code again; the identity must be unchanged. On the live login, `~/.codex` is renewed too | With confirmation; the active, default and last profiles cannot be removed |
+| Antigravity | Supervised CLI login on the dashboard host (below) | The same supervised login; the identity must be unchanged. On the live login, the live Antigravity login is renewed too | Deletes the saved login; no trash; the live login cannot be removed |
 | Cursor | Guided app sign-in (one account) | Guided app sign-in, Open on Mac | With confirmation |
 | Muse Code | Re-check is live; sign-in reads "coming" | Re-check | With confirmation |
 | Kimi Code, Z.ai, OpenCode Go | API key in a masked field; only its last 4 are shown afterwards | Replace key | Deletes the stored key |

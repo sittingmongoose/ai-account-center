@@ -56,7 +56,8 @@ import {
  * pasted code back to the CLI, and stops it the moment the new credential is
  * complete. `complete` then imports and provider-verifies that credential
  * (importSignIn), best-effort refreshes the runtime descriptor, and the
- * runner's accounts-changed hint shows the account.
+ * runner's accounts-changed hint shows the account. When the profile is the
+ * live native login, the import renews the live login too (both or neither).
  *
  * When the preflight cannot run (no CLI, no bubblewrap, no unprivileged user
  * namespaces) or the transport is not trusted, the routes fall back to the
@@ -78,6 +79,8 @@ function jobErrorCode(code: AntigravityLifecycleCode): SignInJobError {
       return new SignInJobError('duplicate_identity');
     case 'identity_mismatch':
       return new SignInJobError('identity_mismatch');
+    case 'live_login_not_updated':
+      return new SignInJobError('live_login_not_updated');
     default:
       return new SignInJobError('write_failed');
   }
@@ -277,10 +280,10 @@ export async function addAntigravity(
 }
 
 /**
- * Antigravity Sign in again: refusals first (the live login and the transient
- * races), then the supervised job, or the terminal fallback when the flow
- * cannot run. The live native login is asked too; when that check cannot run,
- * the terminal command asks again before it starts anything.
+ * Antigravity Sign in again: the transient races are refused first, then the
+ * supervised job starts, or the terminal fallback when the flow cannot run.
+ * The live login signs in again like any other profile; the import renews the
+ * live native login in place when it is this same account.
  */
 export async function antigravitySignInAgain(
   env: LifecycleEnv,
@@ -296,20 +299,11 @@ export async function antigravitySignInAgain(
   try {
     refusal = agy.activationRunning()
       ? 'activation_running'
-      : agy.runtimeActiveProfileId() === profileId
-        ? 'account_active'
-        : agy.signInRunning(profileId)
-          ? 'signin_running'
-          : null;
+      : agy.signInRunning(profileId)
+        ? 'signin_running'
+        : null;
   } catch {
     throw new LifecycleHttpError(500, 'registry_unavailable');
-  }
-  if (!refusal) {
-    // The live native login is asked too; when that check cannot run, the
-    // terminal command asks again before it starts anything.
-    refusal = (await agy.isLiveNativeProfile(profileId).catch(() => false))
-      ? 'account_active'
-      : null;
   }
   if (refusal) throw new LifecycleHttpError(409, refusal);
   gateOrThrow(reason, context, profileId);

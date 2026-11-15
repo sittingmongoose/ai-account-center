@@ -203,14 +203,26 @@ opens the link in a browser, signs in to the Google account for that profile
 and pastes the code back into the CLI. The command never reads the link, the
 code or the screen. As soon as the new credential file is complete, the CLI is
 stopped (before any task can be typed), the credential is checked with Google,
-and it is saved. The live login, history and settings are never touched, and
-the private sign-in folder is removed after every attempt.
+and it is saved. History and settings are never touched, and the private
+sign-in folder is removed after every attempt.
 
 - Add refuses a name already used, a 17th profile and a Google account already
   saved in another profile.
-- Sign in again keeps the same Google account (email and subject) and is
-  refused for the live login. Sign the Antigravity CLI in to another account
-  first.
+- Sign in again keeps the same Google account (email and subject); another
+  account is refused (`identity_mismatch`) and nothing changes.
+- Sign in again on the live login renews it too. Under the registry lock the
+  live login (`~/.gemini/antigravity-cli/antigravity-oauth-token`) is read
+  fresh; it is this profile's when it holds the profile's saved bytes, when
+  Google verifies it as the profile's identity, or, when Google cannot verify
+  it (an expired or revoked login), when it holds the saved credential's Google
+  grant (refresh token). Then the saved profile is written first and the live
+  login second, through the guarded native store's atomic exchange, which
+  refuses a live login that changed after it was read. If the live install
+  fails, the previous profile credential is put back (`write_failed`, nothing
+  changed); only if that fails too does the sign-in report
+  `live_login_not_updated`. A live login of another account, one that cannot be
+  read, or none at all is never written. Restart an open Antigravity CLI
+  afterwards so it reads the renewed login.
 - A held registry transaction lock (an import, a removal or a managed update)
   or an unfinished switch left by an older version refuses both, and so does
   another sign-in for the same profile. `ai-account-center antigravity recover`

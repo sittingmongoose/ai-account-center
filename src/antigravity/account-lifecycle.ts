@@ -1,5 +1,4 @@
 import { createHash } from 'crypto';
-import fs from 'fs';
 import path from 'path';
 import { createUbuntuNativeCredentialStore } from './native-credential-transport';
 import { createAntigravityQuotaWorker } from './quota-worker-transport';
@@ -11,32 +10,35 @@ import {
   credentialFingerprint,
   identityKey,
 } from './registry';
+import {
+  ANTIGRAVITY_NATIVE_TOKEN,
+  liveLoginFileExists,
+  liveLoginToRenew,
+  renewLiveLogin,
+  type LiveLoginAccess,
+} from './live-login-renewal';
 import type { NativeCredential, ProfileDto, VerifiedIdentity } from './types';
 
 /**
  * Antigravity Add, Sign in again and Remove (CONTRACT-registry-lifecycle 6.2,
  * 6.3 and 6.7) over the private saved-profile registry.
  *
- * - A sign-in never touches the live native login: the official CLI signs in
- *   inside an isolated home (signin-sandbox.ts), and only the credential it
- *   created is imported here, after a fresh provider identity check.
- * - Add refuses an identity already saved in another profile; Sign in again
- *   keeps the same Google account (email and subject) and refuses the profile
- *   that is the live native login, because a later switch saves the live login
- *   back into that profile.
+ * - The official CLI signs in inside an isolated home (signin-sandbox.ts), and
+ *   only the credential it created is imported here, after a fresh provider
+ *   identity check.
+ * - Add refuses an identity already saved in another profile. Sign in again
+ *   keeps the same Google account (email and subject). When the live native
+ *   login is this same account, it is renewed with the new credential too,
+ *   both or neither (live-login-renewal.ts); any other live login is never
+ *   touched.
  * - Remove deletes the registry snapshot only, under the registry's
  *   transaction lock. It never logs out and never touches shared history. The
  *   live native login's profile and the registry's runtime-verified active
- *   profile are refused, so a switch always has the current account saved.
+ *   profile are refused, so the live login always stays saved.
  */
 export const ANTIGRAVITY_PROFILE_NAME = /^[a-z][a-z0-9_-]{0,47}$/;
 export const ANTIGRAVITY_MAX_PROFILES = 16;
-/** The native fallback credential file under the user's home. */
-export const ANTIGRAVITY_NATIVE_TOKEN = path.join(
-  '.gemini',
-  'antigravity-cli',
-  'antigravity-oauth-token'
-);
+export { ANTIGRAVITY_NATIVE_TOKEN };
 const IDENTITY_MAX_AGE_MS = 5 * 60_000;
 
 export type AntigravityLifecycleCode =
@@ -49,7 +51,8 @@ export type AntigravityLifecycleCode =
   | 'too_many_accounts'
   | 'duplicate_identity'
   | 'identity_mismatch'
-  | 'write_failed';
+  | 'write_failed'
+  | 'live_login_not_updated';
 
 export class AntigravityLifecycleError extends Error {
   constructor(readonly code: AntigravityLifecycleCode) {
@@ -67,6 +70,8 @@ export interface AntigravityLifecycleDeps {
   validateCredential?: (credential: NativeCredential) => Promise<VerifiedIdentity>;
   /** The live native login; only read when its file exists. */
   readNativeCredential?: () => Promise<NativeCredential>;
+  /** Installs the live native login only while it still has `expected`; the guarded store by default. */
+  installNativeCredential?: (credential: NativeCredential, expected: string) => Promise<unknown>;
   now?: () => number;
 }
 
@@ -74,6 +79,8 @@ export interface AntigravitySignInResult {
   profileId: string;
   email: string;
   plan: string | null;
+  /** The live native login was this account and now holds the new credential too. */
+  liveRenewed: boolean;
 }
 
 /** The terminal command a user runs on Ubuntu to add or sign in a profile again. */
@@ -119,6 +126,21 @@ export class AntigravityAccountLifecycle {
   private readNative(): Promise<NativeCredential> {
     if (this.deps.readNativeCredential) return this.deps.readNativeCredential();
     return createUbuntuNativeCredentialStore({ home: path.resolve(this.deps.home()) }).read();
+  }
+
+  /** The live native login, as live-login-renewal.ts reaches it. */
+  private liveLogin(): LiveLoginAccess {
+    const home = path.resolve(this.deps.home());
+    const install =
+      this.deps.installNativeCredential ??
+      ((credential: NativeCredential, expected: string) =>
+        createUbuntuNativeCredentialStore({ home }).install(credential, expected));
+    return {
+      exists: () => liveLoginFileExists(home),
+      read: () => this.readNative(),
+      validate: (credential) => this.validate(credential),
+      install: async (credential, expected) => void (await install(credential, expected)),
+    };
   }
 
   nameError(name: unknown): boolean {
@@ -171,12 +193,7 @@ export class AntigravityAccountLifecycle {
     if (!registry) return false;
     const profile = registry.listProfiles().find((entry) => entry.id === profileId);
     if (!profile) return false;
-    try {
-      fs.lstatSync(path.join(path.resolve(this.deps.home()), ANTIGRAVITY_NATIVE_TOKEN));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw error;
-    }
+    if (!liveLoginFileExists(path.resolve(this.deps.home()))) return false;
     const native = await this.readNative();
     if (credentialFingerprint(native) === registry.savedRevision(profileId)) return true;
     const identity = checkedIdentity(await this.validate(native));
@@ -274,8 +291,9 @@ export class AntigravityAccountLifecycle {
 
   /**
    * Import a credential the isolated sign-in created. Add saves a new profile;
-   * Sign in again replaces a profile's credential with the same Google account.
-   * The identity is verified with the provider under the registry lock.
+   * Sign in again replaces a profile's credential with the same Google account,
+   * and the live native login's too when it is this same account. The identity
+   * is verified with the provider under the registry lock.
    */
   async importSignIn(options: {
     profileId: string;
@@ -318,6 +336,7 @@ export class AntigravityAccountLifecycle {
         if (!(age <= IDENTITY_MAX_AGE_MS && age >= -60_000))
           throw new AntigravityLifecycleError('write_failed');
         const key = identityKey(identity);
+        let liveFingerprint: string | null = null;
         if (mode === 'add') {
           if (
             profiles.some(
@@ -326,27 +345,48 @@ export class AntigravityAccountLifecycle {
           )
             throw new AntigravityLifecycleError('duplicate_identity');
         } else {
-          if (existing?.identityKey !== key)
+          if (!existing || existing.identityKey !== key)
             throw new AntigravityLifecycleError('identity_mismatch');
-          if (this.runtimeActiveProfileId() === profileId)
-            throw new AntigravityLifecycleError('account_active');
-          let live: boolean;
+          if (
+            profiles.some(
+              (profile) =>
+                profile.id !== profileId &&
+                (profile.identityKey === key || profile.email === identity.email)
+            )
+          )
+            throw new AntigravityLifecycleError('duplicate_identity');
+          liveFingerprint = await liveLoginToRenew(this.liveLogin(), registry, existing);
+        }
+        // The supervised job was cancelled or expired while the provider checks
+        // ran: stop under the lock, before anything is committed.
+        if (options.stopped?.()) throw new AntigravityLifecycleError('write_failed');
+        const save = () => {
           try {
-            live = await this.isLiveNativeProfile(profileId);
+            registry.saveCredential(profileId, 'ubuntu', credential, identity, this.now());
           } catch {
             throw new AntigravityLifecycleError('write_failed');
           }
-          if (live) throw new AntigravityLifecycleError('account_active');
+        };
+        const previous = liveFingerprint ? registry.profileSnapshot(profileId) : null;
+        if (liveFingerprint && previous) {
+          const outcome = await renewLiveLogin(
+            this.liveLogin(),
+            registry,
+            previous,
+            credential,
+            liveFingerprint,
+            save
+          );
+          if (outcome !== 'renewed') throw new AntigravityLifecycleError(outcome);
+        } else {
+          save();
         }
-        // The supervised job was cancelled or expired while the provider check
-        // ran: stop under the lock, before anything is committed.
-        if (options.stopped?.()) throw new AntigravityLifecycleError('write_failed');
-        try {
-          registry.saveCredential(profileId, 'ubuntu', credential, identity, this.now());
-        } catch {
-          throw new AntigravityLifecycleError('write_failed');
-        }
-        return { profileId, email: identity.email, plan: identity.plan };
+        return {
+          profileId,
+          email: identity.email,
+          plan: identity.plan,
+          liveRenewed: liveFingerprint !== null,
+        };
       });
     } catch (error) {
       throw new AntigravityLifecycleError(storageCode(error, 'write_failed'));

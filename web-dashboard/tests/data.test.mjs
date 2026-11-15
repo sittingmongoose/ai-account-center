@@ -34,8 +34,11 @@ test('reported overage stays visible without changing the raw percentage', () =>
   assert.equal(view.amount, '648 / 500 requests used · 129.6% used');
   assert.equal(usageView({ usedPercent: 129.6 }, true).amount, '129.6% used');
   assert.equal(usageView({ remainingPercent: 101 }).hasPercent, false);
-  const auto = dashboardView({ accounts: [], codexAutoSwitch: { thresholdPercent: 101 } });
-  assert.equal(auto.autoAvailable, false);
+  // Switching is gone: the dashboard view carries none of the retired auto-switch fields.
+  const retired = dashboardView({ accounts: [], codexAutoSwitch: { enabled: true, thresholdPercent: 5, pollIntervalSeconds: 60 } });
+  for (const key of ['autoEnabled', 'autoAvailable', 'autoSetting', 'thresholdUsed', 'thresholdLabel', 'autoMessage'])
+    assert.equal(key in retired, false, key);
+  assert.doesNotMatch(JSON.stringify(retired), /switching/i);
 });
 test('balances preserve units and expiration separately from resets', () => {
   const view = usageView({ kind: 'balance', label: 'Credits', remaining: 62500, unit: 'credits', expiresAt: '2026-11-01T00:00:00Z' });
@@ -61,7 +64,7 @@ test('Codex core displays percent only while details preserve every actual windo
   ] };
   const data = { accounts: [account], codexAutoSwitch: { enabled: true, thresholdPercent: 5, pollIntervalSeconds: 60 } };
   const view = dashboardView(data); assert.equal(view.codex[0].five.amount, '92% used');
-  assert.equal(view.autoSetting, '95% used · 60s'); assert.equal(allDetailWindows(data, account.id).length, 3);
+  assert.equal(allDetailWindows(data, account.id).length, 3);
 });
 test('full Codex account leaves missing canonical five-hour usage empty while retaining additional 300-minute limits in Details', () => {
   const account = {
@@ -85,8 +88,6 @@ test('full Codex account leaves missing canonical five-hour usage empty while re
   assert.equal(view.codex[0].weekly.amount, '24% used');
   assert.equal(view.codex[0].active, true);
   assert.equal(view.activeCodexEmail, account.email);
-  assert.equal(view.autoSetting, '95% used · 60s');
-  assert.equal(view.thresholdUsed, 95);
   assert.deepEqual(allDetailWindows(data, account.id).map(window => window.label), ['Weekly usage', 'Additional rate limit']);
   assert.equal(allDetailWindows(data, account.id)[1].amount, '92.13% used');
   assert.equal(allDetailWindows(data, account.id)[1].reset, timeLabel(account.windows[1].resetAt, 'Resets'));

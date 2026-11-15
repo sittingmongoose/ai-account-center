@@ -225,11 +225,24 @@ export const tests = {
 		await t.equal('no refusal line', await t.page.$$eval(`${row('codex:one')} .row-line.refuse`, (els) => els.length), 0);
 	},
 
+	async 'accounts: the live Antigravity login signs in again in place'(t) {
+		// The Antigravity row is one of the rich fixture's accounts.
+		const server = fakeServer({ rich: true });
+		await open(t, server);
+		const again = `${row('antigravity:a1')} [data-probe="signin-again:antigravity:a1"]`;
+		await t.equal('Sign in again is enabled on the live row', await t.page.$eval(again, (el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true'), true);
+		await t.page.click(again);
+		await t.until('the Google sign-in page shows', () => document.querySelector('.prov[data-provider="antigravity"] .cb-url')?.textContent === 'https://accounts.google.com/o/oauth2/auth?fixture=a1', null, { timeout: 15000 });
+		await t.equal('one sign-in request for the live row', JSON.stringify(changes(server).map((r) => r.path)), JSON.stringify(['/api/accounts/antigravity%3Aa1/signin-again']));
+		await t.equal('no refusal line', await t.page.$$eval(`${row('antigravity:a1')} .row-line.refuse`, (els) => els.length), 0);
+	},
+
 	async 'accounts: a refused control says why under its row and sends nothing'(t) {
 		const server = fakeServer();
 		await open(t, server);
 		await t.page.click(`${row('codex:one')} [data-probe="remove:codex:one"]`);
-		await t.until('the remove refusal', () => /cannot be removed\. Sign in to another account there first/.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
+		await t.until('the remove refusal', () => /is the live login on its computer, so it cannot be removed\./.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
+		await t.equal('no switch-first advice', /another account/i.test(await t.page.$eval('.acc-item[data-row="codex:one"] .row-line.refuse', (el) => el.textContent || '')), false);
 		await t.equal('no change was sent', changes(server).length, 0);
 	},
 

@@ -614,7 +614,7 @@ test('Antigravity: Add is live and the section explains the supervised login whe
   );
 });
 
-test('Antigravity: the live login gets a refuse control that says why, and the terminal flow shows the command', () => {
+test('Antigravity: the live login signs in again (enabled), only Remove is refused, and the terminal flow shows the command', () => {
   const ag1 = account({
     id: 'antigravity:profile:gmail',
     provider: 'antigravity',
@@ -627,18 +627,25 @@ test('Antigravity: the live login gets a refuse control that says why, and the t
       capabilities: { add: false, signInAgain: false, remove: true },
     },
   });
+  // The server lists Sign in again for the live login (switching is gone); Remove keeps account_active.
   const r = registry([
     reg('antigravity:profile:gmail', 'antigravity', {
-      actions: { signInAgain: false, remove: true },
+      actions: { signInAgain: true, remove: true },
       removeRefusal: 'account_active',
     }),
   ]);
   const vm = accountsViewModel(data([ag1], { providers: p }), { now, registry: r });
   const actions = row(vm, 'antigravity:profile:gmail').actions;
-  assert.equal(actions[0].act, 'refuse');
-  assert.equal(actions[0].enabled, true);
-  assert.equal(actions[0].label, 'Sign in again');
-  assert.match(actions[0].tip, /live login/);
+  assert.deepEqual(
+    actions.map((a) => [a.act, a.value, a.enabled, a.refused, a.label]),
+    [
+      ['signin-again', 'antigravity:profile:gmail', true, false, 'Sign in again'],
+      ['refuse', 'antigravity:profile:gmail\naccount_active', true, true, 'Remove'],
+    ]
+  );
+  assert.equal(actions[0].probe, 'signin-again:antigravity:profile:gmail');
+  assert.match(actions[0].tip, /live Antigravity login there is renewed too/);
+  assert.doesNotMatch(actions.map((a) => a.tip).join(' '), /another (account|profile)[^.]*first/i);
   // the terminal flow: title, command in the body, Copy + Close
   const view = flowView('antigravity', { type: 'terminal', step: 'run', provider: 'antigravity', accountId: ag1.id, email: ag1.email, command: 'ai-account-center antigravity signin gmail' });
   assert.equal(view.open, true);
@@ -1176,7 +1183,7 @@ test('A held Antigravity update reads as a warning that names the build waiting 
   );
   assert.equal(
     done.hosts[0].items[0].tip,
-    'Update held: Antigravity 1.3.0 is waiting for a switching review; 1.2.16 stays installed.'
+    'Update held: Antigravity 1.3.0 is waiting for a review; 1.2.16 stays installed.'
   );
   // A held version that is not a plain version falls back to the fixed message.
   assert.match(done.hosts[1].items[0].tip, /^Update held: the newest Antigravity version is waiting/);
@@ -2058,8 +2065,7 @@ test('the line under a row: a remove to confirm with its effects, a refusal with
     ]
   );
   for (const [code, words] of [
-    ['account_active', /live login/],
-    ['account_active_signin', /cannot sign in again/],
+    ['account_active', /live login on its computer, so it cannot be removed\.$/],
     ['account_default', /saved default/],
     ['account_protected', /default Claude profile/],
     ['last_account', /last account/],

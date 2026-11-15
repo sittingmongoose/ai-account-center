@@ -234,9 +234,10 @@ export function errorText(error, ctx = {}) {
     case 'key_store_unavailable': return t('Key not stored', 'The key could not be stored safely. Nothing was saved.');
     case 'not_aac_owned': return t('Key belongs to another app', 'This account reads a key another app saved. Add a key here to manage it from the dashboard.');
     case 'use_replace_key': return t('Use Replace key', 'This account signs in with a key; replace the key instead.');
+    // Only Remove refuses the live login; it signs in again in place, so a sign-in refusal is a server too old.
     case 'account_active': return t('This is the live login', ctx.what === 'signin-again'
-      ? 'Sign in to another account on that computer first, then sign in again.'
-      : 'Sign in to another account on that computer first, then remove it.');
+      ? 'This server still refuses to sign in the live login again. Nothing was changed.'
+      : 'It is the live login on that computer, so it cannot be removed.');
     case 'account_default': return t('This is the default account', p === 'claude'
       ? "This is this computer's default Claude profile. It can't be removed here."
       : 'Make another account the default first.');

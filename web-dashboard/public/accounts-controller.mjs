@@ -408,8 +408,7 @@ export function createAccountsController(deps) {
       const answer = await call(requests.signInAgain(id));
       if (!followAnswer(provider, answer, base)) toast('info', `${label(provider)}`, 'Nothing to do for this account.');
     } catch (error) {
-      if (error?.payload?.code === 'account_active') state.lines[id] = { kind: 'refused', code: 'account_active_signin' };
-      else if (openAntigravityTerminal(id, error)) { /* flow set and toast fired inside */ }
+      if (openAntigravityTerminal(id, error)) { /* flow set and toast fired inside */ }
       else if (!(await adoptRunning(provider, error))) fail(error, { provider, what: 'signin-again' });
     } finally { state.busyAct = ''; changed(); }
   }

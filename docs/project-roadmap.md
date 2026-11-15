@@ -10,7 +10,7 @@ the repository default and source revisions are independently managed.
 The supported direction is account usage, safe existing-profile controls,
 truthful Analytics, explicit app updates and native Mac/Windows bars. Keep the
 TypeScript backend and pinned Leptos 0.9 web UI. Preserve private storage,
-session aliases, auth/switch guards and rollback.
+session aliases, auth and identity guards and rollback.
 
 Before implementing a change, verify current source/tests, identify the owner,
 state the compatibility effects and run focused offline checks. Do not recreate

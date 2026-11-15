@@ -45,8 +45,8 @@ export const LIFECYCLE_MESSAGES: Readonly<Record<string, string>> = Object.freez
   key_rejected: 'The provider rejected that key. Nothing was saved.',
   not_aac_owned: 'This account reads a key saved by another app. Add a key here instead.',
   use_replace_key: 'Use Replace key for this account.',
-  account_active:
-    'This is the live login on its computer. Sign in to another account there first, then try again.',
+  // Remove's refusal only: the live login signs in again in place.
+  account_active: 'This is the live login on its computer, so it cannot be removed.',
   account_default: 'This is the default account. Make another account the default first.',
   account_protected: "This is this computer's default Claude profile. It can't be removed here.",
   last_account: 'This is the last account of this provider.',

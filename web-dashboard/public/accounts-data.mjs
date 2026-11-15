@@ -162,7 +162,6 @@ export function accountView(account, inventory = [], clientPlatform = 'mac') {
 }
 export function dashboardView(data, inventory = [], clientPlatform = 'mac') {
   const accounts = Array.isArray(data?.accounts) ? data.accounts.filter((a) => a && typeof a === 'object') : [];
-  const auto = data?.codexAutoSwitch;
   const providers = PROVIDERS.map(([id, name, glyph]) => {
     const rows = accounts.filter((account) => account.provider === id);
     return {
@@ -229,16 +228,6 @@ export function dashboardView(data, inventory = [], clientPlatform = 'mac') {
       accounts.find((account) => account.provider === 'codex' && account.isActive === true)
         ?.label ||
       'Active account unavailable',
-    autoEnabled: auto?.enabled === true,
-    autoAvailable: !!auto && percent(auto.thresholdPercent),
-    autoSetting:
-      auto && percent(auto.thresholdPercent)
-        ? `${number(100 - auto.thresholdPercent)}% used · ${auto.pollIntervalSeconds}s`
-        : 'Setting unavailable',
-    thresholdUsed: auto && percent(auto.thresholdPercent) ? 100 - auto.thresholdPercent : -1,
-    thresholdLabel:
-      auto && percent(auto.thresholdPercent) ? `${number(100 - auto.thresholdPercent)}%` : '—',
-    autoMessage: auto?.message || 'Automatic switching status unavailable.',
     updated: timeLabel(data?.updatedAt, 'Updated') || 'Account data unavailable',
   };
 }

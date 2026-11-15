@@ -489,7 +489,7 @@ describe('handleRemoveCodex — native shared-login protection', () => {
       const message = await removalFailure(() =>
         handleRemoveCodex(ctx, ['primary', ...flags], { codexHome })
       );
-      expect(message).toContain('current Codex account');
+      expect(message).toContain('live Codex login');
       expect(ctx.registry.hasProfile('primary')).toBe(true);
       expect(fs.readFileSync(savedAuth('primary'))).toEqual(syntheticAuth('gmail'));
       expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(syntheticAuth('gmail'));
@@ -725,7 +725,7 @@ describe('handleRemoveCodex — live login matched by workspace and principal', 
     const message = await removalFailure(() =>
       handleRemoveCodex(ctx, ['workspace', '--yes', '--force'], { codexHome })
     );
-    expect(message).toContain('current Codex account');
+    expect(message).toContain('live Codex login');
     expect(message).not.toContain('same-user');
     expect(ctx.registry.hasProfile('workspace')).toBe(true);
     expect(fs.readFileSync(savedAuth('workspace'))).toEqual(boundAuth(workspace));
@@ -808,7 +808,7 @@ describe('handleRemoveCodex — lock wait and real exit', () => {
       await release();
       const message = await pending;
       expect(message).toContain(
-        change === 'membership' ? 'Profile not found' : 'current Codex account'
+        change === 'membership' ? 'Profile not found' : 'live Codex login'
       );
       expect(fs.existsSync(savedAuth('target'))).toBe(true);
       expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(syntheticAuth('gmail'));
@@ -844,7 +844,7 @@ describe('handleRemoveCodex — lock wait and real exit', () => {
       new Response(child.stderr).text(),
     ]);
     expect(exitCode).toBe(7);
-    expect(errorText).toContain('current Codex account');
+    expect(errorText).toContain('live Codex login');
     expect(fs.existsSync(path.join(codexHome, '.ccs-activation.lock'))).toBe(false);
     expect(ctx.registry.hasProfile('sole')).toBe(true);
     expect(fs.readFileSync(savedAuth('sole'))).toEqual(syntheticAuth('gmail'));

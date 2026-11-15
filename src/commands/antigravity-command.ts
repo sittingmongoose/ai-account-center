@@ -22,10 +22,11 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  Runs on Ubuntu in an interactive terminal (over SSH is fine). The official');
   writeLine('  Antigravity CLI starts in a private sign-in home: choose Google OAuth, open the');
   writeLine('  link in a browser, sign in to the Google account for this profile and paste');
-  writeLine('  the code back. The live Antigravity login, history and settings are not');
-  writeLine('  touched. Sign in again keeps the same Google account and is refused for the');
-  writeLine('  live login. Remove profiles in the dashboard. AI Account Center no longer');
-  writeLine("  switches the live login (activate is retired); it reads each profile's usage.");
+  writeLine('  the code back. History and settings are not touched. Sign in again keeps the');
+  writeLine('  same Google account; when the profile is the live Antigravity login, the live');
+  writeLine('  login is renewed too. Remove profiles in the dashboard. AI Account Center no');
+  writeLine("  longer switches the live login (activate is retired); it reads each profile's");
+  writeLine('  usage.');
   writeLine('  Recover finishes a switch that an older version or a managed update left');
   writeLine('  stuck: it re-proves the live Ubuntu login, then completes the stuck switch,');
   writeLine('  undoes it, or restores the previous saved login when the live one matches');
@@ -99,7 +100,9 @@ export async function handleAntigravityCommand(
       result = await runtime.recover();
     } catch (error) {
       if (error instanceof PrivateStorageError && error.code === 'busy') {
-        writeLine('[X] An Antigravity switch is running. Try recovery again when it finishes.');
+        writeLine(
+          '[X] Another change to the saved Antigravity profiles is running. Try recovery again when it finishes.'
+        );
         return 1;
       }
       throw error;
