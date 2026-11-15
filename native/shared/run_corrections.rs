@@ -11,6 +11,22 @@ fn s(v: &V) -> &str {
     v.as_str().unwrap_or("")
 }
 
+/// UTC whole seconds and the complete accepted fraction. Epoch providers supply only the
+/// whole-second normalization; no sub-millisecond information is taken from their millisecond values.
+fn written_at_parts(value: &V, epoch: &impl Fn(&V) -> Option<i64>) -> Option<(i64, u32)> {
+    let text = value.as_str()?;
+    let nanos = if let Some((_, suffix)) = text.split_once('.') {
+        let digits: String = suffix.chars().take_while(char::is_ascii_digit).collect();
+        if !(1..=9).contains(&digits.len()) {
+            return None;
+        }
+        digits.parse::<u32>().ok()? * 10_u32.pow(9 - digits.len() as u32)
+    } else {
+        0
+    };
+    Some((epoch(value)?.div_euclid(1000), nanos))
+}
+
 /// Resolve complete, deduplicated history before a caller applies its filters.
 pub fn resolve(records: &[V], epoch: impl Fn(&V) -> Option<i64>) -> Resolution {
     let known: HashMap<&str, &V> = records.iter().map(|r| (s(&r["doc"]["id"]), r)).collect();
@@ -55,6 +71,10 @@ pub fn resolve(records: &[V], epoch: impl Fn(&V) -> Option<i64>) -> Resolution {
         }
     }
     let mut successors = HashMap::<String, String>::new();
+    let times: HashMap<_, _> = records
+        .iter()
+        .map(|r| (s(&r["doc"]["id"]), written_at_parts(&r["doc"]["writtenAt"], &epoch)))
+        .collect();
     for record in records {
         let doc = &record["doc"];
         let id = s(&doc["id"]);
@@ -66,8 +86,8 @@ pub fn resolve(records: &[V], epoch: impl Fn(&V) -> Option<i64>) -> Resolution {
         }
         if let Some(held) = successors.get(target) {
             let old = &known[held.as_str()]["doc"];
-            let newer = (epoch(&doc["writtenAt"]), doc["seq"].as_u64(), id)
-                > (epoch(&old["writtenAt"]), old["seq"].as_u64(), held.as_str());
+            let newer = (times.get(id), doc["seq"].as_u64(), id)
+                > (times.get(held.as_str()), old["seq"].as_u64(), held.as_str());
             let loser = if newer { held.as_str() } else { id };
             refused.insert(loser.to_owned(), "corrects conflict: a later correction wins".into());
             if !newer {

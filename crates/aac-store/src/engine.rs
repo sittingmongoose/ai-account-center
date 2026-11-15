@@ -128,6 +128,7 @@ pub struct Engine {
     pub instance_id: String,
     pub opened_ms: u64,
     pub integrity: Mutex<Json>,
+    pub(crate) runs_history: Mutex<crate::runs::HistoryCache>,
     /// Last, so it is released after the logs and redb (fields drop in declaration order).
     _lock: fsx::StoreLock,
 }
@@ -318,6 +319,7 @@ impl Engine {
             instance_id,
             opened_ms: now_ms(),
             integrity: Mutex::new(integrity),
+            runs_history: Mutex::new(crate::runs::HistoryCache::default()),
             _lock: lock,
         };
         let replay_findings = engine.replay()?;
@@ -898,6 +900,7 @@ impl Engine {
             txn.commit()?;
         }
         *guard = None;
+        self.runs_history.lock().unwrap_or_else(|p| p.into_inner()).clear();
         Ok(())
     }
 

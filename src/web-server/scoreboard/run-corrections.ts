@@ -2,6 +2,12 @@
 import type { RunDoc } from '../status/run-schema';
 import type { RunsState } from './runs-types';
 
+/** Accepted ISO values: UTC whole seconds plus all nine fractional digits, including before 1970. */
+function writtenAtParts(value: string): readonly [number, number] {
+  const fraction = /\.(\d{1,9})(?:Z|[+-]\d{2}:\d{2})$/.exec(value)?.[1] ?? '';
+  return [Math.floor(Date.parse(value) / 1000), Number(fraction.padEnd(9, '0'))];
+}
+
 export function resolveRunDocs<T extends { doc: RunDoc }>(records: readonly T[]) {
   const known = new Map(records.map((r) => [r.doc.id, r]));
   const refused = new Map<string, string>();
@@ -41,10 +47,17 @@ export function resolveRunDocs<T extends { doc: RunDoc }>(records: readonly T[])
     }
   }
   const successors = new Map<string, string>();
-  const newer = (a: RunDoc, b: RunDoc) =>
-    Date.parse(a.writtenAt) - Date.parse(b.writtenAt) ||
-    a.seq - b.seq ||
-    (a.id > b.id ? 1 : a.id < b.id ? -1 : 0);
+  const times = new Map(records.map(({ doc }) => [doc.id, writtenAtParts(doc.writtenAt)]));
+  const newer = (a: RunDoc, b: RunDoc) => {
+    const left = times.get(a.id) ?? writtenAtParts(a.writtenAt);
+    const right = times.get(b.id) ?? writtenAtParts(b.writtenAt);
+    return (
+      left[0] - right[0] ||
+      left[1] - right[1] ||
+      a.seq - b.seq ||
+      (a.id > b.id ? 1 : a.id < b.id ? -1 : 0)
+    );
+  };
   for (const { doc } of records) {
     if (!doc.corrects || refused.has(doc.id)) continue;
     const held = successors.get(doc.corrects);

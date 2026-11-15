@@ -152,3 +152,60 @@ it('acknowledges voids and superseded records while refusing invalid corrections
       receipt.files.find((f: { file: string }) => f.file.endsWith(`--${id}.json`))?.result
     ).toBe('refused');
 });
+
+it("keeps the reviewer's nanosecond-newer correction and credits Sol, never Opus", async () => {
+  const probe = JSON.parse(
+    fs.readFileSync(
+      path.resolve(import.meta.dir, '../../../fixtures/run-corrections-precision.json'),
+      'utf8'
+    )
+  );
+  const root = dirs.make('run-corrections-precision-');
+  for (const doc of probe.runs) writeRun(root, doc);
+  fs.mkdirSync(path.join(root, 'v1/catalog'), { recursive: true });
+  await seedCatalog(root);
+  const options = { root: () => root, now: () => NOW };
+  const reader = new RunsReader(options);
+  const catalog = new CatalogReader(options);
+  await Promise.all([reader.scan(), catalog.scan()]);
+  const state = reader.snapshot();
+  expect(state.runs.map((r) => r.doc.id)).toEqual(['vm.probe--a-newer']);
+  expect(state.problems).toHaveLength(1);
+  expect(state.problems[0]?.file).toContain('vm.probe--z-older');
+  const view = buildScoreboardView({
+    root,
+    now: NOW,
+    timeZone: 'UTC',
+    runs: state,
+    catalog: catalog.snapshot(),
+  });
+  const rows = view.uses
+    .find((u) => u.id === 'building')
+    ?.taskTypes.find((t) => t.id === 'build')?.rows;
+  expect(rows).toHaveLength(1);
+  expect(rows?.[0]?.model).toBe('openai/gpt-6.1-sol');
+  expect(rows?.[0]?.observed?.n).toBe(1);
+});
+
+const precisionCases = JSON.parse(
+  fs.readFileSync(
+    path.resolve(import.meta.dir, '../../../fixtures/run-corrections-precision.json'),
+    'utf8'
+  )
+);
+for (const testCase of precisionCases.cases) {
+  it(`orders accepted timestamps exactly: ${testCase.name}`, async () => {
+    const root = dirs.make('run-corrections-precision-');
+    for (const original of precisionCases.runs) {
+      const doc = structuredClone(original);
+      if (doc.id.endsWith('--z-older')) doc.writtenAt = testCase.older;
+      if (doc.id.endsWith('--a-newer')) doc.writtenAt = testCase.newer;
+      writeRun(root, doc);
+    }
+    const reader = new RunsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    expect(reader.snapshot().runs.map((r) => r.doc.id)).toEqual([testCase.keep]);
+    expect(reader.snapshot().problems).toHaveLength(1);
+    expect(reader.snapshot().problems[0]?.reason).toContain('conflict');
+  });
+}

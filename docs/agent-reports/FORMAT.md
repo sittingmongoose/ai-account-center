@@ -335,7 +335,9 @@ review.of. Ordinary missing review targets retain their existing ignored-review 
 Refuse a correction naming another writer's id, a missing target, or a cycle. Refuse descendants
 of a refused correction too. Originals remain eligible when the attempted correction is refused.
 Detect cycles before deciding conflicts. Among multiple valid corrections of the same target,
-later writtenAt wins; equal moments use higher seq, then lexicographically greatest ASCII run id.
+later writtenAt wins, comparing UTC seconds and the full accepted fraction padded to nanoseconds;
+equal instants use higher seq, then lexicographically greatest ASCII run id. Historical reader
+forms (up to nine fractional digits, optional seconds, and UTC offsets) remain accepted.
 Report every loser as a conflict and refuse its descendants. A descendant's timestamp never lets
 it bypass a lost branch. Refusals carry fixed reasons in the run Source and reader receipts.
 

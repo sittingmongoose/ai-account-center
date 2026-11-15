@@ -1158,3 +1158,154 @@ fn correction_fixture_resolves_before_native_query_filters() {
     fs::remove_dir_all(db).unwrap();
     fs::remove_dir_all(share.root).unwrap();
 }
+
+#[test]
+fn correction_history_resolves_once_across_five_pages_and_invalidates() {
+    let share = Share::new("runcorr-cache-share");
+    for i in 0..20_001 {
+        share.run(
+            "vm.probe",
+            &format!("page-{i:05}"),
+            1,
+            T0 + DAY,
+            "gpt-6.1-sol",
+            Some("high"),
+            Some("codex"),
+            Some("build"),
+        );
+    }
+    let first = share
+        .root
+        .join("v1/writers/vm.probe/runs/2026-11-02/vm.probe--page-00000.json");
+    let mut correction: Json = serde_json::from_str(&fs::read_to_string(&first).unwrap()).unwrap();
+    correction["id"] = json!("vm.probe--replacement");
+    correction["corrects"] = json!("vm.probe--page-00000");
+    fs::write(
+        first.with_file_name("vm.probe--replacement.json"),
+        correction.to_string(),
+    )
+    .unwrap();
+    let db = temp_dir("runcorr-cache-store");
+    let engine = std::sync::Arc::new(open(&db));
+    loop {
+        let (scan, _) = pass(&engine, &share, T0 + 3 * DAY, 30_000, true);
+        if scan["more"] != true {
+            break;
+        }
+    }
+    assert_eq!(runs::correction_resolution_count(&engine), 0);
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let engine = std::sync::Arc::clone(&engine);
+            std::thread::spawn(move || call(&engine, "runsQuery", json!({"limit":1})))
+        })
+        .collect();
+    for reader in readers {
+        assert_eq!(reader.join().unwrap()["runs"].as_array().unwrap().len(), 1);
+    }
+    assert_eq!(
+        runs::correction_resolution_count(&engine),
+        1,
+        "concurrent cold queries share one resolution"
+    );
+    let mut after = Json::Null;
+    let mut ids = std::collections::HashSet::new();
+    let mut pages = 0;
+    loop {
+        let page = call(&engine, "runsQuery", json!({"after":after}));
+        pages += 1;
+        for row in page["runs"].as_array().unwrap() {
+            assert!(ids.insert(row["doc"]["id"].as_str().unwrap().to_owned()));
+        }
+        after = page["next"].clone();
+        if after.is_null() {
+            break;
+        }
+    }
+    assert_eq!(pages, 5);
+    assert_eq!(ids.len(), 20_001);
+    assert!(!ids.contains("vm.probe--page-00000"));
+    assert!(ids.contains("vm.probe--replacement"));
+    assert_eq!(
+        runs::correction_resolution_count(&engine),
+        1,
+        "one resolution for all five pages"
+    );
+    call(&engine, "runsStatus", json!({}));
+    call(&engine, "runsAudit", json!({}));
+    query(&engine, json!({"taskType":"review"}));
+    assert_eq!(
+        runs::correction_resolution_count(&engine),
+        1,
+        "status, audit and filters reuse the same snapshot"
+    );
+    share.set_aliases(&[("probe-alias", "openai/gpt-6.1-sol")]);
+    pass(&engine, &share, T0 + 4 * DAY, 30_000, true);
+    query(&engine, json!({"limit":1}));
+    assert_eq!(
+        runs::correction_resolution_count(&engine),
+        2,
+        "catalog identity invalidates"
+    );
+    share.run(
+        "vm.probe",
+        "added",
+        2,
+        T0 + 5 * DAY,
+        "gpt-6.1-sol",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
+    pass(&engine, &share, T0 + 6 * DAY, 30_000, true);
+    query(&engine, json!({"limit":1}));
+    assert_eq!(
+        runs::correction_resolution_count(&engine),
+        3,
+        "new run generation invalidates"
+    );
+    engine.close().unwrap();
+    assert!(
+        runs::query(&engine, &runs::QueryArgs::default()).is_err(),
+        "closed engine cannot serve a stale snapshot"
+    );
+    drop(engine);
+    let reopened = open(&db);
+    assert_eq!(runs::correction_resolution_count(&reopened), 0);
+    query(&reopened, json!({"limit":1}));
+    assert_eq!(
+        runs::correction_resolution_count(&reopened),
+        1,
+        "reopen owns a fresh cache"
+    );
+    drop(reopened);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+#[test]
+fn native_store_keeps_nanosecond_newer_sol_correction() {
+    let fixture: Json =
+        serde_json::from_str(include_str!("../../../tests/fixtures/run-corrections-precision.json")).unwrap();
+    let share = Share::new("runcorr-precision-share");
+    let dir = share.root.join("v1/writers/vm.probe/runs/2026-11-06");
+    fs::create_dir_all(&dir).unwrap();
+    for doc in fixture["runs"].as_array().unwrap() {
+        fs::write(
+            dir.join(format!("{}.json", doc["id"].as_str().unwrap())),
+            doc.to_string(),
+        )
+        .unwrap();
+    }
+    let db = temp_dir("runcorr-precision-store");
+    let engine = open(&db);
+    pass(&engine, &share, T0 + 10 * DAY, 1000, true);
+    let rows = query(&engine, json!({}));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["doc"]["id"], "vm.probe--a-newer");
+    assert_eq!(rows[0]["doc"]["model"]["id"], "openai/gpt-6.1-sol");
+    assert_eq!(rows[0]["doc"]["writtenAt"], "2026-11-06T16:00:00.0002Z");
+    drop(engine);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}

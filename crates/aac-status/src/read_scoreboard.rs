@@ -714,6 +714,7 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     }
     let ctx = Context::new(envelope.presentation);
     let mut input = envelope.data;
+    // Epoch facts normalize UTC seconds; the resolver separately retains all nine fractional digits.
     crate::run_corrections::resolve_state(&mut input["runs"], |v| ctx.epoch(v))?;
     let effective: HashMap<String, V> = input["runs"]["runs"]
         .as_array()?
