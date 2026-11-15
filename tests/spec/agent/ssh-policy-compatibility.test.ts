@@ -2,6 +2,7 @@ import { expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import net from 'net';
 import { execFile } from 'child_process';
 import { sshArgv } from '../../../src/web-server/services/ssh-policy';
 import { createEmptyUnifiedConfig } from '../../../src/config/unified-config-types';
@@ -75,4 +76,59 @@ it.skipIf(!process.env.AAC_TEST_OPENSSH_81)(
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
+);
+it.skipIf(!process.env.AAC_TEST_OPENSSH_81)(
+  'an OpenSSH 8.1 client replaced at its path by a modern one is re-probed; the empty pin refuses',
+  async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-ssh-upgrade-'));
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-ssh-upgrade-bin-'));
+    const saved = { ...process.env };
+    const listener = net.createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', resolve));
+    const port = (listener.address() as net.AddressInfo).port;
+    await new Promise<void>((resolve) => listener.close(() => resolve()));
+    try {
+      const ssh = path.join(bin, 'ssh');
+      fs.copyFileSync(process.env.AAC_TEST_OPENSSH_81!, ssh);
+      fs.chmodSync(ssh, 0o755);
+      process.env.PATH = `${bin}:${process.env.PATH}`;
+      process.env.CCS_HOME = root;
+      process.env.CCS_DIR = root;
+      fs.writeFileSync(
+        path.join(root, 'config.yaml'),
+        JSON.stringify({
+          ...createEmptyUnifiedConfig(),
+          agentTransportSsh: { knownHostsFile: path.join(root, 'known_hosts') },
+          computers: {
+            fixture: {
+              sshAlias: 'fixture',
+              transport: { host: '127.0.0.1', user: 'root', port, key: path.join(root, 'key') },
+            },
+          },
+        })
+      );
+      expect(await sshArgv('fixture', 'unused')).not.toContain('KnownHostsCommand=none');
+      fs.copyFileSync('/usr/bin/ssh', ssh);
+      const argv = await sshArgv('fixture', 'unused');
+      expect(argv).toContain('KnownHostsCommand=none');
+      const output = await run('sudo', [
+        '-n',
+        'unshare',
+        '--mount',
+        '--fork',
+        'python3',
+        path.join(import.meta.dir, 'ssh_loopback.py'),
+        root,
+        JSON.stringify(argv.slice(0, -3)),
+        String(port),
+        ssh,
+      ]);
+      expect(output).toContain('PASS empty AAC pin');
+    } finally {
+      process.env = saved;
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  },
+  25000
 );

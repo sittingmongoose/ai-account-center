@@ -27,6 +27,33 @@ class Ssh(unittest.TestCase):
         self.assertIn("'UpdateHostKeys=no'", call)
 
 
+    def test_capabilities_reprobe_after_same_path_replacement(self):
+        old = "if 'KnownHostsCommand=none' in sys.argv:\n print('command-line: Bad configuration option: knownhostscommand', file=sys.stderr); sys.exit(255)\n"
+        with tempfile.TemporaryDirectory() as root:
+            ssh, calls = Path(root, 'ssh'), Path(root, 'calls')
+            def client(body):
+                ssh.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nwith Path(__file__).with_name("calls").open("a") as f: f.write("probe\\n")\n' + body)
+                ssh.chmod(0o700)
+            client(old)
+            self.assertNotIn('KnownHostsCommand=none', h.ssh_capabilities_for(str(ssh)))
+            inode = ssh.stat().st_ino
+            client('')  # In place: same path and inode, new size/mtime/ctime.
+            self.assertEqual(ssh.stat().st_ino, inode)
+            self.assertIn('KnownHostsCommand=none', h.ssh_capabilities_for(str(ssh)))
+            h.ssh_capabilities_for(str(ssh))
+            self.assertEqual(len(calls.read_text().split()), 4)
+
+    @unittest.skipUnless(os.environ.get('AAC_TEST_OPENSSH_81'), 'needs an actual OpenSSH 8.1 client')
+    def test_actual_openssh_81_replaced_by_modern_client_is_reprobed(self):
+        with tempfile.TemporaryDirectory() as root:
+            ssh = Path(root, 'ssh')
+            ssh.write_bytes(Path(os.environ['AAC_TEST_OPENSSH_81']).read_bytes())
+            ssh.chmod(0o755)
+            self.assertNotIn('KnownHostsCommand=none', h.ssh_capabilities_for(str(ssh)))
+            ssh.write_bytes(Path('/usr/bin/ssh').read_bytes())
+            self.assertIn('KnownHostsCommand=none', h.ssh_capabilities_for(str(ssh)))
+
+
 class Fixtures(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='history-helper-fixture-')
