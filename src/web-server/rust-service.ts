@@ -152,10 +152,10 @@ export class RustService extends RustSupervisor {
     this.fallback(route, { kind: 'declined', reason: result.decline ?? 'unnamed' });
   }
 
-  private difference(route: string, status: number, message = 'Rust read response differs'): void {
+  private difference(route: string): void {
     this.stats.differences++;
     this.record(route, { kind: 'different' });
-    logger.warn('rust.service.shadow_difference', message, { route, status });
+    // State changes and suppressed counts are logged by the supervisor.
   }
 
   /**
@@ -184,7 +184,7 @@ export class RustService extends RustSupervisor {
           return;
         }
         if (reference === undefined || JSON.stringify(reference) !== JSON.stringify(value))
-          this.difference(route, result.status);
+          this.difference(route);
         else {
           this.record(route, { kind: 'equal' });
           this.pair(route, tsMs, rustMs);
@@ -214,11 +214,7 @@ export class RustService extends RustSupervisor {
         return expected;
       }
       if (canonical(expected) !== canonical(result.body)) {
-        this.difference(
-          route,
-          result.status,
-          'Rust read candidate differs; TypeScript fallback active'
-        );
+        this.difference(route);
         this.stats.fallbacks++;
         return expected;
       }
@@ -535,12 +531,7 @@ export class RustService extends RustSupervisor {
             return;
           }
           if (canonical(body) !== canonical(result.body)) {
-            this.stats.differences++;
-            this.record(route, { kind: 'different' });
-            logger.warn('rust.service.shadow_difference', 'Rust shadow response differs', {
-              route,
-              status: result.status,
-            });
+            this.difference(route);
           } else {
             this.record(route, { kind: 'equal' });
             this.pair(route, tsMs, rustMs);

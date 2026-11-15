@@ -144,7 +144,10 @@ Failed commands remain unavailable; an interrupted command is never automaticall
 
 Account Center logging uses the existing `logging` section in the unified config. Its defaults
 enable logging and redaction at `info` level with bounded rotation, retention,
-and live-buffer settings. Historical `cliproxy.logging` fields remain private
+and live-buffer settings. Rotations use plain JSONL (legacy gzip archives remain valid); no log
+compression runs on the serving thread. The archive directory has an aggregate 32 MiB cap, pruning
+the oldest files first in addition to age retention. Rust comparison state logs are capped at two
+per route per minute, with suppressed comparison counts in the periodic summary. Historical `cliproxy.logging` fields remain private
 configuration compatibility data; the current product does not start CLIProxy.
 
 When adding a logging setting, update the schema/defaults, configuration loader,

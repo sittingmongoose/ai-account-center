@@ -1,6 +1,5 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as zlib from 'zlib';
 import { getResolvedLoggingConfig } from './log-config';
 import {
   ensureLoggingDirectories,
@@ -11,6 +10,8 @@ import {
 import { pushRecentLogEntry } from './log-buffer';
 import { shouldWriteLogLevel, type LogEntry } from './log-types';
 
+// Includes old .gz archives and new uncompressed rotations.
+export const LOG_ARCHIVE_BYTE_CAP = 32 * 1024 * 1024;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 60 * 1000;
 let lastPruneAt = 0;
@@ -35,15 +36,12 @@ function rotateCurrentLogIfNeeded(): void {
     return;
   }
 
-  const currentContent = fs.readFileSync(currentLogPath, 'utf8');
-  if (!currentContent.trim()) {
-    fs.truncateSync(currentLogPath, 0);
-    return;
-  }
-
-  const archivePath = buildArchiveLogPath(new Date(stats.mtimeMs || Date.now()));
-  fs.writeFileSync(archivePath, zlib.gzipSync(currentContent), { mode: 0o600 });
-  fs.truncateSync(currentLogPath, 0);
+  if (stats.size === 0) return;
+  // Rename only: reading and compressing an entire log on the serving thread stalls requests.
+  // Plain JSONL remains inspectable and shares the same total archive budget as legacy gzip.
+  const archivePath = buildArchiveLogPath(new Date()).replace(/\.gz$/, '');
+  fs.renameSync(currentLogPath, archivePath);
+  pruneExpiredLogArchives();
 }
 
 export function pruneExpiredLogArchives(): void {
@@ -54,6 +52,7 @@ export function pruneExpiredLogArchives(): void {
   }
 
   const cutoffMs = Date.now() - config.retain_days * ONE_DAY_MS;
+  const archives: { file: string; size: number; mtime: number }[] = [];
   for (const entry of fs.readdirSync(archiveDir)) {
     const archivePath = path.join(archiveDir, entry);
     try {
@@ -63,9 +62,21 @@ export function pruneExpiredLogArchives(): void {
       }
       if (stats.mtimeMs < cutoffMs) {
         fs.unlinkSync(archivePath);
-      }
+      } else archives.push({ file: archivePath, size: stats.size, mtime: stats.mtimeMs });
     } catch {
       continue;
+    }
+  }
+  let bytes = archives.reduce((sum, item) => sum + item.size, 0);
+  for (const archive of archives.sort(
+    (a, b) => a.mtime - b.mtime || a.file.localeCompare(b.file)
+  )) {
+    if (bytes <= LOG_ARCHIVE_BYTE_CAP) break;
+    try {
+      fs.unlinkSync(archive.file);
+      bytes -= archive.size;
+    } catch {
+      /* Retry next prune. */
     }
   }
 }

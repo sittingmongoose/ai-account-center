@@ -81,14 +81,28 @@ describe('log storage', () => {
     const archives = fs.readdirSync(archiveDir);
     expect(archives).toHaveLength(1);
 
-    const archivedContent = zlib
-      .gunzipSync(fs.readFileSync(path.join(archiveDir, archives[0])))
-      .toString('utf8');
+    expect(archives[0]).toEndWith('.jsonl');
+    const archivedContent = fs.readFileSync(path.join(archiveDir, archives[0]), 'utf8');
     expect(archivedContent).toContain('"id":"old-entry"');
 
     const currentContent = fs.readFileSync(currentLogPath, 'utf8');
     expect(currentContent).toContain('"id":"new-entry"');
     expect(currentContent).not.toContain('"id":"old-entry"');
+  });
+
+  it('caps aggregate archive bytes including uncompressed rotation files', () => {
+    const archiveDir = getLogArchiveDir();
+    fs.mkdirSync(archiveDir, { recursive: true });
+    for (let n = 0; n < 4; n++) {
+      const file = path.join(archiveDir, `ccs-cap-${n}.jsonl.gz`);
+      fs.closeSync(fs.openSync(file, 'w'));
+      fs.truncateSync(file, 20 * 1024 * 1024);
+    }
+    pruneExpiredLogArchives();
+    const size = fs
+      .readdirSync(archiveDir)
+      .reduce((total, name) => total + fs.statSync(path.join(archiveDir, name)).size, 0);
+    expect(size).toBeLessThanOrEqual(32 * 1024 * 1024);
   });
 
   it('prunes expired archives according to retention settings', () => {

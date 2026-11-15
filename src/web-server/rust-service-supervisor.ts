@@ -49,6 +49,7 @@ export class RustSupervisor {
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */
   readonly routes = new RouteStats((route, state, previous, count) => {
+    if (!this.admitComparisonLog(route, state)) return;
     const context = { route, state, previous, count };
     if (state === 'serving') logger.info('rust.service.route_state', 'Rust route serving', context);
     else
@@ -60,6 +61,23 @@ export class RustSupervisor {
   });
   /** The same outcomes for the current minute only (the `rust.service.minute` line). */
   protected minute = new RouteStats(() => {});
+  private readonly comparisonLogs = new Map<string, { at: number; states: Set<string> }>();
+  private suppressedComparisons = 0;
+
+  /** Bound even alternating equal/different states to two entries per route per minute. */
+  private admitComparisonLog(route: string, state: string): boolean {
+    const previous = this.comparisonLogs.get(route);
+    if (previous && Date.now() - previous.at < 60_000) {
+      if (!previous.states.has(state) && previous.states.size < 2) {
+        previous.states.add(state);
+        return true;
+      }
+      this.suppressedComparisons++;
+      return false;
+    }
+    this.comparisonLogs.set(route, { at: Date.now(), states: new Set([state]) });
+    return true;
+  }
   protected readonly breakers: RouteBreakers;
   protected readonly restarts: RestartBudget;
   protected lease: RustLease | null = null;
@@ -289,6 +307,11 @@ export class RustSupervisor {
   }
 
   protected record(route: string, outcome: RouteOutcome): void {
+    if (
+      (outcome.kind === 'equal' || outcome.kind === 'different') &&
+      this.routes.routes.get(route)?.state === (outcome.kind === 'equal' ? 'serving' : 'different')
+    )
+      this.suppressedComparisons++;
     this.routes.record(route, outcome);
     this.minute.record(route, outcome);
   }
@@ -313,7 +336,9 @@ export class RustSupervisor {
         mode: this.mode,
         rustRssBytes: this.childRssBytes(),
         routes: minute.snapshot(),
+        suppressedComparisons: this.suppressedComparisons,
       });
+      this.suppressedComparisons = 0;
     } catch {
       /* A failed log disk must not stop the bridge. */
     }
