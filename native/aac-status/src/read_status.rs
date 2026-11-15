@@ -128,11 +128,14 @@ fn span(seconds: f64) -> String {
         format!("{}s", seconds.floor())
     }
 }
+/// status-view-panels.ts `partProblemText`: `${item}: ${reason}`. TS writes any `item` through `String()`
+/// ("undefined" when absent) and throws on a reason that is not a string, so anything but two strings declines
+/// (R2 fuzz: a problem without an item was served as ": ..." where TS writes "undefined: ...").
 fn part_problem(i: &Inputs, p: &V) -> Option<String> {
     Some(format!(
         "{}: {} (since {}).",
-        s(&p["item"]),
-        trim_period(s(&p["reason"])),
+        p["item"].as_str()?,
+        trim_period(p["reason"].as_str()?),
         i.clock(i.at(&p["since"])?)
     ))
 }
