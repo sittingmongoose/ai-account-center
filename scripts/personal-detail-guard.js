@@ -38,6 +38,10 @@ const BLOCKED_IPV4_PREFIXES = new Set([
 
 /** path -> { hash -> exact allowed occurrences } (product code, kept on purpose). */
 const ALLOWED = {
+  // The Claude history agent verb keeps the helper's stable profile id (product code).
+  'crates/aac-agent/src/history.rs': {
+    '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 3,
+  },
   'scripts/claude-history/history-index-sync.cjs': {
     '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 3,
   },
