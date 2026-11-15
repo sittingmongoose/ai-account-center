@@ -24,6 +24,18 @@ const cases: unknown[] = [
     expected: parseMachineProbe('linux', probe),
     fallback: true,
   })),
+  // Big review L6/L2: fractional counters expose the subtraction grouping; integers are the control.
+  ...[
+    'cores=4\ncpu=0.1 0.2 0.3 0.4 0.5\n',
+    'cores=4\ncpu=0.1 0.2 0.3 0.4\n',
+    'cores=4\ncpu=0.7 0.1 0.2 0.3 0.4 0.5 0.6 0.9 0.8\n',
+    'cores=4\ncpu=1 2 3 4 5\n',
+  ].map((probe) => ({
+    source: 'review-big-L6-cpu-grouping',
+    verb: 'inventory',
+    args: { platform: 'linux', probe },
+    expected: parseMachineProbe('linux', probe),
+  })),
 ];
 function visit(node: ts.Node) {
   if (

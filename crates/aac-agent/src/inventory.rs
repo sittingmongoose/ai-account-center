@@ -112,8 +112,11 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             })
             .filter(|v| v.len() >= 4 && v.iter().all(|n| n.is_finite()))
             .map(|v| {
-                let total: f64 = v.iter().take(8).sum();
-                json!({"busy":total-v[3]-v.get(4).copied().unwrap_or(0.0),"total":total})
+                // status-collectors.ts linuxCpuTimes, operation for operation: a reduce from 0,
+                // then `total - (idle + iowait)` (other groupings round fractional counters apart).
+                let total = v.iter().take(8).fold(0.0, |sum, n| sum + n);
+                let idle = v[3] + v.get(4).copied().unwrap_or(0.0);
+                json!({"busy":total - idle,"total":total})
             })
     } else {
         None
