@@ -1,0 +1,18 @@
+[package]
+name = "aac-num"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "One numeric layer: ECMAScript, Python and Intl number text, rounding and dates, each with a proven domain (L3)"
+
+# core and alloc only, so the Leptos page (wasm) formats exactly as the server does.
+[dependencies]
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
+[lints]
+workspace = true

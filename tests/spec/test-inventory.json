@@ -103,6 +103,14 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/src/inventory.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-agent/src/quota.rs",
       "kind": "HTTP",
       "evidence": [
@@ -287,6 +295,60 @@
       "evidence": [
         "table"
       ]
+    },
+    {
+      "file": "crates/aac-num/src/big.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/src/civil.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/src/digits.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/src/ecma.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/src/intl.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/src/lib.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/src/py.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/src/view.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-num/tests/corpus.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-protocol/tests/protocol.rs",
@@ -2028,6 +2090,12 @@
     },
     {
       "file": "tests/unit/status-native/seq-parity.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/status-native/to-fixed-parity.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

@@ -76,22 +76,11 @@ fn parse_time(ctx: &Context, value: Option<&Value>) -> Admit<Option<f64>> {
     let Some(Value::String(text)) = value else {
         return Err(Refuse);
     };
-    if text.is_empty() {
-        return Ok(None);
-    }
-    if let Some(ms) = ctx.epoch(&Value::String(text.clone())) {
+    match crate::js::date_parse(ctx, text) {
         #[allow(clippy::cast_precision_loss)]
-        return Ok(Some(ms as f64));
+        Some(ms) => Ok(ms.map(|ms| ms as f64)),
+        None => Err(Refuse),
     }
-    let b = text.as_bytes();
-    let iso_like = b.len() >= 11
-        && b[..4].iter().all(u8::is_ascii_digit)
-        && b[4] == b'-'
-        && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[7] == b'-'
-        && b[8..10].iter().all(u8::is_ascii_digit)
-        && b[10] == b'T';
-    if iso_like { Ok(None) } else { Err(Refuse) }
 }
 
 fn bucket_minutes(span: f64) -> i64 {

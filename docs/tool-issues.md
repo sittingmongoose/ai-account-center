@@ -125,3 +125,11 @@ still needs release-packaging checks.
 | Tool | Issue and evidence | Real false pass? | Status |
 | --- | --- | --- | --- |
 | File-read shadow count | `tests/spec/read-file-parity.ts:211-213` waits at most 1 s (200 x 5 ms) for eight background shadow comparisons. One full `AAC_RUST_SERVICE=shadow node tests/spec/run.mjs` on the VM at load average 31 failed `shadowed >= 8`; two isolated reruns and the next full shadow run passed with 11 comparisons and 0 differences, on the same binary. | No; a timing failure only, no difference or product failure shown. | Open for the six-hour tool batch: await the shadow comparisons' own settlement instead of a fixed sleep budget. No assertion was weakened here. |
+
+## L3 numeric layer (2026-11-15)
+
+| Tool | Issue and evidence | Real false pass? | Status |
+| --- | --- | --- | --- |
+| Spec harness binary default | `tests/spec/settings-parity.ts:10` defaults to `target/debug/aac-http`, while every other `run.mjs` harness defaults to `dist/native/aac-http`. With only `dist/native/aac-http` present, `AAC_RUST_SERVICE=on node tests/spec/run.mjs` stops at settings-parity with "Build the real Rust service on Nas1 or the Mac first"; setting `AAC_RUST_SERVICE_BINARY` to the dist binary passes. | No; a false failure only. | Open for the six-hour tool batch: give settings-parity the same `dist/native` default as the other harnesses. |
+| aac-http profile-read socket test | `crates/aac-http/tests/profile_reads.rs` `profile_reads_keep_the_ts_scopes` failed once with `BrokenPipe` in a full `cargo test --workspace` on Nas1 at load average about 16: the service answers 401 before the test has written its request body. Five isolated reruns passed (4 of 4 each), on the same source. | No; a false failure only, no product failure shown. | Open for the six-hour tool batch: read the reply even when the body write fails, instead of failing on EPIPE. |
+| Stray Windows-path folder | A full `test:slow` run on Linux leaves an empty folder named `C:\Users\x` in the checkout root (seen in this and other worktrees). The suites that use that path are `claude-account-lifecycle.test.ts`, `claude-host-transport.test.ts` and `status-collectors.test.ts`; on Linux the string is a relative name. | No; checkout litter only. | Open for the six-hour tool batch: create such paths under the test's temporary root. |

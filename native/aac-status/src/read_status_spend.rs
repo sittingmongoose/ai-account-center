@@ -69,7 +69,7 @@ fn rounded_value(value: &V, unit: &V) -> V {
     number(value)
         .map(|n| {
             let scale = if unit == "percent" { 10.0 } else { 100.0 };
-            json!(math_round(n * scale) / scale)
+            json!(ecma::math_round(n * scale) / scale)
         })
         .unwrap_or(V::Null)
 }
@@ -86,13 +86,13 @@ fn amount(value: &V, unit: &V, m: &str) -> Option<String> {
         Some(if tiny {
             "≈ under 0.01 credits".into()
         } else {
-            format!("≈ {} credits", fixed(r, 2)?)
+            format!("≈ {} credits", view::fixed(r, 2)?)
         })
     } else if unit == "percent" {
         let points = if tiny {
             "under 0.1 points".into()
         } else {
-            format!("{} {}", fixed(r, 1)?, if r == 1.0 { "point" } else { "points" })
+            format!("{} {}", view::fixed(r, 1)?, if r == 1.0 { "point" } else { "points" })
         };
         Some(format!("≈ {points} of the {}", meter(m)))
     } else {
@@ -103,7 +103,7 @@ fn coverage(value: &V, noun: &str) -> Option<V> {
     Some(match number(value) {
         None => json!(format!("coverage of the {noun} not known")),
         Some(n) if n >= 0.5 => V::Null,
-        Some(n) => json!(format!("covers {}% of the {noun}", round_word(n * 100.0)?)),
+        Some(n) => json!(format!("covers {}% of the {noun}", view::round_word(n * 100.0)?)),
     })
 }
 fn budget_text(b: &V) -> Option<String> {
@@ -137,13 +137,13 @@ fn budget_text(b: &V) -> Option<String> {
     };
     let digits = if b["unit"] == "credits" { 2 } else { 1 };
     let pct = match number(&b["percent"]) {
-        Some(p) => format!(" ({}%)", round_word(p)?),
+        Some(p) => format!(" ({}%)", view::round_word(p)?),
         None => String::new(),
     };
     Some(format!(
         "{lower}≈ {} of {} {what}{per}{pct}.",
-        fixed(used, digits)?,
-        fixed(limit, digits)?
+        view::fixed(used, digits)?,
+        view::fixed(limit, digits)?
     ))
 }
 fn labels(i: &Inputs) -> HashMap<String, String> {
@@ -200,13 +200,13 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
             "week" => "This week".to_owned(),
             _ => {
                 let hours = match (i.at(&p["start"]), i.at(&p["end"])) {
-                    (Some(a), Some(b)) => math_round((b - a) as f64 / 3_600_000.0),
+                    (Some(a), Some(b)) => ecma::math_round((b - a) as f64 / 3_600_000.0),
                     _ => 0.0,
                 };
                 if hours != 0.0 {
                     format!(
                         "Last {} hour{}",
-                        round_word(hours)?,
+                        view::round_word(hours)?,
                         if hours == 1.0 { "" } else { "s" }
                     )
                 } else {

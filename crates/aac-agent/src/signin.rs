@@ -75,9 +75,12 @@ pub(crate) fn epoch(value: &Value) -> Option<i64> {
         .then_some(number)
 }
 
+/// `signin_expiry.iso`: `datetime.fromtimestamp(ms / 1000, utc)` to the millisecond, which divides in binary64 and
+/// rounds to the microsecond first, so some far-future milliseconds print as the one before (8796093022210 is
+/// `.209Z` in Python). `aac_num::py::iso_millis` reproduces that path; `epoch` admits only its proven domain.
 fn iso(ms: Option<i64>) -> Value {
-    ms.and_then(chrono::DateTime::from_timestamp_millis)
-        .map(|d| Value::String(d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)))
+    ms.and_then(aac_num::py::iso_millis)
+        .map(Value::String)
         .unwrap_or(Value::Null)
 }
 

@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 aac-api.workspace = true
 aac-core.workspace = true
+aac-num.workspace = true
 aac-providers.workspace = true
 aac-status = { path = "../../native/aac-status", default-features = false }
 serde.workspace = true

@@ -8,7 +8,12 @@
 //! key that is an `Object.prototype` name, a non-ASCII collation pair or a missing presentation fact all refuse.
 //! Display-zone clock and day words, `Date.parse` epochs and `localeCompare` ranks come from the shared M3
 //! presentation envelope ([`Context`]); the page's own formatter style comes from its format probe.
+//!
+//! The number, date and `Intl` semantics themselves live in `aac-num` (one proven layer, L3); this module maps their
+//! `None` (outside the proven domain) to the [`Decline`] word the view logs.
 pub use crate::spread::{truthy, utf16_len};
+use aac_num::civil::{self, MONTHS, WEEKDAYS};
+pub use aac_num::intl::{STYLES, Style, Zone};
 pub use aac_status::read_context::js_whitespace;
 use aac_status::read_context::{Context, PROTO_NAMES};
 use serde_json::{Map, Value, json};
@@ -215,7 +220,7 @@ pub fn string_of(v: Option<&Value>) -> R<String> {
         Some(Value::Bool(b)) => b.to_string(),
         Some(Value::Number(n)) => n
             .as_f64()
-            .and_then(aac_status::read_context::js_number)
+            .and_then(aac_num::view::string)
             .ok_or(Decline("number"))?,
         Some(Value::String(s)) => s.clone(),
         Some(_) => return Err(Decline("type")),
@@ -224,18 +229,6 @@ pub fn string_of(v: Option<&Value>) -> R<String> {
 
 // ---------------------------------------------------------------- dates
 
-/// `/^\d{4}-\d{2}-\d{2}T/`: the strings the presentation envelope gives a `Date.parse` epoch.
-pub fn iso_prefix(text: &str) -> bool {
-    let b = text.as_bytes();
-    b.len() >= 11
-        && b[..4].iter().all(u8::is_ascii_digit)
-        && b[4] == b'-'
-        && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[7] == b'-'
-        && b[8..10].iter().all(u8::is_ascii_digit)
-        && b[10] == b'T'
-}
-
 /// `Date.parse(text)` from the envelope: `Some(None)` is NaN (the engine supplied no finite
 /// epoch for an ISO-prefixed string, or the string is empty); any other string is one only
 /// the engine's legacy parser decides, so it refuses (`None`).
@@ -243,66 +236,7 @@ pub fn date_parse(ctx: &Context, text: &str) -> Option<Option<i64>> {
     if text.is_empty() {
         return Some(None);
     }
-    iso_prefix(text).then(|| ctx.epoch(&json!(text)))
-}
-
-/// `new Date(ms).toISOString()` for years 1970 through 9999 (`0 <= ms <= 253402300799999`);
-/// any other time value refuses rather than guessing the extended-year form.
-pub fn iso(ms: i64) -> Option<String> {
-    if !(0..=253_402_300_799_999).contains(&ms) {
-        return None;
-    }
-    let days = ms.div_euclid(86_400_000);
-    let of_day = ms.rem_euclid(86_400_000);
-    // Proleptic Gregorian civil date from days since 1970-01-01 (H. Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    Some(format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
-        of_day / 3_600_000,
-        of_day / 60_000 % 60,
-        of_day / 1000 % 60,
-        of_day % 1000
-    ))
-}
-
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// The calendar date `days` after 1970-01-01 (the inverse of [`days_from_civil`]).
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
-}
-
-fn days_in_month(y: i64, m: i64) -> i64 {
-    match m {
-        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    }
+    aac_num::ecma::iso_prefixed(text).then(|| ctx.epoch(&json!(text)))
 }
 
 /// `Date.parse(s)` as the browser reads it, for a view the page draws (Home): unlike [`date_parse`], which takes
@@ -316,78 +250,9 @@ pub fn parse_date(s: &str) -> R<Option<i64>> {
     if s.is_empty() {
         return Ok(None);
     }
-    let b = s.as_bytes();
-    let num = |from: usize, len: usize| -> Option<i64> {
-        let part = b.get(from..from + len)?;
-        part.iter()
-            .all(u8::is_ascii_digit)
-            .then(|| part.iter().fold(0i64, |n, d| n * 10 + i64::from(d - b'0')))
-    };
-    let bad = Err(Decline("date"));
-    let Some(year) = num(0, 4) else { return bad };
-    let (mut month, mut day, mut at) = (1, 1, 4);
-    if b.get(at) == Some(&b'-') {
-        let Some(m) = num(at + 1, 2) else { return bad };
-        month = m;
-        at += 3;
-        if b.get(at) == Some(&b'-') {
-            let Some(d) = num(at + 1, 2) else { return bad };
-            day = d;
-            at += 3;
-        }
-    }
-    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
-        return bad;
-    }
-    let mut ms = days_from_civil(year, month, day) * 86_400_000;
-    // Date-only forms are UTC by the spec, but the M3 envelope carries clock and day words only for date-time
-    // strings, so their instant could not be formatted: decline.
-    if at != 10 || b.get(at) != Some(&b'T') {
-        return bad;
-    }
-    let (Some(h), Some(mi)) = (num(11, 2), num(14, 2)) else {
-        return bad;
-    };
-    if b.get(13) != Some(&b':') || h > 23 || mi > 59 {
-        return bad;
-    }
-    ms += h * 3_600_000 + mi * 60_000;
-    at = 16;
-    if b.get(at) == Some(&b':') {
-        let Some(sec) = num(at + 1, 2) else {
-            return bad;
-        };
-        if sec > 59 {
-            return bad;
-        }
-        ms += sec * 1000;
-        at += 3;
-        if b.get(at) == Some(&b'.') {
-            let Some(frac) = num(at + 1, 3) else {
-                return bad;
-            };
-            ms += frac;
-            at += 4;
-        }
-    }
-    match b.get(at) {
-        Some(b'Z') if at + 1 == b.len() => Ok(Some(ms)),
-        Some(sign @ (b'+' | b'-')) if at + 6 == b.len() && b.get(at + 3) == Some(&b':') => {
-            let (Some(oh), Some(om)) = (num(at + 1, 2), num(at + 4, 2)) else {
-                return bad;
-            };
-            if oh > 23 || om > 59 {
-                return bad;
-            }
-            let offset = (oh * 60 + om) * 60_000;
-            Ok(Some(if *sign == b'+' {
-                ms - offset
-            } else {
-                ms + offset
-            }))
-        }
-        _ => bad,
-    }
+    aac_num::ecma::parse_instant(s)
+        .map(Some)
+        .ok_or(Decline("date"))
 }
 
 /// `validDate(v)`: a string `Date.parse` reads, as its time.
@@ -395,109 +260,6 @@ pub fn valid_date(v: Option<&Value>) -> R<Option<i64>> {
     match v {
         Some(Value::String(s)) => parse_date(s),
         _ => Ok(None),
-    }
-}
-
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/// How this browser's en-US date formatters join the pieces: the space before AM/PM (U+0020 in Chrome, Node and
-/// Safari; U+202F in older ICU) and the joiner between the date and the time (", " in Chrome and Node, " at " in iOS
-/// Safari: "Jan 5 at 12:07 AM").
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Style {
-    /// Before AM/PM.
-    pub sep: &'static str,
-    /// Between "Jan 5" and "3:05 PM".
-    pub joiner: &'static str,
-}
-
-/// The styles the probe can prove; anything else declines.
-const STYLES: [Style; 4] = [
-    Style {
-        sep: " ",
-        joiner: ", ",
-    },
-    Style {
-        sep: "\u{202f}",
-        joiner: ", ",
-    },
-    Style {
-        sep: " ",
-        joiner: " at ",
-    },
-    Style {
-        sep: "\u{202f}",
-        joiner: " at ",
-    },
-];
-
-/// The page's display-zone offsets (view-model.mjs `homeZoneFacts`), checked for shape. The format probe proves only
-/// how the page's formatters punctuate; another engine's time zone data can put a zone's clock an hour elsewhere
-/// (Africa/Casablanca from 2026-09-20 in one tzdata, not in another), so every clock and day word the server's facts
-/// give must be the one these offsets give, or the build declines (`zone`). An instant outside the window declines too.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Zone {
-    from: i64,
-    to: i64,
-    /// `(start ms, offset minutes)`, starts strictly increasing, the first at `from`.
-    offsets: Vec<(i64, i64)>,
-}
-
-impl Zone {
-    /// The page's facts, or a decline when they are not one ordered, bounded segment list over a real window.
-    pub fn proven(facts: &aac_api::home::HomeZone) -> R<Zone> {
-        let bad = Err(Decline("zone"));
-        let rows = &facts.offsets;
-        if facts.from >= facts.to
-            || facts.from < 0
-            || facts.to > 8_640_000_000_000_000
-            || rows.is_empty()
-            || rows.len() > 64
-            || rows[0][0] != facts.from
-            || rows
-                .iter()
-                .any(|[start, minutes]| *start > facts.to || minutes.abs() > 1080)
-            || rows
-                .windows(2)
-                .any(|w| w[1][0] <= w[0][0] || w[1][1] == w[0][1])
-        {
-            return bad;
-        }
-        Ok(Zone {
-            from: facts.from,
-            to: facts.to,
-            offsets: rows
-                .iter()
-                .map(|[start, minutes]| (*start, *minutes))
-                .collect(),
-        })
-    }
-
-    /// The en-US `{hour:'numeric', minute:'2-digit'}` and `{month:'short', day:'numeric'}` words the page writes for
-    /// `ms` ("3:05 PM", "Nov 14"; ASCII space, as the envelope writes them).
-    fn words(&self, ms: i64) -> R<(String, String)> {
-        if ms < self.from || ms > self.to {
-            return Err(Decline("zone"));
-        }
-        let minutes = self
-            .offsets
-            .iter()
-            .take_while(|(start, _)| *start <= ms)
-            .last()
-            .map_or(0, |(_, minutes)| *minutes);
-        // Intl truncates to the minute: whole local minutes since 1970.
-        let local = (ms + minutes * 60_000).div_euclid(60_000);
-        let (_, m, d) = civil_from_days(local.div_euclid(1440));
-        let (hour, minute) = (local.rem_euclid(1440) / 60, local.rem_euclid(60));
-        let clock = format!(
-            "{}:{minute:02} {}",
-            if hour % 12 == 0 { 12 } else { hour % 12 },
-            if hour < 12 { "AM" } else { "PM" }
-        );
-        Ok((clock, format!("{} {d}", MONTHS[(m - 1) as usize])))
     }
 }
 
@@ -544,7 +306,7 @@ impl Fmt {
         if !digits || !matches!(half, "AM" | "PM") {
             return fact;
         }
-        if self.zone.words(ms)?.0 != word {
+        if self.zone.words(ms).ok_or(Decline("zone"))?.0 != word {
             return Err(Decline("zone"));
         }
         Ok(format!("{hm}{}{half}", self.style.sep))
@@ -574,7 +336,7 @@ impl Fmt {
         if day.to_string() != word[name.len() + 1..] || !(1..=31).contains(&day) {
             return fact;
         }
-        if self.zone.words(ms)?.1 != word {
+        if self.zone.words(ms).ok_or(Decline("zone"))?.1 != word {
             return Err(Decline("zone"));
         }
         let iso = self.ctx.iso(Some(ms));
@@ -592,12 +354,12 @@ impl Fmt {
         if utc.get(4) != Some(&b'-') || utc.get(7) != Some(&b'-') {
             return fact;
         }
-        let at = days_from_civil(y, m, d);
+        let at = civil::days_from_civil(y, m, d);
         [y - 1, y, y + 1]
             .into_iter()
             .find(|year| {
-                day <= days_in_month(*year, month)
-                    && (days_from_civil(*year, month, day) - at).abs() <= 1
+                day <= civil::days_in_month(*year, month)
+                    && (civil::days_from_civil(*year, month, day) - at).abs() <= 1
             })
             .map(|year| (year, month, day))
             .ok_or(Decline("fact"))
@@ -621,269 +383,61 @@ impl Fmt {
     /// `{weekday:'short', month:'short', day:'numeric', hour, minute}`: "Thu, Oct 1, 10:15 AM" ("... Oct 1 at 10:15 AM").
     pub fn day_clock(&self, ms: i64) -> R<String> {
         let (y, m, d) = self.date(ms)?;
-        let weekday = WEEKDAYS[(days_from_civil(y, m, d) + 4).rem_euclid(7) as usize];
+        let weekday = WEEKDAYS[civil::weekday(civil::days_from_civil(y, m, d))];
         Ok(format!("{weekday}, {}", self.date_time(ms)?))
     }
 
-    /// `a.localeCompare(b)` from the envelope's ranks, for printable ASCII strings (every ICU orders those alike, so
-    /// the server's rank is the browser's); other strings decline.
+    /// `a.localeCompare(b)` for printable ASCII strings: the envelope's ranks, checked against the CLDR root order
+    /// every ICU shares for them (`aac_num::intl::ascii_compare`, proven against Node), so a server engine that ranks
+    /// them otherwise declines instead of drawing another order than the browser. Other strings decline.
     pub fn compare(&self, a: &str, b: &str) -> R<Ordering> {
         if a == b {
             return Ok(Ordering::Equal);
         }
-        let printable = |s: &str| s.bytes().all(|c| (0x20..=0x7e).contains(&c));
-        if !printable(a) || !printable(b) {
+        let Some(browser) = aac_num::intl::ascii_compare(a, b) else {
             return Err(Decline("collation"));
+        };
+        match (self.ctx.rank(a), self.ctx.rank(b)) {
+            (Some(ra), Some(rb)) if ra.cmp(&rb) != browser => Err(Decline("collation")),
+            // A word without a rank is a missing fact, as before.
+            _ => Ok(self.ctx.compare(a, b)),
         }
-        Ok(self.ctx.compare(a, b))
     }
 
     /// The probe strings this formatter set writes (view-model.mjs `homeFormatProbe`), at UTC reference instants.
     pub fn probe(style: Style) -> Vec<String> {
-        let Style { sep, joiner } = style;
-        vec![
-            "-1,234.57".into(),
-            "1.23M".into(),
-            "-$1,234.50".into(),
-            format!("Jan 5{joiner}12:07{sep}AM"),
-            format!("1:07{sep}PM"),
-            format!("Mon, Jan 5{joiner}1:07{sep}PM"),
-            "Jan 5".into(),
-            "_abB".into(),
-        ]
+        aac_num::intl::probe(style)
     }
 
     /// The style the page's probe proves, or a decline when the page's locale writes anything else.
     pub fn proven_style(probe: &[String]) -> R<Style> {
-        STYLES
-            .into_iter()
-            .find(|style| Self::probe(*style) == probe)
-            .ok_or(Decline("locale"))
+        aac_num::intl::proven_style(probe).ok_or(Decline("locale"))
+    }
+
+    /// The page's zone facts, or a decline when they are not one ordered, bounded segment list over a real window.
+    pub fn proven_zone(facts: &aac_api::home::HomeZone) -> R<Zone> {
+        Zone::proven(facts.from, facts.to, &facts.offsets).ok_or(Decline("zone"))
     }
 }
 
 // ---------------------------------------------------------------- numbers
 
-/// A non-negative decimal: `int` digits (no leading zeros, "0" for zero) and `frac` digits.
-struct Decimal {
-    int: String,
-    frac: String,
-}
-
-/// The digits ECMAScript and ICU write for `|x|`, split at the point. They come from Status's
-/// `read_context::js_number`, the one conversion proved equal to JS `String(x)`: on its domain the
-/// shortest round-trip digits are unique, so the host's choice is the browser's. Rust's own shortest
-/// formatter breaks some ties differently (2251799813685247.25 writes .3 where JS writes .2), so
-/// anything outside that domain declines and the page builds its own view.
-fn decimal(x: f64) -> R<Decimal> {
-    let text = aac_status::read_context::js_number(x.abs()).ok_or(Decline("number"))?;
-    let (mantissa, exp) = match text.split_once('e') {
-        Some((m, e)) => (m, e.parse::<i64>().map_err(|_| Decline("number"))?),
-        None => (text.as_str(), 0),
-    };
-    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let all = format!("{int}{frac}");
-    let digits = all.trim_start_matches('0');
-    if digits.is_empty() {
-        return Ok(Decimal {
-            int: "0".into(),
-            frac: String::new(),
-        });
-    }
-    let k = digits.len() as i64;
-    // Where the point falls after the first significant digit's position in `digits`.
-    let point = int.len() as i64 + exp - (all.len() - digits.len()) as i64;
-    Ok(if point <= 0 {
-        Decimal {
-            int: "0".into(),
-            frac: format!("{}{digits}", "0".repeat((-point) as usize)),
-        }
-    } else if point >= k {
-        Decimal {
-            int: format!("{digits}{}", "0".repeat((point - k) as usize)),
-            frac: String::new(),
-        }
-    } else {
-        Decimal {
-            int: digits[..point as usize].into(),
-            frac: digits[point as usize..].into(),
-        }
-    })
-}
-
-/// Moves the decimal point left by `places` (dividing by 10^places).
-fn shift_left(d: &Decimal, places: usize) -> Decimal {
-    let mut int = d.int.clone();
-    if int.len() <= places {
-        int = format!("{}{int}", "0".repeat(places - int.len() + 1));
-    }
-    let cut = int.len() - places;
-    let frac = format!("{}{}", &int[cut..], d.frac);
-    let int = int[..cut].trim_start_matches('0');
-    Decimal {
-        int: if int.is_empty() {
-            "0".into()
-        } else {
-            int.into()
-        },
-        frac,
-    }
-}
-
-/// Rounds half away from zero to `places` fraction digits.
-fn round(d: &Decimal, places: usize) -> Decimal {
-    if d.frac.len() <= places {
-        return Decimal {
-            int: d.int.clone(),
-            frac: d.frac.clone(),
-        };
-    }
-    let up = d.frac.as_bytes()[places] >= b'5';
-    let mut digits: Vec<u8> = format!("{}{}", d.int, &d.frac[..places]).into_bytes();
-    if up {
-        let mut i = digits.len();
-        loop {
-            if i == 0 {
-                digits.insert(0, b'1');
-                break;
-            }
-            i -= 1;
-            if digits[i] == b'9' {
-                digits[i] = b'0';
-            } else {
-                digits[i] += 1;
-                break;
-            }
-        }
-    }
-    let text = String::from_utf8(digits).unwrap_or_default();
-    let cut = text.len() - places;
-    let int = text[..cut].trim_start_matches('0');
-    Decimal {
-        int: if int.is_empty() {
-            "0".into()
-        } else {
-            int.into()
-        },
-        frac: text[cut..].into(),
-    }
-}
-
-fn grouped(int: &str, min_grouping: usize) -> String {
-    if int.len() < 3 + min_grouping {
-        return int.into();
-    }
-    let mut out = String::new();
-    for (i, c) in int.chars().enumerate() {
-        if i > 0 && (int.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
-fn written(d: &Decimal, min_frac: usize, min_grouping: usize) -> String {
-    let mut frac = d.frac.trim_end_matches('0').to_string();
-    while frac.len() < min_frac {
-        frac.push('0');
-    }
-    let int = grouped(&d.int, min_grouping);
-    if frac.is_empty() {
-        int
-    } else {
-        format!("{int}.{frac}")
-    }
-}
-
-fn sign(x: f64) -> &'static str {
-    if x.is_sign_negative() { "-" } else { "" }
-}
-
-/// `new Intl.NumberFormat('en-US', {maximumFractionDigits: 2}).format(x)`, or a decline outside
-/// [`decimal`]'s proved domain.
+/// `new Intl.NumberFormat('en-US', {maximumFractionDigits: 2}).format(x)` (`aac_num::intl::decimal2`), or a decline
+/// outside the proven view domain.
 pub fn nf2(x: f64) -> R<String> {
-    if !x.is_finite() {
-        return Ok(if x.is_nan() {
-            "NaN".into()
-        } else {
-            format!("{}∞", sign(x))
-        });
-    }
-    Ok(format!(
-        "{}{}",
-        sign(x),
-        written(&round(&decimal(x)?, 2), 0, 1)
-    ))
+    aac_num::intl::decimal2(x).ok_or(Decline("number"))
 }
 
-/// `new Intl.NumberFormat('en-US', {style:'currency', currency:'USD', maximumFractionDigits: 2}).format(x)`,
-/// or a decline outside [`decimal`]'s proved domain.
+/// `new Intl.NumberFormat('en-US', {style:'currency', currency:'USD', maximumFractionDigits: 2}).format(x)`
+/// (`aac_num::intl::usd`), or a decline outside the proven view domain.
 pub fn money(x: f64) -> R<String> {
-    if !x.is_finite() {
-        return Ok(if x.is_nan() {
-            "$NaN".into()
-        } else {
-            format!("{}$∞", sign(x))
-        });
-    }
-    Ok(format!(
-        "{}${}",
-        sign(x),
-        written(&round(&decimal(x)?, 2), 2, 1)
-    ))
+    aac_num::intl::usd(x).ok_or(Decline("number"))
 }
 
-/// `new Intl.NumberFormat('en-US', {notation:'compact', maximumFractionDigits: 2}).format(x)` (ICU's short compact
-/// patterns K, M, B, T; a rounding that reaches the next power picks that power's pattern; grouping from 5 digits),
-/// or a decline outside [`decimal`]'s proved domain.
+/// `new Intl.NumberFormat('en-US', {notation:'compact', maximumFractionDigits: 2}).format(x)`
+/// (`aac_num::intl::compact`), or a decline outside the proven view domain.
 pub fn compact(x: f64) -> R<String> {
-    if !x.is_finite() {
-        return Ok(if x.is_nan() {
-            "NaN".into()
-        } else {
-            format!("{}∞", sign(x))
-        });
-    }
-    let d = decimal(x)?;
-    let magnitude = |d: &Decimal| -> i64 {
-        if d.int != "0" {
-            d.int.len() as i64 - 1
-        } else {
-            match d.frac.bytes().position(|c| c != b'0') {
-                Some(i) => -(i as i64) - 1,
-                None => 0,
-            }
-        }
-    };
-    let multiplier = |m: i64| -> usize {
-        match m {
-            ..=2 => 0,
-            3..=5 => 3,
-            6..=8 => 6,
-            9..=11 => 9,
-            _ => 12,
-        }
-    };
-    let zero = |d: &Decimal| d.int == "0" && d.frac.bytes().all(|c| c == b'0');
-    let mag = magnitude(&d);
-    let mut mult = multiplier(mag);
-    let mut r = round(&shift_left(&d, mult), 2);
-    if !zero(&r) && magnitude(&r) != mag - mult as i64 {
-        let next = multiplier(mag + 1);
-        if next != mult {
-            r = round(&shift_left(&r, next - mult), 2);
-            mult = next;
-        }
-    }
-    let suffix = match mult {
-        3 => "K",
-        6 => "M",
-        9 => "B",
-        12 => "T",
-        _ => "",
-    };
-    Ok(format!("{}{}{suffix}", sign(x), written(&r, 0, 2)))
+    aac_num::intl::compact(x).ok_or(Decline("number"))
 }
 
 #[cfg(test)]
@@ -977,8 +531,8 @@ mod tests {
         }
     }
 
-    /// The meter's `value` is written by aac-api's serializer, which cannot depend on Status; Home
-    /// only sets it to numbers `nf2` admitted, and there both writers agree with JS `String(x)`.
+    /// The meter's `value` is written by aac-api's serializer (`aac_num::ecma::to_string`, all of binary64); Home only
+    /// sets it beside a `valueText` `nf2` admitted, and there it is the view domain's `String(x)`.
     #[test]
     fn the_view_serializer_agrees_with_the_proved_writer_on_its_domain() {
         for x in [
@@ -999,8 +553,8 @@ mod tests {
         ] {
             assert!(nf2(x).is_ok(), "{x}");
             assert_eq!(
-                Some(aac_api::home::js_number_text(x)),
-                aac_status::read_context::js_number(x),
+                Some(aac_num::ecma::to_string(x)),
+                aac_num::view::string(x),
                 "{x}"
             );
         }
@@ -1085,7 +639,7 @@ mod tests {
 
     /// The page's zone facts as view-model.mjs `homeZoneFacts` sends them.
     fn zone(from: i64, to: i64, offsets: &[[i64; 2]]) -> Zone {
-        Zone::proven(&aac_api::home::HomeZone {
+        Fmt::proven_zone(&aac_api::home::HomeZone {
             from,
             to,
             offsets: offsets.to_vec(),
@@ -1210,26 +764,27 @@ mod tests {
                 to,
                 offsets: rows,
             };
-            assert_eq!(Zone::proven(&facts), Err(Decline("zone")), "{facts:?}");
+            assert_eq!(Fmt::proven_zone(&facts), Err(Decline("zone")), "{facts:?}");
         }
         assert_eq!(
-            Zone::proven(&aac_api::home::HomeZone::default()),
+            Fmt::proven_zone(&aac_api::home::HomeZone::default()),
             Err(Decline("zone"))
         );
     }
 
     #[test]
     fn collation_comes_from_the_envelope_for_ascii_and_is_refused_otherwise() {
+        // The ranks Node's localeCompare gives (ICU root): `_` sorts before `-`, lowercase before uppercase.
         let f = Fmt::new(
             facts(
                 serde_json::json!({}),
-                serde_json::json!({"a-1": 0, "a_1": 1, "aB": 3, "ab": 2, "cursor:A": 4, "cursor:b": 5}),
+                serde_json::json!({"a_1": 0, "a-1": 1, "ab": 2, "aB": 3, "cursor:A": 4, "cursor:b": 5}),
             ),
             STYLES[0],
             new_york(),
             0,
         );
-        assert_eq!(f.compare("a_1", "a-1"), Ok(Ordering::Greater));
+        assert_eq!(f.compare("a_1", "a-1"), Ok(Ordering::Less));
         assert_eq!(f.compare("aB", "ab"), Ok(Ordering::Greater));
         assert_eq!(f.compare("cursor:b", "cursor:A"), Ok(Ordering::Greater));
         assert_eq!(f.compare("x", "x"), Ok(Ordering::Equal));
@@ -1237,6 +792,17 @@ mod tests {
         assert_eq!(f.compare("é", "e"), Err(Decline("collation")));
         let _ = f.compare("a-1", "unranked");
         assert!(!f.valid(), "a word without a rank is a missing fact");
+        // A server engine that ranks printable ASCII otherwise than the browser declines instead of drawing its order.
+        let other = Fmt::new(
+            facts(
+                serde_json::json!({}),
+                serde_json::json!({"a-1": 0, "a_1": 1}),
+            ),
+            STYLES[0],
+            new_york(),
+            0,
+        );
+        assert_eq!(other.compare("a_1", "a-1"), Err(Decline("collation")));
     }
 
     #[test]
@@ -1249,10 +815,14 @@ mod tests {
             (4_107_542_399_999, "2100-02-28T23:59:59.999Z"),
             (253_402_300_799_999, "9999-12-31T23:59:59.999Z"),
         ] {
-            assert_eq!(iso(ms).as_deref(), Some(word), "{ms}");
+            assert_eq!(
+                aac_num::ecma::to_iso_string(ms).as_deref(),
+                Some(word),
+                "{ms}"
+            );
         }
-        assert_eq!(iso(-1), None);
-        assert_eq!(iso(253_402_300_800_000), None);
+        assert_eq!(aac_num::ecma::to_iso_string(-1), None);
+        assert_eq!(aac_num::ecma::to_iso_string(253_402_300_800_000), None);
     }
 
     #[test]
@@ -1276,7 +846,9 @@ mod tests {
         assert_eq!(trim("\u{85}x"), "\u{85}x");
         assert!(has_control("a\u{7f}") && has_control("\u{0}") && !has_control("é\u{80}"));
         assert!(
-            iso_prefix("2026-11-15T") && !iso_prefix("2026-11-15 ") && !iso_prefix("26-11-15T")
+            aac_num::ecma::iso_prefixed("2026-11-15T")
+                && !aac_num::ecma::iso_prefixed("2026-11-15 ")
+                && !aac_num::ecma::iso_prefixed("26-11-15T")
         );
     }
 }

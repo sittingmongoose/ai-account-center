@@ -26,6 +26,16 @@ for (const receipt of ['missing', 'stale']) {
         path.join(root, 'web-dashboard/public/computers.json'),
         path.join(fixture, 'web-dashboard/public/computers.json')
       );
+      // The number layer the crate composes with is a build input too (L3).
+      fs.copyFileSync(path.join(root, 'Cargo.toml'), path.join(fixture, 'Cargo.toml'));
+      for (const name of ['Cargo.toml', 'src'])
+        fs.cpSync(
+          path.join(root, 'crates/aac-num', name),
+          path.join(fixture, 'crates/aac-num', name),
+          {
+            recursive: true,
+          }
+        );
       const builder = require(path.join(fixture, 'scripts/build-status-native.js'));
       const prebuilt = path.join(fixture, 'native/aac-status/prebuilt');
       const file = path.join(prebuilt, builder.moduleName());

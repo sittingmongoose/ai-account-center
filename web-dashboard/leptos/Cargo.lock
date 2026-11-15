@@ -6,9 +6,14 @@ version = 4
 name = "aac-api"
 version = "0.1.0"
 dependencies = [
+ "aac-num",
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "aac-num"
+version = "0.1.0"
 
 [[package]]
 name = "aac-web"

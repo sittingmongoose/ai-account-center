@@ -17,6 +17,8 @@ default = ["node"]
 node = ["dep:napi", "dep:napi-derive"]
 
 [dependencies]
+# L3: the one numeric layer (ECMAScript, Intl and Python number and date semantics).
+aac-num = { path = "../../crates/aac-num" }
 napi = { version = "3", optional = true }
 napi-derive = { version = "3", optional = true }
 base64 = "0.22"

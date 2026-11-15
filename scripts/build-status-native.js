@@ -38,7 +38,10 @@ function cdylibName() {
   return 'libaac_status.so';
 }
 
-/** SHA-256 over the crate's build inputs, in a fixed order. */
+/**
+ * SHA-256 over the crate's build inputs, in a fixed order: its own files, the shared computer registry, and the
+ * number layer it composes with (crates/aac-num, whose package fields come from the workspace manifest, L3).
+ */
 function sourceHash() {
   const files = [
     'Cargo.toml',
@@ -46,6 +49,8 @@ function sourceHash() {
     'build.rs',
     'rust-toolchain.toml',
     '../../web-dashboard/public/computers.json',
+    '../../Cargo.toml',
+    '../../crates/aac-num/Cargo.toml',
   ];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(path.join(CRATE, dir), { withFileTypes: true })) {
@@ -55,6 +60,7 @@ function sourceHash() {
     }
   };
   walk('src');
+  walk('../../crates/aac-num/src');
   const hash = crypto.createHash('sha256');
   for (const rel of files.sort()) {
     hash.update(rel);
