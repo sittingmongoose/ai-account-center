@@ -29,11 +29,11 @@ export const PATTERNS = [
 /** Files that keep their own mechanics, each with the reason written next to it. */
 export const ALLOWLIST = [
   {
-    path: 'native/aac-store/src/',
+    path: 'crates/aac-store/src/',
     reason:
       "The store engine's own files (redb, log segments, staged sets, backups). The engine is " +
       'their single writer, held by its kernel lock store/store.lock; every family is declared ' +
-      'in native/aac-store/registry.json, which the store checks at open. The store host (R3) ' +
+      'in crates/aac-store/registry.json, which the store checks at open. The store host (R3) ' +
       'moves them as one unit with its own switch.',
   },
   {

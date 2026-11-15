@@ -245,7 +245,7 @@ export interface ScoreboardIdentity {
   efforts: string[];
 }
 
-/** One by-model row's grouping and sort keys (native/aac-status `group_keys`). */
+/** One by-model row's grouping and sort keys (crates/aac-status `group_keys`). */
 export interface ScoreboardRowKeys {
   family: string;
   modelOrder: number;

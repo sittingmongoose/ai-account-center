@@ -1,6 +1,6 @@
 /**
  * The Scoreboard view's `byModel` field through the aac-status native module
- * (native/aac-status/src/scoreboard.rs): a pure function over the Scoreboard view v1 this
+ * (crates/aac-status/src/scoreboard.rs): a pure function over the Scoreboard view v1 this
  * server already builds, every word decided there. Any failure — no module, a rejected
  * call, an answer that is not the composer's own shape — means no field: the page then
  * says nothing rather than guessing, and nothing here throws.

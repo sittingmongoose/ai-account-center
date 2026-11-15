@@ -78,7 +78,7 @@ else
   echo "[!] cargo is not installed: skipping the history store's Rust checks."
 fi
 
-# The status readers' Rust crate (native/aac-status): format, lints, the reader suites,
+# The status readers' Rust crate (crates/aac-status): format, lints, the reader suites,
 # then this computer's module into dist/native. AAC_STATUS_RUST=off skips it on a machine
 # that may not run Rust builds; the dashboard then builds without the module.
 if [[ "${AAC_STATUS_RUST:-on}" == "off" ]]; then

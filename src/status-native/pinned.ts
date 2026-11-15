@@ -1,8 +1,8 @@
 /**
- * T3's pinned threads through the aac-status native module (native/aac-status/src/pins.rs):
+ * T3's pinned threads through the aac-status native module (crates/aac-status/src/pins.rs):
  * the VM's own rows from its database, the other machines' rows parsed from their
  * `sqlite3 -json` answers, the merged pin list, and the composed updates
- * (native/aac-status/src/pinned.rs). Every failure is `{ unavailable: <fixed sentence> }`;
+ * (crates/aac-status/src/pinned.rs). Every failure is `{ unavailable: <fixed sentence> }`;
  * nothing here throws, guesses, or reads a database itself.
  */
 import {

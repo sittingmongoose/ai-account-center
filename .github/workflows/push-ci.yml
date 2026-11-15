@@ -106,9 +106,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            native/aac-store/target
-            native/aac-status/target
-          key: ${{ runner.os }}-native-cargo-v1-${{ hashFiles('native/aac-store/Cargo.lock', 'native/aac-status/Cargo.lock', 'native/aac-store/rust-toolchain.toml', 'native/aac-status/rust-toolchain.toml') }}
+            crates/aac-store/target
+            crates/aac-status/target
+          key: ${{ runner.os }}-native-cargo-v2-${{ hashFiles('Cargo.lock', 'crates/aac-store/rust-toolchain.toml', 'crates/aac-status/rust-toolchain.toml') }}
 
       - name: Build native history store and status readers
         run: |

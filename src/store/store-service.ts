@@ -110,7 +110,7 @@ export interface StoreReportCapture {
   doc: Record<string, unknown>;
 }
 
-/** The runs methods of the native store (native/aac-store/src/runs.rs). */
+/** The runs methods of the native store (crates/aac-store/src/runs.rs). */
 export type RunsMethod =
   | 'runsScan'
   | 'runsRecord'

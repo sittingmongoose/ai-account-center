@@ -1,12 +1,12 @@
 /**
  * Loads the status readers' native module: `dist/native/aac-status.<platform>-<arch>.node`.
  * Any failure returns no module and a fixed reason; the server then runs without the readers.
- * Copied from the history store's loader (native/aac-store branch).
+ * Copied from the history store's loader (crates/aac-store branch).
  */
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** Must equal the crate's BINDING_VERSION (native/aac-status/src/node.rs). */
+/** Must equal the crate's BINDING_VERSION (crates/aac-status/src/node.rs). */
 export const STATUS_BINDING_VERSION = 1;
 
 export interface NativeStatusHandle {

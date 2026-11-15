@@ -23,7 +23,7 @@ pub mod read_status;
 pub mod run_identity;
 pub mod run_schema;
 pub mod runs;
-#[path = "../../shared/secret_policy.rs"]
+#[path = "../../../native/shared/secret_policy.rs"]
 pub mod secret_policy;
 // Compatibility for callers from the original capture implementation.
 pub use secret_policy as report_secret;

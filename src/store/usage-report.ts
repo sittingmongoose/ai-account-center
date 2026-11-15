@@ -1,6 +1,6 @@
 /**
  * The TypeScript mirror of the usage record contract, `aac.usage-report.v1`. The Rust type
- * `native/aac-store/src/contract.rs` is the authority and checks every report the store receives;
+ * `crates/aac-store/src/contract.rs` is the authority and checks every report the store receives;
  * these types only let today's TypeScript collectors hand their rows over until the Rust readers
  * replace them.
  */

@@ -16,7 +16,7 @@ aac-api.workspace = true
 aac-core.workspace = true
 aac-num.workspace = true
 aac-providers.workspace = true
-aac-status = { path = "../../native/aac-status", default-features = false }
+aac-status.workspace = true
 serde.workspace = true
 # preserve_order: objects keep JavaScript insertion order; float_roundtrip: every number parses
 # to the double JSON.parse reads (both are the M3 read-route settings of aac-http/aac-status).

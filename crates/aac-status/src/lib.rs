@@ -1,4 +1,4 @@
-//! AI Account Center status readers, as a native module like native/aac-store (owner rule
+//! AI Account Center status readers, as a native module like crates/aac-store (owner rule
 //! 2026-11-08: every new server piece is Rust; the TypeScript server stays as it is).
 //!
 //! Status readers: T3's pinned threads from its state database, opened read-only, and the

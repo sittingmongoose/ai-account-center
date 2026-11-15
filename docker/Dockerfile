@@ -43,8 +43,8 @@ RUN bun run build:all
 # then fail loudly if either module is missing: a dashboard without stored
 # history is not a shippable image.
 RUN bun run store:build && bun run status:build
-RUN test -f native/aac-store/prebuilt/*.node \
-  && test -f native/aac-status/prebuilt/*.node \
+RUN test -f crates/aac-store/prebuilt/*.node \
+  && test -f crates/aac-status/prebuilt/*.node \
   && test -f dist/native/aac-store.*.node \
   && test -f dist/native/aac-status.*.node
 

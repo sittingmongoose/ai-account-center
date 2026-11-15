@@ -1,5 +1,5 @@
 //! One error type for the status readers. `code` is a fixed word the TypeScript side matches on;
-//! `message` is for logs and never carries file content. Copied from native/aac-store.
+//! `message` is for logs and never carries file content. Copied from crates/aac-store.
 
 use std::fmt;
 

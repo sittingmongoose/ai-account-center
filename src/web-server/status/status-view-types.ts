@@ -380,7 +380,7 @@ export interface ThreadView {
 }
 
 /** The pinned-threads panel (PINNED-THREADS.md section 1): the composer's output, passed
- * through untouched, or why there is none. Every word is decided in native/aac-status. */
+ * through untouched, or why there is none. Every word is decided in crates/aac-status. */
 export type PinnedPanel = PinnedView | { unavailable: string };
 
 export interface PinnedView {

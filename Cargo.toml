@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["native/aac-store", "native/aac-status", "native/aac-usage", "native/aac-cursor-account", "web-dashboard", "web-dashboard/leptos"]
+exclude = ["native/aac-usage", "native/aac-cursor-account", "web-dashboard", "web-dashboard/leptos"]
 resolver = "3"
 
 [workspace.package]
@@ -22,6 +22,11 @@ aac-num = { path = "crates/aac-num" }
 aac-config = { path = "crates/aac-config" }
 aac-transport = { path = "crates/aac-transport" }
 aac-views = { path = "crates/aac-views" }
+# R3: the store and Status crates joined the workspace (one lock for the host and the NAPI
+# modules). Dependents take them without the Node binding; the `.node` builds use each
+# package's own default features.
+aac-store = { path = "crates/aac-store", default-features = false }
+aac-status = { path = "crates/aac-status", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
@@ -40,6 +45,14 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
+
+# R3: the release settings the store and Status NAPI modules carried as standalone crates.
+# Only the workspace root's profile applies to members, so they live here now.
+[profile.release]
+lto = true
+opt-level = 3
+strip = true
+codegen-units = 1
 
 # Keep reproducible dev/test artifacts below the transport's existing 64 MiB guard.
 [profile.dev]
