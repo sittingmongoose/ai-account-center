@@ -22,8 +22,10 @@ base64 = "0.22"
 libc.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
-tokio = { workspace = true, features = ["net", "signal"] }
+tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+futures-util = { version = "0.3", default-features = false }
+sha2.workspace = true
 subtle = "2.6"
 tracing = "0.1"
 

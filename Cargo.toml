@@ -45,3 +45,8 @@ debug = 0
 
 [profile.test]
 debug = 0
+
+# L1: the service hashes its own executable at start (build check); keep that fast in dev/test
+# builds too.
+[profile.dev.package.sha2]
+opt-level = 3

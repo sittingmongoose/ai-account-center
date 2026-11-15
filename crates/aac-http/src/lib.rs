@@ -2,7 +2,13 @@
 #[cfg(unix)]
 mod account_reads;
 #[cfg(unix)]
+mod feed;
+#[cfg(unix)]
+mod identity;
+#[cfg(unix)]
 mod json_object;
+#[cfg(unix)]
+mod limits;
 #[cfg(unix)]
 mod private_file;
 #[cfg(unix)]
@@ -12,6 +18,12 @@ mod read_files;
 #[cfg(unix)]
 mod read_routes;
 #[cfg(unix)]
+mod table;
+#[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub use unix::{Boot, serve};
+pub mod view_reply;
+#[cfg(unix)]
+pub use identity::PROTOCOL;
+#[cfg(unix)]
+pub use unix::{Boot, serve, short_name};

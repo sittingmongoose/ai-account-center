@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1112,
-    "filesAffected": 110,
-    "hotpathOccurrences": 538,
-    "hotpathFilesAffected": 60,
+    "totalOccurrences": 1120,
+    "filesAffected": 111,
+    "hotpathOccurrences": 546,
+    "hotpathFilesAffected": 61,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -47,6 +47,24 @@
           "mkdirSync",
           "openSync",
           "readFileSync",
+          "renameSync",
+          "rmSync",
+          "statSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/rust-service-lifecycle.ts",
+        "count": 22,
+        "calls": [
+          "existsSync",
+          "lstatSync",
+          "mkdirSync",
+          "readdirSync",
+          "readFileSync",
+          "realpathSync",
           "renameSync",
           "rmSync",
           "statSync",
@@ -140,22 +158,6 @@
           "statSync",
           "unlinkSync",
           "utimesSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/rust-service-lifecycle.ts",
-        "count": 15,
-        "calls": [
-          "existsSync",
-          "lstatSync",
-          "mkdirSync",
-          "readFileSync",
-          "realpathSync",
-          "renameSync",
-          "rmSync",
-          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
@@ -377,9 +379,9 @@
           "* Compute in Rust first from immutable inputs the guarded TS handler already read; legacy",
           "* the desktop profiles through it, D7): the accepted Rust value, or what `legacy` returns (the",
           "* warning), applied only when Rust's answer is served. `legacy` runs the original handler once",
-          "/* Bounded, logged legacy fallback. */",
           "/** Guarded route adapters use this with immutable reader inputs and a lazy legacy composer. */",
           "else await legacy();",
+          "if (!release) return legacy();",
           "if (!verified) return legacy();",
           "if (service instanceof RustService) await service.owned(req, res, route, root, accept, legacy);",
           "legacy: () => Promise<unknown>",
@@ -614,8 +616,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 446,
-      "coverageRatio": 0.0987,
+      "totalSourceFiles": 448,
+      "coverageRatio": 0.0982,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -631,7 +633,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 253,
+          "count": 255,
           "withLogger": 30
         },
         {
@@ -738,7 +740,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 61,
+      "countOver400": 62,
       "countOver600": 23,
       "topOver400": [
         {

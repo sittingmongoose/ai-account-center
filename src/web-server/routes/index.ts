@@ -5,7 +5,7 @@
  * mounting each domain router at its appropriate path.
  */
 
-import { respondWithRust, skeletonDiagnostics } from '../rust-service';
+import { respondWithRust, rustBridgeDiagnostics, skeletonDiagnostics } from '../rust-service';
 import { authKind } from '../middleware/request-auth';
 import {
   apiAuthMiddleware,
@@ -129,6 +129,11 @@ apiRoutes.get('/diag', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (authKind(req) !== 'session') {
     res.status(401).json({ error: 'Authentication required' });
+    return;
+  }
+  // L1: the Rust bridge's counters and paired timings, for shadow runs. TS answers it.
+  if (req.query.bridge === '1') {
+    res.json({ ...skeletonDiagnostics(), bridge: rustBridgeDiagnostics(res) });
     return;
   }
   return respondWithRust(req, res, '/api/diag', skeletonDiagnostics);

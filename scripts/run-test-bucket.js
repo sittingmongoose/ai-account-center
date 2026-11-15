@@ -45,6 +45,8 @@ const slowTests = [
   'tests/unit/app-updates/codex-update-runtime-bundle.test.ts',
   'tests/unit/web-server/status/status-routes.test.ts',
   'tests/unit/web-server/status/status-server-review.test.ts',
+  // Spawns a stand-in Rust service on Unix sockets and waits on restart backoff timers.
+  'tests/unit/web-server/rust-service-lifecycle.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are

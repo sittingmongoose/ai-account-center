@@ -19,6 +19,8 @@ import { UNIFIED_CONFIG_VERSION } from './version';
 export interface UnifiedConfig {
   /** Read-only Rust agent verbs; absent and invalid values stay off. */
   agentVerbs?: 'off' | 'on';
+  /** The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. */
+  rustService?: { mode?: 'off' | 'shadow' | 'on' };
   /** Config version */
   version: number;
   /** Flag indicating setup wizard has been completed */

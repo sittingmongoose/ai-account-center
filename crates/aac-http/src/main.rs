@@ -1,7 +1,22 @@
 //! Unix-only skeleton service; its boot secret arrives on stdin, never argv or logs.
 #[cfg(unix)]
-#[tokio::main(worker_threads = 2)]
-async fn main() {
+fn main() {
+    // Two async workers; at most 16 blocking threads: the 8 read and 4 store permits (L1), the
+    // stdin reader and spare. The permits, not this cap, are the bound the routes rely on.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(16)
+        .enable_all()
+        .build();
+    let Ok(runtime) = runtime else {
+        eprintln!("aac-http: runtime failed");
+        std::process::exit(1);
+    };
+    runtime.block_on(run());
+}
+
+#[cfg(unix)]
+async fn run() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
     let mut input = BufReader::new(tokio::io::stdin()).take(8193);
     let mut line = String::new();

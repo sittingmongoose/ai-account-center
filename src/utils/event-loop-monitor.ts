@@ -1,6 +1,31 @@
 import { performance } from 'perf_hooks';
 import type { Logger } from '../services/logging/logger';
 
+/** More fields for the same line, added by a running part (the Rust service child's RSS). */
+const extraFields = new Set<() => Record<string, unknown> | undefined>();
+
+/** Add fields to every minute line until the returned function removes them. Never request data. */
+export function addEventLoopMonitorFields(
+  fields: () => Record<string, unknown> | undefined
+): () => void {
+  extraFields.add(fields);
+  return () => {
+    extraFields.delete(fields);
+  };
+}
+
+function extra(): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  for (const fields of extraFields) {
+    try {
+      Object.assign(merged, fields() ?? {});
+    } catch {
+      // A failing part must not stop the observation.
+    }
+  }
+  return merged;
+}
+
 /** One unref'd JS timer; at most 48 KB of lag samples, never request data. */
 export function startEventLoopMonitor(
   logger: Pick<Logger, 'info'>,
@@ -36,6 +61,7 @@ export function startEventLoopMonitor(
       rssBytes: memory.rss,
       heapUsedBytes: memory.heapUsed,
       externalBytes: memory.external,
+      ...extra(),
     };
     count = 0;
     cursor = 0;

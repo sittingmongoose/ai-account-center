@@ -217,6 +217,14 @@
     ]
   },
   {
+    "word": "binary",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-lifecycle.ts:RustAcquireFailure",
+      "src/web-server/rust-service-lifecycle.ts:failure"
+    ]
+  },
+  {
     "word": "binary_damaged",
     "cause": "damaged",
     "sources": [
@@ -274,6 +282,28 @@
     "sources": [
       "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
       "src/web-server/services/claude-open-operations.ts:state"
+    ]
+  },
+  {
+    "word": "boot",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-transport.ts:RustFailureKind"
+    ]
+  },
+  {
+    "word": "breaker",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
+    ]
+  },
+  {
+    "word": "build_mismatch",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-lifecycle.ts:RustAcquireFailure",
+      "src/web-server/rust-service-lifecycle.ts:failure"
     ]
   },
   {
@@ -423,6 +453,13 @@
       "scripts/app-updates/app_update_antigravity.py:state['phase']",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
       "src/web-server/services/signin-jobs.ts:state"
+    ]
+  },
+  {
+    "word": "cap",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-transport.ts:RustFailureKind"
     ]
   },
   {
@@ -607,7 +644,8 @@
     "word": "closed",
     "cause": null,
     "sources": [
-      "src/store/store-service.ts:reason"
+      "src/store/store-service.ts:reason",
+      "src/web-server/rust-service-health.ts:BreakerState"
     ]
   },
   {
@@ -655,6 +693,13 @@
     "cause": null,
     "sources": [
       "src/antigravity/types.ts:ActivationStatus"
+    ]
+  },
+  {
+    "word": "connect",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-transport.ts:RustFailureKind"
     ]
   },
   {
@@ -819,6 +864,7 @@
     "word": "deadline",
     "cause": "timeout",
     "sources": [
+      "src/web-server/rust-service-transport.ts:RustFailureKind",
       "src/web-server/services/analytics-remote-transport.ts:entry.reason",
       "src/web-server/services/analytics-remote-transport.ts:reason"
     ]
@@ -923,6 +969,14 @@
       "src/web-server/status/answers.ts:summary.state",
       "src/web-server/status/report-schema.ts:ITEM_STATES",
       "src/web-server/status/report-schema.ts:THREAD_STATES"
+    ]
+  },
+  {
+    "word": "down",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-supervisor.ts:state",
+      "src/web-server/rust-service.ts:reason"
     ]
   },
   {
@@ -1337,6 +1391,13 @@
     ]
   },
   {
+    "word": "gave-up",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-supervisor.ts:state"
+    ]
+  },
+  {
     "word": "gone",
     "cause": null,
     "sources": [
@@ -1355,6 +1416,13 @@
     "cause": "provider_error",
     "sources": [
       "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "half-open",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-health.ts:BreakerState"
     ]
   },
   {
@@ -1574,6 +1642,13 @@
     ]
   },
   {
+    "word": "inflight",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
+    ]
+  },
+  {
     "word": "initializing",
     "cause": null,
     "sources": [
@@ -1584,7 +1659,8 @@
     "word": "input",
     "cause": null,
     "sources": [
-      "scripts/antigravity/runtime/resident_broker.py:state"
+      "scripts/antigravity/runtime/resident_broker.py:state",
+      "src/web-server/rust-service.ts:reason"
     ]
   },
   {
@@ -2264,6 +2340,13 @@
     ]
   },
   {
+    "word": "new",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-health.ts:state"
+    ]
+  },
+  {
     "word": "no_browser_cookie",
     "cause": null,
     "sources": [
@@ -2653,6 +2736,7 @@
     "sources": [
       "src/commands/usage-hub-command.ts:state.state",
       "src/status-native/native-loader.ts:(env.AAC_STATUS_NATIVE ?? '').trim().toLowerCase()",
+      "src/web-server/rust-service-supervisor.ts:state",
       "src/web-server/status/answers.ts:process.env.AAC_STATUS_DOORBELL",
       "src/web-server/usage-hub/usage-hub-key-store.ts:UsageHubKeyState",
       "src/web-server/usage-hub/usage-hub-key-store.ts:state",
@@ -2823,6 +2907,7 @@
     "word": "open",
     "cause": null,
     "sources": [
+      "src/web-server/rust-service-health.ts:BreakerState",
       "src/web-server/status/answers.ts:parsed.doc.state",
       "src/web-server/status/card-schema.ts:CARD_STATES",
       "src/web-server/status/card-schema.ts:doc.state",
@@ -3060,6 +3145,14 @@
     ]
   },
   {
+    "word": "platform",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-lifecycle.ts:RustAcquireFailure",
+      "src/web-server/rust-service-lifecycle.ts:failure"
+    ]
+  },
+  {
     "word": "policy_blocked",
     "cause": "policy_blocked",
     "sources": [
@@ -3101,6 +3194,13 @@
     "cause": null,
     "sources": [
       "scripts/app-updates/app_update_t3_rpc.py:ValueError"
+    ]
+  },
+  {
+    "word": "principal",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
     ]
   },
   {
@@ -3340,6 +3440,7 @@
     "word": "ready",
     "cause": null,
     "sources": [
+      "src/web-server/rust-service-supervisor.ts:state",
       "src/web-server/services/account-dashboard-state.ts:state",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
       "src/web-server/services/account-lifecycle-accounts.ts:state",
@@ -3485,6 +3586,7 @@
     "sources": [
       "scripts/claude-history/history_index_remote_v2.py:receipt['status']",
       "scripts/claude-history/history_index_remote_v2.py:status",
+      "src/web-server/rust-service.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:row.reason",
       "src/web-server/services/claude-history-sync-service.ts:result.status",
@@ -3550,6 +3652,13 @@
     ]
   },
   {
+    "word": "reply",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-transport.ts:RustFailureKind"
+    ]
+  },
+  {
     "word": "reply_too_large",
     "cause": null,
     "sources": [
@@ -3561,6 +3670,13 @@
     "cause": null,
     "sources": [
       "scripts/claude-signin/claude_signin.py:reason"
+    ]
+  },
+  {
+    "word": "reset",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-transport.ts:RustFailureKind"
     ]
   },
   {
@@ -3685,6 +3801,20 @@
     "cause": null,
     "sources": [
       "src/web-server/routes/auth-routes.ts:signedOutReason"
+    ]
+  },
+  {
+    "word": "role",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
+    ]
+  },
+  {
+    "word": "root",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
     ]
   },
   {
@@ -4293,6 +4423,13 @@
     ]
   },
   {
+    "word": "serving",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-supervisor.ts:state"
+    ]
+  },
+  {
     "word": "session-observation-unavailable",
     "cause": "provider_error",
     "sources": [
@@ -4401,6 +4538,14 @@
     ]
   },
   {
+    "word": "socket_path",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-lifecycle.ts:RustAcquireFailure",
+      "src/web-server/rust-service-lifecycle.ts:failure"
+    ]
+  },
+  {
     "word": "source_changed",
     "cause": null,
     "sources": [
@@ -4420,6 +4565,15 @@
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
       "src/web-server/services/usage-failover-service.ts:response.failureCode",
       "src/web-server/services/usage-failover-transport.ts:value.failureCode"
+    ]
+  },
+  {
+    "word": "spawn",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-lifecycle.ts:RustAcquireFailure",
+      "src/web-server/rust-service-lifecycle.ts:failure",
+      "src/web-server/rust-service-supervisor.ts:failure"
     ]
   },
   {
@@ -5056,6 +5210,16 @@
     ]
   },
   {
+    "word": "unhealthy",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service-lifecycle.ts:RustAcquireFailure",
+      "src/web-server/rust-service-lifecycle.ts:failure",
+      "src/web-server/rust-service-supervisor.ts:failure",
+      "src/web-server/rust-service-supervisor.ts:reason"
+    ]
+  },
+  {
     "word": "unknown",
     "cause": "provider_error",
     "sources": [
@@ -5155,6 +5319,13 @@
     "cause": null,
     "sources": [
       "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "unnamed",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
     ]
   },
   {

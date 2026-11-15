@@ -394,6 +394,8 @@ try {
     path.join(root, 'src/web-server/rust-service.ts'),
     path.join(root, 'src/web-server/rust-service-lifecycle.ts'),
     path.join(root, 'src/web-server/rust-service-transport.ts'),
+    path.join(root, 'src/web-server/rust-service-supervisor.ts'),
+    path.join(root, 'src/web-server/rust-service-health.ts'),
     path.join(root, 'src/web-server/rust-service-routes.json'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))
