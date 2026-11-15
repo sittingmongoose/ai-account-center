@@ -172,8 +172,9 @@ export function composeRegistryListing(facts: RegistryListingFacts): {
           row,
           null,
           {
-            signInAgain:
-              fact.available && fact.refusal !== 'account_active' && fact.refusal !== 'unavailable',
+            // The live login signs in again in place (codex-account-lifecycle.ts); its
+            // account_active refusal is Remove's only.
+            signInAgain: fact.available && fact.refusal !== 'unavailable',
             replaceKey: false,
             remove: fact.refusal !== 'unavailable',
             open: [],

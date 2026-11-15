@@ -275,10 +275,11 @@ function isLiveLogin(live: FreshLogin, saved: FreshLogin): boolean {
 
 /**
  * Whether a saved profile holds the live native login, by the same rule as the guard
- * below (workspace and principal, the email only when a binding cannot be read). It is
- * for checks made before the activation lock, such as the dashboard's Remove and Sign in
- * again refusals. It answers false when there is no live login or a login cannot be
- * verified; the guard under the lock still refuses those cases.
+ * below (workspace and principal, the email only when a binding cannot be read). The
+ * dashboard's Remove refusal asks it before the activation lock (the guard under the lock
+ * still refuses the cases it answers false for), and Sign in again asks it under the lock
+ * to decide whether the live login is renewed too. It answers false when there is no live
+ * login or a login cannot be verified.
  */
 export function savedLoginIsLive(nativeAuthPath: string, profileAuthPath: string): boolean {
   try {

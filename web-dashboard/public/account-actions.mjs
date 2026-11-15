@@ -294,6 +294,7 @@ export function jobErrorText(job) {
     case 'timeout': return 'The code expired before it was approved. Start again for a new code.';
     case 'provider_denied': return 'The sign-in was refused or cancelled at the provider. Nothing was saved.';
     case 'write_failed': return 'The new sign-in could not be saved safely. Nothing was changed.';
+    case 'live_login_not_updated': return 'The new sign-in was saved to its profile, but the live login on that computer could not be updated. Sign in again.';
     case 'server_restarted': return 'The dashboard restarted during the sign-in. Start again.';
     default: return job?.state === 'cancelled' ? 'The sign-in was cancelled. Nothing was saved.' : 'The sign-in did not finish. Nothing was saved.';
   }

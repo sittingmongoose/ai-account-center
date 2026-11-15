@@ -25,6 +25,7 @@ export type SignInJobErrorCode =
   | 'timeout'
   | 'provider_denied'
   | 'write_failed'
+  | 'live_login_not_updated'
   | 'server_restarted';
 
 export interface SignInJob {
@@ -71,6 +72,8 @@ export const SIGNIN_ERROR_MESSAGES: Readonly<Record<SignInJobErrorCode, string>>
   timeout: 'The sign-in was not finished in time. Nothing was changed.',
   provider_denied: 'The sign-in was not approved, or its code expired. Nothing was changed.',
   write_failed: 'The new sign-in could not be saved safely. Nothing was changed.',
+  live_login_not_updated:
+    'The new sign-in was saved to its profile, but the live login on this computer could not be updated. Sign in again.',
   server_restarted: 'The server restarted, so this sign-in stopped. Start it again.',
 });
 

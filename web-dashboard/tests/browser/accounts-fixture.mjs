@@ -111,6 +111,14 @@ export function fakeServer(over = {}) {
 			if (body.provider === 'kimi-code') return json(200, { check: 'ok', account: { id: 'kimi-code:k2', credential: { last4: '7c2e' } } });
 			return json(400, { error: 'not in this fixture' });
 		}],
+		['POST', /^\/api\/accounts\/(codex%3A[^/]+)\/signin-again$/, (_b, m) => {
+			// The live Codex login signs in again in place like any other profile (switching was retired).
+			const accountId = decodeURIComponent(m[1]);
+			const job = { id: 'job_00000000000000aa', provider: 'codex', kind: 'device-code', mode: 'signin-again', accountId, state: 'starting', profileName: accountId.slice(6), verification: null, result: null, error: null };
+			const waiting = { ...job, state: 'waiting', verification: { url: 'https://auth.openai.com/codex/device', userCode: 'WXYZ-67890', expiresAt: at(14) } };
+			s.jobs.set(job.id, [waiting]);
+			return json(202, { job });
+		}],
 		['GET', /^\/api\/accounts\/signin-jobs\/([^/]+)$/, (_b, m) => {
 			const list = s.jobs.get(m[1]) || [];
 			const next = list.length > 1 ? list.shift() : list[0];

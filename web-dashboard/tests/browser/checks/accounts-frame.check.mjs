@@ -214,11 +214,20 @@ export const tests = {
 		await t.equal('an ask, then one commit with the token', JSON.stringify(restores.map((r) => r.body)), JSON.stringify([{}, { confirmationToken: 'tok-restore' }]));
 	},
 
+	async 'accounts: the live Codex login signs in again in place'(t) {
+		const server = fakeServer();
+		await open(t, server);
+		const again = `${row('codex:one')} [data-probe="signin-again:codex:one"]`;
+		await t.equal('Sign in again is enabled on the live row', await t.page.$eval(again, (el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true'), true);
+		await t.page.click(again);
+		await t.until('the device code shows', () => document.querySelector('.prov[data-provider="codex"] .cb-text')?.textContent === 'WXYZ-67890', null, { timeout: 15000 });
+		await t.equal('one sign-in request for the live row', JSON.stringify(changes(server).map((r) => r.path)), JSON.stringify(['/api/accounts/codex%3Aone/signin-again']));
+		await t.equal('no refusal line', await t.page.$$eval(`${row('codex:one')} .row-line.refuse`, (els) => els.length), 0);
+	},
+
 	async 'accounts: a refused control says why under its row and sends nothing'(t) {
 		const server = fakeServer();
 		await open(t, server);
-		await t.page.click(`${row('codex:one')} [data-probe="signin-again:codex:one"]`);
-		await t.until('the refusal line', () => /is the live login on its computer, so it cannot sign in again/.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
 		await t.page.click(`${row('codex:one')} [data-probe="remove:codex:one"]`);
 		await t.until('the remove refusal', () => /cannot be removed\. Sign in to another account there first/.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
 		await t.equal('no change was sent', changes(server).length, 0);

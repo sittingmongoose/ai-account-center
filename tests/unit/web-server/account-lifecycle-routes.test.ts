@@ -846,11 +846,13 @@ describe('remove with a confirmation token', () => {
     saveLogin('personal', bound('same@example.com', 'ws-personal'));
     saveLogin('work', bound('same@example.com', 'ws-work'));
     activate('work');
-    // One email, two workspaces: only the live workspace's profile is refused.
+    // One email, two workspaces: only the live workspace's profile is refused. Sign in
+    // again is not refused: the live login signs in again in place.
     const live = await f.request('POST', '/codex:work/remove', {});
     expect([live.status, live.body.code]).toEqual([409, 'account_active']);
     const again = await f.request('POST', '/codex:work/signin-again', {});
-    expect([again.status, again.body.code]).toEqual([409, 'account_active']);
+    expect(again.status).toBe(202);
+    expect(again.body.job).toMatchObject({ mode: 'signin-again', accountId: 'codex:work' });
     expect((await f.request('POST', '/codex:personal/remove', {})).status).toBe(200);
     // A live login without a readable workspace binding names no profile in the summary;
     // the refusals still follow the removal guard, where the email decides.
@@ -1165,13 +1167,21 @@ describe('sign-in and guides', () => {
     expect((await f.request('GET', '/signin-jobs/not-a-job')).status).toBe(404);
   });
 
-  it('refuses Sign in again on the live active Codex profile and guides the app providers', async () => {
+  it('starts Sign in again on the live Codex profile too and guides the app providers', async () => {
     const f = await fixture();
     codexProfile('gmail');
     codexProfile('party');
     activate('party');
     const active = await f.request('POST', '/codex:party/signin-again', {});
-    expect([active.status, active.body.code]).toEqual([409, 'account_active']);
+    expect(active.status).toBe(202);
+    expect(active.body.job).toMatchObject({ mode: 'signin-again', accountId: 'codex:party' });
+    // Remove still refuses the live login.
+    const remove = await f.request('POST', '/codex:party/remove', {});
+    expect([remove.status, remove.body.code]).toEqual([409, 'account_active']);
+    const busy = await f.request('POST', '/codex:gmail/signin-again', {});
+    expect([busy.status, busy.body.code]).toEqual([409, 'job_running']);
+    const job = active.body.job as { id: string };
+    await f.request('POST', `/signin-jobs/${job.id}/cancel`, {});
     const started = await f.request('POST', '/codex:gmail/signin-again', {});
     expect(started.status).toBe(202);
     expect(started.body.job).toMatchObject({ mode: 'signin-again', accountId: 'codex:gmail' });
@@ -1286,9 +1296,10 @@ describe('registry, re-check, open, label and trash', () => {
     expect((secure.body.providers as unknown[]).length).toBe(9);
     const accounts = secure.body.accounts as Array<Record<string, unknown>>;
     const byId = (id: string) => accounts.find((account) => account.id === id);
+    // The live login keeps Remove's refusal and offers Sign in again.
     expect(byId('codex:party')).toMatchObject({
       removeRefusal: 'account_active',
-      actions: { signInAgain: false, remove: true },
+      actions: { signInAgain: true, remove: true },
     });
     expect(byId('codex:gmail')).toMatchObject({ removeRefusal: 'account_default' });
     expect(byId('zai:usage')).toMatchObject({

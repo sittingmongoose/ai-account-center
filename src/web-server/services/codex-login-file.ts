@@ -1,6 +1,5 @@
 import { constants } from 'fs';
 import fs from 'fs/promises';
-import path from 'path';
 import {
   decodeCodexActivationIdentity,
   matchesCodexActivationIdentity,
@@ -49,17 +48,31 @@ interface AuthTokens {
 
 /** A complete Codex login: a structurally valid id token with an email, plus access and refresh tokens. */
 export async function readCodexLogin(authPath: string): Promise<CodexLoginIdentity | null> {
+  return readLogin(authPath, true);
+}
+
+/**
+ * Whose login a file holds, from its id token alone: an expired or half-written
+ * login that needs signing in again still names its account. Null when the id
+ * token cannot be read.
+ */
+export async function readCodexLoginIdentity(authPath: string): Promise<CodexLoginIdentity | null> {
+  return readLogin(authPath, false);
+}
+
+async function readLogin(authPath: string, complete: boolean): Promise<CodexLoginIdentity | null> {
   try {
     const parsed = (await readAuthFile(authPath)) as AuthTokens | null;
     const token = parsed?.tokens?.id_token;
     if (typeof token !== 'string' || !hasStructurallyValidIdToken(token)) return null;
     const identity = decodeIdToken(token);
+    if (!identity.email) return null;
     if (
-      !identity.email ||
-      typeof parsed?.tokens?.access_token !== 'string' ||
-      !parsed.tokens.access_token ||
-      typeof parsed.tokens?.refresh_token !== 'string' ||
-      !parsed.tokens.refresh_token
+      complete &&
+      (typeof parsed?.tokens?.access_token !== 'string' ||
+        !parsed.tokens.access_token ||
+        typeof parsed.tokens?.refresh_token !== 'string' ||
+        !parsed.tokens.refresh_token)
     ) {
       return null;
     }
@@ -67,40 +80,11 @@ export async function readCodexLogin(authPath: string): Promise<CodexLoginIdenti
       email: identity.email,
       accountId: identity.account_id ?? null,
       plan: identity.plan_type ?? null,
-      binding: decodeCodexActivationIdentity(token, parsed.tokens.account_id),
+      binding: decodeCodexActivationIdentity(token, parsed?.tokens?.account_id),
     };
   } catch {
     // Parser messages can contain token fragments; nothing is reported.
     return null;
-  }
-}
-
-export type LiveCodexEmail =
-  { state: 'absent' } | { state: 'unverified' } | { state: 'email'; email: string };
-
-/**
- * The live native login's email, read fresh (no cache, no registry metadata):
- * `absent` when there is no login file, `unverified` when one exists but its
- * identity cannot be read.
- */
-export async function readLiveCodexEmail(authPath: string): Promise<LiveCodexEmail> {
-  try {
-    await fs.lstat(authPath);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { state: 'absent' }
-      : { state: 'unverified' };
-  }
-  try {
-    const parsed = (await readAuthFile(authPath)) as AuthTokens | null;
-    const token = parsed?.tokens?.id_token;
-    if (typeof token !== 'string' || !hasStructurallyValidIdToken(token)) {
-      return { state: 'unverified' };
-    }
-    const email = decodeIdToken(token).email;
-    return email ? { state: 'email', email } : { state: 'unverified' };
-  } catch {
-    return { state: 'unverified' };
   }
 }
 
@@ -131,15 +115,4 @@ export function sameCodexIdentity(
     return false;
   }
   return !saved?.binding || matchesCodexActivationIdentity(saved.binding, binding);
-}
-
-/**
- * True when the live native login in `codexHome` is (or may be) this email,
- * read fresh. A native login whose identity cannot be read is not proof that
- * it is another account.
- */
-export async function liveCodexLoginIs(codexHome: string, email: string): Promise<boolean> {
-  const live = await readLiveCodexEmail(path.join(codexHome, 'auth.json'));
-  if (live.state === 'absent') return false;
-  return live.state === 'unverified' || sameText(live.email, email);
 }

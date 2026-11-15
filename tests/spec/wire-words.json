@@ -17,8 +17,6 @@
       "src/web-server/services/account-visibility.ts:read.state",
       "src/web-server/services/additional-account-service.ts:state",
       "src/web-server/services/claude-account-stores.ts:read.state",
-      "src/web-server/services/codex-login-file.ts:live.state",
-      "src/web-server/services/codex-login-file.ts:state",
       "src/web-server/services/dashboard-auth-files.ts:state",
       "src/web-server/services/dashboard-auth-state.ts:read.state",
       "src/web-server/services/dashboard-device-store.ts:read.state",
@@ -966,8 +964,7 @@
     "cause": null,
     "sources": [
       "scripts/account-usage/muse_console.py:state",
-      "scripts/claude-signin/claude_signin.py:reason",
-      "src/web-server/services/codex-login-file.ts:state"
+      "scripts/claude-signin/claude_signin.py:reason"
     ]
   },
   {
@@ -1905,6 +1902,13 @@
     "sources": [
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
       "src/web-server/services/account-dashboard-projection.ts:renewal.reason"
+    ]
+  },
+  {
+    "word": "live_login_not_updated",
+    "cause": "signin_needed",
+    "sources": [
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
     ]
   },
   {
@@ -5344,9 +5348,7 @@
     "word": "unverified",
     "cause": null,
     "sources": [
-      "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason",
-      "src/web-server/services/codex-login-file.ts:live.state",
-      "src/web-server/services/codex-login-file.ts:state"
+      "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason"
     ]
   },
   {

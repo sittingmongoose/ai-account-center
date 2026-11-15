@@ -30,8 +30,8 @@ import {
   type SignInFlowSpec,
 } from './signin-jobs';
 import {
-  liveCodexLoginIs,
   readCodexLogin,
+  readCodexLoginIdentity,
   sameCodexIdentity,
   sameText as same,
   type CodexLoginIdentity,
@@ -45,16 +45,19 @@ export { readCodexLogin, type CodexLoginIdentity } from './codex-login-file';
  *
  * - Sign-ins run `codex login --device-auth` on a PTY with CODEX_HOME set to a
  *   private staging folder `codex-instances/.staging-<jobId>` (0700, with the
- *   shared config.toml linked when it exists). The native `~/.codex` login is
- *   never written: only the activation lock file lives there.
+ *   shared config.toml linked when it exists). The CLI never writes the native
+ *   `~/.codex` login itself.
  * - Add refuses an email already saved in another profile. Sign in again
  *   applies Codex's activation identity rules (codex-activation-identity.ts):
  *   the new login must carry a workspace claim, keep the known ChatGPT
  *   account, and keep any known person (user id, or subject plus issuer); the
  *   email must match too. Then, under the activation lock, Add renames the
- *   staging folder into place and registers it, and Sign in again (after a
- *   fresh check that the profile is not the live login) replaces the
- *   profile's auth.json atomically.
+ *   staging folder into place and registers it, and Sign in again replaces the
+ *   profile's auth.json atomically. When the live native login (`~/.codex`) is
+ *   this same account, read fresh under the lock, Sign in again replaces it
+ *   too, both or neither: switching was retired (2026-11-13), so the live
+ *   account can only be signed in again in place. A live login of another
+ *   account, or one that cannot be read, is never written.
  * - A stop requested by the job runner (cancel, shutdown) is checked under the
  *   activation lock before anything is committed.
  * - Remove uses the same staged delete as `codex-auth remove`, and refuses the
@@ -333,10 +336,14 @@ export class CodexAccountLifecycle {
     });
   }
 
-  /** Sign in again: the same account and person only; the saved auth.json is replaced atomically. */
+  /**
+   * Sign in again: the same account and person only. The saved auth.json is replaced
+   * atomically, and the live native login too when it is this same account.
+   */
   signInAgainFlow(name: string): SignInFlowSpec {
     return this.flow('signin-again', name, async (jobId, control) => {
-      const login = await readCodexLogin(path.join(this.stagingDir(jobId), 'auth.json'));
+      const staged = path.join(this.stagingDir(jobId), 'auth.json');
+      const login = await readCodexLogin(staged);
       if (!login) throw new SignInJobError('write_failed');
       return this.commitUnderLock(control, async () => {
         const registry = this.registry();
@@ -348,25 +355,14 @@ export class CodexAccountLifecycle {
         if (await this.otherProfileWithEmail(login.email, name)) {
           throw new SignInJobError('duplicate_identity');
         }
-        // Activation copies the live login back into the active profile, which would undo
-        // this. Another process may have activated it a moment ago: no cached answer counts.
-        invalidateCodexAuthProfilesCache();
-        if (
-          (await this.activeProfile()) === name ||
-          (await liveCodexLoginIs(this.codexHome(), login.email))
-        ) {
-          throw new SignInJobError('write_failed');
-        }
-        const content = await fs.readFile(path.join(this.stagingDir(jobId), 'auth.json'));
-        const temporary = `${authPath}.tmp.${process.pid}.${jobId}`;
+        const liveAuth = await this.liveLoginToRenew(name, authPath, login);
+        let content: Buffer;
         try {
-          await fs.writeFile(temporary, content, { mode: 0o600, flag: 'wx' });
-          await fs.chmod(temporary, 0o600);
-          await fs.rename(temporary, authPath);
+          content = await fs.readFile(staged);
         } catch {
-          await fs.rm(temporary, { force: true }).catch(() => undefined);
           throw new SignInJobError('write_failed');
         }
+        await this.installLogin(`${process.pid}.${jobId}`, content, authPath, liveAuth);
         try {
           registry.updateProfile(name, {
             last_used: new Date(this.now()).toISOString(),
@@ -380,6 +376,96 @@ export class CodexAccountLifecycle {
         return login;
       });
     });
+  }
+
+  /**
+   * The live native login's path when it holds this profile's account, read fresh under
+   * the lock (no cached answer counts), or null to leave it alone: no live login, one
+   * whose id token cannot be read, or another account. It is this account when the
+   * summary names this profile (workspace and principal), when the removal guard calls
+   * the saved login live, or when it holds the new login's own identity. Whichever rule
+   * names it, the new login must keep the live login's account and person, so a sign-in
+   * never puts another identity into the live login.
+   */
+  private async liveLoginToRenew(
+    name: string,
+    authPath: string,
+    fresh: CodexLoginIdentity
+  ): Promise<string | null> {
+    const liveAuth = path.join(this.codexHome(), 'auth.json');
+    const live = await readCodexLoginIdentity(liveAuth);
+    if (!live) return null;
+    const keepsLive = sameCodexIdentity(live, {}, fresh);
+    invalidateCodexAuthProfilesCache();
+    const namesThis = (await this.activeProfile()) === name || savedLoginIsLive(liveAuth, authPath);
+    if (!namesThis && !keepsLive) return null;
+    if (!keepsLive) throw new SignInJobError('identity_mismatch');
+    return liveAuth;
+  }
+
+  /**
+   * Installs a new login into the profile and, when `liveAuth` is given, into the live
+   * login, both or neither. Each file goes through a 0600 temporary file in its own
+   * folder ('wx', so a planted file or link is never followed), synced, then renamed
+   * into place. Every temporary file (and a copy of the profile's previous login) is
+   * written before the first rename, so a full disk or a permission problem changes
+   * nothing. If the live rename still fails, the previous profile login goes back; only
+   * when that also fails does the job report that the profile was saved and the live
+   * login was not.
+   */
+  private async installLogin(
+    tag: string,
+    content: Buffer,
+    authPath: string,
+    liveAuth: string | null
+  ): Promise<void> {
+    const temporaries: string[] = [];
+    const stage = async (target: string, bytes: Buffer): Promise<string> => {
+      const temporary = `${target}.tmp.${tag}.${temporaries.length}`;
+      const handle = await fs.open(temporary, 'wx', 0o600);
+      // Only a file this call created is ever cleaned up, never one planted at its name.
+      temporaries.push(temporary);
+      try {
+        await handle.writeFile(bytes);
+        await handle.chmod(0o600);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      return temporary;
+    };
+    const cleanup = () =>
+      Promise.all(temporaries.map((file) => fs.rm(file, { force: true }).catch(() => undefined)));
+    let liveTemporary: string | null = null;
+    let restore: string | null = null;
+    try {
+      // Read before anything changes: an unreadable previous login cannot be put back.
+      const previous = liveAuth ? await previousLogin(authPath) : null;
+      const profileTemporary = await stage(authPath, content);
+      if (liveAuth) {
+        liveTemporary = await stage(liveAuth, content);
+        if (previous) restore = await stage(authPath, previous);
+      }
+      await fs.rename(profileTemporary, authPath);
+    } catch {
+      await cleanup();
+      throw new SignInJobError('write_failed');
+    }
+    if (!liveAuth || !liveTemporary) return;
+    try {
+      await fs.rename(liveTemporary, liveAuth);
+    } catch {
+      try {
+        if (restore) await fs.rename(restore, authPath);
+        else await fs.rm(authPath);
+      } catch {
+        await cleanup();
+        throw new SignInJobError('live_login_not_updated');
+      }
+      await cleanup();
+      throw new SignInJobError('write_failed');
+    }
+    await cleanup();
   }
 
   /** The first refusal a remove would hit now, or null. */
@@ -473,5 +559,15 @@ export class CodexAccountLifecycle {
       }
     }
     return removed;
+  }
+}
+
+/** A profile's saved login bytes, or null when there is none; any other read error throws. */
+async function previousLogin(authPath: string): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(authPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }

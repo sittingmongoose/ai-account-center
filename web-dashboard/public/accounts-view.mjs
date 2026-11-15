@@ -221,18 +221,21 @@ function rowActions(provider, account, homeRow, ctx) {
     case 'device': {
       const g = gate(entry, 'signInAgain', provider);
       const fields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
-      const again = homeRow?.active
-        ? action({ ...fields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the live login on Ubuntu. Sign in to another account there first, then sign in again.' })
-        : !g.live ? gated(fields, g)
-          : reg && reg.actions?.signInAgain === false ? action({ ...fields, enabled: false, tip: 'A sign-in is not possible for this account now.' })
-            : action({ ...fields, enabled: true, tip: 'Run the device-code login for this profile again; its history stays.' });
+      // The live login signs in again like any other (the server renews ~/.codex in place):
+      // switching was retired, so there is no other account to move to first.
+      const again = !g.live ? gated(fields, g)
+        : reg && reg.actions?.signInAgain === false ? action({ ...fields, enabled: false, tip: 'A sign-in is not possible for this account now.' })
+          : action({ ...fields, enabled: true, tip: homeRow?.active
+            ? 'Run the device-code login for this profile again; the live login on Ubuntu is renewed too, and its history stays.'
+            : 'Run the device-code login for this profile again; its history stays.' });
       return [again, removeControl(provider, account, reg, entry)];
     }
     case 'cli': {
       const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
-      // The live login cannot sign in again; like the device rows it gets a refuse control that
-      // says why, not a dead button. The registry's refusal is the signal (the native-selected
-      // flag needs the runtime; without it the registry still records the live login).
+      // The live Antigravity login cannot sign in again yet (the server refuses it); it gets a
+      // refuse control that says why, not a dead button. The registry's refusal is the signal
+      // (the native-selected flag needs the runtime; without it the registry still records the
+      // live login). Codex rows sign the live login in again in place.
       const isLive = homeRow?.active === true || reg?.removeRefusal === 'account_active';
       const signin = isLive
         ? action({ ...signinFields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the live login on Ubuntu. Sign in to another account there first, then sign in again.' })
