@@ -230,6 +230,8 @@ fn ssh_policy_matches_the_design_for_short_and_scan_calls() {
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
+            "UpdateHostKeys=no",
+            "-o",
             "UserKnownHostsFile=/fixture/data/ssh/known_hosts",
             "-o",
             "IdentitiesOnly=yes",

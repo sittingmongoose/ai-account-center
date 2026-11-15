@@ -108,6 +108,7 @@ impl SshPolicy {
                 "ServerAliveCountMax=2"
             },
             "StrictHostKeyChecking=yes",
+            "UpdateHostKeys=no",
         ] {
             argv.extend(["-o".into(), value.into()]);
         }

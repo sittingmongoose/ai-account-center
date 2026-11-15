@@ -8,6 +8,7 @@
  * - `BatchMode=yes`: never prompt for a password or passphrase; a host that
  *   needs one fails instead of hanging.
  * - `ConnectTimeout=5`, `ConnectionAttempts=1`: one bounded connect attempt.
+ * - `UpdateHostKeys=no`: never rewrite trust files, including with an overriding ssh config.
  * - Host keys verify against the user's default known_hosts. No transport
  *   sets StrictHostKeyChecking or UserKnownHostsFile, and none may: a new
  *   host key is a refusal, never an automatic accept.
@@ -56,6 +57,8 @@ export function sshArgv(host: string, command: string, keepalive?: SshKeepalive)
     'ConnectTimeout=5',
     '-o',
     'ConnectionAttempts=1',
+    '-o',
+    'UpdateHostKeys=no',
     ...(keepalive
       ? [
           '-o',

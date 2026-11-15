@@ -59,6 +59,8 @@ describe('muse sign-in flow', () => {
       '-o',
       'ConnectionAttempts=1',
       '-o',
+      'UpdateHostKeys=no',
+      '-o',
       'ServerAliveInterval=5',
       '-o',
       'ServerAliveCountMax=1',
