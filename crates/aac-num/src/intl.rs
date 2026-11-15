@@ -335,9 +335,8 @@ impl Zone {
         })
     }
 
-    /// The en-US `{hour:'numeric', minute:'2-digit'}` and `{month:'short', day:'numeric'}` words for `ms` ("3:05 PM",
-    /// "Nov 14", ASCII space), or `None` outside the window.
-    pub fn words(&self, ms: i64) -> Option<(String, String)> {
+    /// Whole local minutes since 1970 at `ms` (Intl truncates to the minute), or `None` outside the window.
+    fn local_minutes(&self, ms: i64) -> Option<i64> {
         if ms < self.from || ms > self.to {
             return None;
         }
@@ -347,8 +346,21 @@ impl Zone {
             .take_while(|(start, _)| *start <= ms)
             .last()
             .map_or(0, |(_, minutes)| *minutes);
-        // Intl truncates to the minute: whole local minutes since 1970.
-        let local = (ms + minutes * 60_000).div_euclid(60_000);
+        Some((ms + minutes * 60_000).div_euclid(60_000))
+    }
+
+    /// The display-zone calendar date `(year, month, day)` of `ms`, from the same offsets as [`Zone::words`] (R1: the
+    /// page's own date, so no server word is needed for the year), or `None` outside the window.
+    pub fn local_date(&self, ms: i64) -> Option<(i64, i64, i64)> {
+        Some(civil::civil_from_days(
+            self.local_minutes(ms)?.div_euclid(1440),
+        ))
+    }
+
+    /// The en-US `{hour:'numeric', minute:'2-digit'}` and `{month:'short', day:'numeric'}` words for `ms` ("3:05 PM",
+    /// "Nov 14", ASCII space), or `None` outside the window.
+    pub fn words(&self, ms: i64) -> Option<(String, String)> {
+        let local = self.local_minutes(ms)?;
         let (_, m, d) = civil::civil_from_days(local.div_euclid(1440));
         let (hour, minute) = (local.rem_euclid(1440) / 60, local.rem_euclid(60));
         let clock = format!(
@@ -480,8 +492,14 @@ mod tests {
             1_801_440_000_000,
             &[[1_794_096_000_000, -300]],
         );
-        let words = ny.and_then(|z| z.words(1_794_686_700_000));
+        let words = ny.as_ref().and_then(|z| z.words(1_794_686_700_000));
         assert_eq!(words, Some(("3:05 PM".into(), "Nov 14".into())));
+        // R1: the local date comes from the same offsets: 2026-11-14 15:05 in New York is that day there, while
+        // 2027-01-01 03:00Z is still New Year's Eve (the year from the page's offsets, not the UTC word).
+        let ny = ny.expect("a proven zone");
+        assert_eq!(ny.local_date(1_794_686_700_000), Some((2026, 11, 14)));
+        assert_eq!(ny.local_date(1_798_772_400_000), Some((2026, 12, 31)));
+        assert_eq!(ny.local_date(1_794_096_000_000 - 1), None);
         assert_eq!(Zone::proven(5, 5, &[[5, 0]]), None);
         assert_eq!(proven_style(&probe(STYLES[2])), Some(STYLES[2]));
     }

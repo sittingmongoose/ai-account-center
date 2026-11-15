@@ -3,7 +3,8 @@
 //! TS bridge serves its own answer instead (for Home: the page builds its own view). Inputs are what
 //! the guarded TS handler already read from its owners; engine facts (`Date.parse`, `toISOString`,
 //! `localeCompare`, display-zone clock and day words) come from the shared M3 presentation envelope
-//! (`aac_status::read_context`). The specs: the M3 parity corpora, and `tests/spec/views/home` for Home.
+//! (`aac_status::read_context`), or, for Home's fed path (R1), from the page's zone and the facts of a fed
+//! generation. The specs: the M3 parity corpora, and `tests/spec/views/home` for Home.
 pub mod analytics;
 pub mod antigravity;
 pub mod claude_desktop;
@@ -11,5 +12,6 @@ pub mod codex_profiles;
 pub mod decline;
 pub mod home;
 pub mod js;
+pub mod js_json;
 pub mod registry;
 pub mod spread;

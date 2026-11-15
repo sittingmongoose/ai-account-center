@@ -2,7 +2,7 @@
 //! and `x-aac-view: <name>@<version>`, and the front door writes them without parsing. The ETag
 //! follows `revalidated-view.ts`: SHA-256 of the view's JSON with the clock-only keys
 //! (`generatedAt`, `ageSeconds`, `cacheAgeSeconds`) left out at any depth, written `W/"<hex>"`.
-//! No route group is owned yet in L1 (R1 is the first); this is the shared piece they use.
+//! R1 (Home) is the first route group that uses it ([`respond_bytes`]).
 use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -45,6 +45,31 @@ pub fn respond(name: &'static str, version: u32, view: &Value) -> Response {
         HeaderValue::from_static("application/json; charset=utf-8"),
     );
     if let Ok(value) = HeaderValue::from_str(&etag(view)) {
+        headers.insert(header::ETAG, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&format!("{name}@{version}")) {
+        headers.insert("x-aac-view", value);
+    }
+    response
+}
+
+/// R1: the response of a view whose bytes the service wrote itself (`aac_views::js_json`, exactly as Node writes
+/// them), with the ETag of its revalidated-view identity text (the same bytes without the clock-only members).
+pub fn respond_bytes(
+    name: &'static str,
+    version: u32,
+    bytes: Vec<u8>,
+    identity: &[u8],
+) -> Response {
+    let digest = Sha256::digest(identity);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!("W/\"{hex}\"")) {
         headers.insert(header::ETAG, value);
     }
     if let Ok(value) = HeaderValue::from_str(&format!("{name}@{version}")) {

@@ -136,6 +136,20 @@ export interface AccountDashboardDeps {
   failover?: Pick<UsageFailoverService, 'collect' | 'recover' | 'peek'> | null;
 }
 
+/** R1: the dashboard answer before its per-response pass, and that pass's clock. */
+export interface HomeDashboardRead {
+  dashboard: AccountDashboard;
+  now: number;
+}
+
+/** The per-response pass of `get`: every window whose reset passed since its reading is marked. */
+export function withPassedResetsAt(dashboard: AccountDashboard, now: number): AccountDashboard {
+  return {
+    ...dashboard,
+    accounts: dashboard.accounts.map((account) => markPassedResets(account, now)),
+  };
+}
+
 /** Per-request facts the cached collection does not know. */
 export interface AccountDashboardRequestContext {
   /** isSecureTransport(req) (CONTRACT-auth-devices 2a); false until that check ships. */
@@ -687,13 +701,23 @@ export class AccountDashboardService {
     return this.withPassedResets(await this.read(platform, false, context, false));
   }
 
+  /**
+   * R1 (Home, fed): `get`'s read without its per-response pass, and the clock that pass reads. The fed Home
+   * pushes this answer to the Rust service only when it changed, and Rust applies the pass per request
+   * (`withPassedResetsAt(dashboard, now)` is `get`'s answer, for the TS fallback).
+   */
+  async readForHome(
+    platform: ClaudeDashboardPlatform = 'mac',
+    refresh = false,
+    context: AccountDashboardRequestContext = {}
+  ): Promise<HomeDashboardRead> {
+    const dashboard = await this.read(platform, refresh, context, true);
+    return { dashboard, now: (this.deps.now ?? Date.now)() };
+  }
+
   /** Per response: a window's reset can pass while its sample is still cached. */
   private withPassedResets(dashboard: AccountDashboard): AccountDashboard {
-    const now = (this.deps.now ?? Date.now)();
-    return {
-      ...dashboard,
-      accounts: dashboard.accounts.map((account) => markPassedResets(account, now)),
-    };
+    return withPassedResetsAt(dashboard, (this.deps.now ?? Date.now)());
   }
 
   private async read(
@@ -938,6 +962,16 @@ export function getAccountDashboard(
 ): Promise<AccountDashboard> {
   service ??= new AccountDashboardService();
   return service.get(platform, refresh, context);
+}
+
+/** R1: `getAccountDashboard` before its per-response pass, with that pass's clock (Home, fed). */
+export function readAccountDashboardForHome(
+  platform: ClaudeDashboardPlatform = 'mac',
+  refresh = false,
+  context: AccountDashboardRequestContext = {}
+): Promise<HomeDashboardRead> {
+  service ??= new AccountDashboardService();
+  return service.readForHome(platform, refresh, context);
 }
 
 /** Cache only: never starts a collection (see AccountDashboardService.peek). */

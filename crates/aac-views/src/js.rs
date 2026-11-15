@@ -17,7 +17,7 @@ pub use aac_num::intl::{STYLES, Style, Zone};
 pub use aac_status::read_context::js_whitespace;
 use aac_status::read_context::{Context, PROTO_NAMES};
 use serde_json::{Map, Value, json};
-use std::cmp::Ordering;
+use std::{cell::Cell, cmp::Ordering, collections::HashMap, sync::Arc};
 
 /// Why a view could not be proven equal to the JavaScript one. The word is logged; no data is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,12 +263,28 @@ pub fn valid_date(v: Option<&Value>) -> R<Option<i64>> {
     }
 }
 
+/// `localeCompare` ranks of the words a view sorts by (equal words share a rank), computed by the server engine.
+pub type Ranks = HashMap<String, usize>;
+
+/// Where the formatters' engine facts come from.
+enum Facts {
+    /// D7: the M3 presentation envelope, built per request: the server engine's clock and day words of every
+    /// instant, each checked against the page's [`Zone`], and the ranks.
+    Envelope(Context),
+    /// R1 (fed): clock and day words come from the page's own zone offsets and probed style, so the server's `Intl`
+    /// drops out; the only engine fact is the ranks, fed once per dashboard generation.
+    Fed {
+        ranks: Arc<Ranks>,
+        missing: Cell<bool>,
+    },
+}
+
 /// The en-US formatters of view-model.mjs at one `now`: the display-zone clock and day words of each instant and the
-/// collation ranks come from the presentation envelope, joined in the page's proven [`Style`]. A fact the envelope
-/// lacks marks the context invalid, and the build then declines (`fact`); a word the page's [`Zone`] would write
-/// differently declines (`zone`).
+/// collation ranks, joined in the page's proven [`Style`]. In the envelope form a fact the envelope lacks marks the
+/// context invalid, and the build then declines (`fact`); a word the page's [`Zone`] would write differently declines
+/// (`zone`). In the fed form the words are the zone's own, and a word without a rank is the missing fact.
 pub struct Fmt {
-    ctx: Context,
+    facts: Facts,
     style: Style,
     zone: Zone,
     /// The browser's clock.
@@ -279,21 +295,48 @@ impl Fmt {
     /// Formatters over the envelope's facts in the style proven by the format probe, checked against the page's zone.
     pub fn new(ctx: Context, style: Style, zone: Zone, now: i64) -> Self {
         Fmt {
-            ctx,
+            facts: Facts::Envelope(ctx),
             style,
             zone,
             now,
         }
     }
 
-    /// Every fact asked for was in the envelope.
-    pub fn valid(&self) -> bool {
-        self.ctx.valid()
+    /// R1: formatters whose words come from the page's zone and whose ranks are a fed generation's facts.
+    pub fn fed(ranks: Arc<Ranks>, style: Style, zone: Zone, now: i64) -> Self {
+        Fmt {
+            facts: Facts::Fed {
+                ranks,
+                missing: Cell::new(false),
+            },
+            style,
+            zone,
+            now,
+        }
     }
 
-    /// The envelope's clock word ("3:05 PM", ASCII space) in the page's style.
+    /// Every fact asked for was present.
+    pub fn valid(&self) -> bool {
+        match &self.facts {
+            Facts::Envelope(ctx) => ctx.valid(),
+            Facts::Fed { missing, .. } => !missing.get(),
+        }
+    }
+
+    /// The clock word ("3:05 PM", ASCII space) in the page's style: the envelope's, checked against the zone, or
+    /// (fed) the zone's own.
     pub fn clock(&self, ms: i64) -> R<String> {
-        let word = self.ctx.clock(ms);
+        let ctx = match &self.facts {
+            Facts::Envelope(ctx) => ctx,
+            Facts::Fed { .. } => {
+                let word = self.zone.words(ms).ok_or(Decline("zone"))?.0;
+                let Some((hm, half)) = word.split_once(' ') else {
+                    return Err(Decline("zone"));
+                };
+                return Ok(format!("{hm}{}{half}", self.style.sep));
+            }
+        };
+        let word = ctx.clock(ms);
         let fact = Err(Decline("fact"));
         let Some((hm, half)) = word.split_once(' ') else {
             return fact;
@@ -312,17 +355,27 @@ impl Fmt {
         Ok(format!("{hm}{}{half}", self.style.sep))
     }
 
-    /// `{month:'short', day:'numeric'}`: the envelope's day word ("Dec 2"), checked.
+    /// `{month:'short', day:'numeric'}`: the envelope's day word ("Dec 2"), checked, or (fed) the zone's own.
     pub fn day(&self, ms: i64) -> R<String> {
-        self.date(ms)?;
-        Ok(self.ctx.day(ms))
+        match &self.facts {
+            Facts::Envelope(ctx) => {
+                self.date(ms)?;
+                Ok(ctx.day(ms))
+            }
+            Facts::Fed { .. } => Ok(self.zone.words(ms).ok_or(Decline("zone"))?.1),
+        }
     }
 
-    /// The display-zone calendar date of `ms`: month and day from the envelope's day word, the year from the
-    /// envelope's UTC ISO word (a zone moves the date by less than two days, so one year fits).
+    /// The display-zone calendar date of `ms`. Envelope: month and day from the envelope's day word, the year from
+    /// the envelope's UTC ISO word (a zone moves the date by less than two days, so one year fits). Fed: the zone's
+    /// own local date, from the same offsets as its words.
     pub fn date(&self, ms: i64) -> R<(i64, i64, i64)> {
+        let ctx = match &self.facts {
+            Facts::Envelope(ctx) => ctx,
+            Facts::Fed { .. } => return self.zone.local_date(ms).ok_or(Decline("zone")),
+        };
         let fact = Err(Decline("fact"));
-        let word = self.ctx.day(ms);
+        let word = ctx.day(ms);
         let Some((name, day)) = word.split_once(' ') else {
             return fact;
         };
@@ -339,7 +392,7 @@ impl Fmt {
         if self.zone.words(ms).ok_or(Decline("zone"))?.1 != word {
             return Err(Decline("zone"));
         }
-        let iso = self.ctx.iso(Some(ms));
+        let iso = ctx.iso(Some(ms));
         let Some(iso) = iso.as_str() else { return fact };
         let utc = iso.as_bytes();
         let num = |from: usize, len: usize| -> Option<i64> {
@@ -397,10 +450,21 @@ impl Fmt {
         let Some(browser) = aac_num::intl::ascii_compare(a, b) else {
             return Err(Decline("collation"));
         };
-        match (self.ctx.rank(a), self.ctx.rank(b)) {
-            (Some(ra), Some(rb)) if ra.cmp(&rb) != browser => Err(Decline("collation")),
-            // A word without a rank is a missing fact, as before.
-            _ => Ok(self.ctx.compare(a, b)),
+        match &self.facts {
+            Facts::Envelope(ctx) => match (ctx.rank(a), ctx.rank(b)) {
+                (Some(ra), Some(rb)) if ra.cmp(&rb) != browser => Err(Decline("collation")),
+                // A word without a rank is a missing fact, as before.
+                _ => Ok(ctx.compare(a, b)),
+            },
+            Facts::Fed { ranks, missing } => match (ranks.get(a), ranks.get(b)) {
+                (Some(ra), Some(rb)) if ra.cmp(rb) != browser => Err(Decline("collation")),
+                (Some(ra), Some(rb)) => Ok(ra.cmp(rb)),
+                // The envelope's rule: a word without a rank is a missing fact.
+                _ => {
+                    missing.set(true);
+                    Ok(a.cmp(b))
+                }
+            },
         }
     }
 

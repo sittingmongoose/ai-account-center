@@ -258,6 +258,21 @@ export class ClaudeOpenOperations {
     }
     return chosen ? { ...chosen.operation } : null;
   }
+
+  /**
+   * R1 (Home, fed): `forProfile` for every profile of `scope` that has an operation, as `[profileId,
+   * operation]` pairs in first-seen order; a profile without one is absent (`forProfile` is null for it).
+   */
+  forScope(scope: string): [string, ClaudeOpenOperation][] {
+    this.prune();
+    const ids: string[] = [];
+    for (const entry of this.entries.values())
+      if (entry.scope === scope && !ids.includes(entry.profileId)) ids.push(entry.profileId);
+    return ids.flatMap((id) => {
+      const operation = this.forProfile(scope, id);
+      return operation ? [[id, operation] as [string, ClaudeOpenOperation]] : [];
+    });
+  }
 }
 
 let operations: ClaudeOpenOperations | null = null;

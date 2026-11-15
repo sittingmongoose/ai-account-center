@@ -19,8 +19,11 @@ import { UNIFIED_CONFIG_VERSION } from './version';
 export interface UnifiedConfig {
   /** Read-only Rust agent verbs; absent and invalid values stay off. */
   agentVerbs?: 'off' | 'on';
-  /** The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. */
-  rustService?: { mode?: 'off' | 'shadow' | 'on' };
+  /**
+   * The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. `groups.home`
+   * (R1, `AAC_RUST_GROUP_HOME` overrides): Home is built from fed generations when the mode is on.
+   */
+  rustService?: { mode?: 'off' | 'shadow' | 'on'; groups?: { home?: 'off' | 'on' } };
   /** Config version */
   version: number;
   /** Flag indicating setup wizard has been completed */

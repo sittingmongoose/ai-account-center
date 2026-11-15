@@ -537,3 +537,197 @@ fn feeds_and_events_reach_only_the_front_door() -> Result<()> {
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------- R1: Home from fed generations
+// Each check failed before R1: the feed store kept no payload and Home read only the envelope body.
+
+const FED_DASHBOARD: &str = r#"{"schemaVersion":1,"updatedAt":"","settings":{"refreshIntervalSeconds":60},"accounts":[{"id":"claude:a","provider":"claude","sampledAt":"2026-11-14T10:00:00.000Z","windows":[{"key":"five_hour","resetAt":"2026-11-14T12:00:00.000Z","usedPercent":42.5},{"key":"seven_day","resetAt":"2026-11-20T12:00:00.000Z","usedPercent":1e-7}]}],"server":{"version":"0.0.0","commit":null,"views":["home"]}}"#;
+const FED_FACTS: &str = r#"{"order":{"claude:a":0},"epochs":{"2026-11-14T12:00:00.000Z":1794650400000,"2026-11-20T12:00:00.000Z":1795168800000,"2026-11-14T10:00:00.000Z":1794643200000}}"#;
+const FED_OPENS: &str = r#"[["p1",{"id":"op_1","platform":"mac","state":"opened","confirmedCount":null,"totalCount":null,"message":null}]]"#;
+const FED_ANTIGRAVITY: &str = r#"{"data":{"schemaVersion":1,"hostId":"ubuntu","profiles":[]},"presentation":{"dates":{},"epochs":{},"order":{}}}"#;
+const FED_MANIFEST: &str = r#"{"version":1,"profiles":[{"id":"p1","email":"one@example.invalid","mac":{"launcherName":"Claude 1","launcherPath":"/Applications/Claude 1.app","profilePath":"/Users/fixture/Library/Application Support/Claude-1","sshHost":"mac"}},{"id":"p2","email":"two@example.invalid","mac":{"launcherName":"Claude 2","launcherPath":"/Applications/Claude 2.app","profilePath":"/Users/fixture/Library/Application Support/Claude-2","sshHost":"mac"}}]}"#;
+
+fn push(s: &Service, source: &str, generation: &str, data: &str, facts: &str) -> Result<Reply> {
+    let body = format!(r#"{{"generation":"{generation}","data":{data},"facts":{facts}}}"#);
+    s.call(
+        "PUT",
+        &format!("/internal/feed/{source}"),
+        &front_door(),
+        Some(body.as_bytes()),
+    )
+}
+
+fn push_home(s: &Service, generation: &str) -> Result<()> {
+    for (source, data, facts) in [
+        ("home-dashboard-mac-0", FED_DASHBOARD, FED_FACTS),
+        ("home-opens", FED_OPENS, "null"),
+        ("home-antigravity", FED_ANTIGRAVITY, "null"),
+    ] {
+        let reply = push(s, source, generation, data, facts)?;
+        assert_eq!(
+            (reply.status, reply.json()?["generation"].clone()),
+            (200, json!(generation)),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+fn feed(generations: [&str; 3]) -> String {
+    json!({
+        "platform": "mac", "secure": false, "now": 1_794_650_400_000_i64,
+        "updatedAt": "2026-11-14T12:00:00.500Z",
+        "dashboard": generations[0], "opens": generations[1], "antigravity": generations[2],
+    })
+    .to_string()
+}
+
+/// GET /api/views/home with the fed headers (no body).
+fn fed_home(s: &Service, feed: &str, extra: &str) -> Result<Reply> {
+    let mut stream = UnixStream::connect(&s.socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    write!(
+        stream,
+        "GET /api/views/home HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {SECRET}\r\nx-aac-principal: {}\r\nx-aac-feed: {feed}\r\n{extra}\r\n",
+        admin()
+    )?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw)?;
+    parse(&raw)
+}
+
+fn write_manifest(s: &Service) -> Result<()> {
+    let file = s.root.join("claude-desktop-profiles.json");
+    fs::write(&file, FED_MANIFEST)?;
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[test]
+fn home_is_answered_from_the_fed_generations_with_its_etag() -> Result<()> {
+    let s = Service::start(&[])?;
+    write_manifest(&s)?;
+    push_home(&s, "1")?;
+    let reply = fed_home(&s, &feed(["1", "1", "1"]), "")?;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(reply.header("x-aac-view"), Some("home@3"));
+    // The profiles are the desktop-profiles read's rows, each with its Open's progress (p2 has none).
+    let rows = s.get("/api/claude/desktop-profiles", &admin())?.json()?["profiles"].clone();
+    let mut profiles = rows.as_array().ok_or("rows")?.clone();
+    profiles[0]["openOperation"] = serde_json::from_str::<Value>(FED_OPENS)?[0][1].clone();
+    profiles[1]["openOperation"] = Value::Null;
+    // The request's clock: its updatedAt, and the 5-hour reset passed at `now` (sampled before it), as
+    // markPassedResets marks it; the weekly one has not. 1e-7 is written as Node writes it.
+    let dashboard = FED_DASHBOARD
+        .replace(
+            r#""updatedAt":"""#,
+            r#""updatedAt":"2026-11-14T12:00:00.500Z""#,
+        )
+        .replace(
+            r#""usedPercent":42.5}"#,
+            r#""usedPercent":42.5,"resetPassed":true}"#,
+        );
+    let want = format!(
+        r#"{{"schemaVersion":1,"dashboard":{dashboard},"profiles":{},"antigravity":{{"schemaVersion":1,"hostId":"ubuntu","profiles":[]}},"view":null}}"#,
+        Value::Array(profiles)
+    );
+    assert_eq!(reply.body, want);
+    let digest: String = Sha256::digest(want.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        reply.header("etag"),
+        Some(format!("W/\"{digest}\"").as_str())
+    );
+    // Before the reset, nothing is marked.
+    let early = feed(["1", "1", "1"]).replace("1794650400000", "1794650399999");
+    let reply = fed_home(&s, &early, "")?;
+    assert!(!reply.body.contains("resetPassed"), "{}", reply.body);
+    Ok(())
+}
+
+#[test]
+fn home_declines_a_missing_stale_or_unproven_generation() -> Result<()> {
+    let s = Service::start(&[])?;
+    write_manifest(&s)?;
+    let named = |reply: Reply| {
+        (
+            reply.status,
+            reply.header("x-aac-decline").map(str::to_owned),
+        )
+    };
+    let stale = (503, Some("stale".to_owned()));
+    // A missing feed declines: nothing was pushed to this boot.
+    assert_eq!(named(fed_home(&s, &feed(["1", "1", "1"]), "")?), stale);
+    push_home(&s, "1")?;
+    assert_eq!(fed_home(&s, &feed(["1", "1", "1"]), "")?.status, 200);
+    // A push during a request: the request names generation 1, the service now holds 2.
+    assert_eq!(
+        push(&s, "home-dashboard-mac-0", "2", FED_DASHBOARD, FED_FACTS)?.json()?["generation"],
+        json!("2")
+    );
+    assert_eq!(named(fed_home(&s, &feed(["1", "1", "1"]), "")?), stale);
+    // Concurrent pushes: generation 1 arriving after 2 is not taken, and the reply says 2 is held.
+    assert_eq!(
+        push(&s, "home-dashboard-mac-0", "1", FED_DASHBOARD, FED_FACTS)?.json()?["generation"],
+        json!("2")
+    );
+    assert_eq!(fed_home(&s, &feed(["2", "1", "1"]), "")?.status, 200);
+    // Another transport's dashboard is another source: not pushed, so stale.
+    let secure = feed(["2", "1", "1"]).replace("\"secure\":false", "\"secure\":true");
+    assert_eq!(named(fed_home(&s, &secure, "")?), stale);
+    // A generation that cannot be served exactly declines with its reason (a missing epoch fact).
+    push(
+        &s,
+        "home-dashboard-mac-0",
+        "3",
+        FED_DASHBOARD,
+        r#"{"order":{},"epochs":{}}"#,
+    )?;
+    assert_eq!(
+        named(fed_home(&s, &feed(["3", "1", "1"]), "")?),
+        (503, Some("locale".to_owned()))
+    );
+    // A query, a body or an unreadable feed is not the fed read.
+    assert_eq!(
+        named(fed_home(&s, "{\"platform\":\"mac\"}", "")?),
+        (503, Some("shape".to_owned()))
+    );
+    // Sessions only: the front door's own principal never reads Home.
+    let mut stream = UnixStream::connect(&s.socket)?;
+    write!(
+        stream,
+        "GET /api/views/home HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {SECRET}\r\nx-aac-principal: {}\r\nx-aac-feed: {}\r\n\r\n",
+        front_door(),
+        feed(["3", "1", "1"])
+    )?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw)?;
+    assert_eq!(parse(&raw)?.status, 401);
+    Ok(())
+}
+
+#[test]
+fn a_restarted_service_holds_no_feed_until_the_front_door_pushes_again() -> Result<()> {
+    let s = Service::start(&[])?;
+    write_manifest(&s)?;
+    push_home(&s, "1")?;
+    assert_eq!(fed_home(&s, &feed(["1", "1", "1"]), "")?.status, 200);
+    // The service dies mid-feed (one source pushed of three); a new boot holds nothing.
+    drop(s);
+    let s = Service::start(&[])?;
+    write_manifest(&s)?;
+    assert_eq!(
+        push(&s, "home-dashboard-mac-0", "1", FED_DASHBOARD, FED_FACTS)?.status,
+        200
+    );
+    let reply = fed_home(&s, &feed(["1", "1", "1"]), "")?;
+    assert_eq!(
+        (reply.status, reply.header("x-aac-decline")),
+        (503, Some("stale"))
+    );
+    push_home(&s, "1")?;
+    assert_eq!(fed_home(&s, &feed(["1", "1", "1"]), "")?.status, 200);
+    Ok(())
+}

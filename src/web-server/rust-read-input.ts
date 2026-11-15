@@ -98,15 +98,22 @@ export function rustReadInput(
         : { iso: new Date(ms).toISOString() },
     ])
   );
-  const ordered = [...words].sort((a, b) => a.localeCompare(b));
+  return { data, presentation: { dates, epochs, order: localeRanks(words) } };
+}
+
+/**
+ * The `localeCompare` ranks of `words` in this engine (equal words share a rank): the envelope's `order`, and
+ * R1's fed Home facts (computed once per dashboard generation, not per request).
+ */
+export function localeRanks(words: Iterable<string>): Record<string, number> {
+  const ordered = [...new Set(words)].sort((a, b) => a.localeCompare(b));
   let rank = 0;
-  const order = Object.fromEntries(
+  return Object.fromEntries(
     ordered.map((word, index) => {
       if (index > 0 && ordered[index - 1].localeCompare(word) !== 0) rank++;
       return [word, rank];
     })
   );
-  return { data, presentation: { dates, epochs, order } };
 }
 
 export function rustStatusInput(input: StatusInputs): unknown {
