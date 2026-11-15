@@ -4074,6 +4074,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "web-dashboard/tests/no-switch-first-words.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "web-dashboard/tests/overlay-rail.test.mjs",
       "kind": "internal",
       "evidence": [],
