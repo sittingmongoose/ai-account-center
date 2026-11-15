@@ -1209,7 +1209,7 @@ pub fn build(envelope: Envelope) -> R<HomeView> {
         fmt: Fmt::new(
             Context::new(envelope.presentation),
             style,
-            Zone::proven(&ctx.zone)?,
+            Fmt::proven_zone(&ctx.zone)?,
             ctx.now,
         ),
         computers: computers()?,

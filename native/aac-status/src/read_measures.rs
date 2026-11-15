@@ -1,6 +1,7 @@
 //! Scoreboard measure composition over accepted immutable run documents. Missing costs, unknown
 //! outcomes, disputed reviews and absent denominators preserve the TS null/coverage semantics.
-use crate::read_context::{Context, array, js_whitespace, median, number, rounded, s, significant};
+use crate::read_context::{Context, array, js_whitespace, median, number, rounded, s};
+use aac_num::view;
 use serde_json::{Value as V, json};
 use std::collections::{HashMap, HashSet};
 
@@ -129,9 +130,9 @@ fn share(unit: &str, of: f64, per: f64, n: usize) -> Option<V> {
     if per <= 0.0 {
         return Some(v);
     }
-    v["value"] = json!(significant(of / per, 4)?);
-    v["of"] = json!(significant(of, 10)?);
-    v["per"] = json!(significant(per, 10)?);
+    v["value"] = json!(view::precision(of / per, 4)?);
+    v["of"] = json!(view::precision(of, 10)?);
+    v["per"] = json!(view::precision(per, 10)?);
     if of >= 0.0 && of <= per {
         let z = 1.6448536269514722;
         let z2 = z * z;
@@ -139,8 +140,8 @@ fn share(unit: &str, of: f64, per: f64, n: usize) -> Option<V> {
         let den = 1.0 + z2 / per;
         let centre = (p + z2 / (2.0 * per)) / den;
         let margin = z * ((p * (1.0 - p)) / per + z2 / (4.0 * per * per)).sqrt() / den;
-        v["low"] = json!(significant((centre - margin).max(0.0), 4)?);
-        v["high"] = json!(significant((centre + margin).min(1.0), 4)?);
+        v["low"] = json!(view::precision((centre - margin).max(0.0), 4)?);
+        v["high"] = json!(view::precision((centre + margin).min(1.0), 4)?);
         v["interval"] = json!("wilson90");
     }
     Some(v)
@@ -263,7 +264,7 @@ fn rate(runs: &[V], unit: &str, index: &Index, read: impl Fn(&V) -> Option<f64>,
         }
     }
     Some(
-        json!({"value":if n>0&&accepted>0.0{json!(significant(total/accepted,4)?)}else{V::Null},"unit":format!("{label}/{unit}"),"n":n}),
+        json!({"value":if n>0&&accepted>0.0{json!(view::precision(total/accepted,4)?)}else{V::Null},"unit":format!("{label}/{unit}"),"n":n}),
     )
 }
 fn quotas(runs: &[V], unit: &str, index: &Index, estimated: bool) -> Option<V> {

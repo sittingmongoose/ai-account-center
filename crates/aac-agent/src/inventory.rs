@@ -69,7 +69,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
                 }
             })
             .collect::<Option<Vec<_>>>()
-            .map(|v| v.iter().sum())
+            .map(aac_num::ecma::sum)
     };
     let total = n("memTotalKb")
         .map(|n| n * 1024.0)
@@ -88,7 +88,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             .collect();
         n("pageSize")
             .filter(|_| !pages.is_empty())
-            .map(|n| n * pages.iter().sum::<f64>())
+            .map(|n| n * aac_num::ecma::sum(pages.iter().copied()))
     } else {
         n("memAvailKb").map(|n| n * 1024.0)
     };
@@ -114,7 +114,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             .map(|v| {
                 // status-collectors.ts linuxCpuTimes, operation for operation: a reduce from 0,
                 // then `total - (idle + iowait)` (other groupings round fractional counters apart).
-                let total = v.iter().take(8).fold(0.0, |sum, n| sum + n);
+                let total = aac_num::ecma::sum(v.iter().take(8).copied());
                 let idle = v[3] + v.get(4).copied().unwrap_or(0.0);
                 json!({"busy":total - idle,"total":total})
             })
@@ -133,7 +133,10 @@ fn parse_proven(platform: &str, text: &str) -> Value {
                 }
             })
             .collect::<Option<Vec<_>>>()
-            .map(|v| (v.iter().sum::<f64>() / v.len() as f64).round().min(100.0))
+            .map(|v| {
+                aac_num::ecma::math_round(aac_num::ecma::sum(v.iter().copied()) / v.len() as f64)
+                    .min(100.0)
+            })
     } else {
         n("cpuPct")
             .and_then(|n| {
@@ -143,7 +146,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
                     Some(n)
                 }
             })
-            .map(|n| n.round().min(100.0))
+            .map(|n| aac_num::ecma::math_round(n).min(100.0))
     };
     let disk = match (disk_total, disk_free) {
         (Some(t), Some(f)) if t > 0.0 => {
@@ -291,5 +294,26 @@ fn executable(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         true
+    }
+}
+
+#[cfg(test)]
+mod sum_tests {
+    /// status-collectors.ts sums with `reduce((sum, v) => sum + v, 0)`, from +0, so a list of `-0` sums to +0 there
+    /// (tests/spec/num/ecma.json `sums`). Rust's `Iterator::sum` starts from -0 and kept the -0 these readings had.
+    #[test]
+    fn sums_start_from_positive_zero_as_typescript_does() {
+        let positive_zero =
+            |v: &serde_json::Value| v.as_f64().is_some_and(|n| n == 0.0 && n.is_sign_positive());
+        let windows = super::parse_proven(
+            "windows",
+            "coreCount=2\nmemTotalB=1\ncpuLoad=-0\ncpuLoad=-0\n",
+        );
+        assert!(positive_zero(&windows["busyPct"]), "{windows}");
+        let mac = super::parse_proven(
+            "mac",
+            "cores=2\nmemTotalB=8\npageSize=4096\npagesAvail=-0\n",
+        );
+        assert!(positive_zero(&mac["memAvailableBytes"]), "{mac}");
     }
 }

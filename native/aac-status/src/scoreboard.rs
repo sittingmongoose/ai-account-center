@@ -413,7 +413,7 @@ fn name(label: &str, effort: &Option<String>) -> String {
 
 /// JavaScript's Math.round for the non-negative figures this view uses.
 fn js_round(value: f64) -> f64 {
-    crate::read_context::math_round(value)
+    aac_num::ecma::math_round(value)
 }
 
 /// JavaScript's largest safe integer (2^53): the range within which every figure this

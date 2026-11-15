@@ -7,7 +7,7 @@
 //! (`src/web-server/services/claude-desktop-usage-service.ts`) over the manifest identities and
 //! remote history text TS read. Every manifest TS refuses (a 500) and every history text whose
 //! `JSON.parse` answer serde_json cannot prove is a [`Refuse`].
-use crate::js::{ascii_word, email_shape, has_control, iso, trim};
+use crate::js::{ascii_word, email_shape, has_control, trim};
 use crate::spread::{Admit, Refuse, req, utf16_len};
 use serde_json::{Map, Value, json};
 
@@ -248,7 +248,7 @@ fn cached_sample(history: Option<&str>) -> Admit<[(&'static str, Value); 3]> {
     }
     // An integral time value of at most 8.64e15 is exact in i64.
     #[allow(clippy::cast_possible_truncation)]
-    let word = req(iso(at as i64))?;
+    let word = req(aac_num::ecma::to_iso_string(at as i64))?;
     Ok(sample("cached", json!(word), utilization))
 }
 

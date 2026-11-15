@@ -1,5 +1,4 @@
 use super::{error, proof};
-use chrono::Datelike;
 use serde_json::{Value, json};
 fn number(v: &Value) -> Option<f64> {
     let n = match v {
@@ -19,90 +18,36 @@ fn number(v: &Value) -> Option<f64> {
     }?;
     (n.is_finite() && n >= 0.).then_some(n)
 }
+/// `plan_common.reset_at`: a positive number (milliseconds above 1e11) read by `datetime.fromtimestamp`, which
+/// rounds to the microsecond before the second is written, or the one raw ISO shape proved against it; then
+/// years 2000 to 2200 only. Both readings are aac-num's (`py`).
 fn reset(v: &Value) -> Value {
     if v.is_null() || v.is_boolean() {
         return Value::Null;
     }
-    let d = if v.is_number()
+    let instant = if v.is_number()
         || v.as_str()
             .is_some_and(|s| s.bytes().all(|c| c.is_ascii_digit()))
     {
         number(v).filter(|n| *n > 0.).and_then(|n| {
-            chrono::DateTime::from_timestamp(
-                (if n > 100_000_000_000. { n / 1000. } else { n }).floor() as i64,
-                0,
-            )
+            aac_num::py::iso_seconds_of_timestamp(if n > 100_000_000_000. { n / 1000. } else { n })
         })
     } else if let Some(s) = v.as_str() {
-        // Only this raw ISO shape is proved against plan_common.reset_at.
-        let b = s.as_bytes();
-        if b.len() != 20
-            || b[4] != b'-'
-            || b[7] != b'-'
-            || b[10] != b'T'
-            || b[13] != b':'
-            || b[16] != b':'
-            || b[19] != b'Z'
-            || b.iter()
-                .enumerate()
-                .any(|(i, c)| ![4, 7, 10, 13, 16, 19].contains(&i) && !c.is_ascii_digit())
-            || b[17] > b'5'
-        {
-            proof::reject();
-            return Value::Null;
-        }
-        match chrono::DateTime::parse_from_rfc3339(s) {
-            Ok(d) => Some(d.to_utc()),
-            Err(_) => {
+        match aac_num::py::parse_z_seconds(s) {
+            // Year 0 parses but has no Python word: it is then no time, as Python's ValueError gives.
+            Some((seconds, year)) => aac_num::py::iso_seconds(seconds).map(|word| (word, year)),
+            None => {
                 proof::reject();
-                None
+                return Value::Null;
             }
         }
     } else {
         None
     };
-    d.filter(|d| (2000..=2200).contains(&d.year()))
-        .map(|d| json!(d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)))
+    instant
+        .filter(|(_, year)| (2000..=2200).contains(year))
+        .map(|(word, _)| json!(word))
         .unwrap_or(Value::Null)
-}
-/// Python's `round(value, places)` for a finite binary64 (`plan_common.usage_window`): CPython
-/// rounds the exact binary value half-even to `places` decimals (`_Py_dg_dtoa` mode 3) and reads
-/// that decimal back as the nearest double. Scaling by 10^places first would round twice and
-/// break ties away from zero, so the quotient and remainder here are exact integers.
-pub(super) fn python_round(value: f64, places: u32) -> f64 {
-    if !value.is_finite() || value == 0.0 || places > 17 {
-        return value;
-    }
-    let bits = value.abs().to_bits();
-    let raw_exponent = ((bits >> 52) & 0x7ff) as i32;
-    let fraction = bits & ((1u64 << 52) - 1);
-    let (mantissa, exponent) = if raw_exponent == 0 {
-        (fraction, -1074)
-    } else {
-        (fraction | (1u64 << 52), raw_exponent - 1075)
-    };
-    if exponent >= 0 {
-        // An integral double already has no fraction digits to round.
-        return value;
-    }
-    // |value| * 10^places = mantissa * 10^places / 2^shift, exactly (< 2^110 for places <= 17).
-    let scaled = u128::from(mantissa) * 10u128.pow(places);
-    let shift = exponent.unsigned_abs();
-    let units = if shift >= 128 {
-        // scaled < 2^110 <= 2^(shift-1): less than half a unit, which rounds to zero.
-        0
-    } else {
-        let quotient = scaled >> shift;
-        let remainder = scaled & ((1u128 << shift) - 1);
-        let half = 1u128 << (shift - 1);
-        quotient + u128::from(remainder > half || (remainder == half && quotient & 1 == 1))
-    };
-    let magnitude: f64 = format!("{units}e-{places}").parse().unwrap_or(f64::NAN);
-    if value.is_sign_negative() {
-        -magnitude
-    } else {
-        magnitude
-    }
 }
 #[allow(clippy::too_many_arguments)]
 fn window(
@@ -116,7 +61,7 @@ fn window(
     unit: Option<&str>,
     remaining: &Value,
 ) -> Value {
-    let mut w = json!({"key":key,"label":label,"usedPercent":ratio,"remainingPercent":ratio.map(|n| python_round((100.-n).max(0.), 8)),"resetAt":reset(reset_raw),"windowMinutes":minutes,"used":used,"limit":limit,"unit":unit,"kind":"rate_limit"});
+    let mut w = json!({"key":key,"label":label,"usedPercent":ratio,"remainingPercent":ratio.map(|n| aac_num::py::round((100.-n).max(0.), 8).unwrap_or_else(|| { proof::reject(); n })),"resetAt":reset(reset_raw),"windowMinutes":minutes,"used":used,"limit":limit,"unit":unit,"kind":"rate_limit"});
     if !remaining.is_null() {
         w["remaining"] = json!(number(remaining));
     }
@@ -393,7 +338,8 @@ fn zai(p: &Value) -> Value {
             .unwrap_or("")
             .to_lowercase()
             .replace("_limit", "");
-        let mut key = format!("{meter}-{unit}-{n:.1}");
+        // plan_usage.py `"{}".format(count)` on a float: its repr ("5.0").
+        let mut key = format!("{meter}-{unit}-{}", aac_num::py::repr(n));
         if !seen.insert(key.clone()) {
             key.push_str(&format!("-{index}"));
         }
@@ -487,9 +433,7 @@ pub(super) fn packs(p: &Value, now: i64) -> Value {
         return Value::Null;
     }
     let mut windows = Vec::new();
-    let current = chrono::DateTime::from_timestamp(now, 0)
-        .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-        .unwrap_or_default();
+    let current = aac_num::py::iso_seconds(now).unwrap_or_default();
     for (field, prefix, label) in [
         ("fiveHourResets", "5h", "5-hour"),
         ("weekResets", "weekly", "Weekly"),
@@ -686,10 +630,12 @@ mod tests {
 
 #[cfg(test)]
 mod rounding_tests {
-    use super::python_round;
-    /// CPython's own answers (tests/spec/agent/make-round-table.py): every sampled exact tie at
-    /// eight places, both neighbouring doubles of each, the review's Kimi witnesses and random
-    /// values. Scaling by 1e8 and rounding half away from zero misses 136 of these rows.
+    // Exact binary ties and neighbours are written out in full on purpose.
+    #![allow(clippy::excessive_precision)]
+    /// CPython's own answers (tests/spec/agent/make-round-table.py) through the window the collector builds: every
+    /// sampled exact tie at eight places, both neighbouring doubles of each, the review's Kimi witnesses and random
+    /// values. Scaling by 1e8 and rounding half away from zero missed 136 of these rows. The rounding itself is
+    /// `aac_num::py::round` (crates/aac-num/tests/corpus.rs holds the wider CPython corpus).
     #[test]
     fn remaining_percent_rounds_exactly_as_python_round() {
         let table: serde_json::Value = serde_json::from_str(include_str!(
@@ -701,15 +647,54 @@ mod rounding_tests {
         for row in rows {
             let x: f64 = row[0].as_str().expect("x").parse().expect("x parses");
             let want: f64 = row[1].as_str().expect("y").parse().expect("y parses");
-            assert_eq!(
-                python_round(x, 8).to_bits(),
-                want.to_bits(),
-                "round({x}, 8)"
-            );
+            let got = aac_num::py::round(x, 8).expect("finite");
+            assert_eq!(got.to_bits(), want.to_bits(), "round({x}, 8)");
         }
-        assert_eq!(python_round(99.853515625, 8), 99.85351562);
-        assert_eq!(python_round(99.462890625, 8), 99.46289062);
-        assert_eq!(python_round(99.951171875, 8), 99.95117188);
-        assert_eq!(python_round(100.0, 8), 100.0);
+        // The Kimi witness through the window the collector builds (3 of 2048 used).
+        let null = serde_json::Value::Null;
+        let w = super::window(
+            "k",
+            "l",
+            Some(0.146484375),
+            &null,
+            None,
+            None,
+            None,
+            None,
+            &null,
+        );
+        assert_eq!(w["remainingPercent"], serde_json::json!(99.85351562));
+    }
+
+    /// `plan_common.reset_at` on a fractional timestamp: Python rounds to the microsecond first, so a time within half
+    /// a microsecond of the next second is that second (the old floor wrote the second before).
+    #[test]
+    fn reset_seconds_round_like_fromtimestamp() {
+        let at = |v: serde_json::Value| super::reset(&v);
+        assert_eq!(
+            at(serde_json::json!(1767225599.9999996)),
+            serde_json::json!("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            at(serde_json::json!(1767225599.9999994)),
+            serde_json::json!("2025-12-31T23:59:59Z")
+        );
+        assert_eq!(
+            at(serde_json::json!(1767225599999.9996)),
+            serde_json::json!("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            at(serde_json::json!(1767225600000_i64)),
+            serde_json::json!("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            at(serde_json::json!("2026-01-01T00:00:00Z")),
+            serde_json::json!("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            at(serde_json::json!("0000-01-01T00:00:00Z")),
+            serde_json::Value::Null
+        );
+        assert_eq!(at(serde_json::json!(946684799)), serde_json::Value::Null);
     }
 }

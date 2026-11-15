@@ -1,11 +1,10 @@
 //! Model Scoreboard base view, measures, grouping, ranking and source explanations. Input is
 //! the existing accepted reader state; no share scan, store write or provider refresh occurs.
 use crate::{
-    read_context::{
-        Context, Envelope, age, array, js_number, js_whitespace, number, plural, round_word, s, significant,
-    },
+    read_context::{Context, Envelope, age, array, js_whitespace, number, plural, s},
     read_measures::{Index, decisive, measures, outcome},
 };
+use aac_num::view;
 use serde_json::{Value as V, json};
 use std::collections::{HashMap, HashSet};
 
@@ -81,9 +80,9 @@ fn column(runs: &[V], source: &str, benchmark: &V, task: &V, catalog: &V, index:
 fn below(column: &V, min: f64) -> Option<String> {
     let n = number(&column["n"])?;
     if n < min {
-        Some(format!("too little data (n = {})", js_number(n)?))
+        Some(format!("too little data (n = {})", view::string(n)?))
     } else if column["source"] == "observed" && column["reviews"] == 0 {
-        Some(format!("no blind review yet (n = {})", js_number(n)?))
+        Some(format!("no blind review yet (n = {})", view::string(n)?))
     } else {
         None
     }
@@ -114,9 +113,9 @@ struct Scored {
 }
 fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Option<Vec<V>> {
     let min = number(&catalog["minRuns"])?;
-    js_number(min)?;
+    view::string(min)?;
     for column in columns {
-        js_number(number(&column["n"])?)?;
+        view::string(number(&column["n"])?)?;
     }
     let defs = catalog["measures"].as_array()?;
     let weighted: Vec<_> = array(&task["measures"])
@@ -201,14 +200,14 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
         } else if review_bar(c, min) {
             format!(
                 "too few blind reviews yet ({} of {} needed, n = {})",
-                js_number(reviewed(c))?,
-                js_number(min)?,
-                js_number(number(&c["n"]).unwrap_or(0.0))?
+                view::string(reviewed(c))?,
+                view::string(min)?,
+                view::string(number(&c["n"]).unwrap_or(0.0))?
             )
         } else {
             format!(
                 "None of this use's measures is known yet (n = {}).",
-                js_number(number(&c["n"]).unwrap_or(0.0))?
+                view::string(number(&c["n"]).unwrap_or(0.0))?
             )
         };
         c["why"] = json!(why);
@@ -221,7 +220,7 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
     }
     for (position, e) in scored.iter().enumerate() {
         let c = &mut out[e.at];
-        let n = js_number(number(&c["n"])?)?;
+        let n = view::string(number(&c["n"])?)?;
         let cheating = e.marks.iter().find(|m| m.def["id"] == "cheating");
         let weakest = e.marks.iter().min_by(|a, b| a.mark.total_cmp(&b.mark))?;
         let heavy = e
@@ -235,8 +234,8 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
                     "avoid",
                     format!(
                         "Flagged for cheating in {} of {} runs (n = {n}).",
-                        js_number(number(&m.value["of"])?)?,
-                        js_number(number(&m.value["per"])?)?
+                        view::string(number(&m.value["of"])?)?,
+                        view::string(number(&m.value["per"])?)?
                     ),
                 )
             } else if let Some(m) = heavy {
@@ -245,8 +244,8 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
                     format!(
                         "{} is {}% (n = {}).",
                         s(&m.def["label"]),
-                        round_word(number(&m.value["value"]).unwrap_or(0.0) * 100.0)?,
-                        js_number(number(&m.value["n"])?)?
+                        view::round_word(number(&m.value["value"]).unwrap_or(0.0) * 100.0)?,
+                        view::string(number(&m.value["n"])?)?
                     ),
                 )
             } else if e.score < 0.6 {
@@ -254,8 +253,8 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
                     "avoid",
                     format!(
                         "Scores {} against {} for the best row, weakest on {} (n = {n}).",
-                        js_number(significant(e.score, 2)?)?,
-                        js_number(significant(top, 2)?)?,
+                        view::string(view::precision(e.score, 2)?)?,
+                        view::string(view::precision(top, 2)?)?,
                         s(&weakest.def["label"])
                     ),
                 )
@@ -297,7 +296,7 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
         }
         c["ranked"] = json!(true);
         c["rank"] = json!(position + 1);
-        c["score"] = json!(significant(e.score, 3)?);
+        c["score"] = json!(view::precision(e.score, 3)?);
         c["verdict"] = json!(verdict);
         c["verdictLabel"] = json!(label(verdict));
         c["why"] = json!(why);

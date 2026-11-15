@@ -270,7 +270,7 @@ fn is_five(meter: &str) -> bool {
 
 /// JavaScript's Math.round for the non-negative figures this view uses: half rounds up.
 fn js_round(value: f64) -> f64 {
-    crate::read_context::math_round(value)
+    aac_num::ecma::math_round(value)
 }
 
 /// A rounded figure that must survive the cast to an integer; outside the safe integer

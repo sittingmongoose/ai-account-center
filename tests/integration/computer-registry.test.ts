@@ -18,6 +18,8 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
       'docs/agent-reports/schemas',
       'native/aac-status/src',
       'web-dashboard/leptos',
+      // The number layer the status readers compose with is one of their build inputs (L3).
+      'crates/aac-num',
     ]) {
       fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
     }
@@ -26,6 +28,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
         path.join(root, 'native/aac-status', name),
         path.join(fixture, 'native/aac-status', name)
       );
+    fs.copyFileSync(path.join(root, 'Cargo.toml'), path.join(fixture, 'Cargo.toml'));
     fs.symlinkSync(path.join(root, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
     const file = path.join(fixture, 'web-dashboard/public/computers.json');
     const rows = JSON.parse(fs.readFileSync(file, 'utf8'));

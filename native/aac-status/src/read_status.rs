@@ -1,8 +1,7 @@
 //! Status view composition over collected snapshots. Collectors and guarded write protocols keep
 //! their owners; every value and sentence in the read response is composed here.
-use crate::read_context::{
-    Context, Envelope, age, age_of, array, fixed, js_whitespace, math_round, number, plural, round_word, s,
-};
+use crate::read_context::{Context, Envelope, age, age_of, array, js_whitespace, number, plural, s};
+use aac_num::{ecma, view};
 use serde_json::{Value as V, json};
 use std::collections::{HashMap, HashSet};
 #[path = "read_status_cards.rs"]
@@ -81,11 +80,13 @@ fn trim_period(text: &str) -> &str {
     text.strip_suffix('.').unwrap_or(text)
 }
 fn round1(v: &V) -> V {
-    number(v).map(|n| json!(math_round(n * 10.0) / 10.0)).unwrap_or(V::Null)
+    number(v)
+        .map(|n| json!(ecma::math_round(n * 10.0) / 10.0))
+        .unwrap_or(V::Null)
 }
 fn gb(v: &V) -> V {
     number(v)
-        .map(|n| json!(math_round((n / 1_073_741_824.0) * 10.0) / 10.0))
+        .map(|n| json!(ecma::math_round((n / 1_073_741_824.0) * 10.0) / 10.0))
         .unwrap_or(V::Null)
 }
 fn span(seconds: f64) -> String {
@@ -310,7 +311,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
             - number(&row["firstSeenAt"])?)
             / 1000.0;
         let d = &row["doc"];
-        rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(&row)?,"clockAheadSeconds":if ahead>120.0{json!(math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
+        rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(&row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
     }
     for thread in array(&i.data["registry"]["data"]) {
         if reporting.contains(s(&thread["name"])) || array(&i.data["hiddenThreadNames"]).contains(&thread["name"]) {

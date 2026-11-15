@@ -3,9 +3,14 @@
 version = 4
 
 [[package]]
+name = "aac-num"
+version = "0.1.0"
+
+[[package]]
 name = "aac-status"
 version = "0.1.0"
 dependencies = [
+ "aac-num",
  "base64",
  "napi",
  "napi-build",

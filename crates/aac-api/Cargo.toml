@@ -11,5 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# The one numeric layer: core and alloc only, so the Leptos page reads the same number text.
+aac-num.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }

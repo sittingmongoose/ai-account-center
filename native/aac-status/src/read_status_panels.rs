@@ -7,12 +7,15 @@ fn warnings(sample: &V) -> Option<Vec<String>> {
     if let Some(free) = number(&gb(&sample["disk"]["freeBytes"]))
         && free < 50.0
     {
-        out.push(format!("Disk {} GB free, under the 50 GB floor", fixed(free, 1)?));
+        out.push(format!("Disk {} GB free, under the 50 GB floor", view::fixed(free, 1)?));
     }
     if let Some(free) = number(&gb(&sample["memAvailableBytes"]))
         && free < 6.0
     {
-        out.push(format!("Memory {} GB available, under the 6 GB floor", fixed(free, 1)?));
+        out.push(format!(
+            "Memory {} GB available, under the 6 GB floor",
+            view::fixed(free, 1)?
+        ));
     }
     Some(out)
 }

@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "aac-config",
  "aac-core",
+ "aac-num",
  "aac-protocol",
  "aac-providers",
  "aac-status",
@@ -30,6 +31,7 @@ dependencies = [
 name = "aac-api"
 version = "0.1.0"
 dependencies = [
+ "aac-num",
  "serde",
  "serde_json",
 ]
@@ -102,6 +104,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "aac-num"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "aac-protocol"
 version = "0.1.0"
 dependencies = [
@@ -121,6 +130,7 @@ dependencies = [
 name = "aac-status"
 version = "0.1.0"
 dependencies = [
+ "aac-num",
  "base64 0.22.1",
  "napi-build",
  "rusqlite",
@@ -178,6 +188,7 @@ version = "0.1.0"
 dependencies = [
  "aac-api",
  "aac-core",
+ "aac-num",
  "aac-providers",
  "aac-status",
  "serde",

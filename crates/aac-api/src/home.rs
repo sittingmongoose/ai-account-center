@@ -19,60 +19,10 @@ where
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
-/// `Number.prototype.toString` notation over Rust's shortest round-trip digits. `-0` is `"0"`.
-///
-/// Those digits equal ECMAScript's only where the shortest digits are unique: Rust breaks some ties the other way
-/// (2251799813685247.25 writes `.3`, JS `.2`). This crate cannot depend on the native Status crate, so the proof lives
-/// with the producer: `aac-views` writes only numbers `aac_status::read_context::js_number` admits (its own text and
-/// a meter `value` only beside an admitted `valueText`), and tests both writers agree on that domain.
-pub fn js_number_text(x: f64) -> String {
-    if x == 0.0 {
-        return "0".into();
-    }
-    if !x.is_finite() {
-        return if x.is_nan() {
-            "NaN".into()
-        } else if x > 0.0 {
-            "Infinity".into()
-        } else {
-            "-Infinity".into()
-        };
-    }
-    let sci = format!("{:e}", x.abs());
-    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let k = digits.len() as i64;
-    let n = exp.parse::<i64>().unwrap_or(0) + 1;
-    let mut out = String::new();
-    if x < 0.0 {
-        out.push('-');
-    }
-    if k <= n && n <= 21 {
-        out.push_str(&digits);
-        out.extend(std::iter::repeat_n('0', (n - k) as usize));
-    } else if 0 < n && n <= 21 {
-        out.push_str(&digits[..n as usize]);
-        out.push('.');
-        out.push_str(&digits[n as usize..]);
-    } else if -6 < n && n <= 0 {
-        out.push_str("0.");
-        out.extend(std::iter::repeat_n('0', (-n) as usize));
-        out.push_str(&digits);
-    } else {
-        let e = n - 1;
-        out.push_str(&digits[..1]);
-        if k > 1 {
-            out.push('.');
-            out.push_str(&digits[1..]);
-        }
-        out.push('e');
-        out.push(if e < 0 { '-' } else { '+' });
-        out.push_str(&e.abs().to_string());
-    }
-    out
-}
-
 /// Writes an optional number as `JSON.stringify` does: integers as integers, others in JS notation, non-finite as null.
+/// The text is `aac_num::ecma::to_string`, whose shortest digits break a tie between two equally close strings to the
+/// even one as ECMAScript does (2251799813685247.25 writes `.2`; Rust's own formatter wrote `.3`); it is proven against
+/// Node over all of binary64 (`tests/spec/num/ecma.json`).
 pub fn js_number<S: Serializer>(value: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
     match value {
         None => s.serialize_none(),
@@ -80,7 +30,7 @@ pub fn js_number<S: Serializer>(value: &Option<f64>, s: S) -> Result<S::Ok, S::E
         Some(x) if *x == x.trunc() && x.abs() < 9_007_199_254_740_992.0 => {
             s.serialize_i64(*x as i64)
         }
-        Some(x) => serde_json::value::RawValue::from_string(js_number_text(*x))
+        Some(x) => serde_json::value::RawValue::from_string(aac_num::ecma::to_string(*x))
             .map_err(serde::ser::Error::custom)?
             .serialize(s),
     }
@@ -482,6 +432,8 @@ pub struct HomeZone {
 
 #[cfg(test)]
 mod tests {
+    // Exact binary ties and neighbours are written out in full on purpose.
+    #![allow(clippy::excessive_precision)]
     use super::*;
 
     #[test]
@@ -500,8 +452,10 @@ mod tests {
             (123456789012345680000.0, "123456789012345680000"),
             (-2.5, "-2.5"),
             (9_007_199_254_740_992.0, "9007199254740992"),
+            (2251799813685247.25, "2251799813685247.2"),
+            (140737488355327.125, "140737488355327.12"),
         ] {
-            assert_eq!(js_number_text(x), js, "{x}");
+            assert_eq!(aac_num::ecma::to_string(x), js, "{x}");
             let v = MeterView {
                 value: Some(x),
                 ..Default::default()
