@@ -1,5 +1,7 @@
 //! Private Unix-socket HTTP service. The TS front door retains authentication and policy.
 #[cfg(unix)]
+mod agent_transport;
+#[cfg(unix)]
 mod account_reads;
 #[cfg(unix)]
 mod feed;

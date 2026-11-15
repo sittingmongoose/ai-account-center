@@ -2,7 +2,9 @@
 import fs from 'fs';
 import { ConfigError } from '../../errors/error-types';
 import path from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+import { requestRustAgent } from '../rust-service-transport';
+import transportPolicy from '../../../config/agent-transport-policy.json';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
 import { runManagedCommand } from '../../utils/managed-process';
@@ -13,6 +15,12 @@ import manifest from './agent-artifacts.json';
 import { PROVIDER_ROWS } from '../../shared/tables';
 
 const logger = createLogger('agent-verbs');
+/** Independent transport switch. Invalid or absent values never start Rust transport. */
+export function agentTransport(): 'off' | 'on' {
+  try { return (process.env.AAC_AGENT_TRANSPORT ?? loadUnifiedConfig()?.agentTransport) === 'on' ? 'on' : 'off'; }
+  catch { return 'off'; }
+}
+
 export type AgentVerbs = 'off' | 'on';
 export type AgentVerb =
   | 'signin-expiry'
@@ -88,6 +96,8 @@ function reply(stdout: string, id: string): string | null {
 
 export interface AgentCallOptions {
   artifacts?: readonly AgentArtifact[];
+  transport?: 'off' | 'on';
+  onProgress?: (data: unknown) => void;
   run?: typeof runManagedCommand;
   mode?: AgentVerbs;
   deadlineMs: number;
@@ -102,6 +112,7 @@ export function localAgentReady(
   mode: AgentVerbs = agentVerbs()
 ): boolean {
   if (mode !== 'on') return false;
+  if (agentTransport() === 'on') return artifacts.some((a) => a.target === target(platform));
   const artifact = artifacts.find((a) => a.target === target(platform));
   if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return false;
   try {
@@ -109,7 +120,7 @@ export function localAgentReady(
     const stat = fs.lstatSync(file);
     return (
       stat.isFile() &&
-      stat.size <= 128 * 1024 * 1024 &&
+      stat.size <= transportPolicy.artifactMaxBytes &&
       createHash('sha256').update(fs.readFileSync(file)).digest('hex') === artifact.sha256
     );
   } catch {
@@ -119,6 +130,32 @@ export function localAgentReady(
 
 /** Every unavailable, unproven or failed agent delegates to the labelled Python helper. */
 export async function runAgentVerb(
+  host: Pick<UsageHost, 'platform' | 'sshHost'>,
+  verb: AgentVerb,
+  verbArgs: Record<string, unknown>,
+  options: AgentCallOptions
+): Promise<string | null> {
+  try {
+    const mode = options.mode ?? agentVerbs();
+    if (mode === 'off') return null;
+    if ((options.transport ?? agentTransport()) === 'on') {
+      const result = await requestRustAgent(getCcsDir(), verb, {
+        computer: { platform: host.platform, sshHost: host.sshHost ?? null },
+        args: verbArgs,
+        deadlineMs: options.deadlineMs,
+        timeoutMs: options.timeoutMs ?? options.deadlineMs + 5000,
+        maxBytes: options.maxBytes,
+        callId: randomBytes(16).toString('hex'),
+      }, options.onProgress);
+      if (result !== undefined) return result;
+      logger.info('agent.transport.fallback', 'fallback: typescript transport', { verb });
+    }
+    return runAgentVerbTsFallback(host, verb, verbArgs, options);
+  } catch { return null; }
+}
+
+/** Labelled one-release transport fallback while the Rust service is absent or old. */
+async function runAgentVerbTsFallback(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
   verb: AgentVerb,
   verbArgs: Record<string, unknown>,
@@ -143,7 +180,7 @@ export async function runAgentVerb(
       executable = path.resolve(__dirname, '../../..', artifact.file);
       try {
         const info = await fs.promises.lstat(executable);
-        if (!info.isFile() || info.size > 128 * 1024 * 1024) return null;
+        if (!info.isFile() || info.size > transportPolicy.artifactMaxBytes) return null;
         const hash = createHash('sha256');
         for await (const chunk of fs.createReadStream(executable)) hash.update(chunk);
         if (hash.digest('hex') !== artifact.sha256) return null;

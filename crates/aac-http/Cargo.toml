@@ -15,6 +15,9 @@ aac-api.workspace = true
 aac-diag.workspace = true
 aac-files.workspace = true
 aac-core.workspace = true
+aac-config.workspace = true
+aac-protocol.workspace = true
+aac-transport.workspace = true
 aac-providers.workspace = true
 aac-views.workspace = true
 aac-store = { path = "../../native/aac-store", default-features = false }

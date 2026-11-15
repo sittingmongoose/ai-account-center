@@ -1,0 +1,195 @@
+//! L5: the private front door delegates to one pool/client per configured computer. No shipping.
+use aac_config::{Config, LoadOptions, OperatingSystem, TransportConfig};
+use aac_core::{Cause, Failure};
+use aac_protocol::{Control, Event, Handshake, PROTOCOL_VERSION, Request, frame_cap};
+use aac_transport::{AgentArtifact, AgentClient, CallOptions, CancellationToken, Computer, SshPolicy};
+use axum::{body::{Body, Bytes}, response::{IntoResponse, Response}, Json};
+use serde::Deserialize;
+use serde_json::{Value, json, value::RawValue};
+use std::{collections::BTreeMap, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::Duration};
+use tokio::sync::{OnceCell, Semaphore, mpsc, watch};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Catalog { artifacts: Vec<Artifact> }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Artifact { target: String, version: String, sha256: String, file: PathBuf }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Selector { platform: String, ssh_host: Option<String> }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Call {
+    computer: Selector,
+    args: Box<RawValue>,
+    deadline_ms: u64,
+    timeout_ms: u64,
+    max_bytes: usize,
+    call_id: String,
+}
+struct Entry { config: aac_config::ComputerConfig, client: Option<AgentClient> }
+struct Registry { entries: Vec<Entry> }
+struct Active {
+    input: mpsc::Sender<Vec<u8>>,
+    done: watch::Receiver<Option<bool>>,
+    abort: CancellationToken,
+}
+
+pub(crate) struct Agents {
+    root: PathBuf,
+    registry: OnceCell<Result<Registry, Failure>>,
+    slots: Arc<Semaphore>,
+    active: Mutex<BTreeMap<String, Active>>,
+}
+
+fn refused() -> Failure { Failure::new(Cause::Refused, "agent transport unavailable") }
+fn target(os: OperatingSystem) -> &'static str {
+    match os { OperatingSystem::Linux => "x86_64-unknown-linux-musl", OperatingSystem::Mac => "aarch64-apple-darwin", OperatingSystem::Windows => "x86_64-pc-windows-msvc" }
+}
+fn word(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
+}
+fn line(value: &Value) -> Bytes { let mut bytes=value.to_string().into_bytes(); bytes.push(b'\n'); bytes.into() }
+fn fallback(id: &str, reason: &str) -> Bytes { line(&json!({"type":"fallback","protocol":1,"id":id,"fallback":"python","reason":reason})) }
+fn response(body: Body) -> Response { ([("content-type","application/x-ndjson"),("cache-control","no-store")],body).into_response() }
+fn unavailable(id: &str, reason: &str) -> Response { response(Body::from(fallback(id,reason))) }
+
+impl Registry {
+    fn load(root: &Path) -> Result<Self, Failure> {
+        // No real-home discovery. The package paths are supplied by the trusted front door.
+        if std::env::var("AAC_AGENT_TRANSPORT").is_ok_and(|v| v != "on") { return Err(refused()); }
+        let package = PathBuf::from(std::env::var_os("AAC_AGENT_PACKAGE_ROOT").ok_or_else(refused)?);
+        if !package.is_absolute() { return Err(refused()); }
+        let mut options=LoadOptions::new(root.into(),package.join("web-dashboard/public/computers.json"));
+        options.cli=json!({"config_dir":root});
+        let config=Config::load(&options)?;
+        let enabled=std::env::var("AAC_AGENT_TRANSPORT").ok().map_or_else(||config.values()["agentTransport"]=="on",|v| v=="on");
+        if !enabled { return Err(refused()); }
+        let catalog_path=std::env::var_os("AAC_AGENT_CATALOG").map(PathBuf::from).unwrap_or_else(||package.join("dist/web-server/services/agent-artifacts.json"));
+        let catalog: Catalog=serde_json::from_slice(&aac_files::read_bounded(&catalog_path,65536)?).map_err(|_| refused())?;
+        if catalog.artifacts.len()>16 { return Err(refused()); }
+        let settings=&config.values()["agentTransportSsh"];
+        let identity=std::env::var_os("AAC_AGENT_IDENTITY_FILE").map(PathBuf::from).or_else(||settings["identityFile"].as_str().map(PathBuf::from));
+        let hosts=std::env::var_os("AAC_AGENT_KNOWN_HOSTS_FILE").map(PathBuf::from).or_else(||settings["knownHostsFile"].as_str().map(PathBuf::from));
+        let mut entries=Vec::new();
+        for definition in config.computers() {
+            let mut definition=definition.clone();
+            let mut admitted=true;
+            if let TransportConfig::Ssh { key, .. }=&mut definition.transport {
+                if key.as_os_str().is_empty() { *key=identity.clone().unwrap_or_default(); }
+                admitted=key.is_absolute() && hosts.as_ref().is_some_and(|p|p.is_absolute());
+            }
+            let client=if admitted {
+                let policy=SshPolicy::new(hosts.clone().unwrap_or_default(),root.join("run/agent-ssh"));
+                let artifact=catalog.artifacts.iter().find(|a|a.target==target(definition.os));
+                artifact.and_then(|a| {
+                    let path=package.join(&a.file);
+                    AgentArtifact::load(path,a.sha256.clone(),Handshake{name:"aac-agent".into(),version:a.version.clone(),protocol:PROTOCOL_VERSION,target:a.target.clone()}).ok()
+                }).and_then(|artifact| Computer::new(definition.clone(),policy).ok().map(|c|AgentClient::existing(c,artifact)))
+            } else { None };
+            // Missing trust configuration disables this computer, never another computer.
+            entries.push(Entry { config:definition,client });
+        }
+        Ok(Self { entries })
+    }
+    fn client(&self, selector: &Selector) -> Option<AgentClient> {
+        let os=match selector.platform.as_str() { "linux"|"ubuntu"=>OperatingSystem::Linux,"mac"=>OperatingSystem::Mac,"windows"=>OperatingSystem::Windows,_=>return None };
+        let found=self.entries.iter().filter(|e| {
+            e.config.os==os && match &selector.ssh_host {
+                Some(alias)=>matches!(e.config.transport,TransportConfig::Ssh{..}) && (e.config.id.as_str()==alias || e.config.metadata.get("sshAlias").and_then(Value::as_str)==Some(alias)),
+                None=>matches!(e.config.transport,TransportConfig::Local),
+            }
+        }).collect::<Vec<_>>();
+        if found.len()!=1 { return None; }
+        found[0].client.clone()
+    }
+}
+
+impl Agents {
+    pub(crate) fn new(root: PathBuf) -> Self { Self { root,registry:OnceCell::new(),slots:Arc::new(Semaphore::new(16)),active:Mutex::new(BTreeMap::new()) } }
+    pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
+        let started=tokio::time::Instant::now();
+        let Ok(call)=crate::json_object::from_slice::<Call>(bytes,&["computer","args","deadlineMs","timeoutMs","maxBytes","callId"]) else { return unavailable("","shape"); };
+        if !word(&call.call_id) || !["health","inventory","signin-expiry","quota-read","scan-usage","t3-pins","key-store","claude-history","failover-inventory"].contains(&verb)
+            || call.deadline_ms==0 || call.deadline_ms>aac_protocol::MAX_DEADLINE_MS || call.timeout_ms==0 || call.timeout_ms>call.deadline_ms+5000
+            || call.max_bytes==0 || call.max_bytes>frame_cap(verb)*2 || !call.args.get().trim_start().starts_with('{') { return unavailable(&call.call_id,"shape"); }
+        let Ok(permit)=self.slots.clone().try_acquire_owned() else { return unavailable(&call.call_id,"busy"); };
+        let deadline=started+Duration::from_millis(call.timeout_ms.min(call.deadline_ms));
+        let root=self.root.clone();
+        let registry=tokio::time::timeout_at(deadline,self.registry.get_or_init(||async move {
+            tokio::task::spawn_blocking(move ||Registry::load(&root)).await.unwrap_or_else(|_|Err(refused()))
+        })).await;
+        let client=match registry { Ok(Ok(registry))=>registry.client(&call.computer),_=>None };
+        let Some(client)=client else { return unavailable(&call.call_id,"unavailable"); };
+        let mut options=CallOptions::new(Duration::ZERO,call.max_bytes);
+        options.deadline=deadline;
+        options.scan=verb=="scan-usage";
+        let (input, controls)=mpsc::channel(8);
+        let (done, finished)=watch::channel(None);
+        let (output, receiver)=mpsc::channel(8);
+        let abort=options.cancel.clone();
+        {
+            let Ok(mut active)=self.active.lock() else { return unavailable(&call.call_id,"internal"); };
+            if active.contains_key(&call.call_id) { return unavailable(&call.call_id,"busy"); }
+            active.insert(call.call_id.clone(),Active{input,done:finished,abort:abort.clone()});
+        }
+        let wire=format!("{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{}\",\"deadlineMs\":{},\"args\":{}}}",call.call_id,call.deadline_ms,call.args.get());
+        let Ok(request)=serde_json::from_str::<Request>(&wire) else { return unavailable(&call.call_id,"shape"); };
+        let agents=self.clone();
+        tokio::spawn(async move {
+            let _permit=permit;
+            let (progress, mut events)=mpsc::channel(4);
+            let work=client.call_controlled_encoded(&request,wire.as_bytes(),&options,controls,progress);
+            tokio::pin!(work);
+            let result=loop {
+                tokio::select! {
+                    result=&mut work=>break result,
+                    Some(event)=events.recv()=>{
+                        if output.send(line(&serde_json::to_value(event).unwrap_or(Value::Null))).await.is_err() { options.cancel.cancel(); }
+                    }
+                }
+            };
+            let mut cancelled=false;
+            let terminal=match result {
+                Ok(events)=>match events.last() {
+                    Some(Event::Result {value,..}) if value==&json!({"fallback":"python"})=>fallback(&request.id,"unsupported"),
+                    Some(event)=>{
+                        cancelled=matches!(event,Event::Failure{failure,..} if failure.cause==Cause::Cancelled);
+                        line(&serde_json::to_value(event).unwrap_or(Value::Null))
+                    },
+                    None=>fallback(&request.id,"reply"),
+                },
+                Err(_)=>fallback(&request.id,"transport"),
+            };
+            // call_controlled has waited for the far agent's terminal frame AND SSH child exit.
+            let _=done.send(Some(cancelled));
+            if let Ok(mut active)=agents.active.lock() { active.remove(&request.id); }
+            let _=output.send(terminal).await;
+        });
+        let stream=futures_util::stream::unfold((receiver,AbortOnDrop(abort)),|(mut receiver,guard)|async move {
+            receiver.recv().await.map(|bytes|(Ok::<_,std::io::Error>(bytes),(receiver,guard)))
+        });
+        response(Body::from_stream(stream))
+    }
+
+    pub(crate) async fn control(&self, id: &str, bytes: &[u8]) -> Response {
+        let control=if let Ok(c)=crate::json_object::from_slice::<Control>(bytes,&["cancel"]) { c }
+            else if let Ok(c)=crate::json_object::from_slice::<Control>(bytes,&["input"]) { c }
+            else { return Json(json!({"accepted":false})).into_response(); };
+        if bytes.len()>65536 { return Json(json!({"accepted":false})).into_response(); }
+        let active=self.active.lock().ok().and_then(|active|active.get(id).map(|a|(a.input.clone(),a.done.clone(),a.abort.clone())));
+        let Some((input,mut done,abort))=active else { return Json(json!({"accepted":false})).into_response(); };
+        let mut frame=bytes.to_vec();frame.push(b'\n');
+        if input.try_send(frame).is_err() { return Json(json!({"accepted":false})).into_response(); }
+        if matches!(control,Control::Cancel{cancel:true}) {
+            let acknowledged=tokio::time::timeout(Duration::from_secs(2),async {
+                loop { if let Some(cancelled)=*done.borrow_and_update() { return cancelled; } if done.changed().await.is_err() { return false; } }
+            }).await.unwrap_or(false);
+            if !acknowledged { abort.cancel(); }
+            Json(json!({"cancelled":acknowledged})).into_response()
+        } else { Json(json!({"accepted":true})).into_response() }
+    }
+}
+struct AbortOnDrop(CancellationToken);
+impl Drop for AbortOnDrop { fn drop(&mut self) { self.0.cancel(); } }

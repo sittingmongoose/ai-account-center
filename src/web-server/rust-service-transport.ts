@@ -239,3 +239,96 @@ export function openRustEvents(
   });
   return { ready, close: () => request?.destroy() };
 }
+
+/** L5: current private connections, owned by the supervisors, bound to their exact AAC root. */
+const agentConnections = new Map<symbol, {
+  root: string;
+  connection: RustConnection;
+  active: Set<http.ClientRequest>;
+}>();
+
+export function registerRustAgentConnection(
+  root: string,
+  connection: RustConnection,
+  active: Set<http.ClientRequest>
+): () => void {
+  const key = Symbol();
+  agentConnections.set(key, { root, connection, active });
+  return () => agentConnections.delete(key);
+}
+
+/**
+ * POST is never retried: key-store may write. Undefined means an absent/old service, so the
+ * labelled TS transport can run. Null means a handled refusal/failure and goes to the helper.
+ * The caller's timeout includes this whole hop and keeps its Python reserve outside it.
+ */
+export async function requestRustAgent(
+  root: string,
+  verb: string,
+  payload: { computer: unknown; args: unknown; deadlineMs: number; timeoutMs: number; maxBytes: number; callId: string },
+  onProgress?: (data: unknown) => void
+): Promise<string | null | undefined> {
+  const held = [...agentConnections.values()].reverse().find((entry) => entry.root === root);
+  if (!held) return undefined;
+  const bytes = JSON.stringify(payload);
+  if (Buffer.byteLength(bytes) > 8 * 1024 * 1024 + 8192) return null;
+  return new Promise((resolve) => {
+    const request = http.request({
+      socketPath: held.connection.socketPath,
+      path: `/internal/agent/${encodeURIComponent(verb)}`,
+      method: 'POST',
+      agent: held.connection.agent ?? false,
+      headers: {
+        'x-aac-boot-secret': held.connection.secret,
+        'x-aac-principal': JSON.stringify(FRONT_DOOR_PRINCIPAL),
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(bytes),
+      },
+    });
+    held.active.add(request);
+    const timer = setTimeout(() => request.destroy(), payload.timeoutMs);
+    request.once('close', () => { clearTimeout(timer); held.active.delete(request); });
+    request.once('error', (error: NodeJS.ErrnoException) => {
+      resolve(['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '') ? undefined : null);
+    });
+    request.once('response', (response) => {
+      if (response.headers['x-aac-service-boot'] !== held.connection.bootId) {
+        response.resume(); resolve(null); return;
+      }
+      if (response.statusCode === 404 || response.statusCode === 405) {
+        response.resume(); resolve(undefined); return;
+      }
+      if (response.statusCode !== 200 || !String(response.headers['content-type']).startsWith('application/x-ndjson')) {
+        response.resume(); resolve(null); return;
+      }
+      let size = 0;
+      let buffer = '';
+      let terminal = false;
+      let result: string | null = null;
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        size += Buffer.byteLength(chunk);
+        if (size > payload.maxBytes) { request.destroy(); resolve(null); return; }
+        buffer += chunk;
+        let end: number;
+        while ((end = buffer.indexOf('\n')) !== -1) {
+          const text = buffer.slice(0, end);
+          buffer = buffer.slice(end + 1);
+          try {
+            const event = JSON.parse(text);
+            if (terminal || event.protocol !== 1 || event.id !== payload.callId) throw new Error();
+            if (event.type === 'progress') { onProgress?.(event.data); continue; }
+            terminal = true;
+            if (event.type === 'result' && event.value && typeof event.value === 'object') {
+              result = JSON.stringify(event.value) === '{"fallback":"python"}' ? null : JSON.stringify(event.value);
+            } else if (!['fallback', 'failure'].includes(event.type)) throw new Error();
+          } catch { result = null; request.destroy(); resolve(null); return; }
+        }
+      });
+      response.once('end', () => resolve(terminal && buffer === '' ? result : null));
+      response.once('error', () => resolve(null));
+      response.once('aborted', () => resolve(null));
+    });
+    request.end(bytes);
+  });
+}

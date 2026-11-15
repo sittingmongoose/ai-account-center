@@ -228,9 +228,25 @@ impl AgentClient {
         controls: mpsc::Receiver<Vec<u8>>,
         progress: mpsc::Sender<Event>,
     ) -> Result<Vec<Event>, Failure> {
+        let input = serde_json::to_vec(request).map_err(|_| Failure::new(Cause::Refused, "request encoding failed"))?;
+        self.call_controlled_encoded(request, &input, options, controls, progress).await
+    }
+
+    /// Preserve raw argument spellings (duplicate keys, numbers and whitespace) across the
+    /// service hop. The validated envelope must describe exactly these bytes.
+    pub async fn call_controlled_encoded(
+        &self,
+        request: &Request,
+        encoded: &[u8],
+        options: &CallOptions,
+        controls: mpsc::Receiver<Vec<u8>>,
+        progress: mpsc::Sender<Event>,
+    ) -> Result<Vec<Event>, Failure> {
         request.validate()?;
+        let decoded: Request = serde_json::from_slice(encoded).map_err(|_| Failure::new(Cause::Refused, "invalid request encoding"))?;
+        if &decoded != request { return Err(Failure::new(Cause::Refused, "request encoding mismatch")); }
         self.ensure(options).await?;
-        let mut input = serde_json::to_vec(request).map_err(|_| Failure::new(Cause::Refused, "request encoding failed"))?;
+        let mut input = encoded.to_vec();
         if input.len() >= frame_cap(&request.verb) { return Err(Failure::new(Cause::OutputTooLarge, "agent request cap exceeded")); }
         input.push(b'\n');
         let argv = if matches!(self.computer.config.transport, TransportConfig::Local) {

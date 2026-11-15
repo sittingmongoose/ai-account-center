@@ -521,6 +521,7 @@ impl Computer {
                             input.write_all(&frame).await?;
                         }
                     }
+                    drop(input);
                     Ok::<_, std::io::Error>(())
                 };
                 tokio::pin!(send);

@@ -19,6 +19,10 @@ import { UNIFIED_CONFIG_VERSION } from './version';
 export interface UnifiedConfig {
   /** Read-only Rust agent verbs; absent and invalid values stay off. */
   agentVerbs?: 'off' | 'on';
+  /** Existing agents only. Shipping remains disabled pending M3D4 and M3D5. */
+  agentTransport?: 'off' | 'on';
+  /** Explicit existing identity and pinned host-key source; neither is created or edited. */
+  agentTransportSsh?: { identityFile?: string; knownHostsFile?: string };
   /** The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. */
   rustService?: { mode?: 'off' | 'shadow' | 'on' };
   /** Config version */

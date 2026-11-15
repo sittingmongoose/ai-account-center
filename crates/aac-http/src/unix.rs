@@ -59,6 +59,7 @@ struct Shared {
     limits: Limits,
     identity: Identity,
     feeds: Feeds,
+    agents: Arc<crate::agent_transport::Agents>,
 }
 
 #[derive(Clone)]
@@ -233,6 +234,20 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
+        Handler::Agent | Handler::AgentControl => {
+            let path = req.uri().path().to_owned();
+            let cap = if row.handler == Handler::AgentControl { 65536 } else { aac_protocol::MAX_SCAN_FRAME_BYTES + 4096 };
+            let bytes = match tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), cap)).await {
+                Ok(Ok(bytes)) => bytes,
+                _ => return decline(row.handler, Decline::Shape),
+            };
+            let name = path.strip_prefix("/internal/agent/").unwrap_or("");
+            if row.handler == Handler::AgentControl {
+                shared.agents.control(name.strip_suffix("/control").unwrap_or(""), &bytes).await
+            } else {
+                shared.agents.call(name, &bytes).await
+            }
+        }
         Handler::Health => {
             let mut response = Json(aac_diag::health()).into_response();
             response
@@ -375,17 +390,21 @@ pub async fn serve(
     fs::set_permissions(&boot.socket_path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
+    let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
     let state = AppState(Arc::new(Shared {
         boot,
         limits: Limits::new(),
         identity,
         feeds: Feeds::new(),
+        agents,
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
     for row in rows {
         let row = Arc::new(row);
-        let filter = if row.method == axum::http::Method::PUT {
+        let filter = if row.method == axum::http::Method::POST {
+            MethodFilter::POST
+        } else if row.method == axum::http::Method::PUT {
             MethodFilter::PUT
         } else {
             MethodFilter::GET
