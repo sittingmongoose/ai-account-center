@@ -408,6 +408,17 @@ def main(binary):
             record(label, outcome, detail)
     else:
         print('SKIP settings owned by another user: no --foreign-root given')
+    # Final Sol max M1: a POSIX folder name with a literal backslash keeps it in configDir.
+    for base in ('.claude-t3', 'scope/instances'):
+        with tempfile.TemporaryDirectory(prefix='aac-signin-review-') as tmp:
+            home = pathlib.Path(tmp)
+            folder = home / base / 'a\\b'
+            folder.mkdir(parents=True)
+            (folder / '.credentials.json').write_text(json.dumps({'claudeAiOauth': {
+                'accessToken': 'fixture-access', 'refreshToken': 'fixture-refresh',
+                'expiresAt': 1769904000000, 'refreshTokenExpiresAt': 1772496000000}}))
+            label = f'backslash folder under {base}'
+            record(label, *compare(binary, home, label), allowed='equal')
     assert not failures, '\n'.join(failures)
     print(f'PASS signin-expiry review witnesses: {counts}')
 

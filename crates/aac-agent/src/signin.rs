@@ -275,7 +275,10 @@ fn json_bytes(bytes: &[u8]) -> Option<Value> {
 fn display(path: &Path, home: &Path) -> String {
     match path.strip_prefix(home) {
         Ok(p) if p.as_os_str().is_empty() => "~".into(),
-        Ok(p) => format!("~/{}", p.to_string_lossy().replace('\\', "/")),
+        // Python's Path.as_posix(): only Windows separators become "/"; on POSIX a backslash is
+        // an ordinary filename character and stays (final Sol max M1).
+        Ok(p) if cfg!(windows) => format!("~/{}", p.to_string_lossy().replace('\\', "/")),
+        Ok(p) => format!("~/{}", p.to_string_lossy()),
         Err(_) => path.to_string_lossy().into(),
     }
 }
