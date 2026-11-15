@@ -28,6 +28,21 @@ import {
 import { SocketStoreHandle } from '../../../src/store/store-host-client';
 import type { NativeLoadResult } from '../../../src/store/native-loader';
 
+const identity = () =>
+  JSON.stringify({ commit: 'f'.repeat(40), storeSchema: 2, bindingVersion: 2 });
+const hostLoad = (): NativeLoadResult => ({
+  module: {
+    NativeStore: class {
+      async call(): Promise<string> {
+        throw new Error('NAPI open in hosted mode');
+      }
+    },
+    bindingVersion: () => 2,
+    buildIdentity: identity,
+  },
+  file: 'fixture.node',
+});
+
 const fake = path.join(import.meta.dir, '../web-server/fixtures/fake-aac-http.mjs');
 let scratch = '';
 let root = '';
@@ -115,7 +130,7 @@ describe('the hosted open', () => {
     ) as { store: { dir: string } | null };
     expect(descriptor.store?.dir).toBe(path.join(root, 'store'));
 
-    const opened = await openAacStore();
+    const opened = await openAacStore({ hostLoad });
     expect(opened.hosted).toBe(true);
     const store = opened.store!;
     const firstBoot = lease(service)!.connection.bootId;
@@ -144,13 +159,13 @@ describe('the hosted open', () => {
     expect(lease(second)?.owned).toBe(false);
     // The attached registration marks this root's store as another front door's: the open
     // reads lock_held, as a second in-process writer would.
-    const opened = await openAacStore();
+    const opened = await openAacStore({ hostLoad });
     expect(opened).toEqual({ store: null, reason: 'lock_held' });
 
     await closeAacStore();
     resetAacStoreForTests();
     process.env.AAC_STORE = 'off';
-    const off = await openAacStore();
+    const off = await openAacStore({ hostLoad });
     expect(off).toEqual({ store: null, reason: 'disabled' });
   });
 });
@@ -168,6 +183,7 @@ describe('the socket handle', () => {
           }
         },
         bindingVersion: () => 2,
+        buildIdentity: identity,
       },
       file: 'fake.node',
     });
@@ -212,6 +228,7 @@ describe('the socket handle', () => {
             }
           },
           bindingVersion: () => 2,
+          buildIdentity: identity,
         },
         file: 'fake.node',
       }),
@@ -219,5 +236,66 @@ describe('the socket handle', () => {
     // `open` after the budget is used up opens in process right away.
     expect(await handle.call('open', '{"dir":"x"}')).toBe('{"state":"ready"}');
     expect(await handle.call('counts', '{}')).toBe('{"native":true}');
+  });
+});
+
+describe('the R3 handoff guards', () => {
+  it('refuses a module from another commit, schema or binding before a hosted open', async () => {
+    const service = new RustService('on');
+    services.push(service);
+    await service.start(binaryCopy());
+    for (const delta of [{ commit: 'e'.repeat(40) }, { storeSchema: 99 }, { bindingVersion: 99 }]) {
+      resetAacStoreForTests();
+      const badLoad = (): NativeLoadResult => {
+        const loaded = hostLoad();
+        if (!loaded.module) throw new Error('fixture module');
+        return {
+          ...loaded,
+          module: {
+            ...loaded.module,
+            buildIdentity: () => JSON.stringify({ ...JSON.parse(identity()), ...delta }),
+          },
+        };
+      };
+      expect((await openAacStore({ hostLoad: badLoad })).reason).toBe('incompatible');
+    }
+  });
+
+  it('shares the pending close so shutdown waits for the writer', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let closes = 0;
+    await openAacStore({
+      load: () => ({
+        file: 'fixture.node',
+        module: {
+          NativeStore: class {
+            async call(method: string): Promise<string> {
+              if (method === 'close') {
+                closes++;
+                await pending;
+              }
+              return '{}';
+            }
+          },
+          bindingVersion: () => 2,
+        },
+      }),
+    });
+    const first = closeAacStore();
+    const second = closeAacStore();
+    expect(second).toBe(first);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closes).toBe(1);
+    let done = false;
+    void second.then(() => {
+      done = true;
+    });
+    expect(done).toBe(false);
+    finish();
+    await second;
+    expect(done).toBe(true);
   });
 });

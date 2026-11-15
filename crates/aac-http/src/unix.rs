@@ -165,7 +165,9 @@ impl Boot {
         // R3: the hosted store is this root's store folder, never a path from anywhere
         // else; its job folders are absolute when named.
         if let Some(store) = &self.store
-            && (store.dir != self.ccs_dir.join("store")
+            && (store.binding_identity != aac_store::build_identity()
+                || store.binding_identity["commit"] == "unknown"
+                || store.dir != self.ccs_dir.join("store")
                 || store
                     .snapshot_directory
                     .as_ref()
@@ -339,7 +341,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let method = path.strip_prefix("/internal/store/").unwrap_or_default();
             if method.is_empty()
                 || method.len() > 32
-                || !method.bytes().all(|b| b.is_ascii_alphabetic())
+                || !method.bytes().all(|b| b.is_ascii_alphanumeric())
             {
                 return store_error("invalid: unknown method");
             }
@@ -690,6 +692,43 @@ async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBoo
 #[cfg(test)]
 mod dto_tests {
     use super::*;
+    #[test]
+    fn store_binding_identity_is_checked_before_any_open() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempfile::tempdir()?;
+        let root = fs::canonicalize(root.path())?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+        let run = root.join("run");
+        fs::create_dir(&run)?;
+        fs::set_permissions(&run, fs::Permissions::from_mode(0o700))?;
+        let folder = run.join("aac-http-abcdefabcdefabcdefabcdef");
+        fs::create_dir(&folder)?;
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))?;
+        let mut raw = serde_json::json!({
+            "ccsDir": root, "socketPath": folder.join("http.sock"),
+            "secret": "c".repeat(64), "bootId": "abcdefabcdefabcdefabcdef",
+            "store": {"dir": root.join("store"), "retentionDays": 0,
+                      "bindingIdentity": aac_store::build_identity()},
+        });
+        assert!(
+            Boot::from_json(&serde_json::to_vec(&raw)?)?
+                .validate()
+                .is_ok()
+        );
+        for field in ["commit", "storeSchema", "bindingVersion"] {
+            let original = raw["store"]["bindingIdentity"][field].clone();
+            raw["store"]["bindingIdentity"][field] = serde_json::json!("mismatch");
+            assert!(
+                Boot::from_json(&serde_json::to_vec(&raw)?)?
+                    .validate()
+                    .is_err()
+            );
+            assert!(!root.join("store").exists());
+            raw["store"]["bindingIdentity"][field] = original;
+        }
+        Ok(())
+    }
+
     #[test]
     fn short_name_matches_the_front_door() {
         // tests/unit/web-server/rust-service-health.test.ts: shortName('/home/fixture/.ccs')

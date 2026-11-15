@@ -8,12 +8,18 @@ use std::sync::Arc;
 
 /// Bumped when the binding's methods change; the TypeScript loader refuses a mismatch.
 #[allow(dead_code)]
-pub const BINDING_VERSION: u32 = 2;
+pub const BINDING_VERSION: u32 = crate::BINDING_VERSION;
 
 #[napi]
 #[allow(dead_code)]
 pub fn binding_version() -> u32 {
     BINDING_VERSION
+}
+
+/// Compiled store identity; reading it never opens the store.
+#[napi]
+pub fn build_identity() -> String {
+    crate::build_identity().to_string()
 }
 
 #[napi]

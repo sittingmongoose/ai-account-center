@@ -26,6 +26,7 @@ import {
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
 import { rustStoreSwitchOn } from './rust-service-groups';
+import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
 
@@ -147,7 +148,16 @@ export class RustSupervisor {
     ) {
       const snapshotDirectory =
         (await readSnapshotSettings(getCcsDir()).catch(() => null))?.directory ?? null;
+      let bindingIdentity: unknown = null;
+      try {
+        const loaded = loadNativeStore();
+        const text = loaded.module?.buildIdentity?.();
+        if (text) bindingIdentity = JSON.parse(text);
+      } catch {
+        /* The service rejects an unproved binding before opening the store. */
+      }
       this.storeBoot = {
+        bindingIdentity,
         retentionDays: STORE_RAW_RETENTION_DAYS,
         ...storeOpenEnv(process.env),
         snapshotDirectory,
@@ -268,7 +278,9 @@ export class RustSupervisor {
   protected scheduleRestart(): void {
     if (this.stopped || this.restartTimer || this.gaveUp || !this.binary) return;
     const delay = this.restarts.next();
-    if (delay === null) {
+    // R3's fifth crash consumes the last restart slot as a handoff to NAPI. Do not
+    // start another writer only to crash it a sixth time before automatic rollback.
+    if (delay === null || (this.storeBoot !== null && this.restarts.used >= 5)) {
       this.gaveUp = true;
       logger.error(
         'rust.service.gave_up',

@@ -28,6 +28,9 @@ export class SocketStoreHandle implements NativeStoreHandle {
   private native: NativeStoreHandle | null = null;
   private nativeOpening: Promise<void> | null = null;
   private fellBack = false;
+  private identity: string | null = null;
+  private closing: Promise<string> | null = null;
+  private readonly pending = new Set<Promise<string>>();
 
   constructor(
     private readonly root: string,
@@ -38,13 +41,28 @@ export class SocketStoreHandle implements NativeStoreHandle {
     } = {}
   ) {}
 
-  async call(method: string, args: string): Promise<string> {
+  call(method: string, args: string): Promise<string> {
+    if (method === 'close') {
+      this.closing ??= (async () => {
+        await Promise.allSettled([...this.pending]);
+        await this.nativeOpening?.catch(() => undefined);
+        return this.native ? this.native.call('close', args) : this.closeOverSocket();
+      })();
+      return this.closing;
+    }
+    if (this.closing) return Promise.reject(new RustStoreError('closed: the store is stopping'));
+    const call = this.callInner(method, args);
+    this.pending.add(call);
+    void call.finally(() => this.pending.delete(call)).catch(() => undefined);
+    return call;
+  }
+
+  private async callInner(method: string, args: string): Promise<string> {
     if (this.native) return this.native.call(method, args);
     if (method === 'open') {
       this.openArgs = args;
       return this.ensureOpen();
     }
-    if (method === 'close') return this.closeOverSocket();
     if (rustStoreGaveUp(this.root)) {
       await this.fallbackToNative();
       const native = this.native as NativeStoreHandle | null;
@@ -72,6 +90,7 @@ export class SocketStoreHandle implements NativeStoreHandle {
 
   /** The supervisor gave up: fall back now, not on some later sample. Never rejects. */
   hostGaveUp(): void {
+    if (this.closing) return;
     void this.fallbackToNative().catch(() => {
       /* The next call retries; the failure names itself there. */
     });
@@ -88,7 +107,25 @@ export class SocketStoreHandle implements NativeStoreHandle {
     if (this.openedBoot === entry.connection.bootId) return this.openReply;
     this.opening ??= (async () => {
       const bootId = entry.connection.bootId;
-      const reply = await requestRustStore(entry, 'open', this.openArgs);
+      try {
+        const hosted = await requestRustStore(entry, 'hostIdentity', '{}');
+        const native = this.nativeIdentity();
+        const identity = JSON.parse(hosted) as { commit: string; storeSchema: number };
+        if (
+          this.identityKey(identity) !== native ||
+          identity.commit !== entry.connection.build?.commit ||
+          identity.storeSchema !== entry.connection.build?.storeSchema
+        )
+          throw new RustStoreError('incompatible: the store host and binding builds differ');
+        this.identity = native;
+      } catch (error) {
+        if (error instanceof RustStoreError) throw error;
+        throw serviceDown();
+      }
+      const reply = await requestRustStore(entry, 'open', this.openArgs).catch((error: unknown) => {
+        if (error instanceof RustStoreError) throw error;
+        throw serviceDown();
+      });
       this.openedBoot = bootId;
       this.openReply = reply;
       return reply;
@@ -121,6 +158,30 @@ export class SocketStoreHandle implements NativeStoreHandle {
     }
   }
 
+  private identityKey(value: unknown): string {
+    const id = value as { commit?: unknown; storeSchema?: unknown; bindingVersion?: unknown };
+    if (
+      !id ||
+      typeof id.commit !== 'string' ||
+      !/^[a-f0-9]{7,40}$/.test(id.commit) ||
+      id.storeSchema !== 2 ||
+      id.bindingVersion !== 2
+    )
+      throw new RustStoreError('incompatible: unproved store build identity');
+    return JSON.stringify([id.commit, id.storeSchema, id.bindingVersion]);
+  }
+
+  private nativeIdentity(): string {
+    const loaded = (this.options.load ?? (() => loadNativeStore({ env: this.options.env })))();
+    if (!loaded.module?.buildIdentity)
+      throw new RustStoreError('incompatible: the store binding has no compiled identity');
+    try {
+      return this.identityKey(JSON.parse(loaded.module.buildIdentity()));
+    } catch {
+      throw new RustStoreError('incompatible: invalid store binding identity');
+    }
+  }
+
   /**
    * Open the same store through the NAPI module, once, for the rest of this process.
    * The supervisor calls this only after its budget is used up, when no service process
@@ -132,6 +193,9 @@ export class SocketStoreHandle implements NativeStoreHandle {
       const loaded = (this.options.load ?? (() => loadNativeStore({ env: this.options.env })))();
       if (!loaded.module)
         throw new RustStoreError(`${loaded.reason}: the store module is unavailable for fallback`);
+      const identity = this.nativeIdentity();
+      if (this.identity !== null && this.identity !== identity)
+        throw new RustStoreError('incompatible: the fallback binding build changed');
       const handle = new loaded.module.NativeStore();
       const reply = await handle.call('open', this.openArgs);
       this.native = handle;

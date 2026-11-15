@@ -1,3 +1,4 @@
+import { loadStoreTestModule } from '../../support/store-handle';
 /**
  * The history store with the real native module (dist/native, built by `bun run store:build`).
  * Skipped, and said so, when this computer has no module. Every store lives in a temporary
@@ -10,7 +11,7 @@ import * as path from 'path';
 import * as zlib from 'zlib';
 import express from 'express';
 import type { Server } from 'http';
-import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
+import { nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import { buildRollupExports } from '../../../src/store/usage-exports';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
@@ -38,7 +39,7 @@ import type {
 import type { AccountAnalyticsActivity } from '../../../src/web-server/services/account-analytics-types';
 
 const MODULE = path.resolve(__dirname, '../../../dist/native', nativeModuleName());
-const loaded = loadNativeStore({ env: {}, file: MODULE });
+const loaded = loadStoreTestModule({ env: {}, file: MODULE });
 const haveModule = loaded.module !== null;
 if (!haveModule)
   console.warn(`[!] ${MODULE} is not built: the store tests are skipped (bun run store:build).`);

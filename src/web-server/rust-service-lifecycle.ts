@@ -354,7 +354,8 @@ export async function acquireRustService(
   active: Set<http.ClientRequest>,
   store?: RustStoreBootInput | null
 ): Promise<RustLease | null> {
-  return (await acquireRustServiceDetailed(privateRoot, binaryPath, active, undefined, store)).lease;
+  return (await acquireRustServiceDetailed(privateRoot, binaryPath, active, undefined, store))
+    .lease;
 }
 
 export async function acquireRustServiceDetailed(

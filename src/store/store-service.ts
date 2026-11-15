@@ -17,7 +17,6 @@ import {
 import {
   onRustStoreGaveUp,
   rustStoreAttached,
-  rustStoreGaveUp,
   rustStoreHosted,
 } from '../web-server/rust-service-transport';
 import { SocketStoreHandle } from './store-host-client';
@@ -284,6 +283,7 @@ export interface StoreState {
 
 let state: StoreState = { store: null, reason: null };
 let opening: Promise<StoreState> | null = null;
+let closing: Promise<void> | null = null;
 let removeGaveUpHandler: (() => void) | null = null;
 const fallbackListeners = new Set<() => void>();
 
@@ -340,6 +340,8 @@ export function openAacStore(
     ccsDir?: string;
     env?: NodeJS.ProcessEnv;
     load?: () => NativeLoadResult;
+    /** Hosted-handle identity loader for fixture tests; never opens a NAPI writer. */
+    hostLoad?: () => NativeLoadResult;
   } = {}
 ): Promise<StoreState> {
   if (opening) return opening;
@@ -375,46 +377,45 @@ export function openAacStore(
         state = { store: null, reason: 'lock_held' };
         return state;
       }
-      if (!rustStoreGaveUp(root)) {
-        const handle = new SocketStoreHandle(root, {
-          env,
-          onFallback: () => {
-            fellBack = true;
-            if (state.store) state = { ...state, hosted: false };
-            try {
-              logger.warn(
-                'store.host_fallback',
-                'The store service gave up; the history store reopened in this process'
-              );
-            } catch {
-              /* Logging never stops the dashboard. */
-            }
-            for (const listener of fallbackListeners) {
-              try {
-                listener();
-              } catch {
-                /* A listener never stops the store. */
-              }
-            }
-          },
-        });
-        removeGaveUpHandler = onRustStoreGaveUp(root, () => handle.hostGaveUp());
-        try {
-          await handle.call('open', openArgs);
-          state = { store: new AacStore(handle, directory), reason: null, hosted: true };
-        } catch (error) {
-          if (storeErrorCode(error) === 'service_down') {
-            // The lifecycle restarts the service, and the handle reopens on its first
-            // call; until then producers read service_down, as they read lock_held today.
-            state = { store: new AacStore(handle, directory), reason: null, hosted: true };
-          } else {
-            removeGaveUpHandler();
-            removeGaveUpHandler = null;
-            return openFailed(error);
+      const handle = new SocketStoreHandle(root, {
+        env,
+        load: options.hostLoad,
+        onFallback: () => {
+          fellBack = true;
+          if (state.store) state = { ...state, hosted: false };
+          try {
+            logger.warn(
+              'store.host_fallback',
+              'The store service gave up; the history store reopened in this process'
+            );
+          } catch {
+            /* Logging never stops the dashboard. */
           }
+          for (const listener of fallbackListeners) {
+            try {
+              listener();
+            } catch {
+              /* A listener never stops the store. */
+            }
+          }
+        },
+      });
+      removeGaveUpHandler = onRustStoreGaveUp(root, () => handle.hostGaveUp());
+      try {
+        await handle.call('open', openArgs);
+        state = { store: new AacStore(handle, directory), reason: null, hosted: !fellBack };
+      } catch (error) {
+        if (storeErrorCode(error) === 'service_down') {
+          // The lifecycle restarts the service, and the handle reopens on its first
+          // call; until then producers read service_down, as they read lock_held today.
+          state = { store: new AacStore(handle, directory), reason: null, hosted: !fellBack };
+        } else {
+          removeGaveUpHandler();
+          removeGaveUpHandler = null;
+          return openFailed(error);
         }
-        return state;
       }
+      return state;
     }
     const loaded = (options.load ?? (() => loadNativeStore({ env })))();
     if (!loaded.module) {
@@ -442,19 +443,24 @@ export function aacStoreState(): StoreState {
 }
 
 /** Closes the store (seals both logs, marks a clean shutdown). Safe to call more than once. */
-export async function closeAacStore(): Promise<void> {
-  const store = state.store;
-  state = { store: null, reason: 'closed' };
-  opening = Promise.resolve(state);
-  removeGaveUpHandler?.();
-  removeGaveUpHandler = null;
-  if (store) await store.close().catch(() => undefined);
+export function closeAacStore(): Promise<void> {
+  closing ??= (async () => {
+    await opening?.catch(() => undefined);
+    const store = state.store;
+    state = { store: null, reason: 'closed' };
+    opening = Promise.resolve(state);
+    removeGaveUpHandler?.();
+    removeGaveUpHandler = null;
+    if (store) await store.close().catch(() => undefined);
+  })();
+  return closing;
 }
 
 /** For tests: forget the process's store without closing it. */
 export function resetAacStoreForTests(): void {
   state = { store: null, reason: null };
   opening = null;
+  closing = null;
   fellBack = false;
   removeGaveUpHandler?.();
   removeGaveUpHandler = null;

@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const self = fileURLToPath(import.meta.url);
 const sha256 = createHash('sha256').update(fs.readFileSync(self)).digest('hex');
-const build = JSON.stringify({ commit: 'unknown', sha256, protocol: 3, storeSchema: 2 });
+const build = JSON.stringify({ commit: 'f'.repeat(40), sha256, protocol: 3, storeSchema: 2 });
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -69,7 +69,8 @@ function storeCall(boot, req, res) {
       res.statusCode = 500;
       res.end(JSON.stringify({ error }));
     };
-    if (method === 'open') {
+    if (method === 'hostIdentity') { res.end(JSON.stringify({ commit: 'f'.repeat(40), storeSchema: 2, bindingVersion: 2 })); }
+    else if (method === 'open') {
       store.opens++;
       store.closed = false;
       res.end(storeStatus());

@@ -20,6 +20,8 @@ export interface RustConnection {
   socketPath: string;
   secret: string;
   bootId: string;
+  /** R3: compiled service identity, populated by the lifecycle health check. */
+  build?: { commit: string; storeSchema: number };
   /** L1: one keep-alive agent per boot; absent, each call opens its own connection. */
   agent?: http.Agent;
 }
@@ -433,6 +435,7 @@ export async function requestRustAgent(
  * adds `dir` (`<canonical root>/store`) and puts the whole object in the boot JSON.
  */
 export interface RustStoreBootInput {
+  bindingIdentity: unknown;
   retentionDays: number;
   cacheBytes?: number;
   activityRetentionDays?: number;

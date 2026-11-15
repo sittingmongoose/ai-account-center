@@ -636,6 +636,8 @@ impl Engine {
                 return Ok(result);
             }
             log.write(&events)?;
+            #[cfg(feature = "parity-fixtures")]
+            self.drill_checkpoint("append-synced");
             merge_findings(&mut self.findings.lock().unwrap(), log.length_loss_findings());
             for (i, cp) in &checkpoints {
                 db::write_checkpoint(&txn, &Self::checkpoint_name(self.projectors[*i].as_ref(), log_id), cp)?;
@@ -733,6 +735,22 @@ impl Engine {
         })
     }
 
+    /// A drill-only checkpoint, armed by a file inside this fixture store. The ready file
+    /// proves an operation reached the named persistence boundary before the harness kills
+    /// its own process. No environment switch or route can enable this in a shipped binary.
+    #[cfg(feature = "parity-fixtures")]
+    fn drill_checkpoint(&self, point: &str) {
+        let arm = self.dir.join(format!(".r3-pause-{point}"));
+        if !arm.is_file() {
+            return;
+        }
+        let _ = fs::write(arm.with_extension("ready"), point);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while arm.is_file() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
         self.with_db(|db| {
             let read = db.begin_read()?;
@@ -760,6 +778,8 @@ impl Engine {
                 }
             }
         }
+        #[cfg(feature = "parity-fixtures")]
+        self.drill_checkpoint("maintain-sealed");
         merge_findings(&mut self.findings.lock().unwrap(), noted);
         let mut compressed = 0;
         for (id, (start, raw, sha)) in candidates {
@@ -868,6 +888,8 @@ impl Engine {
         logs.ledger.seal()?;
         let mut noted = logs.readings.length_loss_findings();
         noted.extend(logs.ledger.length_loss_findings());
+        #[cfg(feature = "parity-fixtures")]
+        self.drill_checkpoint("maintain-sealed");
         merge_findings(&mut self.findings.lock().unwrap(), noted);
         let mut guard = self.db.write().unwrap_or_else(|p| p.into_inner());
         if let Some(db) = guard.as_ref() {
@@ -957,6 +979,8 @@ impl Engine {
                 let mut guard = self.db.write().unwrap_or_else(|p| p.into_inner());
                 let db = guard.take();
                 drop(db);
+                #[cfg(feature = "parity-fixtures")]
+                self.drill_checkpoint("backup-db-closed");
                 let result = fsx::copy_atomic(&self.dir.join(REDB_FILE), &staging.join(REDB_FILE));
                 let reopened = open_database(&self.dir.join(REDB_FILE), &self.config)
                     .map_err(|e| Error::new("db_unavailable", e.to_string()))?;

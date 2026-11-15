@@ -1048,3 +1048,43 @@ be established, export generation fails before publication, preserving the last 
 Unreadable segments classify rebuild status as degraded with their sequence loss bounds.
 Repeated integrity checks include known loss findings, so a later CLI check cannot print an
 all-clear for previously detected corruption.
+
+## 15. Optional Rust store host (R3)
+
+The default remains the in-process NAPI writer. With `rustService.mode: on` and
+`rustService.store: on` in `config.yaml`, `aac-http` owns the same store files.
+`AAC_RUST_STORE=on|off` overrides that store setting; `shadow` never hosts a store.
+`AAC_STORE=off` still disables the store. Restart the dashboard after changing a setting.
+
+`AacStore` keeps its API and uses `SocketStoreHandle` for the JSON method contract at
+`POST /internal/store/<method>`. Only the boot-secret-authenticated front door with
+its service principal may call this internal route. Store requests queue on four
+blocking permits, have 16 MiB request / 64 MiB reply caps, and are never retried
+across a transport failure: an unanswered write may have committed. While the
+service restarts, calls report `service_down`; no NAPI writer is opened alongside it.
+The fifth crash within the restart budget hands the files back to NAPI, logs
+`store.host_fallback`, and resumes TypeScript maintenance. The kernel store lock
+refuses any competing writer, including a service restarting while NAPI holds it.
+
+The boot compares the NAPI module's compiled commit, store schema and binding
+version against the service's store library before opening or migrating files.
+The socket handle checks them again against the service health identity before
+its first open on each boot, and before a fallback. Build both artifacts from the
+same commit. A legacy module without this identity still works with hosting off.
+
+Rust runs the first maintenance pass after three minutes, then every 15 minutes,
+with the existing daily backup, share copy and weekly verify/compaction/redb
+snapshot cadence and meta keys. `/api/store/status` reads this Engine directly.
+Shutdown stops TS producers, drains admitted socket calls, awaits the idempotent
+store close, then stops the service. Setting `store: off` and restarting restores
+the NAPI path. Rollback across a schema migration still needs its rollback copy.
+
+The fixture gate is `node tests/spec/store-host.mjs`, after `build:server` and
+Nas1-built native modules and `aac-http --features parity-fixtures`. It runs the
+existing store suites through both handles, four in-flight SIGKILL drills, the
+five-crash fallback, backup restore and restart-race exclusion. The pause files
+exist only in fixture-feature binaries; release builds have no drill hooks.
+`--drills-only` skips the suite replay. `--measure --out=/absolute/path.json`
+measures five alternating off/on rounds under Node with a release binary.
+A seven-day install soak, including weekly maintenance and the share backup,
+remains a separate turn-on gate; R3 leaves the switch off.

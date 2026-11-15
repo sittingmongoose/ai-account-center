@@ -33,3 +33,15 @@ pub mod usage;
 
 #[cfg(feature = "node")]
 mod node;
+
+/// Binding contract version, shared by the service and the Node module.
+pub const BINDING_VERSION: u32 = 2;
+
+/// R3 handoff guard. Both store handles must carry this exact compiled identity.
+pub fn build_identity() -> serde_json::Value {
+    serde_json::json!({
+        "commit": env!("AAC_BUILD_COMMIT"),
+        "storeSchema": db::STORE_SCHEMA_VERSION,
+        "bindingVersion": BINDING_VERSION,
+    })
+}

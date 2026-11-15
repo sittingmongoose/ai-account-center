@@ -93,6 +93,7 @@ impl Service {
             boot["store"] = json!({
                 "dir": root.join("store"),
                 "retentionDays": 0,
+                "bindingIdentity": aac_store::build_identity(),
                 "snapshotDirectory": null,
                 "shareBackupDir": null,
                 "shareBackupOff": false,
@@ -213,6 +214,21 @@ fn the_hosted_store_answers_the_napi_contract_and_the_status_route() -> Result<(
     )?;
     assert_eq!(history.status, 200);
     assert!(history.body.contains("codex:first"), "{}", history.body);
+    // Digits in a real binding method name must reach dispatch (R3 socket-suite regression).
+    let legacy = service.store(
+        "activityImportCodexV1",
+        &json!({
+            "path": service.root.join("absent-codex-v1.json"), "computer": "ubuntu"
+        })
+        .to_string(),
+    )?;
+    assert!(
+        legacy.json()?["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("not_found:")),
+        "{}",
+        legacy.body
+    );
     // An unknown method is the binding's invalid, in its error shape.
     let unknown = service.store("noSuchMethod", "{}")?;
     assert_eq!(unknown.status, 500);

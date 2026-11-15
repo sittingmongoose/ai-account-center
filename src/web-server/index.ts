@@ -342,12 +342,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    // R3 shutdown order: the store's close goes to the service before it ends (the
-    // service also closes its engine itself; the shutdown handlers await the same call).
     stopStoreFallbackWatch?.();
     stopStoreFallbackWatch = null;
-    void closeAacStore();
-    rustService.stop();
     stopEventLoopMonitor();
     httpsServer?.close();
     detachDashboardEvents();
@@ -361,6 +357,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopStoreMaintenance = null;
     stopStatusService?.();
     stopStatusService = null;
+    // R3: producers stop above. Drain admitted calls, close the sole writer, then stop
+    // the service. The socket handle refuses new work once closing starts.
+    void closeAacStore().finally(() => rustService.stop());
     stopCgroupForeignCheck?.();
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));

@@ -78,13 +78,14 @@ function checkLoads(file) {
     process.execPath,
     [
       '-e',
-      `const m = require(${JSON.stringify(file)}); if (m.bindingVersion() !== ${BINDING_VERSION}) process.exit(3);`,
+      `const m = require(${JSON.stringify(file)}); if (m.bindingVersion() !== ${BINDING_VERSION} || typeof m.buildIdentity !== "function") process.exit(3); console.log(m.buildIdentity());`,
     ],
     { encoding: 'utf8' }
   );
   if (result.status !== 0) {
     throw new Error(`Node could not load ${path.basename(file)}: ${(result.stderr || '').trim()}`);
   }
+  return JSON.parse(result.stdout);
 }
 
 function copyToDist() {
@@ -136,7 +137,7 @@ function build() {
   // Node chooses its loader by extension, so the temporary copy keeps `.node`.
   const temporary = destination.replace(/\.node$/, `.tmp-${process.pid}.node`);
   fs.copyFileSync(artifact, temporary);
-  checkLoads(temporary);
+  const buildIdentity = checkLoads(temporary);
   fs.renameSync(temporary, destination);
   const rustc = spawnSync('rustc', ['--version'], { encoding: 'utf8', cwd: CRATE });
   const note = {
@@ -144,6 +145,7 @@ function build() {
     sha256: fileSha(destination),
     sourceSha256: sourceHash(),
     bindingVersion: BINDING_VERSION,
+    buildIdentity,
     rustc: (rustc.stdout || '').trim() || null,
     builtAt: new Date().toISOString(),
   };

@@ -68,6 +68,11 @@ for (const [program, args] of [
   ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE)
     ? [['bun', ['tests/spec/status-fuzz.ts', '--cases', '100']]]
     : []),
+  // R3: the store host's exit gate (both handles, kill drills, fallback, restore), under Node.
+  [
+    'node',
+    ['tests/spec/store-host.mjs', ...(process.env.AAC_RUST_SERVICE === 'on' ? [] : ['--ts-only'])],
+  ],
 ])
   execFileSync(program, args, {
     cwd,

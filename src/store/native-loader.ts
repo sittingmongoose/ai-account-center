@@ -15,6 +15,8 @@ export interface NativeStoreHandle {
 export interface NativeStoreModule {
   NativeStore: new () => NativeStoreHandle;
   bindingVersion(): number;
+  /** R3 compiled identity. Older modules still work with the store host off. */
+  buildIdentity?(): string;
 }
 
 export type StoreUnavailableReason = 'disabled' | 'missing' | 'incompatible' | 'load_failed';

@@ -13,6 +13,8 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["node"]
+# Fixture-only crash checkpoints; absent from shipped builds.
+parity-fixtures = []
 # The Node binding. `cargo test --no-default-features` tests the store without it.
 node = ["dep:napi", "dep:napi-derive"]
 

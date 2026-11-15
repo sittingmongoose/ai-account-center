@@ -1,3 +1,4 @@
+import { loadStoreTestModule } from '../../support/store-handle';
 /**
  * Scoreboard v2 recheck 2, H1: a usage account id may be exactly `<provider>:<email address>`
  * (a Claude account without a profile id is `claude:<email>`) and nothing near it. The shared
@@ -12,14 +13,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
+import { nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import { storeObservationFromAccount } from '../../../src/store/usage-observations';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 import cases from '../../fixtures/usage-account-id-cases.json';
 
 const MODULE = path.resolve(__dirname, '../../../dist/native', nativeModuleName());
-const loaded = loadNativeStore({ env: {}, file: MODULE });
+const loaded = loadStoreTestModule({ env: {}, file: MODULE });
 const haveModule = loaded.module !== null;
 if (!haveModule)
   console.warn(

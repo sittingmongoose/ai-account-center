@@ -40,6 +40,9 @@ const VERIFY_EVERY_MS: u64 = 7 * DAY_MS;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreBoot {
+    /// The Node module's compiled identity: checked before opening or migrating any files.
+    #[serde(default)]
+    pub binding_identity: Value,
     /// `<ccsDir>/store`, checked in `Boot::validate`.
     pub dir: PathBuf,
     /// `OpenArgs.retentionDays` (TS's raw-retention constant).
@@ -221,6 +224,7 @@ impl StoreHost {
             match method {
                 "open" => self.open_idempotent(args),
                 "hostJobs" => Ok(self.jobs_json()),
+                "hostIdentity" => Ok(aac_store::build_identity().to_string()),
                 _ => ops::dispatch(&self.slot, method, args).map_err(|e| e.to_string()),
             }
         }));
@@ -364,6 +368,7 @@ mod tests {
 
     fn boot(dir: PathBuf) -> StoreBoot {
         StoreBoot {
+            binding_identity: aac_store::build_identity(),
             dir,
             retention_days: 0,
             cache_bytes: None,
