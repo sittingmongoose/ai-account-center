@@ -158,25 +158,25 @@ pub fn visible<'a>(provider: Option<&str>, account: Acc<'a>) -> R<Vec<Win<'a>>> 
     for w in rows {
         // Made only where a provider's rule below reads it (R1: Home is built per request).
         let desc = || description(&w);
-        let keep = if (provider == Some("codex") && chat_pass(&desc())) || (qwen && subscription(&w))
-        {
-            false
-        } else if provider == Some("zai") && zai_pack_like(&desc()) {
-            let summary = reset_pack_summary(w.key().unwrap_or(""));
-            let mut any = false;
-            for k in ["used", "limit", "remaining"] {
-                if let Some(x) = w.num(k)
-                    && (if summary { x > 0.0 } else { x != 0.0 })
-                {
-                    any = true;
-                    break;
+        let keep =
+            if (provider == Some("codex") && chat_pass(&desc())) || (qwen && subscription(&w)) {
+                false
+            } else if provider == Some("zai") && zai_pack_like(&desc()) {
+                let summary = reset_pack_summary(w.key().unwrap_or(""));
+                let mut any = false;
+                for k in ["used", "limit", "remaining"] {
+                    if let Some(x) = w.num(k)
+                        && (if summary { x > 0.0 } else { x != 0.0 })
+                    {
+                        any = true;
+                        break;
+                    }
                 }
-            }
-            any || valid_date(w.get("expiresAt"))?.is_some()
-                || valid_date(w.get("resetAt"))?.is_some()
-        } else {
-            true
-        };
+                any || valid_date(w.get("expiresAt"))?.is_some()
+                    || valid_date(w.get("resetAt"))?.is_some()
+            } else {
+                true
+            };
         if !keep {
             continue;
         }
