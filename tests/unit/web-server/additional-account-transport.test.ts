@@ -83,7 +83,7 @@ describe('additional account usage transport', () => {
       expect(binary).toBe('ssh');
       expect(args).toEqual([
         '-T',
-        ...sshOptions('work-machine'),
+        ...(await sshOptions('work-machine')),
         '-o',
         'ServerAliveInterval=5',
         '-o',
@@ -257,11 +257,11 @@ describe('additional account usage transport', () => {
   );
 });
 
-describe('usage sources on Nas1', () => {
+describe('usage sources on Nas1', async () => {
   // Nas1 is a second Ubuntu computer: an ubuntu source on its fixed ssh alias.
   const SSH_OPTIONS = [
     '-T',
-    ...sshOptions('nas1-agent'),
+    ...(await sshOptions('nas1-agent')),
     '-o',
     'ServerAliveInterval=5',
     '-o',

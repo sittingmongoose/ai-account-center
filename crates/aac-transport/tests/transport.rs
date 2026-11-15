@@ -15,6 +15,16 @@ struct Fixture {
     root: tempfile::TempDir,
     computer: Computer,
 }
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let run = self.root.path().join("run");
+        let hash = aac_core::sha256_hex(run.to_string_lossy().as_bytes());
+        let directory =
+            Path::new("/tmp").join(format!("aac-{}-{}", aac_files::path::uid(), &hash[..8]));
+        let _ = std::fs::remove_dir(directory);
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         Self::for_os(OperatingSystem::Linux)
@@ -198,23 +208,26 @@ fn max1_unformattable_endpoint_literals_are_refused() {
     }
 }
 
-#[test]
-fn ssh_policy_matches_the_design_for_short_and_scan_calls() {
+#[tokio::test]
+async fn ssh_policy_matches_the_design_for_short_and_scan_calls() {
     let policy = SshPolicy::new(
         "/fixture/data/ssh/known_hosts".into(),
         "/fixture/run".into(),
     );
     for scan in [false, true] {
-        let args: Vec<String> = policy
+        let mut args: Vec<String> = policy
             .argv(Path::new("/fixture/key with space"), scan)
+            .await
             .unwrap()
             .into_iter()
             .map(|s| s.into_string().unwrap())
             .collect();
+        let control = args.pop().unwrap();
+        assert!(control.starts_with("ControlPath=/fixture/run/cm-"));
+        assert!(control.ends_with("-%C"));
+        assert_eq!(args.pop().unwrap(), "-o");
         let expected = vec![
             "-T",
-            "-F",
-            "none",
             "-o",
             "BatchMode=yes",
             "-o",
@@ -236,9 +249,9 @@ fn ssh_policy_matches_the_design_for_short_and_scan_calls() {
             "-o",
             "ForwardAgent=no",
             "-o",
-            "GlobalKnownHostsFile=none",
+            "ForwardX11=no",
             "-o",
-            "KnownHostsCommand=none",
+            "GlobalKnownHostsFile=none",
             "-o",
             "PermitLocalCommand=no",
             "-o",
@@ -252,13 +265,15 @@ fn ssh_policy_matches_the_design_for_short_and_scan_calls() {
             "-o",
             "ControlMaster=auto",
             "-o",
-            "ControlPath=/fixture/run/cm-%C",
-            "-o",
             "ControlPersist=120",
+            "-o",
+            "KnownHostsCommand=none",
+            "-o",
+            "SetEnv=AAC_SSH_POLICY=1",
         ];
         assert_eq!(args, expected);
     }
-    assert!(policy.argv(Path::new("relative"), false).is_err());
+    assert!(policy.argv(Path::new("relative"), false).await.is_err());
 }
 
 #[tokio::test]
@@ -602,14 +617,15 @@ async fn control_socket_directory_is_private_and_symlinks_are_refused() {
     );
 }
 
-#[test]
-fn regression_m4_option_paths_survive_openssh_parsing_or_are_refused() {
+#[tokio::test]
+async fn regression_m4_option_paths_survive_openssh_parsing_or_are_refused() {
     let policy = SshPolicy::new("/fixture/known_hosts".into(), "/fixture/run".into());
     let output = std::process::Command::new("/usr/bin/ssh")
         .args(["-G", "-F", "/dev/null"])
         .args(
             policy
                 .argv(Path::new("/fixture/key with space"), false)
+                .await
                 .unwrap(),
         )
         .arg("fixture.invalid")
@@ -639,18 +655,19 @@ fn regression_m4_option_paths_survive_openssh_parsing_or_are_refused() {
             SshPolicy::new("/fixture/known_hosts".into(), path.into()),
         ] {
             assert!(
-                matches!(policy.argv(Path::new("/fixture/key"), false), Err(error) if error.cause == Cause::Refused),
+                matches!(policy.argv(Path::new("/fixture/key"), false).await, Err(error) if error.cause == Cause::Refused),
                 "unsupported OpenSSH option path must be refused"
             );
         }
     }
 }
 
-#[test]
-fn l5_openssh_option_paths_with_spaces_are_one_literal_path() {
+#[tokio::test]
+async fn l5_openssh_option_paths_with_spaces_are_one_literal_path() {
     let policy = SshPolicy::new("/fixture/known hosts".into(), "/fixture/run space".into());
     let argv = policy
         .argv(Path::new("/fixture/key with space"), false)
+        .await
         .unwrap();
     assert!(
         argv.windows(2)
@@ -681,7 +698,11 @@ fn l5_openssh_option_paths_with_spaces_are_one_literal_path() {
 async fn l5_early_exit_keeps_87_instead_of_epipe_and_does_not_open_breaker() {
     let fixture = Fixture::new();
     let ssh = fixture.root.path().join("ssh");
-    std::fs::write(&ssh, "#!/bin/sh\nexit 87\n").unwrap();
+    std::fs::write(
+        &ssh,
+        "#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then exit 0; fi\nexit 87\n",
+    )
+    .unwrap();
     for _ in 0..4 {
         let output = fixture
             .computer

@@ -158,7 +158,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       // The options are the fixed non-interactive set, never forwarding, a proxy or a local command.
       expect(call.args.slice(0, separator)).toEqual([
         '-T',
-        ...sshOptions(destination),
+        ...(await sshOptions(destination)),
         '-o',
         'ServerAliveInterval=5',
         '-o',

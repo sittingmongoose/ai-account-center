@@ -5,6 +5,7 @@ Collect buffers are PRIVATE SSH pipe data; never display or log this stdout.
 No authentication, cookies, transcript contents, GUI or resume APIs are used.
 """
 import base64
+import asyncio, functools, shutil
 import ctypes
 import fnmatch
 import hashlib
@@ -354,6 +355,41 @@ def validate_neutral(records, policy, platform):
         if 'completedTurns' in value and (isinstance(value['completedTurns'], bool) or not isinstance(value['completedTurns'], int) or not 0 <= value['completedTurns'] <= 1_000_000):
             refuse('record_invalid')
 
+
+def ssh_environment():
+    names = {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SSH_AUTH_SOCK'}
+    if os.name == 'nt':
+        names.update(('SYSTEMROOT', 'USERPROFILE', 'WINDIR'))
+    return {k: v for k, v in os.environ.items() if (k.upper() if os.name == 'nt' else k) in names}
+
+async def probe_ssh_capabilities(executable):
+    options = []
+    for option in ('KnownHostsCommand=none', 'SetEnv=AAC_SSH_POLICY=1'):
+        child = await asyncio.create_subprocess_exec(executable, '-G', '-F', 'none', '-o', option, '--', 'localhost',
+            env=ssh_environment(), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        try:
+            _, stderr = await asyncio.wait_for(child.communicate(), 2)
+        except BaseException:
+            if child.returncode is None:
+                child.kill()
+            await child.wait()
+            raise
+        if child.returncode == 0:
+            options.extend(('-o', option))
+        elif b'bad configuration option:' in stderr.lower():
+            print('[AAC SSH] ' + option.split('=')[0] + ' unsupported; compatibility downgrade', file=sys.stderr)
+        else:
+            refuse('ssh_configuration_unknown')
+    return tuple(options)
+
+@functools.lru_cache(maxsize=16)
+def ssh_capability_options(executable):
+    try:
+        return asyncio.run(probe_ssh_capabilities(executable))
+    except Exception:
+        return None
+
+
 class BoundProfile:
     def __init__(self, profile, platform, policy, home=None, closed=None, native=None):
         self.profile, self.platform, self.policy = profile, platform, validate_policy(profile, policy)
@@ -573,36 +609,30 @@ class BoundProfile:
         alias = self.policy['ssh'][self.platform]['alias']
         endpoint = self.policy['ssh'][self.platform]
         ssh_home = Path(os.environ.get('CCS_HOME', str(Path.home())))
-        ssh_config = ssh_home / '.ssh/config'
-        discovery = subprocess.run(['ssh', '-G', '-F', str(ssh_config) if ssh_config.is_file() else 'none', '--', alias],
-                                   capture_output=True, timeout=2, env={k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'USER', 'LOGNAME', 'SYSTEMROOT')})
-        fields = {}
-        identities = []
-        for line in discovery.stdout.decode().splitlines():
-            parts = line.split(' ', 1)
-            if len(parts) == 2:
-                fields.setdefault(*parts)
-                if parts[0] == 'identityfile':
-                    identities.append(str(ssh_home / parts[1][2:]) if parts[1].startswith('~/') else parts[1])
-        if discovery.returncode or any(fields.get(k, 'none') != 'none' for k in ('proxyjump', 'proxycommand')):
+        identity = os.environ.get('AAC_AGENT_IDENTITY_FILE')
+        identity_args = []
+        if identity:
+            if identity.startswith('~/'):
+                identity = str(ssh_home / identity[2:])
+            if not Path(identity).is_absolute() or any(c in identity for c in '\n\r%"'):
+                refuse('ssh_configuration_unknown')
+            identity_args = ['-i', identity, '-o', 'IdentitiesOnly=yes']
+        executable = shutil.which('ssh')
+        if not executable:
             refuse('ssh_configuration_unknown')
-        # One line is the configured IdentityFile; several are OpenSSH's defaults: the first that exists.
-        found = identities[:1] if len(identities) == 1 else [i for i in identities if Path(i).is_file()][:1]
-        identity = os.environ.get('AAC_AGENT_IDENTITY_FILE', found[0] if found else '')
-        if identity.startswith('~/'):
-            identity = str(ssh_home / identity[2:])
-        if not Path(identity).is_absolute():
+        capabilities = ssh_capability_options(str(Path(executable).resolve()))
+        if capabilities is None:
             refuse('ssh_configuration_unknown')
         pin = os.environ.get('AAC_AGENT_KNOWN_HOSTS_FILE', str(ssh_home / '.ssh/known_hosts'))
         if not Path(pin).is_absolute() or any(c in pin for c in '\n\r%"'):
             refuse('ssh_configuration_unknown')
-        result = subprocess.run(['ssh', '-T', '-F', 'none', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
-            '-o', 'UpdateHostKeys=no', '-o', 'ForwardAgent=no', '-o', 'GlobalKnownHostsFile=none', '-o', 'KnownHostsCommand=none',
-            '-o', 'IdentitiesOnly=yes', '-i', identity, '-o', 'UserKnownHostsFile="' + pin + '"',
+        result = subprocess.run([executable, '-T', *capabilities, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'UpdateHostKeys=no', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'GlobalKnownHostsFile=none',
+            *identity_args, '-o', 'UserKnownHostsFile="' + pin + '"',
             '-o', 'Hostname=' + endpoint['hostname'], '-l', endpoint['username'], '-p', str(endpoint['port']),
             '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
             '-o', 'PermitLocalCommand=no', '-o', 'ClearAllForwardings=yes', '--', alias, command],
-            input=encode({'paths': references}), capture_output=True, timeout=12)
+            input=encode({'paths': references}), capture_output=True, timeout=12, env=ssh_environment())
         if result.returncode or len(result.stdout) > 128 or json.loads(result.stdout) != {'verified': True}:
             refuse('transcript_metadata_unverified')
         self.bind()

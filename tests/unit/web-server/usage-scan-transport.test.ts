@@ -348,6 +348,7 @@ describe('copying the scanner to a computer', () => {
     const { calls, ssh } = steps([0, 0, 0], ['/home/u/.cache/ai-account-center/bin', '', version]);
     await installUsageScan('nas1-agent', 'nas1', 'x86_64-unknown-linux-gnu', manifest, ssh);
     expect(calls.map((call) => call[0])).toEqual(['ssh', 'scp', 'ssh']);
+    expect(calls[1]?.slice(1, 4)).toEqual(['-q', '-S', 'ssh']);
     for (const call of calls) expect(call).toContain('UpdateHostKeys=no');
     expect(calls[1].at(-1)).toBe(
       `nas1-agent:/home/u/.cache/ai-account-center/bin/${remoteName('x86_64-unknown-linux-gnu', manifest.targets['x86_64-unknown-linux-gnu']!.sha256)}.part`

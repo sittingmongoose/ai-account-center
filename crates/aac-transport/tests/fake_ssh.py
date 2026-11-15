@@ -11,6 +11,9 @@ import shutil
 import sys
 import time
 
+if "-G" in sys.argv[1:]:
+    sys.exit(0)
+
 root = Path(__file__).parent
 scenario = json.loads((root / "scenario.json").read_text())
 tool = Path(sys.argv[0]).name

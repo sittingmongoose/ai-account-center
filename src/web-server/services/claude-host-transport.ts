@@ -8,7 +8,7 @@ import {
   type ClaudeHostLauncher,
 } from './claude-account-stores';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 
 /**
  * Host steps for Claude Add and Remove (CONTRACT-registry-lifecycle 6.2, 6.7,
@@ -71,21 +71,29 @@ export class ClaudeHostError extends NetworkError {
   }
 }
 
-export const runClaudeHostOverSsh: ClaudeHostRunner = (sshHost, command, input) =>
-  new Promise((resolve, reject) => {
+export const runClaudeHostOverSsh: ClaudeHostRunner = async (sshHost, command, input) => {
+  const sshArgs0 = await sshArgv(sshHost, command, { interval: 5, countMax: 1 });
+  return new Promise((resolve, reject) => {
     if (!isSafeUsageSshAlias(sshHost)) {
       reject(new ValidationError('Claude host alias is not configured safely.'));
       return;
     }
     const child = execFile(
       'ssh',
-      sshArgv(sshHost, command, { interval: 5, countMax: 1 }),
-      { encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024, windowsHide: true },
+      sshArgs0,
+      {
+        env: sshEnvironment(),
+        encoding: 'utf8',
+        timeout: 60_000,
+        maxBuffer: 64 * 1024,
+        windowsHide: true,
+      },
       (error, stdout) => (error ? reject(new ClaudeHostError()) : resolve(stdout))
     );
     child.stdin?.on('error', () => undefined);
     child.stdin?.end(input);
   });
+};
 
 const MAC_BOOTSTRAP =
   "import sys,json;_d=json.loads(sys.stdin.read());exec(compile(_d['program'],'aac-claude-host','exec'),{'REQUEST':_d['request'],'__name__':'__main__'})";

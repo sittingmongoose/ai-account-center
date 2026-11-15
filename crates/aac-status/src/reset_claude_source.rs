@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
+// Real pinned SSH argv reaches 48 arguments; reserve 16 slots.
+const MAX_HELPER_ARGS: usize = 64;
 
 /// Constructed only from the package's existing verified helper transport, never browser input.
 #[derive(Clone, Deserialize)]
@@ -27,7 +29,7 @@ impl Drop for OwnedChild {
     }
 }
 fn helper(command: &HelperCommand, request: Value, timeout: Duration) -> Result<Value> {
-    if command.executable.is_empty() || command.executable.len() > 4096 || command.args.len() > 32 {
+    if command.executable.is_empty() || command.executable.len() > 4096 || command.args.len() > MAX_HELPER_ARGS {
         return Err("credential-host-unavailable");
     }
     let mut payload = command.payload.clone();
@@ -37,8 +39,28 @@ fn helper(command: &HelperCommand, request: Value, timeout: Duration) -> Result<
         return Err("credential-host-unavailable");
     }
     let deadline = Instant::now() + timeout;
+    let mut process = Command::new(&command.executable);
+    if Path::new(&command.executable)
+        .file_name()
+        .is_some_and(|name| name == "ssh" || name == "ssh.exe")
+    {
+        process.env_clear();
+        for (name, value) in std::env::vars_os() {
+            let key = name.to_string_lossy();
+            let key = if cfg!(windows) {
+                key.to_ascii_uppercase()
+            } else {
+                key.into_owned()
+            };
+            if ["PATH", "HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"].contains(&key.as_str())
+                || (cfg!(windows) && ["SYSTEMROOT", "USERPROFILE", "WINDIR"].contains(&key.as_str()))
+            {
+                process.env(name, value);
+            }
+        }
+    }
     let mut child = OwnedChild(
-        Command::new(&command.executable)
+        process
             .args(&command.args)
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUTF8", "1")

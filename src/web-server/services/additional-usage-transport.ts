@@ -5,7 +5,7 @@ import { NetworkError } from '../../errors/error-types';
 import { withProcessDeadline } from '../../utils/settle-deadline';
 import type { DashboardPlatform } from './account-dashboard-types';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 
 export const ADDITIONAL_PROVIDERS = [
   'antigravity',
@@ -268,7 +268,7 @@ async function runPythonAdditionalUsageSource(source: AdditionalUsageSource): Pr
       ? 'python.exe'
       : '/usr/bin/python3';
   const args = source.sshHost
-    ? sshArgv(source.sshHost, remoteCommand(source), { interval: 5, countMax: 1 })
+    ? await sshArgv(source.sshHost, remoteCommand(source), { interval: 5, countMax: 1 })
     : [
         path.resolve(__dirname, '../../../scripts/account-usage', helperName(source.provider)),
         '--provider',
@@ -287,7 +287,9 @@ async function runPythonAdditionalUsageSource(source: AdditionalUsageSource): Pr
         timeout: PROCESS_TIMEOUT_MS,
         maxBuffer: MAX_STDOUT_BYTES,
         windowsHide: true,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+        env: source.sshHost
+          ? sshEnvironment()
+          : { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
       },
       (error, stdout) => {
         if (error || Buffer.byteLength(stdout, 'utf8') > MAX_STDOUT_BYTES) {

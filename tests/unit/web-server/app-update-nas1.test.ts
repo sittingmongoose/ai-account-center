@@ -77,11 +77,11 @@ describe('Nas1 as the fourth update computer', () => {
     expect(rows.every((row) => row.platform === 'nas1' && row.status === 'current')).toBe(true);
   });
 
-  it('runs the helper over the fixed alias as a second Ubuntu with no local job flags', () => {
-    const nas1 = appUpdateInvocation('nas1', '1.3.0,1.3.1', '/never/passed/to/a/remote/host');
+  it('runs the helper over the fixed alias as a second Ubuntu with no local job flags', async () => {
+    const nas1 = await appUpdateInvocation('nas1', '1.3.0,1.3.1', '/never/passed/to/a/remote/host');
     expect(nas1.binary).toBe('ssh');
     // The same ssh options as the other remote computers, with its own endpoint.
-    const mac = appUpdateInvocation('mac', '1.3.0,1.3.1').args.slice(0, -2);
+    const mac = (await appUpdateInvocation('mac', '1.3.0,1.3.1')).args.slice(0, -2);
     const own = (args: string[], alias: string) => {
       const endpoint = sshConnectionOptions(alias);
       const at = args.indexOf(endpoint[1]) - 1;
@@ -98,28 +98,28 @@ describe('Nas1 as the fourth update computer', () => {
     const text = nas1.args.join(' ');
     for (const local of ['--state-dir', '--dashboard-job', '/never/passed', 'powershell'])
       expect(text).not.toContain(local);
-    expect(appUpdateInvocation('nas1', '').args.at(-1)).toBe(
+    expect((await appUpdateInvocation('nas1', '')).args.at(-1)).toBe(
       'AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform ubuntu'
     );
   });
 
-  it('picks each remote alias by lookup, never by falling through to another host', () => {
+  it('picks each remote alias by lookup, never by falling through to another host', async () => {
     expect(APP_UPDATE_SSH_HOSTS.nas1).toBe(NAS1_SSH_ALIAS);
     expect(Object.keys(APP_UPDATE_SSH_HOSTS).sort()).toEqual([...REMOTE_HOSTS].sort());
     expect(Object.isFrozen(APP_UPDATE_SSH_HOSTS)).toBe(true);
-    const destination = (platform: 'mac' | 'windows' | 'nas1') =>
-      appUpdateInvocation(platform).args.at(-2);
-    expect(destination('mac')).toBe(APP_UPDATE_SSH_HOSTS.mac);
-    expect(destination('windows')).toBe(APP_UPDATE_SSH_HOSTS.windows);
-    expect(destination('nas1')).toBe('nas1-agent');
+    const destination = async (platform: 'mac' | 'windows' | 'nas1') =>
+      (await appUpdateInvocation(platform)).args.at(-2);
+    expect(await destination('mac')).toBe(APP_UPDATE_SSH_HOSTS.mac);
+    expect(await destination('windows')).toBe(APP_UPDATE_SSH_HOSTS.windows);
+    expect(await destination('nas1')).toBe('nas1-agent');
     expect(new Set(Object.values(APP_UPDATE_SSH_HOSTS)).size).toBe(REMOTE_HOSTS.length);
   });
 
-  it('keeps the Mac on --platform mac and Windows on its PowerShell command', () => {
-    expect(appUpdateInvocation('mac', '').args.at(-1)).toBe(
+  it('keeps the Mac on --platform mac and Windows on its PowerShell command', async () => {
+    expect((await appUpdateInvocation('mac', '')).args.at(-1)).toBe(
       'AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform mac'
     );
-    const encoded = appUpdateInvocation('windows', '').args.at(-1)!;
+    const encoded = (await appUpdateInvocation('windows', '')).args.at(-1)!;
     expect(encoded).toMatch(/^powershell\.exe -NoProfile -NonInteractive -EncodedCommand /);
     const script = Buffer.from(encoded.split(' ').at(-1)!, 'base64').toString('utf16le');
     expect(script).toContain('& python.exe $helper --apply --platform windows');
@@ -318,7 +318,7 @@ describe('no account switching reaches Nas1', () => {
     async () => {
       const spawned = await sshArgvOfRealRun();
       // What the real run spawned is exactly the invocation the server builds.
-      expect(spawned).toEqual(appUpdateInvocation('nas1').args);
+      expect(spawned).toEqual((await appUpdateInvocation('nas1')).args);
 
       // Every ssh argv the server can build for Nas1: the update run (as built,
       // without a review list, and as spawned), the hash query, the extract and
@@ -328,12 +328,12 @@ describe('no account switching reaches Nas1', () => {
         [
           {
             name: 'update run',
-            argv: appUpdateInvocation('nas1', '1.3.0,1.3.1').args,
+            argv: (await appUpdateInvocation('nas1', '1.3.0,1.3.1')).args,
             fixed: (command) => UPDATE_COMMAND.test(command),
           },
           {
             name: 'update run without a review list',
-            argv: appUpdateInvocation('nas1', '').args,
+            argv: (await appUpdateInvocation('nas1', '')).args,
             fixed: (command) => UPDATE_COMMAND.test(command),
           },
           {

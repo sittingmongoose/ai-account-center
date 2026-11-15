@@ -30,7 +30,7 @@ it('the production TS SSH argv refuses alternate trust and exports no agent or p
         },
       })
     );
-    const argv = sshArgv('fixture', 'unused').slice(0, -3);
+    const argv = (await sshArgv('fixture', 'unused')).slice(0, -3);
     const output = execFileSync(
       'sudo',
       [

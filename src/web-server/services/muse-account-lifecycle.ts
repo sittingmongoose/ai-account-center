@@ -1,5 +1,5 @@
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import type { RegistryAccount } from './account-registry-v2';
 import { runClaudeHostOverSsh } from './claude-host-transport';
 import {
@@ -158,8 +158,8 @@ export class MuseAccountLifecycle {
         }
         return {
           file: 'ssh',
-          args: sshArgv(sshHost, remoteLogin, { interval: 5, countMax: 1 }),
-          env,
+          args: await sshArgv(sshHost, remoteLogin, { interval: 5, countMax: 1 }),
+          env: sshEnvironment(env),
           pty: false,
         };
       },

@@ -9,7 +9,7 @@ import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
 import { runManagedCommand } from '../../utils/managed-process';
 import { getCcsDir } from '../../utils/config-manager';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import type { UsageHost, UsageHelperRequest } from './usage-failover-contract';
 import manifest from './agent-artifacts.json';
 import { PROVIDER_ROWS } from '../../shared/tables';
@@ -193,7 +193,7 @@ async function runAgentVerbTsFallback(
     let executable = 'ssh';
     let args: string[];
     if (host.sshHost) {
-      args = sshArgv(host.sshHost, agentLauncher(artifact, host.platform), {
+      args = await sshArgv(host.sshHost, agentLauncher(artifact, host.platform), {
         interval: 5,
         countMax: verb === 'scan-usage' ? 6 : 1,
       });
@@ -237,7 +237,7 @@ async function runAgentVerbTsFallback(
       timeoutMs: options.timeoutMs ?? options.deadlineMs + 5000,
       maxBytes: options.maxBytes,
       input,
-      env: { ...process.env },
+      env: host.sshHost ? sshEnvironment() : { ...process.env },
     });
     if (host.sshHost && result.code === 87) return null;
     if (result.failed || result.code !== 0 || result.timedOut || result.missing) return null;

@@ -99,22 +99,22 @@ describe('fixed app update service', () => {
     clone.results.length = 0;
     expect(service.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * 12);
   });
-  it('executes only the four fixed host-local helpers', () => {
-    const local = appUpdateInvocation('ubuntu');
+  it('executes only the four fixed host-local helpers', async () => {
+    const local = await appUpdateInvocation('ubuntu');
     expect(local.binary).toBe('/usr/bin/python3');
     expect(local.args.slice(1, 4)).toEqual(['--apply', '--platform', 'ubuntu']);
-    const mac = appUpdateInvocation('mac');
+    const mac = await appUpdateInvocation('mac');
     expect(mac.binary).toBe('ssh');
     expect(mac.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.mac]);
     expect(mac.args.at(-1)).toContain('$HOME/.ccs/app-updates/app_updates.py');
     expect(mac.args.at(-1)).toContain('--apply --platform mac');
-    const windows = appUpdateInvocation('windows');
+    const windows = await appUpdateInvocation('windows');
     expect(windows.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.windows]);
     const encoded = windows.args.at(-1)!.split(' ').at(-1)!;
     const script = Buffer.from(encoded, 'base64').toString('utf16le');
     expect(script).toContain('--apply --platform windows');
     expect(script).not.toContain('Invoke-Expression');
-    const nas1 = appUpdateInvocation('nas1');
+    const nas1 = await appUpdateInvocation('nas1');
     expect(nas1.binary).toBe('ssh');
     expect(nas1.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.nas1]);
     expect(nas1.args.at(-1)).toContain('$HOME/.ccs/app-updates/app_updates.py');
@@ -122,14 +122,14 @@ describe('fixed app update service', () => {
   it('passes the resolved dashboard state directory for legacy home and custom config paths', async () => {
     const home = directory();
     const check = async (expected: string) => {
-      const local = appUpdateInvocation('ubuntu', '');
+      const local = await appUpdateInvocation('ubuntu', '');
       expect(local.args[local.args.indexOf('--state-dir') + 1]).toBe(expected);
       expect(local.args).toContain('--dashboard-job');
       const service = new AppUpdateService({
         runHost: async (platform, control) => {
           expect(control.stateDirectory).toBe(expected);
           expect(fs.existsSync(path.join(expected, 'dashboard-update.lock'))).toBe(true);
-          const invocation = appUpdateInvocation(platform, '', control.stateDirectory);
+          const invocation = await appUpdateInvocation(platform, '', control.stateDirectory);
           if (platform === 'ubuntu')
             expect(invocation.args[invocation.args.indexOf('--state-dir') + 1]).toBe(expected);
           else expect(invocation.args.join(' ')).not.toContain(expected);
@@ -151,7 +151,7 @@ describe('fixed app update service', () => {
       ccsDir,
       runHost: async (platform, control) => {
         expect(control.stateDirectory).toBe(stateDirectory);
-        const invocation = appUpdateInvocation(platform, '', control.stateDirectory);
+        const invocation = await appUpdateInvocation(platform, '', control.stateDirectory);
         if (platform === 'ubuntu')
           expect(invocation.args[invocation.args.indexOf('--state-dir') + 1]).toBe(stateDirectory);
         return payload();
@@ -161,33 +161,40 @@ describe('fixed app update service', () => {
     await finish(service);
     expect(service.getStatus().job?.state).toBe('completed');
   });
-  it('hands every host the packaged Antigravity reviewed versions, quoted', () => {
+  it('hands every host the packaged Antigravity reviewed versions, quoted', async () => {
     const reviewed = antigravityReviewedArgument();
     expect(reviewed.split(',')).toContain('1.3.0');
     expect(reviewed).toMatch(/^\d+\.\d+\.\d+(,\d+\.\d+\.\d+)*$/);
-    expect(appUpdateInvocation('ubuntu').args.slice(-2)).toEqual(['--agy-reviewed', reviewed]);
-    expect(appUpdateInvocation('mac').args.at(-1)).toMatch(
+    expect((await appUpdateInvocation('ubuntu')).args.slice(-2)).toEqual([
+      '--agy-reviewed',
+      reviewed,
+    ]);
+    expect((await appUpdateInvocation('mac')).args.at(-1)).toMatch(
       new RegExp(`--apply --platform mac --agy-reviewed '${reviewed.replace(/\./g, '\\.')}'$`)
     );
     // Nas1 is a second Ubuntu: its helper runs with --platform ubuntu.
-    expect(appUpdateInvocation('nas1').args.at(-1)).toMatch(
+    expect((await appUpdateInvocation('nas1')).args.at(-1)).toMatch(
       new RegExp(`--apply --platform ubuntu --agy-reviewed '${reviewed.replace(/\./g, '\\.')}'$`)
     );
     const decode = (args: string[]) =>
       Buffer.from(args.at(-1)!.split(' ').at(-1)!, 'base64').toString('utf16le');
     // PowerShell would split an unquoted comma list into separate arguments.
-    expect(decode(appUpdateInvocation('windows').args)).toContain(
+    expect(decode((await appUpdateInvocation('windows')).args)).toContain(
       `& python.exe $helper --apply --platform windows --agy-reviewed '${reviewed}'`
     );
     // An unusable release file sends no list: every helper then holds the update.
     const dir = directory();
     fs.writeFileSync(path.join(dir, 'release.json'), '{"reviewedNatives": "broken"}');
     expect(antigravityReviewedArgument(path.join(dir, 'release.json'))).toBe('');
-    expect(appUpdateInvocation('ubuntu', '').args).not.toContain('--agy-reviewed');
-    expect(appUpdateInvocation('mac', "1.3.0'; rm -rf ~; '").args.at(-1)).not.toContain('rm -rf');
-    expect(appUpdateInvocation('nas1', "1.3.0'; rm -rf ~; '").args.at(-1)).not.toContain('rm -rf');
-    expect(appUpdateInvocation('nas1', '').args.at(-1)).not.toContain('--agy-reviewed');
-    expect(decode(appUpdateInvocation('windows', '').args)).not.toContain('--agy-reviewed');
+    expect((await appUpdateInvocation('ubuntu', '')).args).not.toContain('--agy-reviewed');
+    expect((await appUpdateInvocation('mac', "1.3.0'; rm -rf ~; '")).args.at(-1)).not.toContain(
+      'rm -rf'
+    );
+    expect((await appUpdateInvocation('nas1', "1.3.0'; rm -rf ~; '")).args.at(-1)).not.toContain(
+      'rm -rf'
+    );
+    expect((await appUpdateInvocation('nas1', '')).args.at(-1)).not.toContain('--agy-reviewed');
+    expect(decode((await appUpdateInvocation('windows', '')).args)).not.toContain('--agy-reviewed');
   });
   it('accepts a held Antigravity row with the build it held and keeps it after a restore', () => {
     const rows = JSON.parse(payload()).results;

@@ -9,7 +9,7 @@ import {
   signinHelperBundle,
   usageHelperCommand,
 } from './usage-failover-transport';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import { runSignInAgent, collectSignInWithFallback } from './agent-verbs';
 import {
   readClaudeSignInRenewal,
@@ -217,7 +217,11 @@ function runCollector(
     const child = execFile(
       command,
       args,
-      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      {
+        timeout: timeoutMs,
+        maxBuffer: 1024 * 1024,
+        env: command === 'ssh' ? sshEnvironment() : process.env,
+      },
       (error, stdout, stderr) => {
         if (error && stdout.length === 0) {
           reject(new Error(collectorFailureWord(stderr ?? '')));
@@ -408,7 +412,7 @@ async function collectRemote(host: UsageHostEntry): Promise<string> {
       const bundle = await signinHelperBundle();
       return runCollector(
         'ssh',
-        sshArgv(host.sshHost as string, usageHelperCommand(host.platform), {
+        await sshArgv(host.sshHost as string, usageHelperCommand(host.platform), {
           interval: 5,
           countMax: 1,
         }),

@@ -7,7 +7,7 @@
  * HTTP client honours, and the Windows system names a child process needs. Front-door secrets,
  * NODE_*, LD_* and every other variable stay out. Windows names are case-insensitive.
  * `SSH_AUTH_SOCK` stays out: a passphrase-protected key held only in ssh-agent falls back to the
- * TypeScript path, which still has the full environment. The key named for agent transport has to
+ * TypeScript path, whose minimal SSH environment retains local agent authentication. The key named for agent transport has to
  * be unencrypted until an owner decides to pass the agent socket in.
  */
 export const RUST_SERVICE_ENV_NAMES: readonly string[] = [

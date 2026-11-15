@@ -13,7 +13,7 @@
  * built by an exported builder the table pins against that builder, and where
  * it is a fixed literal the table spells the literal out.
  */
-import { SSH_ISOLATION, sshConnectionOptions } from '../../../src/web-server/services/ssh-policy';
+import { sshOptions } from '../../../src/web-server/services/ssh-policy';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import { EventEmitter } from 'events';
@@ -67,21 +67,17 @@ import { ANALYTICS_TOOLS } from '../../../src/web-server/usage/analytics-tools';
 import type { RegistryAccount } from '../../../src/web-server/services/account-registry-v2';
 
 /** The fixed non-interactive option set every transport shares. */
-const BASE_OPTIONS = ['-T', ...SSH_ISOLATION];
 const keepalive = (interval: number, countMax: number): string[] => [
   '-o',
   `ServerAliveInterval=${interval}`,
   '-o',
   `ServerAliveCountMax=${countMax}`,
 ];
-const expectedArgv = (host: string, command: string, alive: string[] = []): string[] => [
-  ...BASE_OPTIONS,
-  ...sshConnectionOptions(host),
-  ...alive,
-  '--',
-  host,
-  command,
-];
+const expectedArgv = async (
+  host: string,
+  command: string,
+  alive: string[] = []
+): Promise<string[]> => ['-T', ...(await sshOptions(host)), ...alive, '--', host, command];
 
 interface ExecCall {
   file: string;
@@ -174,21 +170,21 @@ describe('analytics-remote-transport', () => {
     });
     expect(sshCalls(calls)).toHaveLength(1);
     expect(sshCalls(calls)[0]!.args).toEqual(
-      expectedArgv('nas1-agent', analyticsHelperCommand('nas1'), keepalive(5, 6))
+      await expectedArgv('nas1-agent', analyticsHelperCommand('nas1'), keepalive(5, 6))
     );
   });
 });
 
 describe('app-update-hosts', () => {
-  it('runs the update helper with interval 10 / count 2 on every remote platform', () => {
+  it('runs the update helper with interval 10 / count 2 on every remote platform', async () => {
     for (const [platform, helperOs] of [
       ['nas1', 'ubuntu'],
       ['mac', 'mac'],
     ] as const) {
-      const invocation = appUpdateInvocation(platform, '');
+      const invocation = await appUpdateInvocation(platform, '');
       expect(invocation.binary).toBe('ssh');
       expect(invocation.args).toEqual(
-        expectedArgv(
+        await expectedArgv(
           SSH_ALIASES[platform],
           `AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform ${helperOs}`,
           keepalive(10, 2)
@@ -204,10 +200,10 @@ describe('app-update-hosts', () => {
       '& python.exe $helper --apply --platform windows',
       'exit $LASTEXITCODE',
     ].join('; ');
-    const windows = appUpdateInvocation('windows', '');
+    const windows = await appUpdateInvocation('windows', '');
     expect(windows.binary).toBe('ssh');
     expect(windows.args).toEqual(
-      expectedArgv(
+      await expectedArgv(
         SSH_ALIASES.windows,
         `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(windowsScript, 'utf16le').toString('base64')}`,
         keepalive(10, 2)
@@ -221,11 +217,11 @@ describe('app-update-hosts', () => {
     await syncRemoteHelpers('nas1');
     const query = sshCalls(execCalls);
     expect(query).toHaveLength(1);
-    expect(query[0]!.args).toEqual(expectedArgv(SSH_ALIASES.nas1, helperHashQuery('nas1')));
+    expect(query[0]!.args).toEqual(await expectedArgv(SSH_ALIASES.nas1, helperHashQuery('nas1')));
     const push = spawnCalls.filter((call) => call.file === 'ssh');
     expect(push).toHaveLength(1);
     expect(push[0]!.args).toEqual(
-      expectedArgv(SSH_ALIASES.nas1, helperExtract('nas1', localHelperChecksums()))
+      await expectedArgv(SSH_ALIASES.nas1, helperExtract('nas1', localHelperChecksums()))
     );
   });
 });
@@ -280,7 +276,7 @@ describe('claude-desktop-live-service', () => {
       'exit $LASTEXITCODE',
     ].join('; ');
     expect(sshCalls(calls)[0]!.args).toEqual(
-      expectedArgv(
+      await expectedArgv(
         'fixture-windows',
         `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`,
         keepalive(5, 1)
@@ -307,7 +303,9 @@ describe('claude-desktop-transport', () => {
       'test "$history_size" -le 1048576 || exit 1',
       `/bin/cat ${history}`,
     ].join('\n');
-    expect(sshCalls(calls)[0]!.args).toEqual(expectedArgv('fixture-mac', command, keepalive(5, 1)));
+    expect(sshCalls(calls)[0]!.args).toEqual(
+      await expectedArgv('fixture-mac', command, keepalive(5, 1))
+    );
   });
 
   it('pipes the private history helper with the same interval 5 / count 1', async () => {
@@ -323,7 +321,9 @@ describe('claude-desktop-transport', () => {
     const code =
       "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];globals()['__ccs_history_helper_source__']=_s;globals()['__ccs_history_node_bridge_source__']=_p.get('nodeBridgeSource');sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-history-helper','exec'))";
     const command = `/usr/bin/python3 -c '${code.replace(/'/g, `'"'"'`)}'`;
-    expect(sshCalls(calls)[0]!.args).toEqual(expectedArgv('fixture-mac', command, keepalive(5, 1)));
+    expect(sshCalls(calls)[0]!.args).toEqual(
+      await expectedArgv('fixture-mac', command, keepalive(5, 1))
+    );
   });
 });
 
@@ -333,7 +333,7 @@ describe('claude-host-transport', () => {
     await runClaudeHostOverSsh('fixture-mac', 'echo ok', 'input');
     expect(sshCalls(calls)).toHaveLength(1);
     expect(sshCalls(calls)[0]!.args).toEqual(
-      expectedArgv('fixture-mac', 'echo ok', keepalive(5, 1))
+      await expectedArgv('fixture-mac', 'echo ok', keepalive(5, 1))
     );
   });
 });
@@ -344,7 +344,7 @@ describe('account-key-store', () => {
     await runKeyHelperOverSsh('fixture-mac', 'key-helper-command', 'input');
     expect(sshCalls(calls)).toHaveLength(1);
     expect(sshCalls(calls)[0]!.args).toEqual(
-      expectedArgv('fixture-mac', 'key-helper-command', keepalive(5, 1))
+      await expectedArgv('fixture-mac', 'key-helper-command', keepalive(5, 1))
     );
   });
 });
@@ -365,7 +365,7 @@ describe('muse-account-lifecycle', () => {
     const command = await spec.prepare('job_0123456789abcdef');
     expect(command.file).toBe('ssh');
     expect(command.args).toEqual(
-      expectedArgv('mac-host', 'PATH="$HOME/.local/bin:$PATH" muse login', keepalive(5, 1))
+      await expectedArgv('mac-host', 'PATH="$HOME/.local/bin:$PATH" muse login', keepalive(5, 1))
     );
   });
 });
@@ -381,7 +381,7 @@ describe('opencode-console-wallet-service', () => {
     await service.get({ refresh: true });
     expect(sshCalls(calls)).toHaveLength(1);
     expect(sshCalls(calls)[0]!.args).toEqual(
-      expectedArgv(
+      await expectedArgv(
         'fixture-mac',
         'exec "$HOME/.ccs/opencode-usage-bridge/native-host/launch-host.sh" --collect',
         keepalive(5, 1)
@@ -406,22 +406,22 @@ describe('signin-health-service', () => {
       const call = remote.find((candidate) => candidate.args.includes(alias));
       expect(call).toBeDefined();
       expect(call!.args).toEqual(
-        expectedArgv(alias, usageHelperCommand(helperPlatform(host)), keepalive(5, 1))
+        await expectedArgv(alias, usageHelperCommand(helperPlatform(host)), keepalive(5, 1))
       );
     }
   });
 });
 
 describe('usage-failover-transport', () => {
-  it('builds the private helper invocation with interval 5 / count 3', () => {
-    const invocation = privateUsageInvocation(
+  it('builds the private helper invocation with interval 5 / count 3', async () => {
+    const invocation = await privateUsageInvocation(
       { host: 'nas1', platform: 'ubuntu', sshHost: 'nas1-agent' },
       { version: 1, action: 'inventory', provider: 'claude' },
       'helper-source'
     );
     expect(invocation.executable).toBe('ssh');
     expect(invocation.args).toEqual(
-      expectedArgv('nas1-agent', usageHelperCommand('ubuntu'), keepalive(5, 3))
+      await expectedArgv('nas1-agent', usageHelperCommand('ubuntu'), keepalive(5, 3))
     );
   });
 });
@@ -440,7 +440,7 @@ describe('status-collectors', () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]!.file).toBe('ssh');
     expect(captured[0]!.args).toEqual(
-      expectedArgv('nas1-agent', machineProbeCommand(REMOTE_MACHINES.nas1), keepalive(5, 2))
+      await expectedArgv('nas1-agent', machineProbeCommand(REMOTE_MACHINES.nas1), keepalive(5, 2))
     );
   });
 
@@ -450,7 +450,7 @@ describe('status-collectors', () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]!.file).toBe('ssh');
     expect(captured[0]!.args).toEqual(
-      expectedArgv('nas1-agent', remotePinsCommand(REMOTE_MACHINES.nas1), keepalive(5, 2))
+      await expectedArgv('nas1-agent', remotePinsCommand(REMOTE_MACHINES.nas1), keepalive(5, 2))
     );
   });
 });

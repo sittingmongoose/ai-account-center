@@ -6,12 +6,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1117 |
-| Sync fs files affected (all) | 113 |
-| Sync fs occurrences (runtime hotpaths) | 545 |
-| Sync fs files affected (runtime hotpaths) | 63 |
-| Legacy shim markers | 210 |
-| Legacy shim files affected | 63 |
+| Sync fs occurrences (all) | 1115 |
+| Sync fs files affected (all) | 112 |
+| Sync fs occurrences (runtime hotpaths) | 543 |
+| Sync fs files affected (runtime hotpaths) | 62 |
+| Legacy shim markers | 209 |
+| Legacy shim files affected | 62 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -51,10 +51,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 32.4% (219/677) |
+| typed-error adoption (typed/total throws) | 32.6% (222/680) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
-| hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
-| hotpath console.error/warn files | 12 |
+| hotpath console.error/warn occurrences | 55 (224 total, 169 CLI-UX exempt) |
+| hotpath console.error/warn files | 13 |
 | files with createLogger | 44/457 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 65 |
@@ -76,6 +76,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/status/readers-check.ts` | 2 |
 | `src/errors/cleanup-registry.ts` | 1 |
 | `src/web-server/middleware/auth-middleware.ts` | 1 |
+| `src/web-server/services/ssh-policy.ts` | 1 |
 
 ### Files > 400 LOC (top 15)
 
@@ -85,10 +86,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-analytics-activity.ts` | 2400 |
 | `src/web-server/services/analytics-remote-sources.ts` | 2232 |
 | `src/web-server/status/answers.ts` | 1744 |
-| `src/web-server/services/analytics-remote-transport.ts` | 1660 |
+| `src/web-server/services/analytics-remote-transport.ts` | 1672 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1154 |
-| `src/web-server/status/status-collectors.ts` | 1060 |
+| `src/web-server/status/status-collectors.ts` | 1069 |
 | `src/web-server/services/usage-failover-service.ts` | 1053 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/account-dashboard-service.ts` | 992 |

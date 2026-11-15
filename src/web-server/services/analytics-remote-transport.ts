@@ -13,7 +13,7 @@ import {
   isSafeUsageSshAlias,
   helperPlatform,
 } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import { runAgentVerb, localAgentReady } from './agent-verbs';
 import { createLogger } from '../../services/logging';
 import {
@@ -1197,11 +1197,13 @@ export async function runAnalyticsRemoteHelper(
   if (input.length > MAX_RESPONSE_BYTES)
     throw new ValidationError('Analytics remote request is invalid.');
   const command = analyticsHelperCommand(platform);
+  const sshArgs0 = await sshArgv(sshHost, command, { interval: 5, countMax: 6 });
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(
       'ssh',
-      sshArgv(sshHost, command, { interval: 5, countMax: 6 }),
+      sshArgs0,
       {
+        env: sshEnvironment(),
         encoding: 'utf8',
         timeout: deps.timeoutMs ?? SSH_TIMEOUT_MS,
         maxBuffer: MAX_RESPONSE_BYTES,
@@ -1352,11 +1354,21 @@ async function runScanner(
   const input = Buffer.from(JSON.stringify(usageScanRequest(request, 20_000)));
   if (input.length > MAX_RESPONSE_BYTES)
     throw new ValidationError('Analytics remote request is invalid.');
+  const sshArgs1 = await sshArgv(sshHost, scanCommand(platform, manifest), {
+    interval: 5,
+    countMax: 6,
+  });
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(
       'ssh',
-      sshArgv(sshHost, scanCommand(platform, manifest), { interval: 5, countMax: 6 }),
-      { encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_RESPONSE_BYTES, windowsHide: true },
+      sshArgs1,
+      {
+        env: sshEnvironment(),
+        encoding: 'utf8',
+        timeout: timeoutMs,
+        maxBuffer: MAX_RESPONSE_BYTES,
+        windowsHide: true,
+      },
       (error, result, stderr) => {
         if (error) {
           const failure = error as NodeJS.ErrnoException & {

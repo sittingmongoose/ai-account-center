@@ -18,7 +18,7 @@ import {
   type ClaudeDesktopLiveUsage,
 } from './claude-desktop-live-cache';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 
 export type { ClaudeDesktopLiveUsage };
 
@@ -570,13 +570,15 @@ async function runWindowsHelper(
     ].join('; ');
     return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
   };
-  const execute = (command: string): Promise<string> => {
+  const execute = async (command: string): Promise<string> => {
     let child: ChildProcess | undefined;
+    const sshArgs0 = await sshArgv(sshHost, command, { interval: 5, countMax: 1 });
     const run = new Promise<string>((resolve, reject) => {
       child = execFile(
         'ssh',
-        sshArgv(sshHost, command, { interval: 5, countMax: 1 }),
+        sshArgs0,
         {
+          env: sshEnvironment(),
           encoding: 'utf8',
           timeout: PROCESS_TIMEOUT_MS,
           maxBuffer: MAX_OUTPUT_BYTES,

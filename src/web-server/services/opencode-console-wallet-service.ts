@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
 import {
@@ -297,15 +297,22 @@ export async function deleteOpencodeWalletSource(ccsDir: string): Promise<boolea
 /** The command can only read the installed bridge's verified safe sample. */
 async function runSource(sshHost: string): Promise<string> {
   let child: ChildProcess | undefined;
+  const sshArgs0 = await sshArgv(
+    sshHost,
+    'exec "$HOME/.ccs/opencode-usage-bridge/native-host/launch-host.sh" --collect',
+    { interval: 5, countMax: 1 }
+  );
   const run = new Promise<string>((resolve, reject) => {
     child = execFile(
       'ssh',
-      sshArgv(
-        sshHost,
-        'exec "$HOME/.ccs/opencode-usage-bridge/native-host/launch-host.sh" --collect',
-        { interval: 5, countMax: 1 }
-      ),
-      { encoding: 'utf8', timeout: SOURCE_TIMEOUT_MS, maxBuffer: MAX_BYTES, windowsHide: true },
+      sshArgs0,
+      {
+        env: sshEnvironment(),
+        encoding: 'utf8',
+        timeout: SOURCE_TIMEOUT_MS,
+        maxBuffer: MAX_BYTES,
+        windowsHide: true,
+      },
       (error, stdout) => {
         if (error) reject(new Error('Optional console wallet unavailable.'));
         else resolve(stdout);

@@ -27,7 +27,7 @@ import path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { runManagedCommand } from '../../utils/managed-process';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
-import { sshArgv } from '../services/ssh-policy';
+import { sshArgv, sshEnvironment } from '../services/ssh-policy';
 import {
   agentVerbs,
   collectAgentWithFallback,
@@ -72,7 +72,10 @@ export type CommandRunner = (
  * SIGTERM is killed after the grace, so a caller's `collecting` or `ringing` flag always clears.
  */
 export const runCommand: CommandRunner = (file, args, options) =>
-  runManagedCommand(file, args, { ...options, env: options.env ?? childEnv() });
+  runManagedCommand(file, args, {
+    ...options,
+    env: file === 'ssh' ? sshEnvironment() : (options.env ?? childEnv()),
+  });
 
 /** The dashboard's environment with Node's own folder on PATH (tool scripts start with `env node`). */
 export function childEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -914,7 +917,10 @@ async function readRemoteMachineTsFallback(
 ): Promise<MachineSample> {
   const result = await run(
     'ssh',
-    sshArgv(alias, machineProbeCommand(REMOTE_MACHINES[machine]), { interval: 5, countMax: 2 }),
+    await sshArgv(alias, machineProbeCommand(REMOTE_MACHINES[machine]), {
+      interval: 5,
+      countMax: 2,
+    }),
     { timeoutMs: 20_000, maxBytes: 64 * 1024 }
   );
   if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));
@@ -1050,7 +1056,10 @@ export async function readRemotePins(
     async () => {
       const result = await run(
         'ssh',
-        sshArgv(alias, remotePinsCommand(REMOTE_MACHINES[machine]), { interval: 5, countMax: 2 }),
+        await sshArgv(alias, remotePinsCommand(REMOTE_MACHINES[machine]), {
+          interval: 5,
+          countMax: 2,
+        }),
         { timeoutMs: 30_000, maxBytes: 1024 * 1024, coalesce: true }
       );
       if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));
