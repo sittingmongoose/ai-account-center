@@ -69,8 +69,9 @@ function storeCall(boot, req, res) {
       res.statusCode = 500;
       res.end(JSON.stringify({ error }));
     };
-    if (method === 'hostIdentity') { res.end(JSON.stringify({ commit: 'f'.repeat(40), storeSchema: 2, bindingVersion: 2 })); }
-    else if (method === 'open') {
+    if (method === 'hostIdentity') {
+      res.end(JSON.stringify({ commit: 'f'.repeat(40), storeSchema: 2, bindingVersion: 2 }));
+    } else if (method === 'open') {
       store.opens++;
       store.closed = false;
       res.end(storeStatus());
@@ -84,8 +85,7 @@ function storeCall(boot, req, res) {
       res.end('{"sampled":1,"seen":0,"skipped":0,"rejected":0}');
     } else if (method === 'counts')
       res.end(JSON.stringify({ opens: store.opens, records: store.records }));
-    else if (method === 'hostJobs')
-      res.end('{"open":true,"bootError":null,"jobs":{"passes":0}}');
+    else if (method === 'hostJobs') res.end('{"open":true,"bootError":null,"jobs":{"passes":0}}');
     else fail(`invalid: unknown method ${method}`);
   });
 }
