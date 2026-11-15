@@ -9,13 +9,13 @@
     "body": {
       "code": "rate_limited",
       "error": "Too many wrong usage hub keys. Try again later.",
-      "retryAfterSeconds": 899
+      "retryAfterSeconds": "<retry-after-seconds>"
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
-      "retry-after": "899",
+      "retry-after": "<retry-after-seconds>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
     "status": 429

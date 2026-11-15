@@ -365,6 +365,17 @@ function normalize(value: any, key = ''): any {
     return '<build-id>';
   if (typeof value === 'string' && key === 'x-ccs-bar-token') return '<bar-proof>';
   if (typeof value === 'string' && key === 'etag') return '<etag>';
+  // A rate-limit wait counts down from the limiter window's start (900 s), so its whole seconds
+  // depend on how long the capture took to reach the request: 900 on a fast machine, 899 on a
+  // slow one. Pin its range, not the clock.
+  if (key === 'retry-after' || key === 'retryAfterSeconds') {
+    const seconds = Number(value);
+    assert.ok(
+      Number.isInteger(seconds) && seconds >= 1 && seconds <= 900,
+      `${key} ${String(value)} is not a whole number of seconds in 1..900`
+    );
+    return '<retry-after-seconds>';
+  }
   if (typeof value === 'string' && key === 'set-cookie')
     return value
       .replace(/^[^=]+=[^;]+/, 'connect.sid=<session-cookie>')
