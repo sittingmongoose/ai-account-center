@@ -2295,6 +2295,12 @@
       ]
     },
     {
+      "file": "tests/unit/web-server/agent-failover-inventory.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/agent-part3.test.ts",
       "kind": "internal",
       "evidence": [],

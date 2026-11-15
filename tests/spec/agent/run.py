@@ -135,6 +135,9 @@ def main():
     if '--part3' in sys.argv:
         from part3 import main as part3
         part3(binary)
+    if '--part4' in sys.argv:
+        from part4 import main as part4
+        part4(binary)
     if '--scan-bin' in sys.argv:
         scanner = str(pathlib.Path(sys.argv[sys.argv.index('--scan-bin') + 1]).resolve())
         # Source tests supply their own fixture selectors. Never inherit private log roots.

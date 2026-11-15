@@ -8,13 +8,19 @@ import { createLogger } from '../../services/logging';
 import { runManagedCommand } from '../../utils/managed-process';
 import { getCcsDir } from '../../utils/config-manager';
 import { sshArgv } from './ssh-policy';
-import type { UsageHost } from './usage-failover-contract';
+import type { UsageHost, UsageHelperRequest } from './usage-failover-contract';
 import manifest from './agent-artifacts.json';
 
 const logger = createLogger('agent-verbs');
 export type AgentVerbs = 'off' | 'on';
 export type AgentVerb =
-  'signin-expiry' | 'quota-read' | 'scan-usage' | 't3-pins' | 'key-store' | 'claude-history';
+  | 'signin-expiry'
+  | 'quota-read'
+  | 'scan-usage'
+  | 't3-pins'
+  | 'key-store'
+  | 'claude-history'
+  | 'failover-inventory';
 export interface AgentArtifact {
   target: string;
   version: string;
@@ -265,7 +271,7 @@ export async function collectQuotaWithFallback(
 
 /** New verbs keep their reference helper visible on every failure. */
 export async function collectAgentWithFallback<T>(
-  verb: 't3-pins' | 'key-store' | 'claude-history',
+  verb: 't3-pins' | 'key-store' | 'claude-history' | 'failover-inventory',
   agent: () => Promise<T | null>,
   helper: () => Promise<T>
 ): Promise<T> {
@@ -360,4 +366,21 @@ export async function runHistoryAgent(
     return null;
   }
   return Buffer.from(result);
+}
+
+/** Bind a validated candidate to the requested provider before accepting an agent reply. */
+export function inventoryKind(provider: UsageHelperRequest['provider'], kind: string): boolean {
+  const kinds: Record<string, readonly string[]> = {
+    codex: ['codex-principal-v1'],
+    claude: ['claude-account-org-v1'],
+    antigravity: ['antigravity-subject'],
+    muse: ['muse-team', 'muse-native-credential'],
+    cursor: ['cursor-subject', 'cursor-credential'],
+    'kimi-code': ['kimi-code-credential'],
+    qwen: ['qwen-session'],
+    zai: ['zai-credential'],
+    'opencode-go': ['opencode-go-credential'],
+    'opencode-wallet': ['opencode-workspace'],
+  };
+  return kinds[provider]?.includes(kind) === true;
 }

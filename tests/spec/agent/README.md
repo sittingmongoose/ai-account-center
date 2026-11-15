@@ -289,3 +289,44 @@ All three TS adapters run the current helper after any unavailable artifact,
 explicit delegation, timeout, exit, malformed envelope or invalid result.
 Fallbacks are labelled `fallback: python` (`fallback: sqlite3` for pins).
 The artifact catalog remains empty; this change does not ship or install agents.
+
+## M2 part 4: failover inventory
+
+`python3 tests/spec/agent/run.py target/debug/aac-agent --part3 --part4` adds
+`failover-inventory` same-home tests to the existing M2 harness. Run quota's
+`quota.py` and `quota-review.py` separately as before. Build with
+`--features parity-fixtures` after any `cargo test`; the latter rebuilds the
+agent without the fixture feature. `part4.py` also runs unchanged against a
+production binary, with no injected filesystem, clock, platform or native receipt.
+
+The agent accepts the existing inventory request on stdin, reconstructs only
+locator/selectors/identity/revision/email/plan, and makes no network calls.
+Linux Codex/Claude CLI default, saved and T3/settings homes; Muse native/config
+homes; OpenCode plan keys, environment keys, private AAC keys; and Qwen cookie
+session identities have a proved subset. Original length limits apply before
+trimming, and the public dispatcher validates display metadata again. Core files
+and settings use 1 MiB, additional auth JSON 64 KiB, and AAC key records 4096
+bytes. Core directory discovery bounds 1024 raw entries, 64 homes and 256 roots;
+additional slot listing bounds 512 entries and 128 candidates. JSON numbers use
+the shared exact-integer grammar. Arrays and every hash/field/null keep their
+reference meaning and order; no reference field is dropped for comparison.
+
+All unsupported grammar and uncertain reads delegate the entire inventory with
+exactly `{"fallback":"python"}`. This includes symlinks, IO/owner/shape/cap
+failures, non-ASCII fields, unproved numbers, SQLite/OMP, Cursor, Antigravity,
+wallet/Muse/Qwen browser capsules, Claude desktop context and all native Mac or
+Windows execution. The existing Python helper retains its full behavior and
+incomplete/sign-in-needed selectors. A failed native read never becomes an empty
+ordinary inventory. The TS boundary uses the existing opt-in verified transport,
+existing public response parser, provider-kind binding and caller deadline;
+collection remains with its current helper. Every failure or fallback is labelled.
+The trusted artifact catalog remains empty and the default remains off.
+
+Part 4 fixture rows explicitly declare equality or exact fallback, including
+valid nonempty Antigravity and wallet stores that delegate. The runner compares
+unchanged Python on the same files, checks file bytes/modes are unchanged,
+validates the terminal envelope/exit, and rejects a changed-answer negative
+control through the same comparator. These are bounded representative fixtures,
+not exhaustive filesystem-race or native-platform proofs. Provider HTTP, real
+homes and credential stores, deployment and actual SSH agent execution are not
+exercised. The adapter's fault tests use a fake verified SSH transport.

@@ -134,7 +134,7 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
 
 #[cfg(unix)]
 #[allow(unsafe_code)]
-fn uid() -> u32 {
+pub(crate) fn uid() -> u32 {
     // SAFETY: getuid has no arguments, memory access or failure state.
     unsafe { libc::getuid() }
 }
