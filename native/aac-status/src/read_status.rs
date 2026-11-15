@@ -389,7 +389,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
         } else {
             V::Null
         };
-        rows.push(json!({"name":thread["name"],"writer":null,"machine":thread["machine"],"project":null,"stream":null,"state":null,"doing":thread["about"],"blockedOn":null,"progress":null,"model":null,"effort":null,"account":null,"source":"pm-mail","lastSeen":thread["lastSeen"],"ageSeconds":i.age(Some(at)),"stale":!file_problem.is_null()||i.now-at>1_800_000,"clockAheadSeconds":null,"problem":file_problem,"registrySource":part_ref(i,registry,&i.data["registry"],Some(&thread),"Not in the pm-mail registry.")?}));
+        rows.push(json!({"name":thread["name"],"writer":null,"machine":thread["machine"],"project":null,"stream":null,"state":null,"doing":thread["about"],"blockedOn":null,"progress":null,"model":null,"effort":null,"account":null,"source":"pm-mail","lastSeen":thread["lastSeen"],"ageSeconds":i.age(Some(at)),"stale":!file_problem.is_null()||i.now-at>1_800_000,"clockAheadSeconds":null,"problem":file_problem,"registrySource":part_ref(i,registry,&i.data["registry"],Some(thread),"Not in the pm-mail registry.")?}));
     }
     let rank = |r: &V| {
         ["blocked", "waiting", "working", "paused", "idle", "done"]
