@@ -365,7 +365,7 @@ export interface AnalyticsDiscoveryKind {
     newestDataMs: number | null;
     newestActivityMs: number | null;
   };
-  /** Local stores whose schema exposes no numeric usage (Cursor CLI blobs, for example). */
+  /** Local data files without numeric usage (Cursor CLI blobs and WAL files, for example). */
   unmeasuredFiles?: number;
 }
 

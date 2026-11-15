@@ -165,7 +165,7 @@ function applyFreshness(
     entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
   }
   if (found.unmeasuredFiles && !entry.detail?.includes('no numeric usage')) {
-    const note = `${found.unmeasuredFiles} local chat store${found.unmeasuredFiles === 1 ? '' : 's'} expose no numeric usage; their tokens and cost are not counted`;
+    const note = `${found.unmeasuredFiles} local chat data file${found.unmeasuredFiles === 1 ? '' : 's'} expose no numeric usage; their tokens and cost are not counted`;
     entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
   }
 }
