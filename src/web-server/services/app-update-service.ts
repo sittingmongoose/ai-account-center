@@ -736,7 +736,7 @@ export class AppUpdateService {
  * One row as an older package reads it: no diagnostics (unknown to it, and it keeps the file under its
  * 64 KiB limit), and words it knows for codes it predates.
  */
-function legacyRow(row: AppUpdateResult): AppUpdateResult {
+export function legacyRow(row: AppUpdateResult): AppUpdateResult {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { diagnostics, ...rest } = row;
   if (
@@ -765,6 +765,13 @@ function legacyRow(row: AppUpdateResult): AppUpdateResult {
     return { ...rest, message: MESSAGES.update_failed };
   if (row.appId === 't3-acp-adapters' && row.message === MESSAGES.prefix_not_writable)
     return { ...rest, message: MESSAGES.unsupported };
+  // Reworded after switching was dropped: an older package matches saved words exactly, so it gets
+  // the wording it last knew (the newest older one) instead of reading the row as unreadable.
+  for (const code of ['held_for_review', 'held_unchecked', 'updated_unreviewed'] as const) {
+    const older = LEGACY_MESSAGES[code];
+    if (row.message === MESSAGES[code] && older?.length)
+      return { ...rest, message: older[older.length - 1] as string };
+  }
   return rest;
 }
 

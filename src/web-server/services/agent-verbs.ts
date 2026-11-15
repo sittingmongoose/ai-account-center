@@ -355,7 +355,8 @@ export async function collectAgentWithFallback<T>(
 /**
  * Inventory retains the existing Status machine DTO; the collector validates its fields.
  * The attempt is 8s, not the verb's 15s plus 5s grace: the TypeScript probe that follows a miss
- * is another 20s, and the two must not add up to 40s (L5 review L6).
+ * is another 20s, and the two must not add up to 40s (L5 review L6). The agent is told 6s, so it
+ * ends with its own answer before the kill; the worst case is 8s plus the 20s probe, 28s.
  */
 export async function runInventoryAgent(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
@@ -368,7 +369,8 @@ export async function runInventoryAgent(
     {},
     {
       ...options,
-      deadlineMs: 15000,
+      // The agent's own deadline ends first, so it answers (or declines) before the 8s kill.
+      deadlineMs: 6000,
       timeoutMs: 8000,
       maxBytes: 65536,
     }

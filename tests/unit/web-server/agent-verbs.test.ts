@@ -210,8 +210,14 @@ describe('plan quota agent', () => {
 
   it('caps a status inventory attempt at 8s so the probe fallback keeps a budget', async () => {
     let timeoutMs = 0;
-    const run = async (_executable: string, _args: string[], options: { timeoutMs: number }) => {
+    let deadlineMs = 0;
+    const run = async (
+      _executable: string,
+      _args: string[],
+      options: { timeoutMs: number; input?: string }
+    ) => {
       timeoutMs = options.timeoutMs;
+      deadlineMs = JSON.parse(options.input ?? '{}').deadlineMs ?? 0;
       return ok(
         `${JSON.stringify({
           protocol: 1,
@@ -228,6 +234,9 @@ describe('plan quota agent', () => {
       transport: 'off',
     });
     expect(timeoutMs).toBe(8000);
+    // The agent's deadline ends before the kill, so it can answer for itself (Lows 3 review L3).
+    expect(deadlineMs).toBeGreaterThan(0);
+    expect(deadlineMs).toBeLessThan(timeoutMs);
     expect(value).toEqual({ cores: 1 });
   });
 });

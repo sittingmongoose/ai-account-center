@@ -211,6 +211,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/agent_transport.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/feed.rs",
       "kind": "internal",
       "evidence": [],
@@ -1851,6 +1857,24 @@
       "evidence": [
         "table"
       ]
+    },
+    {
+      "file": "tests/unit/foundation/agent-lifecycle-runner.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/foundation/check-windows-ssh.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/foundation/npm-rust-files.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/jsonl-parser.test.ts",

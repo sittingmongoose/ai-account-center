@@ -14,7 +14,11 @@ import {
   normalizeDiagnostics,
   scrubText,
 } from '../../../src/web-server/services/app-update-diagnostics';
-import { AppUpdateService } from '../../../src/web-server/services/app-update-service';
+import {
+  LEGACY_MESSAGES,
+  isLegacyMessage,
+} from '../../../src/web-server/services/app-update-messages';
+import { AppUpdateService, legacyRow } from '../../../src/web-server/services/app-update-service';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -338,6 +342,22 @@ describe('Update apps diagnostics', () => {
       (result) => result.appId === 'cursor-cli' && result.platform === 'windows'
     )!;
     expect(cursor.diagnostics?.reason).toBe('http_401');
+  });
+
+  it('writes the reworded Antigravity hold rows in the words an older package reads', () => {
+    // Lows batch 3 review L1: a rollback package matches saved words exactly; the current words
+    // would read as helper_invalid there, so the legacy copy carries the newest older wording.
+    for (const code of ['held_for_review', 'held_unchecked', 'updated_unreviewed'] as const) {
+      const older = LEGACY_MESSAGES[code]!;
+      const written = legacyRow({
+        appId: 'antigravity-cli',
+        platform: 'mac',
+        status: code === 'updated_unreviewed' ? 'updated' : 'held',
+        message: MESSAGES[code],
+      } as Parameters<typeof legacyRow>[0]);
+      expect(written.message).toBe(older[older.length - 1]);
+      expect(isLegacyMessage(code, written.message)).toBe(true);
+    }
   });
 
   it('restores rows saved with the older Antigravity ACP and session words', () => {
