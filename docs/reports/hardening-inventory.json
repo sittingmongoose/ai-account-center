@@ -543,15 +543,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 656,
+      "totalThrows": 658,
       "typedThrows": 212,
       "plainThrows": 47,
-      "otherThrows": 397,
-      "adoptionRatio": 0.3232,
+      "otherThrows": 399,
+      "adoptionRatio": 0.3222,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 385,
+          "count": 387,
           "typed": 161,
           "plain": 7
         },
