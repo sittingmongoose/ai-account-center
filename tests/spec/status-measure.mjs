@@ -59,7 +59,7 @@ function start(mode, root, label = mode, bin = binary) {
     let stderr = '';
     child.stderr.on('data', (d) => (stderr += d));
     const worker = {
-      mode,
+      mode: label,
       child,
       pending: new Map(),
       agent: new http.Agent({ keepAlive: true, maxSockets: 32 }),
@@ -75,15 +75,21 @@ function start(mode, root, label = mode, bin = binary) {
         worker.pending.delete(message.id);
       }
     });
-    child.on('exit', (code) => {
-      if (!worker.port) reject(new Error(`${mode} server exited ${code}: ${stderr}`));
+    child.on('exit', (code, signal) => {
+      worker.exited = { code, signal, stderr: stderr.slice(-2000) };
+      for (const resolve of worker.pending.values()) resolve({ exited: worker.exited });
+      worker.pending.clear();
+      if (!worker.port) reject(new Error(`${label} server exited ${code ?? signal}: ${stderr}`));
     });
+    // A send to a server that has gone is an error event, not a throw: it is recorded by the exit above.
+    child.on('error', () => undefined);
   });
 }
 let asked = 0;
 function ask(worker, type, extra = {}) {
   const id = ++asked;
   return new Promise((resolve) => {
+    if (worker.exited) return resolve({ exited: worker.exited });
     worker.pending.set(id, resolve);
     worker.child.send({ type, id, ...extra });
   });
@@ -173,19 +179,36 @@ try {
   if (clients > 0) {
     concurrency = {};
     for (const worker of servers) {
-      await stats(worker, true);
+      const before = await stats(worker, true);
       const latencies = [];
+      let errors = 0;
       const end = Date.now() + seconds * 1000;
       await Promise.all(
         Array.from({ length: clients }, async () => {
-          while (Date.now() < end) latencies.push((await call(worker)).ms);
+          while (Date.now() < end && !worker.exited) {
+            try {
+              const reply = await call(worker);
+              if (reply.status === 200) latencies.push(reply.ms);
+              else errors++;
+            } catch {
+              errors++;
+            }
+          }
         })
       );
       const s = await stats(worker);
       concurrency[worker.mode] = {
         requests: latencies.length,
-        ...quantiles(latencies),
-        eventLoopP99Ms: s.eventLoopP99Ms,
+        errors,
+        ...(latencies.length ? quantiles(latencies) : {}),
+        eventLoopP99Ms: s.eventLoopP99Ms ?? null,
+        // The fed server: requests the fed path served, and what fell back (Rust's `busy` when its pool is full).
+        ...(worker.mode === 'fed'
+          ? {
+              fedServed: (s.route?.served ?? 0) - (before.route?.served ?? 0),
+              fedDeclined: s.route?.declined ?? {},
+            }
+          : {}),
       };
     }
   }
@@ -242,6 +265,7 @@ try {
     },
     rounds: loads,
     fedDeclines: after.fed.route?.declined ?? {},
+    serverExits: Object.fromEntries(workers.filter((w) => w.exited).map((w) => [w.mode, w.exited])),
     targets: {
       p50: { bar: 0.6, measured: latency.fed.p50Ms, met: latency.fed.p50Ms <= 0.6 },
       p95: { bar: 1.0, measured: latency.fed.p95Ms, met: latency.fed.p95Ms <= 1.0 },
