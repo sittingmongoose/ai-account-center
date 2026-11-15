@@ -502,6 +502,11 @@ fn scan(base: &Path, complete: &mut bool, safe_only: bool) -> Vec<PathBuf> {
             if out.len() > 64 {
                 out.truncate(64);
                 *complete = false;
+                // Python sorts the whole listing before it takes 64; this pass keeps the first
+                // 64 found, so past the bound the chosen homes differ: fall back (big review MED-1).
+                if safe_only {
+                    crate::proof::reject();
+                }
                 break;
             }
         }
@@ -638,6 +643,12 @@ fn roots(
                         } else {
                             PathBuf::from(raw)
                         };
+                        // pathlib keeps a leading "//" as its own root and refuses the home;
+                        // normalizing it to "/" would admit it (big review MED-2).
+                        if expanded.to_string_lossy().starts_with("//") {
+                            crate::proof::reject();
+                            continue;
+                        }
                         let p = normalized(&expanded.to_string_lossy());
                         if !p.is_absolute()
                             || !(p.starts_with(home) || p.starts_with(ccs))
@@ -682,6 +693,10 @@ fn roots(
             env.get(SELECTORS[0]).map(|s| (s, "dir"))
         };
         if let Some((raw, kind)) = selector {
+            // Same pathlib "//" root rule as configured homes (big review MED-2).
+            if raw.starts_with("//") {
+                crate::proof::reject();
+            }
             let path = normalized(raw);
             let (exists, failed) = dir_state(&path);
             complete &= !failed;
