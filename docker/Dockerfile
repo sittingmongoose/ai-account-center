@@ -86,6 +86,11 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/config/tables ./config/tables
 COPY --from=build /app/config/private-files.json ./config/private-files.json
+# Package files the server resolves next to dist/ at runtime (tests/unit/docker/docker-hygiene.test.ts
+# derives this list from src/): the computer table and the agent-report schemas and catalog.
+COPY --from=build /app/web-dashboard/public/computers.json ./web-dashboard/public/computers.json
+COPY --from=build /app/docs/agent-reports/schemas ./docs/agent-reports/schemas
+COPY --from=build /app/docs/agent-reports/catalog ./docs/agent-reports/catalog
 COPY --from=build /app/browser-bridge ./browser-bridge
 COPY --from=build /app/README.md ./README.md
 COPY --from=build /app/LICENSE ./LICENSE
