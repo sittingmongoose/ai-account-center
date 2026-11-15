@@ -4,7 +4,7 @@ import { ConfigError } from '../../errors/error-types';
 import path from 'path';
 import { createHash, randomBytes } from 'crypto';
 import { requestRustAgent } from '../rust-service-transport';
-import transportPolicy from '../../../config/agent-transport-policy.json';
+import transportPolicy from '../../../config/tables/agent-transport-policy.json';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
 import { runManagedCommand } from '../../utils/managed-process';

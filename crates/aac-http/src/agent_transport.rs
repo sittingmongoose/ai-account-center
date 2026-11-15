@@ -121,7 +121,7 @@ impl Agents {
             || call.deadline_ms==0 || call.deadline_ms>aac_protocol::MAX_DEADLINE_MS || call.timeout_ms==0 || call.timeout_ms>call.deadline_ms+5000
             || call.max_bytes==0 || call.max_bytes>frame_cap(verb)*2 || !call.args.get().trim_start().starts_with('{') { return unavailable(&call.call_id,"shape"); }
         let Ok(permit)=self.slots.clone().try_acquire_owned() else { return unavailable(&call.call_id,"busy"); };
-        let deadline=started+Duration::from_millis(call.timeout_ms.min(call.deadline_ms));
+        let deadline=started+Duration::from_millis(call.timeout_ms);
         let mut loaded = self.registry.subscribe();
         if !self.loading.swap(true, Ordering::AcqRel) {
             let root = self.root.clone();
@@ -159,13 +159,22 @@ impl Agents {
         tokio::spawn(async move {
             let _permit=permit;
             let (progress, mut events)=mpsc::channel(4);
-            let work=client.call_controlled_encoded(&request,wire.as_bytes(),&options,controls,progress);
-            tokio::pin!(work);
-            let result=loop {
-                tokio::select! {
-                    result=&mut work=>break result,
-                    Some(event)=events.recv()=>{
-                        if output.send(line(&serde_json::to_value(event).unwrap_or(Value::Null))).await.is_err() { options.cancel.cancel(); }
+            let result = {
+                let work=client.call_controlled_encoded(&request,wire.as_bytes(),&options,controls,progress);
+                tokio::pin!(work);
+                loop {
+                    tokio::select! {
+                        _ = options.cancel.cancelled() => break Err(Failure::new(Cause::Cancelled,"agent receiver closed")),
+                        _ = tokio::time::sleep_until(options.deadline) => break Err(Failure::new(Cause::Timeout,"agent bridge deadline")),
+                        result=&mut work=>break result,
+                        Some(event)=events.recv()=>{
+                            let sent = tokio::select! {
+                                _ = options.cancel.cancelled() => false,
+                                _ = tokio::time::sleep_until(options.deadline) => false,
+                                sent = output.send(line(&serde_json::to_value(event).unwrap_or(Value::Null))) => sent.is_ok(),
+                            };
+                            if !sent { options.cancel.cancel(); break Err(Failure::new(Cause::Cancelled,"agent receiver closed")); }
+                        }
                     }
                 }
             };
@@ -184,7 +193,7 @@ impl Agents {
             // call_controlled has waited for the far agent's terminal frame AND SSH child exit.
             let _=done.send(Some(cancelled));
             if let Ok(mut active)=agents.active.lock() { active.remove(&request.id); }
-            let _=output.send(terminal).await;
+            let _=tokio::time::timeout_at(options.deadline + Duration::from_millis(200), output.send(terminal)).await;
         });
         let stream=futures_util::stream::unfold((receiver,AbortOnDrop(abort)),|(mut receiver,guard)|async move {
             receiver.recv().await.map(|bytes|(Ok::<_,std::io::Error>(bytes),(receiver,guard)))

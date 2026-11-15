@@ -351,7 +351,7 @@ resolve a configured id/SSH alias and OS; an unknown or ambiguous selector refus
 A successful handshake is cached for that client's lifetime. Hash verification and
 fixed launchers live in `aac-transport`; the labelled TS fallback keeps its previous
 verification while the service is absent/old. Both use the 64 MiB artifact cap from
-`config/agent-transport-policy.json`.
+`config/tables/agent-transport-policy.json`.
 
 **Shipping is disabled on the service path.** Only an already installed hash-pinned
 agent is admitted. Missing, damaged or old agents return the labelled helper fallback;

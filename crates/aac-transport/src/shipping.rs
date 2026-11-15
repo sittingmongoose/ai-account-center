@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, mpsc};
 pub fn artifact_cap() -> usize {
     static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *CAP.get_or_init(|| {
-        serde_json::from_str::<serde_json::Value>(include_str!("../../../config/agent-transport-policy.json"))
+        serde_json::from_str::<serde_json::Value>(include_str!("../../../config/tables/agent-transport-policy.json"))
             .ok().and_then(|v| v["artifactMaxBytes"].as_u64()).and_then(|n| usize::try_from(n).ok()).unwrap_or(0)
     })
 }
@@ -284,7 +284,13 @@ impl AgentClient {
                         let event: Event = serde_json::from_slice(&buffer[..n]).map_err(|_| Failure::new(Cause::AgentMismatch, "invalid agent event JSON"))?;
                         check_event(request, &event)?;
                         terminal = !matches!(event, Event::Progress { .. });
-                        if !terminal { progress.send(event).await.map_err(|_| Failure::new(Cause::Cancelled, "agent receiver closed"))?; }
+                        if !terminal {
+                            tokio::select! {
+                                _ = options.cancel.cancelled() => return Err(Failure::new(Cause::Cancelled,"agent receiver closed")),
+                                _ = tokio::time::sleep_until(options.deadline) => return Err(Failure::new(Cause::Timeout,"agent progress deadline")),
+                                sent = progress.send(event) => sent.map_err(|_| Failure::new(Cause::Cancelled,"agent receiver closed"))?,
+                            }
+                        }
                         buffer.drain(..=n);
                     }
                     if buffer.len() >= frame_cap(&request.verb) { return Err(Failure::new(Cause::OutputTooLarge, "agent event cap exceeded")); }
