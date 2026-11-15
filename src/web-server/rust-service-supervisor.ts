@@ -153,7 +153,8 @@ export class RustSupervisor {
     this.removeAgentConnection = registerRustAgentConnection(
       lease.connection.ccsDir,
       lease.connection,
-      this.active
+      this.active,
+      { replied: () => this.replied(lease), failed: (kind) => this.transportFailed(lease, kind) }
     );
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));

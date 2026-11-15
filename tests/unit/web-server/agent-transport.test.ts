@@ -10,6 +10,8 @@ let root = '';
 let server: http.Server | undefined;
 let disconnect: (() => void) | undefined;
 let pool: http.Agent | undefined;
+let healthFailures: string[] = [];
+let healthReplies = 0;
 const saved = { home: process.env.CCS_HOME, dir: process.env.CCS_DIR };
 const host = { platform: 'linux' as const, sshHost: 'fixture' };
 const artifact = { target: 'x86_64-unknown-linux-musl', version: '0.1.0', sha256: 'a'.repeat(64), file: 'fixture' };
@@ -17,6 +19,7 @@ const options = { mode: 'on' as const, transport: 'on' as const, deadlineMs: 100
 const result = (value: unknown) => ({ stdout: JSON.stringify(value), code: 0, failed: false, missing: false, timedOut: false });
 
 beforeEach(() => {
+  healthFailures = []; healthReplies = 0;
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-l5-ts-'));
   process.env.CCS_HOME = root;
   process.env.CCS_DIR = path.join(root, '.ccs');
@@ -43,7 +46,7 @@ async function service(handler: (body: Record<string, any>, res: http.ServerResp
   const socketPath = path.join(root, 'http.sock');
   await new Promise<void>((resolve) => server!.listen(socketPath, resolve));
   pool = rustAgent();
-  disconnect = registerRustAgentConnection(process.env.CCS_DIR!, { socketPath, secret: 'private-fixture', bootId: 'fixture', agent: pool }, new Set());
+  disconnect = registerRustAgentConnection(process.env.CCS_DIR!, { socketPath, secret: 'private-fixture', bootId: 'fixture', agent: pool }, new Set(), { replied: () => healthReplies++, failed: (kind) => healthFailures.push(kind) });
 }
 
 it('off does no service request and keeps the original null result', async () => {
@@ -62,6 +65,7 @@ it('the actual caller uses service NDJSON with no TS artifact hash or launcher',
   });
   expect(await runAgentVerb(host, 'signin-expiry', {}, { ...options, onProgress: (p) => progress.push(p), run: async () => { throw new Error('TS must not launch'); } })).toBe('{"schemaVersion":1,"profiles":[]}');
   expect(progress).toEqual([{ ready: true }]);
+  expect(healthReplies).toBe(1);
 });
 it('service refusals, malformed streams and failures go to the helper without another agent attempt', async () => {
   let outcome = 'fallback';
@@ -92,6 +96,7 @@ it('a stalled service respects the caller budget and does not consume the Python
   const started = Date.now();
   expect(await runAgentVerb(host, 'signin-expiry', {}, { ...options, timeoutMs: 50 })).toBeNull();
   expect(Date.now() - started).toBeLessThan(500);
+  expect(healthFailures).toEqual(['deadline']);
 });
 
 it('Status machine collection consumes inventory through the actual verb caller', async () => {

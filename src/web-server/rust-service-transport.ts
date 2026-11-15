@@ -247,16 +247,18 @@ const agentConnections = new Map<
     root: string;
     connection: RustConnection;
     active: Set<http.ClientRequest>;
+    health: { replied?: () => void; failed?: (kind: RustFailureKind) => void };
   }
 >();
 
 export function registerRustAgentConnection(
   root: string,
   connection: RustConnection,
-  active: Set<http.ClientRequest>
+  active: Set<http.ClientRequest>,
+  health: { replied?: () => void; failed?: (kind: RustFailureKind) => void } = {}
 ): () => void {
   const key = Symbol();
-  agentConnections.set(key, { root, connection, active });
+  agentConnections.set(key, { root, connection, active, health });
   return () => agentConnections.delete(key);
 }
 
@@ -296,20 +298,26 @@ export async function requestRustAgent(
       },
     });
     held.active.add(request);
-    const timer = setTimeout(() => request.destroy(), payload.timeoutMs);
+    const timer = setTimeout(
+      () => request.destroy(new RustTransportError('deadline', 'Rust agent deadline')),
+      payload.timeoutMs
+    );
     request.once('close', () => {
       clearTimeout(timer);
       held.active.delete(request);
     });
     request.once('error', (error: NodeJS.ErrnoException) => {
+      held.health.failed?.(rustFailureKind(error));
       resolve(['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '') ? undefined : null);
     });
     request.once('response', (response) => {
       if (response.headers['x-aac-service-boot'] !== held.connection.bootId) {
         response.resume();
+        held.health.failed?.('boot');
         resolve(null);
         return;
       }
+      held.health.replied?.();
       if (response.statusCode === 404 || response.statusCode === 405) {
         response.resume();
         resolve(undefined);
