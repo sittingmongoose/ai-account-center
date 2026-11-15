@@ -780,6 +780,18 @@ describe('the Leptos dashboard build', () => {
   });
 });
 
+it('refuses an upgrade module that is not the pinned bytes, even one built from an edited source (recheck L3)', () => {
+  // An edited bridge.js builds a manifest and precompressed copies that agree with it, and kept the old shape checks
+  // (small, no import, exports leaveClassic); only the byte pin tells it from the reviewed module.
+  const root = fixture();
+  fs.appendFileSync(
+    path.join(root, 'web-dashboard', 'public', 'bridge.js'),
+    "document.head.append(Object.assign(document.createElement('script'), { src: '/x.js' }));\n"
+  );
+  build({ repoRoot: root, run: runner([]) });
+  expect(() => verifyBundle(path.join(root, 'dist', 'ui'))).toThrow('byte for byte');
+});
+
 it('normalizes Windows folder paths before sorting mixed file and folder inputs', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-fingerprint-'));
   roots.push(root);
