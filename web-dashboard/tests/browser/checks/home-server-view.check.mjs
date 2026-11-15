@@ -1,5 +1,6 @@
 // D7: Home built by the Rust server (GET /api/views/home, aac-views::home) against the page's own view-model.mjs, in
-// this browser. Run with the switch off (default) and on (`--set rustHome=1`, the binary in dist/native/aac-http):
+// this browser. Run with the switch off (default) and on (`--set rustHome=1`, the binary in dist/native/aac-http; R1:
+// add `--set rustHomeFed=1` and the real route is answered from fed generations):
 //   - switch: off, the dashboard offers nothing and the route is the unknown-endpoint 404; on, it is offered and the
 //     real front door answers it with a view the real Rust service built.
 //   - real wiring (on): a reload of a page that was offered the view reads only /api/views/home; the view is drawn,
@@ -15,6 +16,7 @@ const NOW = Math.floor(Date.now() / 60_000) * 60_000;
 function nextHomeView(t) {
 	return t.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/views/home', { timeout: 60000 }).then(async (r) => ({
 		status: r.status(),
+		etag: r.headers().etag ?? null,
 		body: await r.json().catch(() => null),
 		context: (() => { try { return JSON.parse(decodeURIComponent(r.request().headers()['x-aac-home-context'] || '')); } catch { return null; } })(),
 	}));
@@ -91,6 +93,8 @@ export const tests = {
 		await t.page.reload();
 		const r = await reply;
 		await t.check('the real route answers 200 with a Rust view', r.status === 200 && r.body?.view?.version === 3, `${r.status} view=${JSON.stringify(r.body?.view)?.slice(0, 120)}`, { hard: true });
+		// R1 (`--set rustHomeFed=1`): the fed path answered (its revalidated-view ETag), not D7's handler (Express's).
+		if (t.args.rustHomeFed) await t.check('the fed path answered (its SHA-256 ETag)', /^W\/"[a-f0-9]{64}"$/.test(r.etag ?? ''), String(r.etag));
 		const js = await jsView(t, r.body, r.context);
 		await t.check('this browser\'s view-model.mjs builds the same JSON', js === JSON.stringify(r.body.view), firstDifference(js, JSON.stringify(r.body.view)));
 		await t.until('Home is drawn', () => !!document.querySelector('.route:not([hidden]) .home'), null, { timeout: 30000, hard: true });

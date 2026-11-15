@@ -17,7 +17,7 @@ use std::path::Path;
 /// larger multi-byte manifest, so both stay with the TS reader.
 /// The registry row's 1 MiB cap: TS refuses more than 1 MiB of UTF-16 text, and at most 1 MiB of
 /// UTF-8 is always within that.
-fn desktop_profiles(root: &Path) -> Option<Value> {
+pub(crate) fn desktop_profiles(root: &Path) -> Option<Value> {
     let (file, policy) = crate::registered::file(root, "claude-desktop-profiles")?;
     match aac_files::read::read(&file, &policy) {
         Read::Absent => Some(json!({ "profiles": [] })),

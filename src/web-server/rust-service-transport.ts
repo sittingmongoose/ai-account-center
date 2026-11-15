@@ -39,6 +39,21 @@ export interface RustReply {
 /** Total deadline per request, the retry of a reused connection included. */
 export const RUST_DEADLINE_MS = 500;
 
+/** R1: a view reply's cap (the finished Home answer of a large home is several hundred KiB). */
+export const RUST_VIEW_CAP = 8 * 1024 * 1024;
+
+/**
+ * R1 request options: extra private headers (the fed request's ids, clock and page context), a reply passed
+ * through as bytes without parsing (`raw`: `body` is then null), its cap, and a body already written as text (a
+ * feed push whose data TS serialized once, for its change key).
+ */
+export interface RustRequestOptions {
+  headers?: Record<string, string>;
+  raw?: boolean;
+  cap?: number;
+  text?: string;
+}
+
 /** One keep-alive agent per boot (L1): the hop costs a request, not a connection. */
 export function rustAgent(): http.Agent {
   return new http.Agent({ keepAlive: true, maxSockets: 16, maxFreeSockets: 16 });
@@ -74,7 +89,8 @@ function once(
   payload: string | undefined,
   method: 'GET' | 'PUT',
   cap: number,
-  deadline: number
+  deadline: number,
+  options: RustRequestOptions = {}
 ): Promise<RustReply> {
   return new Promise((resolve, reject) => {
     const request = http.request({
@@ -83,6 +99,7 @@ function once(
       method,
       agent: connection.agent ?? false,
       headers: {
+        ...options.headers,
         'x-aac-boot-secret': connection.secret,
         'x-aac-principal': JSON.stringify(principal),
         ...(payload === undefined
@@ -126,7 +143,8 @@ function once(
         try {
           resolve({
             status: response.statusCode ?? 503,
-            body: JSON.parse(bytes.toString('utf8')),
+            // R1: a view passed through is never parsed here; the front door writes its bytes.
+            body: options.raw ? null : JSON.parse(bytes.toString('utf8')),
             decline: typeof decline === 'string' ? decline : null,
             build: typeof build === 'string' ? build : null,
             bytes,
@@ -148,14 +166,16 @@ export function requestRust(
   principal: VerifiedRustPrincipal,
   active: Set<http.ClientRequest>,
   input?: unknown,
-  method: 'GET' | 'PUT' = 'GET'
+  method: 'GET' | 'PUT' = 'GET',
+  options: RustRequestOptions = {}
 ): Promise<RustReply> {
-  const payload = input === undefined ? undefined : JSON.stringify(input);
+  const payload = options.text ?? (input === undefined ? undefined : JSON.stringify(input));
   if (payload !== undefined && Buffer.byteLength(payload) > 4 * 1024 * 1024)
     return Promise.reject(new RustTransportError('cap', 'Rust service request cap'));
-  const cap = input === undefined ? 64 * 1024 : 2 * 1024 * 1024;
+  const cap = options.cap ?? (payload === undefined ? 64 * 1024 : 2 * 1024 * 1024);
   const deadline = Date.now() + RUST_DEADLINE_MS;
-  const attempt = () => once(connection, route, principal, active, payload, method, cap, deadline);
+  const attempt = () =>
+    once(connection, route, principal, active, payload, method, cap, deadline, options);
   return attempt().catch((error: unknown) => {
     // Node does not retry a request whose kept-alive socket the server closed meanwhile.
     // The reads are idempotent: one retry on a fresh connection, inside the same deadline.
@@ -180,6 +200,30 @@ export function pushRustFeed(
     active,
     feed,
     'PUT'
+  );
+}
+
+/**
+ * R1: push a generation whose data and facts TS already wrote as JSON text (the dashboard's text is its change
+ * key, so it is serialized once). The reply names the generation the service holds after the push: a newer one
+ * when this push lost a race.
+ */
+export function pushRustFeedText(
+  connection: RustConnection,
+  source: string,
+  generation: string,
+  data: string,
+  facts: string,
+  active: Set<http.ClientRequest>
+): Promise<RustReply> {
+  return requestRust(
+    connection,
+    `/internal/feed/${encodeURIComponent(source)}`,
+    FRONT_DOOR_PRINCIPAL,
+    active,
+    undefined,
+    'PUT',
+    { text: `{"generation":${JSON.stringify(generation)},"data":${data},"facts":${facts}}` }
   );
 }
 

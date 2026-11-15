@@ -5,6 +5,7 @@
 //! (`src/web-server/views/home-context.ts` `homeReadInput`). No Claude Open is in progress: while one runs the page
 //! draws its own view (the progress line lives only in the browser).
 mod antigravity;
+pub mod fed;
 mod signins;
 pub mod windows;
 
@@ -40,6 +41,9 @@ pub struct Ctx {
     pub fmt: Fmt,
     /// `computers.json` ids and labels, in file order.
     pub computers: Vec<(String, String)>,
+    /// R1 (fed): this response's `updatedAt`, which the held generation leaves out (it is the request's clock).
+    /// `None` reads the dashboard's own.
+    pub updated_at: Option<String>,
 }
 
 fn duration(ms: i64) -> String {
@@ -303,12 +307,12 @@ fn meters_of(account: Acc<'_>) -> R<Vec<Win<'_>>> {
         .filter(windows::is_meter)
         .collect())
 }
-fn amounts_of(account: Acc<'_>) -> R<Vec<Win<'_>>> {
+/// [`meters_of`] and the remaining visible windows (the amounts), from one `visible` pass.
+fn meters_and_amounts(account: Acc<'_>) -> R<(Vec<Win<'_>>, Vec<Win<'_>>)> {
     let provider = str_field(account.get("provider"))?;
     Ok(windows::visible(provider, account)?
         .into_iter()
-        .filter(|w| !windows::is_meter(w))
-        .collect())
+        .partition(windows::is_meter))
 }
 
 fn meter(cx: &Ctx, account: Acc, w: Option<&Win>, label: &str) -> R<MeterView> {
@@ -956,7 +960,7 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
         let label = registry()
             .find(|(p, _)| p.id.as_str() == provider)
             .map_or("", |(p, _)| p.label);
-        let all_meters = meters_of(account)?;
+        let (all_meters, amount_windows) = meters_and_amounts(account)?;
         let meters = all_meters
             .iter()
             .take(3)
@@ -969,7 +973,6 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
                 break;
             }
         }
-        let amount_windows = amounts_of(account)?;
         let mut packs: Vec<Win> = Vec::new();
         for w in &amount_windows {
             if ci_contains(w.text("label"), "pack")
@@ -1079,7 +1082,10 @@ fn chrome(cx: &Ctx, data: &Value, every: &[Value], ctx: &HomeContext) -> R<Chrom
     let cached = every
         .iter()
         .any(|a| is_str(get(Some(a), "status"), "cached"));
-    let updated = valid_date(data.get("updatedAt"))?;
+    let updated = match &cx.updated_at {
+        Some(at) => parse_date(at)?,
+        None => valid_date(data.get("updatedAt"))?,
+    };
     let base = ChromeView {
         refreshing: false,
         username: ctx.username.clone(),
@@ -1162,13 +1168,22 @@ fn validate(data: &Value) -> R<&[Value]> {
 }
 
 fn computers() -> R<Vec<(String, String)>> {
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(COMPUTERS_JSON) else {
-        return Err(Decline("registry"));
-    };
-    Ok(map
-        .iter()
-        .map(|(id, row)| (id.clone(), text(row.get("label")).to_string()))
-        .collect())
+    // Parsed once: the fed path builds a view per request.
+    static COMPUTERS: std::sync::OnceLock<Option<Vec<(String, String)>>> =
+        std::sync::OnceLock::new();
+    COMPUTERS
+        .get_or_init(|| {
+            let Ok(Value::Object(map)) = serde_json::from_str::<Value>(COMPUTERS_JSON) else {
+                return None;
+            };
+            Some(
+                map.iter()
+                    .map(|(id, row)| (id.clone(), text(row.get("label")).to_string()))
+                    .collect(),
+            )
+        })
+        .clone()
+        .ok_or(Decline("registry"))
 }
 
 /// GET /api/views/home's Rust candidate for the shared read dispatch: the view, or [`Refuse`] (the page builds its
@@ -1213,9 +1228,46 @@ pub fn build(envelope: Envelope) -> R<HomeView> {
             ctx.now,
         ),
         computers: computers()?,
+        updated_at: None,
     };
     let built = view(&cx, &ctx, data, profiles, antigravity)?;
     // a fact the envelope did not have was read as missing: nothing built from it can be served
+    if cx.fmt.valid() {
+        Ok(built)
+    } else {
+        Err(Decline("fact"))
+    }
+}
+
+/// R1 (fed): what one Home request builds its view from. The dashboard, its ranks and the Antigravity copy are
+/// held generations the TS owner pushed when they changed; the profiles are this request's manifest read with each
+/// Open's progress; the context is the page's own.
+pub struct FedInput<'a> {
+    /// The page's context (`X-AAC-Home-Context`).
+    pub ctx: &'a HomeContext,
+    /// The dashboard answer (`server.views` included) as the generation holds it.
+    pub dashboard: &'a Value,
+    /// The Claude desktop profiles, each with its `openOperation`.
+    pub profiles: &'a Value,
+    /// The public Antigravity inventory.
+    pub antigravity: &'a Value,
+    /// The `localeCompare` ranks of the dashboard's account ids and sign-in profiles (the generation's facts).
+    pub ranks: std::sync::Arc<Ranks>,
+    /// This response's `updatedAt`; `None` reads the dashboard's own.
+    pub updated_at: Option<&'a str>,
+}
+
+/// The finished Home view from fed inputs, or the reason it cannot be proven equal to the browser's. The clock and
+/// day words are the page's zone's own ([`Fmt::fed`]): no server `Intl` fact is read.
+pub fn build_fed(input: FedInput) -> R<HomeView> {
+    let ctx = input.ctx;
+    let style = Fmt::proven_style(&ctx.format_probe)?;
+    let cx = Ctx {
+        fmt: Fmt::fed(input.ranks, style, Fmt::proven_zone(&ctx.zone)?, ctx.now),
+        computers: computers()?,
+        updated_at: input.updated_at.map(str::to_owned),
+    };
+    let built = view(&cx, ctx, input.dashboard, input.profiles, input.antigravity)?;
     if cx.fmt.valid() {
         Ok(built)
     } else {

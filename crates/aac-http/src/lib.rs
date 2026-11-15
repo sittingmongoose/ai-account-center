@@ -6,6 +6,8 @@ mod agent_transport;
 #[cfg(unix)]
 mod feed;
 #[cfg(unix)]
+mod home_fed;
+#[cfg(unix)]
 mod identity;
 #[cfg(unix)]
 mod json_object;

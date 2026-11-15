@@ -4,11 +4,14 @@ import { performance } from 'perf_hooks';
 import routes from './rust-service-routes.json';
 import type { RustLease } from './rust-service-lifecycle';
 import {
+  pushRustFeedText,
   requestRust,
+  RUST_VIEW_CAP,
   rustFailureKind,
   type RustReply,
   type VerifiedRustPrincipal,
 } from './rust-service-transport';
+import { rustViewBytes, type RustViewBytes } from './rust-view-reply';
 import { canonical, orderedLike, principal, validReply } from './rust-service-values';
 import { logger, RustSupervisor } from './rust-service-supervisor';
 export type { VerifiedRustPrincipal } from './rust-service-transport';
@@ -84,7 +87,8 @@ export class RustService extends RustSupervisor {
     route: string,
     verified: VerifiedRustPrincipal,
     input?: unknown,
-    query = ''
+    query = '',
+    headers?: Record<string, string>
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -101,7 +105,10 @@ export class RustService extends RustSupervisor {
         route.replace('{*path}', 'read') + query,
         verified,
         this.active,
-        input
+        input,
+        'GET',
+        // R1: a fed view carries its ids in headers and comes back as bytes, never parsed here.
+        headers ? { headers, raw: true, cap: RUST_VIEW_CAP } : {}
       );
     } catch (error) {
       pending = Promise.reject(error);
@@ -399,6 +406,92 @@ export class RustService extends RustSupervisor {
       this.failed(route, error);
     }
     return legacy();
+  }
+
+  /**
+   * R1: the boot a fed source belongs to. Feeds are held per service boot, so a new boot (a restart, an
+   * upgrade) starts with none and the front door pushes again. Null without a lease, or when the service
+   * reads another root than `scope` (the TS readers answer for another root).
+   */
+  feedBoot(scope: string): string | null {
+    const lease = this.lease;
+    return lease && !this.stopped && lease.connection.ccsDir === scope
+      ? lease.connection.bootId
+      : null;
+  }
+
+  /**
+   * R1: push one generation (data and facts already JSON text) to the current boot. The held generation the
+   * service names after the push, or null when the push did not reach it (a transport failure also tells the
+   * supervisor, as any request's does).
+   */
+  async pushFeed(
+    bootId: string,
+    source: string,
+    generation: string,
+    data: string,
+    facts: string
+  ): Promise<string | null> {
+    const lease = this.lease;
+    if (!lease || this.stopped || lease.connection.bootId !== bootId) return null;
+    try {
+      const reply = await pushRustFeedText(
+        lease.connection,
+        source,
+        generation,
+        data,
+        facts,
+        this.active
+      );
+      this.replied(lease);
+      const held = (reply.body as { generation?: unknown } | null)?.generation;
+      return reply.status === 200 && typeof held === 'string' ? held : null;
+    } catch (error) {
+      this.transportFailed(lease, rustFailureKind(error));
+      return null;
+    }
+  }
+
+  /**
+   * R1: a view Rust answers from fed generations. The request has no body: `headers` carry the generation ids,
+   * the clock and the page's context. The finished bytes, ETag and view version come back unparsed. Anything
+   * else is counted and the caller's TS handler answers: a named decline returns its word (`stale` tells the
+   * caller to push again), a failure or another reply null. The same admission as every read: an admitted
+   * principal, a lease, a free slot, a closed breaker.
+   */
+  async fedView(
+    req: Request,
+    route: string,
+    headers: Record<string, string>,
+    view: string
+  ): Promise<RustViewBytes | string | null> {
+    if (this.mode !== 'on') return null;
+    const verified = this.forwardable(req, route);
+    if (!verified) return null;
+    const started = now();
+    try {
+      const result = await this.forward(route, verified, undefined, '', headers);
+      const bytes = rustViewBytes(result, view);
+      if (bytes) {
+        this.stats.served++;
+        this.record(route, { kind: 'served' });
+        this.pair(route, null, now() - started);
+        return bytes;
+      }
+      if (result.status === 200) this.fallback(route, { kind: 'failed', reason: 'refused' });
+      else {
+        this.declined(route, result);
+        return result.decline ?? 'unnamed';
+      }
+    } catch (error) {
+      this.failed(route, error);
+    }
+    return null;
+  }
+
+  /** R1: a fed request the front door itself declined before asking Rust (its reason is counted). */
+  fedDeclined(route: string, reason: string): void {
+    this.fallback(route, { kind: 'unavailable', reason });
   }
 
   async respond(

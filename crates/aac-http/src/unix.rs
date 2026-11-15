@@ -334,6 +334,43 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // R1: Home from the fed generations (no body; the ids, clock and context in headers). Without
+        // `x-aac-feed` it is D7's envelope read below, which TS's own handler still uses.
+        Handler::Home if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
+            let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let contexts = req
+                .headers()
+                .get_all(crate::home_fed::CONTEXT_HEADER)
+                .iter()
+                .count();
+            let page =
+                one_header(req.headers(), crate::home_fed::CONTEXT_HEADER).map(str::to_owned);
+            let query = req.uri().query().is_some();
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(feed), false, true, true) = (feed, query, body.is_empty(), contexts <= 1)
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            let feeds = shared.feeds.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::home_fed::answer(&feeds, &root, &feed, page.as_deref())
+                })
+                .await
+            {
+                Ok(answer) => crate::view_reply::respond_bytes(
+                    aac_views::home::fed::VIEW,
+                    aac_views::home::fed::VERSION,
+                    answer.bytes,
+                    &answer.identity,
+                ),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         Handler::Events => {
             let mut response = shared.feeds.stream().into_response();
             response.headers_mut().insert(

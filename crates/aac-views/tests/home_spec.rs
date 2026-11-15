@@ -2,10 +2,13 @@
 //! synthetic zone and decline cases) built by `aac_views::home::build` from the case's envelope (its inputs and the
 //! presentation facts `homeReadInput` computed for them). A built view must be byte-equal to the JS view; a decline
 //! must be the one declines.json names for that case, and only those cases may decline.
+use aac_api::home::HomeContext;
 use aac_status::read_context::Envelope;
-use aac_views::home::build;
+use aac_views::home::{FedInput, build, build_fed};
+use aac_views::js::Ranks;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct Table {
@@ -42,6 +45,49 @@ fn envelope_of(case: &Case) -> Result<Envelope, String> {
         "presentation": case.presentation,
     }))
     .map_err(|e| format!("{}: envelope {e}", case.name))
+}
+
+/// R1 (fed): the same case through the fed path: the page's context, the three answers as the held generations
+/// hold them and, as the only engine fact, the ranks TS feeds once per dashboard generation (`homeSortWords`'s
+/// ranks: the envelope's `order`, which `homeReadInput` computes with `rankAll: false`). No clock or day word of the
+/// server engine is read.
+///
+/// The front door admits a request to the fed path only when the page's zone facts are the ones the server engine
+/// computes for that zone and day (TS `homeZoneAgrees`, cached per zone-day): it keeps D7's guard against a page
+/// whose facts disagree with its zone. The table's server words are the envelope's (`presentation.dates`), so a case
+/// whose words the page's zone would write otherwise is declined there (`zone`), as the front door would.
+fn build_fed_case(
+    case: &Case,
+) -> Result<Result<aac_api::home::HomeView, aac_views::js::Decline>, String> {
+    let ctx = HomeContext::deserialize(&case.ctx).map_err(|e| format!("{}: ctx {e}", case.name))?;
+    if let Some(zone) = aac_num::intl::Zone::proven(ctx.zone.from, ctx.zone.to, &ctx.zone.offsets) {
+        let dates = case.presentation["dates"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for (ms, words) in &dates {
+            let (Ok(ms), Some(clock), Some(day)) = (
+                ms.parse::<i64>(),
+                words["clock"].as_str(),
+                words["day"].as_str(),
+            ) else {
+                continue;
+            };
+            if zone.words(ms).is_some_and(|(c, d)| c != clock || d != day) {
+                return Ok(Err(aac_views::js::Decline("zone")));
+            }
+        }
+    }
+    let ranks: Ranks = serde_json::from_value(case.presentation["order"].clone())
+        .map_err(|e| format!("{}: order {e}", case.name))?;
+    Ok(build_fed(FedInput {
+        ctx: &ctx,
+        dashboard: &case.dashboard,
+        profiles: &case.profiles,
+        antigravity: &case.antigravity,
+        ranks: Arc::new(ranks),
+        updated_at: None,
+    }))
 }
 
 /// Where two texts first differ, with a little of each around it.
@@ -153,20 +199,18 @@ fn every_home_case_is_equal_or_declined_as_listed() -> Result<(), String> {
     Ok(())
 }
 
-/// `HOME_SPEC_FUZZ=<file>` (tests/spec/views/home/fuzz.mjs): any decline is allowed, but a built view must be the JS
-/// view byte for byte, and the JS must not have thrown for it. Without the variable this test has nothing to read.
+/// R1 exit gate: every case through the fed path is byte-equal to the JS view or declines (any reason; the fed path
+/// reads no server word, so the envelope's `zone`/`fact` declines may build here, and must then be equal). A built
+/// view where the JS throws is a failure. Most of the table must build.
 #[test]
-fn fuzzed_cases_are_equal_or_declined() -> Result<(), String> {
-    let Some(path) = std::env::var_os("HOME_SPEC_FUZZ") else {
-        return Ok(());
-    };
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path:?}: {e}"))?;
-    let table: Table = serde_json::from_str(&text).map_err(|e| format!("fuzz table: {e}"))?;
+fn every_home_case_is_equal_or_declined_through_the_fed_path() -> Result<(), String> {
+    let text = std::fs::read_to_string(spec_dir().join("cases.json")).map_err(|e| e.to_string())?;
+    let table: Table = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     let mut failures = Vec::new();
     let mut words: BTreeMap<&str, usize> = BTreeMap::new();
     let mut built = 0;
     for case in &table.cases {
-        match build(envelope_of(case)?) {
+        match build_fed_case(case)? {
             Ok(view) => {
                 let got = serde_json::to_string(&view).map_err(|e| e.to_string())?;
                 match &case.expected {
@@ -184,8 +228,81 @@ fn fuzzed_cases_are_equal_or_declined() -> Result<(), String> {
             Err(word) => *words.entry(word.0).or_default() += 1,
         }
     }
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases failed through the fed path:\n{}",
+        failures.len(),
+        table.cases.len(),
+        failures.join("\n")
+    );
+    assert!(
+        built * 4 >= table.cases.len() * 3,
+        "only {built} of {} cases built through the fed path",
+        table.cases.len()
+    );
+    println!(
+        "fed: {built} of {} built equal; declines {words:?}",
+        table.cases.len()
+    );
+    Ok(())
+}
+
+/// `HOME_SPEC_FUZZ=<file>` (tests/spec/views/home/fuzz.mjs): any decline is allowed, but a built view must be the JS
+/// view byte for byte, and the JS must not have thrown for it. Without the variable this test has nothing to read.
+#[test]
+fn fuzzed_cases_are_equal_or_declined() -> Result<(), String> {
+    let Some(path) = std::env::var_os("HOME_SPEC_FUZZ") else {
+        return Ok(());
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path:?}: {e}"))?;
+    let table: Table = serde_json::from_str(&text).map_err(|e| format!("fuzz table: {e}"))?;
+    let mut failures = Vec::new();
+    let mut words: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut fed_words: BTreeMap<&str, usize> = BTreeMap::new();
+    let (mut built, mut fed_built) = (0, 0);
+    for case in &table.cases {
+        // D7's envelope path, then R1's fed path: each built view must be the JS view.
+        for (fed, result) in [
+            (false, build(envelope_of(case)?)),
+            (true, build_fed_case(case)?),
+        ] {
+            let path = if fed { "fed" } else { "envelope" };
+            match result {
+                Ok(view) => {
+                    let got = serde_json::to_string(&view).map_err(|e| e.to_string())?;
+                    match &case.expected {
+                        Some(want) if *want == got => {
+                            if fed {
+                                fed_built += 1;
+                            } else {
+                                built += 1;
+                            }
+                        }
+                        Some(want) => failures.push(format!(
+                            "{} ({path}): differs {}",
+                            case.name,
+                            first_difference(want, &got)
+                        )),
+                        None => failures.push(format!(
+                            "{} ({path}): built a view where the JS throws",
+                            case.name
+                        )),
+                    }
+                }
+                Err(word) => {
+                    *(if fed { &mut fed_words } else { &mut words })
+                        .entry(word.0)
+                        .or_default() += 1;
+                }
+            }
+        }
+    }
     println!(
         "{built} of {} fuzzed cases built equal; declines {words:?}",
+        table.cases.len()
+    );
+    println!(
+        "fed: {fed_built} of {} fuzzed cases built equal; declines {fed_words:?}",
         table.cases.len()
     );
     assert!(

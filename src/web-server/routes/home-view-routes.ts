@@ -7,22 +7,39 @@
  * built from them. The page keeps the data (Details, Accounts and the notices read it) and draws Home from `view`, or
  * builds its own view when `view` is null: the profiles could not be read, the page's context (`X-AAC-Home-Context`)
  * could not be, or Rust refused it (the shared read fallback).
+ *
+ * R1 (`rustService.groups.home: on`): the same answer from fed generations (views/home-feed.ts). One dashboard
+ * read serves both paths: the fed request carries only its generation ids and clock, Rust answers the final bytes
+ * and ETag, and on any decline the handler below answers from that same read, as before.
  */
 import type { NextFunction, Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { requireDashboardSession } from '../middleware/auth-middleware';
 import { isSecureTransport } from '../middleware/secure-transport';
-import { getAccountDashboard } from '../services/account-dashboard-service';
+import {
+  getAccountDashboard,
+  readAccountDashboardForHome,
+  withPassedResetsAt,
+  type HomeDashboardRead,
+} from '../services/account-dashboard-service';
+import { getCcsDir } from '../../utils/config-manager';
 import { readClaudeDesktopProfiles } from './claude-desktop-routes';
-import { readAntigravityInventory } from './antigravity-routes';
-import { homeViewService, withOfferedViews } from '../views/offered-views';
+import { readAntigravityInventory, runtimeInventory } from './antigravity-routes';
+import { homeFedService, homeViewService, withOfferedViews } from '../views/offered-views';
 import { homeReadInput, isHomeView, parseHomeContext } from '../views/home-context';
+import { answerHomeFed } from '../views/home-feed';
 
 export interface HomeViewRouterDeps {
   getDashboard?: typeof getAccountDashboard;
   readProfiles?: (req: Request, res: Response) => Promise<unknown[]>;
-  readInventory?: (req: Request, res: Response) => Promise<unknown>;
+  readInventory?: (req: Request, res: Response, read?: { value: unknown }) => Promise<unknown>;
+  /** R1: the dashboard before its per-response pass, with that pass's clock. */
+  readHomeDashboard?: typeof readAccountDashboardForHome;
+  /** R1: the Antigravity runtime's inventory. */
+  runtimeInventory?: () => Promise<unknown>;
+  /** R1: the CCS directory the TS readers use. */
+  scope?: () => string;
 }
 
 export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
@@ -50,12 +67,47 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
     // A context this server cannot read (an unusual zone, a long name) only means the page builds its own view.
     const context = parseHomeContext(req.get('x-aac-home-context'), platform);
     res.setHeader('Cache-Control', 'no-store');
+    const secureTransport = isSecureTransport(req);
+    // R1: one read for both paths; `undefined` when the fed path did not run.
+    let read: HomeDashboardRead | null | undefined;
+    // R1: the runtime inventory the fed path read, so a fallback answers from the same reads.
+    let fedInventory: { value: unknown } | undefined;
+    const fed = homeFedService(res);
+    if (fed) {
+      const [homeRead, inventory] = await Promise.all([
+        (deps.readHomeDashboard ?? readAccountDashboardForHome)(platform, refresh === 'true', {
+          secureTransport,
+        }).catch(() => null),
+        (deps.runtimeInventory ?? runtimeInventory)().then(
+          (value) => ({ value }),
+          () => null
+        ),
+      ]);
+      read = homeRead;
+      fedInventory = inventory ?? undefined;
+      if (homeRead && inventory) {
+        const answered = await answerHomeFed(req, res, fed, {
+          platform,
+          secure: secureTransport,
+          context,
+          read: { dashboard: withOfferedViews(homeRead.dashboard, res), now: homeRead.now },
+          inventory: inventory.value,
+          scope: (deps.scope ?? getCcsDir)(),
+        });
+        if (answered) return;
+      } else fed.fedDeclined('/api/views/home', 'input');
+    }
     const [dashboard, profiles, antigravity] = await Promise.all([
-      (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
-        secureTransport: isSecureTransport(req),
-      }).catch(() => null),
+      // The same read's answer after its pass; a pass that throws is a failed read, as `get` rejects.
+      read !== undefined
+        ? Promise.resolve(read)
+            .then((value) => value && withPassedResetsAt(value.dashboard, value.now))
+            .catch(() => null)
+        : (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
+            secureTransport,
+          }).catch(() => null),
       (deps.readProfiles ?? readClaudeDesktopProfiles)(req, res).catch(() => null),
-      (deps.readInventory ?? readAntigravityInventory)(req, res).catch(() => null),
+      (deps.readInventory ?? readAntigravityInventory)(req, res, fedInventory).catch(() => null),
     ]);
     if (!dashboard) {
       res.status(500).json({ error: 'Account usage could not be read safely.' });

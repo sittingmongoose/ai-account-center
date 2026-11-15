@@ -23,8 +23,11 @@ export interface UnifiedConfig {
   agentTransport?: 'off' | 'on';
   /** Explicit existing identity and pinned host-key source; neither is created or edited. */
   agentTransportSsh?: { identityFile?: string; knownHostsFile?: string };
-  /** The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. */
-  rustService?: { mode?: 'off' | 'shadow' | 'on' };
+  /**
+   * The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. `groups.home`
+   * (R1, `AAC_RUST_GROUP_HOME` overrides): Home is built from fed generations when the mode is on.
+   */
+  rustService?: { mode?: 'off' | 'shadow' | 'on'; groups?: { home?: 'off' | 'on' } };
   /** Config version */
   version: number;
   /** Flag indicating setup wizard has been completed */

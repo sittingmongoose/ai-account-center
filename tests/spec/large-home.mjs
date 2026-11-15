@@ -7,11 +7,14 @@
  *     (run@1), in the share layout `<share>/v1/writers/<writer>/...` the Status and Scoreboard
  *     readers scan;
  *   - 30 accounts x 12 windows x 90 days of Analytics observations, as the store's `record`
- *     inputs (one JSON line per observation; R3/R5 ingest them), every 6 hours by default.
+ *     inputs (one JSON line per observation; R3/R5 ingest them), every 6 hours by default;
+ *   - R1: the same 30 accounts x 12 windows as dashboard rows (`dashboard-accounts.json`), which the
+ *     measurement server feeds to the real dashboard service for Home.
  *
  *   node tests/spec/large-home.mjs <dir> [--profiles 50] [--reports 200] [--runs 5000]
  *        [--accounts 30] [--windows 12] [--days 90] [--cadence-hours 6]
- * Writes <dir>/.ccs, <dir>/share and <dir>/analytics/observations.jsonl, and prints a summary.
+ * Writes <dir>/.ccs, <dir>/share, <dir>/analytics/observations.jsonl and <dir>/dashboard-accounts.json, and
+ * prints a summary.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -249,6 +252,38 @@ for (let t = start; t <= NOW; t += N.cadenceHours * HOUR)
     );
   }
 write(path.join(root, 'analytics', 'observations.jsonl'), lines.join('\n') + '\n');
+
+// R1: the dashboard's account rows (30 accounts x 12 windows by default), as the additional-accounts collector
+// publishes them (provider ids from the table's additional providers). The measurement server feeds them to the
+// real AccountDashboardService through that collector's snapshot, so Home's measurements run on this size.
+const DASHBOARD_PROVIDERS = ['muse', 'cursor', 'kimi-code', 'qwen', 'zai', 'opencode-go'];
+const dashboardAccounts = Array.from({ length: N.accounts }, (_, i) => {
+  const provider = DASHBOARD_PROVIDERS[i % DASHBOARD_PROVIDERS.length];
+  const sampled = NOW - (i % 7) * 60_000;
+  return {
+    id: `${provider}:fixture-${i}`,
+    provider,
+    providerLabel: provider,
+    label: `Fixture ${i}`,
+    email: `user${i}@example.com`,
+    plan: pick(['pro', 'plus', 'team', 'free']),
+    status: 'ok',
+    platform: 'ubuntu',
+    source: 'Fixture usage',
+    fetchedAt: iso(sampled),
+    sampledAt: iso(sampled),
+    windows: Array.from({ length: N.windows }, (_, k) => ({
+      key: `window-${k}`,
+      label: `Window ${k}`,
+      kind: 'rate_limit',
+      usedPercent: Math.round(random() * 10000) / 100,
+      windowMinutes: [300, 10080, 43200][k % 3],
+      // Some resets have passed since the reading (markPassedResets marks them per response).
+      resetAt: iso(sampled + (k - 2) * HOUR),
+    })),
+  };
+});
+write(path.join(root, 'dashboard-accounts.json'), dashboardAccounts);
 
 console.log(
   JSON.stringify({

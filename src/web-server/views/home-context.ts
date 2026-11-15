@@ -132,7 +132,7 @@ const record = (value: unknown): Record<string, unknown> | null =>
  * The strings Home compares with `localeCompare`: account ids (view-model.mjs `providerCards`, `text(id)`) and the
  * Claude sign-in profiles (claude-signins.mjs `signInsFor`, `String(profile)`). A pair without ranks refuses.
  */
-function homeSortWords(dashboard: unknown): string[] {
+export function homeSortWords(dashboard: unknown): string[] {
   const data = record(dashboard);
   const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
   const ids = accounts.map((account) => {

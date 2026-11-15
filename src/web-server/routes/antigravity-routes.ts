@@ -95,8 +95,8 @@ export function createAntigravityRouter(
 
 import { getAntigravityRuntime } from '../../antigravity/runtime-service';
 
-/** The runtime's inventory, or the empty Ubuntu one when no runtime runs. */
-async function runtimeInventory(): Promise<AntigravityInventory> {
+/** The runtime's inventory, or the empty Ubuntu one when no runtime runs. Home's fed path reads it too (R1). */
+export async function runtimeInventory(): Promise<AntigravityInventory> {
   return (
     getAntigravityRuntime()?.getInventory() ?? {
       schemaVersion: 1,
@@ -106,9 +106,20 @@ async function runtimeInventory(): Promise<AntigravityInventory> {
   );
 }
 
-/** Home's Antigravity inventory (D7): GET /profiles' answer, composed the same way. */
-export async function readAntigravityInventory(req: Request, res: Response): Promise<unknown> {
-  return publicInventoryAnswer(req, res, await runtimeInventory());
+/**
+ * Home's Antigravity inventory (D7): GET /profiles' answer, composed the same way. `read` is a runtime read the
+ * caller already made (R1's fed path), so its fallback answers from the same read.
+ */
+export async function readAntigravityInventory(
+  req: Request,
+  res: Response,
+  read?: { value: unknown }
+): Promise<unknown> {
+  return publicInventoryAnswer(
+    req,
+    res,
+    read ? (read.value as AntigravityInventory) : await runtimeInventory()
+  );
 }
 
 export default createAntigravityRouter({

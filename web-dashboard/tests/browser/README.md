@@ -70,6 +70,10 @@ switch, the real front-door wiring, and the fixture Home drawn from Rust against
 DOM and pixels). The device fixture proxy takes `AAC_FIXTURE_RUST_HOME=<aac-http>` for the same, and then serves
 `/__d7/home-spec`, which runs the Home spec in the device's own browser.
 
+**Home fed (R1, opt-in).** `--set rustHomeFed=1` implies `rustHome=1` and also starts the server with
+`AAC_RUST_GROUP_HOME=on`, so the server's own `GET /api/views/home` (the real-wiring check) is answered from fed
+generations; stubbed Home data still goes through the kit's own builder. Without it the group is explicitly off.
+
 ## Recording, machines and parallel runs
 
 - **Parallel runs:** each gets its own browser, temporary home and reserved port. Use a worktree per candidate or `--set repo=<tree>`: rebuilding `dist/` during a run breaks that run. `--set port=N` fixes the port, so don't use it in parallel.

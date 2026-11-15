@@ -237,9 +237,9 @@ inert while the service is off.
 | Breaker | Per route in TS: 3 transport failures or timeouts in a row open it for 30 s, then one probe goes. Declines are replies and never count. Admission only looks; the probe is reserved when the request is really sent, so a request TS keeps (no input, another root) never holds it. A new boot starts with every breaker closed. |
 | Restart | An owned service that exits is restarted after 1 s, 5 s, 30 s, 2 min, then 10 min; after 5 restarts in an hour TS logs `rust.service.gave_up` and answers alone until the next dashboard start. An attached boot that stops answering is dropped the same way. A process that accepts but never answers (stopped, deadlocked) is caught by its transport timeouts: after 3 in a row on any route, a health probe (500 ms) decides, and a hung process is retired into the same restart budget. Rust's own `deadline` and `busy` declines are replies and never count. Boot folders older than a minute whose socket refuses a connection are swept at start; no PID read from disk is ever signalled. |
 | Build check | Health replies carry `x-aac-service-build: {commit, sha256, protocol, storeSchema}`, with `sha256` the running image's own hash. The descriptor records it. A front door attaches only when the live identity equals the descriptor's, its `sha256` is that of the binary it would start, and the protocol is its own; otherwise it starts its own boot (an in-place upgrade). The public `/api/health` body stays `{"status":"ok"}`. |
-| Feeds, events | `PUT /internal/feed/<source>` `{generation, data, facts}` and `GET /internal/feed/<source>`; `GET /internal/events` streams NDJSON (`facts-needed` when a generation arrives without facts). Only the reserved `{kind: session, id: front-door, role: service}` principal reaches them. A metadata-only stub until R1: the service keeps the generation, the data's size and whether facts came, not the payload. |
+| Feeds, events | `PUT /internal/feed/<source>` `{generation, data, facts}` and `GET /internal/feed/<source>`; `GET /internal/events` streams NDJSON (`facts-needed` when a generation arrives without facts). Only the reserved `{kind: session, id: front-door, role: service}` principal reaches them. Since R1 each source holds its latest generation's payload and facts, immutable; see Home, fed (R1). |
 | Shadow | At most 2 comparisons in flight per route; the rest are skipped and counted. TS answers first, then Rust is asked, so each comparison times both paths on the same request. |
-| Reply floor | `view_reply` in Rust and `sendRustView` in TS: the final bytes, the revalidated-view ETag and `x-aac-view`, written without a parse. No route uses it yet (R1 onward). |
+| Reply floor | `view_reply` in Rust and `sendRustView` in TS: the final bytes, the revalidated-view ETag and `x-aac-view`, written without a parse. Home (R1) is the first route that uses it. |
 
 **Measurement hooks.** `GET /api/diag?bridge=1` (signed-in session) answers the skeleton
 diagnostics plus a `bridge` block: the service state, its build, restarts, the child's RSS,
@@ -420,3 +420,56 @@ also cancels its owned transport. Fixtures exercise a far-process recorder, not 
 agent corpora directly and through the private socket/SSH recorder and compares their
 counts. It also checks pooled reuse, breaker, byte/hash caps, no shipping, authentication,
 progress/input and acknowledged cancellation. All binaries stay on the build host.
+
+## Home, fed (R1)
+
+R1 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 1.1): Home and the accounts dashboard at the
+**fed** level. Off by default: `rustService.groups.home: on` in `config.yaml` (or `AAC_RUST_GROUP_HOME=on`),
+under `rustService.mode: on`, which stays the ceiling. With the group on, Home is offered as with the D7 switch,
+and `GET /api/views/home` is answered from fed generations; with it off, Home is D7's path (or not offered) and
+nothing below runs.
+
+- **The owners push only when their data changed** (`views/home-feed.ts`, `PUT /internal/feed/<source>`), with
+  a numeric generation per source that only moves forward (a late push of an older one is not taken, and the
+  reply names the generation held):
+  - `home-dashboard-<platform>-<0|1>`: `AccountDashboardService.readForHome` (the answer before its
+    per-response pass) per platform and secure transport, as `JSON.stringify` writes it with `updatedAt: ""`.
+    That text is the change key: the request writes it once and sends it only when it differs. Its facts,
+    computed once per generation: the `localeCompare` ranks of the account ids and sign-in profiles Home sorts
+    by, and the `Date.parse` epochs of every `resetAt`/`sampledAt` string `markPassedResets` reads;
+  - `home-opens`: this process's Claude Open progress per profile (`ClaudeOpenOperations.forScope`);
+  - `home-antigravity`: the runtime's inventory in the ISO envelope; the service composes it (part 4) when it
+    arrives.
+- **A request carries only** the principal, the query (`x-aac-feed`: platform, secure transport, the
+  generation ids), the clock (`now` of the per-response pass, `updatedAt`) and the page's context as TS read it
+  (`x-aac-home-context`). No body.
+- **The service** (`crates/aac-http/src/home_fed.rs`, `aac_views::home::fed`) reads the desktop manifest
+  itself (part 4's capped read), adds each Open's progress, applies `markPassedResets` with `now`, builds the
+  view with clock and day words from the page's own zone offsets and probed style (no server `Intl` per
+  request; the ranks are the generation's facts), and answers the final bytes of
+  `{schemaVersion, dashboard, profiles, antigravity, view}` with the revalidated-view `ETag` and
+  `x-aac-view: home@3`. Every byte is the one Node would write (`aac_views::js_json`: JavaScript's key order,
+  string escapes and number text); a dashboard generation is written once as a template whose only per-request
+  parts are `updatedAt` and the windows whose reset can pass, and a generation whose text does not round-trip
+  byte for byte declines. TS writes the bytes unparsed (`sendRustView`, keeping Home's `no-store`), with a 304
+  for a matching `If-None-Match`.
+- **Anything unproven declines with a named reason and the original handler answers from the same dashboard
+  read:** no service or another root (`root`), a page zone this engine does not agree with (`zone`: the
+  server's offsets for the page's zone and day, cached per zone-day, must be the page's; the guard D7's server
+  words gave), an input JSON cannot carry exactly or a failed read (`input`), a push that did not land
+  (`feed`), a generation the service does not hold as named (`stale`: a push raced, or a new boot), and every
+  service decline (a shape `markPassedResets` throws on, a missing fact, any view decline).
+- **Generations are per boot:** a restarted service holds none, and the front door pushes again on the next
+  request. Generation numbers start from the clock (ms x 1000), and a push that finds a newer one held moves
+  past it, so a front door that attaches to a service an earlier process fed is not declined for long.
+
+The checks: `crates/aac-http/tests/lifecycle.rs` (the fed answer and its ETag, a missing, stale or unproven
+generation, a late push, a restarted service), `aac_views::home::fed` and `js_json` unit tests,
+`crates/aac-views/tests/home_spec.rs` (every Home case and the fuzz seeds through the fed path: equal or
+declined), `tests/unit/web-server/home-feed.test.ts`, and `tests/spec/home-read-parity.mjs` (in `run.mjs`):
+the fed path against today's handler on the real binary under Node, for every Home case, plus the 304, a push
+during a request, a service killed mid-feed and an Open in progress. `tests/spec/bridge-measure.mjs --home`
+measures off `GET /api/accounts/dashboard`, D7's Home and the fed Home in the same rounds on the large
+synthetic home (whose 30 x 12 dashboard rows reach the real dashboard service through the additional-accounts
+snapshot).
+

@@ -19,8 +19,10 @@ const { monitorEventLoopDelay } = require('perf_hooks');
 
 const [dist, binary, given, home] = process.argv.slice(2);
 // `off+owners`: off, with the Status and Scoreboard owners running on the fixture share (heap).
-const owners = given.endsWith('+owners');
-const mode = owners ? given.slice(0, -'+owners'.length) : given;
+// R1: `on+home` offers Home with D7's path (AAC_RUST_HOME_VIEW=on); `on+fed` answers it from fed generations
+// (the Home group on).
+const [mode, ...flags] = given.split('+');
+const owners = flags.includes('owners');
 const repo = path.resolve(__dirname, '../..');
 const ccs = path.join(home, '.ccs');
 for (const key of Object.keys(process.env)) if (key.startsWith('CCS_')) delete process.env[key];
@@ -33,6 +35,8 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
   AAC_RUST_SERVICE: mode,
   AAC_AGENT_REPORTS_DIR: path.join(home, 'share'),
+  AAC_RUST_HOME_VIEW: flags.includes('home') || flags.includes('fed') ? 'on' : 'off',
+  AAC_RUST_GROUP_HOME: flags.includes('fed') ? 'on' : 'off',
 });
 
 // ---- the closed boundary ----------------------------------------------------------------
@@ -158,6 +162,19 @@ stub('antigravity/production-runtime.js', { getInstalledAntigravityRuntimeFactor
 stub('store/store-service.js', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),
 });
+// R1: the large home's dashboard rows reach the real AccountDashboardService through the additional-accounts
+// collector's snapshot (no provider is asked).
+const accountsFile = path.join(home, 'dashboard-accounts.json');
+if (fs.existsSync(accountsFile)) {
+  const rows = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+  stub('web-server/services/additional-account-service.js', {
+    getAdditionalDashboardSnapshot: async () => ({ registry: 'v1', accounts: structuredClone(rows) }),
+    getConfiguredAdditionalAccounts: () => null,
+  });
+  stub('web-server/services/opencode-console-wallet-service.js', {
+    getOpenCodeConsoleWalletAccounts: async () => [],
+  });
+}
 const renewal = require(path.join(dist, 'web-server/services/codex-profile-renewal-service.js'));
 renewal.CodexProfileRenewalService.prototype.start = noop;
 

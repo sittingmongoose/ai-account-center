@@ -1,12 +1,20 @@
 //! L1: the front door's feeds and the service's event stream (the "fed" level of the M3 design).
 //! `PUT /internal/feed/<source>` takes a source's latest generation `{generation, data, facts}`;
-//! `GET /internal/feed/<source>` reports which generation arrived; `GET /internal/events` streams
+//! `GET /internal/feed/<source>` reports which generation is held; `GET /internal/events` streams
 //! NDJSON events to the front door. Only the reserved front-door principal reaches these routes
-//! (the table's `service` role, plus the boot secret). This is a metadata-only stub until R1: it
-//! keeps the generation, the size of `data` and whether facts came, and drops the payload. R1, the
-//! first group that composes from a feed, keeps the immutable bounded data and facts per
-//! generation before anything reads them; until then nothing is served from a feed.
+//! (the table's `service` role, plus the boot secret).
+//!
+//! R1: each source holds its latest generation's immutable bounded payload and facts (the request
+//! body is capped at 4 MiB, and at most 16 sources are held). Home's sources are prepared once,
+//! when their generation arrives (`aac_views::home::fed`): `home-dashboard-<platform>-<0|1>` (the
+//! dashboard answer per platform and secure transport), `home-opens` (the Claude Open progress) and
+//! `home-antigravity` (the composed Antigravity inventory). A source that names a numeric
+//! generation only moves forward: an older one arriving late (two pushes racing) is not taken, and
+//! the reply names the generation held, so the front door knows. A generation is immutable: the
+//! same id with other bytes is refused. A request names the generations its front door read; any
+//! other held generation, or none, is `stale`, and TS answers.
 use aac_views::decline::Decline;
+use aac_views::home::fed;
 use axum::body::{Body, Bytes};
 use serde::Deserialize;
 use serde_json::{json, value::RawValue};
@@ -18,11 +26,34 @@ use tokio::sync::broadcast;
 
 /// At most this many sources are held.
 const SOURCES: usize = 16;
+/// The dashboard sources' prefix; the rest of the name is `<platform>-<0|1>`.
+pub(crate) const HOME_DASHBOARD: &str = "home-dashboard-";
+pub(crate) const HOME_OPENS: &str = "home-opens";
+pub(crate) const HOME_ANTIGRAVITY: &str = "home-antigravity";
 
-struct Feed {
-    generation: String,
-    bytes: usize,
-    facts: bool,
+/// What a generation was prepared into when it arrived. Every request for it reads this.
+#[derive(Debug)]
+pub(crate) enum Prepared {
+    /// A source no composer reads yet: held as sent.
+    Held,
+    Dashboard(Result<fed::Dashboard, Decline>),
+    Opens(Result<fed::Opens, Decline>),
+    Antigravity(Result<serde_json::Value, Decline>),
+}
+
+/// One held generation: immutable.
+#[derive(Debug)]
+pub(crate) struct Generation {
+    pub(crate) id: String,
+    pub(crate) data: Box<RawValue>,
+    pub(crate) facts: Box<RawValue>,
+    pub(crate) prepared: Prepared,
+}
+
+impl Generation {
+    fn has_facts(&self) -> bool {
+        self.facts.get().trim() != "null"
+    }
 }
 
 #[derive(Deserialize)]
@@ -36,7 +67,7 @@ struct Put {
 /// The held feeds and the event channel.
 #[derive(Clone)]
 pub(crate) struct Feeds {
-    held: Arc<Mutex<HashMap<String, Feed>>>,
+    held: Arc<Mutex<HashMap<String, Arc<Generation>>>>,
     events: broadcast::Sender<Bytes>,
 }
 
@@ -54,6 +85,35 @@ fn generation_word(generation: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
+/// A numeric generation (digits, no leading zero), which orders.
+fn number(generation: &str) -> Option<u64> {
+    (generation == "0" || !generation.starts_with('0'))
+        .then(|| generation.parse().ok())
+        .flatten()
+}
+
+/// Home's sources need a numeric generation, so a late push never replaces a newer one.
+fn home_source(source: &str) -> bool {
+    source == HOME_OPENS
+        || source == HOME_ANTIGRAVITY
+        || source
+            .strip_prefix(HOME_DASHBOARD)
+            .is_some_and(|rest| ["mac-0", "mac-1", "windows-0", "windows-1"].contains(&rest))
+}
+
+fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Prepared {
+    let bytes = data.get().as_bytes();
+    if source.starts_with(HOME_DASHBOARD) {
+        Prepared::Dashboard(fed::prepare_dashboard(bytes, facts.get().as_bytes()))
+    } else if source == HOME_OPENS {
+        Prepared::Opens(fed::prepare_opens(bytes))
+    } else if source == HOME_ANTIGRAVITY {
+        Prepared::Antigravity(fed::prepare_antigravity(bytes))
+    } else {
+        Prepared::Held
+    }
+}
+
 impl Feeds {
     pub(crate) fn new() -> Self {
         Self {
@@ -69,6 +129,32 @@ impl Feeds {
         let _ = self.events.send(Bytes::from(line));
     }
 
+    /// Whether generation `id` (with these bytes) may replace what is held for a source:
+    /// `Ok(true)` to take it, `Ok(false)` when it or a newer one is held (the reply names it), an
+    /// error when the same id comes with other bytes (a generation is immutable).
+    fn newer(
+        held: Option<&Arc<Generation>>,
+        id: &str,
+        data: &str,
+        facts: &str,
+    ) -> Result<bool, Decline> {
+        let Some(held) = held else {
+            return Ok(true);
+        };
+        if held.id == id {
+            return if held.data.get() == data && held.facts.get() == facts {
+                Ok(false)
+            } else {
+                Err(Decline::Shape)
+            };
+        }
+        Ok(match (number(&held.id), number(id)) {
+            (Some(old), Some(new)) => new > old,
+            // A source that does not name numbers: the latest push wins (L1).
+            _ => true,
+        })
+    }
+
     /// Store a generation. A generation without facts asks the front door for them
     /// (`facts-needed`): composers serve only generations whose facts are present.
     pub(crate) fn put(&self, source: &str, body: &[u8]) -> Result<serde_json::Value, Decline> {
@@ -77,43 +163,96 @@ impl Feeds {
         }
         let put: Put = crate::json_object::from_slice(body, &["generation", "data", "facts"])
             .map_err(|_| Decline::Shape)?;
-        if !generation_word(&put.generation) {
+        if !generation_word(&put.generation)
+            || (source.starts_with("home-") && !home_source(source))
+            || (home_source(source) && number(&put.generation).is_none())
+        {
             return Err(Decline::Shape);
         }
-        let facts = put.facts.get().trim() != "null";
         {
-            let mut held = self.held.lock().map_err(|_| Decline::Internal)?;
+            let held = self.held.lock().map_err(|_| Decline::Internal)?;
             if held.len() >= SOURCES && !held.contains_key(source) {
                 return Err(Decline::Busy);
             }
-            held.insert(
-                source.to_owned(),
-                Feed {
-                    generation: put.generation.clone(),
-                    bytes: put.data.get().len(),
-                    facts,
-                },
-            );
+            if !Self::newer(
+                held.get(source),
+                &put.generation,
+                put.data.get(),
+                put.facts.get(),
+            )? {
+                let current = held.get(source).ok_or(Decline::Internal)?;
+                return Ok(
+                    json!({"source": source, "generation": current.id, "facts": current.has_facts()}),
+                );
+            }
         }
+        // Prepared outside the lock (a large dashboard takes a moment); the order is checked again.
+        let generation = Arc::new(Generation {
+            prepared: prepare(source, &put.data, &put.facts),
+            id: put.generation.clone(),
+            data: put.data,
+            facts: put.facts,
+        });
+        let facts = generation.has_facts();
+        let reply = {
+            let mut held = self.held.lock().map_err(|_| Decline::Internal)?;
+            if Self::newer(
+                held.get(source),
+                &generation.id,
+                generation.data.get(),
+                generation.facts.get(),
+            )? {
+                if held.len() >= SOURCES && !held.contains_key(source) {
+                    return Err(Decline::Busy);
+                }
+                held.insert(source.to_owned(), generation.clone());
+                json!({"source": source, "generation": generation.id, "facts": facts})
+            } else {
+                let current = held.get(source).ok_or(Decline::Internal)?;
+                return Ok(
+                    json!({"source": source, "generation": current.id, "facts": current.has_facts()}),
+                );
+            }
+        };
         if !facts {
             self.publish(json!({
                 "event": "facts-needed",
                 "source": source,
-                "generation": put.generation,
+                "generation": generation.id,
             }));
         }
-        Ok(json!({"source": source, "generation": put.generation, "facts": facts}))
+        Ok(reply)
+    }
+
+    /// The generation held for a source, if it is the one named.
+    pub(crate) fn current(
+        &self,
+        source: &str,
+        generation: &str,
+    ) -> Result<Arc<Generation>, Decline> {
+        let held = self.held.lock().map_err(|_| Decline::Internal)?;
+        match held.get(source) {
+            Some(g) if g.id == generation => Ok(g.clone()),
+            _ => Err(Decline::Stale),
+        }
     }
 
     /// The generation held for a source, or `stale` when none is.
     pub(crate) fn status(&self, source: &str) -> Result<serde_json::Value, Decline> {
         let held = self.held.lock().map_err(|_| Decline::Internal)?;
         let feed = held.get(source).ok_or(Decline::Stale)?;
+        let declined = match &feed.prepared {
+            Prepared::Held => None,
+            Prepared::Dashboard(r) => r.as_ref().err().copied(),
+            Prepared::Opens(r) => r.as_ref().err().copied(),
+            Prepared::Antigravity(r) => r.as_ref().err().copied(),
+        };
         Ok(json!({
             "source": source,
-            "generation": feed.generation,
-            "facts": feed.facts,
-            "bytes": feed.bytes,
+            "generation": feed.id,
+            "facts": feed.has_facts(),
+            "bytes": feed.data.get().len(),
+            "declined": declined.map(Decline::as_str),
         }))
     }
 
@@ -201,6 +340,68 @@ mod tests {
                 .put("one-too-many", br#"{"generation":"g","data":1,"facts":{}}"#)
                 .err(),
             Some(Decline::Busy)
+        );
+    }
+
+    fn held(feeds: &Feeds, source: &str) -> Option<String> {
+        feeds
+            .status(source)
+            .ok()
+            .and_then(|v| v["generation"].as_str().map(str::to_owned))
+    }
+
+    #[test]
+    fn a_generation_keeps_its_payload_and_only_a_newer_one_replaces_it() {
+        let feeds = Feeds::new();
+        let opens = |g: &str, data: &str| {
+            format!(r#"{{"generation":"{g}","data":{data},"facts":null}}"#).into_bytes()
+        };
+        // R1 (review L2 of L1): the payload is held and prepared, not just its size.
+        assert!(
+            feeds
+                .put(HOME_OPENS, &opens("2", r#"[["p",{"state":"copying"}]]"#))
+                .is_ok()
+        );
+        let g = feeds.current(HOME_OPENS, "2").expect("held");
+        assert_eq!(g.data.get(), r#"[["p",{"state":"copying"}]]"#);
+        assert!(matches!(g.prepared, Prepared::Opens(Ok(_))));
+        // Two pushes racing: generation 1 arrives after 2 and is not taken; the reply names 2.
+        let late = feeds.put(HOME_OPENS, &opens("1", "[]")).expect("reply");
+        assert_eq!(late["generation"], json!("2"));
+        assert_eq!(held(&feeds, HOME_OPENS).as_deref(), Some("2"));
+        assert_eq!(feeds.current(HOME_OPENS, "1").err(), Some(Decline::Stale));
+        // The same generation again is idempotent; with other bytes it is refused (immutable).
+        assert!(
+            feeds
+                .put(HOME_OPENS, &opens("2", r#"[["p",{"state":"copying"}]]"#))
+                .is_ok()
+        );
+        assert_eq!(
+            feeds.put(HOME_OPENS, &opens("2", "[]")).err(),
+            Some(Decline::Shape)
+        );
+        assert!(feeds.put(HOME_OPENS, &opens("3", "[]")).is_ok());
+        assert_eq!(held(&feeds, HOME_OPENS).as_deref(), Some("3"));
+        assert_eq!(feeds.current(HOME_OPENS, "2").err(), Some(Decline::Stale));
+        // Home sources need numeric generations and known names; a prepared decline is held and reported.
+        assert_eq!(
+            feeds.put(HOME_OPENS, &opens("g4", "[]")).err(),
+            Some(Decline::Shape)
+        );
+        assert_eq!(
+            feeds.put("home-dashboard-linux-0", &opens("1", "{}")).err(),
+            Some(Decline::Shape)
+        );
+        assert!(feeds.put(HOME_ANTIGRAVITY, &opens("1", "null")).is_ok());
+        assert_eq!(
+            feeds
+                .status(HOME_ANTIGRAVITY)
+                .map(|v| v["declined"].clone()),
+            Ok(json!("shape"))
+        );
+        assert_eq!(
+            feeds.current("home-dashboard-mac-0", "1").err(),
+            Some(Decline::Stale)
         );
     }
 }
