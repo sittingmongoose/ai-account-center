@@ -272,6 +272,7 @@ const instance = await startServer({
 });
 const base = `http://127.0.0.1:${(instance.server.address() as any).port}`;
 const { apiRoutes } = await import('../../src/web-server/routes');
+const codexSummary = await import('../../src/codex-auth/codex-auth-dashboard-service');
 const { pairDevice } = await import('../../src/web-server/services/dashboard-device-store');
 
 const hubModule = await import('../../src/web-server/usage-hub/usage-hub-key-store');
@@ -472,6 +473,9 @@ try {
         continue;
       }
       const method = route.method === 'ALL' ? 'POST' : route.method;
+      // The Codex summary's 5-second memo would otherwise answer /api/codex/profiles from the
+      // quota route's read, making the Rust reply count depend on timing.
+      codexSummary.invalidateCodexAuthProfilesCache();
       const response = await fetch(base + url, {
         method,
         headers,
@@ -525,16 +529,19 @@ try {
   if (rustMode === 'on')
     assert.equal(
       instance.rustService.stats.served,
-      15,
-      'must actually serve health/settings/diag and the session/bar visibility, preferences and registry reads from Rust after TS role guards'
+      27,
+      'must actually serve health/settings/diag, the session/bar visibility, preferences and registry reads, and the session/bar (and device-scoped) profile reads from Rust after TS role guards'
     );
   if (rustMode === 'shadow') {
     // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
     // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
-    // compared; the Analytics stub stops at its query check before any Rust composition.
-    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)
+    // compared; the Analytics stub stops at its query check before any Rust composition. M3 part 4
+    // adds twelve profile reads: session/bar/device Claude desktop profiles and Antigravity
+    // profiles, session/bar Codex profiles and quotas and Antigravity quotas (the usage stub
+    // stops at its platform check).
+    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 30; i++)
       await new Promise((r) => setTimeout(r, 10));
-    assert.equal(instance.rustService.stats.shadowed, 18);
+    assert.equal(instance.rustService.stats.shadowed, 30);
     assert.equal(instance.rustService.stats.served, 0);
     assert.equal(instance.rustService.stats.differences, 0);
   }

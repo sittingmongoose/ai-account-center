@@ -149,6 +149,37 @@ const MAX_PREFERENCES_BYTES = 64 * 1024;
 const logger = createLogger('dashboard-preferences');
 let warned = false;
 
+/**
+ * The text of a preferences file through one descriptor, opened without following a symlink
+ * and without blocking, once `fstat` proves a regular file of at most MAX_PREFERENCES_BYTES;
+ * at most that plus one byte is read. A FIFO or a larger file swapped in after the callers'
+ * `lstat` throws here, which they read as unreadable, instead of blocking or over-reading.
+ */
+function readPreferencesFile(file: string): string {
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  const fd = fs.openSync(
+    file,
+    process.platform === 'win32' ? O_RDONLY : O_RDONLY | O_NOFOLLOW | O_NONBLOCK
+  );
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_PREFERENCES_BYTES)
+      throw new ConfigError('Dashboard preferences file changed while it was read.');
+    const buffer = Buffer.alloc(MAX_PREFERENCES_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const read = fs.readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) break;
+      length += read;
+    }
+    if (length > MAX_PREFERENCES_BYTES)
+      throw new ConfigError('Dashboard preferences file changed while it was read.');
+    return buffer.toString('utf8', 0, length);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function warnCorrupt(): void {
   if (warned) return;
   warned = true;
@@ -169,7 +200,7 @@ export function readDashboardPreferences(ccsDir = getCcsDir()): DashboardPrefere
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_PREFERENCES_BYTES)
       return primary;
-    const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const value: unknown = JSON.parse(readPreferencesFile(file));
     if (!value || typeof value !== 'object' || Array.isArray(value)) return primary;
     const extra = value as Record<string, unknown>;
     if (Object.keys(extra).some((key) => key !== 'usageLogSources')) return primary;
@@ -198,7 +229,7 @@ function readPrimaryPreferences(ccsDir: string): DashboardPreferences {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) return defaultDashboardPreferences();
     if (stat.size <= MAX_PREFERENCES_BYTES) {
-      let value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+      let value: unknown = JSON.parse(readPreferencesFile(file));
       // Older releases accepted remote JSONL roots. Migrate only those entries;
       // strict write validation must never reset unrelated saved preferences.
       if (value && typeof value === 'object' && !Array.isArray(value)) {

@@ -188,16 +188,28 @@ function _hasStructurallyValidIdToken(authJsonPath: string): boolean {
 
 // ── Active resolution ───────────────────────────────────────────────────────
 
-function resolveActive(registry: CodexProfileData): CodexAuthActiveProfile | null {
-  const instancesDir = getCodexInstancesDir();
+/**
+ * The owner reads behind one summary: the registry, the decoded display-safe login fields,
+ * the live login's saved profile and the two environment overrides. Credentials and tokens are
+ * read and discarded while these are built; none of them is kept here.
+ */
+export interface CodexAuthProfilesFacts {
+  instancesDir: string;
+  env: { codexHome: string | null; profile: string | null };
+  registry: { default: string | null; names: string[] };
+  profiles: CodexAuthProfileEntry[];
+  activated: CodexAuthActivatedProfile | null;
+}
+
+function resolveActive(facts: CodexAuthProfilesFacts): CodexAuthActiveProfile | null {
+  const { instancesDir, registry } = facts;
 
   // Precedence 1: explicit $CODEX_HOME set by env (ccsxp, manual)
-  const codexHome = (process.env.CODEX_HOME ?? '').trim();
+  const codexHome = (facts.env.codexHome ?? '').trim();
   if (codexHome) {
     // Attempt reverse-map: does any registered profile's codexHome match?
     const matchedName =
-      Object.keys(registry.profiles).find((name) => path.join(instancesDir, name) === codexHome) ??
-      null;
+      registry.names.find((name) => path.join(instancesDir, name) === codexHome) ?? null;
     return {
       name: matchedName,
       source: 'explicit-codex-home',
@@ -206,9 +218,9 @@ function resolveActive(registry: CodexProfileData): CodexAuthActiveProfile | nul
   }
 
   // Precedence 2: $CCS_CODEX_PROFILE env var
-  const profileEnv = (process.env.CCS_CODEX_PROFILE ?? '').trim();
+  const profileEnv = (facts.env.profile ?? '').trim();
   if (profileEnv) {
-    if (!Object.prototype.hasOwnProperty.call(registry.profiles, profileEnv)) {
+    if (!registry.names.includes(profileEnv)) {
       logger.warn(
         'codex-auth.dashboard.stale-env-profile',
         'Ignoring CCS_CODEX_PROFILE because it is not registered',
@@ -278,9 +290,8 @@ function resolveActivatedName(
 
 // ── Core builder ────────────────────────────────────────────────────────────
 
-async function buildSummary(codexHome: string): Promise<CodexAuthProfilesSummary> {
+async function readSummaryFacts(codexHome: string): Promise<CodexAuthProfilesFacts> {
   const registry = readRegistry();
-  const active = resolveActive(registry);
 
   const profiles: CodexAuthProfileEntry[] = Object.entries(registry.profiles).map(
     ([name, meta]) => {
@@ -302,10 +313,26 @@ async function buildSummary(codexHome: string): Promise<CodexAuthProfilesSummary
     : null;
 
   return {
-    active,
-    activated,
-    default: registry.default,
+    instancesDir: getCodexInstancesDir(),
+    env: {
+      codexHome: process.env.CODEX_HOME ?? null,
+      profile: process.env.CCS_CODEX_PROFILE ?? null,
+    },
+    registry: { default: registry.default, names: Object.keys(registry.profiles) },
     profiles,
+    activated,
+  };
+}
+
+/** The summary from its owner reads (pure apart from the stale-profile warning). */
+export function composeCodexAuthProfilesSummary(
+  facts: CodexAuthProfilesFacts
+): CodexAuthProfilesSummary {
+  return {
+    active: resolveActive(facts),
+    activated: facts.activated,
+    default: facts.registry.default,
+    profiles: facts.profiles,
   };
 }
 
@@ -316,7 +343,11 @@ async function buildSummary(codexHome: string): Promise<CodexAuthProfilesSummary
  * Tokens are never included in the returned object.
  */
 export async function getCodexAuthProfilesSummary(
-  codexHome: string = path.join(os.homedir(), '.codex')
+  codexHome: string = path.join(os.homedir(), '.codex'),
+  compose: (
+    facts: CodexAuthProfilesFacts
+  ) =>
+    CodexAuthProfilesSummary | Promise<CodexAuthProfilesSummary> = composeCodexAuthProfilesSummary
 ): Promise<CodexAuthProfilesSummary> {
   const now = Date.now();
   let liveSignature = 'missing';
@@ -330,7 +361,7 @@ export async function getCodexAuthProfilesSummary(
   if (cache && cache.expiresAt > now && cache.registrySignature === registrySignature) {
     return cache.value;
   }
-  const value = await buildSummary(codexHome);
+  const value = await compose(await readSummaryFacts(codexHome));
   cache = { value, expiresAt: now + TTL_MS, registrySignature };
   return value;
 }

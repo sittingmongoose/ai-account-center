@@ -113,33 +113,66 @@ function readCachedSample(
   };
 }
 
-async function fetchProfileUsage(
+/**
+ * What one profile's usage read found: no launcher for this platform, a remote read that
+ * failed, or the remote history text (null when the desktop app has none yet).
+ */
+export type ClaudeDesktopHistoryRead =
+  { state: 'unconfigured' } | { state: 'failed' } | { state: 'read'; history: string | null };
+
+/** The owner reads behind one usage answer; composing them reads nothing more. */
+export interface ClaudeDesktopUsageFacts {
+  platform: ClaudeDesktopPlatform;
+  fetchedAt: string;
+  profiles: Array<{
+    profile: Pick<ClaudeDesktopProfile, 'id' | 'email'>;
+    read: ClaudeDesktopHistoryRead;
+  }>;
+}
+
+async function readProfileHistory(
   profile: ClaudeDesktopProfile,
-  platform: ClaudeDesktopPlatform,
-  fetchedAt: string
-): Promise<ClaudeDesktopProfileUsage> {
-  const identity = {
-    ...(profile.id === undefined ? {} : { id: profile.id }),
-    email: profile.email,
-    cached: true as const,
-    fetchedAt,
-  };
+  platform: ClaudeDesktopPlatform
+): Promise<ClaudeDesktopHistoryRead> {
   const launcher = profile[platform];
-  if (!launcher?.sshHost || !launcher.profilePath) {
-    return { ...identity, status: 'unavailable', sampledAt: null, utilization: {} };
-  }
+  if (!launcher?.sshHost || !launcher.profilePath) return { state: 'unconfigured' };
   try {
-    const contents = await readClaudeDesktopUsageHistory(launcher, platform);
-    return { ...identity, ...readCachedSample(contents) };
+    return { state: 'read', history: await readClaudeDesktopUsageHistory(launcher, platform) };
   } catch {
     // Remote errors may contain paths or SSH details; only expose a safe status.
-    return { ...identity, status: 'unavailable', sampledAt: null, utilization: {} };
+    return { state: 'failed' };
   }
 }
 
-/** Read desktop-owned cached usage without requesting live usage or credentials. */
+/** The usage answer from its owner reads (pure; the M3 Rust service ports it). */
+export function composeClaudeDesktopUsage(facts: ClaudeDesktopUsageFacts): ClaudeDesktopUsage {
+  const { platform, fetchedAt } = facts;
+  return {
+    platform,
+    fetchedAt,
+    profiles: facts.profiles.map(({ profile, read }) => {
+      const identity = {
+        ...(profile.id === undefined ? {} : { id: profile.id }),
+        email: profile.email,
+        cached: true as const,
+        fetchedAt,
+      };
+      return read.state === 'read'
+        ? { ...identity, ...readCachedSample(read.history) }
+        : { ...identity, status: 'unavailable' as const, sampledAt: null, utilization: {} };
+    }),
+  };
+}
+
+/**
+ * Read desktop-owned cached usage without requesting live usage or credentials. `compose`
+ * turns the owner reads into the answer; the route may compose through the M3 Rust service.
+ */
 export async function getClaudeDesktopUsage(
-  platform: ClaudeDesktopPlatform
+  platform: ClaudeDesktopPlatform,
+  compose: (
+    facts: ClaudeDesktopUsageFacts
+  ) => ClaudeDesktopUsage | Promise<ClaudeDesktopUsage> = composeClaudeDesktopUsage
 ): Promise<ClaudeDesktopUsage> {
   const scope = getCcsDir();
   const profiles = await listClaudeDesktopProfiles();
@@ -156,8 +189,11 @@ export async function getClaudeDesktopUsage(
 
   const fetchedAt = new Date().toISOString();
   const promise = Promise.all(
-    profiles.map((profile) => fetchProfileUsage(profile, platform, fetchedAt))
-  ).then((usage) => ({ platform, fetchedAt, profiles: usage }));
+    profiles.map(async (profile) => ({
+      profile: { ...(profile.id === undefined ? {} : { id: profile.id }), email: profile.email },
+      read: await readProfileHistory(profile, platform),
+    }))
+  ).then((reads) => compose({ platform, fetchedAt, profiles: reads }));
   const entry: CacheEntry = { expiresAt: Infinity, promise };
   cache.set(key, entry);
   while (cache.size > MAX_CACHE_ENTRIES) {
@@ -165,8 +201,14 @@ export async function getClaudeDesktopUsage(
     if (oldestKey === undefined) break;
     cache.delete(oldestKey);
   }
-  void promise.then(() => {
-    if (cache.get(key) === entry) entry.expiresAt = Date.now() + CACHE_TTL_MS;
-  });
+  void promise.then(
+    () => {
+      if (cache.get(key) === entry) entry.expiresAt = Date.now() + CACHE_TTL_MS;
+    },
+    () => {
+      // A composition that failed is never served from the cache.
+      if (cache.get(key) === entry) cache.delete(key);
+    }
+  );
   return promise;
 }

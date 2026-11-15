@@ -1,0 +1,912 @@
+//! GET /api/antigravity/profiles and /api/antigravity/profiles/quotas.
+//!
+//! [`inventory`] ports `publicInventory` (`src/web-server/routes/antigravity-routes.ts`) with
+//! `publicRuntimeServiceProblem` and `isNativeVersion`; [`quotas`] ports `publicQuotas`:
+//! `publicDashboardAccount`, `poolWindow`, `displayText`, `email`, `timestamp` and
+//! `antigravityPlanDisplay` (`src/antigravity/usage-normalization.ts`, `plan.ts`) with
+//! `markPassedResets` (`account-window-reset.ts`). Inputs are the runtime's inventory and
+//! accounts as TS read them, in the ISO-only presentation envelope: `Date.parse` epochs and
+//! `toISOString` words come from its facts. Every input TS throws on (a 500) is a [`Refuse`].
+use crate::js::{ascii_word, date_parse, email_shape, has_control, is_true, trim};
+use crate::spread::{Admit, Refuse, req, truthy, utf16_len};
+use aac_status::read_context::{Context, Envelope, js_whitespace};
+use serde_json::{Map, Value, json};
+
+type Object = Map<String, Value>;
+
+/// 2000-01-01T00:00:00Z and 2201-01-01T00:00:00Z: `timestamp` keeps UTC years 2000..=2200.
+const YEAR_2000: i64 = 946_684_800_000;
+const YEAR_2201: i64 = 7_289_654_400_000;
+/// `Date.parse('2026-11-02T00:00:00Z')`, plan.ts `MODEL_REMOVAL_AT`.
+const MODEL_REMOVAL_AT: f64 = 1_793_577_600_000.0;
+const MAX_WINDOWS: usize = 256;
+const MAX_MODEL_IDS: usize = 64;
+
+/// `displayText`'s secret pattern, `/(?:bearer\s|dca:|sk[-_]|eyJ[A-Za-z0-9_-]{8}|https?:\/\/|
+/// [{}]|access_token|refresh_token|client_secret)/i`. Without the `u` flag, case folding maps
+/// no non-ASCII character onto an ASCII letter, so ASCII lowercasing decides it exactly.
+fn secret(text: &str) -> bool {
+    let lower: Vec<char> = text.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let at = |index: usize, word: &str| {
+        word.chars()
+            .enumerate()
+            .all(|(offset, c)| lower.get(index + offset) == Some(&c))
+    };
+    (0..lower.len()).any(|i| {
+        matches!(lower[i], '{' | '}')
+            || [
+                "dca:",
+                "sk-",
+                "sk_",
+                "http://",
+                "https://",
+                "access_token",
+                "refresh_token",
+                "client_secret",
+            ]
+            .iter()
+            .any(|word| at(i, word))
+            || (at(i, "bearer") && lower.get(i + 6).is_some_and(|c| js_whitespace(*c)))
+            || (at(i, "eyj")
+                && lower.len() >= i + 11
+                && lower[i + 3..i + 11].iter().all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-'
+                }))
+    })
+}
+
+/// `displayText(value, maximum)`.
+fn display_text(value: Option<&Value>, maximum: usize) -> Option<String> {
+    let text = value?.as_str()?;
+    if utf16_len(text) > maximum || has_control(text) || secret(text) {
+        return None;
+    }
+    let trimmed = trim(text);
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn text_or_null(text: Option<String>) -> Value {
+    text.map_or(Value::Null, Value::String)
+}
+
+/// `email(value)`.
+fn email(value: Option<&Value>) -> Option<String> {
+    display_text(value, 254).filter(|candidate| email_shape(candidate))
+}
+
+/// `safeId`.
+fn safe_id(value: Option<&Value>) -> Option<&str> {
+    value?.as_str().filter(|id| {
+        ascii_word(
+            id,
+            |b| b.is_ascii_alphanumeric(),
+            |b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-',
+            63,
+        )
+    })
+}
+
+/// `safeProviderId` (`max` 160, extra `_.:/@-`) and `safePoolId` (`max` 128, extra `._:@/-`).
+fn safe_key(value: Option<&Value>, max: usize) -> Option<&str> {
+    let text = value?.as_str()?;
+    let shaped = ascii_word(
+        text,
+        |b| b.is_ascii_alphanumeric(),
+        |b| b.is_ascii_alphanumeric() || b"_.:/@-".contains(&b),
+        max - 1,
+    );
+    (shaped && display_text(value, max).is_some()).then_some(text)
+}
+
+/// `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/`.
+fn timestamp_shape(text: &str) -> bool {
+    let b = text.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        b.get(range)
+            .is_some_and(|s| s.iter().all(u8::is_ascii_digit))
+    };
+    if b.len() < 20
+        || !digits(0..4)
+        || b[4] != b'-'
+        || !digits(5..7)
+        || b[7] != b'-'
+        || !digits(8..10)
+        || b[10] != b'T'
+        || !digits(11..13)
+        || b[13] != b':'
+        || !digits(14..16)
+        || b[16] != b':'
+        || !digits(17..19)
+    {
+        return false;
+    }
+    let mut at = 19;
+    if b[at] == b'.' {
+        let start = at + 1;
+        at = start;
+        while at < b.len() && b[at].is_ascii_digit() {
+            at += 1;
+        }
+        if at == start {
+            return false;
+        }
+    }
+    match b.get(at) {
+        Some(b'Z') => at + 1 == b.len(),
+        Some(b'+' | b'-') => {
+            at + 6 == b.len()
+                && digits(at + 1..at + 3)
+                && b[at + 3] == b':'
+                && digits(at + 4..at + 6)
+        }
+        _ => false,
+    }
+}
+
+/// `timestamp(value)`: the `toISOString` word and its epoch, `None` for its null.
+fn timestamp(ctx: &Context, value: Option<&Value>) -> Admit<Option<(String, i64)>> {
+    let Some(Value::String(text)) = value else {
+        return Ok(None);
+    };
+    if utf16_len(text) > 40 || !timestamp_shape(text) {
+        return Ok(None);
+    }
+    let Some(ms) = req(date_parse(ctx, text))? else {
+        return Ok(None);
+    };
+    if !(YEAR_2000..YEAR_2201).contains(&ms) {
+        return Ok(None);
+    }
+    let word = ctx.iso(Some(ms));
+    Ok(Some((req(word.as_str())?.to_owned(), ms)))
+}
+
+fn time_value(time: Option<&(String, i64)>) -> Value {
+    time.map_or(Value::Null, |(word, _)| json!(word))
+}
+
+/// `nonnegative(value)`: the number itself (its JSON spelling is kept).
+fn nonnegative(value: Option<&Value>) -> Option<&Value> {
+    value.filter(|v| v.as_f64().is_some_and(|n| n.is_finite() && n >= 0.0))
+}
+
+fn percent(value: Option<&Value>) -> Option<&Value> {
+    nonnegative(value).filter(|v| v.as_f64().is_some_and(|n| n <= 100.0))
+}
+
+fn or_null(value: Option<&Value>) -> Value {
+    value.cloned().unwrap_or(Value::Null)
+}
+
+/// `100 - percent`, or null.
+fn complement(value: Option<&Value>) -> Value {
+    value
+        .and_then(Value::as_f64)
+        .map_or(Value::Null, |n| json!(100.0 - n))
+}
+
+/// `poolWindow(value)` with its reset epoch; `None` is a window it drops.
+fn pool_window(ctx: &Context, value: &Value) -> Admit<Option<(Object, Option<i64>)>> {
+    let Some(window) = value.as_object() else {
+        return Ok(None);
+    };
+    let Some(key) = safe_key(window.get("key"), 160) else {
+        return Ok(None);
+    };
+    let used_percent = percent(window.get("usedPercent"));
+    let remaining_percent = percent(window.get("remainingPercent"));
+    let used = nonnegative(window.get("used"));
+    let limit = nonnegative(window.get("limit"));
+    let remaining = nonnegative(window.get("remaining"));
+    let reset_at = timestamp(ctx, window.get("resetAt"))?;
+    let expires_at = timestamp(ctx, window.get("expiresAt"))?;
+    let enabled = window.get("enabled").filter(|v| v.is_boolean());
+    let unlimited = window.get("unlimited").filter(|v| v.is_boolean());
+    if used_percent.is_none()
+        && remaining_percent.is_none()
+        && used.is_none()
+        && limit.is_none()
+        && remaining.is_none()
+        && reset_at.is_none()
+        && expires_at.is_none()
+        && unlimited.is_none()
+        && enabled.is_none()
+    {
+        return Ok(None);
+    }
+    // `String(value.kind)`: an array could join to one of the words; that coercion is TS's.
+    let kind = match window.get("kind") {
+        Some(Value::Array(_)) => return Err(Refuse),
+        Some(Value::String(kind))
+            if ["rate_limit", "balance", "spend", "extra_usage"].contains(&kind.as_str()) =>
+        {
+            json!(kind)
+        }
+        _ => json!("rate_limit"),
+    };
+    let minutes = nonnegative(window.get("windowMinutes"))
+        .filter(|v| v.as_f64().is_some_and(|n| n > 0.0 && n <= 525_600.0));
+    let mut model_ids: Vec<&str> = Vec::new();
+    if let Some(Value::Array(ids)) = window.get("modelIds") {
+        for id in ids {
+            if let Some(id) = safe_key(Some(id), 160)
+                && !model_ids.contains(&id)
+            {
+                model_ids.push(id);
+            }
+        }
+        model_ids.truncate(MAX_MODEL_IDS);
+    }
+    let mut out = Object::new();
+    out.insert("key".into(), json!(key));
+    out.insert(
+        "label".into(),
+        if key == "google-ai-credits" {
+            json!("AI credits (overage)")
+        } else {
+            json!(display_text(window.get("label"), 80).unwrap_or_else(|| "Model quota".into()))
+        },
+    );
+    out.insert(
+        "usedPercent".into(),
+        used_percent
+            .cloned()
+            .unwrap_or_else(|| complement(remaining_percent)),
+    );
+    out.insert(
+        "remainingPercent".into(),
+        remaining_percent
+            .cloned()
+            .unwrap_or_else(|| complement(used_percent)),
+    );
+    out.insert("resetAt".into(), time_value(reset_at.as_ref()));
+    out.insert("windowMinutes".into(), or_null(minutes));
+    out.insert("used".into(), or_null(used));
+    out.insert("limit".into(), or_null(limit));
+    out.insert(
+        "unit".into(),
+        text_or_null(display_text(window.get("unit"), 24)),
+    );
+    out.insert("kind".into(), kind);
+    // Own members: TS refuses to send an own member whose value is undefined.
+    if window.contains_key("remaining") {
+        out.insert("remaining".into(), or_null(remaining));
+    }
+    if window.contains_key("expiresAt") {
+        out.insert("expiresAt".into(), time_value(expires_at.as_ref()));
+    }
+    if let Some(enabled) = enabled {
+        out.insert("enabled".into(), enabled.clone());
+    }
+    if let Some(unlimited) = unlimited {
+        out.insert("unlimited".into(), unlimited.clone());
+    }
+    if let Some(pool) = safe_key(window.get("poolId"), 128) {
+        out.insert("poolId".into(), json!(pool));
+        if let Some(Value::String(source)) = window.get("poolIdSource")
+            && (source == "provider-id" || source == "provider-bucket-membership")
+        {
+            out.insert("poolIdSource".into(), json!(source));
+        }
+        if let Some(label) = display_text(window.get("poolLabel"), 80) {
+            out.insert("poolLabel".into(), json!(label));
+        }
+    }
+    if !model_ids.is_empty() {
+        out.insert("modelIds".into(), json!(model_ids));
+    }
+    Ok(Some((out, reset_at.map(|(_, ms)| ms))))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Models {
+    Consumer,
+    PaidConsumer,
+    UltraConsumer,
+    Gemini,
+    None,
+}
+
+struct Plan {
+    class: &'static str,
+    label: &'static str,
+    aliases: &'static [&'static str],
+    policy: &'static str,
+    summary: &'static str,
+    models: Models,
+    credits: bool,
+}
+
+const DUAL_WINDOW: &str = "Refreshes every 5 hours up to a weekly limit.";
+const NO_QUOTA: &str = "This plan does not include Antigravity coding quota.";
+const CLI_QUOTA: &str = "This plan includes separate Gemini CLI quota that AAC does not read; no Antigravity coding quota.";
+const POOLED: &str = "Gemini models use a rolling 7-day shared project credit pool.";
+const GEMINI_MODELS: [&str; 4] = [
+    "Gemini 3.8 Flash",
+    "Gemini 3.7 Flash",
+    "Gemini 3.6 Flash",
+    "Gemini 3.1 Pro",
+];
+const RETIRING_MODELS: [&str; 3] = ["Claude Sonnet 4.6", "Claude Opus 4.6", "GPT-OSS-120B"];
+const PAID_CLAUDE_MODELS: [&str; 2] = ["Claude Sonnet 5.5", "Claude Opus 5.5"];
+const PRO_GEMINI_MODELS: [&str; 2] = ["Gemini 4 Argon", "Gemini 4 Hydrogen"];
+
+/// plan.ts `PLANS`, in its key order. `tests/spec/profile-read-parity.ts` compares every label
+/// and alias (and respellings) with the running TS `antigravityPlanDisplay`.
+const PLANS: &[Plan] = &[
+    Plan {
+        class: "free",
+        label: "Free",
+        aliases: &["free-tier", "Antigravity Starter Quota"],
+        policy: "weekly",
+        summary: "Weekly quota only; no 5-hour refresh.",
+        models: Models::Consumer,
+        credits: false,
+    },
+    Plan {
+        class: "plus",
+        label: "Google AI Plus",
+        aliases: &["plus"],
+        policy: "weekly",
+        summary: "Weekly quota only; no 5-hour refresh.",
+        models: Models::Consumer,
+        credits: false,
+    },
+    Plan {
+        class: "pro-trial",
+        label: "Google AI Pro (trial)",
+        aliases: &["pro-trial", "Google AI Pro trial"],
+        policy: "five-hour-weekly",
+        summary: DUAL_WINDOW,
+        models: Models::Consumer,
+        credits: false,
+    },
+    Plan {
+        class: "pro",
+        label: "Google AI Pro",
+        aliases: &["pro", "Gemini Code Assist in Google One AI Pro"],
+        policy: "five-hour-weekly",
+        summary: "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+        models: Models::PaidConsumer,
+        credits: true,
+    },
+    Plan {
+        class: "ultra",
+        label: "Google AI Ultra",
+        aliases: &["ultra", "Gemini Code Assist in Google One AI Ultra"],
+        policy: "five-hour-weekly",
+        summary: DUAL_WINDOW,
+        models: Models::UltraConsumer,
+        credits: true,
+    },
+    Plan {
+        class: "ultra-5x",
+        label: "Google AI Ultra 5x",
+        aliases: &["ultra-5x"],
+        policy: "five-hour-weekly",
+        summary: "5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.",
+        models: Models::UltraConsumer,
+        credits: true,
+    },
+    Plan {
+        class: "ultra-20x",
+        label: "Google AI Ultra 20x",
+        aliases: &["ultra-20x"],
+        policy: "five-hour-weekly",
+        summary: "20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.",
+        models: Models::UltraConsumer,
+        credits: true,
+    },
+    Plan {
+        class: "enterprise-standard",
+        label: "Gemini Enterprise Standard",
+        aliases: &[],
+        policy: "pooled-7d",
+        summary: POOLED,
+        models: Models::Gemini,
+        credits: false,
+    },
+    Plan {
+        class: "enterprise-plus",
+        label: "Gemini Enterprise Plus",
+        aliases: &[],
+        policy: "pooled-7d",
+        summary: POOLED,
+        models: Models::Gemini,
+        credits: false,
+    },
+    Plan {
+        class: "enterprise-emerging",
+        label: "Gemini Enterprise Standard Emerging Market",
+        aliases: &[],
+        policy: "none",
+        summary: "Antigravity is available, but this plan includes no bundled coding quota.",
+        models: Models::Gemini,
+        credits: false,
+    },
+    Plan {
+        class: "enterprise-payg",
+        label: "Gemini Enterprise Pay-as-you-go",
+        aliases: &[],
+        policy: "metered",
+        summary: "Gemini models use metered Antigravity consumption.",
+        models: Models::Gemini,
+        credits: false,
+    },
+    Plan {
+        class: "enterprise-business",
+        label: "Gemini Enterprise Business",
+        aliases: &[],
+        policy: "none",
+        summary: NO_QUOTA,
+        models: Models::Gemini,
+        credits: false,
+    },
+    Plan {
+        class: "code-assist-standard",
+        label: "Gemini Code Assist Standard",
+        aliases: &[],
+        policy: "none",
+        summary: CLI_QUOTA,
+        models: Models::Gemini,
+        credits: false,
+    },
+    Plan {
+        class: "code-assist-enterprise",
+        label: "Gemini Code Assist Enterprise",
+        aliases: &[],
+        policy: "none",
+        summary: CLI_QUOTA,
+        models: Models::Gemini,
+        credits: false,
+    },
+    Plan {
+        class: "workspace",
+        label: "Google Workspace",
+        aliases: &[
+            "Google Workspace Business Starter",
+            "Google Workspace Business Standard",
+            "Google Workspace Business Plus",
+            "Google Workspace Enterprise Starter",
+            "Google Workspace Enterprise Standard",
+            "Google Workspace Enterprise Plus",
+            "Workspace Business Starter",
+            "Workspace Business Standard",
+            "Workspace Business Plus",
+            "Workspace Enterprise Starter",
+            "Workspace Enterprise Standard",
+            "Workspace Enterprise Plus",
+        ],
+        policy: "none",
+        summary: NO_QUOTA,
+        models: Models::None,
+        credits: false,
+    },
+];
+
+/// plan.ts `key(value)`: `toLowerCase`, `[()_-]` to a space, whitespace runs to one space, trim.
+/// Of all non-ASCII characters only U+212A KELVIN SIGN lowercases to ASCII ('k'); any other one
+/// stays non-ASCII and so can never equal an (ASCII) alias key.
+fn plan_key(value: &str) -> String {
+    let mut out = String::new();
+    let mut space = false;
+    for c in value.chars() {
+        let c = match c {
+            '\u{212a}' => 'k',
+            '(' | ')' | '_' | '-' => ' ',
+            c if js_whitespace(c) => ' ',
+            c => c.to_ascii_lowercase(),
+        };
+        if c == ' ' {
+            space = true;
+            continue;
+        }
+        if space && !out.is_empty() {
+            out.push(' ');
+        }
+        space = false;
+        out.push(c);
+    }
+    out
+}
+
+/// plan.ts `known(value)`: the alias map is filled in `PLANS` order, so a later entry wins.
+fn known(value: &str) -> Option<&'static Plan> {
+    let key = plan_key(value);
+    let mut found = None;
+    for plan in PLANS {
+        if std::iter::once(plan.label)
+            .chain(plan.aliases.iter().copied())
+            .any(|alias| plan_key(alias) == key)
+        {
+            found = Some(plan);
+        }
+    }
+    found
+}
+
+/// `antigravityPlanDisplay(plan, sampledAt)` without a reported plan: the `plan` member and the
+/// optional `antigravityPlan`. `clock` is TS's `Date.now()` for a reading without a time.
+fn plan_display(plan: Option<String>, sampled: Option<i64>, clock: f64) -> (Value, Option<Value>) {
+    let Some(definition) = plan.as_deref().and_then(known) else {
+        return (text_or_null(plan), None);
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let observed = sampled.map_or(clock, |ms| ms as f64);
+    let before_removal = observed < MODEL_REMOVAL_AT;
+    let mut third_party: Vec<&str> = Vec::new();
+    if matches!(
+        definition.models,
+        Models::PaidConsumer | Models::UltraConsumer
+    ) {
+        third_party.extend(PAID_CLAUDE_MODELS);
+    }
+    if before_removal && matches!(definition.models, Models::Consumer | Models::PaidConsumer) {
+        third_party.extend(RETIRING_MODELS);
+    }
+    if before_removal && definition.models == Models::UltraConsumer {
+        third_party.push("GPT-OSS-120B");
+    }
+    let mut models: Vec<&str> = Vec::new();
+    if definition.models != Models::None {
+        models.extend(GEMINI_MODELS);
+    }
+    if definition.class == "pro" {
+        models.extend(PRO_GEMINI_MODELS);
+    }
+    models.extend(third_party.iter().copied());
+    (
+        json!(definition.label),
+        Some(json!({
+            "class": definition.class,
+            "quotaPolicy": definition.policy,
+            "summary": definition.summary,
+            "models": models,
+            "thirdPartyModels": !third_party.is_empty(),
+            "creditsOverage": definition.credits,
+        })),
+    )
+}
+
+/// `publicDashboardAccount(value)` then `markPassedResets(account, now)`.
+fn account(ctx: &Context, value: &Value, now: f64, clock: f64) -> Admit<Value> {
+    let value = req(value.as_object())?;
+    let capabilities = value.get("capabilities").and_then(Value::as_object);
+    let id = req(safe_id(
+        capabilities.and_then(|c| c.get("antigravityProfileId")),
+    ))?;
+    let email = req(email(value.get("email")))?;
+    if value.get("id").and_then(Value::as_str) != Some(&format!("antigravity:profile:{id}"))
+        || value.get("provider").and_then(Value::as_str) != Some("antigravity")
+        || value.get("platform").and_then(Value::as_str) != Some("ubuntu")
+    {
+        return Err(Refuse);
+    }
+    let capabilities = req(capabilities)?;
+    let text = |key: &str| value.get(key).and_then(Value::as_str);
+    let status = text("status")
+        .filter(|s| ["ok", "cached", "needs_sign_in", "unavailable", "error"].contains(s))
+        .unwrap_or("error");
+    let identity_unbound = status == "error" && text("statusReason") == Some("identity_unbound");
+    let fetched_at = timestamp(ctx, value.get("fetchedAt"))?;
+    let sampled_at = timestamp(ctx, value.get("sampledAt"))?;
+    let observed = sampled_at
+        .as_ref()
+        .or(fetched_at.as_ref())
+        .map(|(_, ms)| *ms);
+    let (plan, plan_detail) = plan_display(display_text(value.get("plan"), 80), observed, clock);
+    let cache_reason = text("cacheReason");
+    let host_ids = match capabilities.get("antigravityHostIds") {
+        None | Some(Value::Null) => false,
+        Some(Value::Array(ids)) => ids.iter().any(|id| id.as_str() == Some("ubuntu")),
+        Some(Value::String(ids)) => ids.contains("ubuntu"),
+        // A value without an `includes` method makes TS throw.
+        Some(_) => return Err(Refuse),
+    };
+    let mut windows = Vec::new();
+    if let Some(Value::Array(list)) = value.get("windows") {
+        for window in list.iter().take(MAX_WINDOWS) {
+            if let Some((mut window, reset)) = pool_window(ctx, window)? {
+                // readingPredatesReset(resetAt, account.sampledAt, now); a window has no sampledAt.
+                #[allow(clippy::cast_precision_loss)]
+                let passed = reset.is_some_and(|reset| {
+                    reset as f64 <= now
+                        && sampled_at
+                            .as_ref()
+                            .is_none_or(|(_, sampled)| *sampled < reset)
+                });
+                if passed {
+                    window.insert("resetPassed".into(), json!(true));
+                }
+                windows.push(Value::Object(window));
+            }
+        }
+    }
+    let mut out = Object::new();
+    out.insert("id".into(), json!(format!("antigravity:profile:{id}")));
+    out.insert("provider".into(), json!("antigravity"));
+    out.insert("providerLabel".into(), json!("Antigravity"));
+    out.insert("label".into(), json!(email));
+    out.insert("email".into(), json!(email));
+    out.insert("plan".into(), plan);
+    if let Some(detail) = plan_detail {
+        out.insert("antigravityPlan".into(), detail);
+    }
+    out.insert("platform".into(), json!("ubuntu"));
+    out.insert("source".into(), json!("Antigravity saved login on Ubuntu"));
+    out.insert("status".into(), json!(status));
+    if identity_unbound {
+        out.insert("statusReason".into(), json!("identity_unbound"));
+    }
+    if status == "cached" {
+        let reason = cache_reason
+            .filter(|r| {
+                [
+                    "read_failed",
+                    "rate_limited",
+                    "refresh_pending",
+                    "source_changed",
+                ]
+                .contains(r)
+            })
+            .unwrap_or("outcome_unknown");
+        out.insert("cacheReason".into(), json!(reason));
+    }
+    let message = match status {
+        "ok" => Value::Null,
+        "cached" => json!(match cache_reason {
+            Some("rate_limited") =>
+                "Antigravity refresh is rate limited; showing the last successful reading.",
+            Some("source_changed") =>
+                "The new sign-in is being read; showing the last successful Antigravity reading.",
+            Some("read_failed") =>
+                "The Antigravity usage read failed; showing the last successful reading.",
+            _ =>
+                "The previous Antigravity read outcome was not recorded; showing the saved reading.",
+        }),
+        "needs_sign_in" => json!("This Antigravity profile needs to sign in again."),
+        _ if identity_unbound => {
+            json!("Antigravity usage could not be matched to this saved account.")
+        }
+        _ => json!("Antigravity usage is temporarily unavailable."),
+    };
+    out.insert("message".into(), message);
+    out.insert("fetchedAt".into(), time_value(fetched_at.as_ref()));
+    out.insert("sampledAt".into(), time_value(sampled_at.as_ref()));
+    out.insert("isActive".into(), json!(is_true(value.get("isActive"))));
+    out.insert("windows".into(), Value::Array(windows));
+    out.insert(
+        "capabilities".into(),
+        json!({
+            "codexProfile": null,
+            "claudeProfileId": null,
+            "claudePlatforms": [],
+            "antigravityProfileId": id,
+            "antigravityHostIds": if host_ids { json!(["ubuntu"]) } else { json!([]) },
+        }),
+    );
+    Ok(Value::Object(out))
+}
+
+/// The usage answer from `{accounts, now, clock}` in the presentation envelope.
+pub fn quotas(envelope: Envelope) -> Admit<Value> {
+    let ctx = Context::new(envelope.presentation);
+    let input = req(envelope.data.as_object())?;
+    let now = req(input.get("now").and_then(Value::as_f64))?;
+    let clock = req(input.get("clock").and_then(Value::as_f64))?;
+    let accounts = req(input.get("accounts").and_then(Value::as_array))?
+        .iter()
+        .map(|value| account(&ctx, value, now, clock))
+        .collect::<Admit<Vec<Value>>>()?;
+    if ctx.valid() {
+        Ok(json!({ "schemaVersion": 1, "hostId": "ubuntu", "accounts": accounts }))
+    } else {
+        Err(Refuse)
+    }
+}
+
+fn pattern_text(value: Option<&Value>, ok: fn(&str) -> bool) -> Value {
+    value
+        .and_then(Value::as_str)
+        .filter(|text| ok(text))
+        .map_or(Value::Null, |text| json!(text))
+}
+
+/// `/^\d{1,2}\.\d{1,3}$/`.
+fn minor(text: &str) -> bool {
+    text.split_once('.').is_some_and(|(major, minor)| {
+        (1..=2).contains(&major.len())
+            && (1..=3).contains(&minor.len())
+            && major
+                .bytes()
+                .chain(minor.bytes())
+                .all(|b| b.is_ascii_digit())
+    })
+}
+
+/// `publicRuntimeServiceProblem(value)`.
+fn runtime_problem(value: Option<&Value>) -> Option<Value> {
+    let problem = value?.as_object()?;
+    let reason = problem.get("reason")?.as_str()?;
+    if ![
+        "missing-python-module",
+        "parser-mismatch",
+        "parser-import-failed",
+        "service-failed",
+    ]
+    .contains(&reason)
+    {
+        return None;
+    }
+    let module = |text: &str| {
+        ascii_word(
+            text,
+            |b| b.is_ascii_alphabetic() || b == b'_',
+            |b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.',
+            63,
+        )
+    };
+    let exit = problem.get("exitStatus").filter(|v| {
+        v.as_f64()
+            .is_some_and(|n| n.fract() == 0.0 && (0.0..=255.0).contains(&n))
+    });
+    Some(json!({
+        "reason": reason,
+        "module": pattern_text(problem.get("module"), module),
+        "python": pattern_text(problem.get("python"), minor),
+        "builtFor": pattern_text(problem.get("builtFor"), minor),
+        "exitStatus": or_null(exit),
+    }))
+}
+
+/// `isNativeVersion`: `/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/`, at most 128 characters.
+fn native_version(text: &str) -> bool {
+    let (core, tail) = text
+        .split_once('-')
+        .map_or((text, None), |(c, t)| (c, Some(t)));
+    let parts: Vec<&str> = core.split('.').collect();
+    text.len() <= 128
+        && parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && tail.is_none_or(|t| {
+            !t.is_empty()
+                && t.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+        })
+}
+
+/// The public inventory from the runtime's inventory in the presentation envelope.
+pub fn inventory(envelope: Envelope) -> Admit<Value> {
+    let ctx = Context::new(envelope.presentation);
+    let input = req(envelope.data.as_object())?;
+    let rows = req(input.get("profiles").and_then(Value::as_array))?;
+    if input.get("hostId").and_then(Value::as_str) != Some("ubuntu") || rows.len() > 16 {
+        return Err(Refuse);
+    }
+    let mut out = Object::new();
+    out.insert("schemaVersion".into(), json!(1));
+    out.insert("hostId".into(), json!("ubuntu"));
+    let paused = input.get("nativeUpdatePaused");
+    if truthy(paused) {
+        let installed = paused
+            .and_then(Value::as_object)
+            .and_then(|p| p.get("installedVersion"));
+        out.insert(
+            "nativeUpdatePaused".into(),
+            json!({ "installedVersion": pattern_text(installed, native_version) }),
+        );
+    }
+    if let Some(problem) = runtime_problem(input.get("runtimeServiceProblem")) {
+        out.insert("runtimeServiceProblem".into(), problem);
+    }
+    let mut ids: Vec<&str> = Vec::new();
+    let mut profiles = Vec::new();
+    for row in rows {
+        let row = req(row.as_object())?;
+        let id = req(safe_id(row.get("id")))?;
+        let email = req(email(row.get("email")))?;
+        if ids.contains(&id) || row.get("hostId").and_then(Value::as_str) != Some("ubuntu") {
+            return Err(Refuse);
+        }
+        ids.push(id);
+        let verified = timestamp(&ctx, row.get("verifiedAt"))?;
+        profiles.push(json!({
+            "id": id,
+            "email": email,
+            "plan": text_or_null(display_text(row.get("plan"), 80)),
+            "hostId": "ubuntu",
+            "available": is_true(row.get("available")),
+            "selected": is_true(row.get("selected")),
+            "runtimeVerified": is_true(row.get("runtimeVerified")),
+            "verifiedAt": time_value(verified.as_ref()),
+        }));
+    }
+    out.insert("profiles".into(), Value::Array(profiles));
+    if ctx.valid() {
+        Ok(Value::Object(out))
+    } else {
+        Err(Refuse)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_gates_match_display_text() {
+        for (text, kept) in [
+            ("  Pro ", Some("Pro")),
+            ("Bearer\u{a0}x", None),
+            ("bearer", Some("bearer")),
+            ("SK_live", None),
+            ("ſk-x", Some("ſk-x")),
+            ("eyJabcdefgh", None),
+            ("eyJabcdefg", Some("eyJabcdefg")),
+            ("eyJabcd\u{e9}fgh", Some("eyJabcd\u{e9}fgh")),
+            ("HTTPS://x", None),
+            ("{x}", None),
+            ("Client_Secret", None),
+            ("\u{feff}\u{3000}", None),
+            ("a\u{1f}", None),
+            ("Plan \u{1F680}", Some("Plan \u{1F680}")),
+        ] {
+            assert_eq!(
+                display_text(Some(&json!(text)), 80).as_deref(),
+                kept,
+                "{text:?}"
+            );
+        }
+        for (text, shaped) in [
+            ("2026-11-15T10:00:00Z", true),
+            ("2026-11-15T10:00:00.123456+05:30", true),
+            ("2026-11-15T10:00:00.Z", false),
+            ("2026-11-15T10:00:00+0530", false),
+            ("2026-11-15T10:00Z", false),
+            ("2026-11-15 10:00:00Z", false),
+        ] {
+            assert_eq!(timestamp_shape(text), shaped, "{text}");
+        }
+        assert!(
+            native_version("1.2.3")
+                && native_version("10.0.0-rc.1_x")
+                && !native_version("1.2")
+                && !native_version("1.2.3-")
+        );
+        assert!(minor("3.12") && !minor("3.") && !minor("123.1"));
+    }
+
+    #[test]
+    fn plan_keys_and_last_alias_wins() {
+        assert_eq!(plan_key("  Google_AI-Pro (Trial) "), "google ai pro trial");
+        assert_eq!(
+            known("google ai pro TRIAL").map(|p| p.class),
+            Some("pro-trial")
+        );
+        assert_eq!(
+            known("Google Wor\u{212a}space").map(|p| p.class),
+            Some("workspace")
+        );
+        assert!(known("Google Workspace\u{e9}").is_none());
+        let (plan, detail) = plan_display(Some("pro".into()), Some(1_793_577_599_999), 0.0);
+        assert_eq!(plan, json!("Google AI Pro"));
+        assert_eq!(
+            detail.expect("pro plan")["models"],
+            json!([
+                "Gemini 3.8 Flash",
+                "Gemini 3.7 Flash",
+                "Gemini 3.6 Flash",
+                "Gemini 3.1 Pro",
+                "Gemini 4 Argon",
+                "Gemini 4 Hydrogen",
+                "Claude Sonnet 5.5",
+                "Claude Opus 5.5",
+                "Claude Sonnet 4.6",
+                "Claude Opus 4.6",
+                "GPT-OSS-120B"
+            ])
+        );
+    }
+}

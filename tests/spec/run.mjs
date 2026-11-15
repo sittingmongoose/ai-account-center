@@ -21,7 +21,13 @@ for (const [program, args] of [
     ],
   ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
-  ...['read-view-parity', 'read-file-parity', 'read-http-parity', 'account-read-parity'].map((name) => [
+  ...[
+    'read-view-parity',
+    'read-file-parity',
+    'read-http-parity',
+    'account-read-parity',
+    'profile-read-parity',
+  ].map((name) => [
     'bun',
     [
       `tests/spec/${name}.ts`,

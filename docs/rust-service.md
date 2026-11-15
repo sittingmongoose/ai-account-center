@@ -98,6 +98,45 @@ never applies the folder warning in shadow mode, and every TS reader or composer
 exactly once per request. Requests with bodies keep part 2's 4 MiB input and 2 MiB
 reply caps; larger answers use the TS fallback.
 
+## Profile reads (M3 part 4)
+
+Account switching was removed on 2026-11-13, so these GETs only read and report:
+profiles, usage and sign-in health. All six are `rust` in the ownership table, are
+forwarded only from inside their existing TS handlers after those handlers' session,
+query and device-scope checks, and answer only what is proven identical to TS; anything
+else is the private 503 and the logged `rust.service.fallback`. Rust repeats the scope:
+a paired device reaches `/api/claude/desktop-profiles` and `/api/antigravity/profiles`
+(the TS `/api` guard's device scope), the other four need the signed-in session. A
+request that still carries a query (TS consumed `platform` and `refresh`) is refused.
+
+| Route | What Rust does | TS keeps |
+| --- | --- | --- |
+| `/api/claude/desktop-profiles` | Reads `claude-desktop-profiles.json` under the boot root through the capped descriptor read and ports `listClaudeDesktopProfiles` + `listClaudeDesktopProfileMetadata` (text, email, id and SSH-alias rules, duplicate ids, `canOpen`, `launchUri`). | Each row's `openOperation` (this process's memory), added to Rust's rows exactly as the handler does; a symlinked manifest (TS follows it), one over 1 MiB of UTF-8 (TS counts UTF-16), invalid UTF-8 and every 500. |
+| `/api/claude/desktop-profiles/usage` | Composes the answer (`composeClaudeDesktopUsage` / `readCachedSample`) from the manifest identities and the remote history text TS read; `toISOString` for years 1970-9999. | The manifest read, the SSH history reads, the 30-second memo; a history serde_json cannot prove `JSON.parse` refuses, and a sample past year 9999. |
+| `/api/codex/profiles` | Composes the summary (`composeCodexAuthProfilesSummary`: `resolveActive` precedence and `path.join` for a normalized instances folder). | The registry YAML, every saved and live login (credentials never leave TS; only display-safe fields are sent), the 5-second memo, and the stale `CCS_CODEX_PROFILE` case TS logs. |
+| `/api/codex/profiles/quotas` | Composes `composeCodexProfileQuotas` / `buildQuota` with `readingPredatesReset` over the profiles, collector rows, renewal notes and response clock. | The collector (with its 2.5 s budget and cached rows) and the renewal reader; a date only the engine's legacy parser reads. |
+| `/api/antigravity/profiles` | Composes `publicInventory` (`publicRuntimeServiceProblem`, `isNativeVersion`, `displayText`, `email`, `timestamp`). | The runtime's inventory read; every 500. |
+| `/api/antigravity/profiles/quotas` | Composes `publicQuotas`: `publicDashboardAccount`, `poolWindow`, `antigravityPlanDisplay` (plan table ported; `known()` lowercasing proven: only U+212A lowercases to ASCII) and `markPassedResets`. | The runtime's accounts read (and `refresh=true`); a `kind` given as an array (TS coerces it), an own `remaining`/`expiresAt` member left undefined; every 500. |
+
+The five compositions use part 2's `compose()` / `composeWithRust` and the ISO-only
+presentation envelope (`rustReadInput(..., { rankAll: false, clockAndDay: false })`):
+`Date.parse` epochs and `toISOString` words are the engine's facts, and a missing fact
+refuses the candidate. Inputs pass `jsonExact` first (finite numbers, plain objects, no
+holes), so anything JSON cannot carry exactly never leaves TS. The pure TS references are
+split out of the services (`composeClaudeDesktopUsage`, `composeCodexAuthProfilesSummary`,
+`composeCodexProfileQuotas`, and `src/antigravity/public-reads.ts`); the memos stay where
+they were and now cache the composed answer, whichever side composed it.
+
+**Capped file reads.** Every private file Rust answers from (the desktop manifest, part 3's
+visibility and both preference files) goes through one helper, `private_file::read_capped`:
+the name is opened once with `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY`, every decision is made on
+the opened descriptor (`fstat`: a regular file, its size), at most the cap plus one byte is
+read, and a file that grew past the cap while it was read refuses. A FIFO, folder or other
+special file swapped in is refused without blocking; `ELOOP` (a symlinked final name under
+the canonical root) and `ENOENT` keep the owner's meaning per file. The TS owners got the
+same hardening where practical: `readPrivateJsonFile` adds `O_NONBLOCK`, and the preference
+reader reads through one no-follow, nonblocking descriptor after its `lstat`.
+
 ## Boundary and lifecycle
 
 The service binds no TCP port. It accepts only its Unix socket, mode 0600, in a

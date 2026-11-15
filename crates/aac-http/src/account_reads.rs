@@ -7,15 +7,11 @@
 use serde_json::{Map, Value, json};
 
 type Object = Map<String, Value>;
-use std::{
-    fs::{self, File, OpenOptions},
-    io,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::Path,
-};
+use crate::private_file::{Capped, read_capped};
+use std::{fs, os::unix::fs::MetadataExt, path::Path};
 
 const VISIBILITY_FILE: &str = "account-visibility.json";
-const MAX_VISIBILITY_BYTES: usize = 32 * 1024;
+const MAX_VISIBILITY_BYTES: u64 = 32 * 1024;
 const PREFERENCES_FILE: &str = "dashboard-preferences.json";
 const EXTRA_SOURCES_FILE: &str = "dashboard-preferences-extra-sources.json";
 const MAX_PREFERENCES_BYTES: u64 = 64 * 1024;
@@ -114,38 +110,6 @@ fn store_folder(root: &Path) -> Option<Vec<Value>> {
     } else {
         Vec::new()
     })
-}
-
-fn open_no_follow(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-}
-
-enum Read {
-    Absent,
-    Bytes(Vec<u8>),
-}
-
-/// `readPrivateJsonFile` up to the parse: `None` is its `invalid` state (or an unproven error).
-fn read_private(path: &Path, max: usize) -> Option<Read> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(Read::Absent),
-        Err(_) => return None,
-        Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => return None,
-        Ok(_) => {}
-    }
-    let file = match open_no_follow(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(Read::Absent),
-        Err(_) => return None,
-        Ok(file) => file,
-    };
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() || meta.len() > max as u64 || meta.mode() & 0o077 != 0 {
-        return None;
-    }
-    aac_core::bounded_read(file, max).ok().map(Read::Bytes)
 }
 
 fn record(value: &Value) -> Option<&Object> {
@@ -261,8 +225,10 @@ fn parse_visibility(value: &Value) -> Option<Value> {
 /// The visibility reply: `{visibility, folderWarnings}`, or `None` for the TS reader.
 pub(crate) fn visibility(root: &Path) -> Option<Value> {
     let warnings = store_folder(root)?;
-    let lists = match read_private(&root.join(VISIBILITY_FILE), MAX_VISIBILITY_BYTES)? {
-        Read::Absent => json!({
+    // `readPrivateJsonFile`: absent is empty lists; a symlink, a non-file, an oversized file or
+    // one that group/other can read is its `invalid` state (TS answers it).
+    let lists = match read_capped(&root.join(VISIBILITY_FILE), MAX_VISIBILITY_BYTES)? {
+        Capped::Absent => json!({
             "hiddenProviders": [],
             "hiddenAccountIds": [],
             "trayHiddenProviders": [],
@@ -270,7 +236,10 @@ pub(crate) fn visibility(root: &Path) -> Option<Value> {
         }),
         // serde_json (preserve_order) keeps JSON.parse's duplicate-key answer: the last value at
         // the first position. Lone surrogates and invalid UTF-8 fail here and use the TS reader.
-        Read::Bytes(bytes) => parse_visibility(&serde_json::from_slice(&bytes).ok()?)?,
+        Capped::Bytes { bytes, mode } if mode & 0o077 == 0 => {
+            parse_visibility(&serde_json::from_slice(&bytes).ok()?)?
+        }
+        Capped::Symlink | Capped::TooLarge | Capped::Bytes { .. } => return None,
     };
     Some(json!({ "visibility": lists, "folderWarnings": warnings }))
 }
@@ -448,19 +417,13 @@ fn defaults() -> Object {
 
 /// `readPrimaryPreferences`, except every logging case (corrupt, migrated) is `None`.
 fn primary(root: &Path, hosts: &[(String, String)]) -> Option<Object> {
-    let file = root.join(PREFERENCES_FILE);
-    let meta = match fs::symlink_metadata(&file) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(defaults()),
-        Err(_) => return None,
-        Ok(meta) => meta,
+    // Absent or a symlink: the defaults, unlogged. Oversized (TS logs it), a non-file and every
+    // unexpected open error: the TS reader.
+    let bytes = match read_capped(&root.join(PREFERENCES_FILE), MAX_PREFERENCES_BYTES)? {
+        Capped::Absent | Capped::Symlink => return Some(defaults()),
+        Capped::TooLarge => return None,
+        Capped::Bytes { bytes, .. } => bytes,
     };
-    if meta.file_type().is_symlink() || !meta.is_file() {
-        return Some(defaults());
-    }
-    if meta.len() > MAX_PREFERENCES_BYTES {
-        return None;
-    }
-    let bytes = fs::read(&file).ok()?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
     let prefs = record(&value)?;
     if let Some(sources) = prefs.get("usageLogSources").and_then(Value::as_array) {
@@ -503,16 +466,13 @@ fn primary(root: &Path, hosts: &[(String, String)]) -> Option<Object> {
 pub(crate) fn preferences(root: &Path) -> Option<Value> {
     let hosts = hosts()?;
     let primary = primary(root, &hosts)?;
-    let file = root.join(EXTRA_SOURCES_FILE);
-    let meta = match fs::symlink_metadata(&file) {
-        Err(_) => return Some(Value::Object(primary)),
-        Ok(meta) => meta,
-    };
-    if meta.file_type().is_symlink() || !meta.is_file() || meta.len() > MAX_PREFERENCES_BYTES {
-        return Some(Value::Object(primary));
-    }
-    let Ok(bytes) = fs::read(&file) else {
-        return Some(Value::Object(primary));
+    // TS keeps the primary for an absent, symlinked or oversized companion; a non-file or an
+    // unexpected open error is left to the TS reader.
+    let bytes = match read_capped(&root.join(EXTRA_SOURCES_FILE), MAX_PREFERENCES_BYTES)? {
+        Capped::Absent | Capped::Symlink | Capped::TooLarge => {
+            return Some(Value::Object(primary));
+        }
+        Capped::Bytes { bytes, .. } => bytes,
     };
     // Text JSON.parse accepts but serde_json refuses (lone surrogates, invalid UTF-8): TS decides.
     let value: Value = serde_json::from_slice(&bytes).ok()?;

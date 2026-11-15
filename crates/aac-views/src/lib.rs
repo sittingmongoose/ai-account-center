@@ -4,5 +4,9 @@
 //! engine facts (`Date.parse`, `toISOString`, `localeCompare`) come from the shared M3
 //! presentation envelope (`aac_status::read_context`).
 pub mod analytics;
+pub mod antigravity;
+pub mod claude_desktop;
+pub mod codex_profiles;
+pub mod js;
 pub mod registry;
 pub mod spread;

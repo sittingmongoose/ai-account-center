@@ -11,5 +11,11 @@
   { "method": "GET", "path": "/api/accounts/preferences", "owner": "rust" },
   { "method": "GET", "path": "/api/accounts/registry", "owner": "rust" },
   { "method": "GET", "path": "/api/accounts/analytics", "owner": "rust" },
+  { "method": "GET", "path": "/api/claude/desktop-profiles", "owner": "rust" },
+  { "method": "GET", "path": "/api/claude/desktop-profiles/usage", "owner": "rust" },
+  { "method": "GET", "path": "/api/codex/profiles", "owner": "rust" },
+  { "method": "GET", "path": "/api/codex/profiles/quotas", "owner": "rust" },
+  { "method": "GET", "path": "/api/antigravity/profiles", "owner": "rust" },
+  { "method": "GET", "path": "/api/antigravity/profiles/quotas", "owner": "rust" },
   { "method": "*", "path": "*", "owner": "ts-fallback" }
 ]

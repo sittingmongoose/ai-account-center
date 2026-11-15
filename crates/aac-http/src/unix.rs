@@ -169,6 +169,32 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
         | "/api/accounts/analytics" => {
             crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
         }
+        // The two GETs a paired device may call (the TS /api guard's device scope), then the
+        // four that need the signed-in dashboard session.
+        "/api/claude/desktop-profiles" | "/api/antigravity/profiles"
+            if principal.role == aac_api::PrincipalRole::Device
+                || principal.dashboard_session() =>
+        {
+            crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
+        }
+        "/api/claude/desktop-profiles/usage"
+        | "/api/codex/profiles"
+        | "/api/codex/profiles/quotas"
+        | "/api/antigravity/profiles/quotas"
+            if principal.dashboard_session() =>
+        {
+            crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
+        }
+        "/api/claude/desktop-profiles"
+        | "/api/antigravity/profiles"
+        | "/api/claude/desktop-profiles/usage"
+        | "/api/codex/profiles"
+        | "/api/codex/profiles/quotas"
+        | "/api/antigravity/profiles/quotas" => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Authentication required"})),
+        )
+            .into_response(),
         "/api/accounts/settings" => {
             if req.uri().query().is_some_and(|q| !q.is_empty()) {
                 return (
@@ -268,6 +294,12 @@ pub async fn serve(
                         | "/api/accounts/preferences"
                         | "/api/accounts/registry"
                         | "/api/accounts/analytics"
+                        | "/api/claude/desktop-profiles"
+                        | "/api/claude/desktop-profiles/usage"
+                        | "/api/codex/profiles"
+                        | "/api/codex/profiles/quotas"
+                        | "/api/antigravity/profiles"
+                        | "/api/antigravity/profiles/quotas"
                 )
             {
                 return Err(failure());

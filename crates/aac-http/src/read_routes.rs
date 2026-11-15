@@ -34,6 +34,17 @@ pub async fn answer(req: Request, root: PathBuf) -> Response {
                 crate::account_reads::answer(&path, &root, &bytes)
             };
         }
+        if ["/api/claude/", "/api/codex/", "/api/antigravity/"]
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        {
+            // TS consumed its query (platform, refresh) before forwarding the bare route.
+            return if query {
+                None
+            } else {
+                crate::profile_reads::answer(&path, &root, &bytes)
+            };
+        }
         if path.starts_with("/api/status/files/") || path == "/api/status/deliverable" {
             return crate::read_files::answer(&path, &bytes);
         }
