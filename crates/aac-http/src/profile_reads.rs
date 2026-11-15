@@ -18,11 +18,25 @@ use std::path::Path;
 /// The registry row's 1 MiB cap: TS refuses more than 1 MiB of UTF-16 text, and at most 1 MiB of
 /// UTF-8 is always within that.
 pub(crate) fn desktop_profiles(root: &Path) -> Option<Value> {
+    compose_manifest(desktop_manifest(root)?.as_deref())
+}
+
+/// The manifest's bytes as the capped read finds them: `Some(None)` when the file is absent, `None` when the read
+/// refuses (a link, another owner, too large ...). R1b: Home caches the composition by these exact bytes.
+pub(crate) fn desktop_manifest(root: &Path) -> Option<Option<Vec<u8>>> {
     let (file, policy) = crate::registered::file(root, "claude-desktop-profiles")?;
     match aac_files::read::read(&file, &policy) {
-        Read::Absent => Some(json!({ "profiles": [] })),
-        Read::Bytes(bytes, _) => aac_views::claude_desktop::profiles(&bytes).ok(),
+        Read::Absent => Some(None),
+        Read::Bytes(bytes, _) => Some(Some(bytes)),
         _ => None,
+    }
+}
+
+/// `listClaudeDesktopProfileMetadata`'s answer for the manifest bytes (`None` read as absent).
+pub(crate) fn compose_manifest(bytes: Option<&[u8]>) -> Option<Value> {
+    match bytes {
+        None => Some(json!({ "profiles": [] })),
+        Some(bytes) => aac_views::claude_desktop::profiles(bytes).ok(),
     }
 }
 

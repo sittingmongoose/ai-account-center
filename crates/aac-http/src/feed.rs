@@ -5,7 +5,10 @@
 //! (the table's `service` role, plus the boot secret).
 //!
 //! R1: each source holds its latest generation's immutable bounded payload and facts (the request
-//! body is capped at 4 MiB, and at most 16 sources are held). Home's sources are prepared once,
+//! body is capped at 4 MiB, and at most 16 sources are held). A prepared Home dashboard holds its
+//! text, its parsed value and its byte template, about three times the text (R1b: the template
+//! keeps no second identity copy), plus its view memos (bounded, `aac_views::home::memo`); so the
+//! bound is a small multiple of 4 MiB per source, not 4 MiB. Home's sources are prepared once,
 //! when their generation arrives (`aac_views::home::fed`): `home-dashboard-<platform>-<0|1>` (the
 //! dashboard answer per platform and secure transport), `home-opens` (the Claude Open progress) and
 //! `home-antigravity` (the composed Antigravity inventory). A source that names a numeric
@@ -48,12 +51,29 @@ pub(crate) struct Generation {
     pub(crate) data: Box<RawValue>,
     pub(crate) facts: Box<RawValue>,
     pub(crate) prepared: Prepared,
+    /// R1b: SHA-256 of the generation's data and facts, once: what an answer built from it names in its
+    /// `ETag` (Home's tag digests its inputs, not its 200 KB of bytes).
+    pub(crate) digest: [u8; 32],
 }
 
 impl Generation {
     fn has_facts(&self) -> bool {
         self.facts.get().trim() != "null"
     }
+}
+
+fn digest(data: &RawValue, facts: &RawValue) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(data.get().len().to_le_bytes());
+    hash.update(data.get().as_bytes());
+    hash.update(facts.get().as_bytes());
+    hash.finalize().into()
+}
+
+/// Sources whose generations never carry facts: no `facts-needed` for them (review L3).
+fn without_facts(source: &str) -> bool {
+    source == HOME_OPENS || source == HOME_ANTIGRAVITY
 }
 
 #[derive(Deserialize)]
@@ -189,6 +209,7 @@ impl Feeds {
         // Prepared outside the lock (a large dashboard takes a moment); the order is checked again.
         let generation = Arc::new(Generation {
             prepared: prepare(source, &put.data, &put.facts),
+            digest: digest(&put.data, &put.facts),
             id: put.generation.clone(),
             data: put.data,
             facts: put.facts,
@@ -214,7 +235,7 @@ impl Feeds {
                 );
             }
         };
-        if !facts {
+        if !facts && !without_facts(source) {
             self.publish(json!({
                 "event": "facts-needed",
                 "source": source,
@@ -348,6 +369,34 @@ mod tests {
             .status(source)
             .ok()
             .and_then(|v| v["generation"].as_str().map(str::to_owned))
+    }
+
+    #[test]
+    fn sources_without_facts_ask_for_none() {
+        // Review L3: Opens and Antigravity generations never carry facts, so they publish no `facts-needed`.
+        let feeds = Feeds::new();
+        let mut events = feeds.events.subscribe();
+        let with = |g: &str, data: &str| {
+            format!(r#"{{"generation":"{g}","data":{data},"facts":null}}"#).into_bytes()
+        };
+        let put = |g: &str| with(g, "[]");
+        assert!(feeds.put(HOME_OPENS, &put("1")).is_ok());
+        assert!(feeds.put(HOME_ANTIGRAVITY, &put("1")).is_ok());
+        assert!(
+            events.try_recv().is_err(),
+            "no event for a source without facts"
+        );
+        // A source that takes facts still asks for them (L1).
+        assert!(feeds.put("home", &put("g1")).is_ok());
+        let line = events
+            .try_recv()
+            .map(|b| String::from_utf8_lossy(&b).into_owned());
+        assert!(line.is_ok_and(|l| l.contains("facts-needed")));
+        // Each generation carries the digest of its own bytes.
+        let a = feeds.current(HOME_OPENS, "1").map(|g| g.digest);
+        assert!(feeds.put(HOME_OPENS, &with("2", r#"[["p",{}]]"#)).is_ok());
+        let b = feeds.current(HOME_OPENS, "2").map(|g| g.digest);
+        assert!(matches!((a, b), (Ok(a), Ok(b)) if a != b));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! R1 (fed): Home's inputs as generations the TS owner pushes when they change, and the finished answer of one
 //! request (`GET /api/views/home`) built from them: the bytes `res.json` would write for
-//! `{schemaVersion, dashboard, profiles, antigravity, view}` and the revalidated-view identity for its `ETag`.
+//! `{schemaVersion, dashboard, profiles, antigravity, view}`.
 //!
 //! Each feed is prepared once, when its generation arrives, and held immutable:
 //! - [`Dashboard`]: the dashboard answer before its per-response pass, as `JSON.stringify` wrote it with
@@ -11,9 +11,11 @@
 //! - the public Antigravity inventory, composed from the runtime's inventory (part 4) when it arrives.
 //!
 //! Per request only the clock (`now`, `updatedAt`), the page's context and the generation ids cross. The request
-//! applies `markPassedResets` (`account-window-reset.ts`) with `now` while writing, reads the desktop manifest
-//! (the caller), adds each Open's progress, and builds the view when the page sent its context. Anything not proven
-//! declines with its reason, and the TS handler answers.
+//! applies `markPassedResets` (`account-window-reset.ts`) with `now` while writing, takes the profiles the caller
+//! read (the manifest with each Open's progress), and builds the view when the page sent its context; the view's
+//! clock-independent parts come from the generation's memo ([`super::memo`]). Anything not proven declines with its
+//! reason, and the TS handler answers.
+use super::memo::Memos;
 use super::{FedInput, build_fed};
 use crate::decline::Decline;
 use crate::js::Ranks;
@@ -44,8 +46,8 @@ struct Mark {
 impl Mark {
     /// `readingPredatesReset(resetAt, sampledAt, now)`.
     fn passed(self, now: i64) -> bool {
-        self.reset
-            .is_some_and(|reset| reset <= now && self.sampled.is_none_or(|s| s < reset))
+        #[allow(clippy::cast_precision_loss)]
+        crate::js::reading_predates_reset(self.reset, self.sampled, now as f64)
     }
 }
 
@@ -53,15 +55,15 @@ impl Mark {
 /// per-response parts is fixed bytes, so a request copies them instead of writing the answer again.
 #[derive(Debug)]
 enum Part {
-    /// Fixed text: the full bytes and the identity bytes.
-    Text(Vec<u8>, Vec<u8>),
+    /// Fixed text.
+    Text(Vec<u8>),
     /// This response's `updatedAt`.
     UpdatedAt,
     /// A window whose reset can pass: its text as held, and with `resetPassed` flipped (`markPassedResets`).
     Window {
         mark: Mark,
-        held: (Vec<u8>, Vec<u8>),
-        flipped: (Vec<u8>, Vec<u8>),
+        held: Vec<u8>,
+        flipped: Vec<u8>,
     },
 }
 
@@ -71,6 +73,8 @@ pub struct Dashboard {
     value: Value,
     ranks: Arc<Ranks>,
     parts: Vec<Part>,
+    /// R1b: the view builder's clock-independent results for this generation, per page zone and style.
+    memos: Memos,
 }
 
 #[derive(Deserialize)]
@@ -141,11 +145,9 @@ pub fn prepare_dashboard(data: &[u8], facts: &[u8]) -> Result<Dashboard, Decline
     let mut held = Vec::with_capacity(data.len());
     for part in &parts {
         match part {
-            Part::Text(full, _) => held.extend_from_slice(full),
+            Part::Text(full) => held.extend_from_slice(full),
             Part::UpdatedAt => held.extend_from_slice(b"\"\""),
-            Part::Window {
-                held: (full, _), ..
-            } => held.extend_from_slice(full),
+            Part::Window { held: full, .. } => held.extend_from_slice(full),
         }
     }
     if held != data {
@@ -155,6 +157,7 @@ pub fn prepare_dashboard(data: &[u8], facts: &[u8]) -> Result<Dashboard, Decline
         value,
         ranks: Arc::new(facts.order),
         parts,
+        memos: Memos::default(),
     })
 }
 
@@ -217,12 +220,12 @@ pub fn prepare_antigravity(data: &[u8]) -> Result<Value, Decline> {
 pub struct Request<'a> {
     /// The held dashboard of this request's platform and transport.
     pub dashboard: &'a Dashboard,
-    /// The held Open progress.
-    pub opens: &'a Opens,
     /// The held public Antigravity inventory.
     pub antigravity: &'a Value,
-    /// This request's manifest read: `{profiles: [...]}` as GET /api/claude/desktop-profiles's Rust read answers.
-    pub manifest: &'a Value,
+    /// This request's profiles ([`profiles_with_opens`] of its manifest read and the held Open progress).
+    pub profiles: &'a Value,
+    /// Their JSON text (`js_json::write`), written once per manifest text and Open generation by the caller.
+    pub profiles_text: &'a [u8],
     /// The page's context, when TS could read it (otherwise the answer has no view, as today's handler).
     pub context: Option<&'a HomeContext>,
     /// The clock of the per-response pass (`markPassedResets`).
@@ -231,17 +234,10 @@ pub struct Request<'a> {
     pub updated_at: &'a str,
 }
 
-/// The finished answer: its bytes and its revalidated-view identity.
-pub struct Answer {
-    /// What `res.json` writes.
-    pub bytes: Vec<u8>,
-    /// The `ETag` identity text.
-    pub identity: Vec<u8>,
-}
-
 /// `{...profile, openOperation}` for each manifest row with an id (`desktopProfilesRead` `withOperations`), after
-/// `acceptRustDesktopProfiles`'s shape check.
-fn profiles_with_opens(manifest: &Value, opens: &Opens) -> Result<Value, Decline> {
+/// `acceptRustDesktopProfiles`'s shape check. `manifest` is `{profiles: [...]}` as GET /api/claude/desktop-profiles's
+/// Rust read answers.
+pub fn profiles_with_opens(manifest: &Value, opens: &Opens) -> Result<Value, Decline> {
     let body = manifest.as_object().ok_or(Decline::Shape)?;
     let rows = match body.get("profiles") {
         Some(Value::Array(rows)) if body.len() == 1 => rows,
@@ -287,18 +283,16 @@ fn write_flipped(w: &mut Writer, members: &Map<String, Value>, passed: bool, mem
 /// pass (both of its texts written now).
 fn template(value: &Value, marks: &[Vec<Mark>]) -> Vec<Part> {
     let mut parts = Vec::new();
-    let mut w = Writer::with_capacity(64 * 1024);
+    let mut w = Writer::plain(64 * 1024);
     let Value::Object(top) = value else {
         w.value(value);
-        let (full, identity) = w.cut();
-        return vec![Part::Text(full, identity)];
+        return vec![Part::Text(w.into_bytes())];
     };
     let mut object = w.object();
     for (key, member) in ordered(top) {
         match (key, member) {
             ("updatedAt", _) => object.member(key, |w| {
-                let (full, identity) = w.cut();
-                parts.push(Part::Text(full, identity));
+                parts.push(Part::Text(w.cut().0));
                 parts.push(Part::UpdatedAt);
             }),
             ("accounts", Value::Array(accounts)) => object.member(key, |w| {
@@ -327,11 +321,10 @@ fn template(value: &Value, marks: &[Vec<Mark>]) -> Vec<Part> {
                                         Value::Object(members)
                                             if mark.reset.is_some() || mark.held =>
                                         {
-                                            let (full, identity) = w.cut();
-                                            parts.push(Part::Text(full, identity));
-                                            let mut held = Writer::default();
+                                            parts.push(Part::Text(w.cut().0));
+                                            let mut held = Writer::plain(256);
                                             held.value(window);
-                                            let mut flipped = Writer::default();
+                                            let mut flipped = Writer::plain(256);
                                             write_flipped(
                                                 &mut flipped,
                                                 members,
@@ -340,8 +333,8 @@ fn template(value: &Value, marks: &[Vec<Mark>]) -> Vec<Part> {
                                             );
                                             parts.push(Part::Window {
                                                 mark: *mark,
-                                                held: held.finish(),
-                                                flipped: flipped.finish(),
+                                                held: held.into_bytes(),
+                                                flipped: flipped.into_bytes(),
                                             });
                                         }
                                         _ => w.value(window),
@@ -360,8 +353,7 @@ fn template(value: &Value, marks: &[Vec<Mark>]) -> Vec<Part> {
         }
     }
     object.end();
-    let (full, identity) = w.cut();
-    parts.push(Part::Text(full, identity));
+    parts.push(Part::Text(w.into_bytes()));
     parts
 }
 
@@ -370,56 +362,68 @@ fn template(value: &Value, marks: &[Vec<Mark>]) -> Vec<Part> {
 fn write_dashboard(w: &mut Writer, dashboard: &Dashboard, updated_at: &str, now: i64) {
     for part in &dashboard.parts {
         match part {
-            Part::Text(full, identity) => w.raw_pair(full, identity),
+            Part::Text(full) => w.raw(full),
             Part::UpdatedAt => w.string(updated_at),
             Part::Window {
                 mark,
                 held,
                 flipped,
-            } => {
-                let (full, identity) = if mark.passed(now) == mark.held {
-                    held
-                } else {
-                    flipped
-                };
-                w.raw_pair(full, identity);
-            }
+            } => w.raw(if mark.passed(now) == mark.held {
+                held
+            } else {
+                flipped
+            }),
         }
     }
 }
 
-/// The finished answer of one Home request, or the reason it declines.
-pub fn respond(request: Request) -> Result<Answer, Decline> {
-    let profiles = profiles_with_opens(request.manifest, request.opens)?;
-    // The view's own serializer: the Home spec proves its bytes are JSON.stringify's, and it has no clock-only
-    // member, so its identity text is the same bytes.
+/// The finished answer of one Home request (the bytes `res.json` would write), or the reason it declines. Its
+/// `ETag` is the caller's: a digest of everything these bytes are a function of.
+pub fn respond(request: Request) -> Result<Vec<u8>, Decline> {
+    // The view's own serializer: the Home spec proves its bytes are JSON.stringify's.
     let view = match request.context {
         None => b"null".to_vec(),
         Some(ctx) => {
             let built = build_fed(FedInput {
                 ctx,
                 dashboard: &request.dashboard.value,
-                profiles: &profiles,
+                profiles: request.profiles,
                 antigravity: request.antigravity,
                 ranks: request.dashboard.ranks.clone(),
                 updated_at: Some(request.updated_at),
+                memos: Some(&request.dashboard.memos),
             })
             .map_err(Decline::from)?;
             serde_json::to_vec(&built).map_err(|_| Decline::Internal)?
         }
     };
-    let mut w = Writer::with_capacity(256 * 1024);
+    let mut w = Writer::plain(
+        request.profiles_text.len() + view.len() + request.dashboard.parts_len() + 4096,
+    );
     let mut top = w.object();
     top.member("schemaVersion", |w| w.raw(b"1"));
     top.member("dashboard", |w| {
         write_dashboard(w, request.dashboard, request.updated_at, request.now);
     });
-    top.member("profiles", |w| w.value(&profiles));
+    top.member("profiles", |w| w.raw(request.profiles_text));
     top.member("antigravity", |w| w.value(request.antigravity));
-    top.member("view", |w| w.raw_pair(&view, &view));
+    top.member("view", |w| w.raw(&view));
     top.end();
-    let (bytes, identity) = w.finish();
-    Ok(Answer { bytes, identity })
+    Ok(w.into_bytes())
+}
+
+impl Dashboard {
+    /// The template's size, for the answer's buffer.
+    fn parts_len(&self) -> usize {
+        self.parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(text) => text.len(),
+                Part::UpdatedAt => 32,
+                Part::Window { held, flipped, .. } => held.len().max(flipped.len()),
+            })
+            .sum()
+    }
 }
 
 #[cfg(test)]
@@ -520,11 +524,12 @@ mod tests {
         let held = prepare_dashboard(&dashboard(json!([])), &facts(json!({}))).expect("prepared");
         let opens = prepare_opens(br#"[["p1",{"id":"op_1","state":"opened"}]]"#).expect("opens");
         let manifest = json!({"profiles": [{"id": "p1", "email": "a@example.invalid"}, {"id": "p2"}, {"email": "x"}]});
+        let profiles = profiles_with_opens(&manifest, &opens).expect("profiles");
         let answer = respond(Request {
             dashboard: &held,
-            opens: &opens,
             antigravity: &json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []}),
-            manifest: &manifest,
+            profiles: &profiles,
+            profiles_text: &js_json::write(&profiles),
             context: None,
             now: 0,
             updated_at: "2026-11-14T13:00:00.000Z",
@@ -532,7 +537,7 @@ mod tests {
         .map_err(|d| d.as_str())
         .expect("answer");
         assert_eq!(
-            String::from_utf8(answer.bytes).unwrap_or_default(),
+            String::from_utf8(answer).unwrap_or_default(),
             r#"{"schemaVersion":1,"dashboard":{"schemaVersion":1,"updatedAt":"2026-11-14T13:00:00.000Z","accounts":[{"id":"a","sampledAt":"2026-11-14T10:00:00.000Z","windows":[]}]},"profiles":[{"id":"p1","email":"a@example.invalid","openOperation":{"id":"op_1","state":"opened"}},{"id":"p2","openOperation":null},{"email":"x"}],"antigravity":{"schemaVersion":1,"hostId":"ubuntu","profiles":[]},"view":null}"#
         );
     }

@@ -6,6 +6,7 @@
 //! draws its own view (the progress line lives only in the browser).
 mod antigravity;
 pub mod fed;
+pub mod memo;
 mod signins;
 pub mod windows;
 
@@ -44,6 +45,8 @@ pub struct Ctx {
     /// R1 (fed): this response's `updatedAt`, which the held generation leaves out (it is the request's clock).
     /// `None` reads the dashboard's own.
     pub updated_at: Option<String>,
+    /// R1b (fed): the held generation's memo for this page zone and style; `None` computes everything.
+    pub memo: Option<std::sync::Arc<memo::Memo>>,
 }
 
 fn duration(ms: i64) -> String {
@@ -59,6 +62,22 @@ fn duration(ms: i64) -> String {
 }
 
 impl Ctx {
+    /// `fmt.dateTime(t)`, kept in the memo (it reads only the page zone and style).
+    pub fn date_time(&self, t: i64) -> R<String> {
+        match &self.memo {
+            Some(memo) => memo.text(memo::Key::DateTime(t), || self.fmt.date_time(t)),
+            None => self.fmt.date_time(t),
+        }
+    }
+
+    /// `nf2(x)`, kept in the memo.
+    pub fn nf2(&self, x: f64) -> R<String> {
+        match &self.memo {
+            Some(memo) => memo.text(memo::Key::Nf2(x.to_bits()), || nf2(x)),
+            None => nf2(x),
+        }
+    }
+
     /// view-model.mjs `relative` of a known time.
     pub fn relative_ms(&self, t: i64) -> String {
         let delta = self.fmt.now - t;
@@ -300,17 +319,51 @@ fn age_or_status(cx: &Ctx, account: Acc) -> R<String> {
     }
 }
 
-fn meters_of(account: Acc<'_>) -> R<Vec<Win<'_>>> {
-    let provider = str_field(account.get("provider"))?;
-    Ok(windows::visible(provider, account)?
+/// R1b: an account part kept in the memo when `account` is an account of the held generation, else computed.
+fn kept_account(
+    cx: &Ctx,
+    account: Acc,
+    part: memo::AccountPart,
+    compute: impl FnOnce() -> R<String>,
+) -> R<String> {
+    match cx
+        .memo
+        .as_ref()
+        .and_then(|memo| Some((memo, memo.account(account)?)))
+    {
+        Some((memo, a)) => memo.text(memo::Key::Account(part, a), compute),
+        None => compute(),
+    }
+}
+
+/// The account's visible windows under its own provider (`visibleWindows(account.provider, account)`), kept in the
+/// memo by position for an account of the held generation.
+fn visible_of<'a>(cx: &Ctx, account: Acc<'a>) -> R<Vec<Win<'a>>> {
+    let compute = || windows::visible(str_field(account.get("provider"))?, account);
+    let Some((memo, a)) = cx
+        .memo
+        .as_ref()
+        .and_then(|memo| Some((memo, memo.account(account)?)))
+    else {
+        return compute();
+    };
+    let specs = memo.windows(memo::Key::Visible(a), || {
+        compute().map(|ws| ws.iter().map(Win::spec).collect())
+    })?;
+    match windows::from_specs(account, &specs) {
+        Some(ws) => Ok(ws),
+        None => compute(),
+    }
+}
+fn meters_of<'a>(cx: &Ctx, account: Acc<'a>) -> R<Vec<Win<'a>>> {
+    Ok(visible_of(cx, account)?
         .into_iter()
         .filter(windows::is_meter)
         .collect())
 }
 /// [`meters_of`] and the remaining visible windows (the amounts), from one `visible` pass.
-fn meters_and_amounts(account: Acc<'_>) -> R<(Vec<Win<'_>>, Vec<Win<'_>>)> {
-    let provider = str_field(account.get("provider"))?;
-    Ok(windows::visible(provider, account)?
+fn meters_and_amounts<'a>(cx: &Ctx, account: Acc<'a>) -> R<(Vec<Win<'a>>, Vec<Win<'a>>)> {
+    Ok(visible_of(cx, account)?
         .into_iter()
         .partition(windows::is_meter))
 }
@@ -349,7 +402,10 @@ fn claude_section(
     for a in accounts {
         any_max |= is_max_plan(a)?;
     }
-    let by_account: Vec<Vec<Win>> = accounts.iter().map(|a| meters_of(a)).collect::<R<_>>()?;
+    let by_account: Vec<Vec<Win>> = accounts
+        .iter()
+        .map(|a| meters_of(cx, a))
+        .collect::<R<_>>()?;
     let has_five = by_account.iter().any(|m| five_of(m).is_some());
     let has_weekly = by_account
         .iter()
@@ -686,7 +742,9 @@ fn codex_section(cx: &Ctx, accounts: &[Acc], all: &[Acc]) -> R<SectionView> {
             ]),
             status: windows::status_word(account)?.into(),
             note: text(account.get("message")).into(),
-            platform: cx.host_label(account)?,
+            platform: kept_account(cx, account, memo::AccountPart::Platform, || {
+                cx.host_label(account)
+            })?,
             active: is_true(account.get("isActive")),
             active_label: "on Ubuntu".into(),
             setup: false,
@@ -753,7 +811,10 @@ fn antigravity_section(
     inventory: &Value,
 ) -> R<SectionView> {
     let native = antigravity::native(cx, every, Some(inventory))?;
-    let meters: Vec<Vec<Win>> = accounts.iter().map(|a| meters_of(a)).collect::<R<_>>()?;
+    let meters: Vec<Vec<Win>> = accounts
+        .iter()
+        .map(|a| meters_of(cx, a))
+        .collect::<R<_>>()?;
     // antigravity-data.mjs `antigravityColumns`
     let flat: Vec<&Win> = meters.iter().flatten().collect();
     for w in &flat {
@@ -862,7 +923,9 @@ fn antigravity_section(
                 Some(b) if !b.note.is_empty() => b.note.clone(),
                 _ => text(account.get("message")).into(),
             },
-            platform: cx.host_label(account)?,
+            platform: kept_account(cx, account, memo::AccountPart::Platform, || {
+                cx.host_label(account)
+            })?,
             active,
             active_label: match bound {
                 Some(b) if active && b.runtime_verified => "on Ubuntu".into(),
@@ -960,7 +1023,7 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
         let label = registry()
             .find(|(p, _)| p.id.as_str() == provider)
             .map_or("", |(p, _)| p.label);
-        let (all_meters, amount_windows) = meters_and_amounts(account)?;
+        let (all_meters, amount_windows) = meters_and_amounts(cx, account)?;
         let meters = all_meters
             .iter()
             .take(3)
@@ -990,10 +1053,12 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
         let sampled_ms = sampled.map(parse_date).transpose()?.flatten();
         let stale = sampled_ms.is_some_and(|t| cx.fmt.now - t > STALE_MS);
         let status = windows::status_word(account)?;
-        let plan = plan_label(
-            without_label(text(account.get("plan")), label),
-            Some(provider),
-        )?;
+        let plan = kept_account(cx, account, memo::AccountPart::Plan, || {
+            plan_label(
+                without_label(text(account.get("plan")), label),
+                Some(provider),
+            )
+        })?;
         let source = joined(&[
             if is_str(account.get("status"), "cached") {
                 format!("Cached · sampled {}", cx.relative(sampled)?)
@@ -1002,13 +1067,15 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
             },
             text(account.get("source")).into(),
         ]);
-        let plan_note = joined(&[
-            cursor_plan_note(account).into(),
-            match plan_expiry {
-                Some(w) => windows::exact(cx, w.get("expiresAt"), "Plan subscription ends ")?,
-                None => String::new(),
-            },
-        ]);
+        let plan_note = kept_account(cx, account, memo::AccountPart::PlanNote, || {
+            Ok(joined(&[
+                cursor_plan_note(account).into(),
+                match plan_expiry {
+                    Some(w) => windows::exact(cx, w.get("expiresAt"), "Plan subscription ends ")?,
+                    None => String::new(),
+                },
+            ]))
+        })?;
         let packs_note = if same_expiry {
             windows::expiry_text(
                 cx,
@@ -1049,7 +1116,9 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
                 Some(t) => format!("sampled {}", cx.relative_ms(t)),
                 None => "never sampled".into(),
             },
-            platform: cx.host_label(account)?,
+            platform: kept_account(cx, account, memo::AccountPart::Platform, || {
+                cx.host_label(account)
+            })?,
             plan_note,
             packs_note,
             note: if !message.is_empty() {
@@ -1167,6 +1236,14 @@ fn validate(data: &Value) -> R<&[Value]> {
     Ok(accounts)
 }
 
+/// The accounts list [`validate`] admitted (its first check, without the per-account ones).
+fn validate_accounts(data: &Value) -> R<&[Value]> {
+    match data.get("accounts") {
+        Some(Value::Array(accounts)) => Ok(accounts),
+        _ => Err(Decline("shape")),
+    }
+}
+
 fn computers() -> R<Vec<(String, String)>> {
     // Parsed once: the fed path builds a view per request.
     static COMPUTERS: std::sync::OnceLock<Option<Vec<(String, String)>>> =
@@ -1229,6 +1306,7 @@ pub fn build(envelope: Envelope) -> R<HomeView> {
         ),
         computers: computers()?,
         updated_at: None,
+        memo: None,
     };
     let built = view(&cx, &ctx, data, profiles, antigravity)?;
     // a fact the envelope did not have was read as missing: nothing built from it can be served
@@ -1255,17 +1333,26 @@ pub struct FedInput<'a> {
     pub ranks: std::sync::Arc<Ranks>,
     /// This response's `updatedAt`; `None` reads the dashboard's own.
     pub updated_at: Option<&'a str>,
+    /// R1b: the memos kept with `dashboard`'s generation (`None`: nothing is kept). They must belong to this very
+    /// `dashboard` value: the memo names objects by their address in it.
+    pub memos: Option<&'a memo::Memos>,
 }
 
 /// The finished Home view from fed inputs, or the reason it cannot be proven equal to the browser's. The clock and
-/// day words are the page's zone's own ([`Fmt::fed`]): no server `Intl` fact is read.
+/// day words are the page's zone's own ([`Fmt::fed`]): no server `Intl` fact is read. With memos, the
+/// clock-independent parts are taken from the generation's memo for this zone and style.
 pub fn build_fed(input: FedInput) -> R<HomeView> {
     let ctx = input.ctx;
     let style = Fmt::proven_style(&ctx.format_probe)?;
+    let zone = Fmt::proven_zone(&ctx.zone)?;
+    let memo = input
+        .memos
+        .map(|memos| memos.get(input.dashboard, &zone, style));
     let cx = Ctx {
-        fmt: Fmt::fed(input.ranks, style, Fmt::proven_zone(&ctx.zone)?, ctx.now),
+        fmt: Fmt::fed(input.ranks, style, zone, ctx.now),
         computers: computers()?,
         updated_at: input.updated_at.map(str::to_owned),
+        memo,
     };
     let built = view(&cx, ctx, input.dashboard, input.profiles, input.antigravity)?;
     if cx.fmt.valid() {
@@ -1285,7 +1372,14 @@ fn view(
     if !data.is_object() {
         return Err(Decline("shape"));
     }
-    let raw = validate(data)?;
+    // R1b: the shape check reads only the held dashboard: kept once per generation.
+    let raw = match cx.memo.as_ref().filter(|memo| memo.is_for(data)) {
+        Some(memo) => {
+            memo.text(memo::Key::Valid, || validate(data).map(|_| String::new()))?;
+            validate_accounts(data)?
+        }
+        None => validate(data)?,
+    };
     // A Claude Open the server reports as running puts its progress on the row (claude-open.mjs `openProgress`);
     // that line belongs to the page, so the page draws its own view then.
     for p in array(Some(profiles)) {

@@ -51,15 +51,25 @@ function zoneFacts(value: unknown): HomeZone | null {
   return { from: v.from as number, to: v.to as number, offsets };
 }
 
+/** Zone names this engine has answered for (R1b: building a formatter per request cost about 0.5 ms). */
+const zoneNames = new Map<string, boolean>();
+const ZONE_NAMES = 128;
+
 /** A display zone this engine's `Intl` accepts (the envelope would otherwise fall back to UTC). */
 function knownZone(timeZone: string): boolean {
   if (typeof timeZone !== 'string' || !timeZone || timeZone.length > 64) return false;
+  const known = zoneNames.get(timeZone);
+  if (known !== undefined) return known;
+  let accepted: boolean;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone }).format(0);
-    return true;
+    accepted = true;
   } catch {
-    return false;
+    accepted = false;
   }
+  // The engine's answer for a name does not change while it runs; the map stays small.
+  if (zoneNames.size < ZONE_NAMES) zoneNames.set(timeZone, accepted);
+  return accepted;
 }
 
 const text = (value: unknown, max = MAX_TEXT) => typeof value === 'string' && value.length <= max;

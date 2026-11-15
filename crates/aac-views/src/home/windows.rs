@@ -1,5 +1,6 @@
 //! Usage windows: the product visibility rules (visible-usage.mjs), their labels and periods, and the meter and amount
 //! views (view-model.mjs `meterView`, `amountView`).
+use super::memo::{Key, Part};
 use super::{Acc, Ctx};
 use crate::js::*;
 use aac_api::home::{AmountView, MeterView};
@@ -12,9 +13,56 @@ static TRUE: Value = Value::Bool(true);
 pub struct Win<'a> {
     m: &'a Map<String, Value>,
     expires: Option<&'a Value>,
+    /// The window whose `expiresAt` is `expires` (R1b: so a kept window list can be rebuilt).
+    expires_idx: Option<usize>,
     plan_expiry: bool,
     /// Position in the account's `windows`: the window's identity.
     pub idx: usize,
+}
+
+/// R1b: a visible window by position, as the memo keeps it for a held account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WinSpec {
+    idx: usize,
+    expires_idx: Option<usize>,
+    plan_expiry: bool,
+}
+
+impl Win<'_> {
+    /// The window object (its address names it in the memo).
+    pub fn object(&self) -> &Map<String, Value> {
+        self.m
+    }
+
+    /// This window by position.
+    pub fn spec(&self) -> WinSpec {
+        WinSpec {
+            idx: self.idx,
+            expires_idx: self.expires_idx,
+            plan_expiry: self.plan_expiry,
+        }
+    }
+}
+
+/// The windows `specs` names, rebuilt from the account they were taken from; `None` when the account no longer has
+/// them (never for a held account, which is immutable).
+pub fn from_specs<'a>(account: Acc<'a>, specs: &[WinSpec]) -> Option<Vec<Win<'a>>> {
+    let windows = array(account.get("windows"));
+    specs
+        .iter()
+        .map(|spec| {
+            Some(Win {
+                m: windows.get(spec.idx)?.as_object()?,
+                expires: match spec.expires_idx {
+                    Some(j) => Some(windows.get(j)?.as_object()?.get("expiresAt")?),
+                    None => None,
+                },
+                expires_idx: spec.expires_idx,
+                plan_expiry: spec.plan_expiry,
+                idx: spec.idx,
+            })
+        })
+        .collect()
 }
 
 impl<'a> Win<'a> {
@@ -47,6 +95,7 @@ pub fn stand_in(m: &Map<String, Value>) -> Win<'_> {
     Win {
         m,
         expires: None,
+        expires_idx: None,
         plan_expiry: false,
         idx: usize::MAX,
     }
@@ -138,6 +187,7 @@ pub fn visible<'a>(provider: Option<&str>, account: Acc<'a>) -> R<Vec<Win<'a>>> 
             Value::Object(m) => Some(Win {
                 m,
                 expires: None,
+                expires_idx: None,
                 plan_expiry: false,
                 idx,
             }),
@@ -146,10 +196,12 @@ pub fn visible<'a>(provider: Option<&str>, account: Acc<'a>) -> R<Vec<Win<'a>>> 
         .collect();
     let qwen = provider == Some("qwen");
     let mut expiration = None;
+    let mut expiration_idx = None;
     if qwen {
         for w in &rows {
             if subscription(w) && valid_date(w.get("expiresAt"))?.is_some() {
                 expiration = w.get("expiresAt");
+                expiration_idx = Some(w.idx);
                 break;
             }
         }
@@ -188,6 +240,7 @@ pub fn visible<'a>(provider: Option<&str>, account: Acc<'a>) -> R<Vec<Win<'a>>> 
         {
             out.push(Win {
                 expires: expiration,
+                expires_idx: expiration_idx,
                 plan_expiry: true,
                 ..w
             });
@@ -607,9 +660,27 @@ fn sampled_text(cx: &Ctx, account: Acc, w: Option<&Win>) -> R<String> {
         None => valid_date(account.get("sampledAt"))?,
     };
     Ok(match at {
-        Some(t) => format!("{} · {}", cx.fmt.date_time(t)?, cx.relative_ms(t)),
+        Some(t) => format!("{} · {}", cx.date_time(t)?, cx.relative_ms(t)),
         None => String::new(),
     })
+}
+
+/// R1b: a window part kept in the memo when `w` is a window of the held generation, else computed.
+fn kept(cx: &Ctx, w: Option<&Win>, part: Part, compute: impl FnOnce() -> R<String>) -> R<String> {
+    match (&cx.memo, w) {
+        (Some(memo), Some(w)) => match memo.window(w.object()) {
+            Some((a, i)) => {
+                let spec = w.spec();
+                let expires = spec
+                    .expires_idx
+                    .and_then(|j| u32::try_from(j).ok())
+                    .unwrap_or(u32::MAX);
+                memo.text(Key::Window(part, a, i, expires, spec.plan_expiry), compute)
+            }
+            None => compute(),
+        },
+        _ => compute(),
+    }
 }
 
 /// Options of `meterView`.
@@ -645,16 +716,20 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
         |w| matches!(w.get("limit"), Some(Value::Number(n)) if n.as_f64() == Some(100.0)),
     ) && unit.is_empty();
     let amount = match (num("used"), num("limit")) {
-        (Some(used), Some(limit)) if !pending && !restates && limit > 0.0 => format!(
-            "{} of {}{}",
-            compact(used)?,
-            compact_amount(limit)?,
-            if unit.is_empty() {
-                String::new()
-            } else {
-                format!(" {unit}")
-            }
-        ),
+        (Some(used), Some(limit)) if !pending && !restates && limit > 0.0 => {
+            kept(cx, w, Part::Amount, || {
+                Ok(format!(
+                    "{} of {}{}",
+                    compact(used)?,
+                    compact_amount(limit)?,
+                    if unit.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {unit}")
+                    }
+                ))
+            })?
+        }
         _ => String::new(),
     };
     let reset_at = w.and_then(|w| w.get("resetAt"));
@@ -663,12 +738,14 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
         opts.label.to_string()
     } else {
         match w {
-            Some(w) => window_label(provider, w)?,
+            Some(w) => kept(cx, Some(w), Part::Label, || window_label(provider, w))?,
             None => "Usage".into(),
         }
     };
     let full_label = match w {
-        Some(w) => full_window_label(provider, w)?,
+        Some(w) => kept(cx, Some(w), Part::FullLabel, || {
+            full_window_label(provider, w)
+        })?,
         None if !opts.label.is_empty() => opts.label.into(),
         None => "Usage".into(),
     };
@@ -688,9 +765,9 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
         full_label,
         has_value,
         value: Some(if has_value { v } else { 0.0 }),
-        value_text: if has_value { nf2(v)? } else { String::new() },
+        value_text: if has_value { cx.nf2(v)? } else { String::new() },
         over_text: if has_value && v > 100.0 {
-            nf2(v - 100.0)?
+            cx.nf2(v - 100.0)?
         } else {
             String::new()
         },
@@ -709,7 +786,7 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
         },
         reset_exact: match &pending_clock {
             Some(clock) => format!("Reset at {clock} · new reading pending"),
-            None => exact(cx, reset_at, "Resets ")?,
+            None => kept(cx, w, Part::ResetExact, || exact(cx, reset_at, "Resets "))?,
         },
         reset_soon: reset_ms.is_some_and(|t| t - cx.fmt.now < 7_200_000 && t > cx.fmt.now),
         na_text: if has_value {
@@ -727,22 +804,24 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
         },
         amount,
         left: match num("remaining") {
-            Some(r) if !pending && !unit.is_empty() => {
-                format!("{} left", unit_amount(Some(r), Some(unit))?)
-            }
+            Some(r) if !pending && !unit.is_empty() => kept(cx, w, Part::Left, || {
+                Ok(format!("{} left", unit_amount(Some(r), Some(unit))?))
+            })?,
             _ => String::new(),
         },
         sampled: sampled_text(cx, account, w)?,
-        source: [
-            or_text(str_field(account.get("source"))?, "", "Unknown source"),
-            cx.host_label(account)?,
-            if w.is_some_and(|w| is_str(w.get("status"), "cached")) {
-                "Cached window".into()
-            } else {
-                status_word(account)?.into()
-            },
-        ]
-        .join(" · "),
+        source: kept(cx, w, Part::Source, || {
+            Ok([
+                or_text(str_field(account.get("source"))?, "", "Unknown source"),
+                cx.host_label(account)?,
+                if w.is_some_and(|w| is_str(w.get("status"), "cached")) {
+                    "Cached window".into()
+                } else {
+                    status_word(account)?.into()
+                },
+            ]
+            .join(" · "))
+        })?,
         caption: String::new(),
         caption_tip: String::new(),
     })
@@ -1032,6 +1111,7 @@ mod tests {
             let win = Win {
                 m: &m,
                 expires: None,
+                expires_idx: None,
                 plan_expiry: false,
                 idx: 0,
             };

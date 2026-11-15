@@ -15,7 +15,7 @@ import { RustService } from '../../../src/web-server/rust-service';
 import { withPassedResetsAt } from '../../../src/web-server/services/account-dashboard-service';
 import { ClaudeOpenOperations } from '../../../src/web-server/services/claude-open-operations';
 import type { AccountDashboard } from '../../../src/web-server/services/account-dashboard-types';
-import { resetEpochs } from '../../../src/web-server/views/home-feed';
+import { passFaithful, resetEpochs } from '../../../src/web-server/views/home-feed';
 import { homeZoneAgrees, serverZoneFacts, HOME_ZONE_DAYS } from '../../../src/web-server/views/home-zone';
 import type { HomeContext } from '../../../src/web-server/views/home-context';
 
@@ -347,6 +347,43 @@ describe('GET /api/views/home, fed (R1)', () => {
     expect(service.puts).toEqual([]);
   });
 
+  it('review L1: a window whose JSON is not what the pass reads goes to today\'s handler', async () => {
+    const window = () => (dashboard.accounts[0] as unknown as { windows: Record<string, unknown>[] }).windows[0];
+    for (const [name, setup] of [
+      // TS's spread keeps this member's place; the JSON text has none, so Rust would append the flag.
+      ['resetPassed: undefined', () => (window().resetPassed = undefined)],
+      // The pass reads a Date as "not a string" (never passed); its JSON is an ISO string.
+      ['a Date resetAt', () => (window().resetAt = new Date('2026-11-14T11:00:00.000Z'))],
+      // `??` keeps NaN; JSON writes null, which falls back to the account's sample.
+      ['a NaN sampledAt', () => (window().sampledAt = Number.NaN)],
+    ] as const) {
+      dashboard = fixture();
+      setup();
+      const before = service.puts.length;
+      const reply = await get(fedUrl);
+      expect([name, await reply.text()]).toEqual([name, await (await get(plainUrl)).text()]);
+      expect(service.puts.length).toBe(before);
+    }
+    const counted = (service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>)[
+      '/api/views/home'
+    ];
+    expect(counted.unavailable.input).toBe(3);
+  });
+
+  it('review L4: a dashboard too large to push is refused once per change, not rebuilt each request', async () => {
+    (dashboard as unknown as Record<string, unknown>).note = 'x'.repeat(4 * 1024 * 1024);
+    for (let i = 0; i < 3; i++) {
+      const reply = await get(fedUrl);
+      expect(reply.status).toBe(200);
+      expect(reply.headers.get('etag')).not.toBe(ETAG);
+    }
+    expect(sources()).not.toContain('home-dashboard-mac-1');
+    const counted = (service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>)[
+      '/api/views/home'
+    ];
+    expect(counted.unavailable.cap).toBe(3);
+  });
+
   it('another root stays with the TS readers', async () => {
     const other = new StandIn();
     other.feedBoot = () => null;
@@ -379,6 +416,24 @@ describe('GET /api/views/home, fed (R1)', () => {
 });
 
 describe('fed facts', () => {
+  it('passFaithful admits plain JSON members and refuses what JSON would change or drop', () => {
+    const with_ = (window: Record<string, unknown>, account: Record<string, unknown> = {}) =>
+      ({ accounts: [{ ...account, windows: [window] }] }) as unknown as AccountDashboard;
+    expect(passFaithful(with_({ resetAt: '2026-11-14T11:00:00.000Z', sampledAt: null, resetPassed: false }))).toBe(true);
+    expect(passFaithful(with_({ resetAt: 5, sampledAt: 'x', resetPassed: true }, { sampledAt: 1 }))).toBe(true);
+    expect(passFaithful({ accounts: [null, 3, { windows: 'x' }, { windows: [null, 1, []] }] } as unknown as AccountDashboard)).toBe(true);
+    for (const bad of [
+      with_({ resetPassed: undefined }),
+      with_({ resetAt: new Date(0) }),
+      with_({ sampledAt: Number.POSITIVE_INFINITY }),
+      with_({ resetAt: { at: 1 } }),
+      with_({}, { sampledAt: undefined }),
+      with_(Object.create({ resetAt: '2026-11-14T11:00:00.000Z' })),
+      with_(Object.defineProperty({}, 'resetPassed', { value: true, enumerable: false })),
+    ])
+      expect(passFaithful(bad)).toBe(false);
+  });
+
   it('the epochs are every string markPassedResets hands to Date.parse', () => {
     const epochs = resetEpochs({
       accounts: [

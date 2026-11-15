@@ -11,7 +11,7 @@ import type { HomeContext, HomeZone } from './home-context';
 
 const ZONE_DAY = 86_400_000;
 const ZONE_STEP = 6 * 3_600_000;
-/** view-model.mjs `HOME_ZONE_DAYS`; tests/unit/web-server/home-zone.test.ts binds the two. */
+/** view-model.mjs `HOME_ZONE_DAYS`; tests/unit/web-server/home-feed.test.ts binds the two. */
 export const HOME_ZONE_DAYS = { past: 120, future: 400 } as const;
 /** Zone-days kept (oldest first out). */
 const KEEP = 32;

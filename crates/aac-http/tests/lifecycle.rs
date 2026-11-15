@@ -632,18 +632,29 @@ fn home_is_answered_from_the_fed_generations_with_its_etag() -> Result<()> {
         Value::Array(profiles)
     );
     assert_eq!(reply.body, want);
-    let digest: String = Sha256::digest(want.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    // R1b (review L2): the tag digests everything the bytes are a function of: the same inputs give the same tag
+    // (and the same bytes); another clock, page context or manifest gives another.
+    let tag = reply.header("etag").map(str::to_owned).ok_or("no etag")?;
+    assert!(
+        tag.len() == 68 && tag.starts_with("W/\"") && tag.ends_with('"'),
+        "{tag}"
+    );
+    let again = fed_home(&s, &feed(["1", "1", "1"]), "")?;
     assert_eq!(
-        reply.header("etag"),
-        Some(format!("W/\"{digest}\"").as_str())
+        (again.body.as_str(), again.header("etag")),
+        (want.as_str(), Some(tag.as_str()))
     );
     // Before the reset, nothing is marked.
     let early = feed(["1", "1", "1"]).replace("1794650400000", "1794650399999");
     let reply = fed_home(&s, &early, "")?;
     assert!(!reply.body.contains("resetPassed"), "{}", reply.body);
+    assert_ne!(reply.header("etag"), Some(tag.as_str()));
+    // A changed manifest (same generations) is read, its rows served, and the tag moves.
+    let file = s.root.join("claude-desktop-profiles.json");
+    fs::write(&file, FED_MANIFEST.replace("Claude 2", "Claude Two"))?;
+    let changed = fed_home(&s, &feed(["1", "1", "1"]), "")?;
+    assert!(changed.body.contains("Claude Two"), "{}", changed.body);
+    assert_ne!(changed.header("etag"), Some(tag.as_str()));
     Ok(())
 }
 

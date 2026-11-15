@@ -255,6 +255,15 @@ pub fn parse_date(s: &str) -> R<Option<i64>> {
         .ok_or(Decline("date"))
 }
 
+/// `readingPredatesReset(resetAt, sampledAt, now)` (`account-window-reset.ts`) over the two strings' `Date.parse`
+/// epochs (`None` is NaN, a non-string value included): the reset is finite and at or before `now`, and the reading
+/// was sampled before it or at an unknown time. The one port every composer uses (Antigravity quotas, Codex quotas,
+/// Home's fed `markPassedResets`); each reads its epochs its own way.
+pub fn reading_predates_reset(reset: Option<i64>, sampled: Option<i64>, now: f64) -> bool {
+    #[allow(clippy::cast_precision_loss)]
+    reset.is_some_and(|reset| reset as f64 <= now && sampled.is_none_or(|s| s < reset))
+}
+
 /// `validDate(v)`: a string `Date.parse` reads, as its time.
 pub fn valid_date(v: Option<&Value>) -> R<Option<i64>> {
     match v {

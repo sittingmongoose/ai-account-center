@@ -4,6 +4,7 @@
 //! must be the one declines.json names for that case, and only those cases may decline.
 use aac_api::home::HomeContext;
 use aac_status::read_context::Envelope;
+use aac_views::home::memo::Memos;
 use aac_views::home::{FedInput, build, build_fed};
 use aac_views::js::Ranks;
 use serde::Deserialize;
@@ -80,14 +81,41 @@ fn build_fed_case(
     }
     let ranks: Ranks = serde_json::from_value(case.presentation["order"].clone())
         .map_err(|e| format!("{}: order {e}", case.name))?;
-    Ok(build_fed(FedInput {
+    let plain = build_fed(FedInput {
         ctx: &ctx,
         dashboard: &case.dashboard,
         profiles: &case.profiles,
         antigravity: &case.antigravity,
-        ranks: Arc::new(ranks),
+        ranks: Arc::new(ranks.clone()),
         updated_at: None,
-    }))
+        memos: None,
+    });
+    // R1b: the same case through the generation's memo, twice: the first build fills it, the second reads only the
+    // kept clock-independent parts. All three must be the same view (or the same decline).
+    let memos = Memos::default();
+    for round in ["filling", "kept"] {
+        let with_memo = build_fed(FedInput {
+            ctx: &ctx,
+            dashboard: &case.dashboard,
+            profiles: &case.profiles,
+            antigravity: &case.antigravity,
+            ranks: Arc::new(ranks.clone()),
+            updated_at: None,
+            memos: Some(&memos),
+        });
+        let same = match (&plain, &with_memo) {
+            (Ok(a), Ok(b)) => serde_json::to_string(a).ok() == serde_json::to_string(b).ok(),
+            (Err(a), Err(b)) => a == b,
+            _ => false,
+        };
+        if !same {
+            return Err(format!(
+                "{}: the {round} memo build differs from the plain one",
+                case.name
+            ));
+        }
+    }
+    Ok(plain)
 }
 
 /// Where two texts first differ, with a little of each around it.
