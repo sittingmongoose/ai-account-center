@@ -470,6 +470,31 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             entry.insert("partial".into(), json!(true));
             entry.insert("unreadableFolders".into(), json!(folders.len()));
         }
+        if ["claude", "codex", "omp", "muse"].contains(&kind.as_str())
+            && states.contains_key(kind)
+            && found.as_ref().is_some_and(|f| f.optional_limited)
+        {
+            entry.insert("optionalSearchLimited".into(), json!(true));
+            // Previously observed files are real candidates whose disappearance this optional
+            // cutoff cannot confirm. Preserve their usage and complete-read clock.
+            let unconfirmed = request
+                .fingerprints
+                .get(kind)
+                .and_then(Value::as_object)
+                .map_or(0, |prior| {
+                    prior
+                        .keys()
+                        .filter(|key| {
+                            !collector.fresh.get(kind).is_some_and(|fresh| fresh.contains_key(*key))
+                                && !(kind == "claude" && collector.replaced_files.contains(*key))
+                        })
+                        .count()
+                });
+            if unconfirmed > 0 {
+                entry.insert("partial".into(), json!(true));
+                entry.insert("unconfirmedFiles".into(), json!(unconfirmed));
+            }
+        }
         // A discovery bound that left this kind's roots unlooked-at (FIX-ROUND-BIG 6).
         if let Some((read, seen)) = collector.search_limits.get(kind) {
             entry.insert("partial".into(), json!(true));

@@ -113,3 +113,9 @@ still needs release-packaging checks.
 | Tool | Issue and evidence | Real false pass? | Status |
 | --- | --- | --- | --- |
 | Rust transport four-channel fixture | `crates/aac-transport/tests/transport.rs`, `clones_limit_a_computer_to_four_concurrent_channels`: uncoordinated 100 ms children reached only three-way overlap in two unchanged workspace runs. [Astra max review L2](/mnt/Cursor/share/ai-account-center/2026-11-14-parallel/MAX-REWRITE-ASTRA.md). | No; false failure only, no excess concurrency demonstrated. | Open for six-hour tool batch: arrange four child-ready signals, hold a barrier, assert fifth blocked, then release. Do not weaken the limit assertion to hide the race. |
+
+## Analytics search-bound validation (2026-11-15)
+
+| Tool | Issue and evidence | Real false pass? | Status |
+| --- | --- | --- | --- |
+| OMP cached-root fixture | The unchanged `worker/sessions` 512-root revalidation case in `tests/unit/web-server/usage/omp-session-root-discovery.test.ts` exceeded Bun's default 5-second test timeout once (5.91 s) during the full fast bucket. All six cases passed in isolation (2.59 s total; the case took 1.48 s). [Timeout evidence](/mnt/Cursor/share/ai-account-center/2026-11-15-analytics-search-bound/fast-timeout.txt), [isolated recheck](/mnt/Cursor/share/ai-account-center/2026-11-15-analytics-search-bound/omp-revalidation.txt). | No; timing failure only, no product failure demonstrated. | Open for the six-hour tool batch: remove dependence on shared-runner scheduling while preserving the root-cap and rediscovery assertions. No timeout or assertion was weakened here. |

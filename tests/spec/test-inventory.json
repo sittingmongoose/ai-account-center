@@ -562,6 +562,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/search_bound.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-usage/tests/unreadable.rs",
       "kind": "internal",
       "evidence": [],

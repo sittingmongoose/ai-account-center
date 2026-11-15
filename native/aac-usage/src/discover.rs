@@ -861,7 +861,9 @@ fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
         for name in names {
             seen += 1;
             if seen > 400 {
-                return (false, failed);
+                // A real kind-named candidate exists. Let its reader finish the search instead
+                // of treating this bounded preflight as proof that the folder holds no logs.
+                return (true, failed);
             }
             let path = folder.join(&name);
             if fsx::is_link(&path) {
@@ -876,7 +878,10 @@ fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
                 }
             };
             if meta.is_dir() {
-                if depth < 3 && !fsx::skipped(&name) {
+                if !fsx::skipped(&name) {
+                    if depth >= 3 {
+                        return (true, failed);
+                    }
                     pending.push((path, depth + 1));
                 }
                 continue;
@@ -895,9 +900,10 @@ fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
     (false, failed)
 }
 
-/// What the experiment walk found: each kind's folders, and the kinds whose search a bound cut,
-/// with how many it kept and how many it saw (None: the walk itself stopped, so more may exist).
+/// What the optional experiment walk found, and per-kind caps on real candidate roots.
 pub struct ExperimentRoots {
+    /// Only the optional walk was cut; this does not establish an unread log root.
+    pub optional_limited: bool,
     pub found: HashMap<&'static str, Vec<PathBuf>>,
     pub limits: HashMap<&'static str, (usize, Option<usize>)>,
     /// Kind-named folders whose look inside failed: named by their kind's reader (M3).
@@ -910,10 +916,12 @@ pub struct ExperimentRoots {
 /// by entries and time; hidden folders (tool homes and caches), `node_modules`, `PM-Experiments`
 /// (its own walk), cloud-synced and personal folders, and git checkouts (a `.git` inside: fixtures,
 /// not logs) are never entered, nor is any link. A Muse folder is one root: its sessions are found
-/// under it at any depth. A bound that cuts the walk is a limit on every kind (FIX-ROUND-BIG 6).
+/// under it at any depth. A cut of this optional search is advisory; a cap that leaves known
+/// log roots unread remains a per-kind limit.
 pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
     let deadline = Instant::now() + budget;
     let mut result = ExperimentRoots {
+        optional_limited: false,
         found: HashMap::new(),
         limits: HashMap::new(),
         failed: HashMap::new(),
@@ -992,11 +1000,10 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
     }
     for kind in EXPERIMENT_KINDS {
         let count = seen.get(kind).copied().unwrap_or(0);
-        if cut {
-            result.limits.insert(kind, (count.min(EXPERIMENT_MAX_ROOTS), None));
-        } else if count > EXPERIMENT_MAX_ROOTS {
+        if count > EXPERIMENT_MAX_ROOTS {
             result.limits.insert(kind, (EXPERIMENT_MAX_ROOTS, Some(count)));
         }
     }
+    result.optional_limited = cut;
     result
 }
