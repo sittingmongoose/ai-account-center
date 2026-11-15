@@ -50,7 +50,20 @@ class BootFeeds {
   constructor(readonly boot: string) {}
 }
 
-let counter = 0;
+/**
+ * The last generation number this process issued. Numbers start from the clock (ms x 1000), so a front door that
+ * attaches to a service an earlier process fed still pushes newer generations, and a push that finds a newer one
+ * held moves past it ([`seen`]); both stay safe integers for centuries.
+ */
+let last = 0;
+function nextGeneration(): string {
+  last = Math.max(last + 1, Date.now() * 1000);
+  return String(last);
+}
+function seen(held: string): void {
+  const n = Number(held);
+  if (Number.isSafeInteger(n) && n > last) last = n;
+}
 const boots = new WeakMap<RustService, BootFeeds>();
 
 function feedsOf(service: RustService, boot: string): BootFeeds {
@@ -91,11 +104,16 @@ function ensure(
     feeds.held.set(source, { key, generation: null });
     return Promise.resolve({ declined: 'input' });
   }
-  const generation = String(++counter);
+  const generation = nextGeneration();
   const done = service
     .pushFeed(feeds.boot, source, generation, built.data, built.facts)
     .then((now): Generation => {
-      if (now !== generation) return { declined: now === null ? 'feed' : 'stale' };
+      if (now === null) return { declined: 'feed' };
+      if (now !== generation) {
+        // Another push holds a newer generation: this request is today's; the next one pushes past it.
+        seen(now);
+        return { declined: 'stale' };
+      }
       // A late reply of an older push never replaces what a newer one recorded.
       const current = feeds.held.get(source)?.generation;
       if (current === undefined || current === null || Number(current) < Number(generation))

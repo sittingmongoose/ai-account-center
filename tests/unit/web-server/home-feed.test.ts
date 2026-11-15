@@ -265,6 +265,16 @@ describe('GET /api/views/home, fed (R1)', () => {
     expect(service.puts.length).toBeGreaterThan(before);
   });
 
+  it("a front door whose numbers are behind the service's (an earlier process fed it) moves past them", async () => {
+    // Another front door pushed a generation far ahead; this one's push loses once, then lands.
+    service.held.set('home-dashboard-mac-1', { generation: '9000000000000000', data: '{}', facts: '{}' });
+    const first = await get(fedUrl);
+    expect(await first.text()).toBe(await (await get(plainUrl)).text());
+    const second = await get(fedUrl);
+    expect(await second.text()).toBe(RUST_BYTES);
+    expect(Number(service.held.get('home-dashboard-mac-1')?.generation)).toBeGreaterThan(9e15);
+  });
+
   it('a new service boot holds nothing: every source is pushed again', async () => {
     await get(fedUrl);
     service.boot = 'c'.repeat(24);
@@ -325,6 +335,16 @@ describe('GET /api/views/home, fed (R1)', () => {
     for (const reason of ['locale', 'feed', 'input', 'zone'])
       expect(counted.unavailable[reason]).toBeGreaterThan(0);
     expect(reasons).toEqual(['locale', 'feed', 'input', 'input']);
+  });
+
+  it("a dashboard the per-response pass throws on is today's 500, not an unhandled error", async () => {
+    // Not a list: TS declines before any push (a null window is the Rust service's decline, lifecycle.rs).
+    (dashboard as unknown as Record<string, unknown>).accounts = 'not a list';
+    const fed = await get(fedUrl);
+    const today = await get(plainUrl);
+    expect([fed.status, today.status]).toEqual([500, 500]);
+    expect(await fed.text()).toBe(await today.text());
+    expect(service.puts).toEqual([]);
   });
 
   it('another root stays with the TS readers', async () => {

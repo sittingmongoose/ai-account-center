@@ -33,7 +33,7 @@ import { answerHomeFed } from '../views/home-feed';
 export interface HomeViewRouterDeps {
   getDashboard?: typeof getAccountDashboard;
   readProfiles?: (req: Request, res: Response) => Promise<unknown[]>;
-  readInventory?: (req: Request, res: Response) => Promise<unknown>;
+  readInventory?: (req: Request, res: Response, read?: { value: unknown }) => Promise<unknown>;
   /** R1: the dashboard before its per-response pass, with that pass's clock. */
   readHomeDashboard?: typeof readAccountDashboardForHome;
   /** R1: the Antigravity runtime's inventory. */
@@ -70,6 +70,8 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
     const secureTransport = isSecureTransport(req);
     // R1: one read for both paths; `undefined` when the fed path did not run.
     let read: HomeDashboardRead | null | undefined;
+    // R1: the runtime inventory the fed path read, so a fallback answers from the same reads.
+    let fedInventory: { value: unknown } | undefined;
     const fed = homeFedService(res);
     if (fed) {
       const [homeRead, inventory] = await Promise.all([
@@ -82,6 +84,7 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
         ),
       ]);
       read = homeRead;
+      fedInventory = inventory ?? undefined;
       if (homeRead && inventory) {
         const answered = await answerHomeFed(req, res, fed, {
           platform,
@@ -95,13 +98,16 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
       } else fed.fedDeclined('/api/views/home', 'input');
     }
     const [dashboard, profiles, antigravity] = await Promise.all([
+      // The same read's answer after its pass; a pass that throws is a failed read, as `get` rejects.
       read !== undefined
-        ? Promise.resolve(read && withPassedResetsAt(read.dashboard, read.now))
+        ? Promise.resolve(read)
+            .then((value) => value && withPassedResetsAt(value.dashboard, value.now))
+            .catch(() => null)
         : (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
             secureTransport,
           }).catch(() => null),
       (deps.readProfiles ?? readClaudeDesktopProfiles)(req, res).catch(() => null),
-      (deps.readInventory ?? readAntigravityInventory)(req, res).catch(() => null),
+      (deps.readInventory ?? readAntigravityInventory)(req, res, fedInventory).catch(() => null),
     ]);
     if (!dashboard) {
       res.status(500).json({ error: 'Account usage could not be read safely.' });

@@ -60,8 +60,7 @@ fn build_fed_case(
     case: &Case,
 ) -> Result<Result<aac_api::home::HomeView, aac_views::js::Decline>, String> {
     let ctx = HomeContext::deserialize(&case.ctx).map_err(|e| format!("{}: ctx {e}", case.name))?;
-    if let Some(zone) = aac_num::intl::Zone::proven(ctx.zone.from, ctx.zone.to, &ctx.zone.offsets)
-    {
+    if let Some(zone) = aac_num::intl::Zone::proven(ctx.zone.from, ctx.zone.to, &ctx.zone.offsets) {
         let dates = case.presentation["dates"]
             .as_object()
             .cloned()

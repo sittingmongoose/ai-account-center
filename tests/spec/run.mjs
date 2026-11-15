@@ -48,6 +48,14 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  // R1: Home fed against today's handler, end to end on the real binary, under Node.
+  [
+    'node',
+    [
+      'tests/spec/home-read-parity.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
 ])
   execFileSync(program, args, {
     cwd,
