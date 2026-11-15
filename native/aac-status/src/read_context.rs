@@ -105,6 +105,40 @@ impl Context {
         }
     }
 }
+/// `Object.prototype` member names. TS reads `{...}[name]` on a plain object as the inherited member (a function,
+/// or `Object.prototype` itself), which no JSON lookup reproduces.
+pub const PROTO_NAMES: [&str; 12] = [
+    "constructor",
+    "__defineGetter__",
+    "__defineSetter__",
+    "hasOwnProperty",
+    "__lookupGetter__",
+    "__lookupSetter__",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toString",
+    "valueOf",
+    "__proto__",
+    "toLocaleString",
+];
+
+/// True when a key or string anywhere in `value` holds an `Object.prototype` member name as a word (split at every
+/// character an identifier cannot hold, so "constructor.fixture" counts). A Status or Scoreboard input with one
+/// declines: TS may look such a name up in a plain object (a quota meter label, a catalog metric) and answer with
+/// the inherited member (big review, Fable L1).
+pub fn proto_named(value: &V) -> bool {
+    let named = |text: &str| {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+            .any(|word| PROTO_NAMES.contains(&word))
+    };
+    match value {
+        V::String(text) => named(text),
+        V::Array(rows) => rows.iter().any(proto_named),
+        V::Object(map) => map.iter().any(|(key, v)| named(key) || proto_named(v)),
+        _ => false,
+    }
+}
+
 /// `/^\d{4}-\d{2}-\d{2}T/`: the strings the presentation envelope gives a `Date.parse` epoch whenever
 /// one is finite (`rust-read-input.ts`), so a missing fact for one of them is NaN, not unknown.
 pub fn iso_prefixed(text: &str) -> bool {
@@ -289,6 +323,27 @@ pub fn js_whitespace(c: char) -> bool {
 mod lows_tests {
     use super::js_number;
     use serde_json::{Value, json};
+
+    /// Big review (Fable L1): a prototype member name anywhere in a Status or Scoreboard input declines it.
+    #[test]
+    fn prototype_member_names_are_found_as_words() {
+        for value in [
+            json!({"meter": "constructor"}),
+            json!({"metric": {"of": "__proto__"}}),
+            json!([{"writer": "constructor.fixture"}]),
+            json!({"toString": 1}),
+            json!({"a": ["x", "x valueOf y"]}),
+        ] {
+            assert!(super::proto_named(&value), "{value}");
+        }
+        for value in [
+            json!({"meter": "five_hour", "label": "Constructor"}),
+            json!({"note": "construction toStrings value"}),
+            json!([1, null, true]),
+        ] {
+            assert!(!super::proto_named(&value), "{value}");
+        }
+    }
 
     /// Big review (Fable M1): a time the context cannot read declines the view; it is never "no time".
     #[test]

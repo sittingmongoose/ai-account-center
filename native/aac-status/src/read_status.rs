@@ -448,6 +448,9 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
     Some(out)
 }
 pub fn compose(envelope: Envelope) -> Option<V> {
+    if crate::read_context::proto_named(&envelope.data) {
+        return None;
+    }
     let now = envelope.data["now"].as_i64()?;
     let i = Inputs {
         data: envelope.data,

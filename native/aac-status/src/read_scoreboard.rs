@@ -710,6 +710,9 @@ fn bump(counts: &mut Vec<(String, usize)>, key: &str) {
 }
 
 pub fn compose(envelope: Envelope) -> Option<V> {
+    if crate::read_context::proto_named(&envelope.data) {
+        return None;
+    }
     let ctx = Context::new(envelope.presentation);
     let input = envelope.data;
     let now = input["now"].as_i64()?;

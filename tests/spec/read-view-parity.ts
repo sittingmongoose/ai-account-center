@@ -405,6 +405,45 @@ try {
     assert.equal(JSON.stringify(reply.body), JSON.stringify(expected), `board mtime ${mtime}`);
   }
   assert.ok(fractional >= 1, 'at least one board time carries a fraction');
+  // Big review (Fable L1): TS reads a name from a plain object (a quota meter label, a catalog metric) as the inherited
+  // Object.prototype member when the name is one, which no JSON lookup reproduces. Rust must decline those inputs.
+  const rename = (value: any, edit: (row: any) => boolean): number => {
+    if (value instanceof Map) return [...value.values()].reduce((n, v) => n + rename(v, edit), 0);
+    if (Array.isArray(value)) return value.reduce((n, v) => n + rename(v, edit), 0);
+    if (!value || typeof value !== 'object') return 0;
+    return (
+      (edit(value) ? 1 : 0) + Object.values(value).reduce((n: number, v) => n + rename(v, edit), 0)
+    );
+  };
+  const protoStatus = structuredClone(complex);
+  protoStatus.timeZone = 'UTC';
+  const meters = rename(
+    protoStatus.quota,
+    (row) => row.meter === 'seven_day' && !!(row.meter = 'constructor')
+  );
+  const protoScore = structuredClone(scoreBase);
+  const metrics = rename(protoScore.catalog, (row) =>
+    typeof row.metric?.of === 'string' ? !!(row.metric.of = 'constructor') : false
+  );
+  assert.ok(meters > 0 && metrics > 0, 'the prototype-name inputs reach a meter and a metric');
+  for (const [route, input, build, envelope] of [
+    ['/api/status', protoStatus, buildStatusView, rustStatusInput],
+    ['/api/scoreboard', protoScore, buildScoreboardView, rustScoreboardInput],
+  ] as const) {
+    const expected = JSON.stringify((build as (i: any) => unknown)(input));
+    if (tsOnly) continue;
+    const reply = await requestRust(
+      boot,
+      route,
+      { kind: 'session', id: 'fixture-admin', role: 'admin' },
+      active,
+      (envelope as (i: any) => unknown)(input)
+    );
+    assert.ok(
+      reply.status === 503 || (reply.status === 200 && JSON.stringify(reply.body) === expected),
+      `${route}: a prototype-member name must decline or match TS (got ${reply.status})`
+    );
+  }
   const file = path.join(root, 'tests/spec/contract/m3-read-views.json');
   const golden =
     JSON.stringify(JSON.parse(JSON.stringify(captured).split(home).join('<fixture>')), null, 2) +
@@ -412,7 +451,7 @@ try {
   if (process.argv.includes('--regenerate')) fs.writeFileSync(file, golden);
   else assert.equal(fs.readFileSync(file, 'utf8'), golden, 'raw-reader view golden bytes changed');
   console.log(
-    '18 Scoreboard and 21 Status raw-reader states plus 4 board ages: parity and bytes passed'
+    '18 Scoreboard and 21 Status raw-reader states, 4 board ages and 2 prototype names: parity and bytes passed'
   );
 } finally {
   service.stop();
