@@ -14,8 +14,12 @@ workspace = true
 aac-api.workspace = true
 aac-diag.workspace = true
 aac-files.workspace = true
+aac-store = { path = "../../native/aac-store", default-features = false }
+aac-status = { path = "../../native/aac-status", default-features = false }
+base64 = "0.22"
+libc.workspace = true
 serde.workspace = true
-serde_json = { workspace = true, features = ["raw_value"] }
+serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
 tokio = { workspace = true, features = ["net", "signal"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 subtle = "2.6"

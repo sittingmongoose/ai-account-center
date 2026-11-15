@@ -168,6 +168,20 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
                     .into_response(),
             }
         }
+        "/api/store/status"
+            if principal.role == aac_api::PrincipalRole::Device
+                || principal.dashboard_session() =>
+        {
+            crate::read_routes::answer(req).await
+        }
+        "/api/status" | "/api/scoreboard" | "/api/status/deliverable"
+            if principal.dashboard_session() =>
+        {
+            crate::read_routes::answer(req).await
+        }
+        path if path.starts_with("/api/status/files/") && principal.dashboard_session() => {
+            crate::read_routes::answer(req).await
+        }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -223,7 +237,14 @@ pub async fn serve(
             if entry.method != "GET"
                 || !matches!(
                     entry.path.as_str(),
-                    "/api/health" | "/api/diag" | "/api/accounts/settings"
+                    "/api/health"
+                        | "/api/diag"
+                        | "/api/accounts/settings"
+                        | "/api/store/status"
+                        | "/api/scoreboard"
+                        | "/api/status"
+                        | "/api/status/files/{*path}"
+                        | "/api/status/deliverable"
                 )
             {
                 return Err(failure());

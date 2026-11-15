@@ -167,6 +167,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/tests/read_numbers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/tests/socket.rs",
       "kind": "internal",
       "evidence": [],

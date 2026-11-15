@@ -23,9 +23,15 @@ export function requestRust(
   connection: RustConnection,
   route: string,
   principal: VerifiedRustPrincipal,
-  active: Set<http.ClientRequest>
+  active: Set<http.ClientRequest>,
+  input?: unknown
 ): Promise<RustReply> {
   return new Promise((resolve, reject) => {
+    const payload = input === undefined ? undefined : JSON.stringify(input);
+    if (payload !== undefined && Buffer.byteLength(payload) > 4 * 1024 * 1024) {
+      reject(new NetworkError('Rust service request cap'));
+      return;
+    }
     const request = http.request({
       socketPath: connection.socketPath,
       path: route,
@@ -34,6 +40,9 @@ export function requestRust(
       headers: {
         'x-aac-boot-secret': connection.secret,
         'x-aac-principal': JSON.stringify(principal),
+        ...(payload === undefined
+          ? {}
+          : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }),
       },
     });
     active.add(request);
@@ -48,7 +57,8 @@ export function requestRust(
       let size = 0;
       response.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > 64 * 1024) request.destroy(new NetworkError('Rust service response cap'));
+        if (size > (input === undefined ? 64 * 1024 : 2 * 1024 * 1024))
+          request.destroy(new NetworkError('Rust service response cap'));
         else chunks.push(chunk);
       });
       response.once('error', reject);
@@ -67,6 +77,6 @@ export function requestRust(
         }
       });
     });
-    request.end();
+    request.end(payload);
   });
 }

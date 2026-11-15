@@ -108,6 +108,144 @@ export class RustService {
     );
   }
 
+  /** Immutable reads stay with the existing collector/store owner. Rust assembles a candidate;
+   * this transitional gate admits it only when it exactly equals the TS reference for that read.
+   * No caller headers or request body enter the private input envelope.
+   */
+  async read(req: Request, route: string, expected: unknown, input: unknown): Promise<unknown> {
+    const entry = routes.find((r) => r.path === route && r.method === 'GET');
+    if (
+      this.mode === 'off' ||
+      entry?.owner !== 'rust' ||
+      this.stopped ||
+      !['GET', 'HEAD'].includes(req.method)
+    )
+      return expected;
+    const verified = principal(req, route);
+    if (!this.lease || !verified || this.inFlight >= 16) {
+      this.fallback();
+      return expected;
+    }
+    this.inFlight++;
+    const pending = requestRust(
+      this.lease.connection,
+      route.replace('{*path}', 'read'),
+      verified,
+      this.active,
+      input
+    ).finally(() => {
+      this.inFlight--;
+    });
+    const admit = (result: RustReply): unknown => {
+      if (this.mode === 'shadow') this.stats.shadowed++;
+      if (result.status !== 200) {
+        this.fallback();
+        return expected;
+      }
+      if (canonical(expected) !== canonical(result.body)) {
+        this.stats.differences++;
+        logger.warn(
+          'rust.service.shadow_difference',
+          'Rust read candidate differs; TypeScript fallback active',
+          { route, status: result.status }
+        );
+        this.fallback();
+        return expected;
+      }
+      this.fallbackLogged = false;
+      if (this.mode === 'shadow') return expected;
+      this.stats.served++;
+      return orderedLike(result.body, expected);
+    };
+    if (this.mode === 'shadow') {
+      void pending.then(admit).catch(() => {
+        this.fallback();
+      });
+      return expected;
+    }
+    try {
+      return admit(await pending);
+    } catch {
+      this.fallback();
+      return expected;
+    }
+  }
+
+  /** Compute in Rust first; legacy composition is lazy in on mode. Collectors remain owners. */
+  async compose(
+    req: Request,
+    route: string,
+    input: unknown,
+    legacy: () => unknown | Promise<unknown>,
+    accepts: (body: unknown) => boolean
+  ): Promise<unknown> {
+    const owned = routes.some((r) => r.path === route && r.method === 'GET' && r.owner === 'rust');
+    if (this.mode === 'off' || !owned || this.stopped || !['GET', 'HEAD'].includes(req.method))
+      return legacy();
+    const verified = principal(req, route);
+    if (!this.lease || !verified || this.inFlight >= 16) {
+      this.fallback();
+      return legacy();
+    }
+    let resolved: unknown;
+    try {
+      resolved = typeof input === 'function' ? (input as () => unknown)() : input;
+    } catch {
+      this.fallback();
+      return legacy();
+    }
+    this.inFlight++;
+    const pending = requestRust(
+      this.lease.connection,
+      route.replace('{*path}', 'read'),
+      verified,
+      this.active,
+      resolved
+    ).finally(() => {
+      this.inFlight--;
+    });
+    if (this.mode === 'shadow') {
+      let reference: unknown;
+      try {
+        reference = await legacy();
+      } catch (error) {
+        void pending.catch(() => undefined);
+        throw error;
+      }
+      void pending
+        .then((result) => {
+          this.stats.shadowed++;
+          if (result.status !== 200 || !accepts(result.body)) {
+            this.fallback();
+            return;
+          }
+          if (canonical(reference) !== canonical(result.body)) {
+            this.stats.differences++;
+            logger.warn('rust.service.shadow_difference', 'Rust read response differs', {
+              route,
+              status: result.status,
+            });
+          }
+        })
+        .catch(() => {
+          this.fallback();
+        });
+      return reference;
+    }
+    try {
+      const result = await pending;
+      if (result.status === 200 && accepts(result.body)) {
+        this.stats.served++;
+        this.fallbackLogged = false;
+        return result.body;
+      }
+    } catch {
+      /* Bounded, logged legacy fallback. */
+    }
+    this.fallback();
+    return legacy();
+  }
+
   async respond(
     req: Request,
     res: Response,
@@ -189,4 +327,50 @@ export async function respondWithRust(
   const service: unknown = res.locals.rustService;
   if (service instanceof RustService) await service.respond(req, res, route, answer);
   else res.json(answer());
+}
+
+/** Match the legacy serializer's property order without replacing any candidate values. */
+function orderedLike(candidate: unknown, reference: unknown): unknown {
+  if (Array.isArray(reference) && Array.isArray(candidate))
+    return candidate.map((value, index) => orderedLike(value, reference[index]));
+  if (reference && candidate && typeof reference === 'object' && typeof candidate === 'object') {
+    const values = candidate as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(reference).map(([key, value]) => [key, orderedLike(values[key], value)])
+    );
+  }
+  return candidate;
+}
+
+/** Called only after the original endpoint guards and one immutable source read. */
+export async function readWithRust(
+  req: Request,
+  res: Response,
+  route: string,
+  expected: unknown,
+  input: unknown = { snapshot: expected }
+): Promise<unknown> {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService ? service.read(req, route, expected, input) : expected;
+}
+
+/** Off mode retains the original file streamer without an additional read/copy. */
+export function rustReadsEnabled(res: Response): boolean {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService && service.mode === 'shadow';
+}
+
+/** Guarded route adapters use this with immutable reader inputs and a lazy legacy composer. */
+export async function composeWithRust(
+  req: Request,
+  res: Response,
+  route: string,
+  input: unknown,
+  legacy: () => unknown | Promise<unknown>,
+  accepts: (body: unknown) => boolean
+): Promise<unknown> {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService
+    ? service.compose(req, route, input, legacy, accepts)
+    : legacy();
 }

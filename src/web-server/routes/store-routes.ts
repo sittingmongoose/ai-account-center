@@ -5,6 +5,7 @@
  */
 import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
+import { readWithRust } from '../rust-service';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import {
@@ -93,11 +94,16 @@ export function createStoreRouter(deps: StoreRouterDeps = {}): Router {
       return fail(res, 400, 'invalid_query');
     const current = store();
     if (!current) {
-      res.json({ state: 'unavailable', reason: aacStoreState().reason ?? 'missing' });
+      res.json(
+        await readWithRust(req, res, '/api/store/status', {
+          state: 'unavailable',
+          reason: aacStoreState().reason ?? 'missing',
+        })
+      );
       return;
     }
     try {
-      res.json(await current.status());
+      res.json(await readWithRust(req, res, '/api/store/status', await current.status()));
     } catch {
       fail(res, 503, 'store_failed');
     }

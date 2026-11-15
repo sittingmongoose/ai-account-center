@@ -72,6 +72,16 @@ impl Service {
         principal: Option<&str>,
         method: &str,
     ) -> Result<String> {
+        self.request_input(path, secret, principal, method, None)
+    }
+    fn request_input(
+        &self,
+        path: &str,
+        secret: Option<&str>,
+        principal: Option<&str>,
+        method: &str,
+        input: Option<&Value>,
+    ) -> Result<String> {
         let mut stream = UnixStream::connect(&self.socket)?;
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
         write!(
@@ -84,7 +94,17 @@ impl Service {
         if let Some(p) = principal {
             write!(stream, "x-aac-principal: {p}\r\n")?;
         }
-        write!(stream, "\r\n")?;
+        if let Some(input) = input {
+            let body = serde_json::to_vec(input)?;
+            write!(
+                stream,
+                "content-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                body.len()
+            )?;
+            stream.write_all(&body)?;
+        } else {
+            write!(stream, "\r\n")?;
+        }
         let mut result = String::new();
         stream.read_to_string(&mut result)?;
         Ok(result)
@@ -277,5 +297,82 @@ fn process_opens_no_tcp_socket() -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn read_routes_use_the_existing_writer_snapshot_without_opening_another_writer() -> Result<()> {
+    let service = Service::start()?;
+    let directory = service.root.path().join("store");
+    let writer =
+        aac_store::ops::open_engine(directory.to_str().ok_or("path")?, Some(8 << 20), None)
+            .map_err(|e| e.to_string())?;
+    let snapshot = aac_store::ops::call(&writer, "status", "{}").map_err(|e| e.to_string())?;
+    let before = fs::read(directory.join("aac.redb"))?;
+    let result = service.request_input(
+        "/api/store/status",
+        Some(&"b".repeat(64)),
+        Some(&principal("session", "admin")),
+        "GET",
+        Some(&json!({"snapshot": snapshot})),
+    )?;
+    assert!(result.starts_with("HTTP/1.1 200"), "{result}");
+    assert_eq!(
+        serde_json::from_str::<Value>(result.split("\r\n\r\n").nth(1).ok_or("body")?.trim())?,
+        snapshot
+    );
+    assert_eq!(fs::read(directory.join("aac.redb"))?, before);
+    // A real competing writer is still refused: the service did not replace/release the owner.
+    assert!(aac_store::ops::open_engine(directory.to_str().ok_or("path")?, None, None).is_err());
+    let unsupported = service.request_input(
+        "/api/store/status",
+        Some(&"b".repeat(64)),
+        Some(&principal("session", "admin")),
+        "GET",
+        Some(&json!({"snapshot":{"state":"ready","fixture":true}})),
+    )?;
+    assert!(unsupported.starts_with("HTTP/1.1 503"), "{unsupported}");
+    writer.close().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[test]
+fn bounded_file_reads_are_confined_and_never_follow_a_writer_root_symlink() -> Result<()> {
+    let service = Service::start()?;
+    let root = service.root.path().join("machine");
+    fs::create_dir_all(root.join("share"))?;
+    fs::write(root.join("share/test.txt"), b"fixture")?;
+    let input = json!({"root":root,"writer":null,"path":"share/test.txt","start":1,"length":3,"head":false});
+    let request = |input: &Value| {
+        service.request_input(
+            "/api/status/deliverable",
+            Some(&"b".repeat(64)),
+            Some(&principal("session", "admin")),
+            "GET",
+            Some(input),
+        )
+    };
+    let result = request(&input)?;
+    assert!(result.starts_with("HTTP/1.1 200"), "{result}");
+    assert_eq!(
+        serde_json::from_str::<Value>(result.split("\r\n\r\n").nth(1).ok_or("body")?.trim())?,
+        json!({"size":7,"bytes":"aXh0"})
+    );
+    for path in [
+        "share/../private.txt",
+        "share/.hidden",
+        "share/test.txt%00",
+        "/share/test.txt",
+    ] {
+        let mut invalid = input.clone();
+        invalid["path"] = json!(path);
+        assert!(request(&invalid)?.starts_with("HTTP/1.1 503"));
+    }
+    let outside = service.root.path().join("outside");
+    fs::create_dir(&outside)?;
+    fs::write(outside.join("test.txt"), b"outside")?;
+    fs::rename(root.join("share"), root.join("saved"))?;
+    std::os::unix::fs::symlink(&outside, root.join("share"))?;
+    assert!(request(&input)?.starts_with("HTTP/1.1 503"));
     Ok(())
 }

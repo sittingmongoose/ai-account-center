@@ -60,6 +60,7 @@ import {
   streamLabelsOf,
   type Collected,
   type StatusView,
+  type StatusInputs,
   type UsageInput,
 } from './status-view';
 import { PinnedThreadsCollector, zoneOffsetMinutes } from './pinned-threads';
@@ -578,7 +579,7 @@ export class StatusService {
   };
 
   /** The view now. A read counts as demand for the process-starting collectors. */
-  view(): StatusView {
+  readInputs(): StatusInputs {
     const now = this.now();
     const idle = !this.wanted();
     this.lastDemand = now;
@@ -594,7 +595,7 @@ export class StatusService {
       answers = [];
       answerHistoryProblem = "The answer history can't be read right now.";
     }
-    return buildStatusView({
+    return {
       now,
       timeZone: this.timeZone(),
       reports: this.reader.snapshot(),
@@ -610,7 +611,11 @@ export class StatusService {
       quota: this.quotaReader.snapshot(),
       pinned: this.pinned.view(),
       spendByStream: this.spendByStream,
-    });
+    };
+  }
+
+  view(): StatusView {
+    return buildStatusView(this.readInputs());
   }
 
   /** Starts the timers; returns the stop call. */

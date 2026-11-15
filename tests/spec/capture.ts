@@ -516,7 +516,17 @@ try {
       });
     }
   assert.equal(
-    fs.readdirSync(path.join(spec, 'contract')).length,
+    fs
+      .readdirSync(path.join(spec, 'contract'))
+      .filter(
+        (file) =>
+          ![
+            'm3-read-snapshots.json',
+            'm3-read-files.json',
+            'm3-read-views.json',
+            'm3-read-http.json',
+          ].includes(file)
+      ).length,
     inventory.length * roles.length,
     'Stale or missing golden files'
   );
@@ -527,9 +537,10 @@ try {
       'must actually serve health/settings/diag from Rust after TS role guards'
     );
   if (rustMode === 'shadow') {
-    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 9; i++)
+    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 12; i++)
       await new Promise((r) => setTimeout(r, 10));
-    assert.equal(instance.rustService.stats.shadowed, 9);
+    // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide raw reader inputs.
+    assert.equal(instance.rustService.stats.shadowed, 12);
     assert.equal(instance.rustService.stats.served, 0);
     assert.equal(instance.rustService.stats.differences, 0);
   }
