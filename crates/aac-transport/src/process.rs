@@ -124,7 +124,10 @@ impl SshPolicy {
             "ControlMaster=auto".into(),
         ]);
         let mut control = OsString::from("ControlPath=");
-        control.push(quote_option_path(&format!("{}/cm-%C", control_path.trim_end_matches('/'))));
+        control.push(quote_option_path(&format!(
+            "{}/cm-%C",
+            control_path.trim_end_matches('/')
+        )));
         argv.extend([
             "-o".into(),
             control,
@@ -154,7 +157,11 @@ fn option_path(path: &Path) -> Result<String, Failure> {
 }
 
 fn quote_option_path(text: &str) -> String {
-    if text.contains(' ') { format!("\"{text}\"") } else { text.to_owned() }
+    if text.contains(' ') {
+        format!("\"{text}\"")
+    } else {
+        text.to_owned()
+    }
 }
 
 /// Per-call controls; the absolute deadline also covers waiting for a channel slot.
@@ -281,7 +288,8 @@ impl Computer {
         output: mpsc::Sender<Vec<u8>>,
     ) -> Result<ProcessOutput, Failure> {
         let command = self.command(argv, options)?;
-        self.run_command(command, stdin, options, Some(Pipes { controls, output })).await
+        self.run_command(command, stdin, options, Some(Pipes { controls, output }))
+            .await
     }
 
     fn command(&self, argv: &[OsString], options: &CallOptions) -> Result<Command, Failure> {
@@ -371,7 +379,10 @@ impl Computer {
                         .ok_or_else(|| Failure::new(Cause::Refused, "non-UTF8 remote argv"))
                         .and_then(|s| {
                             if s.chars().any(|c| ('\u{2018}'..='\u{201b}').contains(&c)) {
-                                return Err(Failure::new(Cause::Refused, "unsupported PowerShell quote"));
+                                return Err(Failure::new(
+                                    Cause::Refused,
+                                    "unsupported PowerShell quote",
+                                ));
                             }
                             Ok(format!("'{}'", s.replace('\'', "''")))
                         })
@@ -643,7 +654,10 @@ async fn capture_bytes(
         }
         bytes.extend_from_slice(&buffer[..n]);
         if let Some(stream) = &stream {
-            stream.send(buffer[..n].to_vec()).await.map_err(|_| Failure::new(Cause::Cancelled, "agent receiver closed"))?;
+            stream
+                .send(buffer[..n].to_vec())
+                .await
+                .map_err(|_| Failure::new(Cause::Cancelled, "agent receiver closed"))?;
         }
     }
 }

@@ -236,14 +236,24 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     match row.handler {
         Handler::Agent | Handler::AgentControl => {
             let path = req.uri().path().to_owned();
-            let cap = if row.handler == Handler::AgentControl { 65536 } else { aac_protocol::MAX_SCAN_FRAME_BYTES + 4096 };
-            let bytes = match tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), cap)).await {
-                Ok(Ok(bytes)) => bytes,
-                _ => return decline(row.handler, Decline::Shape),
+            let cap = if row.handler == Handler::AgentControl {
+                65536
+            } else {
+                aac_protocol::MAX_SCAN_FRAME_BYTES + 4096
             };
+            let bytes =
+                match tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), cap))
+                    .await
+                {
+                    Ok(Ok(bytes)) => bytes,
+                    _ => return decline(row.handler, Decline::Shape),
+                };
             let name = path.strip_prefix("/internal/agent/").unwrap_or("");
             if row.handler == Handler::AgentControl {
-                shared.agents.control(name.strip_suffix("/control").unwrap_or(""), &bytes).await
+                shared
+                    .agents
+                    .control(name.strip_suffix("/control").unwrap_or(""), &bytes)
+                    .await
             } else {
                 shared.agents.call(name, &bytes).await
             }

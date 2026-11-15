@@ -11,8 +11,13 @@ use tokio::sync::{Mutex, mpsc};
 pub fn artifact_cap() -> usize {
     static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *CAP.get_or_init(|| {
-        serde_json::from_str::<serde_json::Value>(include_str!("../../../config/tables/agent-transport-policy.json"))
-            .ok().and_then(|v| v["artifactMaxBytes"].as_u64()).and_then(|n| usize::try_from(n).ok()).unwrap_or(0)
+        serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../config/tables/agent-transport-policy.json"
+        ))
+        .ok()
+        .and_then(|v| v["artifactMaxBytes"].as_u64())
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(0)
     })
 }
 
@@ -83,13 +88,21 @@ pub struct AgentClient {
 impl AgentClient {
     /// Pair a computer with a locally verified artifact; this does not contact it.
     pub fn new(computer: Computer, artifact: AgentArtifact) -> Self {
-        Self { computer, artifact, allow_shipping: true, ready: Arc::new(Mutex::new(false)) }
+        Self {
+            computer,
+            artifact,
+            allow_shipping: true,
+            ready: Arc::new(Mutex::new(false)),
+        }
     }
 
     /// Use only an already installed, pinned agent. Exit 87 or an old handshake refuses;
     /// this policy never prepares a cache, invokes SCP, or changes a remote file.
     pub fn existing(computer: Computer, artifact: AgentArtifact) -> Self {
-        Self { allow_shipping: false, ..Self::new(computer, artifact) }
+        Self {
+            allow_shipping: false,
+            ..Self::new(computer, artifact)
+        }
     }
 
     /// Check SHA-256 before every use and cache a successful handshake for this client.
@@ -105,7 +118,9 @@ impl AgentClient {
         };
         self.verify(options).await?;
         let mut ready = self.ready.lock().await;
-        if *ready { return Ok(()); }
+        if *ready {
+            return Ok(());
+        }
         self.ensure_locked(options).await?;
         *ready = true;
         Ok(())
@@ -134,7 +149,10 @@ impl AgentClient {
             return Err(Failure::new(Cause::AgentMismatch, "agent launcher failed"));
         }
         if !self.allow_shipping {
-            return Err(Failure::new(Cause::AgentMismatch, "existing agent missing or damaged"));
+            return Err(Failure::new(
+                Cause::AgentMismatch,
+                "existing agent missing or damaged",
+            ));
         }
         let prepared = self
             .computer
@@ -191,8 +209,11 @@ impl AgentClient {
     }
 
     async fn verify(&self, options: &CallOptions) -> Result<(), Failure> {
-        static VERIFY: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
-        let semaphore = VERIFY.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4))).clone();
+        static VERIFY: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+            std::sync::OnceLock::new();
+        let semaphore = VERIFY
+            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+            .clone();
         let artifact = self.artifact.clone();
         tokio::select! {
             biased;
@@ -230,7 +251,9 @@ impl AgentClient {
             self.launcher("run")
         };
         let output = self.computer.execute(&argv, &input, options).await?;
-        if output.code == Some(EXIT_AGENT_MISSING) { *self.ready.lock().await = false; }
+        if output.code == Some(EXIT_AGENT_MISSING) {
+            *self.ready.lock().await = false;
+        }
         self.events(request, output)
     }
 
@@ -243,8 +266,10 @@ impl AgentClient {
         controls: mpsc::Receiver<Vec<u8>>,
         progress: mpsc::Sender<Event>,
     ) -> Result<Vec<Event>, Failure> {
-        let input = serde_json::to_vec(request).map_err(|_| Failure::new(Cause::Refused, "request encoding failed"))?;
-        self.call_controlled_encoded(request, &input, options, controls, progress).await
+        let input = serde_json::to_vec(request)
+            .map_err(|_| Failure::new(Cause::Refused, "request encoding failed"))?;
+        self.call_controlled_encoded(request, &input, options, controls, progress)
+            .await
     }
 
     /// Preserve raw argument spellings (duplicate keys, numbers and whitespace) across the
@@ -258,17 +283,29 @@ impl AgentClient {
         progress: mpsc::Sender<Event>,
     ) -> Result<Vec<Event>, Failure> {
         request.validate()?;
-        let decoded: Request = serde_json::from_slice(encoded).map_err(|_| Failure::new(Cause::Refused, "invalid request encoding"))?;
-        if &decoded != request { return Err(Failure::new(Cause::Refused, "request encoding mismatch")); }
+        let decoded: Request = serde_json::from_slice(encoded)
+            .map_err(|_| Failure::new(Cause::Refused, "invalid request encoding"))?;
+        if &decoded != request {
+            return Err(Failure::new(Cause::Refused, "request encoding mismatch"));
+        }
         self.ensure(options).await?;
         let mut input = encoded.to_vec();
-        if input.len() >= frame_cap(&request.verb) { return Err(Failure::new(Cause::OutputTooLarge, "agent request cap exceeded")); }
+        if input.len() >= frame_cap(&request.verb) {
+            return Err(Failure::new(
+                Cause::OutputTooLarge,
+                "agent request cap exceeded",
+            ));
+        }
         input.push(b'\n');
         let argv = if matches!(self.computer.config.transport, TransportConfig::Local) {
             vec![self.artifact.path.as_os_str().into()]
-        } else { self.launcher("run") };
+        } else {
+            self.launcher("run")
+        };
         let (sender, mut chunks) = mpsc::channel(4);
-        let execute = self.computer.execute_controlled(&argv, &input, options, controls, sender);
+        let execute = self
+            .computer
+            .execute_controlled(&argv, &input, options, controls, sender);
         tokio::pin!(execute);
         let mut buffer = Vec::new();
         let mut terminal = false;
@@ -297,8 +334,13 @@ impl AgentClient {
                 }
             }
         }
-        let output = match output { Some(output) => output, None => execute.await? };
-        if output.code == Some(EXIT_AGENT_MISSING) { *self.ready.lock().await = false; }
+        let output = match output {
+            Some(output) => output,
+            None => execute.await?,
+        };
+        if output.code == Some(EXIT_AGENT_MISSING) {
+            *self.ready.lock().await = false;
+        }
         self.events(request, output)
     }
 
@@ -401,10 +443,15 @@ if [ '{mode}' = run ]; then exec "$f"; else exec "$f" --version; fi"#
 
 fn check_event(request: &Request, event: &Event) -> Result<(), Failure> {
     let (protocol, id) = match event {
-        Event::Progress { protocol, id, .. } | Event::Result { protocol, id, .. } | Event::Failure { protocol, id, .. } => (protocol, id),
+        Event::Progress { protocol, id, .. }
+        | Event::Result { protocol, id, .. }
+        | Event::Failure { protocol, id, .. } => (protocol, id),
     };
     if *protocol != PROTOCOL_VERSION || id != &request.id {
-        return Err(Failure::new(Cause::AgentMismatch, "agent event correlation mismatch"));
+        return Err(Failure::new(
+            Cause::AgentMismatch,
+            "agent event correlation mismatch",
+        ));
     }
     Ok(())
 }

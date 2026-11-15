@@ -193,7 +193,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
-            || (method == axum::http::Method::POST && !matches!(handler, Handler::Agent | Handler::AgentControl))
+            || (method == axum::http::Method::POST
+                && !matches!(handler, Handler::Agent | Handler::AgentControl))
             || (method == axum::http::Method::PUT && handler != Handler::Feed)
             || rows
                 .iter()
