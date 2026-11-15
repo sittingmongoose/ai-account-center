@@ -382,6 +382,13 @@
       ]
     },
     {
+      "file": "crates/aac-transport/tests/ssh_loopback.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-transport/tests/transport.rs",
       "kind": "helper",
       "evidence": [
@@ -947,6 +954,14 @@
       "file": "tests/spec/agent/harness_test.py",
       "kind": "helper",
       "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/spec/agent/ssh-policy-isolation.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
         "helper"
       ]
     },
@@ -3412,6 +3427,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/ssh-connection-options.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/ssh-policy.test.ts",
       "kind": "helper",
       "evidence": [
@@ -3422,7 +3443,8 @@
       "file": "tests/unit/web-server/start-server-host.test.ts",
       "kind": "HTTP",
       "evidence": [
-        "HTTP"
+        "HTTP",
+        "helper"
       ]
     },
     {

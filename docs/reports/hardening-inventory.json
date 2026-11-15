@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1121,
-    "filesAffected": 111,
-    "hotpathOccurrences": 547,
-    "hotpathFilesAffected": 61,
+    "totalOccurrences": 1116,
+    "filesAffected": 112,
+    "hotpathOccurrences": 544,
+    "hotpathFilesAffected": 62,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -35,25 +35,6 @@
           "existsSync",
           "realpathSync",
           "statSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/rust-service-lifecycle.ts",
-        "count": 23,
-        "calls": [
-          "existsSync",
-          "lstatSync",
-          "mkdirSync",
-          "readdirSync",
-          "readFileSync",
-          "realpathSync",
-          "renameSync",
-          "rmdirSync",
-          "rmSync",
-          "statSync",
-          "unlinkSync",
-          "writeFileSync"
         ],
         "markers": []
       },
@@ -122,6 +103,23 @@
           "readdirSync",
           "renameSync",
           "rmSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/rust-service-lifecycle.ts",
+        "count": 18,
+        "calls": [
+          "existsSync",
+          "lstatSync",
+          "mkdirSync",
+          "readdirSync",
+          "readFileSync",
+          "renameSync",
+          "rmdirSync",
+          "rmSync",
+          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
@@ -346,17 +344,15 @@
         "markers": []
       },
       {
-        "file": "src/web-server/rust-service-lifecycle.ts",
+        "file": "src/web-server/services/app-update-service.ts",
         "count": 23,
         "calls": [
-          "existsSync",
-          "lstatSync",
+          "chmodSync",
+          "closeSync",
           "mkdirSync",
-          "readdirSync",
+          "openSync",
           "readFileSync",
-          "realpathSync",
           "renameSync",
-          "rmdirSync",
           "rmSync",
           "statSync",
           "unlinkSync",
@@ -367,8 +363,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 208,
-    "filesAffected": 61,
+    "totalMarkers": 210,
+    "filesAffected": 63,
     "topFiles": [
       {
         "file": "src/web-server/rust-service.ts",
@@ -549,16 +545,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 667,
-      "typedThrows": 215,
+      "totalThrows": 671,
+      "typedThrows": 219,
       "plainThrows": 47,
       "otherThrows": 405,
-      "adoptionRatio": 0.3223,
+      "adoptionRatio": 0.3264,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 390,
-          "typed": 162,
+          "count": 394,
+          "typed": 166,
           "plain": 7
         },
         {
