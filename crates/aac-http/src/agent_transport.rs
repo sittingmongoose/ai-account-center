@@ -73,6 +73,9 @@ pub(crate) struct Agents {
     active: Mutex<BTreeMap<String, Active>>,
 }
 
+/// The service's deadline is this much earlier than the caller's `timeoutMs`.
+const FRONT_DOOR_MARGIN_MS: u64 = 250;
+
 fn refused() -> Failure {
     Failure::new(Cause::Refused, "agent transport unavailable")
 }
@@ -285,10 +288,20 @@ impl Agents {
         {
             return unavailable(&call.call_id, "shape");
         }
+        // End before the front door's own `timeoutMs` timer, leaving time to reap the owned child
+        // and deliver an ordinary fallback frame. A slow agent must not look like an unresponsive
+        // service to L1's health supervisor (L5 review L2).
+        let Some(budget) = call
+            .timeout_ms
+            .checked_sub(FRONT_DOOR_MARGIN_MS)
+            .filter(|ms| *ms > 0)
+        else {
+            return unavailable(&call.call_id, "deadline");
+        };
         let Ok(permit) = self.slots.clone().try_acquire_owned() else {
             return unavailable(&call.call_id, "busy");
         };
-        let deadline = started + Duration::from_millis(call.timeout_ms);
+        let deadline = started + Duration::from_millis(budget);
         let mut loaded = self.registry.subscribe();
         if !self.loading.swap(true, Ordering::AcqRel) {
             let root = self.root.clone();
