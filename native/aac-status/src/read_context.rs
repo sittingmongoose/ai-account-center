@@ -37,6 +37,10 @@ impl Date {
             day: Some(day),
         })
     }
+    /// `Date#toISOString` of this instant. In the admitted domain it is 24 bytes.
+    pub fn iso_text(&self) -> &str {
+        &self.iso
+    }
 }
 pub struct Context {
     facts: Arc<Presentation>,

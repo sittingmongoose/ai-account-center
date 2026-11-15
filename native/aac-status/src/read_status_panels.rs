@@ -111,7 +111,7 @@ pub(super) fn machines_source(i: &Inputs, rows: &[V]) -> Option<V> {
         if off.is_empty() {
             (
                 "ok",
-                format!("All {} machines read by {}.", rows.len(), i.clock(at.unwrap_or(i.now))),
+                format!("All {} machines read by {}.", rows.len(), i.clock_or_now(at)),
             )
         } else {
             (
@@ -166,7 +166,7 @@ pub(super) fn usage(i: &Inputs, source: &V) -> Option<V> {
                 .filter(|v| !v.is_null())
                 .unwrap_or(&account["sampledAt"]));
             let reset_passed =
-                w["resetPassed"] == true || reset.is_some_and(|r| r <= i.now && sampled.is_none_or(|t| t < r));
+                w["resetPassed"] == true || reset.is_some_and(|r| i.due(r) && sampled.is_none_or(|t| t < r));
             let stale = source["state"] != "ok" || account["status"] != "ok" || w["cached"] == true || reset_passed;
             let at_limit = number(&w["usedPercent"]).is_some_and(|n| n >= 100.0) && !reset_passed;
             let burn = if reset_passed { &V::Null } else { &w["burn"] };
@@ -183,22 +183,18 @@ pub(super) fn usage(i: &Inputs, source: &V) -> Option<V> {
             );
             if at_limit {
                 let text = reset
-                    .map(|r| format!("{who}: at its limit until its {} {} reset", i.ctx.day(r), i.clock(r)))
+                    .map(|r| format!("{who}: at its limit until its {} {} reset", i.day(r), i.clock(r)))
                     .unwrap_or_else(|| format!("{who}: at its limit"));
                 warnings.push((0.0, json!({"tone":"bad","text":text})));
                 continue;
             }
-            if burn["runsOutBeforeReset"] == true && full.is_some_and(|f| f > i.now) {
+            if burn["runsOutBeforeReset"] == true && full.is_some_and(|f| i.ahead(f)) {
                 let full = full?;
                 let text = reset
-                    .map(|r| {
-                        format!(
-                            "{who}: full in {}, before its {} reset",
-                            span((full - i.now) as f64 / 1000.0),
-                            i.ctx.day(r)
-                        )
-                    })
-                    .unwrap_or_else(|| format!("{who}: full in {}", span((full - i.now) as f64 / 1000.0)));
+                    .map(|r| format!("{who}: full in {}, before its {} reset", i.span_until(full), i.day(r)))
+                    .unwrap_or_else(|| format!("{who}: full in {}", i.span_until(full)));
+                // Every rank moves by the same `now`, so the order does not. `ahead` and `span_until`
+                // are the decisions that change the bytes.
                 warnings.push(((full - i.now) as f64, json!({"tone":"warn","text":text})));
             }
         }

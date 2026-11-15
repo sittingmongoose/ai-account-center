@@ -3,6 +3,7 @@
 use crate::read_context::{Context, Envelope, age, age_of, array, js_whitespace, number, plural, rows, s};
 use aac_num::{ecma, view};
 use serde_json::{Value as V, json};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 #[path = "read_status_cards.rs"]
 mod cards;
@@ -12,6 +13,9 @@ mod panels;
 mod spend;
 #[path = "read_status_strip.rs"]
 mod strip;
+#[path = "read_status_trace.rs"]
+mod trace;
+pub use trace::FedTrace;
 /// The composer's input object: the presentation envelope's `data` (owned), or R2's fed generations, each a JSON
 /// object of some of its top-level members, borrowed from the generations a request names (no copy per request).
 /// Indexing by a top-level key reads like `Value` indexing: an absent member is `null`.
@@ -41,6 +45,8 @@ struct Inputs<'a> {
     /// The writers of open question, judgement and action cards, found once per view (`stale_thread` asks for
     /// every thread and every card's asker).
     owner_cards: std::cell::OnceCell<OwnerCards>,
+    /// R2b: the now-dependent decisions, recorded when this view may be kept.
+    trace: RefCell<trace::Recorder>,
 }
 /// Writer values, compared as `Value`s compare: strings by text, anything else by value.
 #[derive(Default)]
@@ -65,13 +71,68 @@ impl Inputs<'_> {
         Some(self.at(&row["writtenAtMs"]).map(|t| t.min(seen)).unwrap_or(seen))
     }
     fn clock(&self, at: i64) -> String {
+        self.trace
+            .borrow_mut()
+            .note_lookup(self.now, trace::LookupKind::Clock, at);
         self.ctx.clock(at)
     }
+    fn day(&self, at: i64) -> String {
+        self.trace
+            .borrow_mut()
+            .note_lookup(self.now, trace::LookupKind::Day, at);
+        self.ctx.day(at)
+    }
     fn iso(&self, at: Option<i64>) -> V {
+        if let Some(ms) = at {
+            self.trace
+                .borrow_mut()
+                .note_lookup(self.now, trace::LookupKind::Iso, ms);
+        }
         self.ctx.iso(at)
     }
+    /// `generatedAt`: the request's own ISO word. It is filled per request and is not a kept decision.
+    fn generated_at(&self) -> V {
+        self.ctx.iso(Some(self.now))
+    }
+    /// A stored instant's clock word, or the request's clock word when the instant is absent.
+    fn clock_or_now(&self, at: Option<i64>) -> String {
+        match at {
+            Some(t) => self.clock(t),
+            None => self.ctx.clock(self.now),
+        }
+    }
     fn age(&self, at: Option<i64>) -> V {
-        age(self.now, at)
+        let value = age(self.now, at);
+        self.trace.borrow_mut().note_age(at, &value);
+        value
+    }
+    fn age_f(&self, ms: f64) -> V {
+        let value = age_of(self.now as f64 - ms);
+        self.trace.borrow_mut().note_age_f(ms, &value);
+        value
+    }
+    /// `now - at > limit`.
+    fn after(&self, at: i64, limit: i64) -> bool {
+        let hit = self.now - at > limit;
+        self.trace.borrow_mut().note_after(at, limit, hit);
+        hit
+    }
+    /// `at <= now`.
+    fn due(&self, at: i64) -> bool {
+        let hit = at <= self.now;
+        self.trace.borrow_mut().note_due(at, hit);
+        hit
+    }
+    /// `at > now`.
+    fn ahead(&self, at: i64) -> bool {
+        let hit = at > self.now;
+        self.trace.borrow_mut().note_ahead(at, hit);
+        hit
+    }
+    fn span_until(&self, full: i64) -> String {
+        let text = span((full - self.now) as f64 / 1000.0);
+        self.trace.borrow_mut().note_span(full, text.clone());
+        text
     }
     fn stale_thread(&self, row: &V) -> Option<bool> {
         if !row["problem"].is_null() {
@@ -100,11 +161,11 @@ impl Inputs<'_> {
         if owner {
             return Some(false);
         }
-        let age = self.now - self.seen(row)?;
+        let seen = self.seen(row)?;
         if row["doc"]["ttlSeconds"].is_null() {
-            Some(!["blocked", "waiting"].contains(&s(&row["doc"]["state"])) && age > 86_400_000)
+            Some(!["blocked", "waiting"].contains(&s(&row["doc"]["state"])) && self.after(seen, 86_400_000))
         } else {
-            Some(age > row["doc"]["ttlSeconds"].as_i64()? * 1000)
+            Some(self.after(seen, row["doc"]["ttlSeconds"].as_i64()? * 1000))
         }
     }
     fn board(&self, given: &V) -> V {
@@ -115,7 +176,7 @@ impl Inputs<'_> {
         // A board time is `fs.Stats.mtimeMs`, fractional on ext4, ZFS, NFS and SMB: age it as
         // status-view-words.ts `ageSeconds` does, in binary64, rather than as "no time".
         let age = match mtime.as_f64() {
-            Some(ms) if !mtime.is_i64() && ms.is_finite() && ms.abs() <= 8.64e15 => age_of(self.now as f64 - ms),
+            Some(ms) if !mtime.is_i64() && ms.is_finite() && ms.abs() <= 8.64e15 => self.age_f(ms),
             _ => self.age(self.at(mtime)),
         };
         json!({"path":given,"ageSeconds":age})
@@ -360,7 +421,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
         reporting.insert(name.clone());
         reporting.insert(s(&row["writer"]).split_once('.')?.1.to_owned());
         let at = i.seen(row)?;
-        if i.now - at > 86_400_000 && row["doc"]["state"] != "blocked" {
+        if i.after(at, 86_400_000) && row["doc"]["state"] != "blocked" {
             continue;
         }
         let ahead = (number(&row["writtenAtMs"]).unwrap_or(number(&row["firstSeenAt"])?)
@@ -377,7 +438,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
         let Some(at) = i.at(&thread["lastSeen"]) else {
             continue;
         };
-        if i.now - at > 86_400_000 {
+        if i.after(at, 86_400_000) {
             continue;
         }
         let file_problem = if thread["problem"].is_object() {
@@ -389,7 +450,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
         } else {
             V::Null
         };
-        rows.push(json!({"name":thread["name"],"writer":null,"machine":thread["machine"],"project":null,"stream":null,"state":null,"doing":thread["about"],"blockedOn":null,"progress":null,"model":null,"effort":null,"account":null,"source":"pm-mail","lastSeen":thread["lastSeen"],"ageSeconds":i.age(Some(at)),"stale":!file_problem.is_null()||i.now-at>1_800_000,"clockAheadSeconds":null,"problem":file_problem,"registrySource":part_ref(i,registry,&i.data["registry"],Some(thread),"Not in the pm-mail registry.")?}));
+        rows.push(json!({"name":thread["name"],"writer":null,"machine":thread["machine"],"project":null,"stream":null,"state":null,"doing":thread["about"],"blockedOn":null,"progress":null,"model":null,"effort":null,"account":null,"source":"pm-mail","lastSeen":thread["lastSeen"],"ageSeconds":i.age(Some(at)),"stale":!file_problem.is_null()||i.after(at, 1_800_000),"clockAheadSeconds":null,"problem":file_problem,"registrySource":part_ref(i,registry,&i.data["registry"],Some(thread),"Not in the pm-mail registry.")?}));
     }
     let rank = |r: &V| {
         ["blocked", "waiting", "working", "paused", "idle", "done"]
@@ -467,7 +528,7 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
             item["ageSeconds"] = i.age(i.at(&item["updatedAt"]));
         }
         let seen = i.seen(row)?;
-        groups[at].2.push(json!({"id":d["stream"],"label":d.get("streamLabel").filter(|v|!v.is_null()).unwrap_or(&d["stream"]),"owner":d["owner"],"goal":d["goal"],"writer":row["writer"],"board":i.board(&d["board"]),"source":"tasks","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":!row["problem"].is_null()||i.now-seen>86_400_000,"problem":row["problem"]["reason"],"counts":counts,"completion":completion(&counts)?,"items":items}));
+        groups[at].2.push(json!({"id":d["stream"],"label":d.get("streamLabel").filter(|v|!v.is_null()).unwrap_or(&d["stream"]),"owner":d["owner"],"goal":d["goal"],"writer":row["writer"],"board":i.board(&d["board"]),"source":"tasks","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":!row["problem"].is_null()||i.after(seen, 86_400_000),"problem":row["problem"]["reason"],"counts":counts,"completion":completion(&counts)?,"items":items}));
     }
     let mut threads: Vec<&V> = rows(&i.data["reports"]["threads"]).iter().collect();
     threads.sort_by_key(|r| std::cmp::Reverse(i.seen(r)));
@@ -515,6 +576,7 @@ pub fn compose(envelope: Envelope) -> Option<V> {
         ctx: Context::new(envelope.presentation),
         now,
         owner_cards: std::cell::OnceCell::new(),
+        trace: RefCell::new(trace::Recorder::default()),
     };
     let view = view(&i)?;
     i.ctx.valid().then_some(view)
@@ -534,17 +596,29 @@ pub fn compose_fed(
     facts: std::sync::Arc<crate::read_context::Presentation>,
     now: (i64, crate::read_context::Date),
 ) -> Result<V, Unproven> {
+    compose_fed_traced(parts, facts, now).map(|(view, _)| view)
+}
+/// [`compose_fed`] plus the now-dependent decisions it made, so a later request can reuse the bytes when those
+/// decisions have the same results.
+pub fn compose_fed_traced(
+    parts: Vec<(&str, &V)>,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+) -> Result<(V, FedTrace), Unproven> {
     let at = now.0;
     let i = Inputs {
         data: Data::Parts(parts),
         ctx: Context::shared(facts, Some(now)),
         now: at,
         owner_cards: std::cell::OnceCell::new(),
+        trace: RefCell::new(trace::Recorder::recording()),
     };
     let view = view(&i);
+    let valid = i.ctx.valid();
+    let traced = i.trace.into_inner().finish();
     match view {
-        Some(view) if i.ctx.valid() => Ok(view),
-        _ if !i.ctx.valid() => Err(Unproven::Facts),
+        Some(view) if valid => Ok((view, traced)),
+        _ if !valid => Err(Unproven::Facts),
         _ => Err(Unproven::Input),
     }
 }
@@ -579,7 +653,7 @@ fn view(i: &Inputs) -> Option<V> {
         usage_source.clone(),
         quota,
     ];
-    let mut view = json!({"version":1,"generatedAt":i.iso(Some(i.now)),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(i)?});
+    let mut view = json!({"version":1,"generatedAt":i.generated_at(),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(i)?});
     if let Some(p) = i.data.get("pinned") {
         view["pinned"] = p.clone();
     }

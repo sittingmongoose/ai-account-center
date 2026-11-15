@@ -39,16 +39,13 @@ pub(super) fn source(i: &Inputs) -> Option<V> {
             "stale",
             format!(
                 "No new quota report since {} (quota-watch writes every 10 minutes).",
-                i.clock(at.unwrap_or(i.now))
+                i.clock_or_now(at)
             ),
         )
     } else {
         (
             "ok",
-            format!(
-                "Report from {}. Every number is an estimate.",
-                i.clock(at.unwrap_or(i.now))
-            ),
+            format!("Report from {}. Every number is an estimate.", i.clock_or_now(at)),
         )
     };
     out["state"] = json!(state);

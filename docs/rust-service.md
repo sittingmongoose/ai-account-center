@@ -496,9 +496,15 @@ With the group off nothing below runs and `GET /api/status` is today's handler.
   re-writes to the very text TS sent and holds no `Object.prototype` name), composes with the existing Status
   composer (`aac_status::read_status::compose_fed`: the same code as the envelope's `compose`, over the borrowed
   generations and the facts plus now's date) and writes the bytes as Node does (`aac_views::js_json`) with the
-  revalidated-view ETag and `x-aac-view: status@1`. The ETag is kept per (generations, second) and reused only for
-  the same identity bytes. TS writes the reply unparsed (`sendRustView`, `private, no-cache`), with a 304 for a
-  matching `If-None-Match`.
+  revalidated-view ETag and `x-aac-view: status@1`. The ETag is the SHA-256 of the identity bytes (everything but
+  `generatedAt`, `ageSeconds` and `cacheAgeSeconds`) and is reused only for those same bytes. TS writes the reply
+  unparsed (`sendRustView`, `private, no-cache`), with a 304 for a matching `If-None-Match`.
+- **R2b keeps the clock-independent bytes** per the six generation ids and the request's clock and day words
+  (`status_cache.rs`, at most 8 generation-sets and 4 word-pairs each). A request recomputes the ages, stale and
+  due thresholds and the "full in" spans. When those decisions match, only `generatedAt` is filled in and the
+  ETag is the one stored with those bytes. A new generation id is a different key. Fed Status reads use their
+  own 4 blocking slots and wait up to 8 ms for one; the read pool's 8 slots are unchanged, and the wait is
+  cancelled by the request's deadline.
 - **Anything unproven declines with a named reason and today's handler answers from the same read:** another
   root (`root`), an input member the front door does not know or a value JSON cannot carry (`input`), a push that
   did not land (`feed`), a generation the service does not hold as named (`stale`; the next request pushes again),

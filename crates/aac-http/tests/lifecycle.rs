@@ -1018,3 +1018,59 @@ fn a_restarted_service_holds_no_status_feed_until_the_front_door_pushes_again() 
     );
     Ok(())
 }
+
+/// A later generation is a different key. The kept view of the earlier one is not served for it,
+/// and naming the earlier id after it was replaced declines `stale` instead of those bytes.
+#[test]
+fn a_new_status_generation_is_not_served_from_the_previous_view() -> Result<()> {
+    let s = Service::start(&[])?;
+    push_status(&s, "1")?;
+    let first = fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?;
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert!(first.body.contains("Fixture task"), "{}", first.body);
+    let collected = STATUS_COLLECTED.replacen("Fixture task", "Other task", 1);
+    let parts = [
+        STATUS_REPORTS,
+        "{}",
+        "{}",
+        collected.as_str(),
+        STATUS_ANSWERS,
+        STATUS_CONTEXT,
+    ];
+    let facts = status_facts(&parts, None)?.to_string();
+    assert_eq!(
+        push(&s, "status-collected", "2", &collected, "{}")?.status,
+        200
+    );
+    assert_eq!(
+        push(&s, "status-facts", "2", STATUS_CONTEXT, &facts)?.status,
+        200
+    );
+    let ids = ["1", "1", "1", "2", "1", "2"];
+    let second = fed_status(&s, &status_feed(ids, STATUS_NOW))?;
+    assert_eq!(second.status, 200, "{}", second.body);
+    assert!(second.body.contains("Other task"), "{}", second.body);
+    assert!(
+        !second.body.contains("Fixture task"),
+        "the earlier generation's bytes: {}",
+        second.body
+    );
+    assert_ne!(second.body, first.body);
+    assert_ne!(second.header("etag"), first.header("etag"));
+    // The same generations again, one millisecond later: the kept view, with this instant filled in.
+    let again = fed_status(&s, &status_feed(ids, STATUS_NOW + 1))?;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.contains("Other task"), "{}", again.body);
+    assert_ne!(again.body, second.body, "generatedAt moves");
+    assert_eq!(
+        again.header("etag"),
+        second.header("etag"),
+        "the identity does not include generatedAt"
+    );
+    // The replaced id is not answered from the cache.
+    assert_eq!(
+        fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.header("x-aac-decline"),
+        Some("stale")
+    );
+    Ok(())
+}
