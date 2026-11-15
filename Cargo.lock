@@ -78,10 +78,12 @@ name = "aac-http"
 version = "0.1.0"
 dependencies = [
  "aac-api",
+ "aac-core",
  "aac-diag",
  "aac-files",
  "aac-status",
  "aac-store",
+ "aac-views",
  "axum",
  "base64 0.22.1",
  "libc",
@@ -155,6 +157,15 @@ dependencies = [
  "sha2",
  "windows-sys 0.61.2",
  "zstd",
+]
+
+[[package]]
+name = "aac-views"
+version = "0.1.0"
+dependencies = [
+ "aac-core",
+ "aac-status",
+ "serde_json",
 ]
 
 [[package]]

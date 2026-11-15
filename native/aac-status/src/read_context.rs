@@ -21,8 +21,11 @@ pub struct Presentation {
 #[serde(deny_unknown_fields)]
 struct Date {
     iso: String,
-    clock: String,
-    day: String,
+    /// Absent when the caller asked for ISO facts only; reading it then refuses the candidate.
+    #[serde(default)]
+    clock: Option<String>,
+    #[serde(default)]
+    day: Option<String>,
 }
 pub struct Context {
     facts: Presentation,
@@ -61,10 +64,20 @@ impl Context {
         ms.and_then(|m| self.date(m)).map(|d| json!(d.iso)).unwrap_or(V::Null)
     }
     pub fn clock(&self, ms: i64) -> String {
-        self.date(ms).map(|d| d.clock.clone()).unwrap_or_default()
+        self.word(ms, |d| d.clock.as_ref())
     }
     pub fn day(&self, ms: i64) -> String {
-        self.date(ms).map(|d| d.day.clone()).unwrap_or_default()
+        self.word(ms, |d| d.day.as_ref())
+    }
+    fn word(&self, ms: i64, pick: impl Fn(&Date) -> Option<&String>) -> String {
+        match self.date(ms).map(pick) {
+            Some(Some(word)) => word.clone(),
+            Some(None) => {
+                self.missing.set(true);
+                String::new()
+            }
+            None => String::new(),
+        }
     }
     pub fn compare(&self, a: &str, b: &str) -> Ordering {
         if a == b {

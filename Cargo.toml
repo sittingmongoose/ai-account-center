@@ -19,6 +19,7 @@ aac-protocol = { path = "crates/aac-protocol" }
 aac-files = { path = "crates/aac-files" }
 aac-config = { path = "crates/aac-config" }
 aac-transport = { path = "crates/aac-transport" }
+aac-views = { path = "crates/aac-views" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

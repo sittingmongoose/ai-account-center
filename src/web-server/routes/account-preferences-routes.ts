@@ -3,6 +3,9 @@ import { createApiRouter } from './api-router';
 import { ConfigError } from '../../errors/error-types';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
+import { getCcsDir } from '../../utils/config-manager';
+import { readOwnedWithRust } from '../rust-service';
+import { acceptRustPreferences } from '../rust-account-input';
 import {
   isDashboardPreferences,
   isDashboardPreferencesPatch,
@@ -40,8 +43,25 @@ export function createAccountPreferencesRouter(deps: PreferencesRouterDeps = {})
     }
     next();
   });
-  router.get('/preferences', (_req, res) => {
-    res.json((deps.read ?? readDashboardPreferences)());
+  router.get('/preferences', async (req, res) => {
+    // After the guards above, the M3 Rust service may read the same files; this is the fallback.
+    const legacy = async (): Promise<unknown> => {
+      const value = (deps.read ?? readDashboardPreferences)();
+      res.json(value);
+      return value;
+    };
+    if (deps.read) {
+      await legacy();
+      return;
+    }
+    await readOwnedWithRust(
+      req,
+      res,
+      '/api/accounts/preferences',
+      getCcsDir(),
+      acceptRustPreferences,
+      legacy
+    );
   });
   router.route('/preferences').put(save).patch(save);
   async function save(req: Request, res: Response): Promise<void> {

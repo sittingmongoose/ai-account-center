@@ -1,0 +1,18 @@
+[package]
+name = "aac-views"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aac-core.workspace = true
+aac-status = { path = "../../native/aac-status", default-features = false }
+# preserve_order: objects keep JavaScript insertion order; float_roundtrip: every number parses
+# to the double JSON.parse reads (both are the M3 read-route settings of aac-http/aac-status).
+serde_json = { workspace = true, features = ["preserve_order", "float_roundtrip"] }

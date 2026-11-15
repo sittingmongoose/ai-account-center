@@ -20,17 +20,20 @@ import {
   validateAccountAnalyticsRangeShape,
 } from './account-analytics-range';
 import {
-  analyticsProviderRows,
-  dashboardRegistryFacts,
   defaultAnalyticsProviderTable,
   type AnalyticsProviderEntry,
 } from './account-analytics-providers';
+import {
+  analyticsAvailableRange,
+  composeAccountAnalytics,
+  type AccountAnalyticsComposed,
+  type AccountAnalyticsComposeInput,
+  type AccountAnalyticsRangeInput,
+} from './account-analytics-compose';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
 import type {
   AccountAnalytics,
-  AccountAnalyticsAccount,
   AccountAnalyticsActivity,
-  AccountAnalyticsPoint,
   AccountAnalyticsQuery,
 } from './account-analytics-types';
 import {
@@ -40,7 +43,6 @@ import {
   FileAccountAnalyticsHistoryStore,
   type AccountAnalyticsHistoryData,
   type AccountAnalyticsHistoryStore,
-  type AccountAnalyticsObservation,
 } from './account-analytics-history';
 import {
   openAacStore,
@@ -102,6 +104,15 @@ export interface AccountAnalyticsDeps {
 
 /** Said with a saved answer when the newest computation of its selection failed (never the error itself). */
 export const REFRESH_ERROR = 'The newest numbers could not be computed; the last ones are shown.';
+/**
+ * Hands one computation's pure composition to another composer (the M3 Rust service, from the
+ * guarded route). `legacy` is this file's own composition; the composer answers it or an equal one.
+ */
+export type AccountAnalyticsComposer = (
+  facts: { rangeInput: AccountAnalyticsRangeInput; compose: AccountAnalyticsComposeInput },
+  legacy: () => AccountAnalyticsComposed
+) => Promise<AccountAnalyticsComposed>;
+
 /** A computation slower than this is logged with its phases (`analytics.read_timing`). */
 const SLOW_READ_MS = 1_000;
 
@@ -176,9 +187,6 @@ interface HistoryState {
   backfilled: boolean;
 }
 
-/** 31 days of 3-hour buckets plus the partial one at the start. */
-const MAX_POINTS_PER_WINDOW = 249;
-
 function unavailableActivity(message: string, tz: string): AccountAnalyticsActivity {
   return {
     status: 'unavailable',
@@ -197,97 +205,6 @@ function unavailableActivity(message: string, tz: string): AccountAnalyticsActiv
     sessions: null,
     anomalies: null,
     sources: fixedAnalyticsSourceEntries(),
-  };
-}
-
-function point(
-  record: AccountAnalyticsObservation,
-  window: DashboardAccountWindow | undefined
-): AccountAnalyticsPoint {
-  const cachedWindow = window?.status === 'cached';
-  return {
-    sampledAt: cachedWindow ? (window?.sampledAt ?? '') : record.sampledAt,
-    observedAt: record.observedAt,
-    usedPercent: window?.usedPercent ?? null,
-    remainingPercent: window?.remainingPercent ?? null,
-    used: window?.used ?? null,
-    limit: window?.limit ?? null,
-    remaining: window?.remaining ?? null,
-    resetAt: window?.resetAt ?? null,
-    expiresAt: window?.expiresAt ?? null,
-    source: cachedWindow ? `${record.source} (cached window)` : record.source,
-    platform: record.platform,
-    status: cachedWindow ? 'cached' : record.status,
-    isActive: record.isActive,
-  };
-}
-
-function accountSeries(
-  account: DashboardAccount,
-  history: AccountAnalyticsHistoryData | null,
-  from: number,
-  to: number,
-  bucketMinutes: number,
-  registry: { hidden: boolean }
-): AccountAnalyticsAccount {
-  const identity = accountAnalyticsIdentity(account);
-  const records = (history?.records ?? []).filter(
-    (record) =>
-      record.identity === identity &&
-      Date.parse(record.sampledAt) >= from &&
-      Date.parse(record.sampledAt) <= to
-  );
-  const windows = new Map<string, DashboardAccountWindow>();
-  for (const record of records)
-    for (const window of record.windows) windows.set(analyticsWindowIdentity(window), window);
-  for (const window of account.windows) windows.set(analyticsWindowIdentity(window), window);
-  const currentWindows = new Map<string, DashboardAccountWindow>();
-  for (const window of account.windows) currentWindows.set(analyticsWindowIdentity(window), window);
-  const preferredWindows = new Map(currentWindows);
-  for (const [key, window] of [...windows.entries()].reverse())
-    if (!preferredWindows.has(key)) preferredWindows.set(key, window);
-  return {
-    ...account,
-    hidden: registry.hidden,
-    firstSampleAt: records[0]?.sampledAt ?? null,
-    lastSampleAt: records[records.length - 1]?.sampledAt ?? null,
-    sampleCount: records.length,
-    windows: [...preferredWindows.entries()].slice(0, 256).map(([identityKey, window]) => {
-      const buckets = new Map<number, AccountAnalyticsPoint>();
-      for (const record of records) {
-        const matching = record.windows.find(
-          (candidate) => analyticsWindowIdentity(candidate) === identityKey
-        );
-        const actualPoint = point(record, matching);
-        const sampleTime = Date.parse(actualPoint.sampledAt);
-        // Retained balances keep the measured time, even while core quota is
-        // refreshed repeatedly. Do not add fresh constant-balance points.
-        if (!Number.isFinite(sampleTime) || sampleTime < from || sampleTime > to) continue;
-        const bucket = Math.floor(sampleTime / (bucketMinutes * 60_000));
-        buckets.set(bucket, actualPoint);
-      }
-      return {
-        ...window,
-        // Historical series remain selectable, but an absent current reading
-        // must never inherit a prior source's amounts, reset, or plan flags.
-        ...(!currentWindows.has(identityKey)
-          ? {
-              usedPercent: null,
-              remainingPercent: null,
-              used: null,
-              limit: null,
-              remaining: null,
-              resetAt: null,
-              expiresAt: null,
-              unlimited: undefined,
-              enabled: undefined,
-            }
-          : {}),
-        points: [...buckets.values()]
-          .sort((a, b) => Date.parse(a.sampledAt) - Date.parse(b.sampledAt))
-          .slice(-MAX_POINTS_PER_WINDOW),
-      };
-    }),
   };
 }
 
@@ -506,7 +423,10 @@ export class AccountAnalyticsService {
    * page reads again while `refreshing`). Only a selection with nothing saved waits for its first answer. Every
    * answer carries `asOf`, when its numbers were computed.
    */
-  async get(requested: AccountAnalyticsQuery): Promise<AccountAnalytics> {
+  async get(
+    requested: AccountAnalyticsQuery,
+    composer?: AccountAnalyticsComposer
+  ): Promise<AccountAnalytics> {
     // Malformed ranges and zones fail before any collector or history read.
     validateAccountAnalyticsRangeShape(requested);
     const scope = (this.deps.scope ?? getCcsDir)();
@@ -552,7 +472,7 @@ export class AccountAnalyticsService {
       const started = new Promise<void>((resolve) => setImmediate(resolve)).then(() => {
         const begin = elapsed();
         const sequence = ++this.sequence;
-        return this.compute(query, scope, tz).then(
+        return this.compute(query, scope, tz, composer).then(
           (answer) => {
             this.computeMs.set(flightKey, elapsed() - begin);
             this.settle(flightKey, sequence, false);
@@ -698,7 +618,8 @@ export class AccountAnalyticsService {
   private async compute(
     query: AccountAnalyticsQuery,
     scope: string,
-    tz: string
+    tz: string,
+    composer?: AccountAnalyticsComposer
   ): Promise<AccountAnalytics> {
     const clock = this.deps.now ?? Date.now;
     const elapsed = this.deps.elapsedMs ?? (() => performance.now());
@@ -782,108 +703,45 @@ export class AccountAnalyticsService {
         if (Number.isFinite(sampled) && sampled < oldestQuota) oldestQuota = sampled;
       }
     }
-    const oldest = Math.min(oldestQuota, coverage?.oldestHourAt ?? Infinity);
-    const availableFrom = Number.isFinite(oldest)
-      ? Math.min(now, Math.max(retainedFrom, oldest))
-      : Math.max(retainedFrom, localMidnight(localDate(now, tz), tz));
-    const range =
-      query.range === 'all'
-        ? resolveAccountAnalyticsRange(query, now, availableFrom, bounds ?? undefined)
-        : provisional;
+    const rangeInput = {
+      query,
+      now,
+      retainedFrom,
+      bounds,
+      oldestQuota,
+      coverageOldestHourAt: coverage?.oldestHourAt,
+      provisional,
+      todayMidnight: () => localMidnight(localDate(now, tz), tz),
+    };
+    const { availableFrom, range } = analyticsAvailableRange(rangeInput);
     const { from, to } = range;
     lap('oldestMs');
     // Quota readings are kept for 90 days; a longer range reads only those days of them.
     const quotaFrom = bounds ? Math.max(from, now - STORE_RETENTION_DAYS * 86_400_000) : from;
     const history = await this.historyFor(state, quotaFrom, to, now, range.bucketMinutes * 60_000);
     lap('historyMs');
-    const stored = state.usageStore !== null;
-
-    const registry = dashboardRegistryFacts(
+    const composeInput: AccountAnalyticsComposeInput = {
+      query,
+      now,
+      tz,
+      range,
+      availableFrom,
+      resolution: activity.resolution,
+      available: state.available,
+      stored: state.usageStore !== null,
+      oldestQuota,
+      history,
       dashboard,
-      (this.deps.providerTable ?? defaultAnalyticsProviderTable)()
-    );
-    const accounts = dashboard.accounts.filter(
-      (account) =>
-        (query.provider === 'all' || query.provider === account.provider) &&
-        (query.account === 'all' || query.account === account.id)
-    );
-    const series = accounts.map((account) =>
-      accountSeries(account, history, from, to, range.bucketMinutes, {
-        hidden: registry.hidden(account),
-      })
-    );
-    const sampleCount = series.reduce((sum, account) => sum + account.sampleCount, 0);
-    const stamps = series
-      .flatMap((account) => [account.firstSampleAt, account.lastSampleAt])
-      .filter((stamp): stamp is string => stamp !== null)
-      .sort();
-
-    const providers = analyticsProviderRows({
-      registry,
-      accounts: dashboard.accounts,
-      account: query.account,
-      records: history?.records ?? [],
-      from,
-      to,
+      providerTable: (this.deps.providerTable ?? defaultAnalyticsProviderTable)(),
       providersWithActivity: coverage?.providersWithActivity ?? [],
-    });
-    const activeAccountIds: AccountAnalytics['summary']['activeAccountIds'] = {};
-    for (const entry of registry.table)
-      if (entry.id === 'codex' || entry.id === 'antigravity')
-        activeAccountIds[entry.id] =
-          dashboard.accounts.find((account) => account.provider === entry.id && account.isActive)
-            ?.id ?? null;
-    const activeCodexAccountId =
-      dashboard.accounts.find((account) => account.provider === 'codex' && account.isActive)?.id ??
-      null;
-    const answer: AccountAnalytics = {
-      schemaVersion: 1,
-      updatedAt: new Date(now).toISOString(),
-      range: {
-        preset: range.preset,
-        from: new Date(from).toISOString(),
-        to: new Date(to).toISOString(),
-        bucketMinutes: range.bucketMinutes,
-        tz,
-        dayBucketTz: tz,
-        availableFrom: new Date(availableFrom).toISOString(),
-        resolution: activity.resolution ?? 'hour',
-        ...(query.range === 'custom' && query.from && query.to
-          ? { days: { from: query.from, to: query.to } }
-          : {}),
-      },
-      filters: { platform: query.platform, provider: query.provider, account: query.account },
-      history: {
-        status: state.available ? 'ok' : 'unavailable',
-        retentionDays: stored ? STORE_RETENTION_DAYS : 30,
-        collectedSince:
-          (stored && Number.isFinite(oldestQuota) ? new Date(oldestQuota).toISOString() : null) ??
-          history?.collectedSince ??
-          null,
-        oldestSampleAt: stamps[0] ?? null,
-        newestSampleAt: stamps[stamps.length - 1] ?? null,
-        sampleCount,
-        message: !state.available
-          ? 'Quota history could not be saved or read. Current account usage remains available.'
-          : sampleCount === 0
-            ? 'No measured quota history is available for this selection yet.'
-            : stored
-              ? 'Every changed quota reading is kept for 90 days, and hourly and daily summaries are kept after that. Missing readings remain gaps; percentages and balances are not added or averaged.'
-              : 'Quota observations are retained for up to 30 days, with older readings downsampled hourly. Missing readings remain gaps; percentages and balances are not added or averaged.',
-      },
-      summary: {
-        accountCount: accounts.length,
-        availableAccounts: accounts.filter(
-          (account) => account.status === 'ok' || account.status === 'cached'
-        ).length,
-        activeCodexAccountId,
-        activeAccountIds,
-        sampleCount,
-      },
-      providers,
-      accounts: series,
-      activity,
     };
+    // The guarded route may hand this read to the M3 Rust composer; it never reads a source itself.
+    const composed = composer
+      ? await composer({ rangeInput, compose: composeInput }, () =>
+          composeAccountAnalytics(composeInput)
+        )
+      : composeAccountAnalytics(composeInput);
+    const answer: AccountAnalytics = { ...composed, activity };
     this.answers.set(selectionKey, { key: answerKey, activity: activityResult, answer });
     lap('seriesMs');
     const totalMs = Math.round(elapsed() - begin);
@@ -1008,8 +866,11 @@ function singleton(): AccountAnalyticsService {
   service ??= new AccountAnalyticsService({ persistViews: true });
   return service;
 }
-export function getAccountAnalytics(query: AccountAnalyticsQuery): Promise<AccountAnalytics> {
-  return singleton().get(query);
+export function getAccountAnalytics(
+  query: AccountAnalyticsQuery,
+  composer?: AccountAnalyticsComposer
+): Promise<AccountAnalytics> {
+  return singleton().get(query, composer);
 }
 export function startAccountAnalyticsSampling(): void {
   singleton().start();

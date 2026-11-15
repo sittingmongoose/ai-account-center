@@ -2,7 +2,13 @@ import type { Router } from 'express';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
-import { getAccountAnalytics } from '../services/account-analytics-service';
+import {
+  getAccountAnalytics,
+  type AccountAnalyticsComposer,
+} from '../services/account-analytics-service';
+import type { AccountAnalyticsComposed } from '../services/account-analytics-compose';
+import { composeWithRust } from '../rust-service';
+import { isRustAnalyticsComposed, rustAnalyticsInput } from '../rust-account-input';
 import { defaultAnalyticsProviderIds } from '../services/account-analytics-providers';
 import {
   ACCOUNT_ANALYTICS_RANGE_PRESETS,
@@ -23,7 +29,10 @@ import { clearAnalyticsRemoteCwds } from '../services/analytics-remote-sources';
 const QUERY_KEYS = ['platform', 'range', 'provider', 'account', 'refresh', 'tz', 'from', 'to'];
 
 export interface AccountAnalyticsRouterDeps {
-  getAnalytics?: (query: AccountAnalyticsQuery) => Promise<AccountAnalytics>;
+  getAnalytics?: (
+    query: AccountAnalyticsQuery,
+    composer?: AccountAnalyticsComposer
+  ) => Promise<AccountAnalytics>;
   /** Provider ids the server reports; `all` is always accepted as well. */
   providerIds?: () => readonly string[];
   readCapture?: () => AnalyticsCaptureSettings;
@@ -97,7 +106,18 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
     try {
       // Zone and date shape errors need no clock; retention is checked by the service.
       validateAccountAnalyticsRangeShape(request);
-      res.json(await (deps.getAnalytics ?? getAccountAnalytics)(request));
+      // After every check above: the M3 Rust service may compose this answer from the inputs
+      // the analytics service already read. Off mode, or no service, keeps the TS composition.
+      const composer: AccountAnalyticsComposer = async (facts, legacy) =>
+        (await composeWithRust(
+          req,
+          res,
+          '/api/accounts/analytics',
+          () => rustAnalyticsInput(facts),
+          legacy,
+          isRustAnalyticsComposed
+        )) as AccountAnalyticsComposed;
+      res.json(await (deps.getAnalytics ?? getAccountAnalytics)(request, composer));
     } catch (error) {
       if (error instanceof AccountAnalyticsQueryError) {
         reject(error.code);

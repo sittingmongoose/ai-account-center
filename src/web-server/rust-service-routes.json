@@ -7,5 +7,9 @@
   { "method": "GET", "path": "/api/status", "owner": "rust" },
   { "method": "GET", "path": "/api/status/files/{*path}", "owner": "rust" },
   { "method": "GET", "path": "/api/status/deliverable", "owner": "rust" },
+  { "method": "GET", "path": "/api/accounts/visibility", "owner": "rust" },
+  { "method": "GET", "path": "/api/accounts/preferences", "owner": "rust" },
+  { "method": "GET", "path": "/api/accounts/registry", "owner": "rust" },
+  { "method": "GET", "path": "/api/accounts/analytics", "owner": "rust" },
   { "method": "*", "path": "*", "owner": "ts-fallback" }
 ]

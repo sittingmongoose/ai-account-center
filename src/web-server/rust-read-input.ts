@@ -28,7 +28,20 @@ export function rustScoreboardInput(input: ScoreboardInputs, finish?: unknown): 
   return rustReadInput({ ...input, docs, ...(finish ? { finish } : {}) }, input.timeZone, keys);
 }
 
-export function rustReadInput(input: unknown, timeZone: string, extras: string[] = []): unknown {
+/**
+ * The M3 presentation envelope: `Date.parse` epochs of ISO-shaped strings, ISO/clock/day words of
+ * every time value and `localeCompare` ranks, all computed by this engine. `rankAll: false` ranks
+ * only `extras`; `clockAndDay: false` supplies ISO words only (a composer that reads a clock or
+ * day word then refuses). Defaults are the Status/Scoreboard envelope.
+ */
+export function rustReadInput(
+  input: unknown,
+  timeZone: string,
+  extras: string[] = [],
+  options: { rankAll?: boolean; clockAndDay?: boolean } = {}
+): unknown {
+  const rankAll = options.rankAll ?? true;
+  const clockAndDay = options.clockAndDay ?? true;
   const data: unknown = JSON.parse(
     JSON.stringify(input, (_key, value: unknown) =>
       value instanceof Map ? Object.fromEntries(value) : value
@@ -39,8 +52,10 @@ export function rustReadInput(input: unknown, timeZone: string, extras: string[]
   const epochs: Record<string, number> = {};
   const visit = (value: unknown): void => {
     if (typeof value === 'string') {
-      words.add(value);
-      if (value.includes('.')) words.add(value.slice(value.indexOf('.') + 1));
+      if (rankAll) {
+        words.add(value);
+        if (value.includes('.')) words.add(value.slice(value.indexOf('.') + 1));
+      }
       if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
         const ms = Date.parse(value);
         if (Number.isFinite(ms)) {
@@ -71,11 +86,13 @@ export function rustReadInput(input: unknown, timeZone: string, extras: string[]
   const dates = Object.fromEntries(
     [...times].map((ms) => [
       String(ms),
-      {
-        iso: new Date(ms).toISOString(),
-        clock: clock.format(ms).replace(/[\u202f\u00a0]/g, ' '),
-        day: day.format(ms).replace(/[\u202f\u00a0]/g, ' '),
-      },
+      clockAndDay
+        ? {
+            iso: new Date(ms).toISOString(),
+            clock: clock.format(ms).replace(/[\u202f\u00a0]/g, ' '),
+            day: day.format(ms).replace(/[\u202f\u00a0]/g, ' '),
+          }
+        : { iso: new Date(ms).toISOString() },
     ])
   );
   const ordered = [...words].sort((a, b) => a.localeCompare(b));

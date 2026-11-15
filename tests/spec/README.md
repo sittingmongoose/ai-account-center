@@ -227,3 +227,31 @@ Keep global `AAC_STATUS_MODULE`/`AAC_STORE_MODULE` overrides unset for the full
 runner. The real-native HTTP harness selects `dist/native/` modules explicitly;
 M0 keeps its saved unavailable reset-backend fixture. Scope `AAC_STATUS_MODULE`
 to the optional native-field command rather than exporting it into M0 capture.
+
+## M3 part 3: account reads
+
+`account-read-parity.ts` (with `account-read-fixtures.ts`) runs GET
+`/api/accounts/{visibility,preferences,registry,analytics}` through the real TS
+routers over HTTP in off, on and shadow modes. Every row must equal
+`contract/m3-part3-account-reads.json` byte for byte in each mode. On mode must
+serve each case marked Rust-eligible with no TS reader/composer call and log a TS
+fallback for the rest; shadow runs TS exactly once per request, applies no
+Rust-side effect and finds no difference. Analytics inputs travel in the shared
+`rustReadInput` presentation envelope (ISO facts and provider-id ranks only). It then
+compares `composeAccountAnalytics`
+and `composeRegistryListing` with the Rust socket over 60 and 48 generated inputs,
+and checks that the running TS accepts every zone Rust admits for preferences.
+
+The fixtures cover 24 visibility and 26 preferences file forms (modes, symlinks,
+folder bits, sizes, BOM, invalid UTF-8, lone surrogates, duplicate keys (answered as
+JSON.parse answers them), migration,
+companion merges, zones), five registry states and nine Analytics reads. Analytics
+activity comes from the real v8 remote-cache code, in one concurrent four-computer
+scan per pass (so it also pins that each computer saves only its own cell notes):
+Mac reads fully (read); Windows reads fully, then partially (partial, cached with
+the first pass's full-read age); Alexis only partially (no complete read); Nas1's
+Claude folder is permission denied; OMP, Devin and others are not installed. The
+M0 capture counts only `NNN-role.json` documents; named `m3-*.json` corpora are
+checked by their own scripts. `run.mjs` runs the TS side in off mode and all three
+modes when `AAC_RUST_SERVICE` is on or shadow. Regenerate with
+`bun tests/spec/account-read-parity.ts --regenerate` and review the diff.
