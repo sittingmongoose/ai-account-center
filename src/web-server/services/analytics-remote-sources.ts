@@ -139,12 +139,14 @@ function applyFreshness(
   if (clock?.state === 'unknown' && entry.state === 'ok') {
     entry.state = 'cached';
     entry.cause = 'freshness_unverified';
-    entry.detail = [
-      entry.detail,
-      'the independent activity check is incomplete; current usage coverage is unverified',
-    ]
-      .filter(Boolean)
-      .join('; ');
+    if (!entry.detail?.includes('current usage coverage is unverified')) {
+      entry.detail = [
+        entry.detail,
+        'the independent activity check is incomplete; current usage coverage is unverified',
+      ]
+        .filter(Boolean)
+        .join('; ');
+    }
   }
   if (
     clock?.state === 'stale' &&

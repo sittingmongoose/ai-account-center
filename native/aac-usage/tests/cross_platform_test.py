@@ -48,7 +48,8 @@ def run(binary, helper):
         """)
         wal = zcode.with_name("db.sqlite-wal")
         original = (zcode.read_bytes(), wal.read_bytes())
-        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "PATH": str(home / "bin"),
+               "APPDATA": str(home / "AppData/Roaming"), "LOCALAPPDATA": str(home / "AppData/Local"),
                "XDG_CONFIG_HOME": str(home / "config"), "XDG_DATA_HOME": str(home / "data"),
                "CCS_HOME": str(home / "ccs")}
         for key in ("HOMEDRIVE", "HOMEPATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"):
