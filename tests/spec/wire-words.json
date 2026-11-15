@@ -3628,6 +3628,14 @@
     ]
   },
   {
+    "word": "retained",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_additional.py:status",
+      "scripts/account-usage/muse_console.py:status"
+    ]
+  },
+  {
     "word": "retrying",
     "cause": null,
     "sources": [
