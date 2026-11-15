@@ -8,6 +8,7 @@ import type { DashboardPlatform } from './account-dashboard-types';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
 import { sshArgv } from './ssh-policy';
 import { collectAgentWithFallback, runKeyStoreAgent } from './agent-verbs';
+import { assertTsWritesRow } from '../../shared/private-files';
 
 /**
  * The AAC-owned API-key store (CONTRACT-registry-lifecycle section 3.2).
@@ -107,6 +108,7 @@ export class LocalKeyStore implements KeyStoreBackend {
   async put(provider: KeyProvider, keyId: string, secret: string): Promise<StoredKeyInfo> {
     checkIds(provider, keyId);
     if (!API_KEY_PATTERN.test(secret)) throw new KeyStoreError();
+    assertTsWritesRow('account-keys');
     await this.ensureDirectory();
     const info = { fingerprint: keyFingerprint(secret), last4: keyLast4(secret) };
     const record = {
@@ -139,6 +141,7 @@ export class LocalKeyStore implements KeyStoreBackend {
 
   async delete(provider: KeyProvider, keyId: string): Promise<void> {
     checkIds(provider, keyId);
+    assertTsWritesRow('account-keys');
     try {
       const stat = await fs.lstat(this.file(provider, keyId));
       if (!stat.isFile() && !stat.isSymbolicLink()) throw new KeyStoreError();

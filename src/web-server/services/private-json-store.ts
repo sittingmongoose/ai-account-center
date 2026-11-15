@@ -4,6 +4,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { ConfigError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
+import { assertTsWritesFile } from '../../shared/private-files';
+import { getCcsDir } from '../../utils/config-manager';
 
 /**
  * Small private JSON stores under the CCS directory
@@ -19,7 +21,9 @@ import { createLogger } from '../../services/logging';
  * - writers run under one in-process mutex per file, keyed on the real path of
  *   its folder, and replace the file atomically: a temporary file in the same
  *   directory, mode 0600, fsync, rename, then a best-effort fsync of the
- *   folder. Missing directories are created at 0700.
+ *   folder. Missing directories are created at 0700;
+ * - a file the shared registry (`config/private-files.json`, L2) gives to another
+ *   writer is refused before anything is written.
  */
 export type PrivateJsonRead =
   { state: 'absent' } | { state: 'invalid' } | { state: 'ok'; value: unknown; contents: string };
@@ -170,6 +174,8 @@ export async function writePrivateJsonFile(file: string, value: unknown): Promis
  * fsync, rename, then a best-effort fsync of the folder.
  */
 export async function writePrivateTextFile(file: string, contents: string): Promise<void> {
+  // One writer per registered file (L2): a row the Rust service owns now is never written here.
+  assertTsWritesFile(file, getCcsDir());
   const directory = path.dirname(file);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   if ((await checkStoreFolder(directory)) !== 'ok') {

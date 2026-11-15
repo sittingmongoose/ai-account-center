@@ -17,6 +17,7 @@ import {
 } from './rust-service-lifecycle';
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
 import { requestRust } from './rust-service-transport';
+import { settlePrivateFileOwners } from '../shared/private-files';
 
 export type RustServiceMode = 'off' | 'shadow' | 'on';
 
@@ -76,6 +77,9 @@ export class RustSupervisor {
     options: { now?: () => number; restartDelaysMs?: readonly number[] } = {}
   ) {
     this.mode = rustServiceMode(mode);
+    // L2: each registered private file's writer, resolved once at start and sent in the boot
+    // JSON. A row moves with its route group; the service has one mode for every group today.
+    settlePrivateFileOwners(() => this.mode === 'on');
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }

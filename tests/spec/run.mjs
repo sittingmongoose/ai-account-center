@@ -7,6 +7,9 @@ for (const [program, args] of [
   ['node', ['tests/spec/parser-ts.mjs']],
   ['node', ['tests/spec/inventory.mjs']],
   ['bun', ['test', 'tests/spec/tables.test.ts']],
+  // L2: one file policy (no raw file mechanics outside aac-files) and the shared registry.
+  ['node', ['scripts/foundation/one-file-policy.mjs']],
+  ['bun', ['test', 'tests/spec/private-files.test.ts']],
   [
     'bun',
     [

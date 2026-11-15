@@ -129,14 +129,14 @@ split out of the services (`composeClaudeDesktopUsage`, `composeCodexAuthProfile
 they were and now cache the composed answer, whichever side composed it.
 
 **Capped file reads.** Every private file Rust answers from (the desktop manifest, part 3's
-visibility and both preference files) goes through one helper, `private_file::read_capped`:
-the name is opened once with `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY`, every decision is made on
-the opened descriptor (`fstat`: a regular file, its size), at most the cap plus one byte is
-read, and a file that grew past the cap while it was read refuses. A FIFO, folder or other
-special file swapped in is refused without blocking; `ELOOP` (a symlinked final name under
-the canonical root) and `ENOENT` keep the owner's meaning per file. The TS owners got the
-same hardening where practical: `readPrivateJsonFile` adds `O_NONBLOCK`, and the preference
-reader reads through one no-follow, nonblocking descriptor after its `lstat`.
+visibility and both preference files, the refresh settings) is a row of the shared registry
+and is read through `aac_files::read` (L2, below): one `lstat`, one open with
+`O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC`, every decision on the opened descriptor plus
+its identity against the `lstat`, at most the cap plus one byte read. A FIFO, folder or other
+special file swapped in is refused without blocking; a final link and `ENOENT` keep the
+owner's meaning per file. The TS owners got the same hardening where practical:
+`readPrivateJsonFile` adds `O_NONBLOCK`, and the preference reader reads through one
+no-follow, nonblocking descriptor after its `lstat`.
 
 ## Home view (D7)
 
@@ -255,6 +255,36 @@ child, shadow paired timings, and (`--heap`) the heap the Status and Scoreboard 
 on the large synthetic home (`tests/spec/large-home.mjs`: 50 profiles, 200 reports, 5,000
 runs, 30 accounts x 12 windows x 90 days). The worker server runs inside the same closed
 boundary as the contract capture.
+
+## One file policy (L2)
+
+L2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 2.2). No answer changes.
+
+- **One read.** `aac_files::read::{read, open}` with a `ReadPolicy`: a byte cap, the leaf rule
+  (a final link refused, or read as absent), the ancestor rule (no link below a base), the
+  owner rule (this user) and the mode rule (no group or other bit). The outcome names what was
+  found (`Bytes`, `Absent`, `Link`, `Foreign`, `BadMode`, `NotRegular`, `TooLarge`,
+  `Unreadable`, `Unproved`); each reader maps it to its reference's meaning. Listings use
+  `aac_files::read::entries`, which yields at most a count cap and then says so.
+- **One path rule set.** `aac_files::path`: `python::{double_root, canonical_home, normpath}`,
+  `node::resolve`, `linked_below`, `linked_within`, `hop` (one `_local_path` hop), `safe_name`
+  and `foreign`.
+- **One writer.** `OwnedStore` stages a 0600 file with `O_EXCL` beside the target, fsyncs it,
+  renames it and fsyncs the folder, under a kernel lease (`<name>.lock`, or a lease on the
+  folder itself where another implementation counts the folder's entries).
+- **One registry,** `config/private-files.json`, read by TS (`src/shared/private-files.ts`) and
+  embedded in Rust (`aac_files::registry`): each file's root, path, class, cap, mode, writer
+  on the dashboard host, whether the agent writes it on other computers, and the route group
+  whose `on` hands it to the service (`movesWith`; none yet). TS resolves the owners at start
+  and sends them in the boot JSON (`files`); the service refuses a map that differs from its
+  own registry, and a front door attaches only to a boot with its own owners. TS writers
+  (`private-json-store.ts`, the key store, the preference and refresh-settings writers, the
+  readers check) refuse a row TS does not own.
+- **Gate.** `scripts/foundation/one-file-policy.mjs` (in `tests/spec/run.mjs`): outside
+  `crates/aac-files`, no Rust source uses `O_NOFOLLOW`, `custom_flags`, `OpenOptions`,
+  `File::open`, `File::create`, `fs::write`, `fs::rename` or a tempfile persist. The
+  allowlist names each exception with its reason (the store engine, the scanner, the Cursor key
+  module, the service's own image hash) and fails when an entry no longer matches.
 
 ## Offline checks
 

@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
 import { ConfigError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
+import { assertTsWritesFile } from '../../shared/private-files';
 
 export interface AccountRefreshSettings {
   refreshIntervalSeconds: number;
@@ -113,8 +114,9 @@ export function writeAccountRefreshSettings(
   ccsDir = getCcsDir()
 ): AccountRefreshSettings {
   if (!isAccountRefreshSettings(value)) throw new ConfigError('Invalid usage refresh interval');
-  fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   const file = path.join(ccsDir, SETTINGS_FILE);
+  assertTsWritesFile(file, ccsDir);
+  fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;
   let fd: number | undefined;
   try {

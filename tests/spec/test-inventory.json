@@ -160,6 +160,30 @@
       ]
     },
     {
+      "file": "crates/aac-files/src/lib.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/src/path.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/src/read.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/src/registry.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/tests/files.rs",
       "kind": "internal",
       "evidence": [],
@@ -197,13 +221,13 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "crates/aac-http/src/private_file.rs",
+      "file": "crates/aac-http/src/read_files.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
     },
     {
-      "file": "crates/aac-http/src/read_files.rs",
+      "file": "crates/aac-http/src/registered.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -228,6 +252,12 @@
     },
     {
       "file": "crates/aac-http/tests/account_reads.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/boot_files.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -839,6 +869,12 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "tests/spec/private-files.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/spec/tables.test.ts",
