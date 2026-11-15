@@ -542,16 +542,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 653,
-      "typedThrows": 209,
+      "totalThrows": 654,
+      "typedThrows": 210,
       "plainThrows": 47,
       "otherThrows": 397,
-      "adoptionRatio": 0.3201,
+      "adoptionRatio": 0.3211,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 384,
-          "typed": 158,
+          "count": 385,
+          "typed": 159,
           "plain": 7
         },
         {
@@ -749,7 +749,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2200
+          "loc": 2221
         },
         {
           "file": "src/web-server/status/answers.ts",

@@ -51,7 +51,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 32.0% (209/653) |
+| typed-error adoption (typed/total throws) | 32.1% (210/654) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
@@ -83,7 +83,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 4028 |
 | `src/web-server/services/account-analytics-activity.ts` | 2400 |
-| `src/web-server/services/analytics-remote-sources.ts` | 2200 |
+| `src/web-server/services/analytics-remote-sources.ts` | 2221 |
 | `src/web-server/status/answers.ts` | 1744 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1634 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
