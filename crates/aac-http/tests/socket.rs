@@ -427,6 +427,7 @@ fn home_view_is_the_js_view_or_the_shared_read_fallback() -> Result<()> {
         "probe/safari",
         "edge/hidden",
         "edge/number-control",
+        "zone/agree-Africa/Casablanca",
     ] {
         let (envelope, expected) = home_case(name)?;
         let (status, got) = split(&home(
@@ -454,7 +455,14 @@ fn home_view_is_the_js_view_or_the_shared_read_fallback() -> Result<()> {
         json!({}),
         json!({"data": envelope["data"]}),
     ];
-    for name in ["decline/facts", "decline/locale", "decline/open-progress"] {
+    // Big review (Fable M2): the server's Casablanca words are an hour off the page's zone facts.
+    for name in [
+        "decline/facts",
+        "decline/locale",
+        "decline/open-progress",
+        "decline/zone-Africa/Casablanca",
+        "decline/zone-facts",
+    ] {
         refused.push(home_case(name)?.0);
     }
     // Big review M4/L4: amounts outside the proved number domain (the reviewers' tie witnesses and

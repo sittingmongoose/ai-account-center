@@ -1233,7 +1233,12 @@ pub fn build(envelope: Envelope) -> R<HomeView> {
     let (ctx, data, profiles, antigravity) = inputs(&envelope.data)?;
     let style = Fmt::proven_style(&ctx.format_probe)?;
     let cx = Ctx {
-        fmt: Fmt::new(Context::new(envelope.presentation), style, ctx.now),
+        fmt: Fmt::new(
+            Context::new(envelope.presentation),
+            style,
+            Zone::proven(&ctx.zone)?,
+            ctx.now,
+        ),
         computers: computers()?,
     };
     let built = view(&cx, &ctx, data, profiles, antigravity)?;

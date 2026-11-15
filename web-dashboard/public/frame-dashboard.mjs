@@ -12,7 +12,7 @@
 // ms}), `chrome` ({statusLead, statusStrong, statusMore}) and `signed-out` ({state: 'expired'|'default', reason}).
 // Until the first answer nothing is sent for Home but the chrome's "Refreshing": the page shows its loading state,
 // never zeros.
-import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, isCatalogPending, homeFormatProbe } from './view-model.mjs';
+import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, isCatalogPending, homeFormatProbe, homeZoneFacts } from './view-model.mjs';
 import { needToasts } from './claude-signins.mjs';
 import { accountsViewModel } from './accounts-view.mjs';
 import { transportOf } from './transport.mjs';
@@ -262,7 +262,9 @@ export function createFrameDashboard({
   }
   /** What only this page knows for the server's Home view (aac-api `HomeContext`). */
   function homeContext() {
-    return { now: now(), timeZone: getDisplayTimeZone(), platform, intervalSeconds: refreshIntervalSeconds, username, host, formatProbe: homeFormatProbe() };
+    const at = now();
+    const timeZone = getDisplayTimeZone();
+    return { now: at, timeZone, platform, intervalSeconds: refreshIntervalSeconds, username, host, formatProbe: homeFormatProbe(), zone: homeZoneFacts(timeZone, at) };
   }
   /** The server's view is the page's only for the context it was built in (the clock aside: it was read just now). */
   function sameHomeContext(sent) {

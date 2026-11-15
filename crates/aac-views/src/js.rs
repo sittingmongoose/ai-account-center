@@ -9,8 +9,8 @@
 //! Display-zone clock and day words, `Date.parse` epochs and `localeCompare` ranks come from the shared M3
 //! presentation envelope ([`Context`]); the page's own formatter style comes from its format probe.
 pub use crate::spread::{truthy, utf16_len};
-use aac_status::read_context::Context;
 pub use aac_status::read_context::js_whitespace;
+use aac_status::read_context::{Context, PROTO_NAMES};
 use serde_json::{Map, Value, json};
 use std::cmp::Ordering;
 
@@ -98,21 +98,6 @@ pub fn array(v: Option<&Value>) -> &[Value] {
         _ => &[],
     }
 }
-
-const PROTO_NAMES: [&str; 12] = [
-    "constructor",
-    "__defineGetter__",
-    "__defineSetter__",
-    "hasOwnProperty",
-    "__lookupGetter__",
-    "__lookupSetter__",
-    "isPrototypeOf",
-    "propertyIsEnumerable",
-    "toString",
-    "valueOf",
-    "__proto__",
-    "toLocaleString",
-];
 
 /// `{...}[key]` on an object literal: an `Object.prototype` name would find a function there, so it declines.
 pub fn lookup<'m>(table: &[(&str, &'m str)], key: &str) -> R<Option<&'m str>> {
@@ -298,6 +283,19 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// The calendar date `days` after 1970-01-01 (the inverse of [`days_from_civil`]).
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
 fn days_in_month(y: i64, m: i64) -> i64 {
     match m {
         2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
@@ -436,20 +434,94 @@ const STYLES: [Style; 4] = [
     },
 ];
 
+/// The page's display-zone offsets (view-model.mjs `homeZoneFacts`), checked for shape. The format probe proves only
+/// how the page's formatters punctuate; another engine's time zone data can put a zone's clock an hour elsewhere
+/// (Africa/Casablanca from 2026-09-20 in one tzdata, not in another), so every clock and day word the server's facts
+/// give must be the one these offsets give, or the build declines (`zone`). An instant outside the window declines too.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Zone {
+    from: i64,
+    to: i64,
+    /// `(start ms, offset minutes)`, starts strictly increasing, the first at `from`.
+    offsets: Vec<(i64, i64)>,
+}
+
+impl Zone {
+    /// The page's facts, or a decline when they are not one ordered, bounded segment list over a real window.
+    pub fn proven(facts: &aac_api::home::HomeZone) -> R<Zone> {
+        let bad = Err(Decline("zone"));
+        let rows = &facts.offsets;
+        if facts.from >= facts.to
+            || facts.from < 0
+            || facts.to > 8_640_000_000_000_000
+            || rows.is_empty()
+            || rows.len() > 64
+            || rows[0][0] != facts.from
+            || rows
+                .iter()
+                .any(|[start, minutes]| *start > facts.to || minutes.abs() > 1080)
+            || rows
+                .windows(2)
+                .any(|w| w[1][0] <= w[0][0] || w[1][1] == w[0][1])
+        {
+            return bad;
+        }
+        Ok(Zone {
+            from: facts.from,
+            to: facts.to,
+            offsets: rows
+                .iter()
+                .map(|[start, minutes]| (*start, *minutes))
+                .collect(),
+        })
+    }
+
+    /// The en-US `{hour:'numeric', minute:'2-digit'}` and `{month:'short', day:'numeric'}` words the page writes for
+    /// `ms` ("3:05 PM", "Nov 14"; ASCII space, as the envelope writes them).
+    fn words(&self, ms: i64) -> R<(String, String)> {
+        if ms < self.from || ms > self.to {
+            return Err(Decline("zone"));
+        }
+        let minutes = self
+            .offsets
+            .iter()
+            .take_while(|(start, _)| *start <= ms)
+            .last()
+            .map_or(0, |(_, minutes)| *minutes);
+        // Intl truncates to the minute: whole local minutes since 1970.
+        let local = (ms + minutes * 60_000).div_euclid(60_000);
+        let (_, m, d) = civil_from_days(local.div_euclid(1440));
+        let (hour, minute) = (local.rem_euclid(1440) / 60, local.rem_euclid(60));
+        let clock = format!(
+            "{}:{minute:02} {}",
+            if hour % 12 == 0 { 12 } else { hour % 12 },
+            if hour < 12 { "AM" } else { "PM" }
+        );
+        Ok((clock, format!("{} {d}", MONTHS[(m - 1) as usize])))
+    }
+}
+
 /// The en-US formatters of view-model.mjs at one `now`: the display-zone clock and day words of each instant and the
 /// collation ranks come from the presentation envelope, joined in the page's proven [`Style`]. A fact the envelope
-/// lacks marks the context invalid, and the build then declines (`fact`).
+/// lacks marks the context invalid, and the build then declines (`fact`); a word the page's [`Zone`] would write
+/// differently declines (`zone`).
 pub struct Fmt {
     ctx: Context,
     style: Style,
+    zone: Zone,
     /// The browser's clock.
     pub now: i64,
 }
 
 impl Fmt {
-    /// Formatters over the envelope's facts in the style proven by the format probe.
-    pub fn new(ctx: Context, style: Style, now: i64) -> Self {
-        Fmt { ctx, style, now }
+    /// Formatters over the envelope's facts in the style proven by the format probe, checked against the page's zone.
+    pub fn new(ctx: Context, style: Style, zone: Zone, now: i64) -> Self {
+        Fmt {
+            ctx,
+            style,
+            zone,
+            now,
+        }
     }
 
     /// Every fact asked for was in the envelope.
@@ -471,6 +543,9 @@ impl Fmt {
         });
         if !digits || !matches!(half, "AM" | "PM") {
             return fact;
+        }
+        if self.zone.words(ms)?.0 != word {
+            return Err(Decline("zone"));
         }
         Ok(format!("{hm}{}{half}", self.style.sep))
     }
@@ -498,6 +573,9 @@ impl Fmt {
         };
         if day.to_string() != word[name.len() + 1..] || !(1..=31).contains(&day) {
             return fact;
+        }
+        if self.zone.words(ms)?.1 != word {
+            return Err(Decline("zone"));
         }
         let iso = self.ctx.iso(Some(ms));
         let Some(iso) = iso.as_str() else { return fact };
@@ -1005,6 +1083,25 @@ mod tests {
         Context::new(presentation.unwrap_or_else(|e| panic!("{e}")))
     }
 
+    /// The page's zone facts as view-model.mjs `homeZoneFacts` sends them.
+    fn zone(from: i64, to: i64, offsets: &[[i64; 2]]) -> Zone {
+        Zone::proven(&aac_api::home::HomeZone {
+            from,
+            to,
+            offsets: offsets.to_vec(),
+        })
+        .unwrap_or_else(|e| panic!("{e:?}"))
+    }
+
+    /// New York's facts from Nov 8, 2026 (EST) to Feb 1, 2027.
+    fn new_york() -> Zone {
+        zone(
+            1_794_096_000_000,
+            1_801_440_000_000,
+            &[[1_794_096_000_000, -300]],
+        )
+    }
+
     #[test]
     fn the_envelope_words_are_joined_in_the_proven_style() {
         // 2026-11-14T20:05Z is Sat Nov 14, 3:05 PM in New York; 2027-01-01T04:30Z is Dec 31, 11:30 PM there.
@@ -1019,6 +1116,7 @@ mod tests {
                     serde_json::json!({}),
                 ),
                 style,
+                new_york(),
                 1_794_686_700_000,
             )
         };
@@ -1055,6 +1153,71 @@ mod tests {
         assert_eq!(f(STYLES[0]).day(2), Err(Decline("fact")));
     }
 
+    /// Big review (Fable M2): the server's words for Africa/Casablanca come from its own tzdata. On 2026-10-01T15:16Z
+    /// Bun writes "4:16 PM" (+01:00 still), Node with tzdata 2026e "3:16 PM" (+00:00 from 2026-09-20). The page's
+    /// offsets decide: a different word, or an instant outside the facts' window, declines.
+    #[test]
+    fn every_clock_and_day_word_is_the_one_the_page_zone_gives() {
+        let at = 1_790_867_760_000; // 2026-10-01T15:16:00Z
+        let server = || {
+            facts(
+                serde_json::json!({
+                    "1790867760000": {"iso": "2026-10-01T15:16:00.000Z", "clock": "4:16 PM", "day": "Oct 1"},
+                    "1790983200000": {"iso": "2026-10-02T23:20:00.000Z", "clock": "12:20 AM", "day": "Oct 3"}
+                }),
+                serde_json::json!({}),
+            )
+        };
+        let from = 1_784_246_400_000; // 2026-07-17
+        let node = zone(
+            from,
+            1_818_806_400_000,
+            &[[from, 60], [1_789_866_000_000, 0]],
+        );
+        let bun = zone(from, 1_818_806_400_000, &[[from, 60]]);
+        let page = |z| Fmt::new(server(), STYLES[0], z, at);
+        assert_eq!(page(node.clone()).clock(at), Err(Decline("zone")));
+        assert_eq!(
+            page(node.clone()).day(1_790_983_200_000),
+            Err(Decline("zone"))
+        );
+        assert_eq!(page(node).date_time(at), Err(Decline("zone")));
+        assert_eq!(page(bun.clone()).clock(at), Ok("4:16 PM".into()));
+        assert_eq!(page(bun.clone()).day(1_790_983_200_000), Ok("Oct 3".into()));
+        assert_eq!(
+            page(bun).date_time(1_790_983_200_000),
+            Ok("Oct 3, 12:20 AM".into())
+        );
+        // the window bounds the proof
+        let short = zone(from, at - 1, &[[from, 60]]);
+        assert_eq!(page(short).clock(at), Err(Decline("zone")));
+        // malformed facts prove nothing
+        for (from, to, rows) in [
+            (from, from, vec![[from, 0]]),
+            (from, from + 1, vec![]),
+            (from, from + 9, vec![[from + 1, 0]]),
+            (from, from + 9, vec![[from, 0], [from + 5, 0]]),
+            (
+                from,
+                from + 9,
+                vec![[from, 0], [from + 5, 60], [from + 4, 0]],
+            ),
+            (from, from + 9, vec![[from, 1081]]),
+            (from, from + 9, vec![[from, 0], [from + 10, 60]]),
+        ] {
+            let facts = aac_api::home::HomeZone {
+                from,
+                to,
+                offsets: rows,
+            };
+            assert_eq!(Zone::proven(&facts), Err(Decline("zone")), "{facts:?}");
+        }
+        assert_eq!(
+            Zone::proven(&aac_api::home::HomeZone::default()),
+            Err(Decline("zone"))
+        );
+    }
+
     #[test]
     fn collation_comes_from_the_envelope_for_ascii_and_is_refused_otherwise() {
         let f = Fmt::new(
@@ -1063,6 +1226,7 @@ mod tests {
                 serde_json::json!({"a-1": 0, "a_1": 1, "aB": 3, "ab": 2, "cursor:A": 4, "cursor:b": 5}),
             ),
             STYLES[0],
+            new_york(),
             0,
         );
         assert_eq!(f.compare("a_1", "a-1"), Ok(Ordering::Greater));

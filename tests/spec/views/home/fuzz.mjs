@@ -35,7 +35,7 @@ const { cases } = JSON.parse(readFileSync(path.join(here, 'cases.json'), 'utf8')
 process.removeAllListeners('warning');
 const { presentations } = await import('./generate.mjs');
 const { restyle } = await import('./synthetic.mjs');
-const { dashboardViewModel } = await import('../../../../web-dashboard/public/view-model.mjs');
+const { dashboardViewModel, homeZoneFacts } = await import('../../../../web-dashboard/public/view-model.mjs');
 const { setDisplayTimeZone } = await import('../../../../web-dashboard/public/time-format.mjs');
 
 const ACCOUNT_FIELDS = ['id', 'provider', 'providerLabel', 'plan', 'email', 'platform', 'status', 'fetchedAt', 'sampledAt', 'windows', 'antigravityPlan', 'capabilities', 'label', 'source', 'message', 'isActive', 'hidden', 'signInNeeded', 'host'];
@@ -84,10 +84,18 @@ function set(object, field, v) {
   else object[field] = v;
 }
 
+// Display zones whose rules this engine (the page) and Bun (the envelope) may set differently: Africa/Casablanca and
+// Africa/El_Aaiun differ from 2026-09-20 (big review, Fable M2); the page's zone facts always come from this engine.
+const FUZZ_ZONES = ['Africa/Casablanca', 'Africa/El_Aaiun', 'America/New_York', 'Australia/Lord_Howe', 'Asia/Kolkata', 'UTC'];
+
 function mutate(input) {
   const accounts = Array.isArray(input.dashboard.accounts) ? input.dashboard.accounts : [];
   const objects = accounts.filter((a) => a && typeof a === 'object');
   const now = input.ctx.now;
+  if (random() < 0.15) {
+    input.ctx.timeZone = pick(FUZZ_ZONES);
+    input.ctx.zone = homeZoneFacts(input.ctx.timeZone, now);
+  }
   const edits = 1 + Math.floor(random() * 3);
   for (let n = 0; n < edits; n++) {
     const roll = random();

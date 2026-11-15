@@ -9,8 +9,8 @@
 // context). synthetic.mjs adds the inputs the tests do not reach (other zones, the decline rules). Each case is then
 // run through the real view-model.mjs here: `expected` is the exact JSON.stringify of the JS view, `presentation`
 // the M3 envelope facts the TS front door computes for it (src/web-server/views/home-context.ts `homeReadInput`,
-// through envelope.ts under Bun) and `ctx.formatProbe` this engine's formatter outputs (or a synthetic case's other
-// proven style). The Rust test (crates/aac-views/tests/home_spec.rs) builds every case and must give
+// through envelope.ts under Bun), `ctx.formatProbe` this engine's formatter outputs (or a synthetic case's other
+// proven style) and `ctx.zone` this engine's display-zone offsets (view-model.mjs `homeZoneFacts`). The Rust test (crates/aac-views/tests/home_spec.rs) builds every case and must give
 // the same bytes, or decline exactly where declines.json says. web-dashboard/tests/home-view-spec.test.mjs keeps the
 // table current with the JS.
 import { spawnSync } from 'node:child_process';
@@ -80,7 +80,7 @@ export function presentations(inputs) {
 }
 
 export async function build(recorded) {
-  const { dashboardViewModel, homeFormatProbe } = await import('../../../../web-dashboard/public/view-model.mjs');
+  const { dashboardViewModel, homeFormatProbe, homeZoneFacts } = await import('../../../../web-dashboard/public/view-model.mjs');
   const { setDisplayTimeZone } = await import('../../../../web-dashboard/public/time-format.mjs');
   const locale = new Intl.NumberFormat().resolvedOptions().locale;
   if (locale !== 'en-US') throw new Error(`The spec is recorded in en-US; this Node reads ${locale}.`);
@@ -121,7 +121,13 @@ export async function build(recorded) {
       dashboard: input.dashboard,
       profiles: input.profiles,
       antigravity: input.antigravity,
-      ctx: { ...input.ctx, formatProbe: input.probe ?? homeFormatProbe() },
+      // The page's zone facts come from this engine (Node), the envelope's words from Bun: where their time zone data
+      // differ (Africa/Casablanca from 2026-09-20), Rust must decline (`zone`).
+      ctx: {
+        ...input.ctx,
+        formatProbe: input.probe ?? homeFormatProbe(),
+        zone: input.ctx.zone ?? homeZoneFacts(input.ctx.timeZone, input.ctx.now),
+      },
       presentation: null,
       expected,
       ...(input.style ? { style: input.style } : {}),

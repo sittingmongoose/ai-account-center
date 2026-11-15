@@ -80,12 +80,15 @@ test('switch on: after the first answer offers it, a refresh is one read and Hom
     const sent = ctl.headers.findLast((h) => h.path.startsWith('/api/views/home?')).headers['X-AAC-Home-Context'];
     assert.match(sent, /^[\x21-\x7e]+$/, 'ASCII on the wire');
     const context = JSON.parse(decodeURIComponent(sent));
-    assert.deepEqual(Object.keys(context), ['now', 'timeZone', 'platform', 'intervalSeconds', 'username', 'host', 'formatProbe']);
+    assert.deepEqual(Object.keys(context), ['now', 'timeZone', 'platform', 'intervalSeconds', 'username', 'host', 'formatProbe', 'zone']);
     assert.equal(context.timeZone, 'UTC');
     assert.equal(context.platform, 'mac');
     assert.equal(context.intervalSeconds, 60);
     assert.equal(context.username, 'owner');
     assert.equal(context.formatProbe.length, 8);
+    // the display zone's offsets this engine found, over whole UTC days around the page's clock (UTC: one segment)
+    const day = Math.floor(context.now / 86_400_000) * 86_400_000;
+    assert.deepEqual(context.zone, { from: day - 120 * 86_400_000, to: day + 400 * 86_400_000, offsets: [[day - 120 * 86_400_000, 0]] });
     // between refreshes the clock tick draws the page's own view of the same answer
     tick.fn();
     await flush();

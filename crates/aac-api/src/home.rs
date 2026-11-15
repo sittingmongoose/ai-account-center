@@ -462,6 +462,22 @@ pub struct HomeContext {
     pub host: String,
     /// The page's own formatter outputs for fixed reference values (view-model.mjs `homeFormatProbe`).
     pub format_probe: Vec<String>,
+    /// The page's display-zone UTC offsets (view-model.mjs `homeZoneFacts`); absent reads as no proof.
+    #[serde(default)]
+    pub zone: HomeZone,
+}
+
+/// The display zone's UTC offsets as the page's own `Intl` found them, over `from..=to` (UTC ms): `offsets` holds
+/// `[start, minutes]` segments, the first starting at `from`, each holding until the next starts.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HomeZone {
+    /// The first instant the facts cover.
+    pub from: i64,
+    /// The last instant the facts cover.
+    pub to: i64,
+    /// `[start ms, offset minutes]`, in time order.
+    pub offsets: Vec<[i64; 2]>,
 }
 
 #[cfg(test)]

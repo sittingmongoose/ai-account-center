@@ -29,7 +29,11 @@ import type { AccountDashboard } from '../../../src/web-server/services/account-
 
 const NOW = Date.parse('2026-11-14T12:00:00.000Z');
 const PROBE = ['-1,234.57', '1.23M', '-$1,234.50', 'Jan 5, 12:07 AM', '1:07 PM', 'Mon, Jan 5, 1:07 PM', 'Jan 5', '_abB'];
-const CONTEXT = { now: NOW, timeZone: 'America/New_York', platform: 'mac', intervalSeconds: 60, username: 'owner', host: '192.0.2.10:3000', formatProbe: PROBE };
+const DAY = 86_400_000;
+const FROM = Math.floor(NOW / DAY) * DAY - 120 * DAY;
+// The page's New York offsets (view-model.mjs homeZoneFacts): EST from Nov 1, 2026, EDT from Mar 14, 2027 ...
+const ZONE = { from: FROM, to: FROM + 520 * DAY, offsets: [[FROM, -240], [1793512800000, -300], [1805007600000, -240]] };
+const CONTEXT = { now: NOW, timeZone: 'America/New_York', platform: 'mac', intervalSeconds: 60, username: 'owner', host: '192.0.2.10:3000', formatProbe: PROBE, zone: ZONE };
 const VIEW = { version: 3, sections: [], cards: [], registry: [], chrome: { statusLead: 'Updated' } };
 const header = (value: unknown) => encodeURIComponent(JSON.stringify(value));
 
@@ -182,6 +186,14 @@ describe('GET /api/views/home', () => {
       header({ ...CONTEXT, formatProbe: PROBE.slice(1) }),
       header({ ...CONTEXT, username: 'x'.repeat(257) }),
       header({ ...CONTEXT, now: 1.5 }),
+      // the zone facts' shape (their meaning is the Rust builder's to check)
+      header({ ...CONTEXT, zone: undefined }),
+      header({ ...CONTEXT, zone: { ...ZONE, extra: 1 } }),
+      header({ ...CONTEXT, zone: { ...ZONE, offsets: [] } }),
+      header({ ...CONTEXT, zone: { ...ZONE, offsets: [[FROM, 1.5]] } }),
+      header({ ...CONTEXT, zone: { ...ZONE, offsets: [[FROM]] } }),
+      header({ ...CONTEXT, zone: { ...ZONE, offsets: Array(65).fill([FROM, 0]) } }),
+      header({ ...CONTEXT, zone: { ...ZONE, to: '1' } }),
     ]) {
       const response = await home('', { context });
       expect(response.status).toBe(200);

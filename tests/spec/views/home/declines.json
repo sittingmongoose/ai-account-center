@@ -19,5 +19,9 @@
   "decline/shape-no-accounts": "shape",
   "decline/shape-null-account": "shape",
   "decline/type": "type",
+  "decline/zone-Africa/Casablanca": "zone",
+  "decline/zone-Africa/El_Aaiun": "zone",
+  "decline/zone-facts": "zone",
+  "decline/zone-window": "zone",
   "edge/fractional-readings": "number"
 }

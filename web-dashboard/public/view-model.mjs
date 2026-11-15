@@ -130,6 +130,56 @@ export function homeFormatProbe() {
     ['b', 'a', 'B', '_'].sort((a, b) => a.localeCompare(b)).join(''),
   ];
 }
+const ZONE_DAY = 86_400_000;
+const ZONE_STEP = 6 * 3_600_000;
+/** The window the zone facts cover, in days around today (UTC): older or later instants make the server decline. */
+export const HOME_ZONE_DAYS = { past: 120, future: 400 };
+const zoneFacts = new Map();
+/**
+ * This engine's UTC offsets (minutes) for `timeZone` over a window of whole UTC days around `now`, as
+ * `{from, to, offsets: [[start, minutes], ...]}`: each segment starts at the first second its offset holds (found by
+ * the same `Intl` the page formats with). The server builds Home only when every clock and day word it would write is
+ * the one these offsets give (aac-views `Zone`): the probe proves the punctuation, this proves the zone's rules,
+ * which another engine's time zone data can set differently (Africa/Casablanca from 2026-09-20). Cached per zone and day.
+ */
+export function homeZoneFacts(timeZone, now) {
+  const day = Math.floor(now / ZONE_DAY) * ZONE_DAY;
+  const key = `${timeZone}|${day}`;
+  const known = zoneFacts.get(key);
+  if (known) return known;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+  });
+  const offset = (ms) => {
+    const p = Object.fromEntries(parts.formatToParts(ms).map(({ type, value }) => [type, value]));
+    const local = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second));
+    return Math.round((local - Math.floor(ms / 1000) * 1000) / 60_000);
+  };
+  const from = day - HOME_ZONE_DAYS.past * ZONE_DAY;
+  const to = day + HOME_ZONE_DAYS.future * ZONE_DAY;
+  const offsets = [[from, offset(from)]];
+  for (let t = from; t < to; ) {
+    const current = offsets[offsets.length - 1][1];
+    const next = Math.min(t + ZONE_STEP, to);
+    if (offset(next) === current) {
+      t = next;
+      continue;
+    }
+    // The first second in (t, next] whose offset is not the current one.
+    let lo = t / 1000;
+    let hi = next / 1000;
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (offset(mid * 1000) === current) lo = mid;
+      else hi = mid;
+    }
+    offsets.push([hi * 1000, offset(hi * 1000)]);
+    t = hi * 1000;
+  }
+  const facts = { from, to, offsets };
+  zoneFacts.set(key, facts);
+  return facts;
+}
 const PLATFORM = { ...HOST_LABELS, linux: 'Linux' };
 
 export const platformLabel = (id) =>

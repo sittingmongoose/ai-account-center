@@ -11,6 +11,8 @@
 //   neither, so these cases' expected views are Node's view restyled (`restyle`: exactly the differences the probe
 //   proves); their inputs carry no clock text of their own. The device pass checks Safari on a real Safari.
 
+import { homeZoneFacts } from '../../../../web-dashboard/public/view-model.mjs';
+
 const ZONES = ['UTC', 'Asia/Kolkata', 'Australia/Lord_Howe', 'Pacific/Chatham', 'America/Los_Angeles', 'Asia/Kathmandu'];
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?Z$/;
 
@@ -279,6 +281,35 @@ export function synthetic(recorded) {
   out.push(variant(rich, 'decline/type', (input) => (accountsOf(input).find((x) => x && typeof x === 'object').email = 5)));
   out.push(variant(rich, 'decline/shape-null-account', (input) => input.dashboard.accounts.push(null)));
   out.push(variant(rich, 'decline/shape-no-accounts', (input) => delete input.dashboard.accounts));
+  // Big review (Fable M2): Node (the page here, tzdata 2026e) has Morocco on +00:00 from 2026-09-20 while Bun (the
+  // envelope's words) keeps +01:00. The page's own zone facts decide: those words decline (`zone`). Before that date
+  // both engines agree and the view is served. Facts that are not this engine's, or that end before an instant, decline.
+  const moved = (base, name, zone, at) =>
+    variant(base, name, (input) => {
+      const delta = at - input.ctx.now;
+      input.dashboard = shifted(input.dashboard, delta);
+      input.profiles = shifted(input.profiles, delta);
+      input.antigravity = shifted(input.antigravity, delta);
+      input.ctx.now = at;
+      input.ctx.timeZone = zone;
+    });
+  for (const zone of ['Africa/Casablanca', 'Africa/El_Aaiun']) {
+    out.push(moved(rich, `decline/zone-${zone}`, zone, Date.UTC(2026, 9, 1, 15, 16)));
+    out.push(moved(rich, `zone/agree-${zone}`, zone, Date.UTC(2026, 5, 1, 12, 0)));
+  }
+  out.push(
+    variant(rich, 'decline/zone-facts', (input) => {
+      const facts = homeZoneFacts(input.ctx.timeZone, input.ctx.now);
+      input.ctx.zone = { ...facts, offsets: facts.offsets.map(([start, minutes]) => [start, minutes + 60]) };
+    })
+  );
+  out.push(
+    variant(rich, 'decline/zone-window', (input) => {
+      const facts = homeZoneFacts(input.ctx.timeZone, input.ctx.now);
+      const to = input.ctx.now - 86_400_000;
+      input.ctx.zone = { ...facts, to, offsets: facts.offsets.filter(([start]) => start <= to) };
+    })
+  );
   // the envelope without its display-zone clock and day words: a missing fact refuses
   out.push(variant(rich, 'decline/facts', (input) => (input.facts = 'no-dates')));
 

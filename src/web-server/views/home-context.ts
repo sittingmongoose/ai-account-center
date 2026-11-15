@@ -2,10 +2,11 @@
  * D7 Home view: the facts only the browser has, and the M3 presentation envelope the Rust builder reads.
  *
  * The page formats every time in its display time zone with its own `Intl` and sends what it alone knows in
- * `X-AAC-Home-Context` (its clock, zone, platform, refresh interval, user, host and a format probe of its
- * formatters). The envelope is the shared one (`rustReadInput`): this server's display-zone clock and day words
- * for every instant in the inputs, the `Date.parse` epochs of their ISO strings, and the `localeCompare` ranks of
- * the strings Home sorts by. Rust joins the words in the style the probe proves, and refuses when a fact is missing.
+ * `X-AAC-Home-Context` (its clock, zone, platform, refresh interval, user, host, a format probe of its formatters
+ * and its display zone's UTC offsets over a window of days). The envelope is the shared one (`rustReadInput`): this
+ * server's display-zone clock and day words for every instant in the inputs, the `Date.parse` epochs of their ISO
+ * strings, and the `localeCompare` ranks of the strings Home sorts by. Rust joins the words in the style the probe
+ * proves, checks each against the page's offsets, and refuses when a fact is missing or differs.
  */
 import { rustReadInput } from '../rust-read-input';
 
@@ -18,10 +19,37 @@ export interface HomeContext {
   username: string;
   host: string;
   formatProbe: string[];
+  /** The page's display-zone UTC offsets (view-model.mjs `homeZoneFacts`); Rust checks every word against them. */
+  zone: HomeZone;
+}
+
+/** `{from, to, offsets: [[start, minutes], ...]}` as the page's `Intl` found them. */
+export interface HomeZone {
+  from: number;
+  to: number;
+  offsets: [number, number][];
 }
 
 const MAX_TEXT = 256;
 const PROBE_LENGTH = 8;
+const MAX_ZONE_SEGMENTS = 64;
+
+/** The zone facts' shape only; their meaning (order, window, every word) is checked by the Rust builder. */
+function zoneFacts(value: unknown): HomeZone | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (Object.keys(v).sort().join(',') !== 'from,offsets,to') return null;
+  if (!Number.isSafeInteger(v.from) || !Number.isSafeInteger(v.to)) return null;
+  if (!Array.isArray(v.offsets) || !v.offsets.length || v.offsets.length > MAX_ZONE_SEGMENTS)
+    return null;
+  const offsets: [number, number][] = [];
+  for (const row of v.offsets) {
+    if (!Array.isArray(row) || row.length !== 2 || !row.every((n) => Number.isSafeInteger(n)))
+      return null;
+    offsets.push([row[0] as number, row[1] as number]);
+  }
+  return { from: v.from as number, to: v.to as number, offsets };
+}
 
 /** A display zone this engine's `Intl` accepts (the envelope would otherwise fall back to UTC). */
 function knownZone(timeZone: string): boolean {
@@ -58,6 +86,7 @@ export function parseHomeContext(header: unknown, platform: string): HomeContext
     'username',
     'host',
     'formatProbe',
+    'zone',
   ];
   if (
     Object.keys(v).length !== keys.length ||
@@ -80,6 +109,8 @@ export function parseHomeContext(header: unknown, platform: string): HomeContext
     !v.formatProbe.every((item) => text(item, 64))
   )
     return null;
+  const zone = zoneFacts(v.zone);
+  if (!zone) return null;
   return {
     now: v.now as number,
     timeZone: v.timeZone as string,
@@ -88,6 +119,7 @@ export function parseHomeContext(header: unknown, platform: string): HomeContext
     username: v.username as string,
     host: v.host as string,
     formatProbe: [...(v.formatProbe as string[])],
+    zone,
   };
 }
 
