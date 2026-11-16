@@ -268,6 +268,18 @@ function cachedShell(request) {
 // worse than a slow start. A server error (a proxy's 502 while the dashboard
 // restarts) is answered from the cache too when the cache has the shell.
 function networkFirst(event, request, timeoutMs) {
+  // An installed generation serves its own page and dependencies until the next complete worker activates.
+  // This also prevents a slow navigation's cached old entry from importing newer network controllers. The build
+  // probe explicitly uses no-store and must continue to see the server, even while the installed app stays put.
+  if (PRECACHE.length > 0 && request.cache !== 'no-store') {
+    return cachedShell(request).then(function (cached) {
+      return cached || networkFallback(event, request, timeoutMs);
+    });
+  }
+  return networkFallback(event, request, timeoutMs);
+}
+
+function networkFallback(event, request, timeoutMs) {
   var waited =
     timeoutMs > 0
       ? cachedShell(request).then(function (cached) {

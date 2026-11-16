@@ -292,7 +292,7 @@ test('the frame loads a page module once, not early while offline, and asks agai
   const make = (online, answers) => {
     const asked = [];
     // eslint-disable-next-line no-new-func
-    const loader = new Function('__import', 'navigator', `${source.replaceAll('import(', '__import(')}; return loader;`)(
+    const loader = new Function('loadModule', 'navigator', `${source}; return loader;`)(
       (url) => { asked.push(url); return answers.shift()(url); },
       { onLine: online }
     );

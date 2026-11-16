@@ -238,6 +238,7 @@ test('a different build cannot overwrite a complete installed generation during 
  const before = new Map(storage.named.get(NEW).store);
  upgrading = true;
  for (const path of ['/', '/analytics', '/frame-session.mjs']) await navigate(old.handlers, path);
+ assert.match(await (await navigate(old.handlers, '/')).text(), /0123456789ab/, 'the installed entry keeps serving until activation');
  // Fetch waitUntil writes would have completed by here.
  await new Promise(resolve => setTimeout(resolve, 0));
  assert.deepEqual(storage.named.get(NEW).store, before, 'the entry page, frame and mutable dependencies stay together');

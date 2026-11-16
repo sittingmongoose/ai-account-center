@@ -96,7 +96,7 @@ const api = {
     activationInProgress: false,
   }),
   '/api/app-updates/status': () => ({ job: null }),
-  '/api/accounts/analytics': () => load('./web-dashboard/tests/browser/device/analytics-fixture.mjs').analyticsFixture({ range: '7d', accounts: load('./web-dashboard/tests/browser/home-fixture.mjs').homeAccounts().accounts }),
+  '/api/accounts/analytics': () => load('./web-dashboard/tests/browser/device/analytics-fixture.mjs').analyticsFixture({ range: '7d', now: Date.parse('2026-11-16T02:00:00Z'), accounts: load('./web-dashboard/tests/browser/home-fixture.mjs').homeAccounts().accounts }),
 };
 app.use('/api', (req, res) => {
   const answer = api[`/api${req.path}`];

@@ -28,7 +28,8 @@
   <body>
     <noscript><main class="start-message">This page needs JavaScript.</main></noscript>
     <script type="module">
-      // The runtime starts first: its wasm (preloaded above) compiles while the sign-in module loads. The app frame signs
+      // Verify the runtime before loading mutable controllers, so an interrupted upgrade preserves the retained modules.
+      // The app frame signs
       // in with a real form (public/frame-session.mjs); a page inside today's shell (?embed=1) doesn't load it.
       // Analytics reads its own data (public/frame-analytics.mjs), Home and Accounts the dashboard's
       // (public/frame-dashboard.mjs): each module loads on first use, at once on its own address.
@@ -41,6 +42,83 @@
         if (/^\/(analytics|accounts|status|scoreboard)$/.test(p)) return p.slice(1);
         return /^\/accounts\/[a-z0-9][a-z0-9-]{0,63}$/.test(p) ? 'accounts' : 'home';
       })(location.pathname, location.search);
+      const installControllers = async (loadModule = address => import(address)) => {
+        if (!/[?&]embed=1(&|$)/.test(location.search)) {
+          // A page's module, loaded once. Offline it is not asked for early (the start page opens on the stored copy, and
+          // the browser keeps a failed module); a load that failed is asked for again under a new address next time.
+          const loader = (path, early) => {
+            let tries = 0;
+            let pending = null;
+            const load = () => {
+              const p = loadModule(tries++ ? `${path}?retry=${tries}` : path);
+              p.catch(() => { if (pending === p) pending = null; });
+              return (pending = p);
+            };
+            if (early && navigator.onLine !== false) load();
+            return () => pending ?? load();
+          };
+          // The tab this address opens, as lib.rs page_from_location reads it (/app/<tab>, then ?view=, then the classic
+          // app's addresses, else Home): its module is asked for at once.
+          // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
+          window.aacLoadAnalytics = loader('/frame-analytics.mjs', startPage === 'analytics');
+          window.aacLoadDashboard = loader('/frame-dashboard.mjs', startPage === 'home' || startPage === 'accounts');
+          const { installFrameSession } = await loadModule('/frame-session.mjs');
+          installFrameSession(window);
+        }
+        const { installResetHints } = await loadModule('/reset-live.mjs');
+        installResetHints(window);
+      };
+      // Historical controllers have relative static imports (including JSON). Resolve that known module graph
+      // entirely from one cache, then import its Blob URLs. Network-first old workers cannot mix in new controllers.
+      const cachedModules = cache => {
+        const ready = new Map(), building = new Set();
+        const moduleUrl = async address => {
+          const url = new URL(address, location.origin);
+          url.search = ''; // a lazy-loader retry still uses this retained generation
+          if (url.origin !== location.origin) throw new Error('A retained module must be same-origin.');
+          if (ready.has(url.href)) return ready.get(url.href);
+          if (building.has(url.href)) throw new Error('A retained module has an unsupported import cycle.');
+          building.add(url.href);
+          try {
+            const response = await cache.match(url.href);
+            if (!response?.ok) throw new Error('A retained dependency is missing: ' + url.pathname);
+            let source = await response.text();
+            if (!url.pathname.endsWith('.json')) {
+              const imports = [...source.matchAll(/^\s*(?:import\s+(?:[^;]*?\sfrom\s*)?|export\s+[^;]*?\sfrom\s*)(['"])(\.[^'"]+)\1/gm)];
+              for (const match of imports.reverse()) {
+                const dependency = await moduleUrl(new URL(match[2], url).href);
+                const begin = match.index + match[0].lastIndexOf(match[1] + match[2] + match[1]) + 1;
+                source = source.slice(0, begin) + dependency + source.slice(begin + match[2].length);
+              }
+            }
+            const blob = URL.createObjectURL(new Blob([source], { type: url.pathname.endsWith('.json') ? 'application/json' : 'text/javascript' }));
+            ready.set(url.href, blob);
+            return blob;
+          } finally { building.delete(url.href); }
+        };
+        const load = async address => import(await moduleUrl(address));
+        load.prepare = moduleUrl;
+        return load;
+      };
+      const retainedStyle = async (cache, address) => {
+        const response = await cache.match(address);
+        if (!response?.ok) throw new Error('A retained stylesheet is missing.');
+        let source = await response.text();
+        const resources = [...source.matchAll(/url\(\s*['"]?([^)'"\s]+)['"]?\s*\)/g)];
+        for (const match of resources.reverse()) {
+          if (match[1].startsWith('data:')) continue;
+          const url = new URL(match[1], new URL(address, location.origin));
+          const resource = await cache.match(url.href);
+          // Lazy historical workers may never have downloaded a font that the old page did not use. Preserve its
+          // normal CSS font-stack fallback instead of stranding an otherwise usable app or fetching a newer font.
+          if (!resource?.ok && !/\.(ttf|otf|woff2?)$/i.test(url.pathname)) throw new Error('A retained style dependency is missing: ' + url.pathname);
+          const saved = resource?.ok ? 'url("' + URL.createObjectURL(await resource.blob()) + '")' : 'local("AAC saved font unavailable")';
+          source = source.slice(0, match.index) + saved + source.slice(match.index + match[0].length);
+        }
+        const style = document.createElement('style');
+        style.textContent = source;
+        document.head.append(style);
+      };
       // An already-installed worker may have saved this new entry before its wasm downloaded. Its older runtime
       // remains content-addressed in CacheStorage. Keep this recovery inline: that old worker cannot fetch a new
       // recovery module while offline. Canonicalize before starting an older runtime (some predate encoded aliases
@@ -75,8 +153,12 @@
             if (!css) continue;
             try {
               const module = await WebAssembly.compile(await wasm.arrayBuffer());
-              const { default: init } = await import(pkg + '/aac_web.js');
-              document.querySelector('link[href="{{CSS}}"]')?.setAttribute('href', css);
+              const modules = cachedModules(cache);
+              for (const address of ['/frame-session.mjs', '/frame-dashboard.mjs', '/frame-analytics.mjs', '/reset-live.mjs']) await modules.prepare(address);
+              const { default: init } = await modules(pkg + '/aac_web.js');
+              await retainedStyle(cache, css);
+              document.querySelector('link[href="{{CSS}}"]')?.remove();
+              await installControllers(modules);
               const kept = location.search.slice(1).split('&').filter(part => part &&
                 !['view', 'classic', 'content'].includes(new URLSearchParams(part).keys().next().value)).join('&');
               const destination = '/app/' + startPage + (kept ? '?' + kept : '') + location.hash;
@@ -84,7 +166,8 @@
               await init({ module_or_path: module });
               history.replaceState(history.state, '', destination);
               return true;
-            } catch {
+            } catch (error) {
+              console.warn('Saved app recovery failed:', error);
               // Another retained generation may still be complete and compatible with this browser.
             }
           }
@@ -92,37 +175,16 @@
         return false;
       };
       try {
-        const wasm = '{{PKG}}/aac_web_bg.wasm';
-        const runtime = import('{{PKG}}/aac_web.js');
-        runtime.catch(() => {});
-        // a server that doesn't say application/wasm: the runtime fetches it itself
-        const compiled = WebAssembly.compileStreaming ? WebAssembly.compileStreaming(fetch(wasm)).catch(() => wasm) : Promise.resolve(wasm);
-        if (!/[?&]embed=1(&|$)/.test(location.search)) {
-          // A page's module, loaded once. Offline it is not asked for early (the start page opens on the stored copy, and
-          // the browser keeps a failed module); a load that failed is asked for again under a new address next time.
-          const loader = (path, early) => {
-            let tries = 0;
-            let pending = null;
-            const load = () => {
-              const p = import(tries++ ? `${path}?retry=${tries}` : path);
-              p.catch(() => { if (pending === p) pending = null; });
-              return (pending = p);
-            };
-            if (early && navigator.onLine !== false) load();
-            return () => pending ?? load();
-          };
-          // The tab this address opens, as lib.rs page_from_location reads it (/app/<tab>, then ?view=, then the classic
-          // app's addresses, else Home): its module is asked for at once.
-          // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
-          window.aacLoadAnalytics = loader('/frame-analytics.mjs', startPage === 'analytics');
-          window.aacLoadDashboard = loader('/frame-dashboard.mjs', startPage === 'home' || startPage === 'accounts');
-          const { installFrameSession } = await import('/frame-session.mjs');
-          installFrameSession(window);
-        }
-        const { installResetHints } = await import('/reset-live.mjs');
-        installResetHints(window);
-        const { default: init } = await runtime;
-        await init({ module_or_path: await compiled });
+        const wasm = fetch('{{PKG}}/aac_web_bg.wasm').then(async response => {
+          if (!response.ok) throw new Error('The runtime download failed.');
+          if (WebAssembly.compileStreaming) {
+            try { return await WebAssembly.compileStreaming(response.clone()); } catch { /* MIME fallback below */ }
+          }
+          return WebAssembly.compile(await response.arrayBuffer());
+        });
+        const [module, { default: init }] = await Promise.all([wasm, import('{{PKG}}/aac_web.js')]);
+        await installControllers();
+        await init({ module_or_path: module });
       } catch {
         if (!await recoverRuntime().catch(() => false)) {
           const message = document.createElement('main');

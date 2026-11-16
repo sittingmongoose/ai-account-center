@@ -15,7 +15,7 @@ const control = (page, values) => page.evaluate(async values => (await fetch('/_
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
 })).json(), values);
 const frame = (page, ms = 15000) => page.waitForFunction(() => window.__aacFrame === true && !!document.querySelector('.shell,.signin-page'), null, { timeout: ms });
-const state = page => page.evaluate(async () => ({ frame: window.__aacFrame === true, path: location.pathname + location.search + location.hash, text: document.body.innerText.slice(0, 220), names: await caches.keys() }));
+const state = page => page.evaluate(async () => ({ frame: window.__aacFrame === true, path: location.pathname + location.search + location.hash, text: document.body.innerText.slice(0, 220), usableHome: !!document.querySelector('.home') && /Claude/.test(document.querySelector('.home').innerText) && !/view version/.test(document.body.innerText), names: await caches.keys() }));
 async function start(t, version) {
   await t.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'allow' });
   await t.goto('/__upgrade/ready');
@@ -74,8 +74,9 @@ for (const [version, setting] of [['previous', 'previousUi'], ['fix1', 'fix1Ui']
     await t.equal('interrupted replacement cannot install', await outcome(t.page), 'redundant');
     await t.page.goto(origin + '/?e2e#kept', { waitUntil: 'commit' });
     await frame(t.page, 10000).catch(() => {});
+    await t.page.waitForFunction(() => document.querySelector('.home')?.innerText.includes('Claude'), null, { timeout: 10000 }).catch(() => {});
     const online = await state(t.page);
-    await t.check('entry page recovers its retained runtime online', online.frame, JSON.stringify(online));
+    await t.check('entry page recovers usable Home with matching retained controllers online', online.frame && online.usableHome, JSON.stringify(online));
     await t.equal('recovery preserves destination, query and fragment', online.path, '/app/home?e2e#kept');
     await t.page.goto('about:blank');
     const after = await offline(t, origin, '/?e2e#kept');
