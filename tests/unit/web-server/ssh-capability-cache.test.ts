@@ -2,7 +2,7 @@ import { expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { sshArgv } from '../../../src/web-server/services/ssh-policy';
+import { scpArgv, sshArgv } from '../../../src/web-server/services/ssh-policy';
 async function fixture(body: string, check: (root: string) => Promise<void>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-ssh-cap-'));
   const saved = { ...process.env };
@@ -110,5 +110,27 @@ it('a replacement during the probe is probed again before argv is returned', asy
     fs.writeFileSync(next, '#!/usr/bin/python3\n', { mode: 0o700 });
     fs.renameSync(next, path.join(root, 'ssh'));
     expect(await pending).toContain('KnownHostsCommand=none');
+  });
+});
+it('scp runs the probed SSH file with the same policy, following a replacement', async () => {
+  await fixture(oldClient, async (root) => {
+    const ssh = path.join(root, 'ssh');
+    const old = await scpArgv('fixture', '/fixture/local', 'fixture:/remote');
+    expect(old.slice(0, 3)).toEqual(['-q', '-S', ssh]);
+    expect(old).not.toContain('KnownHostsCommand=none');
+    for (const option of [
+      'StrictHostKeyChecking=yes',
+      'GlobalKnownHostsFile=none',
+      'ForwardAgent=no',
+      'ClearAllForwardings=yes',
+      'PermitLocalCommand=no',
+    ])
+      expect(old).toContain(option);
+    expect(old.some((arg) => arg.startsWith('UserKnownHostsFile='))).toBe(true);
+    fs.writeFileSync(ssh, '#!/usr/bin/python3\n');
+    const modern = await scpArgv('fixture', '/fixture/local', 'fixture:/remote');
+    expect(modern.slice(0, 3)).toEqual(['-q', '-S', ssh]);
+    expect(modern).toContain('KnownHostsCommand=none');
+    expect(modern.slice(-3)).toEqual(['--', '/fixture/local', 'fixture:/remote']);
   });
 });

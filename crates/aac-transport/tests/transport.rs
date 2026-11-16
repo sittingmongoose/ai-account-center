@@ -153,11 +153,16 @@ from pathlib import Path
 (Path(__file__).parent/'scp-selected.json').write_text(json.dumps(sys.argv[1:]))
 sys.exit(1)
 "#;
+    // The production -S names the probed SSH; record it, then let the recorder stand in for it.
     let wrapper = r#"#!/usr/bin/python3
 import subprocess,sys
 from pathlib import Path
 root=Path(__file__).parent
-sys.exit(subprocess.run(['/usr/bin/scp','-S',str(root/'scp-recorder'),*sys.argv[1:]]).returncode)
+args=sys.argv[1:]
+i=args.index('-S')
+(root/'scp-ssh.txt').write_text(args[i+1])
+args[i+1]=str(root/'scp-recorder')
+sys.exit(subprocess.run(['/usr/bin/scp',*args]).returncode)
 "#;
     for (name, body) in [("scp", wrapper), ("scp-recorder", recorder)] {
         let path = fixture.root.path().join(name);
@@ -176,6 +181,11 @@ sys.exit(subprocess.run(['/usr/bin/scp','-S',str(root/'scp-recorder'),*sys.argv[
         "SCP selected a different host: {args:?}"
     );
     assert!(!args.iter().any(|arg| arg == "2001"));
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.path().join("scp-ssh.txt")).unwrap(),
+        fixture.root.path().join("ssh").to_string_lossy(),
+        "scp must run the probed SSH file"
+    );
 }
 
 #[test]

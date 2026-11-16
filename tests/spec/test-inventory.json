@@ -666,6 +666,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-transport/src/process.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-transport/tests/path_identity.rs",
       "kind": "safety",
       "evidence": [

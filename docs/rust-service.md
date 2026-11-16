@@ -402,6 +402,8 @@ SSH requires an explicit existing identity file (`computers[].transport.key`, or
 `AAC_AGENT_KNOWN_HOSTS_FILE` override those global paths for isolated gates. No path is
 guessed from a home directory. `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes` and the
 shared ControlMaster policy apply; whitespace in option paths is quoted for OpenSSH.
+SCP always runs the probed SSH file (`scp -S <that file>`), never scp's built-in or
+PATH ssh, and that file's identity is checked again just before SSH or SCP starts.
 SSH/SCP preserve OpenSSH's connection config: every IdentityFile in order, HostName,
 User, Port, Match and jumps. Explicit AAC fields override their corresponding settings;
 `-i` and `IdentitiesOnly=yes` apply when AAC specifies a key. There is no synchronous

@@ -14,7 +14,7 @@
  * it into place, runs `--version` and checks the answer (installUsageScan). Nothing else is written:
  * the binary only reads usage logs. Older copies are removed once the new one answered.
  */
-import { sshOptions, sshEnvironment } from './ssh-policy';
+import { scpArgv, sshOptions, sshEnvironment } from './ssh-policy';
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
@@ -298,13 +298,10 @@ export async function installUsageScan(
     throw new UsageScanInstallError('mkdir');
   // 2. The bytes, by scp: never through a PowerShell stdin read (large reads hang over Windows OpenSSH).
   const remotePart = `${windows && /^[A-Za-z]:/.test(dir) ? `/${dir}` : dir}/${name}.part`;
-  const copied = await ssh(
-    ['-q', '-S', 'ssh', ...(await sshOptions(alias)), '--', local, `${alias}:${remotePart}`],
-    {
-      timeoutMs: 120_000,
-      file: 'scp',
-    }
-  );
+  const copied = await ssh(await scpArgv(alias, local, `${alias}:${remotePart}`), {
+    timeoutMs: 120_000,
+    file: 'scp',
+  });
   if (copied.code !== 0) throw new UsageScanInstallError('copy');
   // 3. Verify there, move into place, answer --version; then drop older copies.
   const verified = await ssh(

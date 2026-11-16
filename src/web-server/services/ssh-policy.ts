@@ -93,8 +93,11 @@ function probe(executable: string, env: Record<string, string>): Promise<string[
     return args;
   })();
 }
-/** Bounded, coalesced probe. -F none keeps Match exec and live hosts out of capability checks. */
-async function capabilities(): Promise<string[]> {
+/**
+ * Bounded, coalesced probe. -F none keeps Match exec and live hosts out of capability checks.
+ * Returns the PATH-resolved file whose identity was probed, checked again just before return.
+ */
+async function capabilities(): Promise<{ file: string; args: string[] }> {
   const env = sshEnvironment();
   const searchPath = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
   let executable: string | undefined;
@@ -122,7 +125,7 @@ async function capabilities(): Promise<string[]> {
     }
     const result = await entry.pending;
     const after = await executableIdentity(executable).catch(() => undefined);
-    if (after?.identity === current.identity) return result;
+    if (after?.identity === current.identity) return { file: executable, args: result };
   }
   throw new ConfigError('SSH executable changed during capability probe');
 }
@@ -174,7 +177,21 @@ export function sshConnectionOptions(alias: string): string[] {
 /** Keep both user and system connection config; only the capability probe uses -F none. */
 export async function sshOptions(host: string): Promise<string[]> {
   const connection = sshConnectionOptions(host);
-  return [...SSH_ISOLATION, ...(await capabilities()), ...connection];
+  return [...SSH_ISOLATION, ...(await capabilities()).args, ...connection];
+}
+
+/**
+ * SCP runs the exact SSH file whose identity was probed (-S), with the same policy options,
+ * never scp's own built-in or PATH ssh, whose capabilities nobody checked.
+ */
+export async function scpArgv(
+  host: string,
+  source: string,
+  destination: string
+): Promise<string[]> {
+  const connection = sshConnectionOptions(host);
+  const { file, args } = await capabilities();
+  return ['-q', '-S', file, ...SSH_ISOLATION, ...args, ...connection, '--', source, destination];
 }
 
 /** One remote command argument; the caller owns quoting and its process deadline. */
