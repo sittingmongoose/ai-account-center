@@ -840,7 +840,10 @@ mod tests {
         let chain = read(&file, &policy);
         fs::set_permissions(&userdata, fs::Permissions::from_mode(0o700))?;
         assert!(
-            matches!(chain, Read::ChainUnreadable(io::ErrorKind::PermissionDenied)),
+            matches!(
+                chain,
+                Read::ChainUnreadable(io::ErrorKind::PermissionDenied)
+            ),
             "{chain:?}"
         );
         // Search-only ancestors still read where the platform pins them search-capable.
@@ -849,7 +852,10 @@ mod tests {
             let outcome = read(&file, &policy);
             fs::set_permissions(&userdata, fs::Permissions::from_mode(0o700))?;
             if search_capable() {
-                assert!(matches!(outcome, Read::Bytes(..)), "mode {mode:o}: {outcome:?}");
+                assert!(
+                    matches!(outcome, Read::Bytes(..)),
+                    "mode {mode:o}: {outcome:?}"
+                );
             }
         }
         Ok(())
