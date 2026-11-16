@@ -257,6 +257,24 @@ impl StoreHost {
 
     fn jobs_json(&self) -> String {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        // The persisted markers survive a host restart; the in-memory record only this boot.
+        let (error_code, error_ms, share_ms) = self
+            .engine()
+            .map(|engine| {
+                (
+                    engine.get_meta("ts:host_job_last_error").ok().flatten(),
+                    engine.get_meta("ts:host_job_last_error_ms").ok().flatten(),
+                    engine.get_meta("ts:host_job_last_share_failed_ms").ok().flatten(),
+                )
+            })
+            .unwrap_or((None, None, None));
+        let last_share_failed_ms = [
+            state.jobs.last_share_failed_ms,
+            share_ms.and_then(|text| text.parse().ok()),
+        ]
+        .into_iter()
+        .flatten()
+        .max();
         json!({
             "open": self.engine().is_some(),
             "bootError": state.boot_error,
@@ -264,7 +282,9 @@ impl StoreHost {
                 "passes": state.jobs.passes,
                 "lastPassMs": state.jobs.last_pass_ms,
                 "lastError": state.jobs.last_error,
-                "lastShareFailedMs": state.jobs.last_share_failed_ms,
+                "lastErrorCode": error_code,
+                "lastErrorMs": error_ms.and_then(|text| text.parse::<u64>().ok()),
+                "lastShareFailedMs": last_share_failed_ms,
             },
         })
         .to_string()
@@ -296,11 +316,30 @@ impl StoreHost {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state.jobs.passes += 1;
         state.jobs.last_pass_ms = Some(now);
-        if error.is_some() {
-            state.jobs.last_error = error;
+        if let Some(error) = &error {
+            state.jobs.last_error = Some(error.clone());
         }
         if share_failed {
             state.jobs.last_share_failed_ms = Some(now);
+        }
+        drop(state);
+        // R3 review L1: the operator warning must survive a host restart. Persist the
+        // failure's fixed code and time (never the message, which can name private paths);
+        // TS's hosted-jobs watch reads them back through `hostJobs` and warns as it does
+        // for the in-process loop.
+        if let Some(engine) = self.engine() {
+            let stamp = |key: &str, value: String| {
+                if let Err(error) = engine.set_meta(key, &value) {
+                    tracing::warn!(target: "aac_http", "store job diagnostic not persisted: {error}");
+                }
+            };
+            if let Some(error) = &error {
+                stamp("ts:host_job_last_error", job_error_code(error));
+                stamp("ts:host_job_last_error_ms", now.to_string());
+            }
+            if share_failed {
+                stamp("ts:host_job_last_share_failed_ms", now.to_string());
+            }
         }
     }
 
@@ -359,6 +398,17 @@ impl StoreHost {
                 let _ = engine.close();
             }
         }));
+    }
+}
+
+/// A job failure's fixed code, as TS's `storeErrorCode` reads it: the `<code>:` prefix when
+/// it is one, else `unknown`. The message itself can name private paths and never persists.
+fn job_error_code(error: &str) -> String {
+    let code = error.split(": ").next().unwrap_or("");
+    if !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+        code.to_string()
+    } else {
+        "unknown".to_string()
     }
 }
 
@@ -462,7 +512,83 @@ mod tests {
         assert!(share.join("sets").is_dir(), "the share copy was mirrored");
         let jobs = host.jobs_json();
         assert!(jobs.contains("\"passes\":1"), "{jobs}");
+        let jobs: Value = serde_json::from_str(&jobs).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorMs"], Value::Null, "a healthy pass names no failure");
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], Value::Null);
         host.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_share_backup_keeps_its_warning_across_a_host_restart() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dir = root.path().join("store");
+        // A file where the share folder should be: the local backup succeeds, the mirror fails.
+        let share = root.path().join("share-copy");
+        std::fs::write(&share, b"not a folder").map_err(|e| e.to_string())?;
+        let mut config = boot(dir.clone());
+        config.share_backup_dir = Some(share.clone());
+        let host = StoreHost::new(config);
+        host.open_at_boot();
+        let now = aac_store::engine::now_ms();
+        host.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now));
+        assert_eq!(jobs["jobs"]["lastErrorMs"], Value::Null, "the pass itself finished");
+        assert!(dir.join("backups").join("sets").is_dir(), "the local backup is intact");
+        // Restart: the failure record survives in the store, not only this boot's memory.
+        host.close_engine();
+        drop(host);
+        let reopened = StoreHost::new(boot(dir.clone()));
+        reopened.open_at_boot();
+        let jobs: Value =
+            serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["passes"], json!(0), "a fresh boot ran no pass");
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now));
+        reopened.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_job_pass_persists_its_fixed_code_not_the_message() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dir = root.path().join("store");
+        // A file where the backup root should be: the pass fails before any mirror.
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(dir.clone()));
+        host.open_at_boot();
+        let now = aac_store::engine::now_ms();
+        host.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now));
+        let code = jobs["jobs"]["lastErrorCode"].as_str().ok_or("code")?;
+        assert!(
+            !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+            "{code}"
+        );
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], Value::Null);
+        // The persisted marker is the code alone: no private path reaches the meta value.
+        let engine = host.engine().ok_or("engine")?;
+        let persisted = engine
+            .get_meta("ts:host_job_last_error")
+            .map_err(|e| e.to_string())?
+            .ok_or("persisted")?;
+        assert_eq!(persisted, code);
+        assert!(
+            !persisted.contains(root.path().to_str().ok_or("root")?),
+            "no private path: {persisted}"
+        );
+        // Restart keeps the code and time.
+        host.close_engine();
+        drop(host);
+        let reopened = StoreHost::new(boot(dir.clone()));
+        reopened.open_at_boot();
+        let jobs: Value =
+            serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now));
+        assert_eq!(jobs["jobs"]["lastErrorCode"], json!(code));
+        reopened.close_engine();
         Ok(())
     }
 
