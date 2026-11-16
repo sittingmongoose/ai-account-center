@@ -335,7 +335,10 @@ impl StoreHost {
             }
             if share_failed {
                 let seq = next_failure_seq(&engine, "ts:host_job_last_share_failure");
-                stamp("ts:host_job_last_share_failure", json!({"seq": seq, "ms": now}));
+                stamp(
+                    "ts:host_job_last_share_failure",
+                    json!({"seq": seq, "ms": now}),
+                );
             }
         }
     }
@@ -648,8 +651,7 @@ mod tests {
         drop(host);
         let reopened = StoreHost::new(boot(dir.clone()));
         reopened.open_at_boot();
-        let jobs: Value =
-            serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        let jobs: Value = serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2));
         reopened.close_engine();
         // The share record: mirror failures on due passes, the second stamped earlier.
@@ -669,7 +671,10 @@ mod tests {
         host.job_pass(now + DAY_MS - 1_000);
         let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["lastShareSeq"], json!(2));
-        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now + DAY_MS - 1_000));
+        assert_eq!(
+            jobs["jobs"]["lastShareFailedMs"],
+            json!(now + DAY_MS - 1_000)
+        );
         host.close_engine();
         Ok(())
     }
