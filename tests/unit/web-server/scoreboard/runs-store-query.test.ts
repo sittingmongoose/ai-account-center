@@ -166,3 +166,118 @@ describe('RunsStore.query serves one snapshot per read', () => {
     expect(state.problems.some((problem) => problem.file === 'gen-7-c')).toBe(false);
   });
 });
+
+/**
+ * The review's starvation schedule (M1): 5,001 rows, so the 5,000-row first page has a
+ * next cursor; every second page commits again (generation or catalog), so a restarting
+ * read never settles. The sentinel throws long before any unbounded loop could finish.
+ */
+function churningStore(catalogOnly = false) {
+  const rows = Array.from({ length: 5001 }, (_, i) => row({ id: `b${i}`, endedMs: i }));
+  let generation = 1;
+  let catalogHash = CATALOG;
+  let churn = false;
+  let calls = 0;
+  let firstPages = 0;
+  const handle: NativeStoreHandle = {
+    async call(method, args) {
+      if (method === 'runsRefused') return '[]';
+      if (method !== 'runsQuery') throw new Error(`unexpected method ${method}`);
+      calls += 1;
+      if (calls > 40) throw new Error('churn sentinel: the query never settled');
+      const { after } = JSON.parse(args) as { after: [number, number] | null };
+      if (after === null) firstPages += 1;
+      else if (churn) {
+        if (catalogOnly) catalogHash = catalogHash === CATALOG ? MOVED_CATALOG : CATALOG;
+        else generation += 1;
+      }
+      const page =
+        after === null
+          ? { runs: rows.slice(0, 5000), next: [4999, 4999] }
+          : { runs: rows.slice(5000), next: null };
+      return JSON.stringify({
+        ...page,
+        skipped: 0,
+        generation,
+        catalogHash,
+        ...(after === null ? { problems: [], accepted: [] } : {}),
+      });
+    },
+  };
+  return {
+    handle,
+    startChurn: () => {
+      churn = true;
+    },
+    stats: () => ({ calls, firstPages, generation }),
+  };
+}
+
+const storeWith = (handle: NativeStoreHandle, now: () => number) =>
+  new RunsStore({
+    store: () => new AacStore(handle, '/fixture/store'),
+    root: () => '/fixture/share',
+    now,
+  });
+
+describe('a paged read terminates while imports continue (review M1)', () => {
+  it('fails explicitly when the store never settles and no complete read exists', async () => {
+    const script = churningStore();
+    script.startChurn();
+    const store = storeWith(script.handle, () => 1);
+    await expect(store.query({})).rejects.toThrow(/store_moving/);
+    // Four attempts of two pages at most, never the sentinel.
+    expect(script.stats().calls).toBeLessThanOrEqual(10);
+  });
+
+  it('catalog-only churn also terminates with the explicit failure', async () => {
+    const script = churningStore(true);
+    script.startChurn();
+    const store = storeWith(script.handle, () => 1);
+    await expect(store.query({})).rejects.toThrow(/store_moving/);
+    expect(script.stats().calls).toBeLessThanOrEqual(10);
+  });
+
+  it('serves the last complete read, stamped at that read, when the store never settles', async () => {
+    const script = churningStore();
+    let now = 1000;
+    const store = storeWith(script.handle, () => now);
+    const first = await store.query({});
+    expect(first.length).toBe(5001);
+    script.startChurn();
+    now = 5000;
+    const runs = await store.query({});
+    // The retained read is the complete earlier snapshot, never a mixed accumulation.
+    expect(runs.length).toBe(5001);
+    expect(runs[0].doc.id).toBe('vm.probe--b0');
+    expect(runs[5000].doc.id).toBe('vm.probe--b5000');
+    expect(script.stats().calls).toBeLessThanOrEqual(20);
+    const state = await store.state({});
+    // The answer says it was read up to the retained snapshot, not the later clock.
+    expect(state.scannedAt).toBe(1000);
+    expect(state.runs.length).toBe(5001);
+    expect(
+      state.problems.some(
+        (problem) => problem.file === 'store/read' && /generation 1/.test(problem.reason)
+      )
+    ).toBe(true);
+  });
+
+  it('stamps a completed read at its snapshot, not at a later clock', async () => {
+    const script = scriptedStore();
+    let now = 1000;
+    let seen = 0;
+    const inner = script.handle.call.bind(script.handle);
+    const handle: NativeStoreHandle = {
+      async call(method, args) {
+        if (method === 'runsQuery') {
+          seen += 1;
+          if (seen === 2) now = 5000;
+        }
+        return inner(method, args);
+      },
+    };
+    const state = await storeWith(handle, () => now).state({});
+    expect(state.scannedAt).toBe(1000);
+  });
+});
