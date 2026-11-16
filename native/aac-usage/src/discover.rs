@@ -521,39 +521,61 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
 
 fn count_files(root: &Path, accept: &dyn Fn(&str) -> bool, deadline: Instant) -> (usize, i64, bool) {
     let (mut files, mut newest, mut entries) = (0usize, 0i64, 0usize);
+    let mut incomplete = false;
     let mut pending = vec![(root.to_path_buf(), 0usize)];
     while let Some((directory, depth)) = pending.pop() {
         if Instant::now() >= deadline {
             return (files, newest, true);
         }
         if fsx::avoided(&directory) {
+            incomplete = true;
             continue;
         }
-        let Ok(list) = fs::read_dir(&directory) else {
-            continue;
+        let list = match fs::read_dir(&directory) {
+            Ok(list) => list,
+            Err(error) => {
+                incomplete |= error.kind() != std::io::ErrorKind::NotFound;
+                continue;
+            }
         };
-        for entry in list.flatten() {
+        for entry in list {
             entries += 1;
             if entries > PRESENCE_MAX_ENTRIES {
                 return (files, newest, true);
             }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    incomplete |= error.kind() != std::io::ErrorKind::NotFound;
+                    continue;
+                }
+            };
             let name = entry.file_name().to_string_lossy().into_owned();
-            let Ok(kind) = entry.file_type() else {
-                continue;
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(error) => {
+                    incomplete |= error.kind() != std::io::ErrorKind::NotFound;
+                    continue;
+                }
             };
             if kind.is_dir() {
-                if depth < PRESENCE_MAX_DEPTH && !skipped(&name) {
-                    pending.push((entry.path(), depth + 1));
+                if !skipped(&name) {
+                    if depth < PRESENCE_MAX_DEPTH {
+                        pending.push((entry.path(), depth + 1));
+                    } else {
+                        incomplete = true;
+                    }
                 }
             } else if kind.is_file() && accept(&name) {
                 files += 1;
-                if let Ok(meta) = entry.metadata() {
-                    newest = newest.max(util::mtime_ms(&meta));
+                match entry.metadata() {
+                    Ok(meta) => newest = newest.max(util::mtime_ms(&meta)),
+                    Err(error) => incomplete |= error.kind() != std::io::ErrorKind::NotFound,
                 }
             }
         }
     }
-    (files, newest, false)
+    (files, newest, incomplete)
 }
 
 /// Current CLI chat locations in addition to the older `.cursor/chats`. These stores contain
@@ -572,14 +594,19 @@ pub fn cursor_chat_roots(home: &Path, env: &Env) -> Vec<PathBuf> {
 /// gap, never proof of token use. Nevertheless it must not be advertised as current usage.
 pub const FRESHNESS_CYCLE_MS: i64 = 5 * 60 * 1000;
 
-pub fn freshness(newest_data: Option<i64>, newest_activity: Option<i64>, min_date: i64) -> Value {
+pub fn freshness(
+    newest_data: Option<i64>,
+    newest_activity: Option<i64>,
+    min_date: i64,
+    activity_complete: bool,
+) -> Value {
     let state = match (newest_data, newest_activity) {
         (Some(data), Some(activity)) if activity.saturating_sub(data) > FRESHNESS_CYCLE_MS => "stale",
         (None, Some(activity)) if activity >= min_date => "stale",
-        (Some(_), _) => "current",
+        (Some(_), _) if activity_complete => "current",
         _ => "unknown",
     };
-    json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity})
+    json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity, "activityComplete": activity_complete})
 }
 
 fn install_activity(home: &Path, env: &Env, kind: &str) -> Option<i64> {
@@ -1008,10 +1035,7 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         .get(kind)
         .and_then(|prints| prints.values().filter_map(|p| p.newest_usage_ms).max());
     let signals = installed_signals(home, env, kind, instances);
-    let mut coverage = freshness(newest_data, activity, collector.min_date_ms);
-    if activity_limited && coverage["state"] != "stale" {
-        coverage["state"] = json!("unknown");
-    }
+    let coverage = freshness(newest_data, activity, collector.min_date_ms, !activity_limited);
     json!({
         "installed": !roots.is_empty() || !signals.is_empty(),
         "signals": signals,

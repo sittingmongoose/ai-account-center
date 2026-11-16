@@ -131,8 +131,8 @@ function sourceCounts(kind: AnalyticsDiscoveryKind | undefined): {
 
 /** Project the native reader's coverage verdict. The dates are evidence, not guessed usage. */
 function applyFreshness(
-  entry: AnalyticsRemoteSourceState,
-  found: AnalyticsDiscoveryKind | undefined
+  entry: Pick<AnalyticsRemoteSourceState, 'state' | 'detail' | 'cause'>,
+  found: Pick<AnalyticsDiscoveryKind, 'freshness' | 'unmeasuredFiles'> | undefined
 ): void {
   if (!found) return;
   const clock = found.freshness;
@@ -168,6 +168,46 @@ function applyFreshness(
     const note = `${found.unmeasuredFiles} local chat data file${found.unmeasuredFiles === 1 ? '' : 's'} expose no numeric usage; their tokens and cost are not counted`;
     entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
   }
+}
+
+type SourceFreshness = NonNullable<AnalyticsDiscoveryKind['freshness']>;
+type LocalFreshness = Partial<Record<AnalyticsRemoteKind, SourceFreshness>>;
+
+/** Independent coverage is useful even before the native reader owns any numeric rows. */
+function localFreshnessOf(discovery: AnalyticsRemoteDiscovery | undefined): LocalFreshness {
+  const result: LocalFreshness = {};
+  for (const tool of LOCAL_SCANNER_KINDS) {
+    const clock = discovery?.kinds[tool]?.freshness;
+    if (clock) result[tool] = { ...clock };
+  }
+  return result;
+}
+
+/** Reconcile native evidence only with an actual collector event, never its scan/read time. */
+export function applyLocalScannerFreshness(
+  entry: Pick<AnalyticsRemoteSourceState, 'state' | 'detail' | 'cause'>,
+  clock: SourceFreshness | undefined,
+  collectorDataMs?: number
+): void {
+  if (!clock) return;
+  let resolved = clock;
+  if (
+    collectorDataMs !== undefined &&
+    Number.isFinite(collectorDataMs) &&
+    (clock.newestDataMs === null || collectorDataMs > clock.newestDataMs)
+  ) {
+    const stale =
+      clock.newestActivityMs !== null && clock.newestActivityMs - collectorDataMs > 5 * 60_000;
+    const incomplete =
+      clock.activityComplete === false ||
+      (clock.activityComplete === undefined && clock.state !== 'current');
+    resolved = {
+      ...clock,
+      newestDataMs: collectorDataMs,
+      state: stale ? 'stale' : incomplete ? 'unknown' : 'current',
+    };
+  }
+  applyFreshness(entry, { freshness: resolved });
 }
 
 const NO_READER_LABELS: Record<AnalyticsNoReaderTool, string> = {
@@ -367,6 +407,8 @@ export interface LocalScannerAnswer {
   owned: AnalyticsRemoteKind[];
   /** Kinds still catching up, with what the collector's cell should add. */
   catchingUp: Partial<Record<AnalyticsRemoteKind, string>>;
+  /** Coverage evidence survives takeover, unavailable binaries and cache-only restarts. */
+  freshness?: LocalFreshness;
   /** Why the scanner did not run here (the collector reads everything, labelled). */
   unavailable?: string;
   /** Kinds with more extra roots than the scanner takes: the collector keeps them. */
@@ -1385,7 +1427,11 @@ export function loadAnalyticsRemoteCachedSources(
     states,
     fetchedAt,
     reconcileClaudeMirrors,
-    local: { owned: [...owned], catchingUp: {} },
+    local: {
+      owned: [...owned],
+      catchingUp: {},
+      freshness: localFreshnessOf(loadCache(cacheFile(cacheDir, 'ubuntu')).discovery),
+    },
   };
 }
 
@@ -1583,6 +1629,7 @@ export async function loadAnalyticsRemoteSources(
 }> {
   const now = deps.now ?? Date.now;
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
+  let localFreshness = localFreshnessOf(loadCache(cacheFile(cacheDir, 'ubuntu')).discovery);
   const hosts = await (deps.hosts ?? resolveAnalyticsRemoteHosts)().catch(() =>
     fixedAnalyticsRemoteAliases()
   );
@@ -1909,6 +1956,7 @@ export async function loadAnalyticsRemoteSources(
           const found = response.discovery?.kinds[tool];
           if (found) discovery.kinds[tool] = found;
         }
+        if (host === 'ubuntu') localFreshness = localFreshnessOf(discovery);
         let toolsAt = cached.toolsAt;
         if (response.discovery?.tools) {
           discovery.tools = response.discovery.tools;
@@ -2286,8 +2334,9 @@ export async function loadAnalyticsRemoteSources(
       ? {
           owned: [...localOwned],
           catchingUp,
+          freshness: localFreshness,
           ...(local.overflow.length ? { tooManyRoots: local.overflow } : {}),
         }
-      : { owned: [], catchingUp: {}, unavailable: localReady.cause },
+      : { owned: [], catchingUp: {}, unavailable: localReady.cause, freshness: localFreshness },
   };
 }

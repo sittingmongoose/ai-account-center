@@ -20,6 +20,7 @@ import type { PlanWorkerRequest, PlanWorkerResponse } from '../usage/analytics-p
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
   LOCAL_SCANNER_KINDS,
+  applyLocalScannerFreshness,
   analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
@@ -1502,8 +1503,12 @@ export class AccountAnalyticsActivityService {
             entry.request.activity?.discoveryTruncated
         )
       )
-        source.detail =
-          'usage-root discovery is incomplete or hit its depth or scan budget; records from roots found so far are shown';
+        source.detail = [
+          source.detail,
+          'usage-root discovery is incomplete or hit its depth or scan budget; records from roots found so far are shown',
+        ]
+          .filter(Boolean)
+          .join('; ');
       // A collector's own reason why its scan stays partial (a compressed Codex log too large to
       // finish in one pass) is named on the cell, so a lasting partial state says why.
       if (source.host !== 'ubuntu') continue;
@@ -1910,6 +1915,18 @@ export class AccountAnalyticsActivityService {
       }
     }
     // While the local scanner catches up on a kind, or cannot run here, the collector's cell says so.
+    const measuredClocks = new Map<string, number>();
+    for (const source of state.local.values()) {
+      for (const data of source.data)
+        for (const session of data.session) {
+          const at = Date.parse(session.lastActivity);
+          if (Number.isFinite(at))
+            measuredClocks.set(
+              source.provider,
+              Math.max(measuredClocks.get(source.provider) ?? 0, at)
+            );
+        }
+    }
     for (const entry of entries) {
       if (
         entry.host !== 'ubuntu' ||
@@ -1924,6 +1941,11 @@ export class AccountAnalyticsActivityService {
             ? 'read by the built-in reader: this computer has more experiment folders than the usage scanner takes in one request'
             : null;
       if (note) entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+      applyLocalScannerFreshness(
+        entry,
+        local?.freshness?.[entry.tool as AnalyticsRemoteKind],
+        measuredClocks.get(entry.tool)
+      );
     }
     if (remote) {
       for (const entry of remote) entries.push({ ...entry });

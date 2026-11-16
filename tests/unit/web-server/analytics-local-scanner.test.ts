@@ -128,7 +128,7 @@ const noRemote = async () => ({ mac: null, windows: null, nas1: null, alexis: nu
 describe('the scanner on this computer', () => {
   it('checks freshness with the native reader for every local Analytics tool', async () => {
     const asked: string[] = [];
-    await loadAnalyticsRemoteSources(MIN_DATE, {
+    const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
       cacheDir: path.join(dir, 'all-tools'),
       hosts: noRemote,
       force: true,
@@ -136,7 +136,62 @@ describe('the scanner on this computer', () => {
       localScanner: () => ({ ok: true }),
       runLocal: async (request) => {
         asked.push(...request.kinds);
-        return codexAnswer(true);
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify({
+            version: 2,
+            truncated: false,
+            kinds: Object.fromEntries(
+              request.kinds.map((kind) => [
+                kind,
+                {
+                  state: 'ok',
+                  fingerprints: {
+                    [FILE]: { ...PRINT, ...(kind === 'claude' ? { claudeGroup: FILE } : {}) },
+                  },
+                  ...(kind === 'claude' ? { replacedFiles: [FILE] } : {}),
+                },
+              ])
+            ),
+            rows: request.kinds.map((kind) => ({
+              k: kind,
+              f: FILE,
+              m: 'fixture-model',
+              h: '2026-11-13 15:00',
+              i: 100,
+              o: 5,
+              cr: 0,
+              cw: 0,
+              c: 0,
+              n: 3,
+            })),
+            srows: [],
+            discovery: {
+              kinds: Object.fromEntries(
+                request.kinds.map((kind) => [
+                  kind,
+                  {
+                    installed: true,
+                    roots: [],
+                    signals: ['home'],
+                    counts: {
+                      roots: 0,
+                      filesFound: 1,
+                      filesRead: 1,
+                      filesFailed: 0,
+                      newestMtime: NOW,
+                    },
+                    freshness: {
+                      state: 'stale',
+                      newestDataMs: NOW - 86400000,
+                      newestActivityMs: NOW,
+                      activityComplete: true,
+                    },
+                  },
+                ])
+              ),
+            },
+          })
+        );
       },
     });
     expect([...new Set(asked)].sort()).toEqual([
@@ -149,6 +204,12 @@ describe('the scanner on this computer', () => {
       'omp',
       'zcode',
     ]);
+    for (const kind of new Set(asked)) {
+      const cell = answer.states.find((entry) => entry.host === 'ubuntu' && entry.tool === kind);
+      expect(cell).toMatchObject({ state: 'stale', cause: 'newer_activity', rowCount: 3 });
+      expect(cell?.detail).toContain(new Date(NOW - 86400000).toISOString());
+      expect(cell?.detail).toContain(new Date(NOW).toISOString());
+    }
   });
   // Sol M7 (FIX-ROUND-BIG 6): more experiment folders than the scanner takes, after it took Codex
   // over, hands Codex back to the built-in reader, which then reads it; never neither reader.
@@ -260,7 +321,12 @@ describe('the scanner on this computer', () => {
         throw new Error('must not run');
       },
     });
-    expect(none.local).toEqual({ owned: [], catchingUp: {}, unavailable: 'binary_not_built' });
+    expect(none.local).toEqual({
+      owned: [],
+      catchingUp: {},
+      unavailable: 'binary_not_built',
+      freshness: {},
+    });
     expect(none.results).toEqual([]);
   });
 });

@@ -364,6 +364,8 @@ export interface AnalyticsDiscoveryKind {
     state: 'current' | 'stale' | 'unknown';
     newestDataMs: number | null;
     newestActivityMs: number | null;
+    /** False when a bound or I/O failure left independent activity unchecked. */
+    activityComplete?: boolean;
   };
   /** Local data files without numeric usage (Cursor CLI blobs and WAL files, for example). */
   unmeasuredFiles?: number;
@@ -431,7 +433,8 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
       typeof freshness !== 'object' ||
       !['current', 'stale', 'unknown'].includes(String(freshness.state)) ||
       !epoch(freshness.newestDataMs) ||
-      !epoch(freshness.newestActivityMs))
+      !epoch(freshness.newestActivityMs) ||
+      (freshness.activityComplete !== undefined && typeof freshness.activityComplete !== 'boolean'))
   )
     return null;
   if (entry.unmeasuredFiles !== undefined && !count(entry.unmeasuredFiles)) return null;
@@ -490,6 +493,9 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
             state: freshness.state as 'current' | 'stale' | 'unknown',
             newestDataMs: freshness.newestDataMs as number | null,
             newestActivityMs: freshness.newestActivityMs as number | null,
+            ...(freshness.activityComplete !== undefined
+              ? { activityComplete: freshness.activityComplete as boolean }
+              : {}),
           },
         }
       : {}),

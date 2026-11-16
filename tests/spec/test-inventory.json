@@ -2719,6 +2719,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/analytics-local-freshness.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/analytics-local-scanner.test.ts",
       "kind": "internal",
       "evidence": [],

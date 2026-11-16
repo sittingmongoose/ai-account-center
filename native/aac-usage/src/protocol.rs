@@ -568,7 +568,8 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                     .max();
                 let activity = discovered["freshness"]["newestActivityMs"].as_i64();
                 if retained.is_some() {
-                    discovered["freshness"] = discover::freshness(data, activity, collector.min_date_ms);
+                    let complete = discovered["freshness"]["activityComplete"] == true;
+                    discovered["freshness"] = discover::freshness(data, activity, collector.min_date_ms, complete);
                 }
             }
             discovery_kinds.insert(kind.clone(), discovered);

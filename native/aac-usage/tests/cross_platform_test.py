@@ -68,12 +68,16 @@ def run(binary, helper):
         assert found["freshness"]["state"] == "stale"
         assert found["freshness"]["newestDataMs"] == 1794430860000
         assert found["unmeasuredFiles"] == 1
+        omp_freshness = first["discovery"]["kinds"]["omp"]["freshness"]
+        assert omp_freshness["state"] == "stale"
+        assert omp_freshness["newestDataMs"] == 1794430860000
         assert sum(r["i"] for r in first["rows"] if r["k"] == "zcode") == 320
         assert "walUnread" not in first["kinds"]["zcode"]
         prints = {k: v["fingerprints"] for k, v in first["kinds"].items()}
         second = request([binary], ["cursor", "omp", "zcode"], prints)
         assert second["rows"] == [], "An unchanged file must not duplicate usage"
         assert second["discovery"]["kinds"]["cursor"]["freshness"] == found["freshness"]
+        assert second["discovery"]["kinds"]["omp"]["freshness"] == omp_freshness
         # The legacy remote helper has no SDK reader. Its established OMP format must still
         # produce exactly the same measured hourly/session records on this OS.
         native = request([binary], ["omp", "zcode"])
@@ -81,8 +85,26 @@ def run(binary, helper):
         for key in ("rows", "srows"):
             assert native[key] == python[key], (key, native[key], python[key])
         assert (zcode.read_bytes(), wal.read_bytes()) == original, "Read-only scans must preserve DB and WAL bytes"
+        # Review M2: identical SDK data with a CLI store just beyond the activity depth cap.
+        chat.unlink()
+        old = 1794430860
+        for path in (sdk, home / ".cursor"):
+            os.utime(path, (old, old))
+        deep = home / "config/cursor/chats/0/1/2/3/4/5/6/7/8/store.db"
+        deep.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(deep)) as db:
+            db.executescript("CREATE TABLE blobs (id TEXT, data BLOB); CREATE TABLE meta (key TEXT, value TEXT);")
+        os.utime(deep, (old + 3600, old + 3600))
+        check = request([binary], ["cursor"])["discovery"]["kinds"]["cursor"]["freshness"]
+        assert check["state"] == "unknown" and check["activityComplete"] is False, check
+        shallow = deep.parent.parent / "store.db"
+        deep.rename(shallow)
+        deep.parent.rmdir()
+        check = request([binary], ["cursor"])["discovery"]["kinds"]["cursor"]["freshness"]
+        assert check["state"] == "stale" and check["activityComplete"] is True, check
+        assert check["newestDataMs"] == old * 1000 and check["newestActivityMs"] == (old + 3600) * 1000
         print(json.dumps({"result": "PASS", "os": sys.platform,
-                          "checks": ["sdk tokens", "cli unmeasured", "stale dates", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity"]}))
+                          "checks": ["sdk tokens", "cli unmeasured", "stale dates", "OMP unchanged clocks", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity", "deep unverified/shallow stale"]}))
 
 
 if __name__ == "__main__":

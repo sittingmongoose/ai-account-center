@@ -8,15 +8,15 @@ use std::{fs, path::Path};
 fn freshness_cycle_boundary_and_missing_numbers_are_honest() {
     use aac_usage::discover::{FRESHNESS_CYCLE_MS, freshness};
     assert_eq!(
-        freshness(Some(1000), Some(1000 + FRESHNESS_CYCLE_MS), 0)["state"],
+        freshness(Some(1000), Some(1000 + FRESHNESS_CYCLE_MS), 0, true)["state"],
         "current"
     );
     assert_eq!(
-        freshness(Some(1000), Some(1001 + FRESHNESS_CYCLE_MS), 0)["state"],
+        freshness(Some(1000), Some(1001 + FRESHNESS_CYCLE_MS), 0, true)["state"],
         "stale"
     );
-    assert_eq!(freshness(None, Some(1000), 0)["state"], "stale");
-    assert_eq!(freshness(None, None, 0)["state"], "unknown");
+    assert_eq!(freshness(None, Some(1000), 0, true)["state"], "stale");
+    assert_eq!(freshness(None, None, 0, true)["state"], "unknown");
 }
 
 #[test]
@@ -192,4 +192,212 @@ fn switching_from_immutable_to_read_only_reads_committed_wal_without_changing_so
     assert_eq!(total, 320, "A mode change must reread an unchanged DB/WAL print");
     assert!(fresh["kinds"]["zcode"].get("walUnread").is_none());
     assert_eq!((fs::read(&db).unwrap(), fs::read(&wal).unwrap()), before);
+}
+
+#[cfg(unix)]
+fn modified(path: &Path, at: i64) {
+    let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(at as u64);
+    fs::File::open(path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(time))
+        .unwrap();
+}
+
+#[cfg(unix)]
+fn quiet_sdk(home: &Path) {
+    store(home);
+    modified(
+        &home.join(".cursor/projects/project/sdk-agent-store/store/index.db"),
+        1794430860000,
+    );
+    modified(&home.join(".cursor"), 1794430860000);
+}
+
+#[cfg(unix)]
+#[test]
+fn activity_depth_cap_is_unverified_with_a_shallow_and_known_stale_control() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    quiet_sdk(h);
+    assert_eq!(
+        scan(h, None)["discovery"]["kinds"]["cursor"]["freshness"]["state"],
+        "current"
+    );
+    let root = h.join("config/cursor/chats");
+    let deep = root.join("0/1/2/3/4/5/6/7/8/store.db");
+    fs::create_dir_all(deep.parent().unwrap()).unwrap();
+    fs::write(&deep, "fixture blobs/meta store marker; no usage numbers").unwrap();
+    modified(&deep, 1794434460000);
+    let answer = scan(h, None);
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "unknown");
+    assert_eq!(
+        answer["discovery"]["kinds"]["cursor"]["freshness"]["activityComplete"],
+        false
+    );
+    let visible = root.join("visible/store.db");
+    fs::create_dir_all(visible.parent().unwrap()).unwrap();
+    fs::copy(&deep, &visible).unwrap();
+    modified(&visible, 1794434460000);
+    let known = scan(h, None);
+    assert_eq!(known["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert_eq!(
+        known["discovery"]["kinds"]["cursor"]["freshness"]["activityComplete"],
+        false
+    );
+    fs::remove_file(&visible).unwrap();
+    let shallow = deep.parent().unwrap().parent().unwrap().join("store.db");
+    fs::rename(&deep, &shallow).unwrap();
+    fs::remove_dir(deep.parent().unwrap()).unwrap();
+    let answer = scan(h, None);
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert_eq!(
+        answer["discovery"]["kinds"]["cursor"]["freshness"]["activityComplete"],
+        true
+    );
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["unmeasuredFiles"], 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn activity_listing_errors_are_unverified_instead_of_absent() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    quiet_sdk(h);
+    fs::create_dir_all(h.join("config/cursor")).unwrap();
+    fs::write(
+        h.join("config/cursor/chats"),
+        "a non-directory cannot be exhaustively listed",
+    )
+    .unwrap();
+    let answer = scan(h, None);
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "unknown");
+    assert_eq!(
+        answer["discovery"]["kinds"]["cursor"]["freshness"]["activityComplete"],
+        false
+    );
+}
+
+fn varint(mut value: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    while value >= 128 {
+        out.push((value as u8 & 127) | 128);
+        value >>= 7;
+    }
+    out.push(value as u8);
+    out
+}
+
+fn number(field: u64, value: u64) -> Vec<u8> {
+    [varint(field * 8), varint(value)].concat()
+}
+
+fn bytes(field: u64, value: &[u8]) -> Vec<u8> {
+    [varint(field * 8 + 2), varint(value.len() as u64), value.to_vec()].concat()
+}
+
+#[test]
+fn omp_and_antigravity_stale_clocks_survive_unchanged_reads() {
+    for tool in ["omp", "antigravity"] {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        if tool == "omp" {
+            let file = h.join(".omp/agent/sessions/2026-11-11T21-00-00_fixture.jsonl");
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(
+                file,
+                json!({"type":"message","timestamp":"2026-11-11T21:01:00Z",
+                "message":{"role":"assistant","model":"fixture-model","provider":"fixture-provider",
+                "usage":{"input":100,"output":20,"cacheRead":0,"cacheWrite":0}}})
+                .to_string()
+                    + "\n",
+            )
+            .unwrap();
+        } else {
+            let db = h.join(".gemini/antigravity/conversations/fixture.db");
+            fs::create_dir_all(db.parent().unwrap()).unwrap();
+            let connection = Connection::open(db).unwrap();
+            connection
+                .execute_batch("CREATE TABLE steps (idx INTEGER, metadata BLOB)")
+                .unwrap();
+            let metadata = [
+                bytes(24, &bytes(12, b"claude-opus-4-6")),
+                bytes(8, &number(1, 1794430860)),
+                bytes(9, &[number(2, 100), number(3, 20)].concat()),
+            ]
+            .concat();
+            connection
+                .execute("INSERT INTO steps VALUES (1, ?1)", [metadata])
+                .unwrap();
+        }
+        let ask = |prints| {
+            protocol::parse_request(
+                json!({"kinds":[tool],
+            "minDateMs":1790000000000u64,"deadlineMs":60000,"fingerprints":prints})
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+        let env = Env::from([("PATH".into(), String::new())]);
+        let first = protocol::scan(&ask(json!({})), h, &env);
+        assert_eq!(first["rows"][0]["i"], 100, "{tool}");
+        let freshness = &first["discovery"]["kinds"][tool]["freshness"];
+        assert_eq!(freshness["state"], "stale", "{tool}");
+        assert_eq!(freshness["newestDataMs"], 1794430860000u64, "{tool}");
+        assert!(freshness["newestActivityMs"].as_i64().unwrap() > 1794430860000);
+        let again = protocol::scan(&ask(json!({tool:first["kinds"][tool]["fingerprints"]})), h, &env);
+        assert!(again["rows"].as_array().unwrap().is_empty(), "{tool}");
+        assert_eq!(again["discovery"]["kinds"][tool]["freshness"], *freshness, "{tool}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn t3_only_activity_keeps_quiet_sdk_usage_stale() {
+    let home = tempfile::tempdir().unwrap();
+    quiet_sdk(home.path());
+    let db = home.path().join(".t3/userdata/statev2.sqlite");
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    Connection::open(db).unwrap().execute_batch(
+        "CREATE TABLE orchestration_v2_projection_provider_threads (driver TEXT, provider_instance_id TEXT, updated_at TEXT);
+        INSERT INTO orchestration_v2_projection_provider_threads VALUES ('cursor', 'fixture-instance', '2026-11-15T23:00:00Z');"
+    ).unwrap();
+    let answer = scan(home.path(), None);
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert_eq!(
+        answer["discovery"]["kinds"]["cursor"]["freshness"]["newestActivityMs"],
+        1794783600000u64
+    );
+    assert_eq!(
+        answer["discovery"]["kinds"]["cursor"]["freshness"]["newestDataMs"],
+        1794430860000u64
+    );
+}
+
+#[test]
+fn native_default_cli_root_is_unmeasured_and_discovered_without_xdg_overrides() {
+    let home = tempfile::tempdir().unwrap();
+    let base = if cfg!(windows) {
+        "AppData/Roaming/cursor/chats"
+    } else if cfg!(target_os = "macos") {
+        "Library/Application Support/cursor/chats"
+    } else {
+        ".config/cursor/chats"
+    };
+    let chat = home.path().join(base).join("project/chat/store.db");
+    fs::create_dir_all(chat.parent().unwrap()).unwrap();
+    Connection::open(chat)
+        .unwrap()
+        .execute_batch("CREATE TABLE blobs (id TEXT, data BLOB); CREATE TABLE meta (key TEXT, value TEXT);")
+        .unwrap();
+    let request = protocol::parse_request(
+        json!({"kinds":["cursor"],"minDateMs":0,"deadlineMs":60000})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    let answer = protocol::scan(&request, home.path(), &Env::from([("PATH".into(), String::new())]));
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["unmeasuredFiles"], 1);
+    assert!(answer["rows"].as_array().unwrap().is_empty());
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
 }
