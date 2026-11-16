@@ -230,6 +230,17 @@
       "efforts": [],
       "prices": null,
       "notes": ""
+    },
+    {
+      "model": "google/gemini-4-hydrogen",
+      "label": "Gemini 4 Hydrogen",
+      "family": "Gemini",
+      "runtimes": [
+        "cursor"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
     }
   ]
 }
