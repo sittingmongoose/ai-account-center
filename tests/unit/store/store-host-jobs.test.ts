@@ -49,7 +49,9 @@ function scriptedHost() {
     lastError: 'io: a private path that must never be logged',
     lastErrorCode: 'io' as string | null,
     lastErrorMs: 1_000 as number | null,
+    lastErrorSeq: 1 as number | null,
     lastShareFailedMs: 2_000 as number | null,
+    lastShareSeq: 1 as number | null,
   };
   let down = false;
   const handle: NativeStoreHandle = {
@@ -111,10 +113,12 @@ describe('the hosted store jobs watch', () => {
     await flush();
     expect(warnings().length).toBe(2);
 
-    // A later pass fails again: one new warning per failure, with the new fixed code.
+    // A later pass fails again: new sequences, one new warning per failure, new fixed code.
     host.state.lastErrorMs = 3_000;
+    host.state.lastErrorSeq = 2;
     host.state.lastErrorCode = 'db_unavailable';
     host.state.lastShareFailedMs = 4_000;
+    host.state.lastShareSeq = 2;
     clock.ticks.shift()!();
     await flush();
     const all = warnings();
@@ -174,5 +178,34 @@ describe('the hosted store jobs watch', () => {
     clock.ticks.shift()!();
     await flush();
     expect(warnings().length).toBe(0);
+  });
+
+  it('a backward clock still warns for new failures (monotonic sequence)', async () => {
+    const host = scriptedHost();
+    const clock = manualSchedule();
+    const stop = startAacStoreHostJobsWatch({ store: () => host.store, schedule: clock.schedule });
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(2);
+    // The clock moves back; the next failed pass is stamped earlier but is a new failure.
+    host.state.lastErrorMs = 500;
+    host.state.lastErrorSeq = 2;
+    host.state.lastErrorCode = 'db_unavailable';
+    host.state.lastShareFailedMs = 600;
+    host.state.lastShareSeq = 2;
+    clock.ticks.shift()!();
+    await flush();
+    const all = warnings();
+    expect(all.length).toBe(4);
+    expect(all[2].event).toBe('store.maintenance_failed');
+    expect(all[2].context).toEqual({ code: 'db_unavailable' });
+    expect(all[3].event).toBe('store.share_backup_failed');
+    // The same sequence warns no second time, even if the clock moves again.
+    host.state.lastErrorMs = 400;
+    host.state.lastShareFailedMs = 300;
+    clock.ticks.shift()!();
+    await flush();
+    expect(warnings().length).toBe(4);
+    stop();
   });
 });

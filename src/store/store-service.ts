@@ -287,7 +287,10 @@ export interface HostJobsState {
     lastError: string | null;
     lastErrorCode?: string | null;
     lastErrorMs?: number | null;
+    /** Monotonic failure identity: a backward wall clock cannot hide a new failure. */
+    lastErrorSeq?: number | null;
     lastShareFailedMs: number | null;
+    lastShareSeq?: number | null;
   };
 }
 
@@ -591,6 +594,9 @@ export function startAacStoreMaintenance(
  * operator as the in-process loop's warnings. Polls the host's job record once a minute
  * (the markers persist in the store, so a host restart keeps them) and warns once per new
  * failure, with the same events, words and fixed codes startAacStoreMaintenance logs.
+ * Failures are identified by the host's persisted monotonic sequence, so a backward wall
+ * clock cannot hide a new failure (round 3 L1); a host without sequences falls back to its
+ * stamp, compared by difference for the same reason.
  * Returns the stop function; the server stops it when the jobs fall back in process.
  */
 export function startAacStoreHostJobsWatch(
@@ -602,8 +608,8 @@ export function startAacStoreHostJobsWatch(
   const current = deps.store ?? getAacStore;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let warnedErrorMs = 0;
-  let warnedShareMs = 0;
+  let warnedError: number | null = null;
+  let warnedShare: number | null = null;
   const poll = async (): Promise<void> => {
     if (stopped) return;
     const store = current();
@@ -617,9 +623,9 @@ export function startAacStoreHostJobsWatch(
     }
     // A tick already in flight when the watch stops (a fallback) warns nothing.
     if (stopped || !jobs) return;
-    const errorMs = jobs.lastErrorMs ?? 0;
-    if (errorMs > warnedErrorMs) {
-      warnedErrorMs = errorMs;
+    const errorId = jobs.lastErrorSeq ?? jobs.lastErrorMs ?? null;
+    if (errorId !== null && errorId !== warnedError) {
+      warnedError = errorId;
       try {
         logger.warn('store.maintenance_failed', 'Store maintenance did not finish', {
           code: jobs.lastErrorCode ?? 'unknown',
@@ -628,9 +634,9 @@ export function startAacStoreHostJobsWatch(
         /* Logging never stops the dashboard. */
       }
     }
-    const shareMs = jobs.lastShareFailedMs ?? 0;
-    if (shareMs > warnedShareMs) {
-      warnedShareMs = shareMs;
+    const shareId = jobs.lastShareSeq ?? jobs.lastShareFailedMs ?? null;
+    if (shareId !== null && shareId !== warnedShare) {
+      warnedShare = shareId;
       try {
         logger.warn('store.share_backup_failed', 'The share copy of the store backup failed');
       } catch {

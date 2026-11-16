@@ -87,7 +87,7 @@ function storeCall(boot, req, res) {
       res.end(JSON.stringify({ opens: store.opens, records: store.records }));
     else if (method === 'hostJobs')
       res.end(
-        '{"open":true,"bootError":null,"jobs":{"passes":0,"lastPassMs":null,"lastError":null,"lastErrorCode":null,"lastErrorMs":null,"lastShareFailedMs":null}}'
+        '{"open":true,"bootError":null,"jobs":{"passes":0,"lastPassMs":null,"lastError":null,"lastErrorCode":null,"lastErrorMs":null,"lastErrorSeq":null,"lastShareFailedMs":null,"lastShareSeq":null}}'
       );
     else fail(`invalid: unknown method ${method}`);
   });
