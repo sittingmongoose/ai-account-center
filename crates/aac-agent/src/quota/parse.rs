@@ -439,7 +439,12 @@ pub(super) fn packs(p: &Value, now: i64) -> Value {
         return Value::Null;
     }
     let mut windows = Vec::new();
-    let current = aac_num::py::iso_seconds(now).unwrap_or_default();
+    // Wonder L13: outside `iso_seconds`' domain the comparison instant is unproven; decline the
+    // whole verb as the neighbouring `round` fallback does, never compare against "".
+    let Some(current) = aac_num::py::iso_seconds(now) else {
+        proof::reject();
+        return Value::Null;
+    };
     for (field, prefix, label) in [
         ("fiveHourResets", "5h", "5-hour"),
         ("weekResets", "weekly", "Weekly"),
@@ -757,5 +762,41 @@ mod rounding_tests {
             serde_json::Value::Null
         );
         assert_eq!(at(serde_json::json!(946684799)), serde_json::Value::Null);
+    }
+}
+
+#[cfg(test)]
+mod packs_clock_tests {
+    //! Wonder L13: an out-of-domain clock declines the whole verb instead of comparing against "".
+    use super::*;
+
+    fn payload() -> Value {
+        json!({
+            "success": true,
+            "code": 0,
+            "data": {
+                "fiveHourResets": [{"expireTime": "2026-11-16T04:00:00Z", "available": true}],
+                "weekResets": [{"expireTime": "2026-11-20T04:00:00Z", "available": false}]
+            }
+        })
+    }
+
+    #[test]
+    fn an_out_of_domain_clock_declines_the_pack_inventory() {
+        // Year 10000 and year 0: `iso_seconds` has no answer there.
+        for now in [253_402_300_800_i64, -62_167_219_200_i64] {
+            let outcome = proof::scope(|| packs(&payload(), now));
+            assert_eq!(outcome, proof::fallback(), "now {now}");
+        }
+    }
+
+    #[test]
+    fn an_in_domain_clock_keeps_the_pack_windows() {
+        let outcome = proof::scope(|| packs(&payload(), 1_763_200_000));
+        let windows = outcome.as_array().expect("pack windows");
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0]["key"], json!("reset-packs-5h"));
+        assert_eq!(windows[0]["remaining"], json!(1));
+        assert_eq!(windows[1]["key"], json!("reset-packs-weekly"));
     }
 }

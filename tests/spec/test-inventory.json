@@ -131,6 +131,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/tests/search_ancestors.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-api/src/home.rs",
       "kind": "internal",
       "evidence": [],

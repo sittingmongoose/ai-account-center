@@ -298,6 +298,19 @@ const agentConnections = new Map<
   }
 >();
 
+/**
+ * The root spelling a lease registers under: the lifecycle canonicalizes its root once, so a
+ * symlinked scope (a `/tmp` CCS_HOME on macOS) names the same boot (Wonder L4). A root that
+ * cannot be resolved keeps its own spelling and misses, as before.
+ */
+export function canonicalRoot(root: string): string {
+  try {
+    return fs.realpathSync(root);
+  } catch {
+    return root;
+  }
+}
+
 export function registerRustAgentConnection(
   root: string,
   connection: RustConnection,
@@ -327,7 +340,8 @@ export async function requestRustAgent(
   },
   onProgress?: (data: unknown) => void
 ): Promise<string | null | undefined> {
-  const held = [...agentConnections.values()].reverse().find((entry) => entry.root === root);
+  const scope = canonicalRoot(root);
+  const held = [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
   if (!held) return undefined;
   const bytes = JSON.stringify(payload);
   if (Buffer.byteLength(bytes) > 8 * 1024 * 1024 + 8192) return null;

@@ -69,8 +69,9 @@ function storeCall(boot, req, res) {
       res.statusCode = 500;
       res.end(JSON.stringify({ error }));
     };
-    if (method === 'hostIdentity') { res.end(JSON.stringify({ commit: 'f'.repeat(40), storeSchema: 2, bindingVersion: 2 })); }
-    else if (method === 'open') {
+    if (method === 'hostIdentity') {
+      res.end(JSON.stringify({ commit: 'f'.repeat(40), storeSchema: 2, bindingVersion: 2 }));
+    } else if (method === 'open') {
       store.opens++;
       store.closed = false;
       res.end(storeStatus());
@@ -84,12 +85,17 @@ function storeCall(boot, req, res) {
       res.end('{"sampled":1,"seen":0,"skipped":0,"rejected":0}');
     } else if (method === 'counts')
       res.end(JSON.stringify({ opens: store.opens, records: store.records }));
-    else if (method === 'hostJobs')
-      res.end('{"open":true,"bootError":null,"jobs":{"passes":0}}');
+    else if (method === 'hostJobs') res.end('{"open":true,"bootError":null,"jobs":{"passes":0}}');
     else fail(`invalid: unknown method ${method}`);
   });
 }
 function start(boot) {
+  // Names only (never values): the spawn-env tests assert which names reached the child.
+  fs.writeFileSync(
+    `${boot.ccsDir}/fixture-spawn-env.json`,
+    JSON.stringify(Object.keys(process.env)),
+    { mode: 0o600 }
+  );
   server.on('request', (req, res) => {
     res.setHeader('x-aac-service-boot', boot.bootId);
     if (req.headers['x-aac-boot-secret'] !== boot.secret) {
@@ -150,6 +156,27 @@ function start(boot) {
           return res.end('{"error":"TypeScript read fallback required"}');
         }
         res.end(storeStatus());
+      });
+      return;
+    }
+    if (req.url === '/api/claude/desktop-profiles' && req.method === 'GET') {
+      res.end('{"profiles":[]}');
+      return;
+    }
+    if (req.url.startsWith('/internal/agent/') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        const callId = JSON.parse(body).callId;
+        res.setHeader('content-type', 'application/x-ndjson');
+        res.end(
+          JSON.stringify({
+            protocol: 1,
+            id: callId,
+            type: 'result',
+            value: { ok: true, verb: req.url.split('/').pop() },
+          }) + '\n'
+        );
       });
       return;
     }

@@ -15,6 +15,7 @@ import {
 } from './rust-service-transport';
 import { privateFileOwners, type PrivateFileRole } from '../shared/private-files';
 import { rustServiceEnvironment } from './rust-service-env';
+import { agentTransport } from './services/agent-verbs';
 
 /** The private socket protocol this front door speaks (aac-http `identity::PROTOCOL`). */
 export const RUST_SERVICE_PROTOCOL = 3;
@@ -503,7 +504,8 @@ async function acquireWithinBudget(
     child = spawn(binary, [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
-        ...rustServiceEnvironment(),
+        // Windows already returned above; the default re-detects the platform in its own scope.
+        ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, 'services/agent-artifacts.json'),
         AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,
