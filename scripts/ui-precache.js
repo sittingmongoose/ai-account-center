@@ -10,7 +10,7 @@ const crypto = require('crypto');
 /** The placeholder in the source sw.js that build-ui.js replaces with the list (a JSON array). */
 const SW_PRECACHE = '[/*__AAC_PRECACHE__*/]';
 const SW_PRECACHE_ERROR = 'sw.js must name the [/*__AAC_PRECACHE__*/] placeholder exactly once.';
-/** The frame page answers these addresses (the start page and every tab); offline each needs its own copy. */
+/** Canonical frame addresses. sw-route.js maps the server's supported single trailing slash to these entries. */
 const PAGE_ADDRESSES = Object.freeze([
   '/',
   '/app/home',

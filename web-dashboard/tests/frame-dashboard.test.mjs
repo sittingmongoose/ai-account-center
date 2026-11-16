@@ -292,7 +292,7 @@ test('the frame loads a page module once, not early while offline, and asks agai
   const make = (online, answers) => {
     const asked = [];
     // eslint-disable-next-line no-new-func
-    const loader = new Function('__import', 'navigator', `${source.replaceAll('import(', '__import(')}; return loader;`)(
+    const loader = new Function('loadModule', 'navigator', `${source}; return loader;`)(
       (url) => { asked.push(url); return answers.shift()(url); },
       { onLine: online }
     );
@@ -323,7 +323,7 @@ test('the frame loads a page module once, not early while offline, and asks agai
 
 test('the frame asks for the module of the tab its address opens at once, classic addresses included', async () => {
   const html = await readFile(new URL('../leptos/index.html', import.meta.url), 'utf8');
-  const source = html.match(/const startPage = \(\(path, search\) => \{[\s\S]*?\n {10}\}\)/)?.[0];
+  const source = html.match(/const startPage = \(\(path, search\) => \{[\s\S]*?\n {6}\}\)/)?.[0];
   assert.ok(source, 'index.html names the start tab');
   // eslint-disable-next-line no-new-func
   const startPage = new Function(`${source.replace('const startPage = ', 'return ')};`)();

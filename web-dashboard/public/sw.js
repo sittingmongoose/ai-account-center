@@ -5,7 +5,7 @@
 // with its cache, stays. The new worker activates on the next launch (no skipWaiting, no update prompt) and only
 // then, with its own copy complete, drops the previous build's caches, so the installed app always has one usable
 // copy offline (review M1). Routing rules live in the pure sw-route.js (tested); this file only runs them against
-// fetch/cache.
+// fetch/cache. The installed copy is immutable: ordinary network reads never change it.
 importScripts('./sw-route.js');
 
 var BUILD_ID = '__AAC_BUILD_ID__';
@@ -34,8 +34,8 @@ var OFFLINE_PAGE =
   '<p>The app shell has not been downloaded yet, and there is no connection.</p>' +
   '<p><a href="/">Try again</a></p></main></body></html>';
 
-// The network's answer, never aborted: when a slow start is answered from the cache, the answer that arrives later
-// still refreshes the cache, so the next start is current (an aborted fetch left an old build in place for days).
+// The network answer is never aborted. A packaged worker keeps its installed generation intact; only a complete
+// install may replace it. An unstamped development worker can still warm resources as they are read.
 function fromNetwork(event, request) {
   var network = fetch(request).then(function (response) {
     if (response.status < 500 || response.status > 599) storeFor(event, request, response);
@@ -66,7 +66,8 @@ function giveUpAfter(ms) {
 // the original goes back to the page and its body is read; cloning later, after
 // the cache opened, failed silently and left the cache empty.
 function store(request, response) {
-  if (!AacSwRoute.cacheable(response)) return Promise.resolve();
+  if (PRECACHE.length > 0 || request.cache === 'no-store' || !AacSwRoute.cacheable(response))
+    return Promise.resolve();
   var copy = response.clone();
   var mirror = null;
   try {
@@ -111,6 +112,60 @@ function storeFor(event, request, response) {
   }
 }
 
+// A packaged copy's runtime is already named by its precache addresses and entry HTML.
+function runtimePath(html) {
+  var found = /["'](\/pkg\/[a-f0-9]{12})\/aac_web\.js["']/.exec(html);
+  return found ? found[1] : null;
+}
+
+var installedRuntime = PRECACHE.map(function (address) {
+  var found = /^(\/pkg\/[a-f0-9]{12})\/aac_web\.js$/.exec(address);
+  return found ? found[1] : null;
+}).filter(Boolean)[0];
+var installedStylesheet = PRECACHE.filter(function (address) {
+  return /^\/app\/app\.css\?v=[a-f0-9]{12}$/.test(address);
+})[0];
+var selectedCache;
+
+// Never read a waiting/partial generation through CacheStorage.match. If storage lost part of our copy before
+// activation, use one retained generation for every request, including its entry page and runtime.
+function launchCache() {
+  if (PRECACHE.length === 0) return caches.open(CACHE);
+  if (selectedCache) return selectedCache;
+  selectedCache = copyComplete().then(function (complete) {
+    if (complete) return caches.open(CACHE);
+    return caches.keys().then(function (names) {
+      var chain = Promise.resolve(undefined);
+      names.filter(function (name) {
+        return name !== CACHE && name.indexOf('aac-shell-') === 0;
+      }).forEach(function (name) {
+        chain = chain.then(function (found) {
+          if (found) return found;
+          return caches.open(name).then(function (cache) {
+            return cache.match('/').then(function (page) {
+              if (!page || !AacSwRoute.isHtmlDocument(page)) return undefined;
+              return page.clone().text().then(function (html) {
+                var pkg = runtimePath(html);
+                if (!pkg) return undefined;
+                return Promise.all([cache.match(pkg + '/aac_web.js'), cache.match(pkg + '/aac_web_bg.wasm')])
+                  .then(function (parts) { return parts.every(Boolean) ? cache : undefined; });
+              });
+            });
+          });
+        });
+      });
+      return chain;
+    });
+  }).catch(function () { return undefined; });
+  return selectedCache;
+}
+
+function matchCached(request, options) {
+  return launchCache().then(function (cache) {
+    return cache ? cache.match(request, options) : undefined;
+  });
+}
+
 // A navigation's cached answer: its own entry, then the pure fallback lookups in
 // order (same URL ignoring the query, the start-URL shell, any cached navigation
 // shell). Undefined when the cache has no shell at all.
@@ -120,7 +175,7 @@ function cachedNavigation(request, url) {
     sameOrigin: url.origin === self.location.origin,
     pathname: url.pathname,
   });
-  var chain = caches.match(request).catch(function () {
+  var chain = matchCached(request).catch(function () {
     return undefined;
   });
   lookups.forEach(function (lookup) {
@@ -149,10 +204,13 @@ function offlineNavigation(request, url) {
 function matchFallback(request, url, lookup) {
   if (!lookup) return Promise.resolve(undefined);
   if (lookup.lookup === 'same-url-ignore-search') {
-    return caches.match(request, { ignoreSearch: true });
+    return matchCached(request, { ignoreSearch: true });
+  }
+  if (lookup.lookup === 'canonical-app-page') {
+    return matchCached(new URL(lookup.pathname, url.origin).toString());
   }
   if (lookup.lookup === 'start-url') {
-    return caches.match(new URL(lookup.pathname || '/', url.origin).toString());
+    return matchCached(new URL(lookup.pathname || '/', url.origin).toString());
   }
   if (lookup.lookup === 'any-navigation-shell') {
     return anyCachedShell();
@@ -164,9 +222,9 @@ function matchFallback(request, url, lookup) {
 // HTML document. Every page route serves the same index.html, so any one of
 // them shows the in-app Offline card; subresources never qualify.
 function anyCachedShell() {
-  return caches
-    .open(CACHE)
+  return launchCache()
     .then(function (cache) {
+      if (!cache) return undefined;
       return cache.keys().then(function (keys) {
         var documents = keys.filter(function (key) {
           if (!key || key.method !== 'GET') return false;
@@ -201,7 +259,7 @@ function anyCachedShell() {
 // navigation any cached shell. Undefined when nothing can answer.
 function cachedShell(request) {
   if (request.mode === 'navigate') return cachedNavigation(request, new URL(request.url));
-  return caches.match(request).catch(function () {
+  return matchCached(request).catch(function () {
     return undefined;
   });
 }
@@ -213,6 +271,18 @@ function cachedShell(request) {
 // worse than a slow start. A server error (a proxy's 502 while the dashboard
 // restarts) is answered from the cache too when the cache has the shell.
 function networkFirst(event, request, timeoutMs) {
+  // An installed generation serves its own page and dependencies until the next complete worker activates.
+  // This also prevents a slow navigation's cached old entry from importing newer network controllers. The build
+  // probe explicitly uses no-store and must continue to see the server, even while the installed app stays put.
+  if (PRECACHE.length > 0 && request.cache !== 'no-store') {
+    return cachedShell(request).then(function (cached) {
+      return cached || networkFallback(event, request, timeoutMs);
+    });
+  }
+  return networkFallback(event, request, timeoutMs);
+}
+
+function networkFallback(event, request, timeoutMs) {
   var waited =
     timeoutMs > 0
       ? cachedShell(request).then(function (cached) {
@@ -238,7 +308,7 @@ function networkFirst(event, request, timeoutMs) {
       },
       function () {
         if (request.cache === 'no-store') throw new Error('The network could not answer.');
-        return caches.match(request).then(function (cached) {
+        return matchCached(request).then(function (cached) {
           if (cached) return cached;
           if (request.mode === 'navigate') {
             return offlineNavigation(request, new URL(request.url));
@@ -251,7 +321,7 @@ function networkFirst(event, request, timeoutMs) {
 
 // The content-addressed runtime: immutable, so the cache answers first.
 function cacheFirst(event, request) {
-  return caches.match(request).then(function (cached) {
+  return matchCached(request).then(function (cached) {
     if (cached) return cached;
     return fetch(request).then(function (response) {
       storeFor(event, request, response);
@@ -296,6 +366,16 @@ function precache() {
         return fetch(new Request(address, { cache: 'no-cache' })).then(function (response) {
           if (!AacSwRoute.precacheable(address, response))
             throw new Error('The new app copy is incomplete: ' + address + '.');
+          if (AacSwRoute.isHtmlDocument(response)) {
+            return response.clone().text().then(function (html) {
+              if (!installedRuntime || runtimePath(html) !== installedRuntime)
+                throw new Error('The new app copy names a different runtime: ' + address + '.');
+              var css = /href=["'](\/app\/app\.css\?v=[a-f0-9]{12})["']/.exec(html);
+              if (!installedStylesheet || !css || css[1] !== installedStylesheet)
+                throw new Error('The new app copy names a different stylesheet: ' + address + '.');
+              return cache.put(address, response);
+            });
+          }
           return cache.put(address, response);
         });
       })

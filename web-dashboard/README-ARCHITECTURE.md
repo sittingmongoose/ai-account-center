@@ -41,7 +41,15 @@ public/bridge.js            the classic page's upgrade module: forgets aac-frame
 page's addresses and every packaged asset, stamped by build-ui.js from `scripts/ui-precache.js` and checked again by
 verify-bundle.js); one failed download fails the install and the installed copy stays. It activates on the next
 launch (DESIGN-MOBILE.md 6.5: no skipWaiting, no prompt) and drops the older build's cache only once its own copy is
-complete, so an offline launch after an update always finds an app. A classic start page an older worker kept still
+complete, so an offline launch after an update always finds an app. Network reads cannot overwrite that installed
+copy. The installed worker serves that snapshot until activation, except the explicit no-store build probe;
+cache reads stay within one generation rather than mixing it with a waiting install. Entry HTML must
+name the install's runtime and stylesheet fingerprints. The entry also tries retained cached JavaScript/wasm and its stylesheet
+when a historical worker has already saved newer HTML whose runtime cannot load. Controllers are requested only
+after runtime verification; retained recovery resolves their static import graph and stylesheet/font resources
+from one cache through Blob URLs, preserving the older view contracts without fetching newer modules. Canonical `/app/<tab>` entries
+answer the server's supported single trailing-slash aliases offline, while unknown app paths remain separate.
+A classic start page an older worker kept still
 loads `/bridge.js`, which moves it to the frame (the same address rules as `lib.rs` `page_from_location`, keeping the
 query and the #fragment, as the frame does when it takes over a classic address). `scripts/verify-bundle.js` pins that
 module's bytes (`CLASSIC_UPGRADE_SHA256`): change the module and the hash together.

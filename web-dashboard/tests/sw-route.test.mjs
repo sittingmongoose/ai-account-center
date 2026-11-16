@@ -246,3 +246,16 @@ test('the /app pages (the Status iframe) are never the shell and never get a she
   assert.equal(navigationFallbackLookups({ ...same, pathname: '/status' }).length, 3);
   assert.equal(shouldMirrorStartUrl(nav('/scoreboard'), html()), true);
 });
+
+
+test('only the server-supported single trailing slash aliases canonicalize offline', () => {
+  const same = { method: 'GET', sameOrigin: true };
+  for (const tab of ['home', 'analytics', 'accounts', 'status', 'scoreboard']) {
+    assert.deepEqual(navigationFallbackLookups({ ...same, pathname: `/app/${tab}/` }), [
+      { lookup: 'same-url-ignore-search' }, { lookup: 'canonical-app-page', pathname: `/app/${tab}` },
+    ]);
+  }
+  for (const pathname of ['/app/x/', '/app/accounts//', '/APP/accounts/', '/app/app.css/']) {
+    assert.deepEqual(navigationFallbackLookups({ ...same, pathname }), [{ lookup: 'same-url-ignore-search' }]);
+  }
+});
