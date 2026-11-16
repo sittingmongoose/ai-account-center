@@ -1311,6 +1311,7 @@ fn native_store_keeps_nanosecond_newer_sol_correction() {
 }
 
 /// One correction of an existing run: a new file with `corrects` and a later seq.
+#[allow(clippy::too_many_arguments)]
 fn write_correction(
     share: &Share,
     writer: &str,
