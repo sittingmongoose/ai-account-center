@@ -72,15 +72,15 @@ function fakeCaches() {
 	};
 }
 
-function response(status, contentType, { redirected = false } = {}) {
+function response(status, contentType, { redirected = false, body = '' } = {}) {
 	const headers = new Headers({ 'content-type': contentType });
-	return { status, type: 'basic', redirected, headers, clone() { return this; } };
+	return { status, type: 'basic', redirected, headers, text: async () => body, clone() { return this; } };
 }
 
 /** What the server answers: the frame page at its addresses, each asset as itself. */
 const served = (address) =>
 	PAGE_ADDRESSES.includes(address.split('?')[0])
-		? response(200, 'text/html; charset=utf-8')
+		? response(200, 'text/html; charset=utf-8', { body: '<script src="/pkg/0123456789ab/aac_web.js"></script>' })
 		: response(200, 'text/javascript');
 
 class FakeRequest {
@@ -93,7 +93,7 @@ class FakeRequest {
 }
 
 /** The packaged worker (stamped with `precache`) in a fake worker scope over `storage`. */
-function loadWorker(fetchImpl, storage, precache = PRECACHE) {
+function loadWorker(fetchImpl, storage, precache = PRECACHE, buildId = NEW_ID) {
 	const handlers = {};
 	const claimed = { count: 0 };
 	const sandbox = {
@@ -112,7 +112,7 @@ function loadWorker(fetchImpl, storage, precache = PRECACHE) {
 	const ctx = vm.createContext(sandbox);
 	sandbox.importScripts = () => vm.runInContext(routeSource, ctx);
 	const source = fs.readFileSync(new URL('sw.js', publicDir), 'utf8');
-	vm.runInContext(precache === null ? source.replace('__AAC_BUILD_ID__', NEW_ID) : stampedSwSource(source, NEW_ID, precache), ctx);
+	vm.runInContext(precache === null ? source.replace('__AAC_BUILD_ID__', buildId) : stampedSwSource(source, buildId, precache), ctx);
 	return { handlers, claimed };
 }
 
@@ -132,7 +132,9 @@ async function navigate(handlers, path) {
 /** An installed copy of the previous build: the start page and a tab, as its worker stored them. */
 async function oldCopy(storage) {
 	const old = await storage.open(OLD);
-	await old.put('/', response(200, 'text/html'));
+	await old.put('/', response(200, 'text/html', { body: '<script src="/pkg/000000000001/aac_web.js"></script>' }));
+	await old.put('/pkg/000000000001/aac_web.js', response(200, 'text/javascript'));
+	await old.put('/pkg/000000000001/aac_web_bg.wasm', response(200, 'application/wasm'));
 	await old.put('/app/accounts', response(200, 'text/html'));
 	return old;
 }
@@ -223,4 +225,56 @@ test('an unstamped worker (a fixture or dev server) keeps the previous behaviour
 	assert.deepEqual(asked, [], 'nothing to download');
 	await lifecycle(handlers, 'activate');
 	assert.equal(storage.named.has(OLD), false);
+});
+
+
+test('a different build cannot overwrite a complete installed generation during ordinary fetches', async () => {
+ const storage = fakeCaches();
+ let upgrading = false;
+ const old = loadWorker(async address => upgrading
+   ? response(200, address.endsWith('.mjs') ? 'text/javascript' : 'text/html', { body: address.endsWith('.mjs') ? 'new controller' : '<script src="/pkg/ffffffffffff/aac_web.js"></script>' })
+   : served(address), storage);
+ await lifecycle(old.handlers, 'install');
+ const before = new Map(storage.named.get(NEW).store);
+ upgrading = true;
+ for (const path of ['/', '/analytics', '/frame-session.mjs']) await navigate(old.handlers, path);
+ // Fetch waitUntil writes would have completed by here.
+ await new Promise(resolve => setTimeout(resolve, 0));
+ assert.deepEqual(storage.named.get(NEW).store, before, 'the entry page, frame and mutable dependencies stay together');
+ const offline = loadWorker(async () => { throw new Error('offline'); }, storage);
+ assert.match(await (await navigate(offline.handlers, '/')).text(), /0123456789ab/);
+});
+
+test('an install refuses entry HTML naming another runtime even when every download returns 200', async () => {
+ const storage = fakeCaches();
+ const worker = loadWorker(async address => address === '/'
+   ? response(200, 'text/html', { body: '<script src="/pkg/ffffffffffff/aac_web.js"></script>' })
+   : served(address), storage);
+ await assert.rejects(lifecycle(worker.handlers, 'install'), /incomplete|runtime/);
+ assert.equal(storage.named.has(NEW), false);
+});
+
+test('all supported app trailing-slash aliases open offline; unknown app paths remain refused', async () => {
+ const storage = fakeCaches();
+ const worker = loadWorker(async address => served(address), storage);
+ await lifecycle(worker.handlers, 'install');
+ const offline = loadWorker(async () => { throw new Error('offline'); }, storage);
+ for (const path of PAGE_ADDRESSES.filter(p => p.startsWith('/app/'))) {
+   assert.equal((await navigate(offline.handlers, path + '/?e2e')).status, 200, path);
+ }
+ for (const path of ['/app/x', '/app/accounts//', '/app/pkg/x.wasm']) {
+   assert.equal((await navigate(offline.handlers, path)).status, 503, path);
+ }
+});
+
+test('a waiting partial cache never supplies entries to the active generation', async () => {
+ const storage = fakeCaches();
+ const staged = await storage.open('aac-shell-00000000000b');
+ await staged.put('/', response(200, 'text/html', { body: '<script src="/pkg/ffffffffffff/aac_web.js"></script>' }));
+ const active = loadWorker(async address => served(address), storage);
+ await lifecycle(active.handlers, 'install');
+ const offline = loadWorker(async () => { throw new Error('offline'); }, storage);
+ const page = await navigate(offline.handlers, '/');
+ assert.match(await page.text(), /0123456789ab/);
+ assert.doesNotMatch(await page.text(), /ffffffffffff/);
 });

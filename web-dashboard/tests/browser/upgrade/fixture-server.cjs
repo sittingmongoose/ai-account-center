@@ -25,7 +25,11 @@ const OLD = path.join(__dirname, 'fixtures', 'previous');
 const OLD_STAMP = 'f52e1a7c6000';
 const PROVIDERS = new Set(['claude', 'codex', 'antigravity', 'cursor', 'muse', 'kimi-code', 'qwen', 'zai']);
 
-const state = { oldWorker: false, delayClassicMs: 0, failPath: null };
+const state = { oldWorker: false, uiVersion: 'current', delayClassicMs: 0, failPath: null };
+const previous = {};
+for (const [name, env] of [['previous', 'AAC_UPGRADE_PREVIOUS_UI'], ['fix1', 'AAC_UPGRADE_FIX1_UI']]) {
+  if (process.env[env]) previous[name] = loadStaticUi(path.resolve(process.env[env]));
+}
 const app = express();
 app.use(express.json());
 
@@ -92,7 +96,7 @@ const api = {
     activationInProgress: false,
   }),
   '/api/app-updates/status': () => ({ job: null }),
-  '/api/accounts/analytics': () => ({ activity: { status: 'unavailable' }, usage: { status: 'unavailable' } }),
+  '/api/accounts/analytics': () => load('./web-dashboard/tests/browser/device/analytics-fixture.mjs').analyticsFixture({ range: '7d', accounts: load('./web-dashboard/tests/browser/home-fixture.mjs').homeAccounts().accounts }),
 };
 app.use('/api', (req, res) => {
   const answer = api[`/api${req.path}`];
@@ -109,8 +113,12 @@ app.use((req, res, next) => {
   if (state.delayClassicMs > 0 && classicRoute) setTimeout(next, state.delayClassicMs);
   else next();
 });
-app.use(precompressedStatic(ui));
-app.use(express.static(uiDir, { index: false, setHeaders: uiStaticHeaders(ui) }));
-app.get('/{*splat}', pageRouteHandler(ui, PROVIDERS));
+app.use((req, res, next) => {
+  const selected = state.uiVersion === 'current' ? ui : previous[state.uiVersion];
+  if (!selected) return res.status(500).type('text/plain').send('Supply the retained UI paths for the cross-version check.');
+  precompressedStatic(selected)(req, res, () =>
+    express.static(selected.root, { index: false, setHeaders: uiStaticHeaders(selected) })(req, res, () =>
+      pageRouteHandler(selected, PROVIDERS)(req, res, next)));
+});
 
-app.listen(port, '127.0.0.1', () => console.log(`upgrade fixture server on http://127.0.0.1:${port}/`));
+app.listen(port, process.env.AAC_UPGRADE_BIND || '127.0.0.1', () => console.log(`upgrade fixture server on http://127.0.0.1:${port}/`));

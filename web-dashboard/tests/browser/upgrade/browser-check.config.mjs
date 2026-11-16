@@ -14,6 +14,10 @@ export default async (ctx) => {
       command: [process.execPath, path.join(ctx.configDir, 'fixture-server.cjs'), String(port), repo],
       url: `http://${ctx.reachHost}:${port}/__upgrade/ready`,
       timeoutMs: 30000,
+      env: {
+        AAC_UPGRADE_PREVIOUS_UI: String(ctx.args.previousUi || ''),
+        AAC_UPGRADE_FIX1_UI: String(ctx.args.fix1Ui || ''),
+      },
     },
     viewport: { width: 1280, height: 900 },
     isolate: true,

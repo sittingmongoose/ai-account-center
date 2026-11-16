@@ -27,6 +27,7 @@
    * never mirrored to the start URL and never answers another navigation as "any shell". The rule dates from the
    * retired Slint shell, which showed /app pages in its iframes; it keeps each address answering with its own copy.
    */
+  var CANONICAL_APP_PAGE = /^\/app\/(home|analytics|accounts|status|scoreboard)\/$/;
   var APP_PAGES = /^\/app(\/|$)/i;
   /** A navigation waits this long for the network before reading the cache. */
   var NAVIGATION_TIMEOUT_MS = 3000;
@@ -112,7 +113,12 @@
    */
   function navigationFallbackLookups(request) {
     if (route(request) !== 'network-first') return [];
-    if (isAppPage(request.pathname)) return [{ lookup: SAME_URL_IGNORE_SEARCH }];
+    if (isAppPage(request.pathname)) {
+      var alias = CANONICAL_APP_PAGE.test(request.pathname);
+      return alias
+        ? [{ lookup: SAME_URL_IGNORE_SEARCH }, { lookup: 'canonical-app-page', pathname: request.pathname.slice(0, -1) }]
+        : [{ lookup: SAME_URL_IGNORE_SEARCH }];
+    }
     return [
       { lookup: SAME_URL_IGNORE_SEARCH },
       { lookup: START_URL, pathname: START_URL_PATHNAME },

@@ -32,6 +32,65 @@
       // in with a real form (public/frame-session.mjs); a page inside today's shell (?embed=1) doesn't load it.
       // Analytics reads its own data (public/frame-analytics.mjs), Home and Accounts the dashboard's
       // (public/frame-dashboard.mjs): each module loads on first use, at once on its own address.
+      const startPage = ((path, search) => {
+        const tab = (id) => /^(home|analytics|accounts|status|scoreboard)$/.test(id);
+        const p = path.replace(/\/+$/, '');
+        if (path === '/app' || path.startsWith('/app/')) return tab(p.split('/').pop()) ? p.split('/').pop() : 'status';
+        const view = new URLSearchParams(search).get('view');
+        if (tab(view)) return view;
+        if (/^\/(analytics|accounts|status|scoreboard)$/.test(p)) return p.slice(1);
+        return /^\/accounts\/[a-z0-9][a-z0-9-]{0,63}$/.test(p) ? 'accounts' : 'home';
+      })(location.pathname, location.search);
+      // An already-installed worker may have saved this new entry before its wasm downloaded. Its older runtime
+      // remains content-addressed in CacheStorage. Keep this recovery inline: that old worker cannot fetch a new
+      // recovery module while offline. Canonicalize before starting an older runtime (some predate encoded aliases
+      // and fragment preservation), and restore that destination after it starts. No page reload is needed.
+      const recoverRuntime = async () => {
+        if (!('caches' in window)) return false;
+        const current = '{{PKG}}';
+        const names = (await caches.keys()).filter(name => name.startsWith('aac-shell-'));
+        for (const name of names) {
+          const cache = await caches.open(name);
+          const keys = await cache.keys();
+          const paths = keys.map(key => new URL(key.url));
+          for (const url of paths) {
+            if (url.origin !== location.origin || !/^\/pkg\/[a-f0-9]{12}\/aac_web_bg\.wasm$/.test(url.pathname)) continue;
+            const pkg = url.pathname.slice(0, -'/aac_web_bg.wasm'.length);
+            if (pkg === current) continue;
+            const js = await cache.match(pkg + '/aac_web.js');
+            const wasm = await cache.match(url.href);
+            if (!js?.ok || !wasm?.ok || /text\/html/i.test(js.headers.get('content-type') ?? '')) continue;
+            // Prefer the stylesheet named by a retained entry from the same runtime. Historical workers may have
+            // overwritten every entry; their first cached versioned stylesheet is then the retained copy's style.
+            let css;
+            for (const key of keys) {
+              const page = await cache.match(key);
+              if (!/text\/html/i.test(page?.headers.get('content-type') ?? '')) continue;
+              const html = await page.text();
+              if (!html.includes(pkg + '/aac_web.js')) continue;
+              const href = /href=["'](\/app\/app\.css\?v=[a-f0-9]{12})["']/.exec(html)?.[1];
+              if (href && await cache.match(href)) { css = href; break; }
+            }
+            css ??= paths.find(path => path.origin === location.origin && path.pathname === '/app/app.css' && /^\?v=[a-f0-9]{12}$/.test(path.search))?.href;
+            if (!css) continue;
+            try {
+              const module = await WebAssembly.compile(await wasm.arrayBuffer());
+              const { default: init } = await import(pkg + '/aac_web.js');
+              document.querySelector('link[href="{{CSS}}"]')?.setAttribute('href', css);
+              const kept = location.search.slice(1).split('&').filter(part => part &&
+                !['view', 'classic', 'content'].includes(new URLSearchParams(part).keys().next().value)).join('&');
+              const destination = '/app/' + startPage + (kept ? '?' + kept : '') + location.hash;
+              history.replaceState(history.state, '', destination);
+              await init({ module_or_path: module });
+              history.replaceState(history.state, '', destination);
+              return true;
+            } catch {
+              // Another retained generation may still be complete and compatible with this browser.
+            }
+          }
+        }
+        return false;
+      };
       try {
         const wasm = '{{PKG}}/aac_web_bg.wasm';
         const runtime = import('{{PKG}}/aac_web.js');
@@ -54,15 +113,6 @@
           };
           // The tab this address opens, as lib.rs page_from_location reads it (/app/<tab>, then ?view=, then the classic
           // app's addresses, else Home): its module is asked for at once.
-          const startPage = ((path, search) => {
-            const tab = (id) => /^(home|analytics|accounts|status|scoreboard)$/.test(id);
-            const p = path.replace(/\/+$/, '');
-            if (path === '/app' || path.startsWith('/app/')) return tab(p.split('/').pop()) ? p.split('/').pop() : 'status';
-            const view = new URLSearchParams(search).get('view');
-            if (tab(view)) return view;
-            if (/^\/(analytics|accounts|status|scoreboard)$/.test(p)) return p.slice(1);
-            return /^\/accounts\/[a-z0-9][a-z0-9-]{0,63}$/.test(p) ? 'accounts' : 'home';
-          })(location.pathname, location.search);
           // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
           window.aacLoadAnalytics = loader('/frame-analytics.mjs', startPage === 'analytics');
           window.aacLoadDashboard = loader('/frame-dashboard.mjs', startPage === 'home' || startPage === 'accounts');
@@ -74,10 +124,12 @@
         const { default: init } = await runtime;
         await init({ module_or_path: await compiled });
       } catch {
-        const message = document.createElement('main');
-        message.className = 'start-message';
-        message.textContent = 'This page could not start. Reload it, or update the browser.';
-        document.body.replaceChildren(message);
+        if (!await recoverRuntime().catch(() => false)) {
+          const message = document.createElement('main');
+          message.className = 'start-message';
+          message.textContent = 'This page could not start. Reload it, or update the browser.';
+          document.body.replaceChildren(message);
+        }
       }
     </script>
   </body>

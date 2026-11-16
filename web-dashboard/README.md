@@ -32,6 +32,12 @@ build id and the whole app it must download before replacing an installed copy (
 Center server and session-cookie authentication. Do not serve the page as file:// or configure a cross-origin API
 URL.
 
+The installed worker keeps its cached app version intact during ordinary network reads. Installation checks that
+all entry pages name the precached runtime; only a complete replacement can activate on the next launch. A failed
+update leaves the old copy usable. The entry page also recovers a retained runtime if a previously installed worker
+saved newer HTML before its wasm arrived. Supported `/app/<tab>/` bookmarks use their canonical cached address
+offline; unknown `/app/*` paths and assets do not get that fallback.
+
 ## Data and controls
 
 - GET `/api/accounts/dashboard` supplies consolidated provider accounts.

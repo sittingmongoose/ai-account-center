@@ -15,6 +15,21 @@ have kept (`upgrade/fixtures/previous`, never edited) against this checkout's pa
 from the cached classic page (it must reach the frame by itself, at its tab), and update, close the last client, then
 an offline launch (the new copy must open; a failed download must leave the installed copy in charge).
 
+The cross-version regressions additionally take two retained, genuine packaged UIs (their wasm SHA-256 is
+checked against their manifest). The old UI must use the historically shipped mutable worker; the fix-1 UI must
+include the install-time precache. Files are served unmodified. Only the replacement wasm answers 503:
+
+```sh
+browser-check run web-dashboard/tests/browser/upgrade \
+  --set previousUi=/path/to/c281-ui --set fix1Ui=/path/to/fix1-ui
+```
+
+`consistent.check.mjs` covers failed update, navigation under the old worker, closing the last client, then an
+offline launch, as well as a fixed worker preserving its own generation, two tabs keeping an update waiting,
+all five trailing-slash aliases and refusal of an unknown app path. Those cross-version cases are opt in when
+retained builds are unavailable. `captions.check.mjs` checks synthetic Analytics text bounds at 382, 390 and 466
+CSS pixels, including the Duo rail.
+
 ## What a run does
 
 - **Build needed.** It serves this checkout's `dist/ccs.js` and `dist/ui` (it needs `dist/ui/app/index.html`), so run `bun install` and `bun run build:server` first. Build `dist/ui` with `bun run ui:build` on a build host (the VM refuses: `AAC_NO_LOCAL_RUST_BUILD=1`), or for a first look copy the installed package's `dist/ui`.

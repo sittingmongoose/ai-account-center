@@ -1729,6 +1729,8 @@ body { min-height: 100dvh; }
 .kpi-val { margin-top: 8px; font-size: 26px; line-height: 33px; font-weight: 620; font-variation-settings: 'wght' 620; letter-spacing: -.01em; color: var(--ink); white-space: nowrap; }
 .kpi-val.na { font-size: 20px; }
 .kpi-sub { margin-top: 6px; color: var(--ink-3); font-size: 12.5px; line-height: 1.4; }
+/* Keep a caption part together when it fits; a narrow card lets it wrap within its own width. */
+.kpi-sub .nw { display: inline-block; max-width: 100%; white-space: normal; text-wrap: pretty; vertical-align: top; }
 .kpi-sub b { color: var(--ink-2); }
 .info-dot { display: inline-grid; place-items: center; width: 18px; height: 18px; color: var(--ink-3); cursor: help; }
 .info-dot .ic { width: 14px; height: 14px; }
