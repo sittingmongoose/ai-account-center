@@ -152,6 +152,41 @@ async fn signin_fixture_is_read_only_and_reports_existing_expiry() {
     );
 }
 
+/// An unreadable settings.json leaf is Python's `read_failed()`: discovery is incomplete,
+/// the inventory still answers. Only a denied ancestor chain (or a platform without a
+/// search-capable descriptor) may decline the whole verb (qwen lane 2 recheck L1).
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreadable_settings_leaf_is_incomplete_discovery_not_a_verb_decline() {
+    use std::os::unix::fs::PermissionsExt;
+    if aac_files::path::uid() == 0 {
+        return; // Root bypasses the fixture's permission control.
+    }
+    let home = tempfile::tempdir().unwrap();
+    let userdata = home.path().join(".t3/userdata");
+    std::fs::create_dir_all(&userdata).unwrap();
+    let settings = userdata.join("settings.json");
+    std::fs::write(&settings, json!({"providerInstances":{}}).to_string()).unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let payload = json!({"protocol":1,"verb":"signin-expiry","id":"leaf","deadlineMs":5000,"args":{"home":home.path(),"nowMs":1800000000123_i64}}).to_string()+"\n";
+    let mut output = Vec::new();
+    let code = aac_agent::run(tokio::io::BufReader::new(payload.as_bytes()), &mut output).await;
+    // Restore before asserting so the private fixture can always be removed.
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(code.unwrap(), 0);
+    let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(event["type"], "result");
+    let value = &event["value"];
+    assert_ne!(value, &json!({"fallback":"python"}), "the leaf alone never declines the verb");
+    let profiles = value["profiles"].as_array().expect("an inventory answers");
+    assert!(
+        profiles
+            .iter()
+            .any(|p| p["name"] == "saved-profiles" && p["state"] == "unavailable"),
+        "read_failed() marks discovery incomplete: {value}"
+    );
+}
+
 #[cfg(not(feature = "parity-fixtures"))]
 #[tokio::test]
 async fn production_verbs_refuse_fixture_injection() {

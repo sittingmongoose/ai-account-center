@@ -2275,6 +2275,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/store/store-host-jobs.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/store/store-host.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -3417,6 +3423,12 @@
     },
     {
       "file": "tests/unit/web-server/scoreboard/run-corrections.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/runs-store-query.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
