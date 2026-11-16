@@ -944,7 +944,13 @@ mod tests {
             ("xai/grok-4.7", Some("xai/grok-4.7"), None, "exact", Some("xai")),
             ("grok-4.7", Some("xai/grok-4.7"), None, "alias", Some("xai")),
             ("cursor/grok-4.7", Some("xai/grok-4.7"), None, "alias", Some("xai")),
-            ("gemini-4-hydrogen", None, None, "unmapped", None),
+            (
+                "gemini-4-hydrogen",
+                Some("google/gemini-4-hydrogen"),
+                None,
+                "alias",
+                Some("google"),
+            ),
             ("qwen3.8-max", Some("alibaba/qwen3.8-max"), None, "alias", Some("qwen")),
         ];
         for (written, model, effort, source, family) in table {
