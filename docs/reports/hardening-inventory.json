@@ -545,17 +545,17 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 685,
+      "totalThrows": 686,
       "typedThrows": 226,
-      "plainThrows": 47,
+      "plainThrows": 48,
       "otherThrows": 412,
-      "adoptionRatio": 0.3299,
+      "adoptionRatio": 0.3294,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 402,
+          "count": 403,
           "typed": 173,
-          "plain": 7
+          "plain": 8
         },
         {
           "subdomain": "antigravity",
