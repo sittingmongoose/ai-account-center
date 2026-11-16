@@ -579,6 +579,8 @@ mod tests {
             !persisted.contains(root.path().to_str().ok_or("root")?),
             "no private path: {persisted}"
         );
+        // The kernel lock lives until every Arc drops: release this one before the restart.
+        drop(engine);
         // Restart keeps the code and time.
         host.close_engine();
         drop(host);
