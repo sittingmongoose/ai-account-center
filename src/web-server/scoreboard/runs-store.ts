@@ -244,25 +244,39 @@ export class RunsStore {
     return this.last;
   }
 
-  /** Current revisions in a range, every page. */
+  /**
+   * Current revisions in a range, every page. One snapshot per read: every page names its
+   * generation and catalog hash, and a commit between pages restarts the read from the start,
+   * so one view never mixes two snapshots (run-corrections recheck L1).
+   */
   async query(query: RunsQuery): Promise<StoredRun[]> {
     const store = this.deps.store();
     if (!store) return [];
-    const runs: StoredRun[] = [];
+    let runs: StoredRun[] = [];
     let after: unknown = null;
+    let snapshot = '';
     for (;;) {
       const page = await store.runs<{
         runs: StoredRun[];
         next: unknown;
         problems?: ReportProblem[];
         accepted?: StoredRun[];
+        generation?: number;
+        catalogHash?: string | null;
       }>('runsQuery', {
         ...query,
         after,
       });
+      const key = `${page.generation ?? 0}:${page.catalogHash ?? ''}`;
       if (after === null) {
+        snapshot = key;
         this.queryProblems = page.problems ?? [];
         this.queryAccepted = page.accepted;
+      } else if (key !== snapshot) {
+        // The cursor belongs to another snapshot: its rows may repeat or drop a chain.
+        runs = [];
+        after = null;
+        continue;
       }
       runs.push(...page.runs);
       if (page.next === null || page.next === undefined) return runs;
