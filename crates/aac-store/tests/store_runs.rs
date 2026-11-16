@@ -1322,7 +1322,16 @@ fn write_correction(
     effort: &str,
     harness: &str,
 ) {
-    let rel = share.run(writer, local, 2, ended, model, Some(effort), Some(harness), Some("build"));
+    let rel = share.run(
+        writer,
+        local,
+        2,
+        ended,
+        model,
+        Some(effort),
+        Some(harness),
+        Some("build"),
+    );
     let path = share.root.join("v1").join(rel);
     let mut doc: Json = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     doc["corrects"] = json!(format!("{writer}--{target}"));
@@ -1344,7 +1353,16 @@ fn every_page_names_its_snapshot_and_an_ingest_between_pages_changes_it() {
             Some("build"),
         );
     }
-    write_correction(&share, "vm.probe", "b3-fix", "b3", T0 + 3 * 1000, "openai/gpt-6.1-sol", "max", "codex");
+    write_correction(
+        &share,
+        "vm.probe",
+        "b3-fix",
+        "b3",
+        T0 + 3 * 1000,
+        "openai/gpt-6.1-sol",
+        "max",
+        "codex",
+    );
     let db = temp_dir("runcorr-page-key-store");
     let engine = open(&db);
     pass(&engine, &share, T0 + DAY, 1000, true);
@@ -1364,7 +1382,16 @@ fn every_page_names_its_snapshot_and_an_ingest_between_pages_changes_it() {
         call(&engine, "runsStatus", json!({}))["catalogHash"]
     );
     // The recheck's witness: an ingest commits between two pages of one multi-page read.
-    write_correction(&share, "vm.probe", "b0-fix", "b0", T0 + 5 * 1000, "anthropic/claude-opus-5-5", "high", "claude-code");
+    write_correction(
+        &share,
+        "vm.probe",
+        "b0-fix",
+        "b0",
+        T0 + 5 * 1000,
+        "anthropic/claude-opus-5-5",
+        "high",
+        "claude-code",
+    );
     pass(&engine, &share, T0 + 2 * DAY, 1000, true);
     let second = call(&engine, "runsQuery", json!({"limit":2,"after":first["next"]}));
     assert!(

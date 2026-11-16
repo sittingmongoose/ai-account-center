@@ -177,7 +177,11 @@ async fn an_unreadable_settings_leaf_is_incomplete_discovery_not_a_verb_decline(
     let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(event["type"], "result");
     let value = &event["value"];
-    assert_ne!(value, &json!({"fallback":"python"}), "the leaf alone never declines the verb");
+    assert_ne!(
+        value,
+        &json!({"fallback":"python"}),
+        "the leaf alone never declines the verb"
+    );
     let profiles = value["profiles"].as_array().expect("an inventory answers");
     assert!(
         profiles

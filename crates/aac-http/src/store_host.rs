@@ -264,7 +264,10 @@ impl StoreHost {
                 (
                     engine.get_meta("ts:host_job_last_error").ok().flatten(),
                     engine.get_meta("ts:host_job_last_error_ms").ok().flatten(),
-                    engine.get_meta("ts:host_job_last_share_failed_ms").ok().flatten(),
+                    engine
+                        .get_meta("ts:host_job_last_share_failed_ms")
+                        .ok()
+                        .flatten(),
                 )
             })
             .unwrap_or((None, None, None));
@@ -513,7 +516,11 @@ mod tests {
         let jobs = host.jobs_json();
         assert!(jobs.contains("\"passes\":1"), "{jobs}");
         let jobs: Value = serde_json::from_str(&jobs).map_err(|e| e.to_string())?;
-        assert_eq!(jobs["jobs"]["lastErrorMs"], Value::Null, "a healthy pass names no failure");
+        assert_eq!(
+            jobs["jobs"]["lastErrorMs"],
+            Value::Null,
+            "a healthy pass names no failure"
+        );
         assert_eq!(jobs["jobs"]["lastShareFailedMs"], Value::Null);
         host.close_engine();
         Ok(())
@@ -534,15 +541,21 @@ mod tests {
         host.job_pass(now);
         let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now));
-        assert_eq!(jobs["jobs"]["lastErrorMs"], Value::Null, "the pass itself finished");
-        assert!(dir.join("backups").join("sets").is_dir(), "the local backup is intact");
+        assert_eq!(
+            jobs["jobs"]["lastErrorMs"],
+            Value::Null,
+            "the pass itself finished"
+        );
+        assert!(
+            dir.join("backups").join("sets").is_dir(),
+            "the local backup is intact"
+        );
         // Restart: the failure record survives in the store, not only this boot's memory.
         host.close_engine();
         drop(host);
         let reopened = StoreHost::new(boot(dir.clone()));
         reopened.open_at_boot();
-        let jobs: Value =
-            serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        let jobs: Value = serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["passes"], json!(0), "a fresh boot ran no pass");
         assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now));
         reopened.close_engine();
@@ -586,8 +599,7 @@ mod tests {
         drop(host);
         let reopened = StoreHost::new(boot(dir.clone()));
         reopened.open_at_boot();
-        let jobs: Value =
-            serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        let jobs: Value = serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now));
         assert_eq!(jobs["jobs"]["lastErrorCode"], json!(code));
         reopened.close_engine();

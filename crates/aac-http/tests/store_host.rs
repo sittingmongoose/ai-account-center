@@ -361,9 +361,8 @@ fn an_early_reply_is_read_even_when_the_body_write_hits_broken_pipe() -> Result<
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("fixture connect");
         // Read nothing: answer and close while the client is still writing its 1 MiB body.
-        let _ = stream.write_all(
-            b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\n\r\n{\"ok\":false}",
-        );
+        let _ = stream
+            .write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\n\r\n{\"ok\":false}");
         let _ = stream.shutdown(Shutdown::Both);
     });
     let body = vec![b'x'; 1_048_576];
