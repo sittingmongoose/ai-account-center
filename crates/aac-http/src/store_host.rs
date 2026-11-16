@@ -630,17 +630,19 @@ mod tests {
     fn a_backward_clock_still_names_a_new_failure() -> Result<(), String> {
         let root = tempfile::tempdir().map_err(|e| e.to_string())?;
         // The error record: a file where the backup root should be fails every pass,
-        // whatever the clock says. The second pass is stamped earlier, still a new failure.
+        // whatever the clock says. The second pass is stamped earlier — a real backward
+        // step, not a 1970 fixture time the seal path would read as a different era.
+        let now = aac_store::engine::now_ms();
         let dir = root.path().join("store");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
         let host = StoreHost::new(boot(dir.clone()));
         host.open_at_boot();
-        host.job_pass(2_000);
-        host.job_pass(1_000);
+        host.job_pass(now);
+        host.job_pass(now - 1_000);
         let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2));
-        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(1_000));
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now - 1_000));
         // The sequence survives the restart too.
         host.close_engine();
         drop(host);
@@ -658,16 +660,16 @@ mod tests {
         config.share_backup_dir = Some(share.clone());
         let host = StoreHost::new(config);
         host.open_at_boot();
-        host.job_pass(2 * DAY_MS);
+        host.job_pass(now + DAY_MS);
         let engine = host.engine().ok_or("engine")?;
         engine
             .set_meta("last_backup_ms", "0")
             .map_err(|e| e.to_string())?;
         drop(engine);
-        host.job_pass(DAY_MS + 1_000);
+        host.job_pass(now + DAY_MS - 1_000);
         let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
         assert_eq!(jobs["jobs"]["lastShareSeq"], json!(2));
-        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(DAY_MS + 1_000));
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now + DAY_MS - 1_000));
         host.close_engine();
         Ok(())
     }
