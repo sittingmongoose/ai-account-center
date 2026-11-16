@@ -1430,6 +1430,12 @@ export class AccountAnalyticsActivityService {
     // the account's events cannot prove which residual is outside them (review M1).
     const retainingClaude = args.retainedClaudeRemote !== undefined;
     if (retainingClaude) {
+      // Retaining Claude's mirror election must not discard independent coverage for other tools.
+      // This carries evidence only; numeric ownership follows the existing retained-pair rules.
+      const freshness = {
+        ...args.retainedClaudeRemote?.local?.freshness,
+        ...answer?.local?.freshness,
+      };
       answer = {
         fetchedAt: answer?.fetchedAt,
         results: [
@@ -1440,6 +1446,9 @@ export class AccountAnalyticsActivityService {
           ...(answer?.states.filter((entry) => entry.tool !== 'claude') ?? []),
           ...(args.retainedClaudeRemote?.states.filter((entry) => entry.tool === 'claude') ?? []),
         ],
+        ...(Object.keys(freshness).length
+          ? { local: { owned: [], catchingUp: {}, freshness } }
+          : {}),
       };
       // Persist the same pair we serve, so another restart during failure keeps it.
       state.remote = answer;

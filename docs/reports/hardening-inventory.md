@@ -83,7 +83,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | LOC |
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 4028 |
-| `src/web-server/services/account-analytics-activity.ts` | 2422 |
+| `src/web-server/services/account-analytics-activity.ts` | 2431 |
 | `src/web-server/services/analytics-remote-sources.ts` | 2342 |
 | `src/web-server/status/answers.ts` | 1744 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1717 |

@@ -146,79 +146,94 @@ async function settle(service: AccountAnalyticsActivityService) {
   throw Error('fixture did not settle');
 }
 
-it('publishes stale dates through partial takeover, cached restart and scanner-unavailable fallback without double counting', async () => {
-  const cacheDir = path.join(root, 'cache');
-  const partial = await loadAnalyticsRemoteSources(OLD - 86400000, {
-    cacheDir,
-    force: true,
-    now: () => NOW,
-    hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null }),
-    localScanner: () => ({ ok: true }),
-    runLocal: async () => response(),
-  });
-  expect(partial.local.owned).not.toContain('omp');
-  const make = (remote: typeof partial) =>
-    new AccountAnalyticsActivityService({
-      scope: () => root,
+it.each([false, true])(
+  'publishes stale dates through partial takeover, restart and fallback (retained Claude: %s)',
+  async (retainClaude) => {
+    const cacheDir = path.join(root, 'cache');
+    const partial = await loadAnalyticsRemoteSources(OLD - 86400000, {
+      cacheDir,
+      force: true,
       now: () => NOW,
-      requests: () => [
-        {
-          provider: 'omp',
-          request: { kind: 'omp', sessionRoots: [] },
-        } as unknown as AccountAnalyticsActivityRequest,
-      ],
-      loadWorker: async () => data(),
-      localScannerOwned: () => [],
-      remote: async () => remote,
-      remoteCached: () => remote,
-      persistSnapshot: true,
+      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null }),
+      localScanner: () => ({ ok: true }),
+      runLocal: async () => response(),
     });
-  const assertCell = (answer: Awaited<ReturnType<typeof settle>>) => {
-    expect(answer.totals?.inputTokens).toBe(100);
-    const cells = answer.sources.filter((s) => s.host === 'ubuntu' && s.tool === 'omp');
-    expect(cells).toHaveLength(1);
-    expect(cells[0]).toMatchObject({ state: 'stale', cause: 'newer_activity', rowCount: 3 });
-    expect(cells[0].detail).toContain(new Date(OLD).toISOString());
-    expect(cells[0].detail).toContain(new Date(NOW).toISOString());
-  };
-  let service = make(partial);
-  try {
-    assertCell(await settle(service));
-  } finally {
-    await service.shutdown();
+    expect(partial.local.owned).not.toContain('omp');
+    const make = (remote: typeof partial) =>
+      new AccountAnalyticsActivityService({
+        scope: () => root,
+        now: () => NOW,
+        requests: () => [
+          {
+            provider: 'omp',
+            request: { kind: 'omp', sessionRoots: [] },
+          } as unknown as AccountAnalyticsActivityRequest,
+          ...(retainClaude
+            ? [
+                {
+                  provider: 'claude',
+                  request: { kind: 'claude', projectsDirs: [] },
+                } as unknown as AccountAnalyticsActivityRequest,
+              ]
+            : []),
+        ],
+        loadWorker: async (request) => {
+          if (request.kind === 'claude')
+            throw Error('fixture collector failure retains the Claude pair');
+          return data();
+        },
+        localScannerOwned: () => [],
+        remote: async () => remote,
+        remoteCached: () => remote,
+        persistSnapshot: true,
+      });
+    const assertCell = (answer: Awaited<ReturnType<typeof settle>>) => {
+      expect(answer.totals?.inputTokens).toBe(100);
+      const cells = answer.sources.filter((s) => s.host === 'ubuntu' && s.tool === 'omp');
+      expect(cells).toHaveLength(1);
+      expect(cells[0]).toMatchObject({ state: 'stale', cause: 'newer_activity', rowCount: 3 });
+      expect(cells[0].detail).toContain(new Date(OLD).toISOString());
+      expect(cells[0].detail).toContain(new Date(NOW).toISOString());
+    };
+    let service = make(partial);
+    try {
+      assertCell(await settle(service));
+    } finally {
+      await service.shutdown();
+    }
+    // Cache-only restart must carry evidence even while no numeric tool is owned.
+    const cached = loadAnalyticsRemoteCachedSources(OLD - 86400000, {
+      cacheDir,
+      localScanner: () => ({ ok: false, cause: 'binary_missing' }),
+    });
+    expect(cached.local.owned).toEqual([]);
+    service = make({
+      ...cached,
+      fetchedAt: cached.fetchedAt ?? new Date(NOW).toISOString(),
+    } as typeof partial);
+    try {
+      assertCell(await settle(service));
+    } finally {
+      await service.shutdown();
+    }
+    const unavailable = await loadAnalyticsRemoteSources(OLD - 86400000, {
+      cacheDir,
+      force: true,
+      now: () => NOW,
+      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null }),
+      localScanner: () => ({ ok: false, cause: 'binary_missing' }),
+      runLocal: async () => {
+        throw Error('unavailable scanner must not run');
+      },
+    });
+    service = make(unavailable);
+    try {
+      assertCell(await settle(service));
+    } finally {
+      await service.shutdown();
+    }
   }
-  // Cache-only restart must carry evidence even while no numeric tool is owned.
-  const cached = loadAnalyticsRemoteCachedSources(OLD - 86400000, {
-    cacheDir,
-    localScanner: () => ({ ok: false, cause: 'binary_missing' }),
-  });
-  expect(cached.local.owned).toEqual([]);
-  service = make({
-    ...cached,
-    fetchedAt: cached.fetchedAt ?? new Date(NOW).toISOString(),
-  } as typeof partial);
-  try {
-    assertCell(await settle(service));
-  } finally {
-    await service.shutdown();
-  }
-  const unavailable = await loadAnalyticsRemoteSources(OLD - 86400000, {
-    cacheDir,
-    force: true,
-    now: () => NOW,
-    hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null }),
-    localScanner: () => ({ ok: false, cause: 'binary_missing' }),
-    runLocal: async () => {
-      throw Error('unavailable scanner must not run');
-    },
-  });
-  service = make(unavailable);
-  try {
-    assertCell(await settle(service));
-  } finally {
-    await service.shutdown();
-  }
-});
+);
 
 it.each([
   [NOW, true, 'ok'],

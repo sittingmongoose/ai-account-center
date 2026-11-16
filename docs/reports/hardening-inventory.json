@@ -752,7 +752,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 2422
+          "loc": 2431
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
