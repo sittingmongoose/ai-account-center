@@ -121,7 +121,7 @@ function interceptProcesses(): { ssh: SshCall[]; other: string[] } {
     };
   }) as never);
   spyOn(childProcess, 'execFileSync').mockImplementation(((file: string, args: string[]) => {
-    expect(file).toBe('ssh');
+    expect(file).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(args[0]).toBe('-G');
     return 'hostname fixture.invalid\nuser fixture\nport 22\nidentityfile /fixture/key\n';
   }) as never);
@@ -144,7 +144,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
     expect(seen.ssh.length).toBeGreaterThan(0);
     expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(6);
     for (const call of seen.ssh.filter((call) => call.args.includes('nas1-agent'))) {
-      expect(call.file).toBe('ssh');
+      expect(call.file).toMatch(/(^|[\/])ssh(\.exe)?$/);
       const separator = call.args.indexOf('--');
       expect(separator).toBeGreaterThan(0);
       // After the options come exactly the destination and the one remote command.

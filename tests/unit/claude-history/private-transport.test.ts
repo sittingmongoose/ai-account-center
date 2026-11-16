@@ -24,7 +24,7 @@ function fakeSsh(error?: Error, output=Buffer.from('{"closed":true}')) {
 afterEach(()=>mock.restore());
 test('collect uses fixed SSH and private RAM packet, never code/data in the command',async()=>{
   const f=fakeSsh(); expect(await runClaudeHistoryHelper(mac,'mac',MAC_PROFILE,request())).toEqual(Buffer.from('{"closed":true}'));
-  const [program,args,options]=f.captured(); expect(program).toBe('ssh'); expect(args).toContain('synthetic-mac');
+  const [program,args,options]=f.captured(); expect(program).toMatch(/(^|[\\/])ssh(\.exe)?$/); expect(args).toContain('synthetic-mac');
   expect(args.at(-1)).toContain('/usr/bin/python3 -c'); expect(args.at(-1)).not.toContain('synthetic@example.com');
   expect(args.at(-1).length).toBeLessThan(1000); expect(options).toMatchObject({encoding:'buffer',timeout:30000,maxBuffer:24*1024*1024});
   expect(f.packet().request).toEqual(request()); expect(f.packet().helperSource).toBe(withLfLineEndings(fs.readFileSync(path.join(scripts,'history_index_remote_v2.py'))).toString('utf8'));

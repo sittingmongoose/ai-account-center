@@ -18,7 +18,7 @@ import {
   type ClaudeDesktopLiveUsage,
 } from './claude-desktop-live-cache';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 
 export type { ClaudeDesktopLiveUsage };
 
@@ -573,9 +573,10 @@ async function runWindowsHelper(
   const execute = async (command: string): Promise<string> => {
     let child: ChildProcess | undefined;
     const sshArgs0 = await sshArgv(sshHost, command, { interval: 5, countMax: 1 });
+    const sshArgs0Program = await sshLaunch('ssh', sshArgs0);
     const run = new Promise<string>((resolve, reject) => {
       child = execFile(
-        'ssh',
+        sshArgs0Program,
         sshArgs0,
         {
           env: sshEnvironment(),

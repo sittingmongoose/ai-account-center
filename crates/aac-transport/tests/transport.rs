@@ -807,3 +807,43 @@ async fn l5_powershell_smart_quotes_are_refused_before_ssh() {
     }
     assert!(fixture.traces().is_empty());
 }
+
+#[tokio::test]
+async fn a_client_replaced_while_a_call_waits_for_a_channel_is_refused_not_launched() {
+    let fixture = Fixture::new();
+    fixture.scenario(json!({"mode":"sleep","seconds":1.5}));
+    let call = |computer: Computer| {
+        tokio::spawn(async move {
+            computer
+                .execute(
+                    &["fixture-agent".into()],
+                    &[],
+                    &CallOptions::new(Duration::from_secs(10), 1024),
+                )
+                .await
+        })
+    };
+    let busy: Vec<_> = (0..4)
+        .map(|_| call(fixture.computer.clone()))
+        .collect();
+    while fixture.traces().iter().filter(|t| t["event"] == "start").count() < 4 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // The fifth call builds its argv for the probed client, then waits for a channel.
+    let waiting = call(fixture.computer.clone());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let staging = fixture.root.path().join("ssh.next");
+    std::fs::write(
+        &staging,
+        "#!/usr/bin/python3\nfrom pathlib import Path\nPath(__file__).with_name('replacement-ran').write_text('x')\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::rename(&staging, fixture.root.path().join("ssh")).unwrap();
+    for call in busy {
+        assert!(call.await.unwrap().is_ok());
+    }
+    let refused = waiting.await.unwrap().unwrap_err();
+    assert_eq!(refused.cause, Cause::Refused);
+    assert!(!fixture.root.path().join("replacement-ran").exists());
+}

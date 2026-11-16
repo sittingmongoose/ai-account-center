@@ -14,7 +14,7 @@
  * it into place, runs `--version` and checks the answer (installUsageScan). Nothing else is written:
  * the binary only reads usage logs. Older copies are removed once the new one answered.
  */
-import { scpArgv, sshOptions, sshEnvironment } from './ssh-policy';
+import { scpArgv, sshOptions, sshEnvironment, sshLaunch } from './ssh-policy';
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
@@ -213,10 +213,24 @@ export type SshRunner = (
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
 /** One ssh or scp process; never rejects, the exit code says what happened. */
-export const runSsh: SshRunner = (args, options) =>
+export const runSsh: SshRunner = async (args, options) => {
+  let program: string;
+  try {
+    program = await sshLaunch(options.file ?? 'ssh', args);
+  } catch {
+    return { stdout: '', stderr: 'SSH executable changed before launch', code: null };
+  }
+  return spawnSsh(program, args, options);
+};
+
+const spawnSsh = (
+  program: string,
+  args: string[],
+  options: { input?: Buffer | string; timeoutMs: number }
+): Promise<{ stdout: string; stderr: string; code: number | null }> =>
   new Promise((resolve) => {
     const child = execFile(
-      options.file ?? 'ssh',
+      program,
       args,
       {
         encoding: 'utf8',

@@ -27,7 +27,7 @@ import path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { runManagedCommand } from '../../utils/managed-process';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
-import { sshArgv, sshEnvironment } from '../services/ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from '../services/ssh-policy';
 import {
   agentVerbs,
   collectAgentWithFallback,
@@ -71,11 +71,18 @@ export type CommandRunner = (
  * execFile without a shell; never rejects, and always settles: a child that ignores the timeout's
  * SIGTERM is killed after the grace, so a caller's `collecting` or `ringing` flag always clears.
  */
-export const runCommand: CommandRunner = (file, args, options) =>
-  runManagedCommand(file, args, {
+export const runCommand: CommandRunner = async (file, args, options) => {
+  let program: string;
+  try {
+    program = await sshLaunch(file, args);
+  } catch {
+    return { code: null, stdout: '', timedOut: false, missing: false };
+  }
+  return runManagedCommand(program, args, {
     ...options,
     env: file === 'ssh' ? sshEnvironment() : (options.env ?? childEnv()),
   });
+};
 
 /** The dashboard's environment with Node's own folder on PATH (tool scripts start with `env node`). */
 export function childEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {

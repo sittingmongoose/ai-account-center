@@ -79,7 +79,7 @@ describe('readRemotePins', () => {
     const { run, calls } = fakeRun({ code: 0, stdout: '[{"thread_id":"t1"}]' });
     const json = await readRemotePins('mac', run);
     expect(json).toBe('[{"thread_id":"t1"}]');
-    expect(calls[0].file).toBe('ssh');
+    expect(calls[0].file).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(calls[0].args).toContain(APP_UPDATE_SSH_HOSTS.mac);
     expect(calls[0].args.at(-1)).toBe(remotePinsCommand('mac'));
 

@@ -79,7 +79,7 @@ describe('Nas1 as the fourth update computer', () => {
 
   it('runs the helper over the fixed alias as a second Ubuntu with no local job flags', async () => {
     const nas1 = await appUpdateInvocation('nas1', '1.3.0,1.3.1', '/never/passed/to/a/remote/host');
-    expect(nas1.binary).toBe('ssh');
+    expect(nas1.binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
     // The same ssh options as the other remote computers, with its own endpoint.
     const mac = (await appUpdateInvocation('mac', '1.3.0,1.3.1')).args.slice(0, -2);
     const own = (args: string[], alias: string) => {

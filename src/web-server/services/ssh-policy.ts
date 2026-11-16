@@ -49,7 +49,13 @@ export function sshEnvironment(
 }
 
 /** Capabilities belong to one executable file, not its pathname: same-path upgrades re-probe. */
-const probes = new Map<string, { identity: string; pending: Promise<string[]> }>();
+const probes = new Map<
+  string,
+  { identity: string; pending: Promise<string[]>; failedAt?: number }
+>();
+/** A failed probe is retried after this, so a recovered client is not refused until restart. */
+const PROBE_FAILURE_TTL_MS = 30_000;
+const CAPABILITY_OPTIONS = ['KnownHostsCommand=none', 'SetEnv=AAC_SSH_POLICY=1'];
 const warned = new Set<string>();
 async function executableIdentity(candidate: string): Promise<{ file: string; identity: string }> {
   const file = await fs.promises.realpath(candidate);
@@ -64,7 +70,7 @@ async function executableIdentity(candidate: string): Promise<{ file: string; id
 function probe(executable: string, env: Record<string, string>): Promise<string[]> {
   return (async () => {
     const args: string[] = [];
-    for (const option of ['KnownHostsCommand=none', 'SetEnv=AAC_SSH_POLICY=1']) {
+    for (const option of CAPABILITY_OPTIONS) {
       const supported = await new Promise<boolean>((resolve, reject) => {
         execFile(
           executable,
@@ -118,9 +124,19 @@ async function capabilities(): Promise<{ file: string; args: string[] }> {
       throw new ConfigError('SSH executable unavailable');
     });
     let entry = probes.get(current.file);
-    if (entry?.identity !== current.identity) {
-      // A failed probe stays cached too, until the executable itself changes.
-      entry = { identity: current.identity, pending: probe(current.file, env) };
+    if (
+      entry?.identity !== current.identity ||
+      (entry.failedAt !== undefined && Date.now() - entry.failedAt >= PROBE_FAILURE_TTL_MS)
+    ) {
+      // Success is cached per identity; a failure only for PROBE_FAILURE_TTL_MS.
+      const fresh: { identity: string; pending: Promise<string[]>; failedAt?: number } = {
+        identity: current.identity,
+        pending: probe(current.file, env),
+      };
+      fresh.pending.catch(() => {
+        fresh.failedAt = Date.now();
+      });
+      entry = fresh;
       probes.set(current.file, entry);
     }
     const result = await entry.pending;
@@ -128,6 +144,25 @@ async function capabilities(): Promise<{ file: string; args: string[] }> {
     if (after?.identity === current.identity) return { file: executable, args: result };
   }
   throw new ConfigError('SSH executable changed during capability probe');
+}
+
+/**
+ * The program to spawn for `file`, checked immediately before the spawn: for ssh the exact
+ * probed file, for scp its -S file. The argv's capability options must match that file's
+ * current probe; a client replaced after argv was built is refused, never launched. Other
+ * programs pass through. Residual: a swap between this check and exec, by someone who can
+ * already replace the user's ssh, is not detected.
+ */
+export async function sshLaunch(file: string, args: readonly string[]): Promise<string> {
+  if (file !== 'ssh' && file !== 'scp') return file;
+  const current = await capabilities();
+  const flag = args.indexOf('-S');
+  if (
+    (file === 'scp' && (flag < 0 || args[flag + 1] !== current.file)) ||
+    CAPABILITY_OPTIONS.some((option) => current.args.includes(option) !== args.includes(option))
+  )
+    throw new ConfigError('SSH executable changed before launch');
+  return file === 'scp' ? 'scp' : current.file;
 }
 
 const expandHome = (file: string, home: string) =>

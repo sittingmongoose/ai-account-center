@@ -403,7 +403,12 @@ SSH requires an explicit existing identity file (`computers[].transport.key`, or
 guessed from a home directory. `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes` and the
 shared ControlMaster policy apply; whitespace in option paths is quoted for OpenSSH.
 SCP always runs the probed SSH file (`scp -S <that file>`), never scp's built-in or
-PATH ssh, and that file's identity is checked again just before SSH or SCP starts.
+PATH ssh. Every SSH/SCP launch (TS, Python, Rust and the native reset helper) spawns that
+exact file, and its identity is checked again immediately before the spawn (Rust: after any
+wait for a channel); a client replaced after argv was built is refused, never launched. A
+swap between that check and exec is the accepted residual: it needs someone who can already
+replace the user's ssh. A failed probe is cached for 30 s only, so a recovered client is
+probed again; a successful probe stays cached for that file identity.
 SSH/SCP preserve OpenSSH's connection config: every IdentityFile in order, HostName,
 User, Port, Match and jumps. Explicit AAC fields override their corresponding settings;
 `-i` and `IdentitiesOnly=yes` apply when AAC specifies a key. There is no synchronous

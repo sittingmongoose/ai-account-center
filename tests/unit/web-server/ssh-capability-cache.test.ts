@@ -1,8 +1,9 @@
-import { expect, it } from 'bun:test';
+import { expect, it, setSystemTime } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { scpArgv, sshArgv } from '../../../src/web-server/services/ssh-policy';
+import { scpArgv, sshArgv, sshLaunch } from '../../../src/web-server/services/ssh-policy';
+import { runSsh } from '../../../src/web-server/services/usage-scan-binary';
 async function fixture(body: string, check: (root: string) => Promise<void>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-ssh-cap-'));
   const saved = { ...process.env };
@@ -132,5 +133,46 @@ it('scp runs the probed SSH file with the same policy, following a replacement',
     expect(modern.slice(0, 3)).toEqual(['-q', '-S', ssh]);
     expect(modern).toContain('KnownHostsCommand=none');
     expect(modern.slice(-3)).toEqual(['--', '/fixture/local', 'fixture:/remote']);
+  });
+});
+it('a failed probe is retried after its 30 s TTL, so a recovered client works', async () => {
+  const failOnce =
+    "flag=Path(__file__).with_name('failed-once')\nif not flag.exists():\n flag.write_text('x'); sys.exit(3)";
+  await fixture(failOnce, async (root) => {
+    const calls = () => fs.readFileSync(path.join(root, 'calls'), 'utf8').trim().split('\n').length;
+    try {
+      await expect(sshArgv('fixture', 'unused')).rejects.toThrow('SSH capability probe failed');
+      await expect(sshArgv('fixture', 'unused')).rejects.toThrow('SSH capability probe failed');
+      expect(calls()).toBe(1);
+      setSystemTime(new Date(Date.now() + 31_000));
+      expect(await sshArgv('fixture', 'unused')).toContain('KnownHostsCommand=none');
+      expect(calls()).toBe(3);
+      await sshArgv('fixture', 'unused');
+      expect(calls()).toBe(3);
+    } finally {
+      setSystemTime();
+    }
+  });
+});
+it('a client replaced after argv is built is refused at launch, never spawned', async () => {
+  await fixture(oldClient, async (root) => {
+    const ssh = path.join(root, 'ssh');
+    const argv = await sshArgv('fixture', 'unused');
+    const scp = await scpArgv('fixture', '/fixture/local', 'fixture:/remote');
+    expect(await sshLaunch('ssh', argv)).toBe(ssh);
+    expect(await sshLaunch('scp', scp)).toBe('scp');
+    expect(await sshLaunch('/usr/bin/python3', ['-c', 'pass'])).toBe('/usr/bin/python3');
+    fs.writeFileSync(
+      ssh,
+      "#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nif '-G' not in sys.argv: Path(__file__).with_name('launched').write_text('x')\n"
+    );
+    await expect(sshLaunch('ssh', argv)).rejects.toThrow('SSH executable changed before launch');
+    await expect(sshLaunch('scp', scp)).rejects.toThrow('SSH executable changed before launch');
+    // A production spawn site: refused without starting the replaced client.
+    const result = await runSsh(argv, { timeoutMs: 5000 });
+    expect(result.code).toBeNull();
+    expect(fs.existsSync(path.join(root, 'launched'))).toBe(false);
+    // Argv rebuilt for the new client launches that exact file.
+    expect(await sshLaunch('ssh', await sshArgv('fixture', 'unused'))).toBe(ssh);
   });
 });

@@ -84,7 +84,7 @@ describe('scan-usage opt-in', () => {
           mode: 'on',
           artifacts: [artifact],
           run: async (file, argv, opts) => {
-            expect(file).toBe('ssh');
+            expect(file).toMatch(/(^|[\/])ssh(\.exe)?$/);
             expect(argv.join(' ')).toContain(artifact.sha256);
             const payload = JSON.parse(opts.input!);
             expect(payload.verb).toBe('scan-usage');

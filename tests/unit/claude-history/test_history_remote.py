@@ -22,7 +22,7 @@ spec.loader.exec_module(h)
 class Ssh(unittest.TestCase):
     def test_transcript_probe_refuses_host_key_updates(self):
         text = SOURCE.read_text()
-        start = text.index("subprocess.run([executable")
+        start = text.index("subprocess.run([ssh_launch(executable, capabilities)")
         call = text[start:text.index('input=encode', start)]
         self.assertIn("'UpdateHostKeys=no'", call)
 
@@ -52,6 +52,35 @@ class Ssh(unittest.TestCase):
             self.assertNotIn('KnownHostsCommand=none', h.ssh_capabilities_for(str(ssh)))
             ssh.write_bytes(Path('/usr/bin/ssh').read_bytes())
             self.assertIn('KnownHostsCommand=none', h.ssh_capabilities_for(str(ssh)))
+
+
+    def test_failed_probe_is_retried_after_its_ttl(self):
+        with tempfile.TemporaryDirectory() as root:
+            ssh, calls = Path(root, 'ssh'), Path(root, 'calls')
+            ssh.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nwith Path(__file__).with_name("calls").open("a") as f: f.write("probe\\n")\nflag = Path(__file__).with_name("failed-once")\nif not flag.exists():\n    flag.write_text("x"); sys.exit(3)\n')
+            ssh.chmod(0o700)
+            self.assertIsNone(h.ssh_capabilities_for(str(ssh)))
+            self.assertIsNone(h.ssh_capabilities_for(str(ssh)))
+            self.assertEqual(len(calls.read_text().split()), 1)
+            later = h.time.monotonic() + h.SSH_PROBE_FAILURE_TTL + 1
+            with patch.object(h.time, 'monotonic', return_value=later):
+                self.assertIn('KnownHostsCommand=none', h.ssh_capabilities_for(str(ssh)))
+            self.assertEqual(len(calls.read_text().split()), 3)
+
+    def test_client_replaced_after_argv_is_refused_at_launch(self):
+        old = "if 'KnownHostsCommand=none' in sys.argv:\n print('command-line: Bad configuration option: knownhostscommand', file=sys.stderr); sys.exit(255)\n"
+        with tempfile.TemporaryDirectory() as root:
+            ssh = Path(root, 'ssh')
+            def client(body):
+                ssh.write_text('#!/usr/bin/python3\nimport sys\n' + body)
+                ssh.chmod(0o700)
+            client(old)
+            options = h.ssh_capabilities_for(str(ssh))
+            self.assertEqual(h.ssh_launch(str(ssh), options), str(ssh))
+            client('')
+            with self.assertRaises(h.Refused):
+                h.ssh_launch(str(ssh), options)
+            self.assertEqual(h.ssh_launch(str(ssh), h.ssh_capabilities_for(str(ssh))), str(ssh))
 
 
 class Fixtures(unittest.TestCase):

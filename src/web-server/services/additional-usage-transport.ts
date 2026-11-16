@@ -5,7 +5,7 @@ import { NetworkError } from '../../errors/error-types';
 import { withProcessDeadline } from '../../utils/settle-deadline';
 import type { DashboardPlatform } from './account-dashboard-types';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 
 export const ADDITIONAL_PROVIDERS = [
   'antigravity',
@@ -277,10 +277,11 @@ async function runPythonAdditionalUsageSource(source: AdditionalUsageSource): Pr
         source.platform,
         ...accountArguments,
       ];
+  const program = await sshLaunch(binary, args);
   let child: ChildProcess | undefined;
   const run = new Promise<string>((resolve, reject) => {
     child = execFile(
-      binary,
+      program,
       args,
       {
         encoding: 'utf8',

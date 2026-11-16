@@ -13,7 +13,7 @@ import {
   isSafeUsageSshAlias,
   helperPlatform,
 } from './dashboard-hosts';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import { runAgentVerb, localAgentReady } from './agent-verbs';
 import { createLogger } from '../../services/logging';
 import {
@@ -1198,9 +1198,10 @@ export async function runAnalyticsRemoteHelper(
     throw new ValidationError('Analytics remote request is invalid.');
   const command = analyticsHelperCommand(platform);
   const sshArgs0 = await sshArgv(sshHost, command, { interval: 5, countMax: 6 });
+  const sshArgs0Program = await sshLaunch('ssh', sshArgs0);
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(
-      'ssh',
+      sshArgs0Program,
       sshArgs0,
       {
         env: sshEnvironment(),
@@ -1358,9 +1359,10 @@ async function runScanner(
     interval: 5,
     countMax: 6,
   });
+  const sshArgs1Program = await sshLaunch('ssh', sshArgs1);
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(
-      'ssh',
+      sshArgs1Program,
       sshArgs1,
       {
         env: sshEnvironment(),

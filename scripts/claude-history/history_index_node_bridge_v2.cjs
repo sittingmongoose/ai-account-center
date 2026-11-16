@@ -10,7 +10,7 @@ const child = require('node:child_process');
 const vm = require('node:vm');
 const TRANSACTION_SHA256 = '0b3b4cbb14db144457684bf7683d53bbbc38529d4b92c9c6590ab089eff0c132';
 // Exact frozen packaged Python helper source; no request-supplied pin in production.
-const GUARD_SOURCE_SHA256 = 'a9d24b65701c9013a57dc558d8523720480f6b3328a8c0dd5901155cb7b8c4b0';
+const GUARD_SOURCE_SHA256 = 'c8a2ab25113f43cf6e48a9367828878d446a97424fad33be97dbaeb270621471';
 const MAX_INPUT_BYTES = 32000000;
 const MAX_FILE_BYTES = 2000000;
 const PYTHON_BOOTSTRAP = "import sys,json,base64,io; e=json.load(sys.stdin); sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(e['guardRequest'],separators=(',',':')).encode('utf-8')),encoding='utf-8'); exec(compile(base64.b64decode(e['guardSourceBase64'],validate=True),'<fixed-history-protected-guard>','exec'),{'__name__':'__main__'})";

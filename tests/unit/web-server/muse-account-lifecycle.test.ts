@@ -50,7 +50,7 @@ describe('muse sign-in flow', () => {
     expect([...spec.allowedOrigins]).toEqual([...MUSE_DEVICE_AUTH_ORIGINS]);
     expect(spec.timeoutMs).toBe(MUSE_DEVICE_CODE_TIMEOUT_MS);
     const command = await spec.prepare('job_0123456789abcdef');
-    expect(command.file).toBe('ssh');
+    expect(command.file).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(command.args).toEqual([
       '-T',
       ...(await sshOptions('mac-host')),

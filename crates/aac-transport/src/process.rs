@@ -69,7 +69,9 @@ impl SshPolicy {
     }
 
     async fn probe(&self, file: &Path, identity: &str) -> Result<Vec<OsString>, Failure> {
-        type Probe = Arc<tokio::sync::OnceCell<Result<Vec<OsString>, Failure>>>;
+        /// A failed probe is retried after this, so a recovered client is not refused until restart.
+        const FAILURE_TTL: Duration = Duration::from_secs(30);
+        type Probe = Arc<tokio::sync::OnceCell<(Result<Vec<OsString>, Failure>, Instant)>>;
         static PROBES: OnceLock<Mutex<std::collections::HashMap<PathBuf, (String, Probe)>>> =
             OnceLock::new();
         let probe = {
@@ -80,14 +82,19 @@ impl SshPolicy {
             let entry = probes
                 .entry(file.to_path_buf())
                 .or_insert_with(|| (identity.to_owned(), Probe::default()));
-            if entry.0 != identity {
-                // Failed results stay cached too, until the executable itself changes.
+            // Success is cached per identity; a failure only for FAILURE_TTL.
+            let expired = entry
+                .1
+                .get()
+                .is_some_and(|(result, at)| result.is_err() && at.elapsed() >= FAILURE_TTL);
+            if entry.0 != identity || expired {
                 *entry = (identity.to_owned(), Probe::default());
             }
             entry.1.clone()
         };
         probe
             .get_or_init(|| async {
+                let result: Result<Vec<OsString>, Failure> = async {
                 let mut args = Vec::new();
                 for option in ["KnownHostsCommand=none", "SetEnv=AAC_SSH_POLICY=1"] {
                     let mut command = Command::new(file);
@@ -139,8 +146,12 @@ impl SshPolicy {
                     }
                 }
                 Ok(args)
+            }
+            .await;
+                (result, Instant::now())
             })
             .await
+            .0
             .clone()
     }
 
@@ -571,8 +582,9 @@ impl Computer {
         stdin: &[u8],
         options: &CallOptions,
     ) -> Result<ProcessOutput, Failure> {
-        let command = self.command(argv, options).await?;
-        self.run_command(command, stdin, options, None).await
+        let (command, launch) = self.command(argv, options).await?;
+        self.run_command(command, launch, stdin, options, None)
+            .await
     }
 
     /// Execute with bounded later stdin frames and a bounded stdout chunk stream. The caller
@@ -585,20 +597,30 @@ impl Computer {
         controls: mpsc::Receiver<Vec<u8>>,
         output: mpsc::Sender<Vec<u8>>,
     ) -> Result<ProcessOutput, Failure> {
-        let command = self.command(argv, options).await?;
-        self.run_command(command, stdin, options, Some(Pipes { controls, output }))
+        let (command, launch) = self.command(argv, options).await?;
+        self.run_command(
+            command,
+            launch,
+            stdin,
+            options,
+            Some(Pipes { controls, output }),
+        )
             .await
     }
 
-    async fn command(&self, argv: &[OsString], options: &CallOptions) -> Result<Command, Failure> {
+    async fn command(
+        &self,
+        argv: &[OsString],
+        options: &CallOptions,
+    ) -> Result<(Command, Option<Invocation>), Failure> {
         if argv.is_empty() {
             return Err(Failure::new(Cause::Refused, "empty command"));
         }
-        let mut command = match &self.config.transport {
+        let (mut command, launch) = match &self.config.transport {
             TransportConfig::Local => {
                 let mut cmd = Command::new(&argv[0]);
                 cmd.args(&argv[1..]);
-                cmd
+                (cmd, None)
             }
             TransportConfig::Ssh {
                 host,
@@ -620,12 +642,11 @@ impl Computer {
                 let ssh_host = endpoint_host(host)?;
                 set_literal_hostname(&mut cmd, &ssh_host);
                 cmd.arg("--").arg(ssh_host).arg(self.remote_command(argv)?);
-                self.policy.verify(&invocation).await?;
-                cmd
+                (cmd, Some(invocation))
             }
         };
         self.set_path(&mut command);
-        Ok(command)
+        Ok((command, launch))
     }
 
     pub(crate) async fn scp(
@@ -665,8 +686,8 @@ impl Computer {
         );
         command.arg("--").arg(local).arg(destination);
         self.set_path(&mut command);
-        self.policy.verify(&invocation).await?;
-        self.run_command(command, &[], options, None).await
+        self.run_command(command, Some(invocation), &[], options, None)
+            .await
     }
 
     fn set_path(&self, command: &mut Command) {
@@ -715,6 +736,7 @@ impl Computer {
     async fn run_command(
         &self,
         command: Command,
+        launch: Option<Invocation>,
         stdin: &[u8],
         options: &CallOptions,
         pipes: Option<Pipes>,
@@ -726,7 +748,7 @@ impl Computer {
         let mut completion = CancelOnDrop(Some(options.cancel.clone()));
         let result = tokio::spawn(async move {
             computer
-                .run_command_owned(command, &input, &options, pipes)
+                .run_command_owned(command, launch, &input, &options, pipes)
                 .await
         })
         .await
@@ -738,6 +760,7 @@ impl Computer {
     async fn run_command_owned(
         &self,
         mut command: Command,
+        launch: Option<Invocation>,
         stdin: &[u8],
         options: &CallOptions,
         pipes: Option<Pipes>,
@@ -748,6 +771,12 @@ impl Computer {
             _ = tokio::time::sleep_until(options.deadline) => return Err(Failure::new(Cause::Timeout, "deadline expired waiting for channel")),
             slot = self.shared.slots.acquire() => slot.map_err(|_| Failure::new(Cause::Bug, "channel pool closed"))?,
         };
+        // Immediately before the spawn, after any wait for a channel: the probed ssh file is
+        // still the one argv was built for. Residual: a swap between this check and exec, by
+        // someone who can already replace the user's ssh, is not detected.
+        if let Some(invocation) = &launch {
+            self.policy.verify(invocation).await?;
+        }
         let probing = self.before_call()?;
         let _probe = ProbeLease {
             shared: self.shared.clone(),

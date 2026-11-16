@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
 import {
@@ -302,9 +302,10 @@ async function runSource(sshHost: string): Promise<string> {
     'exec "$HOME/.ccs/opencode-usage-bridge/native-host/launch-host.sh" --collect',
     { interval: 5, countMax: 1 }
   );
+  const sshArgs0Program = await sshLaunch('ssh', sshArgs0);
   const run = new Promise<string>((resolve, reject) => {
     child = execFile(
-      'ssh',
+      sshArgs0Program,
       sshArgs0,
       {
         env: sshEnvironment(),

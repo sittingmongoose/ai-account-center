@@ -10,7 +10,7 @@ import {
   localComputer,
   isSafeUsageSshAlias,
 } from './dashboard-hosts';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import {
   collectAgentWithFallback,
   inventoryKind,
@@ -324,7 +324,8 @@ export async function runPrivateUsageHelper(
     );
     const input = JSON.stringify(invocation.payload);
     const { executable, args } = invocation;
-    const result = await runManagedCommand(executable, args, {
+    // Checked again just before the spawn: the probed ssh, never a replacement.
+    const result = await runManagedCommand(await sshLaunch(executable, args), args, {
       timeoutMs: usageHelperProcessTimeoutMs(request.action),
       deadlineAt,
       maxBytes: MAX_BYTES,

@@ -49,7 +49,7 @@ describe('failover inventory native boundary', () => {
   it('keeps selectors/scopes on verified stdin and validates the full inventory', async () => {
     expect(
       await invoke(async (file, args, options) => {
-        expect(file).toBe('ssh');
+        expect(file).toMatch(/(^|[\/])ssh(\.exe)?$/);
         expect(args.join(' ')).toContain(artifact.sha256);
         expect(args.join(' ')).not.toContain('/fixture/scope');
         const wire = JSON.parse(options.input);

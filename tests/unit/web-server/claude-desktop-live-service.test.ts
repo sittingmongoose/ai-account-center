@@ -164,7 +164,7 @@ describe('identity-bound Claude Desktop live usage', () => {
   it('uses only the fixed Windows helper and enumerated profile on the manifest SSH alias', async () => {
     await getLiveClaudeDesktopUsage('gmail');
     const [binary, args, options] = exec.mock.calls[0]!;
-    expect(binary).toBe('ssh');
+    expect(binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(args).toContain('BatchMode=yes');
     expect(args).toContain('--');
     expect(args).toContain('fixture-windows');

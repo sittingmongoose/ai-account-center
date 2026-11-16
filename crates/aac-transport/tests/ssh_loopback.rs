@@ -229,3 +229,29 @@ async fn replaced_openssh_81_policy_refuses_the_empty_pin() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[tokio::test]
+async fn a_failed_probe_is_retried_after_its_ttl() {
+    let root = tempfile::tempdir().unwrap();
+    client(
+        &root.path().join("ssh"),
+        "#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('probe\\n')\nflag = Path(__file__).with_name('failed-once')\nif not flag.exists():\n    flag.write_text('x'); sys.exit(3)\n",
+    );
+    let policy = fixture_policy(root.path(), root.path());
+    let key = root.path().join("key");
+    let calls = || {
+        std::fs::read_to_string(root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    assert!(policy.argv(&key, false).await.is_err());
+    assert!(policy.argv(&key, false).await.is_err());
+    assert_eq!(calls(), 1, "a failure stays cached inside its TTL");
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    tokio::time::resume();
+    let args = text(policy.argv(&key, false).await.unwrap());
+    assert!(args.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    assert_eq!(calls(), 3);
+}
