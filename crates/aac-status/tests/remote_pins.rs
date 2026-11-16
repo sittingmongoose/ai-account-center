@@ -5,7 +5,9 @@ use aac_status::pins::{MachinePins, PinnedThread, merge_pins, parse_remote_pins}
 use serde_json::{Value, json};
 
 fn row(id: &str, title: &str, pinned: Value, pinned_type: &str, order: Value, order_type: &str) -> Value {
-    // A top-level row: no lineage at all, so both lineage columns print null.
+    // A top-level row: no lineage at all, so both lineage columns print null. `createdAt`
+    // sits a week before the usual `pinnedAt` fixtures, so a child built from this row
+    // with a real pin time is an explicit pin.
     json!({
         "thread_id": id,
         "title": title,
@@ -16,6 +18,8 @@ fn row(id: &str, title: &str, pinned: Value, pinned_type: &str, order: Value, or
         "rootType": "object",
         "lineageType": null,
         "parentType": null,
+        "createdAt": "2026-11-01T00:00:00Z",
+        "createdType": "text",
     })
 }
 
@@ -60,7 +64,7 @@ fn one_machines_rows_parse_with_the_same_fields_as_the_local_read() {
             "integer"
         ),
     );
-    let rows = parse_remote_pins("mac", &text).unwrap();
+    let rows = parse_remote_pins("mac", &text).unwrap().pinned;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].id, "t1");
     assert_eq!(rows[0].title, "Title One");
@@ -73,12 +77,12 @@ fn one_machines_rows_parse_with_the_same_fields_as_the_local_read() {
 #[test]
 fn sqlite_wraps_long_output_across_lines_and_empty_output_means_no_pins() {
     // sqlite3 -json prints one row object per line inside the array; both parse the same.
-    let wrapped = "[{\"thread_id\":\"a\",\"title\":\"A\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null},\n{\"thread_id\":\"b\",\"title\":\"B\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null}]";
-    assert_eq!(parse_remote_pins("nas1", wrapped).unwrap().len(), 2);
+    let wrapped = "[{\"thread_id\":\"a\",\"title\":\"A\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null,\"createdAt\":null,\"createdType\":null},\n{\"thread_id\":\"b\",\"title\":\"B\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null,\"createdAt\":null,\"createdType\":null}]";
+    assert_eq!(parse_remote_pins("nas1", wrapped).unwrap().pinned.len(), 2);
     // Zero rows print nothing at all; a blank answer is an empty list, not a failure.
-    assert!(parse_remote_pins("nas1", "").unwrap().is_empty());
-    assert!(parse_remote_pins("windows", "  \n").unwrap().is_empty());
-    assert!(parse_remote_pins("mac", "[]").unwrap().is_empty());
+    assert!(parse_remote_pins("nas1", "").unwrap().pinned.is_empty());
+    assert!(parse_remote_pins("windows", "  \n").unwrap().pinned.is_empty());
+    assert!(parse_remote_pins("mac", "[]").unwrap().pinned.is_empty());
 }
 
 #[test]
@@ -132,9 +136,17 @@ fn a_changed_shape_is_refused_never_guessed() {
 fn valid_lineages_include_children_and_wrong_shapes_are_refused() {
     // The query carries the lineage's own json_type facts; the parser applies the same rule
     // as the local read: absent, null, or an object whose parent is absent or null is
-    // valid, as is an object with a text parent (a pinned child). Every other shape is a
+    // valid, as is an object with a text parent (a child, counted when its pin is explicit:
+    // this one's pin time is a week past the row's `createdAt`). Every other shape is a
     // changed shape for that machine (Astra M1), never a silently included or excluded row.
-    let mut child = row("child", "Child", json!("x"), "text", json!("k"), "text");
+    let mut child = row(
+        "child",
+        "Child",
+        json!("2026-11-08T10:00:00Z"),
+        "text",
+        json!("k"),
+        "text",
+    );
     child["lineageType"] = json!("object");
     child["parentType"] = json!("text");
     let mut object_null = row(
@@ -148,14 +160,22 @@ fn valid_lineages_include_children_and_wrong_shapes_are_refused() {
     object_null["lineageType"] = json!("object");
     object_null["parentType"] = json!("null");
     let bare = row("bare", "No lineage", json!("x"), "text", json!("k"), "text");
-    let rows = parse_remote_pins("mac", &format!("[{child},{object_null},{bare}]")).unwrap();
+    let rows = parse_remote_pins("mac", &format!("[{child},{object_null},{bare}]"))
+        .unwrap()
+        .pinned;
     let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
     assert_eq!(ids, ["child", "object-null", "bare"]);
 
     // A `lineage` that is JSON null prints "null" in its type column: top-level too.
     let mut null_lineage = row("null-lineage", "Null lineage", json!("x"), "text", json!("k"), "text");
     null_lineage["lineageType"] = json!("null");
-    assert_eq!(parse_remote_pins("mac", &format!("[{null_lineage}]")).unwrap().len(), 1);
+    assert_eq!(
+        parse_remote_pins("mac", &format!("[{null_lineage}]"))
+            .unwrap()
+            .pinned
+            .len(),
+        1
+    );
 
     // Any other lineage container, or an object whose parent is not absent/null/text, is a
     // shape refusal.
@@ -339,7 +359,8 @@ fn a_null_order_key_is_accepted_on_a_remote_machine() {
         "mac",
         &json!([keyed.clone(), explicit.clone(), absent.clone()]).to_string(),
     )
-    .unwrap();
+    .unwrap()
+    .pinned;
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[0].id, "keyed");
     assert_eq!(rows[0].pin_order_key, json!("a"));
@@ -352,19 +373,28 @@ fn a_null_order_key_is_accepted_on_a_remote_machine() {
 #[test]
 fn a_remote_null_order_key_row_is_parsed_not_refused() {
     // The sqlite3 -json spelling itself: pinOrderKey null with orderType "null".
-    let text = "[{\"thread_id\":\"t\",\"title\":\"T\",\"pinnedAt\":\"2026-11-08T10:00:00Z\",\"pinnedType\":\"text\",\"pinOrderKey\":null,\"orderType\":\"null\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null}]";
-    let rows = parse_remote_pins("mac", text).unwrap();
+    let text = "[{\"thread_id\":\"t\",\"title\":\"T\",\"pinnedAt\":\"2026-11-08T10:00:00Z\",\"pinnedType\":\"text\",\"pinOrderKey\":null,\"orderType\":\"null\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null,\"createdAt\":null,\"createdType\":null}]";
+    let rows = parse_remote_pins("mac", text).unwrap().pinned;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].pin_order_key, Value::Null);
 
-    // Pinned child rows with a null key are included, as with the local read.
-    let mut child = row("child", "Child", json!("x"), "text", Value::Null, "null");
+    // Explicitly pinned child rows with a null key are included, as with the local read.
+    let mut child = row(
+        "child",
+        "Child",
+        json!("2026-11-08T10:00:00Z"),
+        "text",
+        Value::Null,
+        "null",
+    );
     child["orderType"] = json!("null");
     child["pinOrderKey"] = Value::Null;
     child["lineageType"] = json!("object");
     child["parentType"] = json!("text");
     let top = row("top", "Top", json!("x"), "text", json!("a"), "text");
-    let rows = parse_remote_pins("mac", &json!([top, child]).to_string()).unwrap();
+    let rows = parse_remote_pins("mac", &json!([top, child]).to_string())
+        .unwrap()
+        .pinned;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].id, "top");
     assert_eq!(rows[1].id, "child");
@@ -416,4 +446,82 @@ fn a_remote_object_order_key_is_still_a_shape_refusal() {
         parse_remote_pins("mac", &json!([array]).to_string()).unwrap_err().code,
         "shape"
     );
+}
+
+#[test]
+fn auto_pinned_children_are_not_counted_by_the_remote_parser_either() {
+    // The query already drops auto-pinned children, but the parser applies the same rule
+    // itself: fed the unfiltered bulk (1,200 children pinned a second after creation),
+    // only the explicit pins survive — 3 children pinned days later, 9 top-level rows —
+    // and nothing counts toward the row budget on the way.
+    let mut rows = Vec::new();
+    for index in 0..1200_u32 {
+        let mut auto = row(
+            &format!("auto-{index:04}"),
+            "Auto child",
+            json!("2026-11-10T00:00:01Z"),
+            "text",
+            json!(index),
+            "integer",
+        );
+        auto["lineageType"] = json!("object");
+        auto["parentType"] = json!("text");
+        auto["createdAt"] = json!("2026-11-10T00:00:00Z");
+        rows.push(auto);
+    }
+    for index in 0..3_u32 {
+        let mut lead = row(
+            &format!("lead-{index}"),
+            "Stream lead",
+            json!("2026-11-15T21:44:00Z"),
+            "text",
+            json!(2000 + index),
+            "integer",
+        );
+        lead["lineageType"] = json!("object");
+        lead["parentType"] = json!("text");
+        lead["createdAt"] = json!("2026-11-04T16:19:00Z");
+        rows.push(lead);
+    }
+    for index in 0..9_u32 {
+        rows.push(row(
+            &format!("top-{index}"),
+            "Top",
+            json!("2026-11-08T10:00:00Z"),
+            "text",
+            json!(3000 + index),
+            "integer",
+        ));
+    }
+    let read = parse_remote_pins("mac", &serde_json::to_string(&rows).unwrap()).unwrap();
+    assert_eq!(read.not_shown, 0);
+    let ids: Vec<&str> = read.pinned.iter().map(|pin| pin.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "lead-0", "lead-1", "lead-2", "top-0", "top-1", "top-2", "top-3", "top-4", "top-5", "top-6", "top-7",
+            "top-8"
+        ]
+    );
+}
+
+#[test]
+fn more_remote_pins_than_the_row_budget_show_the_first_and_count_the_rest() {
+    let rows: Vec<Value> = (0..1005_u32)
+        .map(|index| {
+            row(
+                &format!("row-{index:04}"),
+                "Row",
+                json!("2026-11-08T10:00:00Z"),
+                "text",
+                json!(index),
+                "integer",
+            )
+        })
+        .collect();
+    let read = parse_remote_pins("mac", &serde_json::to_string(&rows).unwrap()).unwrap();
+    assert_eq!(read.pinned.len(), 1000);
+    assert_eq!(read.not_shown, 5);
+    assert_eq!(read.pinned[0].id, "row-0000");
+    assert_eq!(read.pinned[999].id, "row-0999");
 }

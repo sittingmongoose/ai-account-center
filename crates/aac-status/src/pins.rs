@@ -31,12 +31,19 @@ const REQUIRED_COLUMNS: [&str; 5] = ["thread_id", "title", "archived_at", "delet
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The local read's budget, the remote route's caps (a fixed byte allowance per answer) in
-/// local form: at most this many rows, and at most this many bytes of pin text, per read.
-/// Past either the read is refused (`limit`), never a silently truncated pin list.
+/// local form: at most this many rows shown, and at most this many bytes of pin text, per
+/// read. Past the row budget the read shows the first rows in pin order and counts the
+/// rest (`PinsRead::not_shown`), never a blanked list; past the byte budget the read is
+/// still refused (`limit`), never a silently truncated pin list.
 pub const MAX_PINNED_ROWS: usize = 1000;
 pub const MAX_PIN_BYTES: usize = 1024 * 1024;
 
-/// One pinned thread, whatever its lineage. `pinned_at` and `pin_order_key` pass through
+/// T3 auto-pins every delegated child thread at creation, so a pinned child counts only
+/// when the owner pinned it explicitly: its `pinnedAt` more than this long after its
+/// `createdAt`. Auto-pins land within seconds; explicit pins are minutes to days later.
+const EXPLICIT_CHILD_AFTER_MS: i64 = 60_000;
+
+/// One counted pinned thread (top-level, or an explicitly pinned child). `pinned_at` and `pin_order_key` pass through
 /// with the JSON type T3 wrote (text in practice); `pin_order_key` may also carry JSON null when T3 wrote
 /// no key (see the reader), ordered after every keyed row; anything else that is not a
 /// string or a number for either field is a shape change, never a value to invent.
@@ -49,6 +56,15 @@ pub struct PinnedThread {
     pub pinned_at: Json,
     #[serde(default)]
     pub pin_order_key: Json,
+}
+
+/// One machine's pins as read: the first [`MAX_PINNED_ROWS`] in pin order, plus how many
+/// explicit pins past that budget were not shown. `not_shown` is reported, never dropped
+/// silently; it is zero on every ordinary read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinsRead {
+    pub pinned: Vec<PinnedThread>,
+    pub not_shown: usize,
 }
 
 /// The `mergePins` method's shape for one machine's good list: the machine's fixed id and
@@ -117,6 +133,99 @@ fn validate_lineage(lineage: Option<&str>, parent: Option<&str>) -> Result<()> {
     }
 }
 
+/// Whether the lineage facts name a child thread (an object with a text parent). Only
+/// children face the explicit-pin check; every other valid lineage is top-level.
+fn is_child(lineage: Option<&str>, parent: Option<&str>) -> bool {
+    lineage == Some("object") && parent == Some("text")
+}
+
+/// Milliseconds since the epoch from a strict UTC timestamp:
+/// `YYYY-MM-DDTHH:MM[:SS[.f{1,9}]]Z` naming a real calendar moment (leap years counted,
+/// no leap second, no 24:00). An offset tail, a rolled-over date (Feb 30) or any looser
+/// grammar is None, so an auto-pinned child can never pass on a reinterpreted time.
+fn parse_utc_ms(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let digits = |from: usize, count: usize| -> Option<i64> {
+        let span = bytes.get(from..from + count)?;
+        if span.iter().all(|c| c.is_ascii_digit()) {
+            std::str::from_utf8(span).ok()?.parse().ok()
+        } else {
+            None
+        }
+    };
+    // "YYYY-MM-DDTHH:MMZ" is the shortest accepted form (17 bytes).
+    if bytes.len() < 17 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' || bytes[13] != b':' {
+        return None;
+    }
+    let year = digits(0, 4)?;
+    let month = digits(5, 2)?;
+    let day = digits(8, 2)?;
+    let hour = digits(11, 2)?;
+    let minute = digits(14, 2)?;
+    let mut at = 16;
+    let mut second = 0i64;
+    let mut milli = 0i64;
+    if bytes.get(at) == Some(&b':') {
+        second = digits(at + 1, 2)?;
+        at += 3;
+        if bytes.get(at) == Some(&b'.') {
+            let start = at + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() && end - start < 9 {
+                end += 1;
+            }
+            let fraction = &bytes[start..end];
+            if fraction.is_empty() || bytes.get(end).is_some_and(|c| c.is_ascii_digit()) {
+                return None; // no digits at all, or past the grammar's nine
+            }
+            let scaled = format!("{:0<3}", std::str::from_utf8(fraction).ok()?);
+            milli = scaled[..3].parse().unwrap_or(0);
+            at = end;
+        }
+    }
+    if bytes.get(at..) != Some(b"Z".as_slice()) || !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59
+    {
+        return None;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let last_day = match month {
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day < 1 || day > last_day {
+        return None;
+    }
+    // Days from the civil calendar (Howard Hinnant's days_from_civil), proleptic Gregorian.
+    let (y, m) = (
+        if month <= 2 { year - 1 } else { year },
+        if month <= 2 { month + 9 } else { month - 3 },
+    );
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let epoch_seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
+    Some(epoch_seconds.checked_mul(1000)? + milli)
+}
+
+/// Whether a pinned child was pinned explicitly: both times strict UTC timestamps with
+/// `pinnedAt` more than [`EXPLICIT_CHILD_AFTER_MS`] after `createdAt`. A missing or
+/// unparseable time is not explicit; the row is simply not counted, never a failed read.
+fn explicit_child_pin(pinned_at: Option<&str>, created_at: Option<&str>) -> bool {
+    match (pinned_at.and_then(parse_utc_ms), created_at.and_then(parse_utc_ms)) {
+        (Some(pinned), Some(created)) => pinned - created > EXPLICIT_CHILD_AFTER_MS,
+        _ => false,
+    }
+}
+
 /// An SQLite failure while reading: a busy or locked file could not be read; anything else
 /// (a missing table or column, malformed JSON in a payload, a failed JSON function) means
 /// the file no longer has the shape this reader was written against.
@@ -140,24 +249,29 @@ fn scalar(value: SqlValue) -> Result<Json> {
     }
 }
 
-/// Every pinned thread in `path`, in T3's pin order. Error codes: `missing` when
-/// there is no file, `shape` when the table or a payload (including its `lineage`) differs
-/// from the expected shape, `io` when the file could not be read, `limit` when the read
-/// passes [`MAX_PINNED_ROWS`] or [`MAX_PIN_BYTES`].
-pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
-    read(path, false).map(|(pinned, _)| pinned)
+/// Every counted pinned thread in `path`, in T3's pin order: top-level pins, plus child
+/// pins the owner made explicitly (see [`explicit_child_pin`]); T3's auto-pinned children
+/// are not counted. Error codes: `missing` when there is no file, `shape` when the table
+/// or a counted payload (including its `lineage`) differs from the expected shape, `io`
+/// when the file could not be read, `limit` when the shown pins pass [`MAX_PIN_BYTES`].
+/// More than [`MAX_PINNED_ROWS`] counted pins show the first rows and count the rest in
+/// `not_shown` instead of failing.
+pub fn read_pinned_threads(path: &Path) -> Result<PinsRead> {
+    read(path, false).map(|(pinned, _, not_shown)| PinsRead { pinned, not_shown })
 }
 
-/// Read the same bounded SQLite cursor in the remote helper's complete nine-column
-/// row format. Preserve child rows, absent/null type columns and scalar types so an
-/// agent reply can replace sqlite3 JSON without normalizing or dropping any field.
-/// Both representations include pinned children; this remote representation additionally
-/// bounds every transported row and serialized byte.
+/// Read the same bounded SQLite cursor in the remote helper's complete eleven-column
+/// row format. Preserve counted child rows, absent/null type columns and scalar types so
+/// an agent reply can replace sqlite3 JSON without normalizing or dropping any field.
+/// Both representations count the same pins; this remote representation additionally
+/// bounds every transported row and serialized byte, so past either cap it still refuses
+/// (`limit`) and the caller falls back to the `sqlite3 -json` route, whose parser shows
+/// the first rows and counts the rest.
 pub fn read_remote_rows(path: &Path) -> Result<Vec<Json>> {
-    read(path, true).map(|(_, rows)| rows)
+    read(path, true).map(|(_, rows, _)| rows)
 }
 
-fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
+fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>, usize)> {
     if !path.is_file() {
         return Err(missing());
     }
@@ -191,8 +305,14 @@ fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
 
     // `pinnedAt` is present-but-null on unpinned threads, so "set" is a non-null extract. The
     // lineage shape is checked from its own type facts below, in Rust: a path extract cannot tell "no parent" from "a lineage a path cannot walk", so the query
-    // returns every pinned row's lineage facts instead of filtering on the extract. The
-    // statement is dropped before the connection, so no read transaction outlives this call.
+    // returns every counted row's lineage facts instead of filtering on the extract. One
+    // filter does live in SQL, so auto-pinned children never count toward the row budget:
+    // a child (object lineage, text parent) is returned only when both times are text and
+    // SQLite's own date math puts the pin past the explicit gap (a hair under the Rust
+    // threshold, so the strict Rust recheck below is the one that decides). Every other
+    // lineage — top-level and wrong-typed alike — is still returned, so the shape refusal
+    // below keeps working. The statement is dropped before the connection, so no read
+    // transaction outlives this call.
     let mut stmt = conn
         .prepare(
             "SELECT thread_id, title, \
@@ -202,10 +322,18 @@ fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
                     json_type(payload_json, '$.pinOrderKey'), \
                     json_type(payload_json), \
                     json_type(payload_json, '$.lineage'), \
-                    json_type(payload_json, '$.lineage.parentThreadId') \
+                    json_type(payload_json, '$.lineage.parentThreadId'), \
+                    json_extract(payload_json, '$.createdAt'), \
+                    json_type(payload_json, '$.createdAt') \
              FROM orchestration_v2_projection_threads \
              WHERE archived_at IS NULL AND deleted_at IS NULL \
                AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL \
+               AND (json_type(payload_json, '$.lineage') IS NOT 'object' \
+                 OR json_type(payload_json, '$.lineage.parentThreadId') IS NOT 'text' \
+                 OR (json_type(payload_json, '$.pinnedAt') = 'text' \
+                     AND json_type(payload_json, '$.createdAt') = 'text' \
+                     AND (julianday(json_extract(payload_json, '$.pinnedAt')) \
+                        - julianday(json_extract(payload_json, '$.createdAt'))) * 86400.0 > 59.999)) \
              ORDER BY (json_extract(payload_json, '$.pinOrderKey') IS NULL) ASC, \
                     json_extract(payload_json, '$.pinOrderKey') ASC, \
                     json_extract(payload_json, '$.pinnedAt') ASC, thread_id ASC",
@@ -223,22 +351,36 @@ fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, SqlValue>(9)?,
+                row.get::<_, Option<String>>(10)?,
             ))
         })
         .map_err(map_sqlite)?;
 
     let mut pinned = Vec::new();
+    let mut not_shown = 0usize;
     let mut spent = 0usize;
     let mut remote_rows = Vec::new();
     let mut remote_bytes = 0usize;
     for row in rows {
-        let (id, title, pinned_at, pinned_type, pin_order_key, order_type, root_type, lineage_type, parent_type) =
-            match row {
-                Ok(values) => values,
-                // A value SQLite cannot give this reader as the column's type is not T3's shape.
-                Err(rusqlite::Error::InvalidColumnType(..)) => return Err(shape()),
-                Err(error) => return Err(map_sqlite(error)),
-            };
+        let (
+            id,
+            title,
+            pinned_at,
+            pinned_type,
+            pin_order_key,
+            order_type,
+            root_type,
+            lineage_type,
+            parent_type,
+            created_at,
+            created_type,
+        ) = match row {
+            Ok(values) => values,
+            // A value SQLite cannot give this reader as the column's type is not T3's shape.
+            Err(rusqlite::Error::InvalidColumnType(..)) => return Err(shape()),
+            Err(error) => return Err(map_sqlite(error)),
+        };
         if root_type.as_deref() != Some("object")
             || !matches!(pinned_type.as_deref(), Some("text" | "integer" | "real"))
             || !matches!(order_type.as_deref(), Some("text" | "integer" | "real" | "null") | None)
@@ -246,13 +388,38 @@ fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
             return Err(shape());
         }
         validate_lineage(lineage_type.as_deref(), parent_type.as_deref())?;
+        // A child counts only when pinned explicitly. The SQL filter already dropped the
+        // auto-pinned bulk; this strict recheck drops the rest (SQLite's date math accepts
+        // offsets and rolled-over dates this reader does not). Skipped, never a failure.
+        if is_child(lineage_type.as_deref(), parent_type.as_deref()) {
+            let pinned_text = match (&pinned_at, pinned_type.as_deref()) {
+                (SqlValue::Text(text), Some("text")) => Some(text.as_str()),
+                _ => None,
+            };
+            let created_text = match (&created_at, created_type.as_deref()) {
+                (SqlValue::Text(text), Some("text")) => Some(text.as_str()),
+                _ => None,
+            };
+            if !explicit_child_pin(pinned_text, created_text) {
+                continue;
+            }
+        }
         if remote {
+            // `createdAt` is carried for the parser's own explicit-pin recheck and is
+            // never itself a shape fact: any payload value passes through (a blob, which
+            // a JSON extract never yields in practice, travels as null and simply cannot
+            // prove a child explicit on the far side).
+            let created_json = match created_at.clone() {
+                SqlValue::Null | SqlValue::Blob(_) => Json::Null,
+                other => scalar(other).unwrap_or(Json::Null),
+            };
             let row = serde_json::json!({
                 "thread_id": id, "title": title,
                 "pinnedAt": scalar(pinned_at.clone())?, "pinnedType": pinned_type,
                 "pinOrderKey": if matches!(pin_order_key, SqlValue::Null) { Json::Null } else { scalar(pin_order_key.clone())? },
                 "orderType": order_type, "rootType": root_type,
                 "lineageType": lineage_type, "parentType": parent_type,
+                "createdAt": created_json, "createdType": created_type,
             });
             remote_bytes += serde_json::to_vec(&row).map_err(|_| shape())?.len();
             if remote_rows.len() >= MAX_PINNED_ROWS || remote_bytes > MAX_PIN_BYTES {
@@ -275,14 +442,20 @@ fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
             Some("text") | Some("integer") | Some("real") => scalar(pin_order_key)?,
             Some(_) => return Err(shape()),
         };
-        // The read's own budget: refuse the whole read past either bound, never truncate.
+        // The read's own budget: past the row budget the rest are counted, not shown —
+        // the list is never blanked for size alone. The byte budget stays hard: shown
+        // pins past it refuse the whole read, never a silently cut title or list.
+        if pinned.len() >= MAX_PINNED_ROWS {
+            not_shown += 1;
+            continue;
+        }
         spent += id.len()
             + title.len()
             + serde_json::to_string(&pinned_at).map(|text| text.len()).unwrap_or(0)
             + serde_json::to_string(&pin_order_key)
                 .map(|text| text.len())
                 .unwrap_or(0);
-        if pinned.len() >= MAX_PINNED_ROWS || spent > MAX_PIN_BYTES {
+        if spent > MAX_PIN_BYTES {
             return Err(limit());
         }
         pinned.push(PinnedThread {
@@ -292,12 +465,12 @@ fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
             pin_order_key,
         });
     }
-    Ok((pinned, remote_rows))
+    Ok((pinned, remote_rows, not_shown))
 }
 
 /// The columns the remote query returns, and the only keys a row of `sqlite3 -json` output
 /// may carry: exactly the SELECT above, aliased, nothing else.
-const REMOTE_KEYS: [&str; 9] = [
+const REMOTE_KEYS: [&str; 11] = [
     "thread_id",
     "title",
     "pinnedAt",
@@ -307,6 +480,8 @@ const REMOTE_KEYS: [&str; 9] = [
     "rootType",
     "lineageType",
     "parentType",
+    "createdAt",
+    "createdType",
 ];
 
 /// One value of the remote output with its `json_type` name, checked against each other the
@@ -341,26 +516,44 @@ fn remote_type_name(value: &Json) -> Result<Option<&str>> {
     }
 }
 
+/// A remote value as the text the explicit-pin check reads: a JSON string whose declared
+/// `json_type` is "text", and nothing else. Any other pairing simply cannot prove a child
+/// explicit; whether it is also a shape change is the scalar checks' call, not this one's.
+fn remote_text<'a>(row: &'a serde_json::Map<String, Json>, value_key: &str, type_key: &str) -> Option<&'a str> {
+    match (row.get(value_key), row.get(type_key)) {
+        (Some(Json::String(value)), Some(Json::String(declared))) if declared == "text" => Some(value.as_str()),
+        _ => None,
+    }
+}
+
 /// The `sqlite3 -json` text one remote machine printed for the pinned-threads query, parsed
 /// with the same shape checks as the local read (`read_pinned_threads`): an array of row
 /// objects carrying exactly the query's aliased columns, a text/integer/real scalar for
 /// `pinnedAt` and a text/integer/real scalar — or JSON null when T3 wrote no key — for
 /// `pinOrderKey`, each matching its declared `json_type`, a payload root that is an object.
-/// The query's WHERE clause applied the same unarchived, undeleted, pinned predicate; the
-/// lineage is checked here by the same `validate_lineage` as the local read: pinned
-/// children are included, while a wrong-typed lineage is refused instead of read as
-/// "no parent". Empty output means no pinned threads on that machine.
+/// `createdAt`/`createdType` carry no shape rule of their own; they only feed the
+/// explicit-pin check. The query's WHERE clause applied the same unarchived, undeleted,
+/// pinned predicate and already dropped auto-pinned children; the lineage is checked here
+/// by the same `validate_lineage` as the local read, and a child is counted only when the
+/// same strict explicit-pin check passes, while a wrong-typed lineage is refused instead
+/// of read as "no parent". Past [`MAX_PINNED_ROWS`] counted pins the first rows are shown
+/// and the rest counted in `not_shown`, as the local read does; the route's own byte cap
+/// bounds the text itself. Empty output means no pinned threads on that machine.
 /// `machine` is a remote computer in the packaged registry; any deviation is a caller error, not a shape claim.
-pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>> {
+pub fn parse_remote_pins(machine: &str, text: &str) -> Result<PinsRead> {
     if !crate::computers::known_machine(machine, true) {
         return Err(Error::new("invalid", "unknown machine for remote pins"));
     }
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Ok(Vec::new());
+        return Ok(PinsRead {
+            pinned: Vec::new(),
+            not_shown: 0,
+        });
     }
     let rows: Vec<Json> = serde_json::from_str(trimmed).map_err(|_| shape())?;
     let mut pinned = Vec::new();
+    let mut not_shown = 0usize;
     for row in rows {
         let Json::Object(row) = row else {
             return Err(shape());
@@ -377,10 +570,20 @@ pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>>
         }
         // A type column prints as JSON null when SQLite had no value there (the path found
         // nothing); every other shape is a changed shape, as the scalar checks below are.
-        validate_lineage(
-            remote_type_name(row.get("lineageType").ok_or_else(shape)?)?,
-            remote_type_name(row.get("parentType").ok_or_else(shape)?)?,
-        )?;
+        let lineage_type = remote_type_name(row.get("lineageType").ok_or_else(shape)?)?;
+        let parent_type = remote_type_name(row.get("parentType").ok_or_else(shape)?)?;
+        validate_lineage(lineage_type, parent_type)?;
+        // The same explicit-pin rule as the local read, decided before the scalar checks:
+        // a child that cannot prove an explicit pin is not counted, whatever else its row
+        // carries, and the read does not fail for it.
+        if is_child(lineage_type, parent_type)
+            && !explicit_child_pin(
+                remote_text(&row, "pinnedAt", "pinnedType"),
+                remote_text(&row, "createdAt", "createdType"),
+            )
+        {
+            continue;
+        }
         let (Some(Json::String(id)), Some(Json::String(title))) = (row.get("thread_id"), row.get("title")) else {
             return Err(shape());
         };
@@ -405,14 +608,20 @@ pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>>
             }
             _ => remote_scalar(&row, "pinOrderKey", "orderType")?,
         };
-        pinned.push(PinnedThread {
+        let thread = PinnedThread {
             id: id.clone(),
             title: title.clone(),
             pinned_at: remote_scalar(&row, "pinnedAt", "pinnedType")?,
             pin_order_key,
-        });
+        };
+        // Past the row budget the rest are counted, not shown, as the local read does.
+        if pinned.len() >= MAX_PINNED_ROWS {
+            not_shown += 1;
+        } else {
+            pinned.push(thread);
+        }
     }
-    Ok(pinned)
+    Ok(PinsRead { pinned, not_shown })
 }
 
 /// Where a pin order key sorts, as SQLite orders it: numbers before text, numbers by value,

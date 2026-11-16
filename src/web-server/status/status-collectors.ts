@@ -998,12 +998,16 @@ export function validAgentMachineSample(value: unknown): value is MachineSample 
  * read uses: unarchived, undeleted, `pinnedAt` set, in `pinOrderKey` order, each row with the
  * lineage shape facts (`lineageType`, `parentType`) the native parser needs to apply the same
  * lineage shape check as the local read: absent, null, or an object whose parentThreadId
- * is absent, null or text. Pinned children are included; a wrong-typed lineage is a `shape` refusal,
- * because a path extract cannot tell "no parent" from "a lineage a path cannot walk". Only
- * `orchestration_v2_projection_threads` is touched; a database of any size reads the same
- * one table.
+ * is absent, null or text. A wrong-typed lineage is a `shape` refusal, because a path extract
+ * cannot tell "no parent" from "a lineage a path cannot walk", so wrong-typed rows are still
+ * returned for the parser to refuse. T3 auto-pins every delegated child at creation, so a child
+ * row is returned only when its pin looks explicit — both times text, pinned more than 60s after
+ * creation by SQLite's date math (a hair under, at 59.999s; the parser's strict UTC recheck
+ * decides) — which keeps auto-pinned children from eating the reader's row budget. `createdAt`
+ * and `createdType` ride along for that recheck. Only `orchestration_v2_projection_threads` is
+ * touched; a database of any size reads the same one table.
  */
-export const PINNED_THREADS_QUERY = `SELECT thread_id, title, json_extract(payload_json, '$.pinnedAt') AS pinnedAt, json_type(payload_json, '$.pinnedAt') AS pinnedType, json_extract(payload_json, '$.pinOrderKey') AS pinOrderKey, json_type(payload_json, '$.pinOrderKey') AS orderType, json_type(payload_json) AS rootType, json_type(payload_json, '$.lineage') AS lineageType, json_type(payload_json, '$.lineage.parentThreadId') AS parentType FROM orchestration_v2_projection_threads WHERE archived_at IS NULL AND deleted_at IS NULL AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL ORDER BY (json_extract(payload_json, '$.pinOrderKey') IS NULL) ASC, json_extract(payload_json, '$.pinOrderKey') ASC, json_extract(payload_json, '$.pinnedAt') ASC, thread_id ASC`;
+export const PINNED_THREADS_QUERY = `SELECT thread_id, title, json_extract(payload_json, '$.pinnedAt') AS pinnedAt, json_type(payload_json, '$.pinnedAt') AS pinnedType, json_extract(payload_json, '$.pinOrderKey') AS pinOrderKey, json_type(payload_json, '$.pinOrderKey') AS orderType, json_type(payload_json) AS rootType, json_type(payload_json, '$.lineage') AS lineageType, json_type(payload_json, '$.lineage.parentThreadId') AS parentType, json_extract(payload_json, '$.createdAt') AS createdAt, json_type(payload_json, '$.createdAt') AS createdType FROM orchestration_v2_projection_threads WHERE archived_at IS NULL AND deleted_at IS NULL AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL AND (json_type(payload_json, '$.lineage') IS NOT 'object' OR json_type(payload_json, '$.lineage.parentThreadId') IS NOT 'text' OR (json_type(payload_json, '$.pinnedAt') = 'text' AND json_type(payload_json, '$.createdAt') = 'text' AND (julianday(json_extract(payload_json, '$.pinnedAt')) - julianday(json_extract(payload_json, '$.createdAt'))) * 86400.0 > 59.999)) ORDER BY (json_extract(payload_json, '$.pinOrderKey') IS NULL) ASC, json_extract(payload_json, '$.pinOrderKey') ASC, json_extract(payload_json, '$.pinnedAt') ASC, thread_id ASC`;
 
 /** The sqlite3 that answers the pins query on each host. Mac first on PATH is an Android SDK
  * copy, so the fixed /usr/bin one; Windows has chocolatey's, in ProgramData. */

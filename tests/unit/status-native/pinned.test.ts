@@ -54,7 +54,9 @@ function pinnedPayload(
   return {
     id,
     title,
+    // A week after creation: a child built here is an explicit pin, not a T3 auto-pin.
     pinnedAt: '2026-11-08T10:00:00Z',
+    createdAt: '2026-11-01T00:00:00Z',
     pinOrderKey,
     lineage: { parentThreadId: parent },
   };

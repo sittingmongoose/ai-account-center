@@ -31,10 +31,13 @@ fn fixture(dir: &Path) -> (PathBuf, Connection) {
 }
 
 fn payload(id: &str, title: &str, pinned_at: Value, pin_order: Value, parent: Value) -> String {
+    // `createdAt` a week before the usual `pinnedAt` fixtures, so a child built here is an
+    // explicit pin; tests that need an auto-pinned child write their own payload.
     json!({
         "id": id,
         "title": title,
         "pinnedAt": pinned_at,
+        "createdAt": "2026-11-01T00:00:00Z",
         "pinOrderKey": pin_order,
         "lineage": { "parentThreadId": parent },
         "branch": "main",
@@ -60,7 +63,7 @@ fn ids(rows: &[aac_status::pins::PinnedThread]) -> Vec<&str> {
 }
 
 #[test]
-fn pinned_threads_are_returned_regardless_of_lineage() {
+fn explicitly_pinned_threads_are_returned_regardless_of_lineage() {
     let dir = tempfile::tempdir().unwrap();
     let (file, conn) = fixture(dir.path());
     let at = json!("2026-11-08T10:00:00Z");
@@ -113,7 +116,7 @@ fn pinned_threads_are_returned_regardless_of_lineage() {
     );
     drop(conn);
 
-    let rows = read_pinned_threads(&file).unwrap();
+    let rows = read_pinned_threads(&file).unwrap().pinned;
     assert_eq!(ids(&rows), ["child", "top-null", "top-bare"]);
     assert_eq!(rows[0].title, "Child thread");
     assert_eq!(rows[0].pinned_at, json!("2026-11-08T10:00:00Z"));
@@ -151,7 +154,7 @@ fn archived_and_deleted_threads_are_left_out() {
     );
     drop(conn);
 
-    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["live"]);
+    assert_eq!(ids(&read_pinned_threads(&file).unwrap().pinned), ["live"]);
 }
 
 #[test]
@@ -169,7 +172,10 @@ fn rows_come_back_in_pin_order() {
         );
     }
     drop(conn);
-    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["first", "second", "third"]);
+    assert_eq!(
+        ids(&read_pinned_threads(&file).unwrap().pinned),
+        ["first", "second", "third"]
+    );
 }
 
 #[test]
@@ -187,7 +193,7 @@ fn numeric_order_keys_sort_numerically() {
         );
     }
     drop(conn);
-    let rows = read_pinned_threads(&file).unwrap();
+    let rows = read_pinned_threads(&file).unwrap().pinned;
     assert_eq!(ids(&rows), ["one", "two", "ten"]);
     assert_eq!(rows[0].pinned_at, json!(1_700_000_000_000_i64));
 }
@@ -261,11 +267,10 @@ fn a_wrong_typed_lineage_is_a_shape_refusal_never_a_top_level_pin() {
 }
 
 #[test]
-fn a_local_read_past_its_budget_is_refused_never_silently_truncated() {
-    // The remote route's caps (a fixed byte budget per read) as the local read's model
-    // (Astra L1): past the budget the read is a fixed refusal, never a truncated list. The
-    // sizes here are one past this reader's `MAX_PIN_BYTES` (1 MiB) and `MAX_PINNED_ROWS`
-    // (1000), which the check in `read_pinned_threads` enforces.
+fn a_local_read_past_its_byte_budget_is_refused_never_silently_truncated() {
+    // The byte budget stays hard (Astra L1): shown pins past `MAX_PIN_BYTES` (1 MiB)
+    // refuse the whole read, never a silently cut title or list. The row budget no
+    // longer refuses; it shows the first rows and counts the rest (next test).
 
     // One row whose title alone passes the byte budget (the review's 2 MiB title).
     let bytes_dir = tempfile::tempdir().unwrap();
@@ -284,26 +289,34 @@ fn a_local_read_past_its_budget_is_refused_never_silently_truncated() {
     );
     drop(conn);
     assert_eq!(read_pinned_threads(&file).unwrap_err().code, "limit");
+}
 
-    // More rows than the count budget, each tiny.
-    let rows_dir = tempfile::tempdir().unwrap();
-    let (file, conn) = fixture(rows_dir.path());
-    for index in 0..=1000_u32 {
+#[test]
+fn more_explicit_pins_than_the_row_budget_show_the_first_and_count_the_rest() {
+    // Past `MAX_PINNED_ROWS` (1000) counted pins the read must not blank the list: the
+    // first rows in pin order show and the remainder is counted, never a `limit` refusal.
+    let dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(dir.path());
+    for index in 0..1005_u32 {
         insert(
             &conn,
-            &format!("row-{index}"),
+            &format!("row-{index:04}"),
             "Row",
             None,
             None,
             &json!({
-                "id": format!("row-{index}"), "pinnedAt": "2026-11-08T10:00:00Z",
+                "id": format!("row-{index:04}"), "pinnedAt": "2026-11-08T10:00:00Z",
                 "pinOrderKey": index, "lineage": null
             })
             .to_string(),
         );
     }
     drop(conn);
-    assert_eq!(read_pinned_threads(&file).unwrap_err().code, "limit");
+    let read = read_pinned_threads(&file).unwrap();
+    assert_eq!(read.pinned.len(), 1000);
+    assert_eq!(read.not_shown, 5);
+    assert_eq!(read.pinned[0].id, "row-0000");
+    assert_eq!(read.pinned[999].id, "row-0999");
 }
 
 #[test]
@@ -347,7 +360,7 @@ fn a_changed_shape_is_reported_never_guessed() {
         &json!({"pinnedAt": {"at": 1}, "pinOrderKey": "a1"}).to_string(),
     );
     drop(conn2);
-    assert_eq!(read_pinned_threads(&file).unwrap().len(), 0);
+    assert_eq!(read_pinned_threads(&file).unwrap().pinned.len(), 0);
     assert_eq!(read_pinned_threads(&file2).unwrap_err().code, "shape");
 
     // A pinned row with no order key: T3 writes pinnedAt without a key as JSON null or
@@ -364,7 +377,7 @@ fn a_changed_shape_is_reported_never_guessed() {
         &json!({"pinnedAt": "2026-11-08T10:00:00Z"}).to_string(),
     );
     drop(conn3);
-    let rows = read_pinned_threads(&file3).unwrap();
+    let rows = read_pinned_threads(&file3).unwrap().pinned;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "odd");
     assert_eq!(rows[0].pin_order_key, Value::Null);
@@ -408,10 +421,10 @@ fn reads_work_while_a_writer_holds_a_wal_transaction() {
             Value::Null,
         ),
     );
-    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["before"]);
+    assert_eq!(ids(&read_pinned_threads(&file).unwrap().pinned), ["before"]);
 
     writer.execute_batch("COMMIT").unwrap();
-    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["before", "during"]);
+    assert_eq!(ids(&read_pinned_threads(&file).unwrap().pinned), ["before", "during"]);
 }
 
 #[test]
@@ -428,7 +441,7 @@ fn reading_never_writes_to_the_file() {
     );
     drop(conn);
     let before = std::fs::read(&file).unwrap();
-    assert_eq!(read_pinned_threads(&file).unwrap().len(), 1);
+    assert_eq!(read_pinned_threads(&file).unwrap().pinned.len(), 1);
     assert_eq!(std::fs::read(&file).unwrap(), before);
     assert!(!dir.path().join("statev2.sqlite-wal").exists());
 }
@@ -508,7 +521,7 @@ fn a_top_level_null_order_key_is_listed_after_the_keyed_ones() {
     );
     drop(conn);
 
-    let rows = read_pinned_threads(&file).unwrap();
+    let rows = read_pinned_threads(&file).unwrap().pinned;
     assert_eq!(
         ids(&rows),
         ["first", "second", "absent-early", "null-a", "null-b", "null-late"]
@@ -548,7 +561,7 @@ fn a_pinned_child_with_a_null_key_is_included_after_keyed_pins() {
     );
     drop(conn);
 
-    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["top", "child-null"]);
+    assert_eq!(ids(&read_pinned_threads(&file).unwrap().pinned), ["top", "child-null"]);
 }
 
 #[test]
@@ -605,13 +618,20 @@ fn remote_read_preserves_child_rows_and_every_sqlite_shape_column() {
     use aac_status::pins::{parse_remote_pins, read_remote_rows};
     let dir = tempfile::tempdir().unwrap();
     let (file, conn) = fixture(dir.path());
+    // An explicitly pinned child (pinned a week after creation, via `payload`).
     insert(
         &conn,
         "child",
         "Child",
         None,
         None,
-        &payload("child", "Child", json!(1), json!("a"), json!("parent")),
+        &payload(
+            "child",
+            "Child",
+            json!("2026-11-08T10:00:00Z"),
+            json!("a"),
+            json!("parent"),
+        ),
     );
     insert(
         &conn,
@@ -634,19 +654,154 @@ fn remote_read_preserves_child_rows_and_every_sqlite_shape_column() {
     assert_eq!(
         rows,
         vec![
-            json!({"thread_id":"child","title":"Child","pinnedAt":1,"pinnedType":"integer",
+            json!({"thread_id":"child","title":"Child","pinnedAt":"2026-11-08T10:00:00Z","pinnedType":"text",
             "pinOrderKey":"a","orderType":"text","rootType":"object",
-            "lineageType":"object","parentType":"text"}),
+            "lineageType":"object","parentType":"text",
+            "createdAt":"2026-11-01T00:00:00Z","createdType":"text"}),
             json!({"thread_id":"absent","title":"Absent","pinnedAt":2,"pinnedType":"integer",
             "pinOrderKey":null,"orderType":null,"rootType":"object",
-            "lineageType":null,"parentType":null}),
+            "lineageType":null,"parentType":null,
+            "createdAt":null,"createdType":null}),
             json!({"thread_id":"null","title":"Null","pinnedAt":3,"pinnedType":"integer",
             "pinOrderKey":null,"orderType":"null","rootType":"object",
-            "lineageType":null,"parentType":null}),
+            "lineageType":null,"parentType":null,
+            "createdAt":null,"createdType":null}),
         ]
     );
     assert_eq!(
-        parse_remote_pins("mac", &serde_json::to_string(&rows).unwrap()).unwrap(),
-        read_pinned_threads(&file).unwrap()
+        parse_remote_pins("mac", &serde_json::to_string(&rows).unwrap())
+            .unwrap()
+            .pinned,
+        read_pinned_threads(&file).unwrap().pinned
     );
+}
+
+#[test]
+fn auto_pinned_children_never_count_toward_the_row_budget() {
+    // The wave-57 regression, as a fixture: T3 auto-pins every delegated child at
+    // creation (here 1,200 of them, pinned one second after they were made). Counting
+    // them blew the 1,000-row budget and blanked the whole list. Only the explicit
+    // pins count: 3 children pinned days later and 9 top-level threads.
+    let dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(dir.path());
+    for index in 0..1200_u32 {
+        insert(
+            &conn,
+            &format!("auto-{index:04}"),
+            "Auto child",
+            None,
+            None,
+            &json!({
+                "pinnedAt": "2026-11-10T00:00:01Z", "createdAt": "2026-11-10T00:00:00Z",
+                "pinOrderKey": index, "lineage": { "parentThreadId": "lead" }
+            })
+            .to_string(),
+        );
+    }
+    for index in 0..3_u32 {
+        insert(
+            &conn,
+            &format!("lead-{index}"),
+            "Stream lead",
+            None,
+            None,
+            &json!({
+                "pinnedAt": "2026-11-15T21:44:00Z", "createdAt": "2026-11-04T16:19:00Z",
+                "pinOrderKey": 2000 + index, "lineage": { "parentThreadId": "lead" }
+            })
+            .to_string(),
+        );
+    }
+    for index in 0..9_u32 {
+        insert(
+            &conn,
+            &format!("top-{index}"),
+            "Top",
+            None,
+            None,
+            &json!({
+                "pinnedAt": "2026-11-08T10:00:00Z", "createdAt": "2026-11-08T09:59:59Z",
+                "pinOrderKey": 3000 + index, "lineage": { "parentThreadId": null }
+            })
+            .to_string(),
+        );
+    }
+    drop(conn);
+
+    let read = read_pinned_threads(&file).unwrap();
+    assert_eq!(read.not_shown, 0);
+    assert_eq!(
+        ids(&read.pinned),
+        [
+            "lead-0", "lead-1", "lead-2", "top-0", "top-1", "top-2", "top-3", "top-4", "top-5", "top-6", "top-7",
+            "top-8"
+        ]
+    );
+
+    // The same twelve through the remote representations: agent rows and their parse.
+    use aac_status::pins::{parse_remote_pins, read_remote_rows};
+    let rows = read_remote_rows(&file).unwrap();
+    assert_eq!(rows.len(), 12);
+    let parsed = parse_remote_pins("mac", &serde_json::to_string(&rows).unwrap()).unwrap();
+    assert_eq!(parsed, read);
+}
+
+#[test]
+fn a_child_counts_only_when_its_pin_is_explicit_and_strictly_dated() {
+    // Every child below but one must be left out without failing the read; the one
+    // top-level row is unaffected by the child rule whatever its times look like.
+    let dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(dir.path());
+    let child = |id: &str, pinned: Value, created: Value, key: u32| {
+        let mut body = json!({
+            "pinnedAt": pinned, "pinOrderKey": key,
+            "lineage": { "parentThreadId": "lead" }
+        });
+        if !created.is_null() {
+            body["createdAt"] = created;
+        }
+        insert(&conn, id, id, None, None, &body.to_string());
+    };
+    // Exactly 60s later is not "more than 60s".
+    child("at-60", json!("2026-11-10T00:01:00Z"), json!("2026-11-10T00:00:00Z"), 1);
+    // 61s later is explicit: the one child that counts.
+    child("at-61", json!("2026-11-10T00:01:01Z"), json!("2026-11-10T00:00:00Z"), 2);
+    // No createdAt at all.
+    child("no-created", json!("2026-11-15T00:00:00Z"), Value::Null, 3);
+    // An unparseable pin time.
+    child("garbage-pin", json!("yesterday-ish"), json!("2026-11-10T00:00:00Z"), 4);
+    // A numeric pin time is not a UTC timestamp.
+    child(
+        "numeric-pin",
+        json!(1_700_000_000_000_i64),
+        json!("2026-11-10T00:00:00Z"),
+        5,
+    );
+    // An offset time is not a strict UTC timestamp, however late it lands.
+    child(
+        "offset-pin",
+        json!("2026-11-15T00:00:00+05:00"),
+        json!("2026-11-10T00:00:00Z"),
+        6,
+    );
+    // Feb 30 does not roll over into a real day.
+    child(
+        "rollover-pin",
+        json!("2026-02-30T00:00:00Z"),
+        json!("2026-01-01T00:00:00Z"),
+        7,
+    );
+    insert(
+        &conn,
+        "top",
+        "Top",
+        None,
+        None,
+        &payload("top", "Top", json!("2026-11-08T10:00:00Z"), json!(0), Value::Null),
+    );
+    drop(conn);
+
+    let read = read_pinned_threads(&file).unwrap();
+    assert_eq!(ids(&read.pinned), ["top", "at-61"]);
+    assert_eq!(read.not_shown, 0);
 }

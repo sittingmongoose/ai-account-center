@@ -743,7 +743,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 65,
+      "countOver400": 66,
       "countOver600": 25,
       "topOver400": [
         {
@@ -776,7 +776,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1069
+          "loc": 1073
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
