@@ -8,7 +8,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
 import { HOST_OS, SSH_ALIASES, helperPlatform } from './dashboard-hosts';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 
 /**
  * How the dashboard reaches each computer's fixed update helper: the local
@@ -158,10 +158,26 @@ export function runHelperProcess(
   env: NodeJS.ProcessEnv,
   control?: HostRunControl
 ): Promise<string> {
+  // ssh runs the probed file only, checked here just before the spawn.
+  return sshLaunch(binary, args).then(
+    (program) => spawnHelperProcess(program, binary, args, env, control),
+    () => {
+      throw new HelperExecutionError('host_unknown');
+    }
+  );
+}
+
+function spawnHelperProcess(
+  program: string,
+  binary: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  control?: HostRunControl
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(binary, args, {
+      child = spawn(program, args, {
         stdio: ['pipe', 'pipe', 'ignore'],
         windowsHide: true,
         env: updaterEnvironment(env),
@@ -389,9 +405,10 @@ export function localHelperChecksums(root = PACKAGE_ROOT): Record<string, string
 
 async function sshText(host: string, command: string): Promise<string> {
   const sshArgs0 = await sshArgv(host, command);
+  const sshArgs0Program = await sshLaunch('ssh', sshArgs0);
   return new Promise((resolve, reject) => {
     execFile(
-      'ssh',
+      sshArgs0Program,
       sshArgs0,
       {
         env: sshEnvironment(),
@@ -408,6 +425,7 @@ async function sshText(host: string, command: string): Promise<string> {
 async function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promise<void> {
   // lib is ES2020, so the executor form is the available API here (as in runHost).
   const sshArgs1 = await sshArgv(host, extract);
+  const sshArgs1Program = await sshLaunch('ssh', sshArgs1);
   return new Promise((resolve, reject) => {
     let args: string[];
     try {
@@ -420,7 +438,7 @@ async function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): 
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
     });
-    const remote = spawn('ssh', sshArgs1, {
+    const remote = spawn(sshArgs1Program, sshArgs1, {
       env: sshEnvironment(),
       stdio: ['pipe', 'ignore', 'ignore'],
       windowsHide: true,

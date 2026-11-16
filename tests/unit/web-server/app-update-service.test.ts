@@ -104,7 +104,7 @@ describe('fixed app update service', () => {
     expect(local.binary).toBe('/usr/bin/python3');
     expect(local.args.slice(1, 4)).toEqual(['--apply', '--platform', 'ubuntu']);
     const mac = await appUpdateInvocation('mac');
-    expect(mac.binary).toBe('ssh');
+    expect(mac.binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(mac.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.mac]);
     expect(mac.args.at(-1)).toContain('$HOME/.ccs/app-updates/app_updates.py');
     expect(mac.args.at(-1)).toContain('--apply --platform mac');
@@ -115,7 +115,7 @@ describe('fixed app update service', () => {
     expect(script).toContain('--apply --platform windows');
     expect(script).not.toContain('Invoke-Expression');
     const nas1 = await appUpdateInvocation('nas1');
-    expect(nas1.binary).toBe('ssh');
+    expect(nas1.binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(nas1.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.nas1]);
     expect(nas1.args.at(-1)).toContain('$HOME/.ccs/app-updates/app_updates.py');
   });

@@ -545,16 +545,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 683,
-      "typedThrows": 225,
+      "totalThrows": 685,
+      "typedThrows": 226,
       "plainThrows": 47,
-      "otherThrows": 411,
-      "adoptionRatio": 0.3294,
+      "otherThrows": 412,
+      "adoptionRatio": 0.3299,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 400,
-          "typed": 172,
+          "count": 402,
+          "typed": 173,
           "plain": 7
         },
         {
@@ -764,7 +764,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1672
+          "loc": 1674
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -776,7 +776,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1073
+          "loc": 1080
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",

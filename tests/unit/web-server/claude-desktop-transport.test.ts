@@ -53,7 +53,7 @@ describe('Claude desktop transport', () => {
     await openClaudeMacLauncher(mac);
     expect(exec).toHaveBeenCalledTimes(1);
     const [binary, args, options] = exec.mock.calls[0]!;
-    expect(binary).toBe('ssh');
+    expect(binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(args).toContain('BatchMode=yes');
     expect(args).toContain('ConnectTimeout=5');
     expect(args).toContain('--');
@@ -89,7 +89,7 @@ describe('Claude desktop transport', () => {
       const exec = mockSsh();
       await openClaudeWindowsLauncher(windows, id);
       const [binary, args] = exec.mock.calls[0]!;
-      expect(binary).toBe('ssh');
+      expect(binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
       expect(args).toContain('example-windows');
       const command = (args as string[]).at(-1)!;
       const script = Buffer.from(command.split(' ').at(-1)!, 'base64').toString('utf16le');

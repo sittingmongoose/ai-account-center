@@ -43,7 +43,7 @@ describe('agent verb opt-in', () => {
       host,
       [artifact],
       async (file, args, options) => {
-        expect(file).toBe('ssh');
+        expect(file).toMatch(/(^|[\/])ssh(\.exe)?$/);
         expect(args.join(' ')).toContain(artifact.sha256);
         const request = JSON.parse(options.input!);
         expect(request.verb).toBe('signin-expiry');

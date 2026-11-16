@@ -25,7 +25,7 @@ pub struct SshPolicy {
     pub run_dir: PathBuf,
     /// SSH executable, normally `ssh` resolved on PATH.
     pub ssh: PathBuf,
-    /// SCP executable, normally `scp` resolved on PATH.
+    /// SCP executable, normally `scp` resolved on PATH. It always runs the probed SSH via `-S`.
     pub scp: PathBuf,
     /// Explicit child PATH for test fakes; process-global environment is never changed.
     pub path: Option<OsString>,
@@ -43,20 +43,23 @@ impl SshPolicy {
         }
     }
 
-    /// Capabilities belong to one executable file, not its pathname: a same-path upgrade,
-    /// PATH change or symlink retarget re-probes. Returns the identity for the master hash.
-    async fn capabilities(&self) -> Result<(String, Vec<OsString>), Failure> {
-        let path = self
-            .path
+    fn search_path(&self) -> OsString {
+        self.path
             .clone()
             .or_else(|| std::env::var_os("PATH"))
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    /// Capabilities belong to one executable file, not its pathname: a same-path upgrade,
+    /// PATH change or symlink retarget re-probes. Returns the probed file and its identity.
+    async fn capabilities(&self) -> Result<(PathBuf, String, Vec<OsString>), Failure> {
+        let path = self.search_path();
         // A file replaced while its probe runs is probed again; results match the file now there.
         for _ in 0..3 {
             let (file, identity) = executable_identity(&self.ssh, &path).await?;
             let args = self.probe(&file, &identity).await?;
-            if executable_identity(&self.ssh, &path).await?.1 == identity {
-                return Ok((identity, args));
+            if executable_identity(&self.ssh, &path).await? == (file.clone(), identity.clone()) {
+                return Ok((file, identity, args));
             }
         }
         Err(Failure::new(
@@ -66,7 +69,9 @@ impl SshPolicy {
     }
 
     async fn probe(&self, file: &Path, identity: &str) -> Result<Vec<OsString>, Failure> {
-        type Probe = Arc<tokio::sync::OnceCell<Result<Vec<OsString>, Failure>>>;
+        /// A failed probe is retried after this, so a recovered client is not refused until restart.
+        const FAILURE_TTL: Duration = Duration::from_secs(30);
+        type Probe = Arc<tokio::sync::OnceCell<(Result<Vec<OsString>, Failure>, Instant)>>;
         static PROBES: OnceLock<Mutex<std::collections::HashMap<PathBuf, (String, Probe)>>> =
             OnceLock::new();
         let probe = {
@@ -77,67 +82,77 @@ impl SshPolicy {
             let entry = probes
                 .entry(file.to_path_buf())
                 .or_insert_with(|| (identity.to_owned(), Probe::default()));
-            if entry.0 != identity {
-                // Failed results stay cached too, until the executable itself changes.
+            // Success is cached per identity; a failure only for FAILURE_TTL.
+            let expired = entry
+                .1
+                .get()
+                .is_some_and(|(result, at)| result.is_err() && at.elapsed() >= FAILURE_TTL);
+            if entry.0 != identity || expired {
                 *entry = (identity.to_owned(), Probe::default());
             }
             entry.1.clone()
         };
         probe
             .get_or_init(|| async {
-                let mut args = Vec::new();
-                for option in ["KnownHostsCommand=none", "SetEnv=AAC_SSH_POLICY=1"] {
-                    let mut command = Command::new(file);
-                    ssh_environment(&mut command);
-                    if let Some(path) = &self.path {
-                        command.env("PATH", path);
+                let result: Result<Vec<OsString>, Failure> = async {
+                    let mut args = Vec::new();
+                    for option in ["KnownHostsCommand=none", "SetEnv=AAC_SSH_POLICY=1"] {
+                        let mut command = Command::new(file);
+                        ssh_environment(&mut command);
+                        if let Some(path) = &self.path {
+                            command.env("PATH", path);
+                        }
+                        command
+                            .args(["-G", "-F", "none", "-o", option, "--", "localhost"])
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::piped())
+                            .kill_on_drop(true);
+                        let mut child = command.spawn()?;
+                        let stderr = child
+                            .stderr
+                            .take()
+                            .ok_or_else(|| Failure::new(Cause::Bug, "SSH probe stderr absent"))?;
+                        let result = tokio::time::timeout(Duration::from_secs(2), async {
+                            let mut output = Vec::new();
+                            stderr.take(8192).read_to_end(&mut output).await?;
+                            let status = child.wait().await?;
+                            Ok::<_, std::io::Error>((status, output))
+                        })
+                        .await;
+                        match result {
+                            Ok(Ok((status, _))) if status.success() => {
+                                args.extend(["-o".into(), option.into()])
+                            }
+                            Ok(Ok((_, output)))
+                                if String::from_utf8_lossy(&output)
+                                    .to_ascii_lowercase()
+                                    .contains("bad configuration option:") =>
+                            {
+                                eprintln!(
+                                    "[AAC SSH] {} unsupported; compatibility downgrade",
+                                    option.split('=').next().unwrap_or("option")
+                                );
+                            }
+                            _ => {
+                                let _ = child.start_kill();
+                                let _ =
+                                    tokio::time::timeout(Duration::from_millis(150), child.wait())
+                                        .await;
+                                return Err(Failure::new(
+                                    Cause::Refused,
+                                    "SSH capability probe failed",
+                                ));
+                            }
+                        }
                     }
-                    command
-                        .args(["-G", "-F", "none", "-o", option, "--", "localhost"])
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::piped())
-                        .kill_on_drop(true);
-                    let mut child = command.spawn()?;
-                    let stderr = child
-                        .stderr
-                        .take()
-                        .ok_or_else(|| Failure::new(Cause::Bug, "SSH probe stderr absent"))?;
-                    let result = tokio::time::timeout(Duration::from_secs(2), async {
-                        let mut output = Vec::new();
-                        stderr.take(8192).read_to_end(&mut output).await?;
-                        let status = child.wait().await?;
-                        Ok::<_, std::io::Error>((status, output))
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok((status, _))) if status.success() => {
-                            args.extend(["-o".into(), option.into()])
-                        }
-                        Ok(Ok((_, output)))
-                            if String::from_utf8_lossy(&output)
-                                .to_ascii_lowercase()
-                                .contains("bad configuration option:") =>
-                        {
-                            eprintln!(
-                                "[AAC SSH] {} unsupported; compatibility downgrade",
-                                option.split('=').next().unwrap_or("option")
-                            );
-                        }
-                        _ => {
-                            let _ = child.start_kill();
-                            let _ = tokio::time::timeout(Duration::from_millis(150), child.wait())
-                                .await;
-                            return Err(Failure::new(
-                                Cause::Refused,
-                                "SSH capability probe failed",
-                            ));
-                        }
-                    }
+                    Ok(args)
                 }
-                Ok(args)
+                .await;
+                (result, Instant::now())
             })
             .await
+            .0
             .clone()
     }
 
@@ -205,10 +220,15 @@ impl SshPolicy {
     /// The separate identity argv accepts spaces. OpenSSH -o paths accept only literal ASCII
     /// letters/digits and `/._-:`; unsupported quoting, whitespace and expansion are refused.
     pub async fn argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
+        Ok(self.invocation(key, scan).await?.argv)
+    }
+
+    /// The probed SSH file and the policy argv computed for exactly that file.
+    async fn invocation(&self, key: &Path, scan: bool) -> Result<Invocation, Failure> {
         let mut argv = self.base_argv(key, scan)?;
-        let (executable, capabilities) = self.capabilities().await?;
+        let (program, identity, capabilities) = self.capabilities().await?;
         argv.extend(capabilities);
-        let policy_hash = self.policy_hash(&argv, &executable).await?;
+        let policy_hash = self.policy_hash(&argv, &identity).await?;
         let control = format!(
             "ControlPath={}",
             quote_option_path(&format!(
@@ -217,7 +237,23 @@ impl SshPolicy {
             ))
         );
         argv.extend(["-o".into(), control.into()]);
-        Ok(argv)
+        Ok(Invocation {
+            program,
+            identity,
+            argv,
+        })
+    }
+
+    /// Re-check, just before spawning, that the probed file is still the one SSH resolves to.
+    async fn verify(&self, invocation: &Invocation) -> Result<(), Failure> {
+        let current = executable_identity(&self.ssh, &self.search_path()).await?;
+        if current.0 != invocation.program || current.1 != invocation.identity {
+            return Err(Failure::new(
+                Cause::Refused,
+                "SSH executable changed before launch",
+            ));
+        }
+        Ok(())
     }
 
     async fn policy_hash(&self, argv: &[OsString], executable: &str) -> Result<String, Failure> {
@@ -387,6 +423,13 @@ async fn executable_identity(
     .map_err(|_| Failure::new(Cause::Bug, "SSH executable identity unavailable"))?
 }
 
+/// One SSH launch: the probed file, its identity and the policy argv bound to them.
+struct Invocation {
+    program: PathBuf,
+    identity: String,
+    argv: Vec<OsString>,
+}
+
 /// Only connection/authentication environment reaches SSH or SCP; Local verbs keep theirs.
 fn ssh_environment(command: &mut Command) {
     command.env_clear();
@@ -540,8 +583,9 @@ impl Computer {
         stdin: &[u8],
         options: &CallOptions,
     ) -> Result<ProcessOutput, Failure> {
-        let command = self.command(argv, options).await?;
-        self.run_command(command, stdin, options, None).await
+        let (command, launch) = self.command(argv, options).await?;
+        self.run_command(command, launch, stdin, options, None)
+            .await
     }
 
     /// Execute with bounded later stdin frames and a bounded stdout chunk stream. The caller
@@ -554,20 +598,30 @@ impl Computer {
         controls: mpsc::Receiver<Vec<u8>>,
         output: mpsc::Sender<Vec<u8>>,
     ) -> Result<ProcessOutput, Failure> {
-        let command = self.command(argv, options).await?;
-        self.run_command(command, stdin, options, Some(Pipes { controls, output }))
-            .await
+        let (command, launch) = self.command(argv, options).await?;
+        self.run_command(
+            command,
+            launch,
+            stdin,
+            options,
+            Some(Pipes { controls, output }),
+        )
+        .await
     }
 
-    async fn command(&self, argv: &[OsString], options: &CallOptions) -> Result<Command, Failure> {
+    async fn command(
+        &self,
+        argv: &[OsString],
+        options: &CallOptions,
+    ) -> Result<(Command, Option<Invocation>), Failure> {
         if argv.is_empty() {
             return Err(Failure::new(Cause::Refused, "empty command"));
         }
-        let mut command = match &self.config.transport {
+        let (mut command, launch) = match &self.config.transport {
             TransportConfig::Local => {
                 let mut cmd = Command::new(&argv[0]);
                 cmd.args(&argv[1..]);
-                cmd
+                (cmd, None)
             }
             TransportConfig::Ssh {
                 host,
@@ -576,9 +630,10 @@ impl Computer {
                 key,
             } => {
                 self.policy.prepare_control_directory()?;
-                let mut cmd = Command::new(&self.policy.ssh);
+                let invocation = self.policy.invocation(key, options.scan).await?;
+                let mut cmd = Command::new(&invocation.program);
                 ssh_environment(&mut cmd);
-                cmd.args(self.policy.argv(key, options.scan).await?);
+                cmd.args(&invocation.argv);
                 if let Some(port) = port {
                     cmd.args(["-p", &port.to_string()]);
                 }
@@ -588,11 +643,11 @@ impl Computer {
                 let ssh_host = endpoint_host(host)?;
                 set_literal_hostname(&mut cmd, &ssh_host);
                 cmd.arg("--").arg(ssh_host).arg(self.remote_command(argv)?);
-                cmd
+                (cmd, Some(invocation))
             }
         };
         self.set_path(&mut command);
-        Ok(command)
+        Ok((command, launch))
     }
 
     pub(crate) async fn scp(
@@ -610,16 +665,16 @@ impl Computer {
         else {
             return Err(Failure::new(Cause::Refused, "SCP needs SSH transport"));
         };
+        let invocation = self.policy.invocation(key, options.scan).await?;
         let mut command = Command::new(&self.policy.scp);
         ssh_environment(&mut command);
-        // SCP gets the identical SSH options, except SSH's -T (which has another meaning in scp).
-        command.arg("-q").args(
-            self.policy
-                .argv(key, options.scan)
-                .await?
-                .into_iter()
-                .skip(1),
-        );
+        // SCP runs the probed SSH file (-S), never its built-in or PATH ssh, with the identical
+        // SSH options except SSH's -T (which has another meaning in scp).
+        command
+            .arg("-q")
+            .arg("-S")
+            .arg(&invocation.program)
+            .args(invocation.argv.iter().skip(1));
         if let Some(port) = port {
             command.args(["-P", &port.to_string()]);
         }
@@ -632,7 +687,8 @@ impl Computer {
         );
         command.arg("--").arg(local).arg(destination);
         self.set_path(&mut command);
-        self.run_command(command, &[], options, None).await
+        self.run_command(command, Some(invocation), &[], options, None)
+            .await
     }
 
     fn set_path(&self, command: &mut Command) {
@@ -681,6 +737,7 @@ impl Computer {
     async fn run_command(
         &self,
         command: Command,
+        launch: Option<Invocation>,
         stdin: &[u8],
         options: &CallOptions,
         pipes: Option<Pipes>,
@@ -692,7 +749,7 @@ impl Computer {
         let mut completion = CancelOnDrop(Some(options.cancel.clone()));
         let result = tokio::spawn(async move {
             computer
-                .run_command_owned(command, &input, &options, pipes)
+                .run_command_owned(command, launch, &input, &options, pipes)
                 .await
         })
         .await
@@ -704,6 +761,7 @@ impl Computer {
     async fn run_command_owned(
         &self,
         mut command: Command,
+        launch: Option<Invocation>,
         stdin: &[u8],
         options: &CallOptions,
         pipes: Option<Pipes>,
@@ -714,6 +772,12 @@ impl Computer {
             _ = tokio::time::sleep_until(options.deadline) => return Err(Failure::new(Cause::Timeout, "deadline expired waiting for channel")),
             slot = self.shared.slots.acquire() => slot.map_err(|_| Failure::new(Cause::Bug, "channel pool closed"))?,
         };
+        // Immediately before the spawn, after any wait for a channel: the probed ssh file is
+        // still the one argv was built for. Residual: a swap between this check and exec, by
+        // someone who can already replace the user's ssh, is not detected.
+        if let Some(invocation) = &launch {
+            self.policy.verify(invocation).await?;
+        }
         let probing = self.before_call()?;
         let _probe = ProbeLease {
             shared: self.shared.clone(),
@@ -1031,5 +1095,88 @@ impl Drop for CancelOnDrop {
         if let Some(cancel) = self.0.take() {
             cancel.cancel();
         }
+    }
+}
+
+/// Production `Computer::scp` against an owned loopback sshd (tests/spec/agent/scp_loopback.py).
+#[cfg(all(test, target_os = "linux"))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod scp_loopback {
+    use super::{CallOptions, Computer, SshPolicy};
+    use aac_config::{ComputerConfig, OperatingSystem, TransportConfig};
+    use aac_core::ComputerId;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    /// Runs only as the fixture script's child, inside its namespace; otherwise a no-op.
+    #[tokio::test]
+    async fn child() {
+        let Some(spec) = std::env::var_os("AAC_SCP_LOOPBACK_CHILD") else {
+            return;
+        };
+        let spec: serde_json::Value = serde_json::from_str(&spec.to_string_lossy()).unwrap();
+        let text = |name: &str| PathBuf::from(spec[name].as_str().unwrap());
+        let root = text("root");
+        let mut policy = SshPolicy::new(text("pin"), text("run"));
+        policy.path = Some(spec["path"].as_str().unwrap().into());
+        let computer = Computer::new(
+            ComputerConfig {
+                id: ComputerId::new("fixture").unwrap(),
+                label: "Fixture".into(),
+                os: OperatingSystem::Linux,
+                transport: TransportConfig::Ssh {
+                    host: "127.0.0.1".into(),
+                    user: Some("root".into()),
+                    port: Some(u16::try_from(spec["port"].as_u64().unwrap()).unwrap()),
+                    key: root.join("key"),
+                },
+                roles: Vec::new(),
+                metadata: Default::default(),
+            },
+            policy,
+        )
+        .unwrap();
+        let result = computer
+            .scp(
+                &text("payload"),
+                spec["dest"].as_str().unwrap(),
+                &CallOptions::new(Duration::from_secs(15), 64 * 1024),
+            )
+            .await;
+        let report = match &result {
+            Ok(output) => serde_json::json!({"ok": true, "code": output.code}),
+            Err(failure) => {
+                serde_json::json!({"ok": false, "cause": format!("{:?}", failure.cause)})
+            }
+        };
+        println!("AAC_SCP_RESULT {report}");
+    }
+
+    #[test]
+    #[ignore = "requires AAC_TEST_OPENSSH_81, sudo, mount namespaces and an owned loopback sshd"]
+    fn scp_runs_the_probed_ssh_and_refuses_an_empty_pin() {
+        let old = std::env::var_os("AAC_TEST_OPENSSH_81").expect("AAC_TEST_OPENSSH_81");
+        // A short root keeps AAC's control directory inside the fixture.
+        let root = tempfile::Builder::new()
+            .prefix("s")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/spec/agent/scp_loopback.py");
+        let output = std::process::Command::new("sudo")
+            .args(["-n", "unshare", "--mount", "--fork", "python3"])
+            .arg(script)
+            .arg(root.path())
+            .arg(std::env::current_exe().unwrap())
+            .arg(old)
+            .output()
+            .unwrap();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

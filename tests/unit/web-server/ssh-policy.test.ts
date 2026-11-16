@@ -156,7 +156,8 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-const sshCalls = (calls: ExecCall[]): ExecCall[] => calls.filter((call) => call.file === 'ssh');
+const sshCalls = (calls: ExecCall[]): ExecCall[] =>
+  calls.filter((call) => /(^|[\/])ssh(\.exe)?$/.test(call.file));
 
 describe('analytics-remote-transport', () => {
   it('streams the packaged helper with interval 5 / count 6', async () => {
@@ -182,7 +183,7 @@ describe('app-update-hosts', () => {
       ['mac', 'mac'],
     ] as const) {
       const invocation = await appUpdateInvocation(platform, '');
-      expect(invocation.binary).toBe('ssh');
+      expect(invocation.binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
       expect(invocation.args).toEqual(
         await expectedArgv(
           SSH_ALIASES[platform],
@@ -201,7 +202,7 @@ describe('app-update-hosts', () => {
       'exit $LASTEXITCODE',
     ].join('; ');
     const windows = await appUpdateInvocation('windows', '');
-    expect(windows.binary).toBe('ssh');
+    expect(windows.binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(windows.args).toEqual(
       await expectedArgv(
         SSH_ALIASES.windows,
@@ -218,7 +219,7 @@ describe('app-update-hosts', () => {
     const query = sshCalls(execCalls);
     expect(query).toHaveLength(1);
     expect(query[0]!.args).toEqual(await expectedArgv(SSH_ALIASES.nas1, helperHashQuery('nas1')));
-    const push = spawnCalls.filter((call) => call.file === 'ssh');
+    const push = spawnCalls.filter((call) => /(^|[\/])ssh(\.exe)?$/.test(call.file));
     expect(push).toHaveLength(1);
     expect(push[0]!.args).toEqual(
       await expectedArgv(SSH_ALIASES.nas1, helperExtract('nas1', localHelperChecksums()))
@@ -363,7 +364,7 @@ describe('muse-account-lifecycle', () => {
     };
     const spec = new MuseAccountLifecycle({ enabled: true }).signInAgainFlow(entry);
     const command = await spec.prepare('job_0123456789abcdef');
-    expect(command.file).toBe('ssh');
+    expect(command.file).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(command.args).toEqual(
       await expectedArgv('mac-host', 'PATH="$HOME/.local/bin:$PATH" muse login', keepalive(5, 1))
     );
@@ -419,7 +420,7 @@ describe('usage-failover-transport', () => {
       { version: 1, action: 'inventory', provider: 'claude' },
       'helper-source'
     );
-    expect(invocation.executable).toBe('ssh');
+    expect(invocation.executable).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(invocation.args).toEqual(
       await expectedArgv('nas1-agent', usageHelperCommand('ubuntu'), keepalive(5, 3))
     );
@@ -438,7 +439,7 @@ describe('status-collectors', () => {
     const captured: Array<{ file: string; args: string[] }> = [];
     expect(readRemoteMachine('nas1', captureRun(captured))).rejects.toThrow();
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.file).toBe('ssh');
+    expect(captured[0]!.file).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(captured[0]!.args).toEqual(
       await expectedArgv('nas1-agent', machineProbeCommand(REMOTE_MACHINES.nas1), keepalive(5, 2))
     );
@@ -448,7 +449,7 @@ describe('status-collectors', () => {
     const captured: Array<{ file: string; args: string[] }> = [];
     expect(readRemotePins('nas1', captureRun(captured))).rejects.toThrow();
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.file).toBe('ssh');
+    expect(captured[0]!.file).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(captured[0]!.args).toEqual(
       await expectedArgv('nas1-agent', remotePinsCommand(REMOTE_MACHINES.nas1), keepalive(5, 2))
     );

@@ -9,7 +9,7 @@ import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
 import { runManagedCommand } from '../../utils/managed-process';
 import { getCcsDir } from '../../utils/config-manager';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { UsageHost, UsageHelperRequest } from './usage-failover-contract';
 import manifest from './agent-artifacts.json';
 import { PROVIDER_ROWS } from '../../shared/tables';
@@ -185,7 +185,11 @@ async function runAgentVerbTsFallback(
   try {
     const mode = options.mode ?? agentVerbs();
     const artifacts = options.artifacts ?? manifest.artifacts;
-    const run = options.run ?? runManagedCommand;
+    // The default runner launches only the probed ssh, checked just before the spawn.
+    const run =
+      options.run ??
+      (async (file: string, args: string[], opts: Parameters<typeof runManagedCommand>[2]) =>
+        runManagedCommand(await sshLaunch(file, args), args, opts));
     if (mode === 'off') return null;
     const artifact = artifacts.find((a) => a.target === target(host.platform));
     if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return null;

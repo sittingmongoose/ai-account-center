@@ -45,7 +45,7 @@ for (const verb of verbs)
   describe(verb, () => {
     it('uses the verified stdin protocol without private argv or environment', async () => {
       const result = await invoke(verb, async (file, args, options) => {
-        expect(file).toBe('ssh');
+        expect(file).toMatch(/(^|[\/])ssh(\.exe)?$/);
         expect(args.join(' ')).toContain(artifact.sha256);
         expect(args.join(' ')).not.toContain(secret);
         expect(JSON.stringify(options.env)).not.toContain(secret);

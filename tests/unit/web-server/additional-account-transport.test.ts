@@ -80,7 +80,7 @@ describe('additional account usage transport', () => {
       const exec = mockProcess('{}');
       await runAdditionalUsageSource({ provider: 'cursor', platform, sshHost: 'work-machine' });
       const [binary, args, options] = exec.mock.calls[0]!;
-      expect(binary).toBe('ssh');
+      expect(binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
       expect(args).toEqual([
         '-T',
         ...(await sshOptions('work-machine')),
@@ -111,7 +111,7 @@ describe('additional account usage transport', () => {
     const exec = mockProcess('{}');
     await runAdditionalUsageSource({ provider, platform: 'windows', sshHost: 'work-windows' });
     const [binary, args, options] = exec.mock.calls[0]!;
-    expect(binary).toBe('ssh');
+    expect(binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(args).toContain('BatchMode=yes');
     expect(args).toContain('ConnectTimeout=5');
     expect(args).toContain('--');
@@ -280,7 +280,7 @@ describe('usage sources on Nas1', async () => {
       await runAdditionalUsageSource({ provider, platform: 'ubuntu', sshHost: 'nas1-agent' });
       expect(exec).toHaveBeenCalledTimes(1);
       const [binary, args, options] = exec.mock.calls[0]!;
-      expect(binary).toBe('ssh');
+      expect(binary).toMatch(/(^|[\/])ssh(\.exe)?$/);
       expect(args).toEqual([...SSH_OPTIONS, 'nas1-agent', command(provider)]);
       expect(options).toMatchObject({ timeout: 25_000, maxBuffer: 64 * 1024 });
     }
@@ -313,12 +313,15 @@ describe('usage sources on Nas1', async () => {
     ];
     const exec = mockProcess('{}');
     for (const source of sources) await runAdditionalUsageSource(source);
-    expect(exec.mock.calls.map(([binary, args]) => [binary, (args as string[]).slice(-3)])).toEqual(
-      [
-        ['ssh', ['--', 'nas1-agent', command('muse')]],
-        ['ssh', ['--', 'nas1-agent', command('cursor')]],
-      ]
-    );
+    expect(
+      exec.mock.calls.map(([binary, args]) => [
+        path.basename(binary as string),
+        (args as string[]).slice(-3),
+      ])
+    ).toEqual([
+      ['ssh', ['--', 'nas1-agent', command('muse')]],
+      ['ssh', ['--', 'nas1-agent', command('cursor')]],
+    ]);
   });
 
   it('builds the same command as any Ubuntu over ssh, with no switch, sign-in or key flow', () => {

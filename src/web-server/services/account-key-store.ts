@@ -6,7 +6,7 @@ import path from 'path';
 import { ConfigError, NetworkError } from '../../errors/error-types';
 import type { DashboardPlatform } from './account-dashboard-types';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import { collectAgentWithFallback, runKeyStoreAgent } from './agent-verbs';
 import { assertTsWritesRow } from '../../shared/private-files';
 
@@ -244,13 +244,14 @@ export type KeyHelperRunner = (
 
 export const runKeyHelperOverSsh: KeyHelperRunner = async (sshHost, remoteCommand, input) => {
   const sshArgs0 = await sshArgv(sshHost, remoteCommand, { interval: 5, countMax: 1 });
+  const sshArgs0Program = await sshLaunch('ssh', sshArgs0);
   return new Promise((resolve, reject) => {
     if (!isSafeUsageSshAlias(sshHost)) {
       reject(new KeyStoreError());
       return;
     }
     const child = execFile(
-      'ssh',
+      sshArgs0Program,
       sshArgs0,
       {
         env: sshEnvironment(),

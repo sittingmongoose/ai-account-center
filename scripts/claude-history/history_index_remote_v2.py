@@ -5,7 +5,7 @@ Collect buffers are PRIVATE SSH pipe data; never display or log this stdout.
 No authentication, cookies, transcript contents, GUI or resume APIs are used.
 """
 import base64
-import asyncio, functools, shutil
+import asyncio, shutil, time
 import ctypes
 import fnmatch
 import hashlib
@@ -391,12 +391,22 @@ def ssh_executable_identity(executable):
     # On Windows st_dev/st_ino are the volume serial number and file index.
     return (real, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
-@functools.lru_cache(maxsize=16)
+SSH_PROBE_FAILURE_TTL = 30
+_ssh_probes = {}
+
 def ssh_capability_options(identity):
+    """Success is cached per file identity; a failure only for SSH_PROBE_FAILURE_TTL seconds."""
+    cached = _ssh_probes.get(identity)
+    if cached and (cached[0] is not None or time.monotonic() - cached[1] < SSH_PROBE_FAILURE_TTL):
+        return cached[0]
     try:
-        return asyncio.run(probe_ssh_capabilities(identity[0]))
+        options = asyncio.run(probe_ssh_capabilities(identity[0]))
     except Exception:
-        return None
+        options = None
+    if len(_ssh_probes) >= 16:
+        _ssh_probes.clear()
+    _ssh_probes[identity] = (options, time.monotonic())
+    return options
 
 def ssh_capabilities_for(executable):
     """Re-probe when the file changes, including during its own probe."""
@@ -409,6 +419,15 @@ def ssh_capabilities_for(executable):
         except OSError:
             return None
     return None
+
+def ssh_launch(executable, options):
+    """The exact file to spawn, checked just before the spawn: the argv's capability options must
+    match that file's current probe, so a client replaced after argv was built is refused, never
+    launched. Residual: a swap between this check and exec, by someone who can already replace
+    the user's ssh, is not detected."""
+    if ssh_capabilities_for(executable) != options:
+        refuse('ssh_configuration_unknown')
+    return os.path.abspath(executable)
 
 
 class BoundProfile:
@@ -647,7 +666,7 @@ class BoundProfile:
         pin = os.environ.get('AAC_AGENT_KNOWN_HOSTS_FILE', str(ssh_home / '.ssh/known_hosts'))
         if not Path(pin).is_absolute() or any(c in pin for c in '\n\r%"'):
             refuse('ssh_configuration_unknown')
-        result = subprocess.run([executable, '-T', *capabilities, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+        result = subprocess.run([ssh_launch(executable, capabilities), '-T', *capabilities, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'UpdateHostKeys=no', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'GlobalKnownHostsFile=none',
             *identity_args, '-o', 'UserKnownHostsFile="' + pin + '"',
             '-o', 'Hostname=' + endpoint['hostname'], '-l', endpoint['username'], '-p', str(endpoint['port']),

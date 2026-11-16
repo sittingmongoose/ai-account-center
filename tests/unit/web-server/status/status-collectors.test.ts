@@ -284,7 +284,7 @@ describe('status collectors', () => {
       };
     };
     await expect(readRemoteMachine('nas1', run)).rejects.toThrow('ssh failed.');
-    expect(calls[0][0]).toBe('ssh');
+    expect(calls[0][0]).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(calls[0]).toContain('BatchMode=yes');
     expect(calls[0]).toContain('nas1-agent');
   });

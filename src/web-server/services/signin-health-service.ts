@@ -9,7 +9,7 @@ import {
   signinHelperBundle,
   usageHelperCommand,
 } from './usage-failover-transport';
-import { sshArgv, sshEnvironment } from './ssh-policy';
+import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import { runSignInAgent, collectSignInWithFallback } from './agent-verbs';
 import {
   readClaudeSignInRenewal,
@@ -207,15 +207,16 @@ export function publishableFailureReason(reason: unknown): string {
   return typeof reason === 'string' && FAILURE_WORDS.has(reason) ? reason : 'collector failed';
 }
 
-function runCollector(
+async function runCollector(
   command: string,
   args: string[],
   timeoutMs: number,
   input?: string
 ): Promise<string> {
+  const program = await sshLaunch(command, args);
   return new Promise((resolve, reject) => {
     const child = execFile(
-      command,
+      program,
       args,
       {
         timeout: timeoutMs,

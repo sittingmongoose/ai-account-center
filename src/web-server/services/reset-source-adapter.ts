@@ -9,6 +9,7 @@ import { loadNativeStatus } from '../../status-native/native-loader';
 import type { ResetSource, ResetWrite } from './reset-source-contract';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 import { isDefaultClaudeDataFolder } from './claude-account-records';
+import { sshLaunch } from './ssh-policy';
 import {
   localUsageHost,
   privateUsageInvocation,
@@ -94,9 +95,11 @@ export function createResetSourceAdapter(): ResetSource {
       beforeHostDispatch?.();
       return JSON.parse(await runPrivateUsageHelper(host, transportRequest, source, input));
     }
+    const command = await privateUsageInvocation(host, transportRequest, source, input);
+    // The native helper spawns exactly the probed ssh file, checked just before the call.
     return native('resetClaudeSource', {
       ...context,
-      command: await privateUsageInvocation(host, transportRequest, source, input),
+      command: { ...command, executable: await sshLaunch(command.executable, command.args) },
     });
   }
   return {

@@ -119,7 +119,7 @@ describe('the host field of the dashboard rows', () => {
       const exec = fakeExec();
       const dashboard = await dashboardJson(dashboardService(deps));
       const ssh = exec.mock.calls
-        .filter(([binary]) => binary === 'ssh')
+        .filter(([binary]) => /(^|[\/])ssh(\.exe)?$/.test(binary))
         .map(([, args]) => args as string[]);
       expect(ssh).toHaveLength(1);
       expect(ssh[0]!.slice(-3)).toEqual([

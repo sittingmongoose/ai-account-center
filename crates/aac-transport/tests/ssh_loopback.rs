@@ -85,10 +85,27 @@ async fn control_path_changes_with_pin_identity_and_stays_short_on_long_roots() 
 const OLD_CLIENT: &str = "#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('old\\n')\nif 'KnownHostsCommand=none' in sys.argv:\n print('command-line: Bad configuration option: knownhostscommand', file=sys.stderr); sys.exit(255)\n";
 const MODERN_CLIENT: &str = "#!/usr/bin/python3\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('modern\\n')\n";
 
+/// Install an executable through a `cp` child: a write descriptor held by this process could
+/// leak into another test thread's fork and make exec fail with ETXTBSY.
+fn install(source: &std::path::Path, path: &std::path::Path) {
+    let status = std::process::Command::new("cp")
+        .arg(source)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let status = std::process::Command::new("chmod")
+        .arg("700")
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 fn client(path: &std::path::Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, body).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let staging = path.with_extension("staging");
+    std::fs::write(&staging, body).unwrap();
+    install(&staging, path);
 }
 
 fn fixture_policy(root: &std::path::Path, bin: &std::path::Path) -> SshPolicy {
@@ -119,7 +136,7 @@ async fn capability_cache_follows_a_same_path_executable_replacement() {
     assert!(!old.iter().any(|arg| arg == "KnownHostsCommand=none"));
     let inode = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&ssh).unwrap());
     // In-place rewrite: same path and inode, new size/mtime/ctime.
-    std::fs::write(&ssh, MODERN_CLIENT).unwrap();
+    client(&ssh, MODERN_CLIENT);
     assert_eq!(
         inode,
         std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&ssh).unwrap())
@@ -164,12 +181,12 @@ async fn actual_openssh_81_replaced_at_its_path_is_reprobed() {
     };
     let root = tempfile::tempdir().unwrap();
     let ssh = root.path().join("ssh");
-    std::fs::copy(old, &ssh).unwrap();
+    install(std::path::Path::new(&old), &ssh);
     let policy = fixture_policy(root.path(), root.path());
     let key = root.path().join("key");
     let before = text(policy.argv(&key, false).await.unwrap());
     assert!(!before.iter().any(|arg| arg == "KnownHostsCommand=none"));
-    std::fs::copy("/usr/bin/ssh", &ssh).unwrap();
+    install(std::path::Path::new("/usr/bin/ssh"), &ssh);
     let after = text(policy.argv(&key, false).await.unwrap());
     assert!(after.iter().any(|arg| arg == "KnownHostsCommand=none"));
     assert_ne!(control(&before), control(&after));
@@ -182,13 +199,13 @@ async fn replaced_openssh_81_policy_refuses_the_empty_pin() {
     let root = tempfile::tempdir().unwrap();
     let bin = tempfile::tempdir().unwrap();
     let ssh = bin.path().join("ssh");
-    std::fs::copy(old, &ssh).unwrap();
+    install(std::path::Path::new(&old), &ssh);
     let policy = fixture_policy(root.path(), bin.path());
     let key = root.path().join("key");
     std::fs::write(root.path().join("known_hosts"), "fixture trust identity").unwrap();
     let stale = text(policy.argv(&key, false).await.unwrap());
     assert!(!stale.iter().any(|arg| arg == "KnownHostsCommand=none"));
-    std::fs::copy("/usr/bin/ssh", &ssh).unwrap();
+    install(std::path::Path::new("/usr/bin/ssh"), &ssh);
     let trusted = text(policy.argv(&key, false).await.unwrap());
     std::fs::write(root.path().join("known_hosts"), "").unwrap();
     let empty = text(policy.argv(&key, false).await.unwrap());
@@ -211,4 +228,30 @@ async fn replaced_openssh_81_policy_refuses_the_empty_pin() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[tokio::test]
+async fn a_failed_probe_is_retried_after_its_ttl() {
+    let root = tempfile::tempdir().unwrap();
+    client(
+        &root.path().join("ssh"),
+        "#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('probe\\n')\nflag = Path(__file__).with_name('failed-once')\nif not flag.exists():\n    flag.write_text('x'); sys.exit(3)\n",
+    );
+    let policy = fixture_policy(root.path(), root.path());
+    let key = root.path().join("key");
+    let calls = || {
+        std::fs::read_to_string(root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    assert!(policy.argv(&key, false).await.is_err());
+    assert!(policy.argv(&key, false).await.is_err());
+    assert_eq!(calls(), 1, "a failure stays cached inside its TTL");
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    tokio::time::resume();
+    let args = text(policy.argv(&key, false).await.unwrap());
+    assert!(args.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    assert_eq!(calls(), 3);
 }
