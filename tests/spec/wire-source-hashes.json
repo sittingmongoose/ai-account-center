@@ -121,7 +121,7 @@
   "src/web-server/rust-service.ts": "97e98b442844f51fa4d435eb3298e13cf7436622e269dc94c74c203ca7a6be3a",
   "src/web-server/scoreboard/catalog.ts": "2511d3c8bbc7141a417e639a2f34434767bd5faae8222dcabb15fdd760ce2427",
   "src/web-server/scoreboard/runs-reader.ts": "24dd17ff85006587115e7b488c0e1a3498876d24df78180b03789e2af86f5c13",
-  "src/web-server/scoreboard/runs-store.ts": "dae17623a0843d3638d2fd67861a86d7a64146494ebe1ba1d1f59a0290d8584f",
+  "src/web-server/scoreboard/runs-store.ts": "41812eb42697ff73c3abc54297e8f49eeb06b241e6e30bdcdf3956a0887719db",
   "src/web-server/scoreboard/runs-types.ts": "d2b10c57cc0ede2f7d0958faf084b9979c0711abbed1ba15b8217c14764b920b",
   "src/web-server/scoreboard/scoreboard-service.ts": "0194f9482198eb21d86dca2ff917a8633adf7eb0fd20ac66b591d03c57e923a5",
   "src/web-server/scoreboard/scoreboard-sources.ts": "6ac6fbff8edbf6f6532fd18fdfcd3d05145fc1b6a982d42e4f8b0b78294d405d",
