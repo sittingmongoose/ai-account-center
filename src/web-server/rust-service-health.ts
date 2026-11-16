@@ -111,8 +111,10 @@ export class RestartBudget {
 /** One request's outcome on a route. */
 export type RouteOutcome =
   | { kind: 'served' }
+  | { kind: 'fedServed' }
   | { kind: 'equal' }
   | { kind: 'declined'; reason: string }
+  | { kind: 'fedDeclined'; reason: string }
   | { kind: 'failed'; reason: string }
   | { kind: 'different' }
   | { kind: 'unavailable'; reason: string }
@@ -123,10 +125,14 @@ const PAIRS = 512;
 
 export interface RouteCounters {
   served: number;
+  /** Of `served`: the fed path's own answers (R2b L2), never the envelope fallback's. */
+  fedServed: number;
   equal: number;
   different: number;
   skipped: number;
   declined: Record<string, number>;
+  /** Of `declined`: the fed path's own named declines, never the envelope read's. */
+  fedDeclined: Record<string, number>;
   failed: Record<string, number>;
   unavailable: Record<string, number>;
   /** The latest state word: `serving`, `declined:<reason>`, `failed:<kind>`, ... */
@@ -153,12 +159,15 @@ export function summarize(values: number[]): TimingSummary {
 function stateOf(outcome: RouteOutcome): string | null {
   switch (outcome.kind) {
     case 'served':
+    case 'fedServed':
     case 'equal':
       return 'serving';
     case 'different':
       return 'different';
     case 'skipped':
       return null;
+    case 'fedDeclined':
+      return `declined:${outcome.reason}`;
     default:
       return `${outcome.kind}:${outcome.reason}`;
   }
@@ -178,10 +187,12 @@ export class RouteStats {
     if (!counters) {
       counters = {
         served: 0,
+        fedServed: 0,
         equal: 0,
         different: 0,
         skipped: 0,
         declined: {},
+        fedDeclined: {},
         failed: {},
         unavailable: {},
         state: 'new',
@@ -199,6 +210,10 @@ export class RouteStats {
       case 'served':
         counters.served++;
         break;
+      case 'fedServed':
+        counters.served++;
+        counters.fedServed++;
+        break;
       case 'equal':
         counters.equal++;
         break;
@@ -207,6 +222,10 @@ export class RouteStats {
         break;
       case 'skipped':
         counters.skipped++;
+        break;
+      case 'fedDeclined':
+        counters.declined[outcome.reason] = (counters.declined[outcome.reason] ?? 0) + 1;
+        counters.fedDeclined[outcome.reason] = (counters.fedDeclined[outcome.reason] ?? 0) + 1;
         break;
       default:
         counters[outcome.kind][outcome.reason] = (counters[outcome.kind][outcome.reason] ?? 0) + 1;
@@ -237,10 +256,12 @@ export class RouteStats {
       routes[route] = {
         state: c.state,
         served: c.served,
+        fedServed: c.fedServed,
         equal: c.equal,
         different: c.different,
         skipped: c.skipped,
         declined: c.declined,
+        fedDeclined: c.fedDeclined,
         failed: c.failed,
         unavailable: c.unavailable,
         paired: {

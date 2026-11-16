@@ -22,6 +22,7 @@
     "/api/accounts/settings": {
       "state": "declined:unsupported",
       "served": 1,
+      "fedServed": 0,
       "equal": 0,
       "different": 0,
       "skipped": 0,
@@ -30,6 +31,7 @@
         "shape": 1,
         "unsupported": 1
       },
+      "fedDeclined": {},
       "failed": {},
       "unavailable": {},
       "paired": {

@@ -247,7 +247,9 @@ diagnostics plus a `bridge` block: the service state, its build, restarts, the c
 the counters and, per route, the paired timings (TS path and Rust path on the same requests,
 from shadow) and Rust-only timings (on). Every minute with traffic, `rust.service.minute`
 logs the same per-route block for that minute, and the event-loop monitor's line adds
-`rustMode` and `rustRssBytes`. Response bodies are never logged.
+`rustMode` and `rustRssBytes`. Response bodies are never logged. A route's `served` counts every
+Rust success on it; `fedServed` and `fedDeclined` count only the fed path's own answers and named
+declines, so an envelope fallback's successes on the same route are `served - fedServed` (R2b L2).
 
 `tests/spec/bridge-measure.mjs` measures a built `dist/` under Node: off and on servers in
 alternating rounds (5 x 40 samples per route) with the load average around each round, a

@@ -453,7 +453,8 @@ export class RustService extends RustSupervisor {
    * the clock and the page's context. The finished bytes, ETag and view version come back unparsed. Anything
    * else is counted and the caller's TS handler answers: a named decline returns its word (`stale` tells the
    * caller to push again), a failure or another reply null. The same admission as every read: an admitted
-   * principal, a lease, a free slot, a closed breaker.
+   * principal, a lease, a free slot, a closed breaker. Serves and named declines also count in the route's
+   * fed-only counters (`fedServed`, `fedDeclined`), apart from the envelope read's successes on the same route.
    */
   async fedView(
     req: Request,
@@ -470,14 +471,15 @@ export class RustService extends RustSupervisor {
       const bytes = rustViewBytes(result, view);
       if (bytes) {
         this.stats.served++;
-        this.record(route, { kind: 'served' });
+        this.record(route, { kind: 'fedServed' });
         this.pair(route, null, now() - started);
         return bytes;
       }
       if (result.status === 200) this.fallback(route, { kind: 'failed', reason: 'refused' });
       else {
-        this.declined(route, result);
-        return result.decline ?? 'unnamed';
+        const reason = result.decline ?? 'unnamed';
+        this.fallback(route, { kind: 'fedDeclined', reason });
+        return reason;
       }
     } catch (error) {
       this.failed(route, error);

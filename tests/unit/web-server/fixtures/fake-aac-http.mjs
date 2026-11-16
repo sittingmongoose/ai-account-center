@@ -153,6 +153,32 @@ function start(boot) {
       });
       return;
     }
+    // R2b L2: the fed Status read (x-aac-feed) answers view bytes; the envelope read answers JSON.
+    // status-fed.json steers the fed path: '"busy"' declines busy, anything else serves.
+    if (req.url === '/api/status') {
+      if (req.headers['x-aac-feed']) {
+        let text = '';
+        try {
+          text = fs.readFileSync(`${boot.ccsDir}/status-fed.json`, 'utf8');
+        } catch {
+          text = '';
+        }
+        if (text === '"busy"') {
+          res.statusCode = 503;
+          res.setHeader('x-aac-decline', 'busy');
+          res.end('{"error":"TypeScript status fallback required"}');
+          return;
+        }
+        res.setHeader('x-aac-view', 'status@1');
+        res.setHeader('etag', `W/"${'e'.repeat(64)}"`);
+        res.end('{"version":1,"source":"fed"}');
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => res.end('{"version":1,"source":"envelope"}'));
+      return;
+    }
     res.statusCode = 404;
     res.end('{}');
   });

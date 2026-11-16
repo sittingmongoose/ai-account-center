@@ -6,8 +6,8 @@
  * Status owner running its scan timers. Records p50/p95/p99, the load average before and after each round, RSS of
  * TS and of the Rust child after the rounds, the event-loop p99, the owner's `readInputs` time and the fed path's
  * Rust part (the hop and the service's answer), and evaluates the design's R2 targets. Every fed reply in the
- * rounds must be the fed answer (the route's served counter), and the fed and off answers must agree (ETag at the
- * same second, checked before the rounds).
+ * rounds must be the fed answer (the route's fed-only `fedServed` counter), and the fed and off answers must
+ * agree (ETag at the same second, checked before the rounds).
  *
  *   node tests/spec/status-measure.mjs --dist <dist> --binary <aac-http> --out <file.json>
  *        [--rounds 10] [--samples 40] [--clients 16] [--seconds 20] [--base <aac-http>]
@@ -149,7 +149,9 @@ try {
     await Promise.all(servers.map(async (w) => [w.mode, (await call(w)).body.length]))
   );
   for (const worker of servers) await stats(worker, true);
-  const fedBefore = (await stats(servers[2])).route?.served ?? 0;
+  const fedStatsBefore = await stats(servers[2]);
+  const fedBefore = fedStatsBefore.route?.fedServed ?? 0;
+  const routeBefore = fedStatsBefore.route?.served ?? 0;
 
   const times = Object.fromEntries(servers.map((w) => [w.mode, []]));
   const loads = [];
@@ -168,12 +170,14 @@ try {
   const after = Object.fromEntries(
     await Promise.all(servers.map(async (w) => [w.mode, await stats(w)]))
   );
-  const fedServed = (after.fed.route?.served ?? 0) - fedBefore;
+  const fedServed = (after.fed.route?.fedServed ?? 0) - fedBefore;
   assert.equal(
     fedServed,
     rounds * samples,
     `every fed request in the rounds was served by the fed path (${fedServed})`
   );
+  // The envelope fallback's successes on the same route, apart from the fed path's (R2b L2).
+  const envelopeServed = (after.fed.route?.served ?? 0) - routeBefore - fedServed;
 
   let concurrency = null;
   if (clients > 0) {
@@ -202,11 +206,16 @@ try {
         errors,
         ...(latencies.length ? quantiles(latencies) : {}),
         eventLoopP99Ms: s.eventLoopP99Ms ?? null,
-        // The fed server: requests the fed path served, and what fell back (Rust's `busy` when its pool is full).
+        // The fed server: fed-only serves, the envelope fallback's serves, and the fed path's own
+        // named declines (Rust's `busy` when its pool is full).
         ...(worker.mode === 'fed'
           ? {
-              fedServed: (s.route?.served ?? 0) - (before.route?.served ?? 0),
-              fedDeclined: s.route?.declined ?? {},
+              fedServed: (s.route?.fedServed ?? 0) - (before.route?.fedServed ?? 0),
+              envelopeServed:
+                (s.route?.served ?? 0) -
+                (before.route?.served ?? 0) -
+                ((s.route?.fedServed ?? 0) - (before.route?.fedServed ?? 0)),
+              fedDeclined: s.route?.fedDeclined ?? {},
             }
           : {}),
       };
@@ -264,7 +273,9 @@ try {
       max: Math.max(...loads.flatMap((l) => [l.before, l.after])),
     },
     rounds: loads,
-    fedDeclines: after.fed.route?.declined ?? {},
+    fedServed,
+    envelopeServed,
+    fedDeclines: after.fed.route?.fedDeclined ?? {},
     serverExits: Object.fromEntries(workers.filter((w) => w.exited).map((w) => [w.mode, w.exited])),
     targets: {
       p50: { bar: 0.6, measured: latency.fed.p50Ms, met: latency.fed.p50Ms <= 0.6 },
