@@ -44,7 +44,7 @@ launch (DESIGN-MOBILE.md 6.5: no skipWaiting, no prompt) and drops the older bui
 complete, so an offline launch after an update always finds an app. Network reads cannot overwrite that installed
 copy. The installed worker serves that snapshot until activation, except the explicit no-store build probe;
 cache reads stay within one generation rather than mixing it with a waiting install. Entry HTML must
-name the install's runtime fingerprint. The entry also tries retained cached JavaScript/wasm and its stylesheet
+name the install's runtime and stylesheet fingerprints. The entry also tries retained cached JavaScript/wasm and its stylesheet
 when a historical worker has already saved newer HTML whose runtime cannot load. Controllers are requested only
 after runtime verification; retained recovery resolves their static import graph and stylesheet/font resources
 from one cache through Blob URLs, preserving the older view contracts without fetching newer modules. Canonical `/app/<tab>` entries

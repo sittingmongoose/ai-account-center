@@ -122,6 +122,9 @@ var installedRuntime = PRECACHE.map(function (address) {
   var found = /^(\/pkg\/[a-f0-9]{12})\/aac_web\.js$/.exec(address);
   return found ? found[1] : null;
 }).filter(Boolean)[0];
+var installedStylesheet = PRECACHE.filter(function (address) {
+  return /^\/app\/app\.css\?v=[a-f0-9]{12}$/.test(address);
+})[0];
 var selectedCache;
 
 // Never read a waiting/partial generation through CacheStorage.match. If storage lost part of our copy before
@@ -367,6 +370,9 @@ function precache() {
             return response.clone().text().then(function (html) {
               if (!installedRuntime || runtimePath(html) !== installedRuntime)
                 throw new Error('The new app copy names a different runtime: ' + address + '.');
+              var css = /href=["'](\/app\/app\.css\?v=[a-f0-9]{12})["']/.exec(html);
+              if (!installedStylesheet || !css || css[1] !== installedStylesheet)
+                throw new Error('The new app copy names a different stylesheet: ' + address + '.');
               return cache.put(address, response);
             });
           }

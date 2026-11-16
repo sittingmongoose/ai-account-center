@@ -80,7 +80,7 @@ function response(status, contentType, { redirected = false, body = '' } = {}) {
 /** What the server answers: the frame page at its addresses, each asset as itself. */
 const served = (address) =>
 	PAGE_ADDRESSES.includes(address.split('?')[0])
-		? response(200, 'text/html; charset=utf-8', { body: '<script src="/pkg/0123456789ab/aac_web.js"></script>' })
+		? response(200, 'text/html; charset=utf-8', { body: '<link rel="stylesheet" href="/app/app.css?v=0123456789ab"><script src="/pkg/0123456789ab/aac_web.js"></script>' })
 		: response(200, 'text/javascript');
 
 class FakeRequest {
@@ -278,4 +278,14 @@ test('a waiting partial cache never supplies entries to the active generation', 
  const page = await navigate(offline.handlers, '/');
  assert.match(await page.text(), /0123456789ab/);
  assert.doesNotMatch(await page.text(), /ffffffffffff/);
+});
+
+
+test('an install refuses another stylesheet fingerprint even when the wasm runtime is unchanged', async () => {
+ const storage = fakeCaches();
+ const worker = loadWorker(async address => address === '/'
+   ? response(200, 'text/html', { body: '<link rel="stylesheet" href="/app/app.css?v=ffffffffffff"><script src="/pkg/0123456789ab/aac_web.js"></script>' })
+   : served(address), storage);
+ await assert.rejects(lifecycle(worker.handlers, 'install'), /stylesheet|incomplete/);
+ assert.equal(storage.named.has(NEW), false);
 });
