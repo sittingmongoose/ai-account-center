@@ -57,7 +57,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | hotpath console.error/warn files | 13 |
 | files with createLogger | 44/459 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 65 |
+| files > 400 LOC | 66 |
 | files > 600 LOC | 25 |
 
 ### Top Hotpath console.error/warn Files
@@ -89,7 +89,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/analytics-remote-transport.ts` | 1672 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1154 |
-| `src/web-server/status/status-collectors.ts` | 1069 |
+| `src/web-server/status/status-collectors.ts` | 1073 |
 | `src/web-server/services/usage-failover-service.ts` | 1053 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/account-dashboard-service.ts` | 992 |

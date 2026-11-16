@@ -20,7 +20,12 @@ export interface PinnedThread {
   pinOrderKey: string | number | null;
 }
 
-export type PinnedThreadsResult = { pinned: PinnedThread[] } | { unavailable: string };
+export type PinnedThreadsResult =
+  | {
+      pinned: PinnedThread[];
+      /** Counted pins past the reader's row budget; set only when > 0. */ notShown?: number;
+    }
+  | { unavailable: string };
 
 /** One merged pin: the thread fields plus the machine it was read from. */
 export interface MergedPin extends PinnedThread {
@@ -53,6 +58,17 @@ function isMergedPin(value: unknown): value is MergedPin {
   return isPinnedThread(value) && typeof (value as MergedPin).machine === 'string';
 }
 
+/** A good pin list with its honest remainder: `notShown` rides along only when pins were cut. */
+function withNotShown(
+  pinned: PinnedThread[],
+  record: Record<string, unknown>
+): PinnedThreadsResult {
+  const notShown = record.notShown;
+  return typeof notShown === 'number' && Number.isInteger(notShown) && notShown > 0
+    ? { pinned, notShown }
+    : { pinned };
+}
+
 async function call(handle: NativeStatusHandle, method: string, args: unknown): Promise<unknown> {
   return JSON.parse(await handle.call(method, JSON.stringify(args))) as unknown;
 }
@@ -78,7 +94,8 @@ export function openStatusHandle(
 }
 
 /**
- * All pinned threads, including delegated children, from T3's state database (`AAC_T3_STATE_DB`, else
+ * All counted pinned threads — top-level pins and explicitly pinned delegated children (T3's
+ * auto-pinned children do not count) — from T3's state database (`AAC_T3_STATE_DB`, else
  * `~/.t3/userdata/statev2.sqlite`; the native reader resolves the default), in pin order.
  */
 export async function readPinnedThreads(
@@ -113,7 +130,7 @@ export async function readPinnedThreads(
   if (!Array.isArray(record.pinned) || !record.pinned.every(isPinnedThread)) {
     return { unavailable: pinsUnavailableSentence('io') };
   }
-  return { pinned: record.pinned };
+  return withNotShown(record.pinned, record);
 }
 
 /**
@@ -137,7 +154,7 @@ export async function parseRemotePins(
     if (!Array.isArray(record.pinned) || !record.pinned.every(isPinnedThread)) {
       return { unavailable: pinsUnavailableSentence('io') };
     }
-    return { pinned: record.pinned };
+    return withNotShown(record.pinned, record);
   }
   return { unavailable: 'shape' };
 }

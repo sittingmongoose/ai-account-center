@@ -48,6 +48,11 @@ mod tests {
         assert!(!known_machine("unregistered", false));
         assert_eq!(machine_label("alexis"), "Alexis PC");
         assert!(crate::validate::is_writer_name("alexis.fixture"));
-        assert!(crate::pins::parse_remote_pins("alexis", "[]").unwrap().is_empty());
+        assert!(
+            crate::pins::parse_remote_pins("alexis", "[]")
+                .unwrap()
+                .pinned
+                .is_empty()
+        );
     }
 }

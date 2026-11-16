@@ -107,14 +107,19 @@ pub struct PinIn {
     pub pin_order_key: Json,
 }
 
-/// Why one machine's pins are absent this scan: a fixed code, put in words by this crate.
-/// Codes: `did_not_answer` (the ssh read or sqlite failed), `shape` (the answer was not the
-/// shape T3's state file has), `missing` / `io` / `limit` (this computer's own T3 database).
+/// Why one machine's pins are absent or cut short this scan: a fixed code, put in words by
+/// this crate. Codes: `did_not_answer` (the ssh read or sqlite failed), `shape` (the answer
+/// was not the shape T3's state file has), `missing` / `io` / `limit` (this computer's own
+/// T3 database), and `truncated` — the pins show, but `not_shown` counted pins past the
+/// reader's row budget do not; it is a note beside a good list, never an absence.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineProblemIn {
     pub machine: String,
     pub code: String,
+    /// Counted pins not shown; set only with the `truncated` code.
+    #[serde(default)]
+    pub not_shown: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -593,15 +598,20 @@ fn clock_text(epoch_ms: i64, offset_minutes: i64) -> String {
     format!("{hour}:{minute:02} {half}")
 }
 
-/// The machine-problem sentence for one unavailability code, by name.
-fn machine_problem_text(machine: &str, code: &str) -> String {
+/// The machine-problem sentence for one unavailability code, by name. A `truncated` note
+/// with its count is the one entry whose pins do show: it names the honest remainder.
+fn machine_problem_text(machine: &str, code: &str, not_shown: Option<u64>) -> String {
     let label = machine_label(machine);
-    match code {
-        "did_not_answer" => format!("Pinned threads unavailable on {label}: it did not answer."),
-        "shape" => format!("Pinned threads unavailable on {label}: T3's state file changed shape."),
-        "missing" => format!("Pinned threads unavailable on {label}: T3's state file is missing."),
-        "io" => format!("Pinned threads unavailable on {label}: T3's state file could not be read."),
-        "limit" => {
+    match (code, not_shown) {
+        ("truncated", Some(more)) => format!(
+            "Pinned threads on {label}: showing the first {}, and {more} more pinned threads not shown.",
+            crate::pins::MAX_PINNED_ROWS
+        ),
+        ("did_not_answer", _) => format!("Pinned threads unavailable on {label}: it did not answer."),
+        ("shape", _) => format!("Pinned threads unavailable on {label}: T3's state file changed shape."),
+        ("missing", _) => format!("Pinned threads unavailable on {label}: T3's state file is missing."),
+        ("io", _) => format!("Pinned threads unavailable on {label}: T3's state file could not be read."),
+        ("limit", _) => {
             format!("Pinned threads unavailable on {label}: its pin list is past this reader's limits.")
         }
         _ => format!("Pinned threads unavailable on {label}: its pins could not be read."),
@@ -1539,7 +1549,7 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
             .map(|problem| MachineProblemOut {
                 machine: problem.machine.clone(),
                 label: machine_label(&problem.machine),
-                text: machine_problem_text(&problem.machine, &problem.code),
+                text: machine_problem_text(&problem.machine, &problem.code, problem.not_shown),
             })
             .collect(),
         status_problems: input

@@ -78,7 +78,10 @@ function fixturePinDb(
     JSON.stringify({
       id,
       title: PIN_TITLE,
+      // Pinned five days after creation: an explicit pin when this is a delegated child,
+      // never one of T3's at-creation auto-pins.
       pinnedAt: '2026-11-06T10:00:00Z',
+      createdAt: '2026-11-01T00:00:00Z',
       pinOrderKey: 'a',
       lineage: { parentThreadId: parent },
     })

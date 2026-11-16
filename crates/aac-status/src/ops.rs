@@ -3,11 +3,12 @@
 //! no handle state (unlike aac-store's engine slot).
 //!
 //! Methods:
-//! - `pins` `{ dbPath?: string | null }` -> `{ pinned: [...] }`, or
-//!   `{ unavailable: "missing" | "shape" | "io" | "limit" }` when T3's state file cannot be
-//!   read as expected (or is past this reader's pin limits). Unavailability is an answer,
-//!   not a rejected call.
-//! - `parseRemotePins` `{ machine, json }` -> `{ ok: true, pinned: [...] }`, or
+//! - `pins` `{ dbPath?: string | null }` -> `{ pinned: [...], notShown: number }` (the
+//!   first pins in pin order plus how many counted pins past the row budget were not
+//!   shown), or `{ unavailable: "missing" | "shape" | "io" | "limit" }` when T3's state
+//!   file cannot be read as expected (or its shown pins pass the byte budget).
+//!   Unavailability is an answer, not a rejected call.
+//! - `parseRemotePins` `{ machine, json }` -> `{ ok: true, pinned: [...], notShown: number }`, or
 //!   `{ ok: false, reason: "shape" }` when a machine's `sqlite3 -json` answer is not the
 //!   shape T3's state file has. The ssh run itself is the caller's; a machine that did not
 //!   answer never reaches this method.
@@ -59,7 +60,7 @@ fn pins(args: &str) -> Result<Json> {
         return Ok(json!({ "unavailable": "missing" }));
     };
     match pins::read_pinned_threads(&path) {
-        Ok(list) => Ok(json!({ "pinned": list })),
+        Ok(list) => Ok(json!({ "pinned": list.pinned, "notShown": list.not_shown })),
         Err(error) => Ok(json!({ "unavailable": error.code })),
     }
 }
@@ -74,7 +75,7 @@ struct ParseRemotePinsArgs {
 fn parse_remote_pins(args: &str) -> Result<Json> {
     let parsed: ParseRemotePinsArgs = parse(args)?;
     match pins::parse_remote_pins(&parsed.machine, &parsed.json) {
-        Ok(list) => Ok(json!({ "ok": true, "pinned": list })),
+        Ok(list) => Ok(json!({ "ok": true, "pinned": list.pinned, "notShown": list.not_shown })),
         Err(error) if error.code == "shape" => Ok(json!({ "ok": false, "reason": "shape" })),
         Err(error) => fail!("invalid", "{}", error.message),
     }

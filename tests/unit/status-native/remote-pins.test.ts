@@ -122,7 +122,10 @@ describe('PINNED_THREADS_QUERY against the real parser', () => {
       const insert = db.prepare(
         'INSERT INTO orchestration_v2_projection_threads VALUES (?,?,NULL,NULL,?)'
       );
+      // One transaction: the auto-pin fixture inserts over a thousand rows.
+      db.exec('BEGIN');
       for (const row of rows) insert.run(row.id, row.title, JSON.stringify(row.payload));
+      db.exec('COMMIT');
       const printed = JSON.stringify(db.prepare(PINNED_THREADS_QUERY).all());
       db.close();
       return printed;
@@ -169,6 +172,7 @@ describe('PINNED_THREADS_QUERY against the real parser', () => {
           title: 'Child',
           payload: {
             pinnedAt: '2026-11-08T10:00:00Z',
+            createdAt: '2026-11-01T00:00:00Z',
             pinOrderKey: 'a',
             lineage: { parentThreadId: 'top' },
           },
@@ -196,4 +200,68 @@ describe('PINNED_THREADS_QUERY against the real parser', () => {
       ]);
     }
   );
+
+  it('the query itself drops auto-pinned children, so they never eat the row budget', () => {
+    // T3 auto-pins every delegated child at creation: 1,200 pinned a second after they
+    // were made. The query must return only the explicit pins (3 children pinned days
+    // later, 9 top-level) — plus a wrong-typed lineage row, which stays a parser refusal.
+    const rows: Array<{ id: string; title: string; payload: Record<string, unknown> }> = [];
+    for (let index = 0; index < 1200; index += 1) {
+      rows.push({
+        id: `auto-${index}`,
+        title: 'Auto child',
+        payload: {
+          pinnedAt: '2026-11-10T00:00:01Z',
+          createdAt: '2026-11-10T00:00:00Z',
+          pinOrderKey: index,
+          lineage: { parentThreadId: 'lead' },
+        },
+      });
+    }
+    for (let index = 0; index < 3; index += 1) {
+      rows.push({
+        id: `lead-${index}`,
+        title: 'Stream lead',
+        payload: {
+          pinnedAt: '2026-11-15T21:44:00Z',
+          createdAt: '2026-11-04T16:19:00Z',
+          pinOrderKey: 2000 + index,
+          lineage: { parentThreadId: 'lead' },
+        },
+      });
+    }
+    for (let index = 0; index < 9; index += 1) {
+      rows.push({
+        id: `top-${index}`,
+        title: 'Top',
+        payload: {
+          pinnedAt: '2026-11-08T10:00:00Z',
+          createdAt: '2026-11-08T09:59:59Z',
+          pinOrderKey: 3000 + index,
+          lineage: { parentThreadId: null },
+        },
+      });
+    }
+    rows.push({
+      id: 'drift',
+      title: 'Drift',
+      payload: { pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 4000, lineage: [] },
+    });
+    const printed = JSON.parse(remoteRows(rows)) as Array<{ thread_id: string }>;
+    expect(printed.map((row) => row.thread_id)).toEqual([
+      'lead-0',
+      'lead-1',
+      'lead-2',
+      'top-0',
+      'top-1',
+      'top-2',
+      'top-3',
+      'top-4',
+      'top-5',
+      'top-6',
+      'top-7',
+      'top-8',
+      'drift',
+    ]);
+  });
 });

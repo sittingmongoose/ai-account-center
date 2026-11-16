@@ -658,6 +658,25 @@ fn a_machine_that_could_not_be_read_is_named_with_its_reason() {
 }
 
 #[test]
+fn a_truncated_pin_list_shows_its_pins_and_names_the_remainder() {
+    // Past the reader's row budget the list is not blanked: the pins compose as usual and
+    // the machine note counts the ones not shown, in so many words.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "machineProblems": [
+            { "machine": "vm", "code": "truncated", "notShown": 5 }
+        ]
+    }));
+    let view = compose(&built);
+    assert_eq!(view.updates.len(), 1);
+    assert_eq!(view.machine_problems.len(), 1);
+    assert_eq!(
+        view.machine_problems[0].text,
+        "Pinned threads on the VM: showing the first 1000, and 5 more pinned threads not shown."
+    );
+}
+
+#[test]
 fn the_head_counts_looping_and_waiting_pins() {
     let built = input(json!({
         "pins": [pin("t1", json!("a")), pin("t2", json!("b"))],

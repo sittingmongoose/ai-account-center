@@ -40,8 +40,13 @@ export const PINS_MACHINES: readonly PinsMachine[] = MACHINE_IDS;
 /** Why one machine's pins are absent: a fixed code the composer puts in words. */
 export type PinsProblemCode = 'did_not_answer' | 'shape' | 'missing' | 'io' | 'limit';
 
+/** One machine note for the composer: a failure above, or `truncated` beside a good list. */
+type PinsNote = { machine: PinsMachine; code: PinsProblemCode | 'truncated'; notShown?: number };
+
 interface MachineState {
   lastGood: PinnedThread[] | null;
+  /** Counted pins past the reader's row budget on the last good read; 0 when none were cut. */
+  notShown: number;
   failures: number;
   problem: { code: PinsProblemCode; since: number } | null;
 }
@@ -69,10 +74,13 @@ export class PinnedThreadsCollector {
   private readonly handle: NativeStatusHandle | null;
   private readonly moduleReason: string;
   private readonly machines = new Map<PinsMachine, MachineState>(
-    PINS_MACHINES.map((machine) => [machine, { lastGood: null, failures: 0, problem: null }])
+    PINS_MACHINES.map((machine) => [
+      machine,
+      { lastGood: null, notShown: 0, failures: 0, problem: null },
+    ])
   );
   private merged: MergedPin[] = [];
-  private problems: Array<{ machine: PinsMachine; code: PinsProblemCode }> = [];
+  private problems: PinsNote[] = [];
   private composed: PinnedView | null = null;
   /** False until the first collect lands, so no update is composed over an empty pin list. */
   private collected = false;
@@ -122,7 +130,8 @@ export class PinnedThreadsCollector {
         const state = this.machines.get(machine);
         if (!state) return;
         if (typeof outcome !== 'string') {
-          state.lastGood = outcome;
+          state.lastGood = outcome.pinned;
+          state.notShown = outcome.notShown;
           state.failures = 0;
           state.problem = null;
           return;
@@ -134,6 +143,7 @@ export class PinnedThreadsCollector {
         }
         state.failures += 1;
         state.lastGood = null;
+        state.notShown = 0;
         state.problem =
           state.problem?.code === outcome ? state.problem : { code: outcome, since: now };
       })
@@ -144,14 +154,20 @@ export class PinnedThreadsCollector {
     });
     const merged = await mergePins(lists, { handle: this.handle });
     if ('pinned' in merged) this.merged = merged.pinned;
-    this.problems = PINS_MACHINES.flatMap((machine) => {
-      const problem = this.machines.get(machine)?.problem;
-      return problem ? [{ machine, code: problem.code }] : [];
+    this.problems = PINS_MACHINES.flatMap<PinsNote>((machine) => {
+      const state = this.machines.get(machine);
+      if (state?.problem) return [{ machine, code: state.problem.code }];
+      // A good list cut at the row budget keeps its pins and gains the honest remainder.
+      return state?.lastGood && state.notShown > 0
+        ? [{ machine, code: 'truncated' as const, notShown: state.notShown }]
+        : [];
     });
   }
 
-  /** One machine's good rows, or its failure code. */
-  private async readMachine(machine: PinsMachine): Promise<PinnedThread[] | PinsProblemCode> {
+  /** One machine's good rows (with its not-shown remainder), or its failure code. */
+  private async readMachine(
+    machine: PinsMachine
+  ): Promise<{ pinned: PinnedThread[]; notShown: number } | PinsProblemCode> {
     if (!this.handle) return 'io';
     if (machine === 'vm') return this.readLocalPins();
     const read = this.deps.readRemote ?? readRemotePins;
@@ -162,11 +178,13 @@ export class PinnedThreadsCollector {
       return 'did_not_answer';
     }
     const parsed = await parseRemotePins(machine, json, { handle: this.handle });
-    return 'pinned' in parsed ? parsed.pinned : 'shape';
+    return 'pinned' in parsed ? { pinned: parsed.pinned, notShown: parsed.notShown ?? 0 } : 'shape';
   }
 
   /** The VM's own database, with the reader's unavailability code kept as-is. */
-  private async readLocalPins(): Promise<PinnedThread[] | PinsProblemCode> {
+  private async readLocalPins(): Promise<
+    { pinned: PinnedThread[]; notShown: number } | PinsProblemCode
+  > {
     if (!this.handle) return 'io';
     let raw: string;
     try {
@@ -189,7 +207,12 @@ export class PinnedThreadsCollector {
       return record.unavailable;
     }
     if (!Array.isArray(record.pinned)) return 'io';
-    return record.pinned as PinnedThread[];
+    const notShown = record.notShown;
+    return {
+      pinned: record.pinned as PinnedThread[],
+      notShown:
+        typeof notShown === 'number' && Number.isInteger(notShown) && notShown > 0 ? notShown : 0,
+    };
   }
 
   /** Rescan the status@1 documents (the reports share), then recompose. */
