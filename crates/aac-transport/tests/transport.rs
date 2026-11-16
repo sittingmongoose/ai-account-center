@@ -330,7 +330,9 @@ async fn timeout_cancel_and_output_cap_terminate_processes() {
 #[tokio::test]
 async fn clones_limit_a_computer_to_four_concurrent_channels() {
     let fixture = Fixture::new();
-    fixture.scenario(json!({"mode":"sleep","seconds":0.1}));
+    // Each call holds its channel long enough that four overlap even when the gate host is
+    // loaded (0.1 s once let a slow fourth spawn start after the first call ended).
+    fixture.scenario(json!({"mode":"sleep","seconds":1.0}));
     let mut calls = Vec::new();
     for _ in 0..12 {
         let computer = fixture.computer.clone();
@@ -339,7 +341,7 @@ async fn clones_limit_a_computer_to_four_concurrent_channels() {
                 .execute(
                     &["fixture-agent".into()],
                     &[],
-                    &CallOptions::new(Duration::from_secs(5), 1024),
+                    &CallOptions::new(Duration::from_secs(10), 1024),
                 )
                 .await
         }));
@@ -358,7 +360,8 @@ async fn clones_limit_a_computer_to_four_concurrent_channels() {
         }
     }
     assert_eq!(active, 0);
-    assert_eq!(max, 4);
+    assert!(max <= 4, "{max} channels ran at once; the limit is 4");
+    assert_eq!(max, 4, "the four channels never overlapped");
 }
 
 #[tokio::test]
