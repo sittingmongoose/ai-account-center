@@ -504,19 +504,9 @@ fn opened_checks<B: Facts>(
     Ok((file, opened))
 }
 
-/// An open or stat error's read outcome: missing is absent, a non-folder the named unreadable.
-#[cfg(unix)]
-fn open_error(error: io::Error) -> Read {
-    match error.kind() {
-        io::ErrorKind::NotFound => Read::Absent,
-        io::ErrorKind::NotADirectory => Read::Unreadable(io::ErrorKind::NotADirectory),
-        kind => Read::Unreadable(kind),
-    }
-}
-
 /// A chain step's error: the leaf was never opened. Missing is absent and a non-folder the
-/// named unreadable, as `open_error`; any other failure names the chain, so a caller can tell
-/// a denied ancestor from a denied leaf (qwen lane 2 recheck L1).
+/// named unreadable; any other failure names the chain, so a caller can tell a denied
+/// ancestor from a denied leaf (qwen lane 2 recheck L1).
 #[cfg(unix)]
 fn chain_error(error: io::Error) -> Read {
     match error.kind() {
