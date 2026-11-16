@@ -236,6 +236,11 @@ pub enum Read {
     TooLarge,
     /// An `lstat`, open, `fstat` or read error (never `ENOENT` at the first `lstat`).
     Unreadable(io::ErrorKind),
+    /// A step of the pinned ancestor chain failed before the leaf was opened — the base or a
+    /// folder below it, or the leaf's own `lstat` through its pinned parent. A denied chain
+    /// cannot prove the reference's named read would fail on platforms without a search-capable
+    /// descriptor, so callers that must match the reference decline rather than answer.
+    ChainUnreadable(io::ErrorKind),
     /// The descriptor is not the file the path named when it was checked (replaced, removed or
     /// linked in between), or the path is not below the policy's base.
     Unproved,
@@ -253,6 +258,7 @@ impl fmt::Debug for Read {
             Read::NotRegular => f.write_str("NotRegular"),
             Read::TooLarge => f.write_str("TooLarge"),
             Read::Unreadable(kind) => write!(f, "Unreadable({kind:?})"),
+            Read::ChainUnreadable(kind) => write!(f, "ChainUnreadable({kind:?})"),
             Read::Unproved => f.write_str("Unproved"),
         }
     }
@@ -367,8 +373,9 @@ fn open_named(
 /// opened `O_NOFOLLOW | O_DIRECTORY` as it is checked, so a later swap of any of them cannot
 /// redirect the leaf's `lstat` or open. `base` itself may be a link: the caller admitted it (the
 /// walk never checked it). Search-capable descriptors preserve access through search-only
-/// folders; other platforms retain the read-only open and callers must decline on a chain's
-/// `PermissionDenied` when equivalence with the reference cannot be proved.
+/// folders; other platforms retain the read-only open. A chain step's failure (the leaf's
+/// `lstat` included) is `ChainUnreadable`, so callers can decline a denied chain while a
+/// denied leaf itself stays `Unreadable` (qwen lane 2 recheck L1).
 #[cfg(unix)]
 fn open_below(
     base: &Path,
@@ -380,11 +387,11 @@ fn open_below(
         return Err(Read::Unproved);
     };
     let parts: Vec<_> = rest.components().collect();
-    let mut dir = open_at(None, base.as_os_str(), directory_flags()).map_err(open_error)?;
+    let mut dir = open_at(None, base.as_os_str(), directory_flags()).map_err(chain_error)?;
     for part in parts.iter().take(parts.len().saturating_sub(1)) {
         // Check the name, then pin it: a link is refused before the open, and a swap between
         // the two is caught by the open's own `O_NOFOLLOW | O_DIRECTORY`.
-        let stat = stat_at(&dir, part.as_os_str()).map_err(open_error)?;
+        let stat = stat_at(&dir, part.as_os_str()).map_err(chain_error)?;
         if stat.link() {
             return Err(Read::Link);
         }
@@ -400,14 +407,16 @@ fn open_below(
                 Ok(now) if now.link() => Read::Link,
                 _ => Read::Unreadable(io::ErrorKind::NotADirectory),
             },
-            _ => open_error(error),
+            _ => chain_error(error),
         })?;
     }
     between(Stage::Walk);
     let leaf = parts
         .last()
         .map_or(std::ffi::OsStr::new("."), |part| part.as_os_str());
-    let before = stat_at(&dir, leaf).map_err(open_error)?;
+    // The leaf's stat goes through the pinned parent: its denial is the chain's, not the
+    // leaf's — the file itself was never opened (qwen lane 2 recheck L1).
+    let before = stat_at(&dir, leaf).map_err(chain_error)?;
     if before.link() {
         return Err(match policy.leaf {
             Leaf::Refuse => Read::Link,
@@ -459,6 +468,22 @@ fn directory_flags() -> libc::c_int {
     access | libc::O_DIRECTORY
 }
 
+/// Whether this platform pins ancestors with a search-capable descriptor (`O_PATH` or
+/// `O_SEARCH`), so a denied chain is told apart from a denied leaf and search-only folders
+/// still read. Callers that must match a named-read reference decline a `ChainUnreadable`
+/// everywhere, and a leaf `PermissionDenied` only where this is false.
+pub const fn search_capable() -> bool {
+    cfg!(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "solaris",
+        target_os = "illumos"
+    ))
+}
+
 /// The descriptor's own admission: type, identity against the earlier stat, then owner/mode/size.
 fn opened_checks<B: Facts>(
     file: File,
@@ -486,6 +511,18 @@ fn open_error(error: io::Error) -> Read {
         io::ErrorKind::NotFound => Read::Absent,
         io::ErrorKind::NotADirectory => Read::Unreadable(io::ErrorKind::NotADirectory),
         kind => Read::Unreadable(kind),
+    }
+}
+
+/// A chain step's error: the leaf was never opened. Missing is absent and a non-folder the
+/// named unreadable, as `open_error`; any other failure names the chain, so a caller can tell
+/// a denied ancestor from a denied leaf (qwen lane 2 recheck L1).
+#[cfg(unix)]
+fn chain_error(error: io::Error) -> Read {
+    match error.kind() {
+        io::ErrorKind::NotFound => Read::Absent,
+        io::ErrorKind::NotADirectory => Read::Unreadable(io::ErrorKind::NotADirectory),
+        kind => Read::ChainUnreadable(kind),
     }
 }
 
@@ -782,6 +819,49 @@ mod tests {
             read(&sub.join("x.json"), &below(Path::new("/elsewhere"))),
             Read::Unproved
         ));
+        Ok(())
+    }
+
+    /// qwen lane 2 recheck L1: a denied leaf is the reference's read_failed(), but a denied
+    /// chain cannot prove the named read would fail — the two must be told apart.
+    #[cfg(unix)]
+    #[test]
+    fn a_denied_leaf_is_unreadable_but_a_denied_chain_is_named() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        if crate::path::uid() == 0 {
+            return Ok(()); // Root bypasses the fixture's permission control.
+        }
+        let home = tempfile::tempdir()?;
+        let userdata = home.path().join(".t3/userdata");
+        fs::create_dir_all(&userdata)?;
+        let file = userdata.join("settings.json");
+        fs::write(&file, b"{}")?;
+        let policy = ReadPolicy::capped(65536).ancestors(Ancestors::NoLinkBelow(home.path()));
+        // The leaf itself denied: the chain reads, the file does not open.
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000))?;
+        let leaf = read(&file, &policy);
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600))?;
+        assert!(
+            matches!(leaf, Read::Unreadable(io::ErrorKind::PermissionDenied)),
+            "{leaf:?}"
+        );
+        // An ancestor denied: the leaf was never opened, and the chain's denial is named.
+        fs::set_permissions(&userdata, fs::Permissions::from_mode(0o000))?;
+        let chain = read(&file, &policy);
+        fs::set_permissions(&userdata, fs::Permissions::from_mode(0o700))?;
+        assert!(
+            matches!(chain, Read::ChainUnreadable(io::ErrorKind::PermissionDenied)),
+            "{chain:?}"
+        );
+        // Search-only ancestors still read where the platform pins them search-capable.
+        for mode in [0o300, 0o100] {
+            fs::set_permissions(&userdata, fs::Permissions::from_mode(mode))?;
+            let outcome = read(&file, &policy);
+            fs::set_permissions(&userdata, fs::Permissions::from_mode(0o700))?;
+            if search_capable() {
+                assert!(matches!(outcome, Read::Bytes(..)), "mode {mode:o}: {outcome:?}");
+            }
+        }
         Ok(())
     }
 

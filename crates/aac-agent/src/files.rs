@@ -55,7 +55,7 @@ impl From<Read> for Regular {
             Read::TooLarge => Regular::TooLarge,
             Read::Foreign => Regular::Foreign,
             Read::BadMode => Regular::Loose,
-            Read::Unreadable(_) | Read::Unproved => Regular::Failed,
+            Read::Unreadable(_) | Read::ChainUnreadable(_) | Read::Unproved => Regular::Failed,
         }
     }
 }

@@ -357,7 +357,7 @@ pub fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, Failure> {
     match read::read(path, &ReadPolicy::capped(max as u64)) {
         Read::Bytes(bytes, _) => Ok(bytes),
         Read::Absent => Err(io::Error::from(io::ErrorKind::NotFound).into()),
-        Read::Unreadable(kind) => Err(io::Error::from(kind).into()),
+        Read::Unreadable(kind) | Read::ChainUnreadable(kind) => Err(io::Error::from(kind).into()),
         Read::TooLarge => Err(Failure::new(Cause::OutputTooLarge, "byte cap exceeded")),
         Read::Link | Read::NotRegular => Err(Failure::new(
             Cause::Refused,

@@ -257,9 +257,16 @@ fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
         .ancestors(Ancestors::NoLinkBelow(home))
         .owner(Owner::Mine);
     let value = match aac_files::read::read(&path, &policy) {
-        // A chain may need directory read access on platforms without O_PATH/O_SEARCH.
-        // Its denial cannot prove Python's named read would fail: decline the whole verb.
-        Read::Link | Read::Unproved | Read::Unreadable(std::io::ErrorKind::PermissionDenied) => {
+        // A denied ancestor chain cannot prove Python's named read would fail: decline the
+        // whole verb. Where the chain open needs read access (no O_PATH/O_SEARCH), a leaf
+        // PermissionDenied may be the chain's too, so it declines there as well.
+        Read::Link | Read::Unproved | Read::ChainUnreadable(_) => {
+            crate::proof::reject();
+            return None;
+        }
+        Read::Unreadable(std::io::ErrorKind::PermissionDenied)
+            if !aac_files::read::search_capable() =>
+        {
             crate::proof::reject();
             return None;
         }
@@ -269,7 +276,9 @@ fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
             return None;
         }
         Read::Bytes(bytes, _) => crate::proof::json(&bytes, CAP, true),
-        // Present but not one ordinary file of this user, or unreadable: `read_failed()`.
+        // Present but not one ordinary file of this user, or the leaf itself unreadable:
+        // Python's `read_failed()` — discovery incomplete, the inventory still answers
+        // (qwen lane 2 recheck L1).
         Read::Foreign | Read::NotRegular | Read::BadMode | Read::Unreadable(_) => None,
     };
     if !value.as_ref().is_some_and(Value::is_object) {
