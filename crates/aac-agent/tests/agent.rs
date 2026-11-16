@@ -177,18 +177,28 @@ async fn an_unreadable_settings_leaf_is_incomplete_discovery_not_a_verb_decline(
     let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(event["type"], "result");
     let value = &event["value"];
-    assert_ne!(
-        value,
-        &json!({"fallback":"python"}),
-        "the leaf alone never declines the verb"
-    );
-    let profiles = value["profiles"].as_array().expect("an inventory answers");
-    assert!(
-        profiles
-            .iter()
-            .any(|p| p["name"] == "saved-profiles" && p["state"] == "unavailable"),
-        "read_failed() marks discovery incomplete: {value}"
-    );
+    if aac_files::read::search_capable() {
+        assert_ne!(
+            value,
+            &json!({"fallback":"python"}),
+            "the leaf alone never declines the verb"
+        );
+        let profiles = value["profiles"].as_array().expect("an inventory answers");
+        assert!(
+            profiles
+                .iter()
+                .any(|p| p["name"] == "saved-profiles" && p["state"] == "unavailable"),
+            "read_failed() marks discovery incomplete: {value}"
+        );
+    } else {
+        // Without O_PATH/O_SEARCH the chain open needs read access, so a leaf denial may
+        // be the chain's: production intentionally declines the whole verb there.
+        assert_eq!(
+            value,
+            &json!({"fallback":"python"}),
+            "a non-search platform declines the ambiguous denial"
+        );
+    }
 }
 
 #[cfg(not(feature = "parity-fixtures"))]
