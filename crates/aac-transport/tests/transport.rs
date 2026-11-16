@@ -823,10 +823,14 @@ async fn a_client_replaced_while_a_call_waits_for_a_channel_is_refused_not_launc
                 .await
         })
     };
-    let busy: Vec<_> = (0..4)
-        .map(|_| call(fixture.computer.clone()))
-        .collect();
-    while fixture.traces().iter().filter(|t| t["event"] == "start").count() < 4 {
+    let busy: Vec<_> = (0..4).map(|_| call(fixture.computer.clone())).collect();
+    while fixture
+        .traces()
+        .iter()
+        .filter(|t| t["event"] == "start")
+        .count()
+        < 4
+    {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     // The fifth call builds its argv for the probed client, then waits for a channel.
@@ -843,7 +847,7 @@ async fn a_client_replaced_while_a_call_waits_for_a_channel_is_refused_not_launc
     for call in busy {
         assert!(call.await.unwrap().is_ok());
     }
-    let refused = waiting.await.unwrap().unwrap_err();
+    let refused = waiting.await.unwrap().err().unwrap();
     assert_eq!(refused.cause, Cause::Refused);
     assert!(!fixture.root.path().join("replacement-ran").exists());
 }

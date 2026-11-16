@@ -95,59 +95,60 @@ impl SshPolicy {
         probe
             .get_or_init(|| async {
                 let result: Result<Vec<OsString>, Failure> = async {
-                let mut args = Vec::new();
-                for option in ["KnownHostsCommand=none", "SetEnv=AAC_SSH_POLICY=1"] {
-                    let mut command = Command::new(file);
-                    ssh_environment(&mut command);
-                    if let Some(path) = &self.path {
-                        command.env("PATH", path);
+                    let mut args = Vec::new();
+                    for option in ["KnownHostsCommand=none", "SetEnv=AAC_SSH_POLICY=1"] {
+                        let mut command = Command::new(file);
+                        ssh_environment(&mut command);
+                        if let Some(path) = &self.path {
+                            command.env("PATH", path);
+                        }
+                        command
+                            .args(["-G", "-F", "none", "-o", option, "--", "localhost"])
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::piped())
+                            .kill_on_drop(true);
+                        let mut child = command.spawn()?;
+                        let stderr = child
+                            .stderr
+                            .take()
+                            .ok_or_else(|| Failure::new(Cause::Bug, "SSH probe stderr absent"))?;
+                        let result = tokio::time::timeout(Duration::from_secs(2), async {
+                            let mut output = Vec::new();
+                            stderr.take(8192).read_to_end(&mut output).await?;
+                            let status = child.wait().await?;
+                            Ok::<_, std::io::Error>((status, output))
+                        })
+                        .await;
+                        match result {
+                            Ok(Ok((status, _))) if status.success() => {
+                                args.extend(["-o".into(), option.into()])
+                            }
+                            Ok(Ok((_, output)))
+                                if String::from_utf8_lossy(&output)
+                                    .to_ascii_lowercase()
+                                    .contains("bad configuration option:") =>
+                            {
+                                eprintln!(
+                                    "[AAC SSH] {} unsupported; compatibility downgrade",
+                                    option.split('=').next().unwrap_or("option")
+                                );
+                            }
+                            _ => {
+                                let _ = child.start_kill();
+                                let _ =
+                                    tokio::time::timeout(Duration::from_millis(150), child.wait())
+                                        .await;
+                                return Err(Failure::new(
+                                    Cause::Refused,
+                                    "SSH capability probe failed",
+                                ));
+                            }
+                        }
                     }
-                    command
-                        .args(["-G", "-F", "none", "-o", option, "--", "localhost"])
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::piped())
-                        .kill_on_drop(true);
-                    let mut child = command.spawn()?;
-                    let stderr = child
-                        .stderr
-                        .take()
-                        .ok_or_else(|| Failure::new(Cause::Bug, "SSH probe stderr absent"))?;
-                    let result = tokio::time::timeout(Duration::from_secs(2), async {
-                        let mut output = Vec::new();
-                        stderr.take(8192).read_to_end(&mut output).await?;
-                        let status = child.wait().await?;
-                        Ok::<_, std::io::Error>((status, output))
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok((status, _))) if status.success() => {
-                            args.extend(["-o".into(), option.into()])
-                        }
-                        Ok(Ok((_, output)))
-                            if String::from_utf8_lossy(&output)
-                                .to_ascii_lowercase()
-                                .contains("bad configuration option:") =>
-                        {
-                            eprintln!(
-                                "[AAC SSH] {} unsupported; compatibility downgrade",
-                                option.split('=').next().unwrap_or("option")
-                            );
-                        }
-                        _ => {
-                            let _ = child.start_kill();
-                            let _ = tokio::time::timeout(Duration::from_millis(150), child.wait())
-                                .await;
-                            return Err(Failure::new(
-                                Cause::Refused,
-                                "SSH capability probe failed",
-                            ));
-                        }
-                    }
+                    Ok(args)
                 }
-                Ok(args)
-            }
-            .await;
+                .await;
                 (result, Instant::now())
             })
             .await
@@ -605,7 +606,7 @@ impl Computer {
             options,
             Some(Pipes { controls, output }),
         )
-            .await
+        .await
     }
 
     async fn command(
