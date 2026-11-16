@@ -4,7 +4,10 @@
  * (thread, tasks and card documents, some malformed) that the real reader scans, then builds cases around that
  * snapshot: clocks with millisecond offsets, time zones (Casablanca, Lord Howe and Chatham included), collected
  * panels, usage windows, answers and sends, quota values at rounding boundaries, unusual strings. A served fed
- * answer must be byte-equal to TS's, ETag included; a decline is today's answer. No case may differ.
+ * answer must be byte-equal to TS's, ETag included; a decline is today's answer. No case may differ. After the
+ * seeds, a persisted rich same-generation clock sweep (R2b L1) queries one share at +0/+1 ms, +30 s/+30 s+1 ms,
+ * +90 s/+90 s+1 ms and +120 s/+120 s+1 ms, with a usage window projected full at +90 s and resetting at +120 s:
+ * cache hits across moved clocks, fill-only `generatedAt`, and crossed span/full/reset decisions.
  *
  *   bun tests/spec/status-fuzz.ts [--seeds 301,302,303,304] [--cases 400]
  * Fixture data only, in a temporary CCS home; the service it starts is its own.
@@ -363,6 +366,250 @@ function firstDifference(a: unknown, b: unknown, at = '$'): string {
   return `${at}: ${JSON.stringify(x)?.slice(0, 160)} vs ${JSON.stringify(y)?.slice(0, 160)}`;
 }
 
+/**
+ * R2b L1: the rich same-generation clock sweep's share, scanned once at `base`: a 60 s TTL thread, a day-TTL
+ * blocked thread, a board with a fractional mtime, one open question, and the quota fixture. Deterministic;
+ * it draws no random numbers, so the sweep is the same on every run.
+ */
+async function sweepShare(base: number, label: string) {
+  const dir = path.join(home, `sweep-${label}`);
+  const board = path.join(dir, 'v1', 'writers', 'vm.sweep', 'board.md');
+  writeReport(
+    dir,
+    'vm.sweep',
+    'thread.json',
+    threadDoc('vm.sweep', {
+      writtenAt: iso(base - 10_000),
+      ttlSeconds: 60,
+      doing: 'Sweeping the clock',
+    })
+  );
+  writeReport(
+    dir,
+    'mac.sweep',
+    'thread.json',
+    threadDoc('mac.sweep', {
+      writtenAt: iso(base - 3_600_000),
+      ttlSeconds: 86_400,
+      state: 'blocked',
+      doing: 'Held for a day',
+      blockedOn: { kind: 'owner', detail: 'A decision.' },
+    })
+  );
+  writeReport(
+    dir,
+    'vm.sweep',
+    'tasks.json',
+    tasksDoc('vm.sweep', [item('A', 'doing', { updatedAt: iso(base - 20_000), title: 'Sweep item' })], {
+      board,
+      writtenAt: iso(base - 15_000),
+    })
+  );
+  fs.mkdirSync(path.dirname(board), { recursive: true });
+  fs.writeFileSync(board, '# Board\n');
+  // A fractional mtime: the board age probe keeps its rounded second across +1 ms, and moves at +30 s.
+  const mtime = (base - 45_678.25) / 1000;
+  fs.utimesSync(board, mtime, mtime);
+  writeCard(
+    dir,
+    cardDoc('vm.sweep', 'q', {
+      kind: 'question',
+      writtenAt: iso(base - 60_000),
+      askedAt: iso(base - 600_000),
+    })
+  );
+  fs.mkdirSync(path.join(dir, 'v1/quota'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'v1/quota/report.json'), JSON.stringify(quotaDocument()));
+  const reader = new AgentReportsReader({ root: () => dir, now: () => base });
+  await reader.scan();
+  const quota = new QuotaReportReader({ root: () => dir, now: () => base });
+  await quota.scan();
+  return { reports: reader.snapshot(), quota: quota.snapshot() };
+}
+
+/**
+ * The sweep's input at `base`: a fresh usage sample whose window is projected full at base+90 s and resets at
+ * base+120 s, collected panels, one answered card. Every stored instant is fixed at `base`; only `input.now`
+ * moves between queries, so the six generation ids stay the same and the cache is exercised across the moves.
+ */
+function sweepInput(shared: { reports: any; quota: any }, base: number) {
+  const panel = (data: unknown) => ({ data, asOf: base - 30_000, error: null });
+  const sample = {
+    cores: 8,
+    load1: 1.25,
+    busyPct: 12.5,
+    memAvailableBytes: 16 * 1024 ** 3,
+    memTotalBytes: 32 * 1024 ** 3,
+    disk: { mount: '/', freeBytes: 200 * 1024 ** 3, totalBytes: 500 * 1024 ** 3 },
+    cpuTimes: null,
+  };
+  const card = shared.reports.cards[0];
+  const done = (at: number) => ({ state: 'done', at: iso(at), detail: null, attempts: 1 });
+  const input: any = {
+    now: base,
+    timeZone: 'UTC',
+    reports: shared.reports,
+    registry: panel([
+      {
+        name: 'sweep-worker',
+        kind: 'codex',
+        machine: 'vm',
+        about: 'The clock sweep',
+        lastSeen: iso(base - 60_000),
+        readAt: base - 30_000,
+        problem: null,
+      },
+    ]),
+    machines: Object.fromEntries(
+      ['vm', 'mac', 'windows', 'nas1', 'alexis'].map((id) => [id, panel(structuredClone(sample))])
+    ),
+    browsers: panel([
+      {
+        machine: 'vm',
+        browsers: 1,
+        recordings: 0,
+        gpuPct: 25,
+        sessions: [],
+        readAt: base - 30_000,
+        problem: null,
+      },
+    ]),
+    simlock: { data: null, asOf: null, error: null },
+    usage: {
+      sampledAt: base - 5_000,
+      staleAfterSeconds: 600,
+      accounts: [
+        {
+          id: 'sweep-account',
+          provider: 'codex',
+          label: 'Sweep',
+          host: 'vm',
+          active: true,
+          hidden: false,
+          status: 'ok',
+          sampledAt: iso(base - 5_000),
+          windows: [
+            {
+              label: '5 hours',
+              kind: 'rate_limit',
+              usedPercent: 45.25,
+              remaining: null,
+              limit: null,
+              unit: 'percent',
+              resetAt: iso(base + 120_000),
+              resetPassed: false,
+              cached: false,
+              burn: { projectedFullAt: iso(base + 90_000), runsOutBeforeReset: true },
+              sampledAt: iso(base - 5_000),
+            },
+          ],
+        },
+      ],
+    },
+    answers: [
+      {
+        id: 'sweep-answer',
+        sendId: 'sweep-send',
+        answer: {
+          cardId: card.doc.id,
+          cardSeq: card.doc.seq,
+          cardSha256: card.sha256,
+          kind: 'answer',
+          choice: ['A'],
+          note: null,
+          via: 'deck',
+          answeredAt: iso(base - 120_000),
+          device: 'Sweep',
+        },
+        card: card.doc,
+        share: done(base - 110_000),
+        doorbell: done(base - 105_000),
+      },
+    ],
+    sends: [{ sendId: 'sweep-send', summary: done(base - 100_000) }],
+    answerHistoryProblem: null,
+    hiddenThreadNames: ['aac-doorbell'],
+    quota: shared.quota,
+    pinned: { unavailable: 'the pinned threads have not been read yet' },
+  };
+  return input;
+}
+
+/** The revalidated-view identity of a serialized view: the ETag's own exclusions. */
+const identityOf = (text: string) =>
+  JSON.stringify(JSON.parse(text), (key, value: unknown) =>
+    key === 'generatedAt' || key === 'ageSeconds' || key === 'cacheAgeSeconds' ? undefined : value
+  );
+
+/**
+ * R2b L1: the persisted rich same-generation clock sweep. Queries at +0/+1 ms, +30 s/+30 s+1 ms,
+ * +90 s/+90 s+1 ms and +120 s/+120 s+1 ms over one share: every fed answer must equal a fresh TS composition
+ * byte for byte, ETag included; the same instant twice must answer byte-identical (the kept view); a +1 ms
+ * step over a composed instant may move only `generatedAt`; and a crossed span, full projection or reset must
+ * change the identity (the kept bytes are not served across a decision). The midnight phase crosses the day
+ * word at +30 s; the afternoon phase crosses minute words at +90 s and +120 s.
+ */
+async function sweepClocks(service: RustService) {
+  const sweep: Record<string, any> = {};
+  for (const [label, base] of [
+    ['afternoon', NOW],
+    ['midnight', Date.parse('2026-11-06T23:59:30.000Z')],
+  ] as const) {
+    const shared = await sweepShare(base, label);
+    const input = sweepInput(shared, base);
+    const views = new Map<number, { text: string; etag: string }>();
+    for (const offset of [0, 1, 30_000, 30_001, 90_000, 90_001, 120_000, 120_001]) {
+      input.now = base + offset;
+      const expected = buildStatusView(input);
+      const text = JSON.stringify(expected);
+      const fed = await statusFed(service, input);
+      assert.ok(fed.served, `the sweep ${label} +${offset} ms serves through the fed path`);
+      assert.equal(fed.bytes?.toString('utf8'), text, `the sweep ${label} +${offset} ms fed bytes`);
+      assert.equal(fed.etag, revalidatedEtag(expected), `the sweep ${label} +${offset} ms fed ETag`);
+      const again = await statusFed(service, input);
+      assert.ok(again.served, `the sweep ${label} +${offset} ms repeat serves`);
+      assert.equal(
+        again.bytes?.toString('utf8'),
+        text,
+        `the sweep ${label} +${offset} ms repeat answers the kept bytes`
+      );
+      assert.equal(again.etag, fed.etag, `the sweep ${label} +${offset} ms repeat ETag`);
+      views.set(offset, { text, etag: fed.etag! });
+    }
+    for (const [composed, hit] of [
+      [0, 1],
+      [90_000, 90_001],
+      [120_000, 120_001],
+    ] as const) {
+      const a = views.get(composed)!;
+      const b = views.get(hit)!;
+      assert.equal(
+        identityOf(b.text),
+        identityOf(a.text),
+        `the sweep ${label} +${hit} ms keeps the composed identity`
+      );
+      assert.equal(b.etag, a.etag, `the sweep ${label} +${hit} ms keeps the ETag`);
+      assert.ok(
+        b.text.includes(`"generatedAt":"${iso(base + hit)}"`),
+        `the sweep ${label} +${hit} ms fills generatedAt`
+      );
+    }
+    for (const [before, after] of [
+      [30_000, 30_001],
+      [0, 90_000],
+      [90_000, 120_000],
+    ] as const) {
+      assert.notEqual(
+        identityOf(views.get(after)!.text),
+        identityOf(views.get(before)!.text),
+        `the sweep ${label} +${after} ms crosses a recorded decision`
+      );
+    }
+    sweep[label] = { base: iso(base), queries: views.size, answers: views.size * 2 };
+  }
+  return sweep;
+}
+
 const service = new RustService('on');
 const report: Record<string, any> = { seeds: {}, differences: [] as string[] };
 try {
@@ -411,13 +658,15 @@ try {
     }
     report.seeds[seed] = counts;
   }
+  report.sweep = await sweepClocks(service);
   report.declined = service.diagnostics().routes['/api/status']?.declined ?? {};
   console.log(JSON.stringify(report, null, 1));
   assert.deepEqual(report.differences, [], 'no fuzzed Status case differs from TS');
   const served = Object.values(report.seeds).reduce((n: number, c: any) => n + c.fedServed, 0);
   assert.ok(served > 0, 'the fuzz serves cases through the fed path');
   console.log(
-    `[OK] status-fuzz: ${seeds.length} seeds, ${served} fed answers byte-equal, 0 differences`
+    `[OK] status-fuzz: ${seeds.length} seeds, ${served} fed answers byte-equal, 0 differences; ` +
+      `clock sweep ${Object.values(report.sweep).reduce((n: number, p: any) => n + p.answers, 0)} answers across cache hits`
   );
 } finally {
   service.stop();

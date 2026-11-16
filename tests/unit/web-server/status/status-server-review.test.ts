@@ -4323,6 +4323,11 @@ describe('real-process journal and publication fences', () => {
 describe('a send summary keeps its signed identity across restart', () => {
   // Two real processes on one store with the real clock: A records a note while its send line fails to be
   // stored, publishes the batch and dies; B, restarted, rebuilds the send from the answer line and retries.
+  // Each test here spawns two real worker processes (module load, key generation, fsync'd journal
+  // writes): ~450 ms alone, but past Bun's default 5 s under VM load (precheck-wave58's send-fsync
+  // timeout). The waits are the children's exit events, not polls; 30 s is an explicit hang bound,
+  // like this file's other process fixtures (20-25 s) and the helper-sync tool row's 30 s.
+  const SPAWN_TIMEOUT = 30_000;
   const worker = path.resolve('tests/unit/web-server/status/status-batch-identity-worker.ts');
   const run = (root: string, ...args: string[]) =>
     new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
@@ -4397,7 +4402,7 @@ describe('a send summary keeps its signed identity across restart', () => {
         ).length,
         1
       );
-    });
+    }, SPAWN_TIMEOUT);
   }
 
   it('keeps a valid published summary an earlier version signed at another time', async () => {
@@ -4418,7 +4423,7 @@ describe('a send summary keeps its signed identity across restart', () => {
       ).length,
       1
     );
-  });
+  }, SPAWN_TIMEOUT);
 
   for (const code of ['EIO', 'ESTALE', 'EACCES', 'ENOENT']) {
     it('keeps a rung legacy summary through a ' + code + ' read and its recovery', async () => {
@@ -4458,7 +4463,7 @@ describe('a send summary keeps its signed identity across restart', () => {
         [...new Set(rings.map((r) => r.file + '/' + r.keyId + '/' + r.signature))],
         [path.basename(file) + '/' + signed.signature.keyId + '/' + signed.signature.value]
       );
-    });
+    }, SPAWN_TIMEOUT);
   }
 
   it('replaces a summary only once a fresh listing shows it absent', async () => {
@@ -4470,7 +4475,7 @@ describe('a send summary keeps its signed identity across restart', () => {
     fs.rmSync(file);
     assert.equal((await run(root, 'b', 'ENOENT')).code, 0);
     assert.equal(fs.readFileSync(file, 'utf8'), good);
-  });
+  }, SPAWN_TIMEOUT);
 
   for (const change of ['entries', 'signature', 'key']) {
     it('replaces a published summary that does not match by its ' + change, async () => {
@@ -4496,7 +4501,7 @@ describe('a send summary keeps its signed identity across restart', () => {
       fs.writeFileSync(file, text);
       assert.equal((await run(root, 'b')).code, 0);
       assert.equal(fs.readFileSync(file, 'utf8'), good);
-    });
+    }, SPAWN_TIMEOUT);
   }
 
   it('republishes a stored answer from before kinds exactly as it was signed', async () => {

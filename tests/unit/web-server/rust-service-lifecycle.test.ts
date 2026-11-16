@@ -647,3 +647,35 @@ it('bounds the whole silent acquisition and closes its unadopted owned child', a
     fs.readdirSync(path.join(ccs, 'run')).filter((name) => name.startsWith('aac-http-'))
   ).toEqual([]);
 }, 7000);
+
+// r2b-review-L2: the route's `served` counts every Rust success on it; the fed path's own serves
+// and named declines must be countable apart from the envelope fallback's successes.
+it('counts fed serves and declines apart from the envelope successes on the same route', async () => {
+  const service = await started('on', binaryCopy());
+  const statusRequest = { ...request, originalUrl: '/api/status' };
+  const headers = { 'x-aac-feed': '{"now":1}' };
+  const fed = await service.fedView(statusRequest, '/api/status', headers, 'status@1');
+  expect(fed && typeof fed === 'object' && fed.view).toBe('status@1');
+  const envelope = await service.compose(
+    statusRequest,
+    '/api/status',
+    { snapshot: {} },
+    () => ({ ts: true }),
+    (body) => (body as { source?: string } | null)?.source === 'envelope'
+  );
+  expect(envelope).toEqual({ version: 1, source: 'envelope' });
+  fs.writeFileSync(path.join(ccs, 'status-fed.json'), '"busy"');
+  const declined = await service.fedView(statusRequest, '/api/status', headers, 'status@1');
+  expect(declined).toBe('busy');
+  const route = (service.diagnostics().routes as Record<string, Record<string, unknown>>)[
+    '/api/status'
+  ];
+  expect(route).toMatchObject({
+    state: 'declined:busy',
+    served: 2,
+    fedServed: 1,
+    declined: { busy: 1 },
+    fedDeclined: { busy: 1 },
+  });
+  expect(service.stats.served).toBe(2);
+});

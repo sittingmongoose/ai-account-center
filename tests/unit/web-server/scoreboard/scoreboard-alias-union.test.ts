@@ -30,7 +30,7 @@ const builtin = read<AliasFile>(
   path.join(__dirname, 'fixtures', 'agent-report-1.6-builtin-model-aliases.json')
 );
 const packaged = read<AliasFile>(path.join(packagedCatalogDir(), 'model-aliases.json'));
-const { models } = read<{ models: Array<{ model: string; efforts?: string[] }> }>(
+const { models } = read<{ models: Array<{ model: string; efforts?: string[]; runtimes?: string[] }> }>(
   path.join(packagedCatalogDir(), 'models.json')
 );
 
@@ -64,8 +64,8 @@ describe('the published alias table', () => {
     for (const [written, canonical] of Object.entries(builtin.aliases))
       expect([written, packaged.aliases[written]]).toEqual([written, canonical]);
     for (const suffix of builtin.effortSuffixes) expect(packaged.effortSuffixes).toContain(suffix);
-    // The union (108), plus the explicit Qwen spellings (4).
-    expect(Object.keys(packaged.aliases)).toHaveLength(112);
+    // The union (108), the explicit Qwen spellings (4), and Gemini 4 Hydrogen's (2).
+    expect(Object.keys(packaged.aliases)).toHaveLength(114);
     const known = new Set(models.map((model) => model.model));
     for (const canonical of Object.values(packaged.aliases))
       expect(known.has(canonical)).toBe(true);
@@ -93,11 +93,12 @@ describe('the published alias table', () => {
   it('maps the 35 tally runs the built-in copy left unmapped', async () => {
     const published = await publishedTable();
     const builtinTable = { aliases: builtin.aliases, effortSuffixes: builtin.effortSuffixes };
-    // agent-report's copy came with the catalog's 16 ids of Nov 11, before these three were added.
+    // agent-report's copy came with the catalog's 16 ids of Nov 11, before these were added.
     const NEW_MODELS = [
       'deepseek/deepseek-v4.1-flash',
       'alibaba/qwen3.8-max',
       'alibaba/qwen4-max-preview',
+      'google/gemini-4-hydrogen',
     ];
     const nov11 = published.models.filter((model) => !NEW_MODELS.includes(model.model));
     expect(nov11).toHaveLength(16);
@@ -114,6 +115,27 @@ describe('the published alias table', () => {
       runs += count;
     }
     expect(runs).toBe(35);
+  });
+
+  // catalog-gemini-hydrogen: a Cursor run names this model; the catalog and the published table
+  // must score it, not keep the written spelling as an unknown id.
+  it('resolves the Cursor model gemini-4-hydrogen and its spellings', async () => {
+    const entry = models.find((model) => model.model === 'google/gemini-4-hydrogen');
+    expect(entry).toBeDefined();
+    expect(entry?.runtimes).toContain('cursor');
+    const published = await publishedTable();
+    for (const written of [
+      'gemini-4-hydrogen',
+      'cursor/gemini-4-hydrogen',
+      'google/gemini-4-hydrogen',
+    ])
+      expect([written, normalizeModel(written, null, published.models, published.table)]).toEqual([
+        written,
+        { id: 'google/gemini-4-hydrogen', effort: null },
+      ]);
+    expect(
+      normalizeModel('gemini-4-hydrogen-high', null, published.models, published.table)
+    ).toEqual({ id: 'google/gemini-4-hydrogen', effort: 'high' });
   });
 
   // Review 1, L5: a catalog model whose own name ends in an effort word must have its spellings as

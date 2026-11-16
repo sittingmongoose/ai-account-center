@@ -260,6 +260,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -12095,6 +12106,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,
@@ -23938,6 +23960,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -35777,6 +35810,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -40163,6 +40207,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,
@@ -44557,6 +44612,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -48943,6 +49009,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,
@@ -60786,6 +60863,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -72621,6 +72709,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,
@@ -84464,6 +84563,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -96299,6 +96409,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,
@@ -108142,6 +108263,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -119981,6 +120113,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -120819,6 +120962,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,
@@ -121665,6 +121819,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -122503,6 +122668,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,
@@ -134346,6 +134522,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
           }
         ],
         "taskTypes": [
@@ -146181,6 +146368,17 @@
             "family": "Qwen",
             "runtimes": [
               "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "google/gemini-4-hydrogen",
+            "label": "Gemini 4 Hydrogen",
+            "family": "Gemini",
+            "runtimes": [
+              "cursor"
             ],
             "efforts": [],
             "prices": null,

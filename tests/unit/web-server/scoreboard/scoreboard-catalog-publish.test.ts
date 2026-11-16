@@ -32,11 +32,12 @@ const packagedAliases = JSON.parse(packaged('model-aliases.json')) as {
   aliases: Record<string, string>;
   effortSuffixes: string[];
 };
-/** The three models added on 2026-11-13, which the share's Nov 11 models.json lacks. */
+/** The models added after Nov 11 (2026-11-13 and 2026-11-16), which the share's Nov 11 models.json lacks. */
 const NEW_MODELS = [
   'deepseek/deepseek-v4.1-flash',
   'alibaba/qwen3.8-max',
   'alibaba/qwen4-max-preview',
+  'google/gemini-4-hydrogen',
 ];
 const pretty = (doc: unknown) => `${JSON.stringify(doc, null, 2)}\n`;
 
