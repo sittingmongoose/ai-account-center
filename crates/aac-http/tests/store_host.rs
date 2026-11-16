@@ -361,12 +361,19 @@ fn an_early_reply_is_read_even_when_the_body_write_hits_broken_pipe() -> Result<
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("fixture connect");
         // Answer, then refuse the body: SHUT_RD makes the client's write hit EPIPE while
-        // the reply stays readable. Closing both directions with the unread body still
-        // queued resets the connection, and the reset races the reply read (the r4 gate
-        // run caught that flake); a read-side shutdown is deterministic.
+        // the reply stays readable. The body queued before the shutdown must be drained
+        // before the close: a close with unread data resets the connection, and the reset
+        // destroys the reply read (the r4 gate run caught that flake). Drained, the pattern
+        // is deterministic — 30/30 in a syscall probe with the strict read criterion.
         let _ = stream
             .write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\n\r\n{\"ok\":false}");
         let _ = stream.shutdown(Shutdown::Read);
+        let mut sink = [0u8; 65536];
+        while let Ok(n) = stream.read(&mut sink) {
+            if n == 0 {
+                break;
+            }
+        }
     });
     let body = vec![b'x'; 1_048_576];
     let reply = exchange(
