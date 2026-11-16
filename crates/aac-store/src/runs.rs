@@ -887,6 +887,9 @@ fn raise_path(txn: &WriteTransaction, r: u32, index: u16, mut row: Head, path: &
 }
 
 fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64) -> Result<()> {
+    if serde_json::from_str::<Json>(&p.doc)?.get("corrects").is_some() {
+        meta_set(txn, "corrections", "1")?;
+    }
     let Some(sha) = unhex32(&p.sha256) else {
         fail!("invalid", "run sha256");
     };
@@ -1868,6 +1871,8 @@ pub struct QueryArgs {
     pub task_type: Option<String>,
     /// Only runs with a review block: the reviews a filtered view still joins to its runs.
     pub reviews_only: Option<bool>,
+    /// Include valid suppressed files for reader receipts on the first page.
+    pub include_receipts: Option<bool>,
     /// Resume after this `[endedMs, r]` cursor.
     pub after: Option<(u64, u32)>,
     pub limit: Option<usize>,
@@ -1932,100 +1937,283 @@ fn ids_json<T: ReadableTable<&'static [u8], &'static [u8]>>(
 /// Current revisions in a time range, as the run@1 projection the view builder reads (model,
 /// effort and harness canonical, provider dropped as the TypeScript view does) with each run's
 /// identity and ids. Paged by `(endedMs, r)`.
-pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
-    let limit = args.limit.unwrap_or(5000).clamp(1, 20_000);
+fn has_corrections(engine: &Engine) -> Result<bool> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
-        let by_time = read.open_table(RUN_BY_TIME)?;
-        let heads = read.open_table(RUN_HEAD)?;
-        let payloads = read.open_table(RUN_PAYLOAD)?;
-        let dict_table = read.open_table(RUN_DICT)?;
-        let rev_table = read.open_table(RUN_DICT_REV)?;
-        let mut dict = Dict::new(&dict_table);
-        let task_type = match &args.task_type {
-            Some(t) => match lookup_id(&rev_table, kind::TASK_TYPE, t)? {
-                Some(id) => Some(id),
-                None => return Ok(json!({ "runs": [], "next": null, "skipped": 0 })),
-            },
-            None => None,
-        };
-        let lo = match args.after {
-            Some((t, r)) => Key::new().u64(t).u32(r.saturating_add(1)),
-            None => Key::new().u64(args.from_ms.unwrap_or(0)).u32(0),
-        };
-        let hi = Key::new().u64(args.to_ms.unwrap_or(u64::MAX - 1)).u32(u32::MAX);
-        if lo.as_slice() > hi.as_slice() {
-            return Ok(json!({ "runs": [], "next": null, "skipped": 0 }));
+        Ok(read.open_table(RUN_META)?.get("corrections")?.is_some())
+    })
+}
+fn hide_cursors(page: &mut Json) {
+    if let Some(rows) = page["runs"].as_array_mut() {
+        for row in rows {
+            if let Some(obj) = row.as_object_mut() {
+                obj.remove("_cursor");
+            }
         }
-        let mut blocks: HashMap<(u32, u32), Vec<Vec<u8>>> = HashMap::new();
-        let mut out = Vec::new();
-        let mut skipped = 0usize;
-        let mut next = Json::Null;
-        // The cursor is the last run returned, so the next page starts just after it.
-        let mut last: Option<(u64, u32)> = None;
-        for item in by_time.range(lo.as_slice()..=hi.as_slice())? {
-            let (k, _) = item?;
-            let (ended, r) = (be_u64(k.value(), 0), be_u32(k.value(), 8));
-            let Some(value) = heads.get(Key::new().u32(r).as_slice())? else {
-                continue;
-            };
-            let head = Head::decode(value.value())?;
-            let benchmark = head.flags & F_BENCHMARK != 0;
-            match args.source.as_deref() {
-                Some("observed") if benchmark => continue,
-                Some("benchmark") if !benchmark => continue,
-                _ => {}
-            }
-            if task_type.is_some_and(|t| t != head.id(at::TASK_TYPE)) {
-                continue;
-            }
-            if args.reviews_only == Some(true) && head.flags & F_REVIEW == 0 {
-                continue;
-            }
-            if out.len() == limit {
-                next = last.map(|(t, r)| json!([t, r])).unwrap_or(Json::Null);
+    }
+}
+/// One immutable resolved history, keyed by the same database snapshot's run generation and catalog.
+struct ResolvedHistory {
+    key: (u64, Option<Vec<u8>>),
+    rows: Vec<Json>,
+    cursors: Vec<(u64, u32)>,
+    problems: Vec<Json>,
+    skipped: usize,
+    accepted: Vec<Json>,
+}
+
+/// Per-engine cache: no cross-store sharing, and at most one resident generation.
+#[derive(Default)]
+pub(crate) struct HistoryCache {
+    snapshot: Option<std::sync::Arc<ResolvedHistory>>,
+    resolutions: u64,
+}
+impl HistoryCache {
+    pub(crate) fn clear(&mut self) {
+        self.snapshot = None;
+    }
+}
+
+/// Number of full correction resolutions built by this engine (not query pages).
+#[doc(hidden)]
+pub fn correction_resolution_count(engine: &Engine) -> u64 {
+    engine
+        .runs_history
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .resolutions
+}
+
+fn resolved_history(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> {
+    // Lock order is database then cache, also used by close. All pages of this build read
+    // one MVCC transaction, so concurrent ingestion cannot mix generations in the snapshot.
+    engine.with_db(|db| {
+        let mut cache = engine.runs_history.lock().unwrap_or_else(|p| p.into_inner());
+        let read = db.begin_read()?;
+        let checkpoint = read.open_table(crate::db::CHECKPOINT)?;
+        let generation = crate::db::read_checkpoint(&checkpoint, "runs/ledger")?
+            .map(|c| c.last_sequence_id)
+            .unwrap_or(0);
+        let catalog = read.open_table(RUN_META)?.get("catalog")?.map(|v| v.value().to_vec());
+        let key = (generation, catalog);
+        if let Some(snapshot) = cache.snapshot.as_ref().filter(|s| s.key == key) {
+            return Ok(std::sync::Arc::clone(snapshot));
+        }
+        let mut rows = Vec::new();
+        let mut after = None;
+        let mut skipped = 0;
+        loop {
+            let page = query_snapshot(
+                &read,
+                &QueryArgs {
+                    after,
+                    limit: Some(20_000),
+                    ..Default::default()
+                },
+            )?;
+            rows.extend(page["runs"].as_array().cloned().unwrap_or_default());
+            skipped += page["skipped"].as_u64().unwrap_or(0) as usize;
+            if page["next"].is_null() {
                 break;
             }
-            let block_key = (head.loc.day, head.loc.block);
-            if let std::collections::hash_map::Entry::Vacant(slot) = blocks.entry(block_key) {
-                let Some(bytes) = payloads.get(Key::new().u32(head.loc.day).u32(head.loc.block).as_slice())? else {
-                    skipped += 1;
-                    continue;
-                };
-                slot.insert(block_decode(bytes.value())?.1);
-            }
-            let Some(doc) = blocks[&block_key].get(head.loc.slot as usize) else {
-                skipped += 1;
-                continue;
-            };
-            let writer = dict.field(&head, at::WRITER)?.unwrap_or_default();
-            let text = String::from_utf8_lossy(doc);
-            // Stored text was accepted at ingest; a projection that now fails is counted, not shown.
-            let Ok(mut run) = run_schema::parse_run_text(&text, &writer) else {
-                skipped += 1;
-                continue;
-            };
-            let identity = identity_json(&mut dict, &head)?;
-            let shown = identity["modelId"]
-                .as_str()
-                .or(identity["modelRaw"].as_str())
-                .map(str::to_string);
-            run["model"]["id"] = opt_json(shown);
-            run["model"]["effort"] = identity["effort"].clone();
-            run["model"]["harness"] = identity["harness"].clone();
-            run["model"]["provider"] = Json::Null;
-            out.push(json!({
-                "file": dict.field(&head, at::PATH)?,
-                "sha256": hex(&head.sha),
-                "firstSeenAt": head.ingested_ms,
-                "doc": run,
-                "identity": identity,
-                "ids": ids_json(&mut dict, r, &head)?,
-            }));
-            last = Some((ended, r));
+            after = Some(serde_json::from_value(page["next"].clone())?);
         }
-        Ok(json!({ "runs": out, "next": next, "skipped": skipped }))
+        let result = crate::run_corrections::resolve(&rows, |v| v.as_str().and_then(run_schema::iso_ms));
+        let problems = rows
+            .iter()
+            .filter_map(|r| {
+                result
+                    .refused
+                    .get(r["doc"]["id"].as_str()?)
+                    .map(|reason| json!({"file":r["file"],"reason":reason,"since":r["firstSeenAt"]}))
+            })
+            .collect();
+        let accepted = rows
+            .into_iter()
+            .filter(|r| !result.refused.contains_key(r["doc"]["id"].as_str().unwrap_or("")))
+            .map(|mut row| {
+                if let Some(obj) = row.as_object_mut() {
+                    obj.remove("_cursor");
+                }
+                row
+            })
+            .collect();
+        let cursors = result
+            .rows
+            .iter()
+            .map(|r| serde_json::from_value(r["_cursor"].clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let snapshot = std::sync::Arc::new(ResolvedHistory {
+            key,
+            rows: result.rows,
+            cursors,
+            problems,
+            skipped,
+            accepted,
+        });
+        cache.resolutions += 1;
+        cache.snapshot = Some(std::sync::Arc::clone(&snapshot));
+        Ok(snapshot)
     })
+}
+
+/// Effective leaves resolved before range/task filters. Pages share a resolved generation;
+/// seeking after the cursor avoids rescanning the prefix. History/original APIs keep raw records.
+pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
+    if let Some(mut page) = query_uncorrected(engine, args)? {
+        hide_cursors(&mut page);
+        return Ok(page);
+    }
+    let snapshot = resolved_history(engine)?;
+    let limit = args.limit.unwrap_or(5000).clamp(1, 20_000);
+    let start = snapshot.cursors.partition_point(|cursor| {
+        args.after.is_some_and(|a| *cursor <= a) || args.from_ms.is_some_and(|a| cursor.0 < a)
+    });
+    let mut out = Vec::new();
+    let mut next = Json::Null;
+    let mut last = Json::Null;
+    for (index, row) in snapshot.rows.iter().enumerate().skip(start) {
+        let cursor = snapshot.cursors[index];
+        if args.to_ms.is_some_and(|a| cursor.0 > a) {
+            break;
+        }
+        let doc = &row["doc"];
+        if args.source.as_ref().is_some_and(|a| doc["source"].as_str() != Some(a))
+            || args
+                .task_type
+                .as_ref()
+                .is_some_and(|a| doc["task"]["type"].as_str() != Some(a))
+            || (args.reviews_only == Some(true) && !doc["review"].is_object())
+        {
+            continue;
+        }
+        if out.len() == limit {
+            next = last;
+            break;
+        }
+        last = json!(cursor);
+        let mut row = row.clone();
+        if let Some(obj) = row.as_object_mut() {
+            obj.remove("_cursor");
+        }
+        out.push(row);
+    }
+    let problems = if args.after.is_none() {
+        snapshot.problems.clone()
+    } else {
+        Vec::new()
+    };
+    let mut page =
+        json!({"runs":out,"next":next,"skipped":snapshot.skipped,"problems":problems,"correctionsResolved":true});
+    if args.include_receipts == Some(true) && args.after.is_none() {
+        page["accepted"] = json!(snapshot.accepted);
+    }
+    Ok(page)
+}
+
+fn query_uncorrected(engine: &Engine, args: &QueryArgs) -> Result<Option<Json>> {
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        // Admission and decoding share one transaction, even if the first correction is ingested now.
+        if read.open_table(RUN_META)?.get("corrections")?.is_some() {
+            return Ok(None);
+        }
+        query_snapshot(&read, args).map(Some)
+    })
+}
+
+fn query_snapshot(read: &redb::ReadTransaction, args: &QueryArgs) -> Result<Json> {
+    let limit = args.limit.unwrap_or(5000).clamp(1, 20_000);
+    let by_time = read.open_table(RUN_BY_TIME)?;
+    let heads = read.open_table(RUN_HEAD)?;
+    let payloads = read.open_table(RUN_PAYLOAD)?;
+    let dict_table = read.open_table(RUN_DICT)?;
+    let rev_table = read.open_table(RUN_DICT_REV)?;
+    let mut dict = Dict::new(&dict_table);
+    let task_type = match &args.task_type {
+        Some(t) => match lookup_id(&rev_table, kind::TASK_TYPE, t)? {
+            Some(id) => Some(id),
+            None => return Ok(json!({ "runs": [], "next": null, "skipped": 0 })),
+        },
+        None => None,
+    };
+    let lo = match args.after {
+        Some((t, r)) => Key::new().u64(t).u32(r.saturating_add(1)),
+        None => Key::new().u64(args.from_ms.unwrap_or(0)).u32(0),
+    };
+    let hi = Key::new().u64(args.to_ms.unwrap_or(u64::MAX - 1)).u32(u32::MAX);
+    if lo.as_slice() > hi.as_slice() {
+        return Ok(json!({ "runs": [], "next": null, "skipped": 0 }));
+    }
+    let mut blocks: HashMap<(u32, u32), Vec<Vec<u8>>> = HashMap::new();
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    let mut next = Json::Null;
+    // The cursor is the last run returned, so the next page starts just after it.
+    let mut last: Option<(u64, u32)> = None;
+    for item in by_time.range(lo.as_slice()..=hi.as_slice())? {
+        let (k, _) = item?;
+        let (ended, r) = (be_u64(k.value(), 0), be_u32(k.value(), 8));
+        let Some(value) = heads.get(Key::new().u32(r).as_slice())? else {
+            continue;
+        };
+        let head = Head::decode(value.value())?;
+        let benchmark = head.flags & F_BENCHMARK != 0;
+        match args.source.as_deref() {
+            Some("observed") if benchmark => continue,
+            Some("benchmark") if !benchmark => continue,
+            _ => {}
+        }
+        if task_type.is_some_and(|t| t != head.id(at::TASK_TYPE)) {
+            continue;
+        }
+        if args.reviews_only == Some(true) && head.flags & F_REVIEW == 0 {
+            continue;
+        }
+        if out.len() == limit {
+            next = last.map(|(t, r)| json!([t, r])).unwrap_or(Json::Null);
+            break;
+        }
+        let block_key = (head.loc.day, head.loc.block);
+        if let std::collections::hash_map::Entry::Vacant(slot) = blocks.entry(block_key) {
+            let Some(bytes) = payloads.get(Key::new().u32(head.loc.day).u32(head.loc.block).as_slice())? else {
+                skipped += 1;
+                continue;
+            };
+            slot.insert(block_decode(bytes.value())?.1);
+        }
+        let Some(doc) = blocks[&block_key].get(head.loc.slot as usize) else {
+            skipped += 1;
+            continue;
+        };
+        let writer = dict.field(&head, at::WRITER)?.unwrap_or_default();
+        let text = String::from_utf8_lossy(doc);
+        // Stored text was accepted at ingest; a projection that now fails is counted, not shown.
+        let Ok(mut run) = run_schema::parse_run_text(&text, &writer) else {
+            skipped += 1;
+            continue;
+        };
+        let identity = identity_json(&mut dict, &head)?;
+        let shown = identity["modelId"]
+            .as_str()
+            .or(identity["modelRaw"].as_str())
+            .map(str::to_string);
+        run["model"]["id"] = opt_json(shown);
+        run["model"]["effort"] = identity["effort"].clone();
+        run["model"]["harness"] = identity["harness"].clone();
+        run["model"]["provider"] = Json::Null;
+        out.push(json!({
+            "_cursor": [ended, r],
+            "file": dict.field(&head, at::PATH)?,
+            "sha256": hex(&head.sha),
+            "firstSeenAt": head.ingested_ms,
+            "doc": run,
+            "identity": identity,
+            "ids": ids_json(&mut dict, r, &head)?,
+        }));
+        last = Some((ended, r));
+    }
+    Ok(json!({ "runs": out, "next": next, "skipped": skipped }))
 }
 
 /// The original text of a run's current revision (or of the revision with `sha256`).
@@ -2155,6 +2343,17 @@ pub fn identity_table(engine: &Engine) -> Result<Json> {
 /// Every distinct written model, effort and harness with counts and what each maps to, the
 /// unmapped strings and the data-quality counts (DESIGN.md 1.1 to 1.5).
 pub fn audit(engine: &Engine) -> Result<Json> {
+    let correction_history = has_corrections(engine)?;
+    let history = if correction_history {
+        Some(resolved_history(engine)?)
+    } else {
+        None
+    };
+    let effective: std::collections::HashSet<_> = history
+        .iter()
+        .flat_map(|h| &h.rows)
+        .filter_map(|r| r["doc"]["id"].as_str())
+        .collect();
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let heads = read.open_table(RUN_HEAD)?;
@@ -2167,7 +2366,10 @@ pub fn audit(engine: &Engine) -> Result<Json> {
         let mut quality: BTreeMap<&'static str, u64> = BTreeMap::new();
         let mut total = 0u64;
         for item in heads.iter()? {
-            let head = &Head::decode(item?.1.value())?;
+            let (key, value) = item?;
+            let head = &Head::decode(value.value())?;
+            let id = dict.text(kind::RUN_ID, be_u32(key.value(), 0))?;
+            if correction_history && !id.as_deref().is_some_and(|id| effective.contains(id)) { continue; }
             total += 1;
             let model_raw = dict.field(head, at::MODEL_RAW)?;
             let model = dict.field(head, at::MODEL)?;
@@ -2241,6 +2443,11 @@ pub fn audit(engine: &Engine) -> Result<Json> {
 
 /// Counts and sizes of the run tables, the current catalog and the generation.
 pub fn status(engine: &Engine) -> Result<Json> {
+    let effective_count = if has_corrections(engine)? {
+        Some(resolved_history(engine)?.rows.len())
+    } else {
+        None
+    };
     let generation_seq = generation(engine)?;
     engine.with_db(|db| {
         let read = db.begin_read()?;
@@ -2263,7 +2470,7 @@ pub fn status(engine: &Engine) -> Result<Json> {
         }
         let meta = read.open_table(RUN_META)?;
         Ok(json!({
-            "runs": read.open_table(RUN_HEAD)?.len()?,
+            "runs": effective_count.map(|n| n as u64).unwrap_or(read.open_table(RUN_HEAD)?.len()?),
             "revisions": read.open_table(RUN_REV)?.len()?,
             "files": read.open_table(RUN_FILE)?.len()?,
             "refusedFiles": refused,

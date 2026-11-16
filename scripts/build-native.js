@@ -47,6 +47,7 @@ function sourceHash() {
     'rust-toolchain.toml',
     '../../src/shared/secret-policy.json',
     '../../native/shared/secret_policy.rs',
+    '../../native/shared/run_corrections.rs',
     // runs.rs embeds the package's computer table.
     '../../web-dashboard/public/computers.json',
   ];

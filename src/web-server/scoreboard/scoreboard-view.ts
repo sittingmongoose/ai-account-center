@@ -6,6 +6,7 @@
  */
 import { normalizeModel } from './model-identity';
 import type { RunDoc } from '../status/report-schema';
+import { resolveRunsState } from './run-corrections';
 import type { RunsState } from './runs-reader';
 import type { CatalogMeasure, CatalogTaskType, CatalogUse } from './catalog';
 import {
@@ -286,6 +287,7 @@ function scanLimitRuns(runs: RunsState): number {
 }
 
 export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
+  inputs = { ...inputs, runs: resolveRunsState(inputs.runs) };
   const { catalog, runs, now } = inputs;
   // The alias table applies to every run read, history included, before scoring: a run keeps its
   // raw written id only when it resolves to no catalog id.

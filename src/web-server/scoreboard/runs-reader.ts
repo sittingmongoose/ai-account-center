@@ -6,6 +6,9 @@
  * counted and named, never dropped silently.
  */
 import path from 'path';
+import { resolveRunsState } from './run-corrections';
+import type { RunsState } from './runs-types';
+export type { RunsState } from './runs-types';
 import {
   isTransientShareError,
   newestFolders,
@@ -43,18 +46,6 @@ export function runFileNameReadable(name: string): boolean {
  * is named in the runs Source.
  */
 export const RUN_LIMITS = { writers: 20000, runs: 50000, bytes: 256 * 1024 * 1024 };
-
-export interface RunsState {
-  /** missing: no `v1/writers` folder; error: the folder could not be listed. */
-  state: 'ok' | 'missing' | 'error';
-  scannedAt: number | null;
-  /** The newest copy of each run, by run id. */
-  runs: ShareFile<RunDoc>[];
-  writers: number;
-  /** Files and writers left out by any cap (the newest days/writers are kept). */
-  skipped: { runFiles: number; writerFolders: number };
-  problems: ReportProblem[];
-}
 
 export class RunsReader {
   private readonly files: ShareFiles<RunDoc>;
@@ -275,14 +266,14 @@ export class RunsReader {
       if (!held || newer(file, held)) best.set(file.doc.id, file);
     }
     const runs = [...best.values()].sort((a, b) => a.doc.id.localeCompare(b.doc.id));
-    return {
+    return resolveRunsState({
       state: this.state,
       scannedAt: this.scannedAt,
       runs,
       writers: new Set(runs.map((run) => run.doc.writer)).size,
       skipped: { ...this.skipped },
       problems: byFile([...this.files.problems(), ...this.folderProblems.values()]),
-    };
+    });
   }
 }
 

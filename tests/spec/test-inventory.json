@@ -530,6 +530,12 @@
       ]
     },
     {
+      "file": "crates/aac-status/tests/run_corrections.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/tests/scoreboard.rs",
       "kind": "internal",
       "evidence": [],
@@ -821,6 +827,12 @@
     },
     {
       "file": "native/aac-usage/tests/unreadable.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/shared/run_corrections.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3386,6 +3398,12 @@
     },
     {
       "file": "tests/unit/web-server/scoreboard/run-bounds.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/run-corrections.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

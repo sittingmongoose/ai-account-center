@@ -77,6 +77,7 @@ export interface RunsQuery {
   taskType?: string;
   /** Only runs with a review block (the reviews a filtered view joins). */
   reviewsOnly?: boolean;
+  includeReceipts?: boolean;
 }
 
 export interface PassState {
@@ -132,6 +133,8 @@ export class RunsStore {
    */
   private readonly safePaths = new Map<string, string>();
   private lastFullAt = 0;
+  private queryProblems: ReportProblem[] = [];
+  private queryAccepted: StoredRun[] | undefined;
   last: PassState | null = null;
 
   constructor(
@@ -248,10 +251,19 @@ export class RunsStore {
     const runs: StoredRun[] = [];
     let after: unknown = null;
     for (;;) {
-      const page = await store.runs<{ runs: StoredRun[]; next: unknown }>('runsQuery', {
+      const page = await store.runs<{
+        runs: StoredRun[];
+        next: unknown;
+        problems?: ReportProblem[];
+        accepted?: StoredRun[];
+      }>('runsQuery', {
         ...query,
         after,
       });
+      if (after === null) {
+        this.queryProblems = page.problems ?? [];
+        this.queryAccepted = page.accepted;
+      }
       runs.push(...page.runs);
       if (page.next === null || page.next === undefined) return runs;
       after = page.next;
@@ -266,7 +278,7 @@ export class RunsStore {
   /** The runs as the view builder reads them (the file reader's shape), from the store. */
   async state(query: RunsQuery): Promise<RunsState> {
     const store = this.deps.store();
-    const runs = await this.query(query);
+    const runs = await this.query({ ...query, includeReceipts: true });
     const refused = store ? await store.runs<RefusedRow[]>('runsRefused') : [];
     // A refused file is named by the path this server saw when the secret filter passes it,
     // else by its hash alone: the store keeps no path, name or writer for it.
@@ -279,8 +291,11 @@ export class RunsStore {
         since: row.atMs,
       })),
       ...(this.last?.problems ?? []),
+      ...this.queryProblems,
     ];
     return {
+      correctionsResolved: true,
+      accepted: this.queryAccepted,
       state: this.last?.state ?? 'ok',
       scannedAt: this.last?.at ?? null,
       runs: runs.map((run) => ({

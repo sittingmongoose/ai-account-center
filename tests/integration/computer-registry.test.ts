@@ -26,6 +26,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
       'crates/aac-files',
       'crates/aac-core',
       'tests/spec/wire-words.json',
+      'native/shared/run_corrections.rs',
     ]) {
       fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
     }

@@ -1,0 +1,3721 @@
+{
+  "envelope": {
+    "data": {
+      "now": 1793982600000,
+      "timeZone": "UTC",
+      "root": "fixture",
+      "catalog": {
+        "state": "ok",
+        "scannedAt": 1793982600000,
+        "missingFiles": [],
+        "problems": [],
+        "minRuns": 5,
+        "models": [
+          {
+            "model": "anthropic/claude-opus-5-5",
+            "label": "Opus 5.5",
+            "family": "Claude",
+            "runtimes": [
+              "claude-code"
+            ],
+            "efforts": [
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
+            "model": "openai/gpt-6.1-sol",
+            "label": "Sol 6.1",
+            "family": "GPT-6",
+            "runtimes": [
+              "codex"
+            ],
+            "efforts": [
+              "medium",
+              "high",
+              "max"
+            ],
+            "prices": null,
+            "notes": null
+          }
+        ],
+        "aliases": {
+          "alibaba-token-plan/qwen3.8-max": "alibaba/qwen3.8-max",
+          "alibaba-token-plan/qwen4-max-preview": "alibaba/qwen4-max-preview",
+          "builtin:bigmodel-coding-plan\\GLM-5.3": "zai/glm-5.3",
+          "builtin:zai-coding-plan\\GLM-5.3": "zai/glm-5.3",
+          "claude-fable-5-1": "anthropic/claude-fable-5-1",
+          "claude-fable-5-2": "anthropic/claude-fable-5-2",
+          "claude-haiku-5-5": "anthropic/claude-haiku-5-5",
+          "claude-opus-5-5": "anthropic/claude-opus-5-5",
+          "claude-sonnet-5-5": "anthropic/claude-sonnet-5-5",
+          "codex/claude-fable-5-1": "anthropic/claude-fable-5-1",
+          "codex/claude-fable-5-2": "anthropic/claude-fable-5-2",
+          "codex/claude-haiku-5-5": "anthropic/claude-haiku-5-5",
+          "codex/claude-opus-5-5": "anthropic/claude-opus-5-5",
+          "codex/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5",
+          "codex/gemini-4-argon": "google/gemini-4-argon",
+          "codex/glm-5.3": "zai/glm-5.3",
+          "codex/gpt-6-astra": "openai/gpt-6-astra",
+          "codex/gpt-6-luna": "openai/gpt-6-luna",
+          "codex/gpt-6.1-sol": "openai/gpt-6.1-sol",
+          "codex/gpt-6.1-terra": "openai/gpt-6.1-terra",
+          "codex/grok-4.7": "xai/grok-4.7",
+          "codex/muse-ember-1.0": "muse/muse-ember-1.0",
+          "codex/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
+          "codex/muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
+          "codex/muse-wonder-1.0": "muse/muse-wonder-1.0",
+          "codex/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+          "cursor/claude-fable-5-1": "anthropic/claude-fable-5-1",
+          "cursor/claude-fable-5-2": "anthropic/claude-fable-5-2",
+          "cursor/claude-haiku-5-5": "anthropic/claude-haiku-5-5",
+          "cursor/claude-opus-5-5": "anthropic/claude-opus-5-5",
+          "cursor/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5",
+          "cursor/gemini-4-argon": "google/gemini-4-argon",
+          "cursor/glm-5.3": "zai/glm-5.3",
+          "cursor/gpt-6-astra": "openai/gpt-6-astra",
+          "cursor/gpt-6-luna": "openai/gpt-6-luna",
+          "cursor/gpt-6.1-sol": "openai/gpt-6.1-sol",
+          "cursor/gpt-6.1-terra": "openai/gpt-6.1-terra",
+          "cursor/grok-4.7": "xai/grok-4.7",
+          "cursor/muse-ember-1.0": "muse/muse-ember-1.0",
+          "cursor/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
+          "cursor/muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
+          "cursor/muse-wonder-1.0": "muse/muse-wonder-1.0",
+          "cursor/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+          "deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+          "gemini-4-argon": "google/gemini-4-argon",
+          "glm-5.3": "zai/glm-5.3",
+          "gpt-6-astra": "openai/gpt-6-astra",
+          "gpt-6-luna": "openai/gpt-6-luna",
+          "gpt-6.1-sol": "openai/gpt-6.1-sol",
+          "gpt-6.1-terra": "openai/gpt-6.1-terra",
+          "grok-4.7": "xai/grok-4.7",
+          "muse-ember-1.0": "muse/muse-ember-1.0",
+          "muse-spark-1.3": "muse/muse-spark-1.3-contributor",
+          "muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
+          "muse-wonder-1.0": "muse/muse-wonder-1.0",
+          "muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+          "omp/alibaba-token-plan/qwen3.8-max": "alibaba/qwen3.8-max",
+          "omp/alibaba-token-plan/qwen4-max-preview": "alibaba/qwen4-max-preview",
+          "omp/claude-fable-5-1": "anthropic/claude-fable-5-1",
+          "omp/claude-fable-5-2": "anthropic/claude-fable-5-2",
+          "omp/claude-haiku-5-5": "anthropic/claude-haiku-5-5",
+          "omp/claude-opus-5-5": "anthropic/claude-opus-5-5",
+          "omp/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5",
+          "omp/gemini-4-argon": "google/gemini-4-argon",
+          "omp/glm-5.3": "zai/glm-5.3",
+          "omp/gpt-6-astra": "openai/gpt-6-astra",
+          "omp/gpt-6-luna": "openai/gpt-6-luna",
+          "omp/gpt-6.1-sol": "openai/gpt-6.1-sol",
+          "omp/gpt-6.1-terra": "openai/gpt-6.1-terra",
+          "omp/grok-4.7": "xai/grok-4.7",
+          "omp/muse-ember-1.0": "muse/muse-ember-1.0",
+          "omp/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
+          "omp/muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
+          "omp/muse-wonder-1.0": "muse/muse-wonder-1.0",
+          "omp/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+          "opencode-go/claude-fable-5-1": "anthropic/claude-fable-5-1",
+          "opencode-go/claude-fable-5-2": "anthropic/claude-fable-5-2",
+          "opencode-go/claude-haiku-5-5": "anthropic/claude-haiku-5-5",
+          "opencode-go/claude-opus-5-5": "anthropic/claude-opus-5-5",
+          "opencode-go/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5",
+          "opencode-go/deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+          "opencode-go/gemini-4-argon": "google/gemini-4-argon",
+          "opencode-go/glm-5.3": "zai/glm-5.3",
+          "opencode-go/gpt-6-astra": "openai/gpt-6-astra",
+          "opencode-go/gpt-6-luna": "openai/gpt-6-luna",
+          "opencode-go/gpt-6.1-sol": "openai/gpt-6.1-sol",
+          "opencode-go/gpt-6.1-terra": "openai/gpt-6.1-terra",
+          "opencode-go/grok-4.7": "xai/grok-4.7",
+          "opencode-go/muse-ember-1.0": "muse/muse-ember-1.0",
+          "opencode-go/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
+          "opencode-go/muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
+          "opencode-go/muse-wonder-1.0": "muse/muse-wonder-1.0",
+          "opencode-go/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+          "qwen3.8-max": "alibaba/qwen3.8-max",
+          "qwen4-max-preview": "alibaba/qwen4-max-preview",
+          "zcode/claude-fable-5-1": "anthropic/claude-fable-5-1",
+          "zcode/claude-fable-5-2": "anthropic/claude-fable-5-2",
+          "zcode/claude-haiku-5-5": "anthropic/claude-haiku-5-5",
+          "zcode/claude-opus-5-5": "anthropic/claude-opus-5-5",
+          "zcode/claude-sonnet-5-5": "anthropic/claude-sonnet-5-5",
+          "zcode/gemini-4-argon": "google/gemini-4-argon",
+          "zcode/glm-5.3": "zai/glm-5.3",
+          "zcode/gpt-6-astra": "openai/gpt-6-astra",
+          "zcode/gpt-6-luna": "openai/gpt-6-luna",
+          "zcode/gpt-6.1-sol": "openai/gpt-6.1-sol",
+          "zcode/gpt-6.1-terra": "openai/gpt-6.1-terra",
+          "zcode/grok-4.7": "xai/grok-4.7",
+          "zcode/muse-ember-1.0": "muse/muse-ember-1.0",
+          "zcode/muse-spark-1.3": "muse/muse-spark-1.3-contributor",
+          "zcode/muse-spark-1.3-contributor": "muse/muse-spark-1.3-contributor",
+          "zcode/muse-wonder-1.0": "muse/muse-wonder-1.0",
+          "zcode/muse-wonder-full-1.0": "muse/muse-wonder-full-1.0"
+        },
+        "effortSuffixes": [
+          "-minimal",
+          "-low",
+          "-medium",
+          "-high",
+          "-xhigh",
+          "-max"
+        ],
+        "taskTypes": [
+          {
+            "id": "build",
+            "label": "Build",
+            "description": "Implementation work outside WorkNodes.",
+            "unit": "task",
+            "measures": [
+              "speed",
+              "quality",
+              "thoroughness",
+              "laziness",
+              "cheating",
+              "cost",
+              "reliability",
+              "overclaim"
+            ],
+            "byProcess": false
+          },
+          {
+            "id": "review",
+            "label": "Review",
+            "description": "Blind review of another run's work, judged later by a second reviewer.",
+            "unit": "record",
+            "measures": [
+              "speed",
+              "quality",
+              "thoroughness",
+              "laziness",
+              "cheating",
+              "cost",
+              "reliability"
+            ],
+            "byProcess": false
+          }
+        ],
+        "measures": [
+          {
+            "id": "speed",
+            "label": "Speed",
+            "better": "lower",
+            "unit": "s/unit",
+            "description": "Median wall seconds per unit of work, in the task type's unit.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "quality",
+            "label": "Quality",
+            "better": "higher",
+            "unit": "share",
+            "description": "Share of the work a later blind review passed without overturning. Fix rounds on one item count once.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "thoroughness",
+            "label": "Thoroughness",
+            "better": "higher",
+            "unit": "share",
+            "description": "Median of files read over files assigned and records judged over records assigned.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "laziness",
+            "label": "Laziness",
+            "better": "lower",
+            "unit": "share",
+            "description": "Share of runs flagged incomplete-read or scope-cut, or that read under 90% of what was assigned.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "cheating",
+            "label": "Cheating",
+            "better": "lower",
+            "unit": "share",
+            "description": "Share of runs flagged shortcut, cheating, fabricated, test-weakened or false-claim. Each one is listed with its evidence.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "cost",
+            "label": "Cost",
+            "better": "lower",
+            "unit": "credits/unit",
+            "description": "Measured credits or quota per accepted unit. Estimates are shown apart and labelled.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "reliability",
+            "label": "Reliability",
+            "better": "higher",
+            "unit": "share",
+            "description": "Share of runs that started and did not end failed or cancelled for infrastructure reasons.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "overclaim",
+            "label": "Over-claimed passes",
+            "better": "lower",
+            "unit": "share",
+            "description": "Share of runs that reported passing checks which a later review overturned.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "facts-kept",
+            "label": "Facts kept",
+            "better": "higher",
+            "unit": "share",
+            "description": "Scout: share of the known plan-changing facts that reached the final decisions.",
+            "metric": {
+              "of": "factsKept",
+              "per": "factsTotal"
+            },
+            "preliminaryUnless": null
+          },
+          {
+            "id": "verdict-drift",
+            "label": "Verdict drift",
+            "better": "lower",
+            "unit": "share",
+            "description": "Scout: share of verdicts that differ from the reference model's.",
+            "metric": {
+              "of": "verdictsChanged",
+              "per": "verdictsTotal"
+            },
+            "preliminaryUnless": null
+          },
+          {
+            "id": "silent-misses",
+            "label": "Silent misses",
+            "better": "lower",
+            "unit": "share",
+            "description": "Planning: share of the agreed obligations a run missed without flagging them.",
+            "metric": {
+              "of": "silent",
+              "per": "goldAgreed"
+            },
+            "preliminaryUnless": "answerKeyFinal"
+          }
+        ],
+        "uses": [
+          {
+            "id": "building",
+            "label": "Building WorkNodes",
+            "description": "Which models to use to build, fix, test and review WorkNodes.",
+            "taskTypes": [
+              "worknode-build",
+              "build",
+              "fix",
+              "test",
+              "review",
+              "audit-read"
+            ],
+            "weights": {
+              "quality": 3,
+              "cheating": 3,
+              "overclaim": 2,
+              "laziness": 2,
+              "reliability": 1,
+              "speed": 1,
+              "cost": 1
+            }
+          }
+        ],
+        "benchmarks": [
+          {
+            "id": "scout-sv3-t9",
+            "label": "Scout test bed SV3/t9",
+            "taskType": "scout",
+            "description": "One 4-capability Scout test bed with 127 known plan-changing facts. Controlled experiments: compare only within one process version.",
+            "items": 127,
+            "scoring": "Facts kept in the final decisions, picked by id; verdicts compared with the reference model."
+          },
+          {
+            "id": "plan-pilot2",
+            "label": "Planning wizard pilot 2",
+            "taskType": "plan",
+            "description": "12 planning documents; each stage extracts the obligations the plan places on the product (requirements, bans, checks, scope exclusions, conditions). The key is the 1,075 claims two blind judges agree on; the owner's sampled and disputed items are not settled yet, so quality numbers are preliminary.",
+            "items": 12,
+            "scoring": "Silent misses on judge-agreed obligations (lower is better), and model seconds per 1,000 words."
+          }
+        ]
+      },
+      "runs": {
+        "state": "ok",
+        "scannedAt": 1793982600000,
+        "runs": [
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--wrong",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "wrong",
+                "type": "build",
+                "title": "wrong",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--wrong.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--right",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "right",
+                "type": "build",
+                "title": "right",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "anthropic/claude-opus-5-5",
+                "provider": "anthropic",
+                "harness": "claude-code",
+                "effort": "high",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--right.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--review",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "review",
+                "type": "review",
+                "title": "Review",
+                "size": null
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": {
+                "of": "vm.corrections--wrong",
+                "verdict": "fail",
+                "findings": {
+                  "high": 0,
+                  "medium": 1,
+                  "low": 0
+                },
+                "overturned": true,
+                "by": null,
+                "disputed": false
+              },
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--review.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--review",
+              "id": "vm.corrections--review-fixed",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "review",
+                "type": "review",
+                "title": "Review",
+                "size": null
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": {
+                "of": "vm.corrections--right",
+                "verdict": "fail",
+                "findings": {
+                  "high": 0,
+                  "medium": 1,
+                  "low": 0
+                },
+                "overturned": true,
+                "by": null,
+                "disputed": false
+              },
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--review-fixed.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--duplicate",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "duplicate",
+                "type": "build",
+                "title": "duplicate",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--duplicate.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--duplicate",
+              "void": {
+                "reason": "Duplicate copy"
+              },
+              "id": "vm.corrections--void",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "void",
+                "type": "build",
+                "title": "void",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--void.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--hook",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "hook",
+                "type": "build",
+                "title": "hook",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--hook.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--hook",
+              "id": "vm.corrections--hook-fixed",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "hook-fixed",
+                "type": "build",
+                "title": "hook-fixed",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "openai",
+                "harness": "codex",
+                "effort": "max",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--hook-fixed.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--absent",
+              "id": "vm.corrections--missing",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "missing",
+                "type": "build",
+                "title": "missing",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--missing.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "mac.other--build",
+              "id": "vm.corrections--foreign",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "foreign",
+                "type": "build",
+                "title": "foreign",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--foreign.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--cycle-b",
+              "id": "vm.corrections--cycle-a",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "cycle-a",
+                "type": "build",
+                "title": "cycle-a",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--cycle-a.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--cycle-a",
+              "id": "vm.corrections--cycle-b",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "cycle-b",
+                "type": "build",
+                "title": "cycle-b",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--cycle-b.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--fork",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "fork",
+                "type": "build",
+                "title": "fork",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--fork.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--fork",
+              "id": "vm.corrections--fork-early",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "fork-early",
+                "type": "build",
+                "title": "fork-early",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--fork-early.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:01:00Z",
+              "corrects": "vm.corrections--fork",
+              "id": "vm.corrections--fork-late",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "fork-late",
+                "type": "build",
+                "title": "fork-late",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--fork-late.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--build-old",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "build-old",
+                "type": "build",
+                "title": "build-old",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--build-old.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "corrects": "vm.corrections--build-old",
+              "id": "vm.corrections--build-new",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "build-new",
+                "type": "build",
+                "title": "build-new",
+                "size": {
+                  "records": null,
+                  "files": null,
+                  "items": null,
+                  "words": null,
+                  "tasks": 1
+                }
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": null,
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--build-new.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--retarget",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "retarget",
+                "type": "review",
+                "title": "Review",
+                "size": null
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": {
+                "of": "vm.corrections--build-old",
+                "verdict": "pass",
+                "findings": {
+                  "high": 0,
+                  "medium": 0,
+                  "low": 0
+                },
+                "overturned": false,
+                "by": null,
+                "disputed": false
+              },
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--retarget.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "doc": {
+              "writer": "vm.corrections",
+              "seq": 1,
+              "writtenAt": "2026-11-06T16:00:00Z",
+              "id": "vm.corrections--void-review",
+              "source": "observed",
+              "benchmark": null,
+              "project": "proj",
+              "stream": null,
+              "task": {
+                "id": "void-review",
+                "type": "review",
+                "title": "Review",
+                "size": null
+              },
+              "model": {
+                "id": "openai/gpt-6.1-sol",
+                "provider": "claude",
+                "harness": "codex",
+                "effort": "low",
+                "account": null
+              },
+              "startedAt": null,
+              "endedAt": "2026-11-06T15:00:00Z",
+              "wallSeconds": 100,
+              "outcome": "done",
+              "cost": null,
+              "scope": null,
+              "review": {
+                "of": "vm.corrections--duplicate",
+                "verdict": "pass",
+                "findings": {
+                  "high": 0,
+                  "medium": 0,
+                  "low": 0
+                },
+                "overturned": false,
+                "by": null,
+                "disputed": false
+              },
+              "flags": [],
+              "evidence": [],
+              "process": null,
+              "metrics": {},
+              "imported": null,
+              "unknownModel": false
+            },
+            "file": "writers/vm.corrections/runs/2026-11-06/vm.corrections--void-review.json",
+            "firstSeenAt": 1793982600000,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ],
+        "writers": 1,
+        "skipped": {
+          "runFiles": 0,
+          "writerFolders": 0
+        },
+        "problems": []
+      },
+      "docs": [
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--wrong",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "wrong",
+            "type": "build",
+            "title": "wrong",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--right",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "right",
+            "type": "build",
+            "title": "right",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "anthropic/claude-opus-5-5",
+            "provider": null,
+            "harness": "claude-code",
+            "effort": "high",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--review",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "review",
+            "type": "review",
+            "title": "Review",
+            "size": null
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": {
+            "of": "vm.corrections--wrong",
+            "verdict": "fail",
+            "findings": {
+              "high": 0,
+              "medium": 1,
+              "low": 0
+            },
+            "overturned": true,
+            "by": null,
+            "disputed": false
+          },
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--review",
+          "id": "vm.corrections--review-fixed",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "review",
+            "type": "review",
+            "title": "Review",
+            "size": null
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": {
+            "of": "vm.corrections--right",
+            "verdict": "fail",
+            "findings": {
+              "high": 0,
+              "medium": 1,
+              "low": 0
+            },
+            "overturned": true,
+            "by": null,
+            "disputed": false
+          },
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--duplicate",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "duplicate",
+            "type": "build",
+            "title": "duplicate",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--duplicate",
+          "void": {
+            "reason": "Duplicate copy"
+          },
+          "id": "vm.corrections--void",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "void",
+            "type": "build",
+            "title": "void",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--hook",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "hook",
+            "type": "build",
+            "title": "hook",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--hook",
+          "id": "vm.corrections--hook-fixed",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "hook-fixed",
+            "type": "build",
+            "title": "hook-fixed",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "max",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--absent",
+          "id": "vm.corrections--missing",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "missing",
+            "type": "build",
+            "title": "missing",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "mac.other--build",
+          "id": "vm.corrections--foreign",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "foreign",
+            "type": "build",
+            "title": "foreign",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--cycle-b",
+          "id": "vm.corrections--cycle-a",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "cycle-a",
+            "type": "build",
+            "title": "cycle-a",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--cycle-a",
+          "id": "vm.corrections--cycle-b",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "cycle-b",
+            "type": "build",
+            "title": "cycle-b",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--fork",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "fork",
+            "type": "build",
+            "title": "fork",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--fork",
+          "id": "vm.corrections--fork-early",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "fork-early",
+            "type": "build",
+            "title": "fork-early",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:01:00Z",
+          "corrects": "vm.corrections--fork",
+          "id": "vm.corrections--fork-late",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "fork-late",
+            "type": "build",
+            "title": "fork-late",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--build-old",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "build-old",
+            "type": "build",
+            "title": "build-old",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "corrects": "vm.corrections--build-old",
+          "id": "vm.corrections--build-new",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "build-new",
+            "type": "build",
+            "title": "build-new",
+            "size": {
+              "records": null,
+              "files": null,
+              "items": null,
+              "words": null,
+              "tasks": 1
+            }
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": null,
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--retarget",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "retarget",
+            "type": "review",
+            "title": "Review",
+            "size": null
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": {
+            "of": "vm.corrections--build-old",
+            "verdict": "pass",
+            "findings": {
+              "high": 0,
+              "medium": 0,
+              "low": 0
+            },
+            "overturned": false,
+            "by": null,
+            "disputed": false
+          },
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        },
+        {
+          "writer": "vm.corrections",
+          "seq": 1,
+          "writtenAt": "2026-11-06T16:00:00Z",
+          "id": "vm.corrections--void-review",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "void-review",
+            "type": "review",
+            "title": "Review",
+            "size": null
+          },
+          "model": {
+            "id": "openai/gpt-6.1-sol",
+            "provider": null,
+            "harness": "codex",
+            "effort": "low",
+            "account": null
+          },
+          "startedAt": null,
+          "endedAt": "2026-11-06T15:00:00Z",
+          "wallSeconds": 100,
+          "outcome": "done",
+          "cost": null,
+          "scope": null,
+          "review": {
+            "of": "vm.corrections--duplicate",
+            "verdict": "pass",
+            "findings": {
+              "high": 0,
+              "medium": 0,
+              "low": 0
+            },
+            "overturned": false,
+            "by": null,
+            "disputed": false
+          },
+          "flags": [],
+          "evidence": [],
+          "process": null,
+          "metrics": {},
+          "imported": null,
+          "unknownModel": false
+        }
+      ]
+    },
+    "presentation": {
+      "dates": {
+        "1793982600000": {
+          "iso": "2026-11-06T16:30:00.000Z",
+          "clock": "4:30 PM",
+          "day": "Nov 6"
+        },
+        "1793980800000": {
+          "iso": "2026-11-06T16:00:00.000Z",
+          "clock": "4:00 PM",
+          "day": "Nov 6"
+        },
+        "1793977200000": {
+          "iso": "2026-11-06T15:00:00.000Z",
+          "clock": "3:00 PM",
+          "day": "Nov 6"
+        },
+        "1793980860000": {
+          "iso": "2026-11-06T16:01:00.000Z",
+          "clock": "4:01 PM",
+          "day": "Nov 6"
+        }
+      },
+      "epochs": {
+        "2026-11-06T16:00:00Z": 1793980800000,
+        "2026-11-06T15:00:00Z": 1793977200000,
+        "2026-11-06T16:01:00Z": 1793980860000
+      },
+      "order": {
+        "0": 12,
+        "1": 14,
+        "3": 22,
+        "5": 24,
+        "7": 25,
+        "": 0,
+        " Controlled experiments: compare only within one process version.": 1,
+        " Each one is listed with its evidence.": 2,
+        " Estimates are shown apart and labelled.": 3,
+        " Fix rounds on one item count once.": 4,
+        " The key is the 1,075 claims two blind judges agree on; the owner's sampled and disputed items are not settled yet, so quality numbers are preliminary.": 5,
+        "-high": 6,
+        "-low": 7,
+        "-max": 8,
+        "-medium": 9,
+        "-minimal": 10,
+        "-xhigh": 11,
+        "0000000000000000000000000000000000000000000000000000000000000000": 13,
+        "1-flash": 15,
+        "1-sol": 16,
+        "1-terra": 17,
+        "12 planning documents; each stage extracts the obligations the plan places on the product (requirements, bans, checks, scope exclusions, conditions). The key is the 1,075 claims two blind judges agree on; the owner's sampled and disputed items are not settled yet, so quality numbers are preliminary.": 18,
+        "2026-11-06T15:00:00Z": 19,
+        "2026-11-06T16:00:00Z": 20,
+        "2026-11-06T16:01:00Z": 21,
+        "3-contributor": 23,
+        "8-max": 26,
+        "alibaba/qwen3.8-max": 27,
+        "alibaba/qwen4-max-preview": 28,
+        "answerKeyFinal": 29,
+        "anthropic": 30,
+        "anthropic/claude-fable-5-1": 31,
+        "anthropic/claude-fable-5-2": 32,
+        "anthropic/claude-haiku-5-5": 33,
+        "anthropic/claude-opus-5-5": 34,
+        "anthropic/claude-opus-5-5|claude-code|high": 35,
+        "anthropic/claude-opus-5-5|claude-code|high||": 36,
+        "anthropic/claude-sonnet-5-5": 37,
+        "audit-read": 38,
+        "Blind review of another run's work, judged later by a second reviewer.": 39,
+        "build": 40,
+        "Build": 41,
+        "build-new": 42,
+        "build-old": 43,
+        "building": 44,
+        "Building WorkNodes": 45,
+        "cheating": 46,
+        "Cheating": 47,
+        "claude": 48,
+        "Claude": 49,
+        "claude-code": 50,
+        "codex": 51,
+        "corrections": 52,
+        "corrections--absent": 53,
+        "corrections--build-new": 54,
+        "corrections--build-old": 55,
+        "corrections--cycle-a": 56,
+        "corrections--cycle-b": 57,
+        "corrections--duplicate": 58,
+        "corrections--foreign": 59,
+        "corrections--fork": 60,
+        "corrections--fork-early": 61,
+        "corrections--fork-late": 62,
+        "corrections--hook": 63,
+        "corrections--hook-fixed": 64,
+        "corrections--missing": 65,
+        "corrections--retarget": 66,
+        "corrections--review": 67,
+        "corrections--review-fixed": 68,
+        "corrections--right": 69,
+        "corrections--void": 70,
+        "corrections--void-review": 71,
+        "corrections--wrong": 72,
+        "corrections/runs/2026-11-06/vm.corrections--build-new.json": 73,
+        "corrections/runs/2026-11-06/vm.corrections--build-old.json": 74,
+        "corrections/runs/2026-11-06/vm.corrections--cycle-a.json": 75,
+        "corrections/runs/2026-11-06/vm.corrections--cycle-b.json": 76,
+        "corrections/runs/2026-11-06/vm.corrections--duplicate.json": 77,
+        "corrections/runs/2026-11-06/vm.corrections--foreign.json": 78,
+        "corrections/runs/2026-11-06/vm.corrections--fork-early.json": 79,
+        "corrections/runs/2026-11-06/vm.corrections--fork-late.json": 80,
+        "corrections/runs/2026-11-06/vm.corrections--fork.json": 81,
+        "corrections/runs/2026-11-06/vm.corrections--hook-fixed.json": 82,
+        "corrections/runs/2026-11-06/vm.corrections--hook.json": 83,
+        "corrections/runs/2026-11-06/vm.corrections--missing.json": 84,
+        "corrections/runs/2026-11-06/vm.corrections--retarget.json": 85,
+        "corrections/runs/2026-11-06/vm.corrections--review-fixed.json": 86,
+        "corrections/runs/2026-11-06/vm.corrections--review.json": 87,
+        "corrections/runs/2026-11-06/vm.corrections--right.json": 88,
+        "corrections/runs/2026-11-06/vm.corrections--void-review.json": 89,
+        "corrections/runs/2026-11-06/vm.corrections--void.json": 90,
+        "corrections/runs/2026-11-06/vm.corrections--wrong.json": 91,
+        "cost": 92,
+        "Cost": 93,
+        "credits/unit": 94,
+        "cycle-a": 95,
+        "cycle-b": 96,
+        "deepseek/deepseek-v4.1-flash": 97,
+        "done": 98,
+        "duplicate": 99,
+        "Duplicate copy": 100,
+        "Facts kept": 101,
+        "Facts kept in the final decisions, picked by id; verdicts compared with the reference model.": 102,
+        "facts-kept": 103,
+        "factsKept": 104,
+        "factsTotal": 105,
+        "fail": 106,
+        "fix": 107,
+        "fixture": 108,
+        "foreign": 109,
+        "fork": 110,
+        "fork-early": 111,
+        "fork-late": 112,
+        "goldAgreed": 113,
+        "google/gemini-4-argon": 114,
+        "GPT-6": 115,
+        "high": 116,
+        "higher": 117,
+        "hook": 118,
+        "hook-fixed": 119,
+        "Implementation work outside WorkNodes.": 120,
+        "laziness": 121,
+        "Laziness": 122,
+        "low": 123,
+        "lower": 124,
+        "mac.other--build": 125,
+        "max": 126,
+        "Measured credits or quota per accepted unit. Estimates are shown apart and labelled.": 127,
+        "Median of files read over files assigned and records judged over records assigned.": 128,
+        "Median wall seconds per unit of work, in the task type's unit.": 129,
+        "medium": 130,
+        "missing": 131,
+        "muse/muse-ember-1.0": 132,
+        "muse/muse-spark-1.3-contributor": 133,
+        "muse/muse-wonder-1.0": 134,
+        "muse/muse-wonder-full-1.0": 135,
+        "observed": 136,
+        "ok": 137,
+        "One 4-capability Scout test bed with 127 known plan-changing facts. Controlled experiments: compare only within one process version.": 138,
+        "openai": 139,
+        "openai/gpt-6-astra": 140,
+        "openai/gpt-6-luna": 141,
+        "openai/gpt-6.1-sol": 142,
+        "openai/gpt-6.1-sol|codex|low": 143,
+        "openai/gpt-6.1-sol|codex|low||": 144,
+        "openai/gpt-6.1-sol|codex|max": 145,
+        "openai/gpt-6.1-sol|codex|max||": 146,
+        "openai/gpt-6.1-terra": 147,
+        "Opus 5.5": 148,
+        "other--build": 149,
+        "Over-claimed passes": 150,
+        "overclaim": 151,
+        "pass": 152,
+        "plan": 153,
+        "plan-pilot2": 154,
+        "Planning wizard pilot 2": 155,
+        "Planning: share of the agreed obligations a run missed without flagging them.": 156,
+        "proj": 157,
+        "quality": 158,
+        "Quality": 159,
+        "record": 160,
+        "reliability": 161,
+        "Reliability": 162,
+        "retarget": 163,
+        "review": 164,
+        "Review": 165,
+        "right": 166,
+        "s/unit": 167,
+        "scout": 168,
+        "Scout test bed SV3/t9": 169,
+        "scout-sv3-t9": 170,
+        "Scout: share of the known plan-changing facts that reached the final decisions.": 171,
+        "Scout: share of verdicts that differ from the reference model's.": 172,
+        "share": 173,
+        "Share of runs flagged incomplete-read or scope-cut, or that read under 90% of what was assigned.": 174,
+        "Share of runs flagged shortcut, cheating, fabricated, test-weakened or false-claim. Each one is listed with its evidence.": 175,
+        "Share of runs that reported passing checks which a later review overturned.": 176,
+        "Share of runs that started and did not end failed or cancelled for infrastructure reasons.": 177,
+        "Share of the work a later blind review passed without overturning. Fix rounds on one item count once.": 178,
+        "silent": 179,
+        "Silent misses": 180,
+        "Silent misses on judge-agreed obligations (lower is better), and model seconds per 1,000 words.": 181,
+        "silent-misses": 182,
+        "Sol 6.1": 183,
+        "speed": 184,
+        "Speed": 185,
+        "task": 186,
+        "test": 187,
+        "thoroughness": 188,
+        "Thoroughness": 189,
+        "UTC": 190,
+        "Verdict drift": 191,
+        "verdict-drift": 192,
+        "verdictsChanged": 193,
+        "verdictsTotal": 194,
+        "vm.corrections": 195,
+        "vm.corrections--absent": 196,
+        "vm.corrections--build-new": 197,
+        "vm.corrections--build-old": 198,
+        "vm.corrections--cycle-a": 199,
+        "vm.corrections--cycle-b": 200,
+        "vm.corrections--duplicate": 201,
+        "vm.corrections--foreign": 202,
+        "vm.corrections--fork": 203,
+        "vm.corrections--fork-early": 204,
+        "vm.corrections--fork-late": 205,
+        "vm.corrections--hook": 206,
+        "vm.corrections--hook-fixed": 207,
+        "vm.corrections--missing": 208,
+        "vm.corrections--retarget": 209,
+        "vm.corrections--review": 210,
+        "vm.corrections--review-fixed": 211,
+        "vm.corrections--right": 212,
+        "vm.corrections--void": 213,
+        "vm.corrections--void-review": 214,
+        "vm.corrections--wrong": 215,
+        "void": 216,
+        "void-review": 217,
+        "Which models to use to build, fix, test and review WorkNodes.": 218,
+        "worknode-build": 219,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--build-new.json": 220,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--build-old.json": 221,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--cycle-a.json": 222,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--cycle-b.json": 223,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--duplicate.json": 224,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--foreign.json": 225,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--fork-early.json": 226,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--fork-late.json": 227,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--fork.json": 228,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--hook-fixed.json": 229,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--hook.json": 230,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--missing.json": 231,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--retarget.json": 232,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--review-fixed.json": 233,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--review.json": 234,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--right.json": 235,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--void-review.json": 236,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--void.json": 237,
+        "writers/vm.corrections/runs/2026-11-06/vm.corrections--wrong.json": 238,
+        "wrong": 239,
+        "xai/grok-4.7": 240,
+        "xhigh": 241,
+        "zai/glm-5.3": 242
+      }
+    }
+  },
+  "expected": {
+    "version": 1,
+    "generatedAt": "2026-11-06T16:30:00.000Z",
+    "refresh": {
+      "pollSeconds": 60
+    },
+    "sources": [
+      {
+        "id": "scoreboard-runs",
+        "label": "Agent runs",
+        "asOf": "2026-11-06T16:30:00.000Z",
+        "ageSeconds": 0,
+        "staleAfterSeconds": 180,
+        "state": "unreadable",
+        "detail": "5 files unreadable since 4:30 PM: vm.corrections/runs/2026-11-06/vm.corrections--missing.json (corrects names a missing run), vm.corrections/runs/2026-11-06/vm.corrections--foreign.json (corrects names another writer's run), vm.corrections/runs/2026-11-06/vm.corrections--cycle-a.json (corrects forms a cycle), vm.corrections/runs/2026-11-06/vm.corrections--cycle-b.json (corrects forms a cycle), vm.corrections/runs/2026-11-06/vm.corrections--fork-early.json (corrects conflict: a later correction wins). 7 runs from 1 writer read 4:30 PM (7 observed, 0 benchmark)."
+      },
+      {
+        "id": "scoreboard-catalog",
+        "label": "Scoreboard catalog",
+        "asOf": "2026-11-06T16:30:00.000Z",
+        "ageSeconds": 0,
+        "staleAfterSeconds": 180,
+        "state": "ok",
+        "detail": "Catalog read 4:30 PM."
+      }
+    ],
+    "catalog": {
+      "minRuns": 5,
+      "models": [
+        {
+          "model": "anthropic/claude-opus-5-5",
+          "label": "Opus 5.5",
+          "family": "Claude",
+          "runtimes": [
+            "claude-code"
+          ],
+          "efforts": [
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "prices": null,
+          "notes": null
+        },
+        {
+          "model": "openai/gpt-6.1-sol",
+          "label": "Sol 6.1",
+          "family": "GPT-6",
+          "runtimes": [
+            "codex"
+          ],
+          "efforts": [
+            "medium",
+            "high",
+            "max"
+          ],
+          "prices": null,
+          "notes": null
+        }
+      ],
+      "taskTypes": [
+        {
+          "id": "build",
+          "label": "Build",
+          "description": "Implementation work outside WorkNodes.",
+          "unit": "task",
+          "measures": [
+            "speed",
+            "quality",
+            "thoroughness",
+            "laziness",
+            "cheating",
+            "cost",
+            "reliability",
+            "overclaim"
+          ],
+          "byProcess": false
+        },
+        {
+          "id": "review",
+          "label": "Review",
+          "description": "Blind review of another run's work, judged later by a second reviewer.",
+          "unit": "record",
+          "measures": [
+            "speed",
+            "quality",
+            "thoroughness",
+            "laziness",
+            "cheating",
+            "cost",
+            "reliability"
+          ],
+          "byProcess": false
+        }
+      ],
+      "measures": [
+        {
+          "id": "speed",
+          "label": "Speed",
+          "better": "lower",
+          "unit": "s/unit",
+          "description": "Median wall seconds per unit of work, in the task type's unit.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "quality",
+          "label": "Quality",
+          "better": "higher",
+          "unit": "share",
+          "description": "Share of the work a later blind review passed without overturning. Fix rounds on one item count once.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "thoroughness",
+          "label": "Thoroughness",
+          "better": "higher",
+          "unit": "share",
+          "description": "Median of files read over files assigned and records judged over records assigned.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "laziness",
+          "label": "Laziness",
+          "better": "lower",
+          "unit": "share",
+          "description": "Share of runs flagged incomplete-read or scope-cut, or that read under 90% of what was assigned.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "cheating",
+          "label": "Cheating",
+          "better": "lower",
+          "unit": "share",
+          "description": "Share of runs flagged shortcut, cheating, fabricated, test-weakened or false-claim. Each one is listed with its evidence.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "cost",
+          "label": "Cost",
+          "better": "lower",
+          "unit": "credits/unit",
+          "description": "Measured credits or quota per accepted unit. Estimates are shown apart and labelled.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "reliability",
+          "label": "Reliability",
+          "better": "higher",
+          "unit": "share",
+          "description": "Share of runs that started and did not end failed or cancelled for infrastructure reasons.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "overclaim",
+          "label": "Over-claimed passes",
+          "better": "lower",
+          "unit": "share",
+          "description": "Share of runs that reported passing checks which a later review overturned.",
+          "metric": null,
+          "preliminaryUnless": null
+        },
+        {
+          "id": "facts-kept",
+          "label": "Facts kept",
+          "better": "higher",
+          "unit": "share",
+          "description": "Scout: share of the known plan-changing facts that reached the final decisions.",
+          "metric": {
+            "of": "factsKept",
+            "per": "factsTotal"
+          },
+          "preliminaryUnless": null
+        },
+        {
+          "id": "verdict-drift",
+          "label": "Verdict drift",
+          "better": "lower",
+          "unit": "share",
+          "description": "Scout: share of verdicts that differ from the reference model's.",
+          "metric": {
+            "of": "verdictsChanged",
+            "per": "verdictsTotal"
+          },
+          "preliminaryUnless": null
+        },
+        {
+          "id": "silent-misses",
+          "label": "Silent misses",
+          "better": "lower",
+          "unit": "share",
+          "description": "Planning: share of the agreed obligations a run missed without flagging them.",
+          "metric": {
+            "of": "silent",
+            "per": "goldAgreed"
+          },
+          "preliminaryUnless": "answerKeyFinal"
+        }
+      ],
+      "uses": [
+        {
+          "id": "building",
+          "label": "Building WorkNodes",
+          "description": "Which models to use to build, fix, test and review WorkNodes.",
+          "taskTypes": [
+            "worknode-build",
+            "build",
+            "fix",
+            "test",
+            "review",
+            "audit-read"
+          ],
+          "weights": {
+            "quality": 3,
+            "cheating": 3,
+            "overclaim": 2,
+            "laziness": 2,
+            "reliability": 1,
+            "speed": 1,
+            "cost": 1
+          }
+        }
+      ],
+      "benchmarks": [
+        {
+          "id": "scout-sv3-t9",
+          "label": "Scout test bed SV3/t9",
+          "taskType": "scout",
+          "description": "One 4-capability Scout test bed with 127 known plan-changing facts. Controlled experiments: compare only within one process version.",
+          "items": 127,
+          "scoring": "Facts kept in the final decisions, picked by id; verdicts compared with the reference model."
+        },
+        {
+          "id": "plan-pilot2",
+          "label": "Planning wizard pilot 2",
+          "taskType": "plan",
+          "description": "12 planning documents; each stage extracts the obligations the plan places on the product (requirements, bans, checks, scope exclusions, conditions). The key is the 1,075 claims two blind judges agree on; the owner's sampled and disputed items are not settled yet, so quality numbers are preliminary.",
+          "items": 12,
+          "scoring": "Silent misses on judge-agreed obligations (lower is better), and model seconds per 1,000 words."
+        }
+      ]
+    },
+    "uses": [
+      {
+        "id": "building",
+        "label": "Building WorkNodes",
+        "description": "Which models to use to build, fix, test and review WorkNodes.",
+        "taskTypes": [
+          {
+            "id": "build",
+            "label": "Build",
+            "description": "Implementation work outside WorkNodes.",
+            "unit": "task",
+            "measures": [
+              "speed",
+              "quality",
+              "thoroughness",
+              "laziness",
+              "cheating",
+              "cost",
+              "reliability",
+              "overclaim"
+            ],
+            "byProcess": false,
+            "rows": [
+              {
+                "key": "openai/gpt-6.1-sol|codex|low",
+                "model": "openai/gpt-6.1-sol",
+                "label": "Sol 6.1",
+                "inCatalog": true,
+                "runtime": "codex",
+                "effort": "low",
+                "process": null,
+                "n": {
+                  "observed": 3,
+                  "benchmark": 0
+                },
+                "basis": null,
+                "benchmark": null,
+                "ranked": false,
+                "rank": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too little data (n = 3)",
+                "observed": {
+                  "source": "observed",
+                  "benchmark": null,
+                  "benchmarkLabel": null,
+                  "n": 3,
+                  "imported": 0,
+                  "reviews": 1,
+                  "ranked": false,
+                  "rank": null,
+                  "score": null,
+                  "verdict": "not-enough-data",
+                  "verdictLabel": "Not enough data yet",
+                  "why": "too little data (n = 3)",
+                  "preliminary": false,
+                  "measures": {
+                    "speed": {
+                      "value": 100,
+                      "unit": "s/task",
+                      "n": 3,
+                      "low": 100,
+                      "high": 100,
+                      "interval": "range",
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "perTask": {
+                        "value": 100,
+                        "n": 3,
+                        "low": 100,
+                        "high": 100
+                      }
+                    },
+                    "quality": {
+                      "value": 1,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0.2699,
+                      "high": 1,
+                      "interval": "wilson90",
+                      "of": 1,
+                      "per": 1,
+                      "preliminary": false,
+                      "disputed": 0,
+                      "cannotVerify": 0,
+                      "rounds": {
+                        "value": 1,
+                        "n": 1,
+                        "low": 1,
+                        "high": 1
+                      },
+                      "firstTry": 1,
+                      "overturns": []
+                    },
+                    "thoroughness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "files": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "records": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      }
+                    },
+                    "laziness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false
+                    },
+                    "cheating": {
+                      "value": 0,
+                      "unit": "share",
+                      "n": 3,
+                      "low": 0,
+                      "high": 0.4742,
+                      "interval": "wilson90",
+                      "of": 0,
+                      "per": 3,
+                      "preliminary": false
+                    },
+                    "cost": {
+                      "value": null,
+                      "unit": "credits/task",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "quota": [],
+                      "usd": null,
+                      "estimate": null
+                    },
+                    "reliability": {
+                      "value": 1,
+                      "unit": "share",
+                      "n": 3,
+                      "low": 0.5258,
+                      "high": 1,
+                      "interval": "wilson90",
+                      "of": 3,
+                      "per": 3,
+                      "preliminary": false
+                    },
+                    "overclaim": {
+                      "value": 0,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0,
+                      "high": 0.7301,
+                      "interval": "wilson90",
+                      "of": 0,
+                      "per": 1,
+                      "preliminary": false
+                    }
+                  },
+                  "flags": [],
+                  "runs": [
+                    {
+                      "id": "vm.corrections--build-new",
+                      "writer": "vm.corrections",
+                      "source": "observed",
+                      "benchmark": null,
+                      "project": "proj",
+                      "stream": null,
+                      "task": {
+                        "id": "build-new",
+                        "type": "build",
+                        "title": "build-new"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "low",
+                      "process": null,
+                      "outcome": "done",
+                      "endedAt": "2026-11-06T15:00:00Z",
+                      "wallSeconds": 100,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    },
+                    {
+                      "id": "vm.corrections--fork-late",
+                      "writer": "vm.corrections",
+                      "source": "observed",
+                      "benchmark": null,
+                      "project": "proj",
+                      "stream": null,
+                      "task": {
+                        "id": "fork-late",
+                        "type": "build",
+                        "title": "fork-late"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "low",
+                      "process": null,
+                      "outcome": "done",
+                      "endedAt": "2026-11-06T15:00:00Z",
+                      "wallSeconds": 100,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    },
+                    {
+                      "id": "vm.corrections--wrong",
+                      "writer": "vm.corrections",
+                      "source": "observed",
+                      "benchmark": null,
+                      "project": "proj",
+                      "stream": null,
+                      "task": {
+                        "id": "wrong",
+                        "type": "build",
+                        "title": "wrong"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "low",
+                      "process": null,
+                      "outcome": "done",
+                      "endedAt": "2026-11-06T15:00:00Z",
+                      "wallSeconds": 100,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    }
+                  ]
+                },
+                "benchmarks": []
+              },
+              {
+                "key": "anthropic/claude-opus-5-5|claude-code|high",
+                "model": "anthropic/claude-opus-5-5",
+                "label": "Opus 5.5",
+                "inCatalog": true,
+                "runtime": "claude-code",
+                "effort": "high",
+                "process": null,
+                "n": {
+                  "observed": 1,
+                  "benchmark": 0
+                },
+                "basis": null,
+                "benchmark": null,
+                "ranked": false,
+                "rank": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too little data (n = 1)",
+                "observed": {
+                  "source": "observed",
+                  "benchmark": null,
+                  "benchmarkLabel": null,
+                  "n": 1,
+                  "imported": 0,
+                  "reviews": 1,
+                  "ranked": false,
+                  "rank": null,
+                  "score": null,
+                  "verdict": "not-enough-data",
+                  "verdictLabel": "Not enough data yet",
+                  "why": "too little data (n = 1)",
+                  "preliminary": false,
+                  "measures": {
+                    "speed": {
+                      "value": 100,
+                      "unit": "s/task",
+                      "n": 1,
+                      "low": 100,
+                      "high": 100,
+                      "interval": "range",
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "perTask": {
+                        "value": 100,
+                        "n": 1,
+                        "low": 100,
+                        "high": 100
+                      }
+                    },
+                    "quality": {
+                      "value": 0,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0,
+                      "high": 0.7301,
+                      "interval": "wilson90",
+                      "of": 0,
+                      "per": 1,
+                      "preliminary": false,
+                      "disputed": 0,
+                      "cannotVerify": 0,
+                      "rounds": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "firstTry": 0,
+                      "overturns": [
+                        {
+                          "run": "vm.corrections--right",
+                          "review": "vm.corrections--review-fixed",
+                          "by": "openai/gpt-6.1-sol low",
+                          "disputed": false,
+                          "evidence": null
+                        }
+                      ]
+                    },
+                    "thoroughness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "files": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "records": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      }
+                    },
+                    "laziness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false
+                    },
+                    "cheating": {
+                      "value": 0,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0,
+                      "high": 0.7301,
+                      "interval": "wilson90",
+                      "of": 0,
+                      "per": 1,
+                      "preliminary": false
+                    },
+                    "cost": {
+                      "value": null,
+                      "unit": "credits/task",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "quota": [],
+                      "usd": null,
+                      "estimate": null
+                    },
+                    "reliability": {
+                      "value": 1,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0.2699,
+                      "high": 1,
+                      "interval": "wilson90",
+                      "of": 1,
+                      "per": 1,
+                      "preliminary": false
+                    },
+                    "overclaim": {
+                      "value": 1,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0.2699,
+                      "high": 1,
+                      "interval": "wilson90",
+                      "of": 1,
+                      "per": 1,
+                      "preliminary": false
+                    }
+                  },
+                  "flags": [],
+                  "runs": [
+                    {
+                      "id": "vm.corrections--right",
+                      "writer": "vm.corrections",
+                      "source": "observed",
+                      "benchmark": null,
+                      "project": "proj",
+                      "stream": null,
+                      "task": {
+                        "id": "right",
+                        "type": "build",
+                        "title": "right"
+                      },
+                      "model": "anthropic/claude-opus-5-5",
+                      "label": "Opus 5.5",
+                      "runtime": "claude-code",
+                      "effort": "high",
+                      "process": null,
+                      "outcome": "done",
+                      "endedAt": "2026-11-06T15:00:00Z",
+                      "wallSeconds": 100,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    }
+                  ]
+                },
+                "benchmarks": []
+              },
+              {
+                "key": "openai/gpt-6.1-sol|codex|max",
+                "model": "openai/gpt-6.1-sol",
+                "label": "Sol 6.1",
+                "inCatalog": true,
+                "runtime": "codex",
+                "effort": "max",
+                "process": null,
+                "n": {
+                  "observed": 1,
+                  "benchmark": 0
+                },
+                "basis": null,
+                "benchmark": null,
+                "ranked": false,
+                "rank": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too little data (n = 1)",
+                "observed": {
+                  "source": "observed",
+                  "benchmark": null,
+                  "benchmarkLabel": null,
+                  "n": 1,
+                  "imported": 0,
+                  "reviews": 0,
+                  "ranked": false,
+                  "rank": null,
+                  "score": null,
+                  "verdict": "not-enough-data",
+                  "verdictLabel": "Not enough data yet",
+                  "why": "too little data (n = 1)",
+                  "preliminary": false,
+                  "measures": {
+                    "speed": {
+                      "value": 100,
+                      "unit": "s/task",
+                      "n": 1,
+                      "low": 100,
+                      "high": 100,
+                      "interval": "range",
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "perTask": {
+                        "value": 100,
+                        "n": 1,
+                        "low": 100,
+                        "high": 100
+                      }
+                    },
+                    "quality": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "disputed": 0,
+                      "cannotVerify": 0,
+                      "rounds": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "firstTry": 0,
+                      "overturns": []
+                    },
+                    "thoroughness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "files": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "records": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      }
+                    },
+                    "laziness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false
+                    },
+                    "cheating": {
+                      "value": 0,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0,
+                      "high": 0.7301,
+                      "interval": "wilson90",
+                      "of": 0,
+                      "per": 1,
+                      "preliminary": false
+                    },
+                    "cost": {
+                      "value": null,
+                      "unit": "credits/task",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "quota": [],
+                      "usd": null,
+                      "estimate": null
+                    },
+                    "reliability": {
+                      "value": 1,
+                      "unit": "share",
+                      "n": 1,
+                      "low": 0.2699,
+                      "high": 1,
+                      "interval": "wilson90",
+                      "of": 1,
+                      "per": 1,
+                      "preliminary": false
+                    },
+                    "overclaim": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false
+                    }
+                  },
+                  "flags": [],
+                  "runs": [
+                    {
+                      "id": "vm.corrections--hook-fixed",
+                      "writer": "vm.corrections",
+                      "source": "observed",
+                      "benchmark": null,
+                      "project": "proj",
+                      "stream": null,
+                      "task": {
+                        "id": "hook-fixed",
+                        "type": "build",
+                        "title": "hook-fixed"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "max",
+                      "process": null,
+                      "outcome": "done",
+                      "endedAt": "2026-11-06T15:00:00Z",
+                      "wallSeconds": 100,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    }
+                  ]
+                },
+                "benchmarks": []
+              }
+            ]
+          },
+          {
+            "id": "review",
+            "label": "Review",
+            "description": "Blind review of another run's work, judged later by a second reviewer.",
+            "unit": "record",
+            "measures": [
+              "speed",
+              "quality",
+              "thoroughness",
+              "laziness",
+              "cheating",
+              "cost",
+              "reliability"
+            ],
+            "byProcess": false,
+            "rows": [
+              {
+                "key": "openai/gpt-6.1-sol|codex|low",
+                "model": "openai/gpt-6.1-sol",
+                "label": "Sol 6.1",
+                "inCatalog": true,
+                "runtime": "codex",
+                "effort": "low",
+                "process": null,
+                "n": {
+                  "observed": 2,
+                  "benchmark": 0
+                },
+                "basis": null,
+                "benchmark": null,
+                "ranked": false,
+                "rank": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too little data (n = 2)",
+                "observed": {
+                  "source": "observed",
+                  "benchmark": null,
+                  "benchmarkLabel": null,
+                  "n": 2,
+                  "imported": 0,
+                  "reviews": 0,
+                  "ranked": false,
+                  "rank": null,
+                  "score": null,
+                  "verdict": "not-enough-data",
+                  "verdictLabel": "Not enough data yet",
+                  "why": "too little data (n = 2)",
+                  "preliminary": false,
+                  "measures": {
+                    "speed": {
+                      "value": null,
+                      "unit": "s/record",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "perTask": {
+                        "value": 100,
+                        "n": 2,
+                        "low": 100,
+                        "high": 100
+                      }
+                    },
+                    "quality": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "disputed": 0,
+                      "cannotVerify": 0,
+                      "rounds": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "firstTry": 0,
+                      "overturns": []
+                    },
+                    "thoroughness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "files": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "records": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      }
+                    },
+                    "laziness": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false
+                    },
+                    "cheating": {
+                      "value": 0,
+                      "unit": "share",
+                      "n": 2,
+                      "low": 0,
+                      "high": 0.575,
+                      "interval": "wilson90",
+                      "of": 0,
+                      "per": 2,
+                      "preliminary": false
+                    },
+                    "cost": {
+                      "value": null,
+                      "unit": "credits/record",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "quota": [],
+                      "usd": null,
+                      "estimate": null
+                    },
+                    "reliability": {
+                      "value": 1,
+                      "unit": "share",
+                      "n": 2,
+                      "low": 0.425,
+                      "high": 1,
+                      "interval": "wilson90",
+                      "of": 2,
+                      "per": 2,
+                      "preliminary": false
+                    }
+                  },
+                  "flags": [],
+                  "runs": [
+                    {
+                      "id": "vm.corrections--retarget",
+                      "writer": "vm.corrections",
+                      "source": "observed",
+                      "benchmark": null,
+                      "project": "proj",
+                      "stream": null,
+                      "task": {
+                        "id": "retarget",
+                        "type": "review",
+                        "title": "Review"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "low",
+                      "process": null,
+                      "outcome": "done",
+                      "endedAt": "2026-11-06T15:00:00Z",
+                      "wallSeconds": 100,
+                      "imported": null,
+                      "review": {
+                        "of": "vm.corrections--build-new",
+                        "verdict": "pass",
+                        "overturned": false,
+                        "disputed": false,
+                        "by": null
+                      },
+                      "flags": 0,
+                      "evidence": []
+                    },
+                    {
+                      "id": "vm.corrections--review-fixed",
+                      "writer": "vm.corrections",
+                      "source": "observed",
+                      "benchmark": null,
+                      "project": "proj",
+                      "stream": null,
+                      "task": {
+                        "id": "review",
+                        "type": "review",
+                        "title": "Review"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "low",
+                      "process": null,
+                      "outcome": "done",
+                      "endedAt": "2026-11-06T15:00:00Z",
+                      "wallSeconds": 100,
+                      "imported": null,
+                      "review": {
+                        "of": "vm.corrections--right",
+                        "verdict": "fail",
+                        "overturned": true,
+                        "disputed": false,
+                        "by": null
+                      },
+                      "flags": 0,
+                      "evidence": []
+                    }
+                  ]
+                },
+                "benchmarks": []
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "recent": [
+      {
+        "id": "vm.corrections--build-new",
+        "writer": "vm.corrections",
+        "source": "observed",
+        "benchmark": null,
+        "project": "proj",
+        "stream": null,
+        "task": {
+          "id": "build-new",
+          "type": "build",
+          "title": "build-new"
+        },
+        "model": "openai/gpt-6.1-sol",
+        "label": "Sol 6.1",
+        "runtime": "codex",
+        "effort": "low",
+        "process": null,
+        "outcome": "done",
+        "endedAt": "2026-11-06T15:00:00Z",
+        "wallSeconds": 100,
+        "imported": null,
+        "review": null,
+        "flags": 0,
+        "evidence": []
+      },
+      {
+        "id": "vm.corrections--fork-late",
+        "writer": "vm.corrections",
+        "source": "observed",
+        "benchmark": null,
+        "project": "proj",
+        "stream": null,
+        "task": {
+          "id": "fork-late",
+          "type": "build",
+          "title": "fork-late"
+        },
+        "model": "openai/gpt-6.1-sol",
+        "label": "Sol 6.1",
+        "runtime": "codex",
+        "effort": "low",
+        "process": null,
+        "outcome": "done",
+        "endedAt": "2026-11-06T15:00:00Z",
+        "wallSeconds": 100,
+        "imported": null,
+        "review": null,
+        "flags": 0,
+        "evidence": []
+      },
+      {
+        "id": "vm.corrections--hook-fixed",
+        "writer": "vm.corrections",
+        "source": "observed",
+        "benchmark": null,
+        "project": "proj",
+        "stream": null,
+        "task": {
+          "id": "hook-fixed",
+          "type": "build",
+          "title": "hook-fixed"
+        },
+        "model": "openai/gpt-6.1-sol",
+        "label": "Sol 6.1",
+        "runtime": "codex",
+        "effort": "max",
+        "process": null,
+        "outcome": "done",
+        "endedAt": "2026-11-06T15:00:00Z",
+        "wallSeconds": 100,
+        "imported": null,
+        "review": null,
+        "flags": 0,
+        "evidence": []
+      },
+      {
+        "id": "vm.corrections--retarget",
+        "writer": "vm.corrections",
+        "source": "observed",
+        "benchmark": null,
+        "project": "proj",
+        "stream": null,
+        "task": {
+          "id": "retarget",
+          "type": "review",
+          "title": "Review"
+        },
+        "model": "openai/gpt-6.1-sol",
+        "label": "Sol 6.1",
+        "runtime": "codex",
+        "effort": "low",
+        "process": null,
+        "outcome": "done",
+        "endedAt": "2026-11-06T15:00:00Z",
+        "wallSeconds": 100,
+        "imported": null,
+        "review": {
+          "of": "vm.corrections--build-new",
+          "verdict": "pass",
+          "overturned": false,
+          "disputed": false,
+          "by": null
+        },
+        "flags": 0,
+        "evidence": []
+      },
+      {
+        "id": "vm.corrections--review-fixed",
+        "writer": "vm.corrections",
+        "source": "observed",
+        "benchmark": null,
+        "project": "proj",
+        "stream": null,
+        "task": {
+          "id": "review",
+          "type": "review",
+          "title": "Review"
+        },
+        "model": "openai/gpt-6.1-sol",
+        "label": "Sol 6.1",
+        "runtime": "codex",
+        "effort": "low",
+        "process": null,
+        "outcome": "done",
+        "endedAt": "2026-11-06T15:00:00Z",
+        "wallSeconds": 100,
+        "imported": null,
+        "review": {
+          "of": "vm.corrections--right",
+          "verdict": "fail",
+          "overturned": true,
+          "disputed": false,
+          "by": null
+        },
+        "flags": 0,
+        "evidence": []
+      },
+      {
+        "id": "vm.corrections--right",
+        "writer": "vm.corrections",
+        "source": "observed",
+        "benchmark": null,
+        "project": "proj",
+        "stream": null,
+        "task": {
+          "id": "right",
+          "type": "build",
+          "title": "right"
+        },
+        "model": "anthropic/claude-opus-5-5",
+        "label": "Opus 5.5",
+        "runtime": "claude-code",
+        "effort": "high",
+        "process": null,
+        "outcome": "done",
+        "endedAt": "2026-11-06T15:00:00Z",
+        "wallSeconds": 100,
+        "imported": null,
+        "review": null,
+        "flags": 0,
+        "evidence": []
+      },
+      {
+        "id": "vm.corrections--wrong",
+        "writer": "vm.corrections",
+        "source": "observed",
+        "benchmark": null,
+        "project": "proj",
+        "stream": null,
+        "task": {
+          "id": "wrong",
+          "type": "build",
+          "title": "wrong"
+        },
+        "model": "openai/gpt-6.1-sol",
+        "label": "Sol 6.1",
+        "runtime": "codex",
+        "effort": "low",
+        "process": null,
+        "outcome": "done",
+        "endedAt": "2026-11-06T15:00:00Z",
+        "wallSeconds": 100,
+        "imported": null,
+        "review": null,
+        "flags": 0,
+        "evidence": []
+      }
+    ],
+    "unscored": {
+      "total": 5,
+      "scanLimit": 0,
+      "unreadable": 5,
+      "noModel": 0,
+      "noTaskType": 0,
+      "unknownModel": 0,
+      "unknownTaskType": 0,
+      "unknownModels": [],
+      "examples": []
+    }
+  }
+}

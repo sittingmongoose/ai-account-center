@@ -7,8 +7,9 @@ tasks, card, answer, run, status. `schemas/` holds the six schemas;
 The same six schema files are published on the share at
 /mnt/Cursor/agent-reports/v1/schemas/ for writers and readers.
 
-Source of truth is the written spec on the share
-(see the 2026-11-06-status-tabs folder); these files copy it.
+The format is kept in [FORMAT.md](FORMAT.md), including the additive run@1
+correction revision and the exact CLI contract for tools-lead. The share copy
+is published with the matching reader release.
 
 Timestamps carry `"format": "date-time"` beside their pattern. A 2020-12
 validator treats `format` as an annotation, so the pattern stays the hard
@@ -41,3 +42,10 @@ id is at most 194 and fits `review.of`. The reader keeps each exactly as written
 never cut to fit, and `run.json` publishes the same numbers as `maxLength`. A
 refused id says which rule it broke: the writer prefix, the length or the grammar.
 Card local ids keep their 64-character bound.
+
+Run corrections (2026-11-15): optional `corrects` replaces an earlier same-writer run
+in full; `void: { "reason": "..." }` with `corrects` retracts a duplicate. Always use
+a new id/file. Correct wrong review targets or hook metadata; void only work that
+should not count. Readers resolve complete chains before filters and retarget
+reviews. Deploy the correction-aware readers before enabling these CLI writes.
+The CLI belongs to tools-lead; this repo publishes its contract, not its code.

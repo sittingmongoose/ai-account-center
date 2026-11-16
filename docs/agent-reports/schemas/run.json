@@ -64,7 +64,7 @@
   "$id": "agent-reports/run@1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "One finished run or review. Size cap: 32 KB (see spec).",
+  "description": "One finished run or review. Size cap: 32 KB. Additive run@1 revision 2026-11-15: corrects and void; deploy correction-aware readers before writers.",
   "properties": {
     "benchmark": {
       "description": "Benchmark id, for source benchmark.",
@@ -520,6 +520,27 @@
     "unknownModel": {
       "description": "True when the writer found model.id missing from catalog/models.json (agent-report 1.6). Optional; absent means false. The run is still read and counted.",
       "type": "boolean"
+    },
+    "corrects": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 194,
+      "description": "Earlier run id by this same writer. This record replaces the target entirely. Resolve complete correction chains before scoring or filtering."
+    },
+    "void": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "description": "Retract the corrected chain without a scored replacement. Requires corrects."
     }
   },
   "required": [
@@ -537,5 +558,20 @@
     "writer",
     "writtenAt"
   ],
-  "type": "object"
+  "type": "object",
+  "anyOf": [
+    {
+      "required": [
+        "corrects"
+      ]
+    },
+    {
+      "properties": {
+        "void": {
+          "type": "null"
+        }
+      },
+      "description": "Without corrects, void must be absent (the top-level object type also disallows null)."
+    }
+  ]
 }

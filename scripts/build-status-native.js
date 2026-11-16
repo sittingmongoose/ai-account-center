@@ -70,6 +70,7 @@ function sourceFiles() {
     '../aac-core/Cargo.toml',
     '../../config/private-files.json',
     '../../tests/spec/wire-words.json',
+    '../../native/shared/run_corrections.rs',
   ];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(path.join(CRATE, dir), { withFileTypes: true })) {
