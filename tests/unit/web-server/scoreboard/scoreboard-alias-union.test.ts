@@ -64,8 +64,8 @@ describe('the published alias table', () => {
     for (const [written, canonical] of Object.entries(builtin.aliases))
       expect([written, packaged.aliases[written]]).toEqual([written, canonical]);
     for (const suffix of builtin.effortSuffixes) expect(packaged.effortSuffixes).toContain(suffix);
-    // The union (108), the explicit Qwen spellings (4), and Gemini 4 Hydrogen's (2).
-    expect(Object.keys(packaged.aliases)).toHaveLength(114);
+    // The union (108), explicit Qwen spellings (4), Gemini 4 Hydrogen (2), and Astra 6.2 (6).
+    expect(Object.keys(packaged.aliases)).toHaveLength(120);
     const known = new Set(models.map((model) => model.model));
     for (const canonical of Object.values(packaged.aliases))
       expect(known.has(canonical)).toBe(true);
@@ -99,6 +99,7 @@ describe('the published alias table', () => {
       'alibaba/qwen3.8-max',
       'alibaba/qwen4-max-preview',
       'google/gemini-4-hydrogen',
+      'openai/gpt-6.2-astra',
     ];
     const nov11 = published.models.filter((model) => !NEW_MODELS.includes(model.model));
     expect(nov11).toHaveLength(16);
@@ -136,6 +137,21 @@ describe('the published alias table', () => {
     expect(
       normalizeModel('gemini-4-hydrogen-high', null, published.models, published.table)
     ).toEqual({ id: 'google/gemini-4-hydrogen', effort: 'high' });
+  });
+
+  it('resolves Astra 6.2 review spellings with max effort', async () => {
+    const entry = models.find((model) => model.model === 'openai/gpt-6.2-astra');
+    expect(entry?.runtimes).toEqual(['codex']);
+    expect(entry?.efforts).toEqual(['max']);
+    const published = await publishedTable();
+    for (const prefix of ['', 'codex/', 'cursor/', 'omp/', 'opencode-go/', 'zcode/']) {
+      const written = `${prefix}gpt-6.2-astra`;
+      expect(packaged.aliases[written]).toBe('openai/gpt-6.2-astra');
+      expect(normalizeModel(written, 'max', published.models, published.table)).toEqual({
+        id: 'openai/gpt-6.2-astra',
+        effort: 'max',
+      });
+    }
   });
 
   // Review 1, L5: a catalog model whose own name ends in an effort word must have its spellings as
