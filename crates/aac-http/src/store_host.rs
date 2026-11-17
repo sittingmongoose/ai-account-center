@@ -112,7 +112,6 @@ struct Jobs {
     passes: u64,
     last_pass_ms: Option<u64>,
     last_error: Option<String>,
-    last_share_failed_ms: Option<u64>,
 }
 
 struct State {
@@ -257,6 +256,18 @@ impl StoreHost {
 
     fn jobs_json(&self) -> String {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        // The persisted failure records survive a host restart; each is one meta write
+        // holding a monotonic sequence plus code/time, so a backward wall clock cannot
+        // hide a new failure (round 3 L1).
+        let (error, share) = self
+            .engine()
+            .map(|engine| {
+                (
+                    failure_record(&engine, "ts:host_job_last_error"),
+                    failure_record(&engine, "ts:host_job_last_share_failure"),
+                )
+            })
+            .unwrap_or((Value::Null, Value::Null));
         json!({
             "open": self.engine().is_some(),
             "bootError": state.boot_error,
@@ -264,7 +275,11 @@ impl StoreHost {
                 "passes": state.jobs.passes,
                 "lastPassMs": state.jobs.last_pass_ms,
                 "lastError": state.jobs.last_error,
-                "lastShareFailedMs": state.jobs.last_share_failed_ms,
+                "lastErrorCode": error["code"],
+                "lastErrorMs": error["ms"],
+                "lastErrorSeq": error["seq"],
+                "lastShareFailedMs": share["ms"],
+                "lastShareSeq": share["seq"],
             },
         })
         .to_string()
@@ -296,11 +311,35 @@ impl StoreHost {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state.jobs.passes += 1;
         state.jobs.last_pass_ms = Some(now);
-        if error.is_some() {
-            state.jobs.last_error = error;
+        if let Some(error) = &error {
+            state.jobs.last_error = Some(error.clone());
         }
-        if share_failed {
-            state.jobs.last_share_failed_ms = Some(now);
+        drop(state);
+        // R3 review L1: the operator warning must survive a host restart. Persist one
+        // record per failure kind — a monotonic sequence with the fixed code and time
+        // (never the message, which can name private paths). TS's hosted-jobs watch reads
+        // them back through `hostJobs` and warns as it does for the in-process loop; the
+        // sequence, not the wall time, identifies a new failure (round 3 L1).
+        if let Some(engine) = self.engine() {
+            let stamp = |key: &str, record: Value| {
+                if let Err(error) = engine.set_meta(key, &record.to_string()) {
+                    tracing::warn!(target: "aac_http", "store job diagnostic not persisted: {error}");
+                }
+            };
+            if let Some(error) = &error {
+                let seq = next_failure_seq(&engine, "ts:host_job_last_error");
+                stamp(
+                    "ts:host_job_last_error",
+                    json!({"seq": seq, "code": job_error_code(error), "ms": now}),
+                );
+            }
+            if share_failed {
+                let seq = next_failure_seq(&engine, "ts:host_job_last_share_failure");
+                stamp(
+                    "ts:host_job_last_share_failure",
+                    json!({"seq": seq, "ms": now}),
+                );
+            }
         }
     }
 
@@ -360,6 +399,34 @@ impl StoreHost {
             }
         }));
     }
+}
+
+/// A job failure's fixed code, as TS's `storeErrorCode` reads it: the `<code>:` prefix when
+/// it is one, else `unknown`. The message itself can name private paths and never persists.
+fn job_error_code(error: &str) -> String {
+    let code = error.split(": ").next().unwrap_or("");
+    if !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+        code.to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+/// A persisted failure record, or null when none exists: one meta value holding the
+/// monotonic sequence and the code/time, written as one record so a crash cannot split them.
+fn failure_record(engine: &Engine, key: &str) -> Value {
+    engine
+        .get_meta(key)
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// The next failure sequence for a record key: monotonic across passes and restarts,
+/// independent of the wall clock (round 3 L1).
+fn next_failure_seq(engine: &Engine, key: &str) -> u64 {
+    failure_record(engine, key)["seq"].as_u64().unwrap_or(0) + 1
 }
 
 #[cfg(test)]
@@ -462,6 +529,152 @@ mod tests {
         assert!(share.join("sets").is_dir(), "the share copy was mirrored");
         let jobs = host.jobs_json();
         assert!(jobs.contains("\"passes\":1"), "{jobs}");
+        let jobs: Value = serde_json::from_str(&jobs).map_err(|e| e.to_string())?;
+        assert_eq!(
+            jobs["jobs"]["lastErrorMs"],
+            Value::Null,
+            "a healthy pass names no failure"
+        );
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], Value::Null);
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], Value::Null);
+        assert_eq!(jobs["jobs"]["lastShareSeq"], Value::Null);
+        host.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_share_backup_keeps_its_warning_across_a_host_restart() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dir = root.path().join("store");
+        // A file where the share folder should be: the local backup succeeds, the mirror fails.
+        let share = root.path().join("share-copy");
+        std::fs::write(&share, b"not a folder").map_err(|e| e.to_string())?;
+        let mut config = boot(dir.clone());
+        config.share_backup_dir = Some(share.clone());
+        let host = StoreHost::new(config);
+        host.open_at_boot();
+        let now = aac_store::engine::now_ms();
+        host.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now));
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(1));
+        assert_eq!(
+            jobs["jobs"]["lastErrorMs"],
+            Value::Null,
+            "the pass itself finished"
+        );
+        assert!(
+            dir.join("backups").join("sets").is_dir(),
+            "the local backup is intact"
+        );
+        // Restart: the failure record survives in the store, not only this boot's memory.
+        host.close_engine();
+        drop(host);
+        let reopened = StoreHost::new(boot(dir.clone()));
+        reopened.open_at_boot();
+        let jobs: Value = serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["passes"], json!(0), "a fresh boot ran no pass");
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], json!(now));
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(1));
+        reopened.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_job_pass_persists_its_fixed_code_not_the_message() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dir = root.path().join("store");
+        // A file where the backup root should be: the pass fails before any mirror.
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(dir.clone()));
+        host.open_at_boot();
+        let now = aac_store::engine::now_ms();
+        host.job_pass(now);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now));
+        let code = jobs["jobs"]["lastErrorCode"].as_str().ok_or("code")?;
+        assert!(
+            !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+            "{code}"
+        );
+        assert_eq!(jobs["jobs"]["lastShareFailedMs"], Value::Null);
+        // The persisted record is one meta value: sequence, fixed code and time — no
+        // private path reaches it.
+        let engine = host.engine().ok_or("engine")?;
+        let persisted = engine
+            .get_meta("ts:host_job_last_error")
+            .map_err(|e| e.to_string())?
+            .ok_or("persisted")?;
+        let record: Value = serde_json::from_str(&persisted).map_err(|e| e.to_string())?;
+        assert_eq!(record["code"], json!(code));
+        assert_eq!(record["ms"], json!(now));
+        assert_eq!(record["seq"], json!(1));
+        assert!(
+            !persisted.contains(root.path().to_str().ok_or("root")?),
+            "no private path: {persisted}"
+        );
+        // The kernel lock lives until every Arc drops: release this one before the restart.
+        drop(engine);
+        // Restart keeps the code and time.
+        host.close_engine();
+        drop(host);
+        let reopened = StoreHost::new(boot(dir.clone()));
+        reopened.open_at_boot();
+        let jobs: Value = serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now));
+        assert_eq!(jobs["jobs"]["lastErrorCode"], json!(code));
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(1));
+        reopened.close_engine();
+        Ok(())
+    }
+
+    #[test]
+    fn a_backward_clock_still_names_a_new_failure() -> Result<(), String> {
+        let root = tempfile::tempdir().map_err(|e| e.to_string())?;
+        // The error record: a file where the backup root should be fails every pass,
+        // whatever the clock says. The second pass is stamped earlier — a real backward
+        // step, not a 1970 fixture time the seal path would read as a different era.
+        let now = aac_store::engine::now_ms();
+        let dir = root.path().join("store");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("backups"), b"not a folder").map_err(|e| e.to_string())?;
+        let host = StoreHost::new(boot(dir.clone()));
+        host.open_at_boot();
+        host.job_pass(now);
+        host.job_pass(now - 1_000);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2));
+        assert_eq!(jobs["jobs"]["lastErrorMs"], json!(now - 1_000));
+        // The sequence survives the restart too.
+        host.close_engine();
+        drop(host);
+        let reopened = StoreHost::new(boot(dir.clone()));
+        reopened.open_at_boot();
+        let jobs: Value = serde_json::from_str(&reopened.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastErrorSeq"], json!(2));
+        reopened.close_engine();
+        // The share record: mirror failures on due passes, the second stamped earlier.
+        let dir = root.path().join("store-share");
+        let share = root.path().join("share-copy");
+        std::fs::write(&share, b"not a folder").map_err(|e| e.to_string())?;
+        let mut config = boot(dir.clone());
+        config.share_backup_dir = Some(share.clone());
+        let host = StoreHost::new(config);
+        host.open_at_boot();
+        host.job_pass(now + DAY_MS);
+        let engine = host.engine().ok_or("engine")?;
+        engine
+            .set_meta("last_backup_ms", "0")
+            .map_err(|e| e.to_string())?;
+        drop(engine);
+        host.job_pass(now + DAY_MS - 1_000);
+        let jobs: Value = serde_json::from_str(&host.jobs_json()).map_err(|e| e.to_string())?;
+        assert_eq!(jobs["jobs"]["lastShareSeq"], json!(2));
+        assert_eq!(
+            jobs["jobs"]["lastShareFailedMs"],
+            json!(now + DAY_MS - 1_000)
+        );
         host.close_engine();
         Ok(())
     }

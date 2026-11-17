@@ -14,6 +14,7 @@ import { REPORT_SIZE_CAPS } from '../status/report-schema';
 import { findSecret } from '../../shared/secret-policy';
 import { jsonFromBytes } from '../status/schema-helpers';
 import { createHash } from 'crypto';
+import { RetryableError } from '../../errors/error-types';
 import { CATALOG_CAP_BYTES } from './catalog';
 import type { RunsState } from './runs-reader';
 
@@ -125,6 +126,26 @@ function filtered(text: string, cap: number): { ok: true } | { ok: false; reason
   return parsed.ok ? { ok: true } : { ok: false, reason: parsed.reason };
 }
 
+/**
+ * A paged read's restart budget (review M1): a store that keeps committing between pages
+ * gets this many restarts, then the last complete read for the same filter — stamped at
+ * that read, with the moving store disclosed — or an explicit transient failure when no
+ * complete read exists. Never an endless restart, never a mixed partial accumulation.
+ */
+const QUERY_RESTARTS = 3;
+/** Completed reads kept for that fallback, by filter; the oldest goes when full. */
+const READ_CACHE_ENTRIES = 8;
+
+/** One fully completed paged read: its rows and the snapshot they were read against. */
+interface CompletedRead {
+  runs: StoredRun[];
+  problems: ReportProblem[];
+  accepted: StoredRun[] | undefined;
+  generation: number;
+  /** When the read's snapshot was current: its first page's clock, never a later one. */
+  at: number;
+}
+
 export class RunsStore {
   private passing: Promise<PassState> | null = null;
   /**
@@ -133,8 +154,7 @@ export class RunsStore {
    */
   private readonly safePaths = new Map<string, string>();
   private lastFullAt = 0;
-  private queryProblems: ReportProblem[] = [];
-  private queryAccepted: StoredRun[] | undefined;
+  private readonly reads = new Map<string, CompletedRead>();
   last: PassState | null = null;
 
   constructor(
@@ -244,28 +264,91 @@ export class RunsStore {
     return this.last;
   }
 
-  /** Current revisions in a range, every page. */
+  /** Current revisions in a range, every page of one snapshot (see `read`). */
   async query(query: RunsQuery): Promise<StoredRun[]> {
+    return (await this.read(query)).runs;
+  }
+
+  /**
+   * One snapshot per read: every page names its generation and catalog hash, and a commit
+   * between pages restarts the read from the start, so one view never mixes two snapshots
+   * (run-corrections recheck L1). The restarts are bounded (review M1): while imports keep
+   * arriving, the read finishes with the last complete read for this filter — its own
+   * snapshot's stamp and a disclosed moving store — or fails explicitly when none exists.
+   */
+  private async read(query: RunsQuery): Promise<CompletedRead> {
+    const signature = JSON.stringify([
+      query.fromMs ?? null,
+      query.toMs ?? null,
+      query.source ?? null,
+      query.taskType ?? null,
+      query.reviewsOnly ?? false,
+    ]);
     const store = this.deps.store();
-    if (!store) return [];
-    const runs: StoredRun[] = [];
+    if (!store)
+      return { runs: [], problems: [], accepted: undefined, generation: 0, at: this.deps.now() };
+    let runs: StoredRun[] = [];
     let after: unknown = null;
+    let snapshot = '';
+    let generation = 0;
+    let problems: ReportProblem[] = [];
+    let accepted: StoredRun[] | undefined;
+    let at = this.deps.now();
+    let restarts = 0;
     for (;;) {
       const page = await store.runs<{
         runs: StoredRun[];
         next: unknown;
         problems?: ReportProblem[];
         accepted?: StoredRun[];
+        generation?: number;
+        catalogHash?: string | null;
       }>('runsQuery', {
         ...query,
         after,
       });
+      const key = `${page.generation ?? 0}:${page.catalogHash ?? ''}`;
       if (after === null) {
-        this.queryProblems = page.problems ?? [];
-        this.queryAccepted = page.accepted;
+        snapshot = key;
+        generation = page.generation ?? 0;
+        at = this.deps.now();
+        problems = page.problems ?? [];
+        accepted = page.accepted;
+      } else if (key !== snapshot) {
+        // The cursor belongs to another snapshot: its rows may repeat or drop a chain.
+        if (restarts >= QUERY_RESTARTS) {
+          const kept = this.reads.get(signature);
+          if (!kept)
+            throw new RetryableError(
+              'store_moving: the run history kept changing while it was read'
+            );
+          // The last complete read, stamped at its own snapshot — never newer than it is.
+          return {
+            ...kept,
+            problems: [
+              ...kept.problems,
+              {
+                file: 'store/read',
+                reason: `The run history kept importing during the read; this view is the last complete read (generation ${kept.generation}).`,
+                since: kept.at,
+              },
+            ],
+          };
+        }
+        restarts += 1;
+        runs = [];
+        after = null;
+        continue;
       }
       runs.push(...page.runs);
-      if (page.next === null || page.next === undefined) return runs;
+      if (page.next === null || page.next === undefined) {
+        const read: CompletedRead = { runs, problems, accepted, generation, at };
+        this.reads.delete(signature);
+        this.reads.set(signature, read);
+        while (this.reads.size > READ_CACHE_ENTRIES)
+          this.reads.delete(this.reads.keys().next().value as string);
+        return read;
+      }
       after = page.next;
     }
   }
@@ -278,7 +361,7 @@ export class RunsStore {
   /** The runs as the view builder reads them (the file reader's shape), from the store. */
   async state(query: RunsQuery): Promise<RunsState> {
     const store = this.deps.store();
-    const runs = await this.query({ ...query, includeReceipts: true });
+    const read = await this.read({ ...query, includeReceipts: true });
     const refused = store ? await store.runs<RefusedRow[]>('runsRefused') : [];
     // A refused file is named by the path this server saw when the secret filter passes it,
     // else by its hash alone: the store keeps no path, name or writer for it.
@@ -291,20 +374,21 @@ export class RunsStore {
         since: row.atMs,
       })),
       ...(this.last?.problems ?? []),
-      ...this.queryProblems,
+      ...read.problems,
     ];
     return {
       correctionsResolved: true,
-      accepted: this.queryAccepted,
+      accepted: read.accepted,
       state: this.last?.state ?? 'ok',
-      scannedAt: this.last?.at ?? null,
-      runs: runs.map((run) => ({
+      // The read's own snapshot stamp, not a later pass's: the rows are as of that read.
+      scannedAt: store ? read.at : (this.last?.at ?? null),
+      runs: read.runs.map((run) => ({
         file: run.file,
         doc: run.doc,
         firstSeenAt: run.firstSeenAt,
         sha256: run.sha256,
       })),
-      writers: new Set(runs.map((run) => run.doc.writer)).size,
+      writers: new Set(read.runs.map((run) => run.doc.writer)).size,
       skipped: { runFiles: 0, writerFolders: 0 },
       problems,
     };

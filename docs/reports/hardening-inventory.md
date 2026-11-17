@@ -51,14 +51,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 33.0% (226/685) |
+| typed-error adoption (typed/total throws) | 33.1% (227/686) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 55 (224 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
 | files with createLogger | 44/459 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
-| files > 600 LOC | 25 |
+| files > 600 LOC | 26 |
 
 ### Top Hotpath console.error/warn Files
 

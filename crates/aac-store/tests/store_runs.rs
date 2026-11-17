@@ -1309,3 +1309,185 @@ fn native_store_keeps_nanosecond_newer_sol_correction() {
     fs::remove_dir_all(db).unwrap();
     fs::remove_dir_all(share.root).unwrap();
 }
+
+/// One correction of an existing run: a new file with `corrects` and a later seq.
+#[allow(clippy::too_many_arguments)]
+fn write_correction(
+    share: &Share,
+    writer: &str,
+    local: &str,
+    target: &str,
+    ended: u64,
+    model: &str,
+    effort: &str,
+    harness: &str,
+) {
+    let rel = share.run(
+        writer,
+        local,
+        2,
+        ended,
+        model,
+        Some(effort),
+        Some(harness),
+        Some("build"),
+    );
+    let path = share.root.join("v1").join(rel);
+    let mut doc: Json = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    doc["corrects"] = json!(format!("{writer}--{target}"));
+    fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+}
+
+#[test]
+fn every_page_names_its_snapshot_and_an_ingest_between_pages_changes_it() {
+    let share = Share::new("runcorr-page-key");
+    for i in 0..4u64 {
+        share.run(
+            "vm.probe",
+            &format!("b{i}"),
+            1,
+            T0 + i * 1000,
+            "openai/gpt-6.1-sol",
+            Some("max"),
+            Some("codex"),
+            Some("build"),
+        );
+    }
+    write_correction(
+        &share,
+        "vm.probe",
+        "b3-fix",
+        "b3",
+        T0 + 3 * 1000,
+        "openai/gpt-6.1-sol",
+        "max",
+        "codex",
+    );
+    let db = temp_dir("runcorr-page-key-store");
+    let engine = open(&db);
+    pass(&engine, &share, T0 + DAY, 1000, true);
+    let ids = |page: &Json| -> Vec<String> {
+        page["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["doc"]["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let first = call(&engine, "runsQuery", json!({"limit":2}));
+    assert_eq!(ids(&first), vec!["vm.probe--b0", "vm.probe--b1"]);
+    assert_eq!(first["generation"], json!(runs::generation(&engine).unwrap()));
+    assert_eq!(
+        first["catalogHash"],
+        call(&engine, "runsStatus", json!({}))["catalogHash"]
+    );
+    // The recheck's witness: an ingest commits between two pages of one multi-page read.
+    write_correction(
+        &share,
+        "vm.probe",
+        "b0-fix",
+        "b0",
+        T0 + 5 * 1000,
+        "anthropic/claude-opus-5-5",
+        "high",
+        "claude-code",
+    );
+    pass(&engine, &share, T0 + 2 * DAY, 1000, true);
+    let second = call(&engine, "runsQuery", json!({"limit":2,"after":first["next"]}));
+    assert!(
+        second["generation"].as_u64().unwrap() > first["generation"].as_u64().unwrap(),
+        "the later page names the new snapshot, not the cursor's"
+    );
+    let third = call(&engine, "runsQuery", json!({"limit":2,"after":second["next"]}));
+    assert_eq!(third["generation"], second["generation"]);
+    // Without a restart the consumer mixes snapshots: b0 counts twice (Sol and Opus).
+    let mut mixed = ids(&first);
+    mixed.extend(ids(&second));
+    mixed.extend(ids(&third));
+    assert!(
+        mixed.contains(&"vm.probe--b0".to_owned()) && mixed.contains(&"vm.probe--b0-fix".to_owned()),
+        "the race this key prevents: {mixed:?}"
+    );
+    // With the key, the reader restarts on the change and serves exactly one fresh snapshot.
+    let fresh = call(&engine, "runsQuery", json!({}));
+    assert_eq!(
+        ids(&fresh),
+        vec!["vm.probe--b1", "vm.probe--b2", "vm.probe--b3-fix", "vm.probe--b0-fix"]
+    );
+    let mut restarted: Vec<String> = Vec::new();
+    let mut after = Json::Null;
+    let mut key = Json::Null;
+    loop {
+        let page = call(&engine, "runsQuery", json!({"limit":2,"after":after}));
+        let page_key = json!([page["generation"], page["catalogHash"]]);
+        if after.is_null() {
+            key = page_key;
+        } else if page_key != key {
+            restarted.clear();
+            after = Json::Null;
+            continue;
+        }
+        restarted.extend(ids(&page));
+        if page["next"].is_null() {
+            break;
+        }
+        after = page["next"].clone();
+    }
+    assert_eq!(restarted, ids(&fresh));
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}
+
+#[test]
+fn uncorrected_pages_name_their_snapshot_too() {
+    let share = Share::new("runcorr-raw-page-key");
+    for i in 0..3u64 {
+        share.run(
+            "vm.probe",
+            &format!("r{i}"),
+            1,
+            T0 + i * 1000,
+            "openai/gpt-6.1-sol",
+            Some("max"),
+            Some("codex"),
+            Some("build"),
+        );
+    }
+    let db = temp_dir("runcorr-raw-page-key-store");
+    let engine = open(&db);
+    pass(&engine, &share, T0 + DAY, 1000, true);
+    let first = call(&engine, "runsQuery", json!({"limit":2}));
+    assert_eq!(first["correctionsResolved"], Json::Null, "the raw indexed path");
+    assert_eq!(first["generation"], json!(runs::generation(&engine).unwrap()));
+    assert_eq!(
+        first["catalogHash"],
+        call(&engine, "runsStatus", json!({}))["catalogHash"]
+    );
+    share.run(
+        "vm.probe",
+        "r3",
+        1,
+        T0 + 3 * 1000,
+        "openai/gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    pass(&engine, &share, T0 + 2 * DAY, 1000, true);
+    let second = call(&engine, "runsQuery", json!({"limit":2,"after":first["next"]}));
+    assert!(
+        second["generation"].as_u64().unwrap() > first["generation"].as_u64().unwrap(),
+        "a run recorded between pages moves the raw path's key too"
+    );
+    // A catalog-only write moves the key without a new run.
+    share.set_aliases(&[("raw-alias", "openai/gpt-6.1-sol")]);
+    pass(&engine, &share, T0 + 3 * DAY, 1000, true);
+    let third = call(&engine, "runsQuery", json!({"limit":2}));
+    assert_ne!(third["catalogHash"], first["catalogHash"]);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}

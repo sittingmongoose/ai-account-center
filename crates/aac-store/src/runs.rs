@@ -2059,6 +2059,8 @@ fn resolved_history(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> 
 
 /// Effective leaves resolved before range/task filters. Pages share a resolved generation;
 /// seeking after the cursor avoids rescanning the prefix. History/original APIs keep raw records.
+/// Every page names its snapshot (generation + catalog hash), so a paged reader can restart
+/// when a commit lands between pages instead of mixing two snapshots (recheck L1).
 pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
     if let Some(mut page) = query_uncorrected(engine, args)? {
         hide_cursors(&mut page);
@@ -2103,12 +2105,33 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
     } else {
         Vec::new()
     };
-    let mut page =
-        json!({"runs":out,"next":next,"skipped":snapshot.skipped,"problems":problems,"correctionsResolved":true});
+    let catalog = snapshot
+        .key
+        .1
+        .as_ref()
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+    let mut page = json!({
+        "runs":out,"next":next,"skipped":snapshot.skipped,"problems":problems,
+        "correctionsResolved":true,"generation":snapshot.key.0,"catalogHash":catalog
+    });
     if args.include_receipts == Some(true) && args.after.is_none() {
         page["accepted"] = json!(snapshot.accepted);
     }
     Ok(page)
+}
+
+/// The snapshot a page belongs to: the runs ledger generation and the catalog hash, read in
+/// the page's own transaction. The corrected path takes them from its resolved snapshot key.
+fn snapshot_key(read: &redb::ReadTransaction) -> Result<(u64, Option<String>)> {
+    let checkpoint = read.open_table(crate::db::CHECKPOINT)?;
+    let generation = crate::db::read_checkpoint(&checkpoint, "runs/ledger")?
+        .map(|c| c.last_sequence_id)
+        .unwrap_or(0);
+    let catalog = read
+        .open_table(RUN_META)?
+        .get("catalog")?
+        .map(|v| String::from_utf8_lossy(v.value()).into_owned());
+    Ok((generation, catalog))
 }
 
 fn query_uncorrected(engine: &Engine, args: &QueryArgs) -> Result<Option<Json>> {
@@ -2118,7 +2141,11 @@ fn query_uncorrected(engine: &Engine, args: &QueryArgs) -> Result<Option<Json>> 
         if read.open_table(RUN_META)?.get("corrections")?.is_some() {
             return Ok(None);
         }
-        query_snapshot(&read, args).map(Some)
+        let mut page = query_snapshot(&read, args)?;
+        let (generation, catalog) = snapshot_key(&read)?;
+        page["generation"] = json!(generation);
+        page["catalogHash"] = json!(catalog);
+        Ok(Some(page))
     })
 }
 

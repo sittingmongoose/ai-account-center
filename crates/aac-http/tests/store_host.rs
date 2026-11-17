@@ -6,8 +6,12 @@ use serde_json::{Value, json};
 use std::{
     error::Error,
     fs,
-    io::{Read, Write},
-    os::unix::{fs::PermissionsExt, net::UnixStream},
+    io::{self, Read, Write},
+    net::Shutdown,
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -74,6 +78,23 @@ impl Drop for Service {
 
 impl Service {
     fn start(store: bool) -> Result<Self> {
+        // Under gate load a child can die before its first accept (runtime start, boot
+        // read): start over within the same deadline instead of failing the contract.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match Self::try_start(store, deadline) {
+                Ok(service) => return Ok(service),
+                Err(error) => {
+                    if Instant::now() >= deadline {
+                        return Err(error);
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+    }
+
+    fn try_start(store: bool, deadline: Instant) -> Result<Self> {
         let dir = tempfile::tempdir()?;
         let root = fs::canonicalize(dir.path())?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
@@ -88,43 +109,53 @@ impl Service {
             .stderr(Stdio::null())
             .env_clear()
             .spawn()?;
-        let mut boot = json!({"ccsDir":root,"socketPath":socket,"secret":SECRET,"bootId":BOOT_ID});
-        if store {
-            boot["store"] = json!({
-                "dir": root.join("store"),
-                "retentionDays": 0,
-                "bindingIdentity": aac_store::build_identity(),
-                "snapshotDirectory": null,
-                "shareBackupDir": null,
-                "shareBackupOff": false,
-            });
-        }
-        writeln!(child.stdin.as_mut().ok_or("stdin missing")?, "{boot}")?;
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let service = Self {
-            child,
-            socket,
-            root,
-            _keep: dir,
-        };
-        loop {
-            if service.socket.exists()
-                && service
-                    .call(
+        let ready = (|| -> Result<()> {
+            let mut boot =
+                json!({"ccsDir":root,"socketPath":socket,"secret":SECRET,"bootId":BOOT_ID});
+            if store {
+                boot["store"] = json!({
+                    "dir": root.join("store"),
+                    "retentionDays": 0,
+                    "bindingIdentity": aac_store::build_identity(),
+                    "snapshotDirectory": null,
+                    "shareBackupDir": null,
+                    "shareBackupOff": false,
+                });
+            }
+            writeln!(child.stdin.as_mut().ok_or("stdin missing")?, "{boot}")?;
+            loop {
+                if child.try_wait()?.is_some() {
+                    return Err("the service exited before it was ready".into());
+                }
+                if socket.exists()
+                    && exchange(
+                        &socket,
                         "GET",
                         "/api/health",
                         &principal("session", "public-health", "public"),
                         None,
                     )
                     .is_ok_and(|r| r.status == 200)
-            {
-                return Ok(service);
+                {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    return Err("service failed to start".into());
+                }
+                std::thread::sleep(Duration::from_millis(20));
             }
-            if Instant::now() >= deadline {
-                return Err("service failed to start".into());
-            }
-            std::thread::sleep(Duration::from_millis(20));
+        })();
+        if let Err(error) = ready {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
         }
+        Ok(Self {
+            child,
+            socket,
+            root,
+            _keep: dir,
+        })
     }
 
     fn store_dir(&self) -> PathBuf {
@@ -132,26 +163,7 @@ impl Service {
     }
 
     fn call(&self, method: &str, path: &str, who: &str, body: Option<&[u8]>) -> Result<Reply> {
-        let mut stream = UnixStream::connect(&self.socket)?;
-        stream.set_read_timeout(Some(Duration::from_secs(15)))?;
-        write!(
-            stream,
-            "{method} {path} HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {SECRET}\r\nx-aac-principal: {who}\r\n"
-        )?;
-        match body {
-            Some(body) => {
-                write!(
-                    stream,
-                    "content-type: application/json\r\ncontent-length: {}\r\n\r\n",
-                    body.len()
-                )?;
-                stream.write_all(body)?;
-            }
-            None => write!(stream, "\r\n")?,
-        }
-        let mut raw = String::new();
-        stream.read_to_string(&mut raw)?;
-        parse(&raw)
+        exchange(&self.socket, method, path, who, body)
     }
 
     fn store(&self, method: &str, args: &str) -> Result<Reply> {
@@ -175,6 +187,59 @@ impl Service {
             std::thread::sleep(Duration::from_millis(20));
         }
         Ok(())
+    }
+}
+
+/// One request/response exchange on the fixture socket. The connect retries within a short
+/// deadline: under load the listener can refuse or reset the first connections after the
+/// health probe. A reply that arrives before the body is written is still read: the service
+/// may answer and close early (the wave-56 BrokenPipe), and the contract assertions apply
+/// to that reply exactly as to any other.
+fn exchange(
+    socket: &Path,
+    method: &str,
+    path: &str,
+    who: &str,
+    body: Option<&[u8]>,
+) -> Result<Reply> {
+    let connect_deadline = Instant::now() + Duration::from_secs(2);
+    let mut stream = loop {
+        match UnixStream::connect(socket) {
+            Ok(stream) => break stream,
+            Err(error) => {
+                if Instant::now() >= connect_deadline {
+                    return Err(error.into());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(15)))?;
+    let write = (|| -> io::Result<()> {
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {SECRET}\r\nx-aac-principal: {who}\r\n"
+        )?;
+        match body {
+            Some(body) => {
+                write!(
+                    stream,
+                    "content-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                    body.len()
+                )?;
+                stream.write_all(body)?;
+            }
+            None => write!(stream, "\r\n")?,
+        }
+        Ok(())
+    })();
+    let mut raw = String::new();
+    match stream.read_to_string(&mut raw) {
+        Ok(_) => parse(&raw),
+        Err(read_error) => match write {
+            Err(write_error) => Err(write_error.into()),
+            Ok(()) => Err(read_error.into()),
+        },
     }
 }
 
@@ -282,5 +347,74 @@ fn a_boot_without_the_store_config_never_opens_it() -> Result<()> {
     // The hosted status read declines too, so TS's snapshot path answers as before.
     let status = service.call("GET", "/api/store/status", &admin(), Some(b"{}"))?;
     assert_eq!(status.status, 503, "{}", status.body);
+    Ok(())
+}
+
+/// The wave-56 BrokenPipe shape, deterministic: the service answers and closes before the
+/// request body is written (under load the boundary can reply 401 early). The exchange must
+/// still read that reply; the contract assertions apply to it unchanged.
+#[test]
+fn an_early_reply_is_read_even_when_the_body_write_hits_broken_pipe() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let socket = dir.path().join("early.sock");
+    let listener = UnixListener::bind(&socket)?;
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("fixture connect");
+        // Answer, then refuse the body: SHUT_RD makes the client's write hit EPIPE while
+        // the reply stays readable. The body queued before the shutdown must be drained
+        // before the close: a close with unread data resets the connection, and the reset
+        // destroys the reply read (the r4 gate run caught that flake). Drained, the pattern
+        // is deterministic — 30/30 in a syscall probe with the strict read criterion.
+        let _ = stream
+            .write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\n\r\n{\"ok\":false}");
+        let _ = stream.shutdown(Shutdown::Read);
+        let mut sink = [0u8; 65536];
+        while let Ok(n) = stream.read(&mut sink) {
+            if n == 0 {
+                break;
+            }
+        }
+    });
+    let body = vec![b'x'; 1_048_576];
+    let reply = exchange(
+        &socket,
+        "POST",
+        "/internal/store/status",
+        &admin(),
+        Some(&body),
+    )?;
+    server.join().expect("fixture server");
+    assert_eq!(reply.status, 401);
+    assert_eq!(reply.json()?["ok"], json!(false));
+    Ok(())
+}
+
+/// A socket file whose listener is not accepting yet refuses the first connect; the
+/// exchange retries within its deadline instead of failing the contract test.
+#[test]
+fn the_first_connect_retries_until_the_listener_answers() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let socket = dir.path().join("late.sock");
+    // Bind and drop: the file stays, but connect reads ECONNREFUSED until the real bind.
+    drop(UnixListener::bind(&socket)?);
+    let path = socket.clone();
+    let server = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("fixture rebind");
+        let (mut stream, _) = listener.accept().expect("fixture connect");
+        let mut request = [0u8; 4096];
+        let _ = stream.read(&mut request);
+        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}");
+    });
+    let reply = exchange(
+        &socket,
+        "GET",
+        "/api/health",
+        &principal("session", "public-health", "public"),
+        None,
+    )?;
+    server.join().expect("fixture server");
+    assert_eq!(reply.status, 200);
     Ok(())
 }

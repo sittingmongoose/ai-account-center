@@ -69,6 +69,7 @@ import {
   closeAacStore,
   onStoreHostFallback,
   openAacStore,
+  startAacStoreHostJobsWatch,
   startAacStoreMaintenance,
 } from '../store/store-service';
 import { startScoreboardService } from './scoreboard/scoreboard-service';
@@ -319,6 +320,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let stopCgroupForeignCheck: (() => void) | null = null;
   let stopAgentUsageSnapshot: (() => void) | null = null;
   let stopStoreMaintenance: (() => void) | null = null;
+  let stopStoreHostJobsWatch: (() => void) | null = null;
   let stopStoreFallbackWatch: (() => void) | null = null;
   let stopStatusService: (() => void) | null = null;
   // Start the small command parent before analytics/collectors populate the server heap.
@@ -355,6 +357,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopAgentUsageSnapshot = null;
     stopStoreMaintenance?.();
     stopStoreMaintenance = null;
+    stopStoreHostJobsWatch?.();
+    stopStoreHostJobsWatch = null;
     stopStatusService?.();
     stopStatusService = null;
     // R3: producers stop above. Drain admitted calls, close the sole writer, then stop
@@ -447,8 +451,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // The history store (docs/store.md): opened before the first sample, which waits for it;
       // without the native module the dashboard runs as before, without stored history.
       // R3: while the service hosts the store, its jobs run there; this loop starts only
-      // for the in-process store, including after the automatic fallback.
+      // for the in-process store, including after the automatic fallback. While hosted,
+      // the jobs watch carries the host's failure warnings instead (R3 review L1).
       const startStoreMaintenanceOnce = (): void => {
+        stopStoreHostJobsWatch?.();
+        stopStoreHostJobsWatch = null;
         stopStoreMaintenance ??= startAacStoreMaintenance({
           snapshotDirectory: async () => (await readSnapshotSettings())?.directory ?? null,
         });
@@ -456,6 +463,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       stopStoreFallbackWatch = onStoreHostFallback(startStoreMaintenanceOnce);
       void openAacStore().then((opened) => {
         if (opened.store && !opened.hosted) startStoreMaintenanceOnce();
+        else if (opened.store && opened.hosted)
+          stopStoreHostJobsWatch ??= startAacStoreHostJobsWatch();
         else if (
           !opened.store &&
           opened.reason &&

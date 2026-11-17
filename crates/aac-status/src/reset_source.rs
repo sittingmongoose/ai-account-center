@@ -110,7 +110,7 @@ fn auth_bytes(path: &Path) -> Result<Vec<u8>> {
     }
     match outcome {
         files::Read::Bytes(raw, _) => Ok(raw),
-        files::Read::Absent | files::Read::Unreadable(_) => Err("signed-out"),
+        files::Read::Absent | files::Read::Unreadable(_) | files::Read::ChainUnreadable(_) => Err("signed-out"),
         files::Read::Link
         | files::Read::NotRegular
         | files::Read::TooLarge

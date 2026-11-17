@@ -262,6 +262,10 @@ export class AacStore {
   runs<T>(method: RunsMethod, args: unknown = {}): Promise<T> {
     return this.call(method, args);
   }
+  /** The hosted store's job record (R3): its failure markers persist across host restarts. */
+  hostJobs(): Promise<HostJobsState> {
+    return this.call('hostJobs');
+  }
   getMeta(key: string): Promise<string | null> {
     return this.call('getMeta', { key });
   }
@@ -271,6 +275,23 @@ export class AacStore {
   async close(): Promise<void> {
     await this.call('close');
   }
+}
+
+/** The hosted store's job record, as the Rust host's `hostJobs` method answers it. */
+export interface HostJobsState {
+  open: boolean;
+  bootError: string | null;
+  jobs: {
+    passes: number;
+    lastPassMs: number | null;
+    lastError: string | null;
+    lastErrorCode?: string | null;
+    lastErrorMs?: number | null;
+    /** Monotonic failure identity: a backward wall clock cannot hide a new failure. */
+    lastErrorSeq?: number | null;
+    lastShareFailedMs: number | null;
+    lastShareSeq?: number | null;
+  };
 }
 
 export interface StoreState {
@@ -565,5 +586,74 @@ export function startAacStoreMaintenance(
   return () => {
     stopped = true;
     if (timer) clearTimeout(timer);
+  };
+}
+
+/**
+ * R3 review L1: while the Rust service hosts the store, its job failures still reach the
+ * operator as the in-process loop's warnings. Polls the host's job record once a minute
+ * (the markers persist in the store, so a host restart keeps them) and warns once per new
+ * failure, with the same events, words and fixed codes startAacStoreMaintenance logs.
+ * Failures are identified by the host's persisted monotonic sequence, so a backward wall
+ * clock cannot hide a new failure (round 3 L1); a host without sequences falls back to its
+ * stamp, compared by difference for the same reason.
+ * Returns the stop function; the server stops it when the jobs fall back in process.
+ */
+export function startAacStoreHostJobsWatch(
+  deps: {
+    store?: () => AacStore | null;
+    schedule?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  } = {}
+): () => void {
+  const current = deps.store ?? getAacStore;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let warnedError: number | null = null;
+  let warnedShare: number | null = null;
+  const poll = async (): Promise<void> => {
+    if (stopped) return;
+    const store = current();
+    if (!store) return;
+    let jobs: HostJobsState['jobs'] | null = null;
+    try {
+      jobs = (await store.hostJobs()).jobs;
+    } catch {
+      /* A down or restarting service names itself through the lifecycle and fallback
+         warnings; the next tick reads the reopened host. */
+    }
+    // A tick already in flight when the watch stops (a fallback) warns nothing.
+    if (stopped || !jobs) return;
+    const errorId = jobs.lastErrorSeq ?? jobs.lastErrorMs ?? null;
+    if (errorId !== null && errorId !== warnedError) {
+      warnedError = errorId;
+      try {
+        logger.warn('store.maintenance_failed', 'Store maintenance did not finish', {
+          code: jobs.lastErrorCode ?? 'unknown',
+        });
+      } catch {
+        /* Logging never stops the dashboard. */
+      }
+    }
+    const shareId = jobs.lastShareSeq ?? jobs.lastShareFailedMs ?? null;
+    if (shareId !== null && shareId !== warnedShare) {
+      warnedShare = shareId;
+      try {
+        logger.warn('store.share_backup_failed', 'The share copy of the store backup failed');
+      } catch {
+        /* Logging never stops the dashboard. */
+      }
+    }
+  };
+  const loop = (delay: number): void => {
+    if (stopped) return;
+    timer = (deps.schedule ?? setTimeout)(() => {
+      void poll().finally(() => loop(MINUTE));
+    }, delay) as ReturnType<typeof setTimeout>;
+    timer.unref?.();
+  };
+  loop(MINUTE);
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
   };
 }

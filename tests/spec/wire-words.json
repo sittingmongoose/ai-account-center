@@ -5334,6 +5334,7 @@
       "scripts/app-updates/app_updates.py:status",
       "src/antigravity/managed-updater.ts:NativeReviewState",
       "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState",
+      "src/store/store-service.ts:jobs.lastErrorCode",
       "src/web-server/index.ts:error.code",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",

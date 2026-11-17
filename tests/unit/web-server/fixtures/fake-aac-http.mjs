@@ -85,7 +85,10 @@ function storeCall(boot, req, res) {
       res.end('{"sampled":1,"seen":0,"skipped":0,"rejected":0}');
     } else if (method === 'counts')
       res.end(JSON.stringify({ opens: store.opens, records: store.records }));
-    else if (method === 'hostJobs') res.end('{"open":true,"bootError":null,"jobs":{"passes":0}}');
+    else if (method === 'hostJobs')
+      res.end(
+        '{"open":true,"bootError":null,"jobs":{"passes":0,"lastPassMs":null,"lastError":null,"lastErrorCode":null,"lastErrorMs":null,"lastErrorSeq":null,"lastShareFailedMs":null,"lastShareSeq":null}}'
+      );
     else fail(`invalid: unknown method ${method}`);
   });
 }
