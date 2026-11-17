@@ -764,7 +764,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1717
+          "loc": 1719
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
