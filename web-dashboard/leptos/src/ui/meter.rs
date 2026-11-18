@@ -179,17 +179,84 @@ pub enum MeterMode {
     Inline,
 }
 
-/// Track the active native popover so page motion or navigation can dismiss it.
+#[derive(Clone, Copy)]
+enum RevealMotion {
+    Scrolled,
+    Settling,
+    Done,
+}
+
+struct FocusReveal {
+    anchor: web_sys::HtmlElement,
+    motion: Rc<Cell<RevealMotion>>,
+}
+
+impl FocusReveal {
+    fn new(anchor: web_sys::HtmlElement) -> Self {
+        let motion = Rc::new(Cell::new(RevealMotion::Scrolled));
+        // Focus can queue scroll events on multiple ancestors. Leave a rendering update
+        // for those events and wait until a frame without scroll ends the reveal.
+        Self::finish_when_still(motion.clone());
+        Self { anchor, motion }
+    }
+
+    fn finish_when_still(motion: Rc<Cell<RevealMotion>>) {
+        let _ = request_animation_frame(move || match motion.get() {
+            RevealMotion::Scrolled => {
+                motion.set(RevealMotion::Settling);
+                Self::finish_when_still(motion);
+            }
+            RevealMotion::Settling => motion.set(RevealMotion::Done),
+            RevealMotion::Done => {}
+        });
+    }
+}
+
+struct OpenMeterTip {
+    card: web_sys::HtmlElement,
+    reveal: Option<FocusReveal>,
+}
+
+/// Track the active native popover so page motion can reposition or dismiss it.
 #[derive(Clone, Copy)]
 struct MeterTips {
-    open: StoredValue<Option<web_sys::HtmlElement>, LocalStorage>,
+    open: StoredValue<Option<OpenMeterTip>, LocalStorage>,
     next_id: StoredValue<u32>,
 }
 
 impl MeterTips {
     fn dismiss(self) {
-        if let Some(Some(card)) = self.open.try_update_value(Option::take) {
-            let _ = card.hide_popover();
+        if let Some(Some(tip)) = self.open.try_update_value(Option::take) {
+            let _ = tip.card.hide_popover();
+        }
+    }
+
+    fn on_input(self) {
+        self.open.with_value(|tip| {
+            if let Some(reveal) = tip.as_ref().and_then(|tip| tip.reveal.as_ref()) {
+                reveal.motion.set(RevealMotion::Done);
+            }
+        });
+    }
+
+    fn on_scroll(self) {
+        let reanchored = self.open.with_value(|open| {
+            let Some(tip) = open else { return false };
+            let Some(reveal) = &tip.reveal else {
+                return false;
+            };
+            if matches!(reveal.motion.get(), RevealMotion::Done)
+                || !reveal.anchor.matches(":focus-visible").unwrap_or(false)
+                || !tip.card.matches(":popover-open").unwrap_or(false)
+            {
+                return false;
+            }
+            reveal.motion.set(RevealMotion::Scrolled);
+            position_tip(&reveal.anchor, &tip.card);
+            true
+        });
+        if !reanchored {
+            self.dismiss();
         }
     }
 }
@@ -203,6 +270,10 @@ pub(crate) fn provide_meter_tips() {
     for event in ["resize", super::device::LAYOUT_EVENT, crate::PAGE_EVENT] {
         crate::owned::listen(&win, event, move || tips.dismiss());
     }
+    // A new gesture ends the focus reveal even if it arrives before the next paint.
+    for event in ["wheel", "touchmove", "pointerdown", "keydown"] {
+        crate::owned::listen(&win, event, move || tips.on_input());
+    }
     // The dashboard content itself can scroll. Capture its event as well as document scroll.
     let scroll = Closure::<dyn Fn(web_sys::Event)>::new(move |ev: web_sys::Event| {
         let within_card = ev
@@ -210,7 +281,7 @@ pub(crate) fn provide_meter_tips() {
             .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
             .is_some_and(|target| target.matches(".um-card").unwrap_or(false));
         if !within_card {
-            tips.dismiss();
+            tips.on_scroll();
         }
     });
     let _ = win.add_event_listener_with_callback_and_bool(
@@ -229,9 +300,9 @@ pub(crate) fn provide_meter_tips() {
 }
 
 /// Give the card the same horizontal bounds as Analytics tips and use whichever side has room.
-fn show_tip(anchor: &web_sys::HtmlElement, card: &web_sys::HtmlElement) -> bool {
+fn position_tip(anchor: &web_sys::HtmlElement, card: &web_sys::HtmlElement) {
     let Some(root) = document().document_element() else {
-        return false;
+        return;
     };
     let (vw, vh) = (
         f64::from(root.client_width()),
@@ -247,9 +318,6 @@ fn show_tip(anchor: &web_sys::HtmlElement, card: &web_sys::HtmlElement) -> bool 
     let x = tip_centre(rect.left() + rect.width() / 2.0, width, lo, hi) - width / 2.0;
     let base = format!("width:{width}px;left:{x}px;");
     let _ = card.set_attribute("style", &base);
-    if card.show_popover().is_err() {
-        return false;
-    }
     let height = f64::from(card.offset_height());
     let room_below = bottom - below;
     let room_above = above - top;
@@ -262,7 +330,6 @@ fn show_tip(anchor: &web_sys::HtmlElement, card: &web_sys::HtmlElement) -> bool 
         "style",
         &format!("{base}{edge};max-height:{}px", room.max(1.0)),
     );
-    true
 }
 
 /// One meter bound to a reading that may change; `owner` names whose reading it is in the hover card ("Claude ·
@@ -281,10 +348,18 @@ pub fn UsageMeter(
     let description = id.clone();
     let anchor = NodeRef::<leptos::html::Div>::new();
     let tip = NodeRef::<leptos::html::Div>::new();
-    let show = move || {
+    let show = move |from_focus: bool| {
         if let (Some(anchor), Some(card)) = (anchor.get_untracked(), tip.get_untracked()) {
-            if show_tip(&anchor, &card) {
-                tips.open.set_value(Some(card.into()));
+            // A pointer entering during the browser's reveal scroll can hit this same meter.
+            if !from_focus && card.matches(":popover-open").unwrap_or(false) {
+                return;
+            }
+            if card.show_popover().is_ok() {
+                position_tip(&anchor, &card);
+                tips.open.set_value(Some(OpenMeterTip {
+                    card: card.into(),
+                    reveal: from_focus.then(|| FocusReveal::new(anchor.into())),
+                }));
             }
         }
     };
@@ -451,9 +526,9 @@ pub fn UsageMeter(
     view! {
         <div class="um" class:inline=mode == MeterMode::Inline data-sev=move || sev.get()
             tabindex="0" aria-describedby=description node_ref=anchor
-            on:pointerenter=move |ev| if ev.pointer_type() == "mouse" { show(); }
+            on:pointerenter=move |ev| if ev.pointer_type() == "mouse" { show(false); }
             on:pointerleave=move |ev| if ev.pointer_type() == "mouse" && !keyboard_focus() { hide(); }
-            on:focus=move |_| if keyboard_focus() { show(); }
+            on:focus=move |_| if keyboard_focus() { show(true); }
             on:focusout=move |ev| {
                 let inside = ev.related_target().and_then(|target| target.dyn_into::<web_sys::Node>().ok())
                     .is_some_and(|target| anchor.get_untracked().is_some_and(|el| el.contains(Some(&target))));
@@ -465,7 +540,7 @@ pub fn UsageMeter(
                 if touch.get_value() {
                     touch.set_value(false);
                     ev.stop_propagation();
-                    show();
+                    show(false);
                 }
             }>
             {top}

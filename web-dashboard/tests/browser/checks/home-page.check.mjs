@@ -7,8 +7,8 @@ import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 
 const ROW = (id) => `.hrow[data-row="${id}"]`;
 
-async function openHome(t, { width = 1440, height = 900, mobile = false, safe = '', screen } = {}) {
-	await t.newContext({ viewport: { width, height }, screen, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+async function openHome(t, { width = 1440, height = 900, mobile = false, safe = '', screen, reducedMotion } = {}) {
+	await t.newContext({ viewport: { width, height }, screen, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1, serviceWorkers: 'block', reducedMotion });
 	await t.app.signIn();
 	await t.app.stub('/api/accounts/dashboard', homeAccounts());
 	await t.app.stub('/api/claude/desktop-profiles', homeProfiles());
@@ -70,12 +70,100 @@ const layout = () => {
 	return { sections, cardRows: [...rows.values()].map((r) => r.length), holes, sideways: document.documentElement.scrollWidth > innerWidth + 1, overflow };
 };
 
+const phoneLayouts = [
+	{ name: 'iPhone 17 Pro', width: 402, height: 874, mobile: true, safe: '0,0,34,0' },
+	{ name: 'Duo folded', width: 466, height: 678, mobile: true, screen: { width: 466, height: 678 }, safe: '0,84,34,0' },
+];
+
+async function tapOutsideMeter(t) {
+	const outside = await t.page.evaluate(() => {
+		const title = document.querySelector('.topbar .t-title').getBoundingClientRect();
+		if (title.width) return [title.left + title.width / 2, title.top + title.height / 2];
+		// The folded rail has open space above its links. Stay clear of touch target adjustment.
+		const rail = document.querySelector('.rail');
+		const bounds = rail.getBoundingClientRect();
+		const first = rail.querySelector('a').getBoundingClientRect();
+		return [bounds.left + bounds.width / 2, (bounds.top + first.top) / 2];
+	});
+	await t.page.touchscreen.tap(...outside);
+}
+
 export const tests = {
+	async 'home meter keyboard reveal: a phone Tab scroll keeps the focused card open'(t) {
+		for (const [i, layout] of phoneLayouts.entries()) {
+			await openHome(t, { ...layout, reducedMotion: 'reduce' });
+			const owner = t.page.locator('.hcard').filter({ hasText: 'Z.ai Coding Plan' });
+			const meter = owner.locator('.um').first();
+			const card = meter.locator('.um-card');
+			const openWithTab = async () => {
+				await owner.evaluate((el) => el.focus({ preventScroll: true }));
+				await t.page.keyboard.press('Tab');
+			};
+			await owner.evaluate((el) => el.focus({ preventScroll: true }));
+			const before = await meter.evaluate(async (el) => {
+				const targetTop = document.documentElement.clientHeight + 20;
+				for (const scroller of [document.querySelector('.content'), document.scrollingElement]) {
+					scroller.scrollTop += el.getBoundingClientRect().top - targetTop;
+				}
+				await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+				return { top: el.getBoundingClientRect().top, viewport: document.documentElement.clientHeight, focused: document.activeElement === el.closest('.hcard') };
+			});
+			await t.check(`${layout.name}: Tab starts on the card with its meter below the viewport`,
+				before.focused && Math.abs(before.top - before.viewport - 20) <= 2, JSON.stringify(before));
+			await t.page.keyboard.press('Tab');
+			const after = await meter.evaluate(async (el) => {
+				// Read the painted state after the browser dispatches its queued scroll events.
+				await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+				const anchor = el.getBoundingClientRect();
+				const tip = el.querySelector('.um-card');
+				const bounds = tip.getBoundingClientRect();
+				const { clientWidth: width, clientHeight: height } = document.documentElement;
+				const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+				return {
+					focused: document.activeElement === el && el.matches(':focus-visible'),
+					top: anchor.top,
+					open: tip.matches(':popover-open'),
+					adjacent: Math.min(Math.abs(bounds.top - anchor.bottom), Math.abs(bounds.bottom - anchor.top)) <= 1,
+					onTop: tip.contains(hit),
+					fits: bounds.left >= 0 && bounds.top >= 0 && bounds.right <= width + 0.5 && bounds.bottom <= height + 0.5,
+				};
+			});
+			await t.check(`${layout.name}: Tab scrolled the meter into view and kept keyboard focus`,
+				after.focused && after.top >= 0 && after.top < before.viewport, JSON.stringify(after));
+			await t.check(`${layout.name}: the painted tooltip follows the focused meter`,
+				after.open && after.adjacent && after.onTop && after.fits, JSON.stringify(after));
+			await t.shot(i === 0 ? 'home-tab-iphone' : 'home-tab-duo', 'The focused Z.ai meter after Tab scrolls it into view');
+
+			await t.page.keyboard.press('Escape');
+			await t.check(`${layout.name}: Escape dismisses the tooltip and keeps meter focus`,
+				!await card.isVisible() && await meter.evaluate((el) => el === document.activeElement));
+			await openWithTab();
+			await t.check(`${layout.name}: Tab can open the tooltip again`, await card.isVisible());
+			await t.page.keyboard.press('Tab');
+			await t.check(`${layout.name}: moving focus to the next stop closes the tooltip`,
+				!await card.isVisible() && await meter.evaluate((el) => el !== document.activeElement));
+
+			await openWithTab();
+			await t.check(`${layout.name}: tooltip is open before outside scrolling`, await card.isVisible());
+			const top = await meter.evaluate((el) => el.getBoundingClientRect().top);
+			await t.page.mouse.move(6, layout.height / 2);
+			await t.page.mouse.wheel(0, -100);
+			await t.until(`${layout.name}: outside wheel scrolls Home`, (before) => document.activeElement.getBoundingClientRect().top > before + 8, top, { timeout: 5000 });
+			await t.check(`${layout.name}: outside scroll dismisses the tooltip and keeps meter focus`,
+				!await card.isVisible() && await meter.evaluate((el) => el === document.activeElement));
+
+			await openWithTab();
+			await t.check(`${layout.name}: tooltip is open before the outside tap`, await card.isVisible());
+			await tapOutsideMeter(t);
+			await t.check(`${layout.name}: outside tap dismisses the tooltip and keeps Home open`,
+				!await card.isVisible() && await meter.isVisible());
+		}
+	},
+
 	async 'home meter cards: every meter is on top and inside the viewport'(t) {
 		const layouts = [
 			{ name: 'desktop', width: 1760, height: 1080 },
-			{ name: 'iPhone 17 Pro', width: 402, height: 874, mobile: true, safe: '0,0,34,0' },
-			{ name: 'Duo folded', width: 466, height: 678, mobile: true, screen: { width: 466, height: 678 }, safe: '0,84,34,0' },
+			...phoneLayouts,
 		];
 		for (const layout of layouts) {
 			await openHome(t, layout);
@@ -123,16 +211,7 @@ export const tests = {
 						await t.check(`${layout.name}: tap on meter ${i + 1} opens the tooltip without Details`, false);
 						break;
 					}
-					const outside = await t.page.evaluate(() => {
-						const title = document.querySelector('.topbar .t-title').getBoundingClientRect();
-						if (title.width) return [title.left + title.width / 2, title.top + title.height / 2];
-						// The folded rail has open space above its links. Stay clear of touch target adjustment.
-						const rail = document.querySelector('.rail');
-						const bounds = rail.getBoundingClientRect();
-						const first = rail.querySelector('a').getBoundingClientRect();
-						return [bounds.left + bounds.width / 2, (bounds.top + first.top) / 2];
-					});
-					await t.page.touchscreen.tap(...outside);
+					await tapOutsideMeter(t);
 					await t.check(`${layout.name}: outside tap dismisses meter ${i + 1}`, !await card.isVisible());
 					if (!await meter.isVisible()) {
 						await t.check(`${layout.name}: tapping outside keeps Home open`, false);
