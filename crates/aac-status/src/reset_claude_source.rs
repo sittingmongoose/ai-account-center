@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
-// Real pinned SSH argv reaches 48 arguments; reserve 16 slots.
+// Real pinned SSH argv reaches 50 arguments; reserve 14 slots.
 const MAX_HELPER_ARGS: usize = 64;
 
 /// Constructed only from the package's existing verified helper transport, never browser input.

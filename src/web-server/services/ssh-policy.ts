@@ -17,6 +17,7 @@ export const SSH_ISOLATION = [
   'ConnectTimeout=5',
   'ConnectionAttempts=1',
   'StrictHostKeyChecking=yes',
+  'VerifyHostKeyDNS=no',
   'UpdateHostKeys=no',
   'ForwardAgent=no',
   'ForwardX11=no',

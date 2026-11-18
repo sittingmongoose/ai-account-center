@@ -122,7 +122,14 @@ if (worker < 0) {
           assert.equal(stat.served, 0, `${where}: shadow served Rust`);
           assert.equal(stat.legacy, 1, `${where}: shadow must run TS exactly once`);
           assert.equal(stat.differences, 0, `${where}: shadow difference`);
-          assert.equal(stat.shadowed, stat.compared ? 1 : 0, `${where}: shadow comparison count`);
+          const profile = report.rows[report.cases.indexOf(stat)].route.match(
+            /^\/api\/(?:claude\/desktop-profiles|codex\/profiles|antigravity\/profiles)(?:\/|$)/
+          );
+          assert.equal(
+            stat.shadowed,
+            !profile && stat.compared ? 1 : 0,
+            `${where}: shadow comparison count`
+          );
           if (!stat.rust && stat.compared)
             assert.ok(stat.fallbacks >= 1, `${where}: shadow fallback not logged`);
         }
@@ -352,8 +359,13 @@ async function runWorker(mode: string, destination: string): Promise<void> {
   const rows: Row[] = [];
   const cases: CaseStat[] = [];
   const pendingOpens: Array<() => void> = [];
-  const settle = async (before: typeof bridge.stats, compared: boolean) => {
-    if (mode !== 'shadow' || !compared) return;
+  const settle = async (before: typeof bridge.stats, compared: boolean, route: string) => {
+    if (
+      mode !== 'shadow' ||
+      !compared ||
+      /\/api\/(?:claude\/desktop-profiles|codex\/profiles|antigravity\/profiles)/.test(route)
+    )
+      return;
     for (let attempt = 0; attempt < 400; attempt++) {
       if (bridge.stats.shadowed > before.shadowed) return;
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -385,7 +397,7 @@ async function runWorker(mode: string, destination: string): Promise<void> {
       headers: role === 'device' ? { 'x-device': '1' } : { 'x-session': '1' },
     });
     const body = await response.text();
-    await settle(before, compared);
+    await settle(before, compared, route);
     rows.push({
       name,
       route,

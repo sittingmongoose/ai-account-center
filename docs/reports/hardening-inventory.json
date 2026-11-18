@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1116,
-    "filesAffected": 112,
-    "hotpathOccurrences": 544,
-    "hotpathFilesAffected": 62,
+    "totalOccurrences": 1098,
+    "filesAffected": 111,
+    "hotpathOccurrences": 526,
+    "hotpathFilesAffected": 61,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -108,23 +108,6 @@
         "markers": []
       },
       {
-        "file": "src/web-server/rust-service-lifecycle.ts",
-        "count": 18,
-        "calls": [
-          "existsSync",
-          "lstatSync",
-          "mkdirSync",
-          "readdirSync",
-          "readFileSync",
-          "renameSync",
-          "rmdirSync",
-          "rmSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/web-server/status/answer-signing.ts",
         "count": 18,
         "calls": [
@@ -175,6 +158,18 @@
           "renameSync",
           "unlinkSync",
           "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/usage/t3-usage-roots.ts",
+        "count": 14,
+        "calls": [
+          "readdirSync",
+          "readFileSync",
+          "readlinkSync",
+          "realpathSync",
+          "statSync"
         ],
         "markers": []
       }
@@ -545,15 +540,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 686,
+      "totalThrows": 687,
       "typedThrows": 227,
       "plainThrows": 47,
-      "otherThrows": 412,
-      "adoptionRatio": 0.3309,
+      "otherThrows": 413,
+      "adoptionRatio": 0.3304,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 403,
+          "count": 404,
           "typed": 174,
           "plain": 7
         },
@@ -744,7 +739,7 @@
     },
     "largeFiles": {
       "countOver400": 66,
-      "countOver600": 26,
+      "countOver600": 27,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",

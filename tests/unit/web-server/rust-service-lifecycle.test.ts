@@ -261,7 +261,7 @@ describe('Rust service lifecycle (L1)', () => {
         began();
         return held;
       };
-      const route = helper === 'compose' ? '/api/views/home' : '/api/claude/desktop-profiles';
+      const route = helper === 'compose' ? '/api/views/home' : '/api/accounts/visibility';
       const req = { ...request, originalUrl: route } as unknown as Request;
       const answer =
         helper === 'compose'

@@ -363,9 +363,10 @@ fn native_helper_accepts_real_pinned_ssh_argv_and_keeps_a_bound() {
         .unwrap();
     assert!(output.status.success(), "real SSH argv builder failed");
     command.args = serde_json::from_slice(&output.stdout).unwrap();
-    // 48 is today's longest policy (explicit endpoint/key and keepalive).
-    // 64 admits that policy plus 16 slots of margin, while bounding future callers.
-    assert_eq!(command.args.len(), 48);
+    // 50 is today's longest policy (explicit endpoint/key, DNS trust override and keepalive).
+    // 64 admits that policy plus 14 slots of margin, while bounding future callers.
+    assert_eq!(command.args.len(), 50);
+    assert!(command.args.iter().any(|arg| arg == "VerifyHostKeyDNS=no"));
     let bootstrap = "import sys,json,io;p=json.loads(sys.stdin.buffer.read().decode('utf-8'));sys.stdin=io.StringIO(json.dumps(p['request']));exec(compile(p['helperSource'],'managed-fixture','exec'))";
     let ssh = root.join("ssh");
     std::fs::write(&ssh, format!("#!/usr/bin/python3\n{bootstrap}\n")).unwrap();

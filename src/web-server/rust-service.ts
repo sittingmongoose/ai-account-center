@@ -40,7 +40,15 @@ export class RustService extends RustSupervisor {
    * else is a TS answer, counted with its reason.
    */
   private forwardable(req: Request, route: string): VerifiedRustPrincipal | null {
-    const owned = routes.some((r) => r.path === route && r.method === 'GET' && r.owner === 'rust');
+    const row = routes.find((r) => r.path === route && r.method === 'GET' && r.owner === 'rust');
+    const owned = !!row;
+    // DESIGN-M3-COMPLETE 1.6: standalone profiles stay in TS until M6. Their current
+    // composition inputs contain identities, login state, private paths and history, not
+    // a minimal comparison DTO. Shadow must not copy those facts into a second process.
+    if (this.mode === 'shadow' && row?.group === 'profiles') {
+      this.fallback(route, { kind: 'unavailable', reason: 'private_input' });
+      return null;
+    }
     if (this.mode === 'off' || !owned || this.stopped || !['GET', 'HEAD'].includes(req.method))
       return null;
     const verified = principal(req, route);

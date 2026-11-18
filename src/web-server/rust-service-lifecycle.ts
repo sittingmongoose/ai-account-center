@@ -8,6 +8,7 @@ import type http from 'http';
 import { ConfigError } from '../errors/error-types';
 import {
   requestRust,
+  PUBLIC_HEALTH_PRINCIPAL,
   rustAgent,
   type RustConnection,
   type RustStoreBoot,
@@ -81,11 +82,7 @@ export interface RustLease {
 export type RustAcquireFailure =
   'platform' | 'binary' | 'socket_path' | 'spawn' | 'unhealthy' | 'build_mismatch';
 
-export const PUBLIC_HEALTH_PRINCIPAL = {
-  kind: 'session',
-  id: 'public-health',
-  role: 'public',
-} as const;
+export { PUBLIC_HEALTH_PRINCIPAL } from './rust-service-transport';
 
 /** A Unix socket path must fit `sun_path` (108 bytes on Linux, 104 on macOS); keep a margin. */
 export const SOCKET_PATH_LIMIT = 100;
@@ -94,22 +91,22 @@ function uid(): number {
   return process.getuid?.() ?? -1;
 }
 
-function isPrivateDirectory(directory: string): boolean {
+async function isPrivateDirectory(directory: string): Promise<boolean> {
   try {
-    const stat = fs.lstatSync(directory);
+    const stat = await fs.promises.lstat(directory);
     return stat.isDirectory() && (stat.mode & 0o777) === 0o700 && stat.uid === uid();
   } catch {
     return false;
   }
 }
 
-function privateDirectory(directory: string): void {
+async function privateDirectory(directory: string): Promise<void> {
   try {
-    fs.mkdirSync(directory, { mode: 0o700 });
+    await fs.promises.mkdir(directory, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
-  if (!isPrivateDirectory(directory))
+  if (!(await isPrivateDirectory(directory)))
     throw new ConfigError('Rust service requires a private run directory');
 }
 
@@ -222,17 +219,69 @@ export function buildMatches(build: RustBuild | null, binarySha: string): build 
   return !!build && build.sha256 === binarySha && build.protocol === RUST_SERVICE_PROTOCOL;
 }
 
-function readBoot(
+/** Validate the opened descriptor, not a pathname that could change before the read. */
+async function privateDescriptor(file: string): Promise<string | null> {
+  const handle = await fs.promises.open(
+    file,
+    fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW
+  );
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > 4096 || (stat.mode & 0o777) !== 0o600 || stat.uid !== uid())
+      return null;
+    const buffer = Buffer.alloc(4097);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, size, buffer.length - size, null);
+      if (!bytesRead) break;
+      size += bytesRead;
+    }
+    return size <= 4096 ? buffer.subarray(0, size).toString('utf8') : null;
+  } finally {
+    await handle.close();
+  }
+}
+
+// Async cleanup and publication must not interleave a boot-id check with another
+// boot's rename in this process. Admission below also bounds these mutation waiters.
+const descriptorMutations = new Map<string, Promise<void>>();
+function mutateDescriptor(file: string, change: () => Promise<void>): Promise<void> {
+  const pending = (descriptorMutations.get(file) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(change);
+  descriptorMutations.set(file, pending);
+  void pending
+    .finally(() => {
+      if (descriptorMutations.get(file) === pending) descriptorMutations.delete(file);
+    })
+    .catch(() => undefined);
+  return pending;
+}
+
+// Keep stalled libuv operations bounded across retries, even after the caller's budget expires.
+let acquiring = 0;
+let cleaning = 0;
+const FILESYSTEM_LIMIT = 2;
+function cleanupFiles(cleanup: () => Promise<void>): void {
+  // A later stale-boot sweep reclaims files if cleanup is already saturated. Never queue
+  // unbounded filesystem work on the HTTP process or hold shutdown waiting for a disk.
+  if (cleaning >= FILESYSTEM_LIMIT) return;
+  cleaning++;
+  void cleanup()
+    .catch(() => undefined)
+    .finally(() => cleaning--);
+}
+
+async function readBoot(
   file: string,
   ccsDir: string,
   binary: string,
   store: RustStoreBoot | null = null
-): RustBoot | null {
+): Promise<RustBoot | null> {
   try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.size > 4096 || (stat.mode & 0o777) !== 0o600 || stat.uid !== uid())
-      return null;
-    const boot = JSON.parse(fs.readFileSync(file, 'utf8')) as RustBoot;
+    const text = await privateDescriptor(file);
+    if (text === null) return null;
+    const boot = JSON.parse(text) as RustBoot;
     if (
       boot.ccsDir !== ccsDir ||
       boot.binary !== binary ||
@@ -247,8 +296,8 @@ function readBoot(
       return null;
     const layout = socketLayout(ccsDir, boot.bootId);
     if (!layout || boot.socketPath !== layout.socketPath) return null;
-    if (!layout.folders.every(isPrivateDirectory)) return null;
-    const socket = fs.lstatSync(boot.socketPath);
+    if (!(await Promise.all(layout.folders.map(isPrivateDirectory))).every(Boolean)) return null;
+    const socket = await fs.promises.lstat(boot.socketPath);
     if (!socket.isSocket() || (socket.mode & 0o777) !== 0o600 || socket.uid !== uid()) return null;
     return {
       ccsDir,
@@ -317,7 +366,7 @@ export async function sweepStaleBoots(
   for (const parent of parents) {
     let names: string[];
     try {
-      names = fs.readdirSync(parent);
+      names = await fs.promises.readdir(parent);
     } catch {
       continue;
     }
@@ -326,11 +375,11 @@ export async function sweepStaleBoots(
       if (!/^aac-http-[a-f0-9]{24}$/.test(name) || name === keep) continue;
       const folder = path.join(parent, name);
       try {
-        const stat = fs.lstatSync(folder);
-        if (!isPrivateDirectory(folder) || Date.now() - stat.mtimeMs < 60_000) continue;
+        const stat = await fs.promises.lstat(folder);
+        if (!(await isPrivateDirectory(folder)) || Date.now() - stat.mtimeMs < 60_000) continue;
         if (!(await refuses(path.join(folder, 'http.sock')))) continue;
         signal?.throwIfAborted();
-        fs.rmSync(folder, { recursive: true, force: true });
+        await fs.promises.rm(folder, { recursive: true, force: true });
         swept++;
       } catch {
         /* Changed meanwhile; the next start looks again. */
@@ -366,9 +415,14 @@ export async function acquireRustServiceDetailed(
   signal?: AbortSignal,
   storeInput?: RustStoreBootInput | null
 ): Promise<AcquireResult> {
+  if (acquiring >= FILESYSTEM_LIMIT)
+    return { lease: null, failure: 'unhealthy', refusedAttach: false, swept: 0 };
+  acquiring++;
   const budget = AbortSignal.timeout(5000);
   const stopped = signal ? AbortSignal.any([signal, budget]) : budget;
-  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput);
+  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput).finally(
+    () => acquiring--
+  );
   // Async filesystem work may finish late; every continuation checks the signal before adoption.
   return new Promise((resolve) => {
     const aborted = () =>
@@ -398,10 +452,12 @@ async function acquireWithinBudget(
   const sha256 = await binarySha256(binary, signal);
   signal.throwIfAborted();
   const run = path.join(ccsDir, 'run');
-  privateDirectory(run);
+  await privateDirectory(run);
+  signal.throwIfAborted();
   const descriptor = path.join(run, 'aac-http.json');
   const store = expectedStoreBoot(ccsDir, storeInput);
-  const existing = readBoot(descriptor, ccsDir, binary, store);
+  const existing = await readBoot(descriptor, ccsDir, binary, store);
+  signal.throwIfAborted();
   if (existing) {
     const agent = rustAgent();
     const build = await healthBuild({ ...existing, agent }, active);
@@ -433,7 +489,6 @@ async function acquireWithinBudget(
   const bootId = randomBytes(12).toString('hex');
   const layout = socketLayout(ccsDir, bootId);
   if (!layout) return { ...result, failure: 'socket_path' };
-  for (const folder of layout.folders) privateDirectory(folder);
   const directory = layout.folders[layout.folders.length - 1];
   const agent = rustAgent();
   const boot: RustBoot = {
@@ -454,32 +509,30 @@ async function acquireWithinBudget(
   // Beside the descriptor: the socket folder may be on another filesystem (a tmpfs), where a
   // rename into run/ would fail.
   const temporary = path.join(run, `.aac-http-${bootId}.json`);
-  const removeOwnedFiles = () => {
-    try {
-      const stat = fs.lstatSync(descriptor);
-      if (
-        stat.isFile() &&
-        stat.size <= 4096 &&
-        JSON.parse(fs.readFileSync(descriptor, 'utf8')).bootId === bootId
-      )
-        fs.unlinkSync(descriptor);
-    } catch {
-      /* Descriptor missing, changed or unreadable. */
-    }
-    try {
-      fs.rmSync(directory, { recursive: true, force: true });
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      /* Best effort. */
-    }
-    // A short socket folder of this root goes too once no other boot of the root uses it.
-    if (layout.folders.length > 1)
+  const removeOwnedFiles = () =>
+    cleanupFiles(async () => {
       try {
-        fs.rmdirSync(layout.folders[layout.folders.length - 2]);
+        await mutateDescriptor(descriptor, async () => {
+          const text = await privateDescriptor(descriptor);
+          if (text !== null && JSON.parse(text).bootId === bootId)
+            await fs.promises.unlink(descriptor);
+        });
       } catch {
-        /* Not empty, or already gone. */
+        /* Descriptor missing, changed or unreadable. */
       }
-  };
+      try {
+        await fs.promises.rm(directory, { recursive: true, force: true });
+        await fs.promises.rm(temporary, { force: true });
+      } catch {
+        /* Best effort; a later sweep reclaims leftovers. */
+      }
+      if (layout.folders.length > 1)
+        try {
+          await fs.promises.rmdir(layout.folders[layout.folders.length - 2]);
+        } catch {
+          /* Not empty, or already gone. */
+        }
+    });
   const close = () => {
     if (closed) return;
     closed = true;
@@ -501,6 +554,10 @@ async function acquireWithinBudget(
   signal.addEventListener('abort', close, { once: true });
   try {
     signal.throwIfAborted();
+    for (const folder of layout.folders) {
+      await privateDirectory(folder);
+      signal.throwIfAborted();
+    }
     child = spawn(binary, [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
@@ -539,7 +596,7 @@ async function acquireWithinBudget(
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.
     for (let attempt = 0; attempt < 200 && !failed && !closed; attempt++) {
-      const build = fs.existsSync(boot.socketPath) ? await healthBuild(boot, active) : null;
+      const build = await healthBuild(boot, active);
       if (closed || signal.aborted) break;
       if (build) {
         if (!buildMatches(build, sha256)) {
@@ -547,12 +604,17 @@ async function acquireWithinBudget(
           failure = 'build_mismatch';
           break;
         }
-        const socket = fs.lstatSync(boot.socketPath);
+        const socket = await fs.promises.lstat(boot.socketPath);
         if (!socket.isSocket() || (socket.mode & 0o777) !== 0o600 || socket.uid !== uid()) break;
+        signal.throwIfAborted();
         boot.build = build;
         const { agent: _agent, ...stored } = boot;
-        fs.writeFileSync(temporary, JSON.stringify(stored), { flag: 'wx', mode: 0o600 });
-        fs.renameSync(temporary, descriptor);
+        await fs.promises.writeFile(temporary, JSON.stringify(stored), { flag: 'wx', mode: 0o600 });
+        await mutateDescriptor(descriptor, async () => {
+          signal.throwIfAborted();
+          await fs.promises.rename(temporary, descriptor);
+        });
+        signal.throwIfAborted();
         signal.removeEventListener('abort', close);
         const owned = child;
         return {
@@ -572,5 +634,7 @@ async function acquireWithinBudget(
     /* Fixed fallback log belongs to the caller, never log boot input. */
   }
   close();
+  // A cancelled mkdir/write/rename may have completed after close's first cleanup.
+  removeOwnedFiles();
   return { ...result, failure };
 }

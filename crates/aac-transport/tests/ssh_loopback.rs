@@ -255,3 +255,32 @@ async fn a_failed_probe_is_retried_after_its_ttl() {
     assert!(args.iter().any(|arg| arg == "KnownHostsCommand=none"));
     assert_eq!(calls(), 3);
 }
+
+/// Max pair 2 M4: command-line pin policy overrides DNS trust inherited from a config.
+#[tokio::test]
+async fn effective_policy_disables_dns_trust_on_every_client() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config");
+    std::fs::write(&config, "Host *\n VerifyHostKeyDNS yes\n").unwrap();
+    let mut clients = vec![std::path::PathBuf::from("/usr/bin/ssh")];
+    if let Some(old) = std::env::var_os("AAC_TEST_OPENSSH_81") {
+        clients.push(old.into());
+    }
+    for client in clients {
+        let mut policy =
+            SshPolicy::new(root.path().join("known_hosts"), root.path().join("control"));
+        policy.ssh = client.clone();
+        let argv = policy.argv(&root.path().join("key"), false).await.unwrap();
+        let output = std::process::Command::new(&client)
+            .args(["-G", "-F"])
+            .arg(&config)
+            .args(argv)
+            .arg("fixture.invalid")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("verifyhostkeydns false\n"), "{text}");
+        assert!(text.contains("stricthostkeychecking true\n"), "{text}");
+    }
+}
