@@ -743,6 +743,8 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         Some(view! { <p class="banner" role="status">{error.sentence()}{old}</p> })
     };
     let sources_open = RwSignal::new(false);
+    let how_open = RwSignal::new(false);
+    let runs_open = RwSignal::new(false);
     // The sheet holds the model's key; what it shows comes from the current view, so it follows a refresh.
     let sheet = RwSignal::new(None::<String>);
     let open_sheet = Callback::new(move |m: ModelRow| sheet.set(Some(m.key)));
@@ -846,7 +848,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                                     groups.with(|g| arr::arrange(refs, g.as_ref(), id, sort.get(), grouped.get(), &pick.get()))
                                 });
                                 let keys = groups.with(|g| g.as_ref().and_then(|g| g.views.get(&v.id).cloned()).unwrap_or_default());
-                                view! { <ModelsSections view=v lines=lines keys=keys selected=selected on_row=on_row on_sheet=open_sheet on_clear=on_clear board=board/> }.into_any()
+                                view! { <ModelsSections view=v lines=lines keys=keys selected=selected how_open=how_open runs_open=runs_open on_row=on_row on_sheet=open_sheet on_clear=on_clear board=board/> }.into_any()
                             }
                         }}
                         <p class="sb-read">
@@ -998,13 +1000,13 @@ fn ModelsSections(
     lines: Vec<Line>,
     keys: BTreeMap<String, RowKeys>,
     selected: RwSignal<Option<String>>,
+    how_open: RwSignal<bool>,
+    runs_open: RwSignal<bool>,
     on_row: Callback<String>,
     on_sheet: Callback<ModelRow>,
     on_clear: Callback<()>,
     board: Board,
 ) -> impl IntoView {
-    let how_open = RwSignal::new(false);
-    let runs_open = RwSignal::new(false);
     let measures = move || {
         board.view.with(|v| {
             v.as_ref()
@@ -1573,27 +1575,32 @@ pub fn unlisted_unknown_runs(u: &Unscored) -> u32 {
 /// The quiet line under the head that names the runs left out of every verdict, hidden at none. The line is a native
 /// disclosure: a tap, a click or the keyboard opens the reasons and the unknown model ids with their runs under it, and
 /// with a mouse a hover shows them floating until the pointer leaves (CSS). The list is the disclosure's next sibling,
-/// not its content: browsers keep a closed disclosure's content unpainted, whatever its CSS says. No signals, timers or
-/// overlay: each is code in the page's WebAssembly, which is at its size limit.
+/// so the hover rule can show it while the native disclosure is closed. Keep the chosen state if a refresh briefly
+/// removes all unscored runs.
 #[component]
 fn UnscoredNote(board: Board) -> impl IntoView {
-    move || {
-        board.view.with(|v| v.as_ref().and_then(shown_unscored)).map(|u| {
-            // The last count, its words and the chevron share one unbreakable piece: a break is allowed before an
-            // inline icon even after a no-break space, which left the chevron alone on a line (review 1, M3).
-            let mut note = unscored_note(&u);
-            let last = note.split_off(note.len().saturating_sub(2));
-            view! {
-                <div class="sb-unscored">
-                    <details>
-                        <summary>{runs_view(note)}<span class="nw">{runs_view(last)}<Icon name="chev-down" class="chev"/></span></summary>
-                    </details>
-                    <div class="sbu-list">
-                        {unscored_lines(&u).into_iter().map(|(class, runs)| view! { <p class=class>{runs_view(runs)}</p> }).collect_view()}
-                    </div>
-                </div>
-            }
-        })
+    let unscored = Memo::new(move |_| board.view.with(|v| v.as_ref().and_then(shown_unscored)));
+    let open = RwSignal::new(false);
+    view! {
+        <Show when=move || unscored.with(Option::is_some)>
+        <div class="sb-unscored">
+            <details open=move || open.get() on:toggle=move |event| {
+                open.set(event_target::<web_sys::HtmlElement>(&event).has_attribute("open"));
+            }>
+                <summary>{move || unscored.with(|u| u.as_ref().map(|u| {
+                    // Keep the last count with its chevron when the line wraps.
+                    let mut note = unscored_note(u);
+                    let last = note.split_off(note.len().saturating_sub(2));
+                    view! { {runs_view(note)}<span class="nw">{runs_view(last)}<Icon name="chev-down" class="chev"/></span> }
+                }))}</summary>
+            </details>
+            <div class="sbu-list">
+                {move || unscored.with(|u| u.as_ref().map(|u| {
+                    unscored_lines(u).into_iter().map(|(class, runs)| view! { <p class=class>{runs_view(runs)}</p> }).collect_view()
+                }))}
+            </div>
+        </div>
+        </Show>
     }
 }
 

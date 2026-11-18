@@ -3,7 +3,7 @@
 //! the server refuses an answer to a card that changed after it was shown.
 
 use crate::api::*;
-use crate::blocks::Blocks;
+use crate::blocks::{BlockFolds, Blocks};
 use crate::drafts::{self, Drafts, Standing};
 use crate::fmt;
 use crate::live::Live;
@@ -119,6 +119,7 @@ pub fn CardsPanel() -> impl IntoView {
             .iter()
             .find(|s| s.id == view.cards.source)
             .cloned()
+            .map(|source| crate::status::report_source_for_cards(source, view.pinned.as_ref()))
     });
     let open = Memo::new(move |_| {
         live.view.with(|v| {
@@ -207,6 +208,7 @@ pub fn CardsPanel() -> impl IntoView {
     });
 
     let answered_open = RwSignal::new(false);
+    let list_open = RwSignal::new(false);
     let history_problem = move || {
         live.view.with(|v| {
             v.as_ref()
@@ -231,7 +233,7 @@ pub fn CardsPanel() -> impl IntoView {
                     <p class="q-empty">"No questions waiting."</p>
                 }
             >
-                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem source=source history_problem=Signal::derive(history_problem)/>
+                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem source=source history_problem=Signal::derive(history_problem) list_open=list_open/>
             </Show>
             <UnsentClosed open=open drafts=drafts/>
             <Show when=move || !answered().is_empty()>
@@ -258,9 +260,9 @@ fn Deck(
     problem: RwSignal<Option<String>>,
     source: Signal<Option<Source>>,
     history_problem: Signal<Option<String>>,
+    list_open: RwSignal<bool>,
 ) -> impl IntoView {
     let live = expect_context::<Live>();
-    let list_open = RwSignal::new(false);
     // After the new card or the review screen is in place, bring the deck's top back into view when the owner had
     // scrolled past it (a long card). A deck already in view does not move. A plain browser timer on purpose:
     // Leptos 0.9 cancels its own `set_timeout` when the owner that started it is cleaned up, and this click redraws
@@ -376,6 +378,7 @@ fn Deck(
         })
     };
     let current = Memo::new(move |_| shown.with(|cards| cards.get(at.get()).cloned()));
+    let body_id = Memo::new(move |_| current.with(|c| c.as_ref().map(|c| c.id.clone())));
     let next = move || {
         let last = at.get_untracked() + 1 >= shown.with_untracked(|o| o.len());
         if last {
@@ -541,7 +544,13 @@ fn Deck(
             </Show>
             {move || match deck_view.get() {
                 DeckView::Cards => view! {
-                    {move || current.get().map(|card| view! { <CardBody card=card drafts=drafts open=open/> })}
+                    <For each=move || body_id.get() key=|id| id.clone() children=move |id| {
+                        let tech = RwSignal::new(false);
+                        provide_context(BlockFolds::new());
+                        move || current.with(|c| c.as_ref().filter(|c| c.id == id).cloned().map(|card| view! {
+                            <CardBody card=card drafts=drafts open=open tech=tech/>
+                        }))
+                    }/>
                 }.into_any(),
                 DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open sending=sending problem=problem/> }.into_any(),
                 DeckView::Sent(summary) => view! { <Sent summary=summary back=move || go_card(0)/> }.into_any(),
@@ -559,7 +568,12 @@ fn Deck(
 }
 
 #[component]
-fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl IntoView {
+fn CardBody(
+    card: Card,
+    drafts: RwSignal<Drafts>,
+    open: Memo<Vec<Card>>,
+    tech: RwSignal<bool>,
+) -> impl IntoView {
     let card = StoredValue::new(card);
     let c = card.get_value();
     // A judgement card is the owner's own call: no recommendation is shown, so nothing anchors it.
@@ -822,7 +836,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                                     {has_extra.then(|| view! {
                                         <div class="opt-extra">
                                             <MediaList items=o.media.clone()/>
-                                            <Blocks blocks=o.sections.clone()/>
+                                            <Blocks blocks=o.sections.clone() option=key.clone()/>
                                         </div>
                                     })}
                                 </div>
@@ -872,7 +886,6 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                 })}
                 <div class="q-more">
                     {(!c.evidence.is_empty() || !c.id.is_empty()).then(|| {
-                        let tech = RwSignal::new(false);
                         let items = c.evidence.clone();
                         // The full id first: a chat may quote it ("vm.pm7-build--Q1") where the label reads PM7-Q1.
                         let id = c.id.clone();

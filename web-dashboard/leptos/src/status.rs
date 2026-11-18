@@ -42,11 +42,9 @@ fn headline_runs(view: &StatusView) -> Vec<Run> {
 #[component]
 pub fn StatusPage(embedded: bool) -> impl IntoView {
     let live = expect_context::<Live>();
+    let summary_open = RwSignal::new(None::<String>);
     // The summary counts (summary.rs); None from a server older than the strip, which keeps the sentence.
-    let strip = Memo::new(move |_| {
-        live.view
-            .with(|v| v.as_ref().and_then(|v| v.headline.strip.clone()))
-    });
+    let strip = Memo::new(move |_| live.view.with(|v| v.as_ref().and_then(headline_strip)));
     let info = ChromeInfo {
         updated: Signal::derive(move || {
             if live.view.with(|v| v.is_none()) {
@@ -87,7 +85,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                             <p class="headline">{move || runs_view(live.view.with(|v| v.as_ref().map(headline_runs).unwrap_or_default()))}</p>
                         }
                     >
-                        <crate::summary::SummaryStrip strip=strip/>
+                        <crate::summary::SummaryStrip strip=strip open=summary_open/>
                     </Show>
                 </div>
                 {banner}
@@ -166,36 +164,130 @@ pub(crate) fn cached_notice(p: &PinnedUpdate) -> impl IntoView + use<> {
     }
 }
 
-/// "<file> was refused:", or "A status file was refused:" when the server names no file.
-fn refused_head(file: &str) -> String {
-    if file.trim().is_empty() {
-        "A status file was refused:".to_string()
+/// A refusal can occur in both the status reader's list and the pin it matched.
+fn report_refusals(panel: &PinnedPanel) -> Vec<(&StatusProblem, Option<&str>)> {
+    let mut seen = std::collections::BTreeSet::new();
+    panel
+        .updates
+        .iter()
+        .filter_map(|u| Some((u.refusal.as_ref()?, Some(u.title.as_str()))))
+        .chain(panel.status_problems.iter().map(|problem| (problem, None)))
+        .filter(|(p, _)| seen.insert((p.file.trim(), p.reason.trim().trim_end_matches('.'))))
+        .collect()
+}
+
+fn report_writer(file: &str) -> &str {
+    let file = file.trim();
+    let file = file.strip_prefix("writers/").unwrap_or(file);
+    file.strip_suffix("/status.json").unwrap_or(file)
+}
+
+pub(crate) fn report_problem_lines(panel: &PinnedPanel) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut lines: Vec<_> = panel
+        .machine_problems
+        .iter()
+        .map(|m| m.text.trim())
+        .filter(|text| !text.is_empty() && seen.insert(*text))
+        .map(str::to_owned)
+        .collect();
+    lines.extend(report_refusals(panel).into_iter().map(|(problem, title)| {
+        let writer = report_writer(&problem.file);
+        let subject = title
+            .filter(|title| !title.trim().is_empty())
+            .or_else(|| (!writer.is_empty()).then_some(writer));
+        let head = subject.map_or_else(
+            || "A status report could not be read".to_string(),
+            |name| format!("{name}’s status report could not be read"),
+        );
+        match problem.reason.trim().trim_end_matches('.') {
+            "" => format!("{head}."),
+            "folder name is not a writer name" => {
+                format!("{head} because the folder name is invalid.")
+            }
+            reason => format!("{head} ({reason})."),
+        }
+    }));
+    lines
+}
+
+/// The report reader includes a short file preview in its source detail. The count and time still
+/// describe the source when a pinned report's full problem is displayed below.
+fn report_source_parts(source: &Source) -> Option<(&str, &str)> {
+    if source.id == "agent-reports"
+        && source.state == "unreadable"
+        && source.detail.contains(" unreadable since ")
+    {
+        source.detail.split_once(": ")
     } else {
-        format!("{file} was refused:")
+        None
     }
 }
 
-/// The refusal over a pin's card or sheet: what was refused and why, in the server's words.
-pub(crate) fn refusal_notice(p: &PinnedUpdate) -> Option<AnyView> {
-    let r = p.refusal.as_ref()?;
-    Some(view! { <p class="pin-cached"><span data-tone="crit">{refused_head(&r.file)}</span>{format!(" {}", r.reason)}</p> }.into_any())
+fn omit_report_preview(preview: &mut String, file: &str, reason: &str) {
+    let entry = format!("{file} ({reason})");
+    while let Some((start, end)) = preview.match_indices(&entry).find_map(|(start, entry)| {
+        let end = start + entry.len();
+        let before = &preview[..start];
+        let after = &preview[end..];
+        match (
+            before.is_empty(),
+            before.ends_with(", "),
+            after.starts_with(", "),
+            after.starts_with('.'),
+        ) {
+            (true, _, true, _) => Some((start, end + 2)),
+            (_, true, true, _) | (_, true, _, true) => Some((start - 2, end)),
+            (true, _, _, true) => Some((start, end + 1)),
+            _ => None,
+        }
+    }) {
+        preview.replace_range(start..end, "");
+    }
+    if preview.starts_with(' ') {
+        *preview = preview.trim_start().to_string();
+    }
 }
 
-/// The refused status@1 files the server holds no good copy of, under the head. A pin whose own row says it was
-/// refused isn't repeated here.
-pub(crate) fn refused_lines(p: &PinnedPanel) -> impl IntoView + use<> {
-    let on_pins: Vec<String> = p
-        .updates
+pub(crate) fn report_source_for_cards(mut source: Source, panel: Option<&PinnedPanel>) -> Source {
+    if let Some((head, preview)) = report_source_parts(&source) {
+        let mut preview = preview.to_string();
+        for (problem, _) in panel.into_iter().flat_map(report_refusals) {
+            let file = problem
+                .file
+                .strip_prefix("writers/")
+                .unwrap_or(&problem.file);
+            omit_report_preview(&mut preview, file, &problem.reason);
+            // The directory scan reports this refusal against the folder, the status scan
+            // against the status file in it.
+            if problem.reason == "folder name is not a writer name"
+                && let Some(folder) = file.strip_suffix("/status.json")
+            {
+                omit_report_preview(&mut preview, folder, &problem.reason);
+            }
+        }
+        source.detail = if preview.is_empty() {
+            format!("{head}.")
+        } else {
+            format!("{head}: {preview}")
+        };
+    }
+    source
+}
+
+fn headline_strip(view: &StatusView) -> Option<Strip> {
+    let mut strip = view.headline.strip.clone()?;
+    if let Some((source, (head, _))) = view
+        .sources
         .iter()
-        .filter_map(|u| u.refusal.as_ref().map(|r| r.file.clone()))
-        .collect();
-    p.status_problems
-        .iter()
-        .filter(|s| s.file.is_empty() || !on_pins.contains(&s.file))
-        .map(|s| {
-            view! { <p class="plate-note problem"><span data-tone="crit">{refused_head(&s.file)}</span>{format!(" {}", s.reason)}</p> }
-        })
-        .collect_view()
+        .find_map(|s| report_source_parts(s).map(|parts| (s, parts)))
+        && let Some(item) = strip.items.iter_mut().find(|i| i.key == "sources")
+    {
+        item.detail = item
+            .detail
+            .replace(source.detail.trim().trim_end_matches('.'), head);
+    }
+    Some(strip)
 }
 
 /// The sheet's grabber: drag the sheet down to close it (past 80 px, or a quick flick down); otherwise it springs back.
@@ -860,13 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_with_or_without_a_file_says_what_was_refused() {
-        // a refusal with no file name still says what happened
-        assert_eq!(refused_head(""), "A status file was refused:");
-        assert_eq!(
-            refused_head("mac.flash/status.json"),
-            "mac.flash/status.json was refused:"
-        );
+    fn machine_labels_use_the_packaged_registry() {
         assert_eq!(machine_label("nas1"), Some("Nas1"));
         assert_eq!(machine_label("alexis"), Some("Alexis PC"));
         assert_eq!(machine_label("elsewhere"), None);

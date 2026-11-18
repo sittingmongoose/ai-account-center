@@ -239,6 +239,109 @@ async function stripLayout(t) {
 }
 
 export const tests = {
+  async 'status report regression: desktop Show all survives two live polls'(t) {
+    await t.viewport(1440, 900);
+    const view = fixture('status-design-view.json');
+    const pin = fixture('status-c2-pins.json').pinned.updates.find((u) => u.id === 'c2-loop');
+    pin.board = null;
+    pin.left = Array.from({ length: 8 }, (_, i) => ({ id: `todo-${i}`, title: `Pending task ${i + 1}` }));
+    pin.done = Array.from({ length: 4 }, (_, i) => ({ id: `done-${i}`, title: `Finished task ${i + 1}` }));
+    view.refresh.pollSeconds = 10;
+    view.pinned.updates = [pin];
+    view.pinned.counts.pinned = 1;
+    // Leave the safety timer as the only source of reads during the check.
+    await t.page.routeWebSocket('**/ws', () => {});
+    await openStatus(t, view);
+    const pane = t.page.locator('.c2-pane');
+    const left = pane.locator('.c2-tg').filter({ hasText: 'Not done' });
+    const done = pane.locator('.c2-tg').filter({ hasText: 'Done 4' });
+    await left.getByRole('button', { name: 'Show all 8' }).click();
+    await done.getByRole('button', { name: 'Show all 4' }).click();
+
+    for (const n of [1, 2]) {
+      pin.now = `Live poll ${n} updated this report.`;
+      await t.page.waitForFunction((text) => document.querySelector('.c2-pane')?.textContent.includes(text), pin.now, { timeout: 16000 });
+      if (n === 1) {
+        await t.equal('all four completed tasks still show after the first poll', await done.locator('.c2-tg-t').count(), 4);
+        const fewer = done.getByRole('button', { name: 'Fewer' });
+        if (await fewer.count()) await fewer.click();
+      }
+    }
+    await t.equal('all eight pending tasks still show after the second poll', await left.locator('.c2-tg-t').count(), 8);
+    await t.equal('Done is still folded after selecting Fewer', await done.getByRole('button', { name: 'Show all 4' }).count(), 1);
+    await pane.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await t.crop('status-tasks-after-two-polls', '.c2-pane', 'Pinned thread after two real Status polls, with Not done expanded and Done folded');
+  },
+
+  async 'status report regression: one collapsed report problem count'(t) {
+    await t.viewport(1440, 900);
+    const view = fixture('status-design-view.json');
+    view.pinned.updates = [fixture('status-c2-pins.json').pinned.updates.find((u) => u.id === 'c2-loop')];
+    view.pinned.counts.pinned = 1;
+    const reason = 'folder name is not a writer name';
+    const writers = ['vm.muse-run', 'ubuntuserver.muse-run'];
+    view.pinned.statusProblems = writers.map((writer) => ({ file: `writers/${writer}/status.json`, reason, sinceMs: 1 }));
+    view.pinned.statusProblems.push(view.pinned.statusProblems[0]);
+    view.pinned.machineProblems = [{ machine: 'alexis', label: 'Alexis PC', text: 'Pinned threads unavailable on Alexis PC: it did not answer.' }];
+    const reportSource = view.sources.find((s) => s.id === 'agent-reports');
+    const otherReport = 'vm.other/card.json (invalid card)';
+    reportSource.state = 'unreadable';
+    reportSource.detail = `3 files unreadable since 1:10 PM: ${writers.map((writer) => `${writer} (${reason})`).join(', ')}, ${otherReport}.`;
+    view.headline.strip.items.push({
+      key: 'sources', value: '1', label: 'source not current', short: 'not current', tone: 'warn',
+      detail: `Not current: Agent reports: ${reportSource.detail}`,
+    });
+    await openStatus(t, view);
+    await t.text('.st-head .sum-i[data-key="sources"]', /1\s+source not current/);
+    const drawer = t.page.locator('.c2-report-problems');
+    const summary = drawer.locator('summary');
+    await t.equal('one accessible count for the three distinct report problems', await summary.allTextContents(), ['3 report problems']);
+    const pinned = await t.page.locator('.sec-pinned').innerText();
+    await t.check('closed disclosure keeps raw lines off the page', !pinned.includes(reason) && !pinned.includes('Alexis PC'));
+    await t.crop('status-report-problems-collapsed', '.sec-pinned', 'Pinned threads before opening report problems');
+
+    if (await summary.count()) {
+      await summary.click();
+      await t.equal('three explanations appear once', await drawer.locator('li').count(), 3);
+      await t.text('.c2-report-problems ul', /Alexis PC.*vm\.muse-run.*ubuntuserver\.muse-run/s);
+      await t.crop('status-report-problems-open', '.sec-pinned', 'Report problems open with one explanation per writer or source');
+      const machine = view.pinned.machineProblems[0];
+      machine.text = 'Pinned threads unavailable on Alexis PC: its pin list could not be read.';
+      await t.page.evaluate(() => window.dispatchEvent(new Event('online')));
+      await t.page.waitForFunction((text) => document.querySelector('.c2-report-problems li')?.textContent === text, machine.text);
+      await t.check('the problem list stays open while its contents update', await drawer.evaluate((el) => el.open));
+    }
+    await t.page.locator('.st-head .sum-i[data-key="sources"]').click();
+    await t.text('.st-head .sum-more', /Agent reports: 3 files unreadable since 1:10 PM/);
+    await t.check('the source summary does not repeat file problems', !/muse-run|invalid card/.test(await t.page.locator('.st-head .sum-more').innerText()));
+    await t.text('.sec-questions .plate-note', /vm\.other\/card\.json/);
+    await t.check('questions keep unrelated file warnings without repeating pinned reports', !/muse-run/.test(await t.page.locator('.sec-questions').innerText()));
+  },
+
+  async 'status question disclosures retain their choices when the card changes'(t) {
+    await t.viewport(1440, 900);
+    const view = fixture('status-design-view.json');
+    const card = view.cards.open[0];
+    view.cards.open = [card];
+    card.sections = [
+      { type: 'text', title: 'First detail', fold: true, body: 'Before the read.' },
+      { type: 'text', title: 'Second detail', fold: true, body: 'Keep this folded.' },
+    ];
+    await openStatus(t, view);
+    const first = t.page.locator('article.q-card details').filter({ hasText: 'First detail' });
+    const second = t.page.locator('article.q-card details').filter({ hasText: 'Second detail' });
+    const technical = t.page.getByRole('button', { name: 'Technical detail for agents' });
+    await first.locator('summary').click();
+    await technical.click();
+
+    card.sections[0].body = 'After the read.';
+    await t.page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await t.page.waitForFunction(() => document.querySelector('article.q-card')?.textContent.includes('After the read.'));
+    await t.check('the first section stays open', await first.evaluate((el) => el.open));
+    await t.check('the second section stays folded', !(await second.evaluate((el) => el.open)));
+    await t.equal('technical details stay open', await technical.getAttribute('aria-expanded'), 'true');
+  },
+
   async '72 questions stay bounded and searchable'(t) {
     const view = fixture('status-view.json');
     const seed = view.cards.open[0];
