@@ -10,6 +10,7 @@ import {
   type ReportProblem,
   type SeenReport,
 } from './agent-reports-reader';
+import { cardRowVersion, closesCard, closingCardVersions } from './answered-cards';
 import { CLOSING_KINDS, deliveryView, summarySteps } from './answers';
 import {
   ITEM_STATES,
@@ -260,7 +261,10 @@ function waitsOnOwner(row: SeenReport<ThreadDoc>, inputs: StatusInputs): boolean
     row.doc.blockedOn?.kind === 'owner' ||
     inputs.reports.cards.some(
       (card) =>
-        card.writer === row.writer && card.doc.state === 'open' && QUESTION_KINDS.has(card.doc.kind)
+        card.writer === row.writer &&
+        card.doc.state === 'open' &&
+        QUESTION_KINDS.has(card.doc.kind) &&
+        !inputs.answers.some((entry) => closesCard(entry.answer, card.doc, card.sha256))
     )
   );
 }
@@ -486,9 +490,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
   const summaries = summarySteps(inputs.sends ?? []);
   // Choices, written responses and completed actions close a card version; objections remain open.
   const answers = inputs.answers.filter((e) => CLOSING_KINDS.has(e.answer.kind));
-  const answered = new Set(
-    answers.map((e) => `${e.answer.cardId}\n${e.answer.cardSeq}\n${e.answer.cardSha256}`)
-  );
+  const answered = closingCardVersions(answers);
   const notes = new Map<string, CardNoteView[]>();
   for (const entry of inputs.answers) {
     if (CLOSING_KINDS.has(entry.answer.kind)) continue;
@@ -507,10 +509,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
   for (const { answer } of inputs.answers)
     highest.set(answer.cardId, Math.max(highest.get(answer.cardId) ?? 0, answer.cardSeq));
   const open = inputs.reports.cards
-    .filter(
-      (row) =>
-        row.doc.state === 'open' && !answered.has(`${row.doc.id}\n${row.doc.seq}\n${row.sha256}`)
-    )
+    .filter((row) => row.doc.state === 'open' && !answered.has(cardRowVersion(row)))
     .map((row) => {
       const older = row.doc.seq < (highest.get(row.doc.id) ?? 0);
       const problem =
@@ -541,20 +540,21 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
     source: 'agent-reports',
     open,
     answerHistoryProblem: inputs.answerHistoryProblem ?? null,
-    answered: inputs.answerHistoryProblem
-      ? null
-      : history.map((entry) => ({
-          card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
-          answer: {
-            kind: entry.answer.kind as 'answer' | 'note' | 'done',
-            choice: entry.answer.choice,
-            note: entry.answer.note,
-            via: entry.answer.via,
-            answeredAt: entry.answer.answeredAt,
-            device: entry.answer.device,
-            delivery: deliveryView(entry, summaries),
-          },
-        })),
+    answered:
+      inputs.answerHistoryProblem && history.length === 0
+        ? null
+        : history.map((entry) => ({
+            card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
+            answer: {
+              kind: entry.answer.kind as 'answer' | 'note' | 'done',
+              choice: entry.answer.choice,
+              note: entry.answer.note,
+              via: entry.answer.via,
+              answeredAt: entry.answer.answeredAt,
+              device: entry.answer.device,
+              delivery: deliveryView(entry, summaries),
+            },
+          })),
     batches: [...batches.values()],
     complete: cardsComplete(inputs),
   };

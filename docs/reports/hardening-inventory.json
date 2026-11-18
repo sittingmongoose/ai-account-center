@@ -610,8 +610,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 459,
-      "coverageRatio": 0.0959,
+      "totalSourceFiles": 460,
+      "coverageRatio": 0.0957,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -627,7 +627,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 263,
+          "count": 264,
           "withLogger": 30
         },
         {
@@ -755,7 +755,7 @@
         },
         {
           "file": "src/web-server/status/answers.ts",
-          "loc": 1744
+          "loc": 1899
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",

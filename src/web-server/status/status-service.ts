@@ -32,6 +32,7 @@ import {
 import { ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { AgentReportsReader, ensureReportsLayout, publishSchemas } from './agent-reports-reader';
+import { activeBlocker, resolvedCardWaits, closingCardVersions } from './answered-cards';
 import { DOORBELL_SENDER, StatusAnswers } from './answers';
 import { QuotaReportReader } from './quota-report';
 import { MACHINES, type MachineId } from './report-schema';
@@ -157,6 +158,12 @@ export class StatusService {
   private hintTimer: ReturnType<typeof setTimeout> | null = null;
   private lastHint = 0;
   private readonly recent = new RecentReadings();
+  private reportsBeforeScan: ReturnType<AgentReportsReader['snapshot']> | null = null;
+  private scanningReports: Promise<void> | null = null;
+  private readonly resolvedThreads = new WeakMap<
+    StatusInputs['reports']['threads'][number],
+    StatusInputs['reports']['threads'][number]
+  >();
 
   constructor(private readonly deps: StatusServiceDeps = {}) {
     this.reader = deps.reader ?? new AgentReportsReader();
@@ -166,6 +173,7 @@ export class StatusService {
       deps.answers ??
       new StatusAnswers({
         readCard: (id) => this.reader.readCardNow(id),
+        reportsRoot: () => this.reader.root,
         onChange: () => this.changed(),
       });
     this.pinned =
@@ -225,24 +233,30 @@ export class StatusService {
     this.hintTimer.unref?.();
   }
 
-  async scanReports(): Promise<void> {
+  scanReports(): Promise<void> {
+    if (!this.scanningReports)
+      this.scanningReports = this.runReportsScan().finally(() => {
+        this.scanningReports = null;
+      });
+    return this.scanningReports;
+  }
+
+  private async runReportsScan(): Promise<void> {
+    // A cold read must not publish open cards while their signed copies are still being checked.
+    this.reportsBeforeScan = this.reader.snapshot();
     try {
-      if (await this.reader.scan()) this.changed();
-    } catch {
-      /* The reader keeps its own state; the source shows stale. */
-    }
-    try {
-      if (await this.quotaReader.scan()) this.changed();
-    } catch {
-      /* The reader keeps its own state; the source shows stale. */
-    }
-    // The pinned panel recomposes from whatever the scans just read.
-    try {
+      await this.reader.scan().catch(() => undefined);
+      await this.quotaReader.scan().catch(() => undefined);
+      const reports = this.reader.snapshot();
+      await this.answers.scanSharedAnswers(reports.cards, this.listAnswersSafe());
       await this.pinned.scanStatusDocs();
-      await this.pinned.compose(this.reader.snapshot(), this.listAnswersSafe());
-      this.changed();
+      await this.composePinned();
     } catch {
-      /* The panel keeps its last composed view. */
+      /* The collectors keep their last good copies. */
+    } finally {
+      this.reportsBeforeScan = null;
+      this.answers.pruneSharedAnswers(this.reader.snapshot().cards);
+      this.changed();
     }
     await this.captureReportHistory();
     // The spend-by-stream panel recomposes over the quota scan's latest accepted report.
@@ -361,6 +375,14 @@ export class StatusService {
       { handle: this.spendNative }
     );
     this.spendByStream = panel;
+  }
+
+  private async composePinned(): Promise<void> {
+    const reports = this.reader.snapshot();
+    await this.pinned.compose(
+      reports,
+      this.answers.withSharedAnswers(this.listAnswersSafe(), reports.cards)
+    );
   }
 
   private listAnswersSafe(): ReturnType<StatusAnswers['list']> {
@@ -557,7 +579,8 @@ export class StatusService {
   async collectPins(): Promise<void> {
     try {
       await this.pinned.collect();
-      await this.pinned.compose(this.reader.snapshot(), this.listAnswersSafe());
+      await this.scanningReports;
+      await this.composePinned();
       this.changed();
     } catch {
       /* The panel keeps its last good pins and its last composed view. */
@@ -603,10 +626,24 @@ export class StatusService {
       answers = [];
       answerHistoryProblem = "The answer history can't be read right now.";
     }
+    const reports = this.reportsBeforeScan ?? this.reader.snapshot();
+    answers = this.answers.withSharedAnswers(answers, reports.cards);
+    const answered = resolvedCardWaits(reports, closingCardVersions(answers));
+    // Keep the scan intact. Both view composers receive the same resolved thread waits.
+    const threads = reports.threads.map((row) => {
+      const blockedOn = activeBlocker(answered, row.writer, row.doc.blockedOn);
+      if (blockedOn === row.doc.blockedOn) return row;
+      let resolved = this.resolvedThreads.get(row);
+      if (!resolved) {
+        resolved = { ...row, doc: { ...row.doc, blockedOn } };
+        this.resolvedThreads.set(row, resolved);
+      }
+      return resolved;
+    });
     return {
       now,
       timeZone: this.timeZone(),
-      reports: this.reader.snapshot(),
+      reports: { ...reports, threads },
       registry: this.registry,
       machines: this.machines,
       browsers: this.browsers,

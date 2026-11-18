@@ -423,6 +423,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/read_status_cards.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/src/read_status_trace.rs",
       "kind": "internal",
       "evidence": [],
@@ -3657,6 +3663,12 @@
     },
     {
       "file": "tests/unit/web-server/status/agent-reports-reader.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/answered-cards.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

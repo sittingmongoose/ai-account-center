@@ -912,6 +912,7 @@ impl Delivery {
     pub fn told(&self) -> &'static str {
         match self.state.as_str() {
             "rang" => "the agent was told",
+            "published" => "signed answer on the share",
             "failed" => "could not tell the agent",
             _ => "telling the agent",
         }
@@ -1756,6 +1757,16 @@ mod tests {
         assert!(n.delivery.warnings().is_empty());
         assert_eq!(n.delivery.not_told(), None);
         assert_eq!(n.delivery.told(), "the agent was told");
+    }
+
+    #[test]
+    fn a_published_answer_reports_its_signed_copy() {
+        let delivery: Delivery = serde_json::from_value(serde_json::json!({
+            "state": "published", "detail": "The signed answer is on the share."
+        }))
+        .unwrap();
+        assert_eq!(delivery.told(), "signed answer on the share");
+        assert!(delivery.warnings().is_empty());
     }
 
     #[test]
