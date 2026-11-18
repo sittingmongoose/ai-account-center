@@ -62,6 +62,59 @@ const DASHBOARD_READS = {
   '/api/auth/network': () => ({ trustLocalNetwork: false, connection: { peer: '127.0.0.1', trusted: true }, canTurnOn: false }),
 };
 
+// An honest empty Analytics answer in the product's shape (account-analytics-compose.ts): no accounts, no
+// samples, the requested range. Made-up, never real; the frame draws its empty state instead of a console
+// 404 (TOOL-ISSUES rail3-T1).
+function emptyAnalytics(url) {
+  const q = url.searchParams;
+  const now = Date.now();
+  const preset = q.get('range') || '30d';
+  const day = 24 * 3600 * 1000;
+  const span = preset === '24h' ? day : preset === '7d' ? 7 * day : preset === '90d' ? 90 * day : 30 * day;
+  const custom = preset === 'custom' && q.get('from') && q.get('to');
+  const from = custom ? Date.parse(q.get('from')) : preset === 'all' ? now : now - span;
+  const to = custom ? Date.parse(q.get('to')) + day - 1 : now;
+  const tz = 'America/New_York';
+  return {
+    schemaVersion: 1,
+    updatedAt: new Date(now).toISOString(),
+    range: {
+      preset,
+      from: new Date(from).toISOString(),
+      to: new Date(to).toISOString(),
+      bucketMinutes: 60,
+      tz,
+      dayBucketTz: tz,
+      availableFrom: new Date(from).toISOString(),
+      resolution: 'hour',
+      ...(custom ? { days: { from: q.get('from'), to: q.get('to') } } : {}),
+    },
+    filters: {
+      platform: q.get('platform') || 'all',
+      provider: q.get('provider') || 'all',
+      account: q.get('account') || 'all',
+    },
+    history: {
+      status: 'ok',
+      retentionDays: 30,
+      collectedSince: null,
+      oldestSampleAt: null,
+      newestSampleAt: null,
+      sampleCount: 0,
+      message: 'No measured quota history is available for this selection yet.',
+    },
+    summary: {
+      accountCount: 0,
+      availableAccounts: 0,
+      activeCodexAccountId: null,
+      activeAccountIds: { codex: null, antigravity: null },
+      sampleCount: 0,
+    },
+    providers: [],
+    accounts: [],
+  };
+}
+
 function json(res, status, value) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(value));
@@ -103,6 +156,12 @@ http.createServer((req, res) => {
   else if (p.startsWith('/assets/')) file(res, path.join(dashboard, 'public/assets', path.basename(p)));
   else if (p.startsWith('/api/status/files/')) ranged(req, res, path.join(crate, 'fixtures/media', path.basename(p)));
   else if (p === '/api/scoreboard' && req.method === 'GET') json(res, 200, { ...fixtureJson('scoreboard-view.json'), byModel: fixtureJson('scoreboard-by-model.json') });
+  // Details reads the reset inventory of the account it opens (reset-rows.mjs). The fixture has no reset
+  // backend; answer the honest empty inventory of the contract (docs/reset-claims.md), never a 404
+  // (TOOL-ISSUES Perf G5 row 39).
+  else if (req.method === 'GET' && /^\/api\/accounts\/[^/]+\/reset-claims$/.test(p)) {
+    json(res, 200, { status: 'ok', grants: [], history: [], pendingAttempt: null });
+  } else if (p === '/api/accounts/analytics' && req.method === 'GET') json(res, 200, emptyAnalytics(url));
   else if (p === '/api/status' && req.method === 'GET') json(res, 200, liveView());
   else if (p === '/api/status/answers' && req.method === 'POST') {
     let body = '';

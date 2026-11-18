@@ -984,10 +984,9 @@
     },
     {
       "file": "tests/integration/web-server/m0-spec.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/integration/web-server/usage-hub-endpoint.test.ts",
@@ -3586,6 +3585,13 @@
       ]
     },
     {
+      "file": "tests/unit/web-server/spec-run-captured.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/sqlite-cli-path-resolution.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -4498,6 +4504,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/leptos-fixture-server.test.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "web-dashboard/tests/leptos-style.test.mjs",
