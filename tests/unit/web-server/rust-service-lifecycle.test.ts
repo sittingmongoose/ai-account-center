@@ -284,8 +284,16 @@ describe('Rust service lifecycle (L1)', () => {
     }
   }, 15000);
 
-  for (const scenario of ['once', 'stat', 'twice', 'public', 'symlink', 'owner'] as const)
-    it(`revalidates a vanished short parent with one retry: ${scenario}`, async () => {
+  for (const scenario of [
+    'once',
+    'stat',
+    'twice',
+    'exhausted',
+    'public',
+    'symlink',
+    'owner',
+  ] as const)
+    it(`revalidates a vanished short parent with bounded retries: ${scenario}`, async () => {
       useRoot(makeRoot(path.join('r'.repeat(110), '.ccs')));
       writeSettings('{"refreshIntervalSeconds":90}');
       const { socketLayout } = await import('../../../src/web-server/rust-service-lifecycle');
@@ -299,7 +307,11 @@ describe('Rust service lifecycle (L1)', () => {
         const value = await lstat(...args);
         if (args[0] === shared) {
           validations++;
-          if (validations === 1 || scenario === 'twice') {
+          if (
+            validations === 1 ||
+            (scenario === 'twice' && validations === 2) ||
+            scenario === 'exhausted'
+          ) {
             await fs.promises.rmdir(shared);
             if (scenario === 'stat')
               throw Object.assign(new Error('fixture parent vanished before lstat'), {
@@ -320,8 +332,8 @@ describe('Rust service lifecycle (L1)', () => {
       }) as typeof fs.promises.lstat);
       try {
         const service = await started('on', binaryCopy());
-        expect(validations).toBe(2);
-        if (scenario === 'once' || scenario === 'stat') {
+        expect(validations).toBe(scenario === 'twice' || scenario === 'exhausted' ? 3 : 2);
+        if (scenario === 'once' || scenario === 'stat' || scenario === 'twice') {
           expect(lease(service)?.owned).toBe(true);
           expect(service.stats.fallbacks).toBe(0);
           expect(await settings(service)).toEqual({ refreshIntervalSeconds: 90 });
@@ -335,63 +347,22 @@ describe('Rust service lifecycle (L1)', () => {
       }
     });
 
-  it('sweeps only aged empty private foreign-root parents without following links', async () => {
-    const runtime = path.join(scratch, 'runtime');
-    fs.mkdirSync(runtime, { mode: 0o700 });
-    const savedRun = process.env.AAC_RUST_RUN_DIR;
-    process.env.AAC_RUST_RUN_DIR = runtime;
-    const names = ['old', 'recent', 'public', 'foreign', 'nonempty', 'link'] as const;
-    const dirs = Object.fromEntries(
-      names.map((name, index) => [name, path.join(runtime, `aac-${String(index + 1).repeat(12)}`)])
-    ) as Record<(typeof names)[number], string>;
+  it('never scans abandoned parents through a symlinked runtime ancestor', async () => {
+    const target = path.join(scratch, 'target');
+    const runtime = path.join(target, 'runtime');
+    fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
+    const ancestor = path.join(scratch, 'ancestor');
+    fs.symlinkSync(target, ancestor);
+    const candidate = path.join(runtime, 'aac-' + 'a'.repeat(12));
+    fs.mkdirSync(candidate, { mode: 0o700 });
     const old = new Date(Date.now() - 24 * 60 * 60_000);
-    const current = path.join(runtime, `aac-${shortName(ccs)}`);
-    const invalid = path.join(runtime, 'aac-not-a-hash');
-    for (const folder of [
-      ...Object.values(dirs).filter((folder) => folder !== dirs.link),
-      current,
-      invalid,
-    ]) {
-      fs.mkdirSync(folder, { mode: 0o700 });
-      fs.utimesSync(folder, old, old);
-    }
-    fs.utimesSync(dirs.recent, new Date(), new Date());
-    fs.chmodSync(dirs.public, 0o755);
-    fs.writeFileSync(path.join(dirs.nonempty, 'foreign-content'), 'keep');
-    fs.utimesSync(dirs.nonempty, old, old);
-    fs.symlinkSync(dirs.nonempty, dirs.link);
-    const lstat = fs.promises.lstat.bind(fs.promises);
-    const statSpy = spyOn(fs.promises, 'lstat').mockImplementation((async (
-      ...args: Parameters<typeof lstat>
-    ) => {
-      const value = await lstat(...args);
-      if (args[0] === dirs.foreign)
-        Object.defineProperty(value, 'uid', { value: (process.getuid?.() ?? 0) + 1 });
-      return value;
-    }) as typeof fs.promises.lstat);
+    fs.utimesSync(candidate, old, old);
+    const savedRun = process.env.AAC_RUST_RUN_DIR;
+    process.env.AAC_RUST_RUN_DIR = path.join(ancestor, 'runtime');
     try {
-      expect(await sweepStaleBoots(ccs, null)).toBe(1);
-      expect(fs.existsSync(dirs.old)).toBe(false);
-      for (const folder of [
-        dirs.recent,
-        dirs.public,
-        dirs.foreign,
-        dirs.nonempty,
-        dirs.link,
-        current,
-        invalid,
-      ])
-        expect(fs.existsSync(folder)).toBe(true);
-      // Even a candidate with a safe name stays if its runtime base is a symlink.
-      fs.mkdirSync(dirs.old, { mode: 0o700 });
-      fs.utimesSync(dirs.old, old, old);
-      const linkedBase = path.join(scratch, 'linked-runtime');
-      fs.symlinkSync(runtime, linkedBase);
-      process.env.AAC_RUST_RUN_DIR = linkedBase;
-      await sweepStaleBoots(ccs, null);
-      expect(fs.existsSync(dirs.old)).toBe(true);
+      expect(await sweepStaleBoots(ccs, null)).toBe(0);
+      expect(fs.existsSync(candidate)).toBe(true);
     } finally {
-      statSpy.mockRestore();
       if (savedRun === undefined) delete process.env.AAC_RUST_RUN_DIR;
       else process.env.AAC_RUST_RUN_DIR = savedRun;
     }

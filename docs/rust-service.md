@@ -195,11 +195,13 @@ An attachment does not terminate the owner on cleanup. The spawning front door
 owns the boot; its stdin closing ends that service. Normal shutdown also sends
 SIGTERM, with a one-second SIGKILL backstop.
 
-Rust removes its inode-matched socket and empty boot directory; TS owns shared-parent
-removal under the descriptor lock. Startup also reclaims empty private root-hash
-parents older than one minute, examining at most 256 entries per private runtime
-location. It excludes the current root's parent, refuses links and foreign owners
-or modes, and uses nonrecursive directory removal so live boots and other content stay.
+Rust removes its inode-matched socket, empty boot directory and empty shared parent
+on shutdown, including when its front door dies. TS serializes its own directory
+creation and cleanup and retries ENOENT at most twice when Rust removes a parent
+between validation and child creation. Each attempt recreates and revalidates every
+layout component (directory type, current owner and 0700 mode, without following a
+link at that component) before spawning. Startup only sweeps stale boot children
+of the selected root; it does not scan abandoned parents belonging to other roots.
 
 The child's environment is an allowlist (`rust-service-env.ts`): home and profile folders,
 the CCS and provider selectors, locale, temp and the Windows system names. The provider keys

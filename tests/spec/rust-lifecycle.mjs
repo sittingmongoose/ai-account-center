@@ -92,10 +92,8 @@ const checks = {
     const runtime = fs.mkdtempSync('/tmp/aac-r2-');
     const saved = process.env.AAC_RUST_RUN_DIR;
     process.env.AAC_RUST_RUN_DIR = runtime;
-    const { sweepStaleBoots } = require(path.join(dist, 'web-server/rust-service-lifecycle.js'));
     const children = [];
     const parents = [];
-    const old = new Date(Date.now() - 24 * 60 * 60_000);
     try {
       for (let i = 0; i < 3; i++) {
         const ccs = root(`retired-${i}-` + 'r'.repeat(150));
@@ -121,29 +119,23 @@ const checks = {
         const exited = new Promise((resolve) => child.once('exit', resolve));
         child.kill('SIGKILL');
         await exited;
-        await until(() => !fs.existsSync(path.dirname(info.socket)), 3000);
-        assert.ok(fs.existsSync(parent), 'Rust leaves parent reclamation to the front door');
+        await until(() => !fs.existsSync(parent), 3000);
+        assert.equal(fs.existsSync(info.socket), false);
+        assert.equal(fs.existsSync(path.dirname(info.socket)), false);
       }
-      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 3,
-        'three fresh parents survive until the age threshold');
-      for (const parent of parents) fs.utimesSync(parent, old, old);
-      // The protected root's parent is aged too, but a live socket must survive the sweep.
-      const liveRoot = root('live-' + 'l'.repeat(150));
-      fs.writeFileSync(path.join(liveRoot, 'account-refresh-settings.json'), '{"refreshIntervalSeconds":90}');
+      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 0,
+        'three front-door deaths leave no shared parents');
+      const unrelated = root('unrelated-' + 'l'.repeat(150));
+      fs.writeFileSync(path.join(unrelated, 'account-refresh-settings.json'), '{"refreshIntervalSeconds":90}');
       const live = await start();
       assert.ok(live.lease?.owned);
-      const liveParent = path.dirname(path.dirname(live.lease.connection.socketPath));
-      fs.utimesSync(liveParent, old, old);
-      // Recreate the three deaths if startup already swept them, then test direct sweep too.
-      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 0,
-        'an unrelated startup reclaims all three retired parents');
-      for (const parent of parents) { fs.mkdirSync(parent, { mode: 0o700 }); fs.utimesSync(parent, old, old); }
-      await sweepStaleBoots(liveRoot, null);
-      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 0);
-      await sweepStaleBoots(root('unrelated-sweep'), null);
-      assert.ok(fs.existsSync(live.lease.connection.socketPath), 'another root cannot remove a live parent');
       assert.deepEqual(await settings(live), { refreshIntervalSeconds: 90 });
       live.stop();
+      root('retired-0-' + 'r'.repeat(150));
+      const revisited = await start();
+      assert.ok(revisited.lease?.owned, 'the retired root can start again');
+      revisited.stop();
+      await until(() => !fs.existsSync(parents[0]), 3000);
     } finally {
       for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       for (const service of services) service.stop();
@@ -208,7 +200,7 @@ const checks = {
         }
       }, 3000);
       assert.equal(fs.existsSync(path.dirname(previous.connection.socketPath)), false);
-      assert.ok(fs.existsSync(shared), 'production shutdown must retain the shared parent');
+      assert.equal(fs.existsSync(shared), false, 'production shutdown removes the empty shared parent');
       release();
       await starting;
       assert.ok(next.lease?.owned, 'next start obtains a lease');

@@ -428,15 +428,11 @@ fn an_over_long_root_starts_on_a_short_private_socket_folder() -> Result<()> {
         .to_path_buf();
     let s = Service::start_at(root.clone(), socket.clone(), &[], vec![dir])?;
     assert_eq!(s.get("/api/diag", &admin())?.status, 200);
-    // Shutdown removes only this boot. The front door owns shared-parent reclamation,
-    // so a new boot can safely create its child after validating the shared folder.
+    // When the service ends, its socket, boot folder and empty short folder go with it, even if
+    // the front door that made them is gone.
     s.finish()?;
     assert!(!socket.exists());
-    assert!(!socket.parent().ok_or("boot folder")?.exists());
-    assert!(
-        folder.exists(),
-        "the shared short folder remains for the front door"
-    );
+    assert!(!folder.exists(), "the empty short folder is removed");
     drop(base);
 
     // A short folder made for another root is refused: the service exits without binding.
