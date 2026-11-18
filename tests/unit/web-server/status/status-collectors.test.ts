@@ -537,7 +537,7 @@ describe('status collectors', () => {
     expect(parseMachineProbe('mac', 'cores=8\nmemAvailPct=67\n')?.memAvailableBytes).toBeNull();
   });
 
-  it('runs the same Mac shell probe in TypeScript and Rust and falls back only for a missing sysctl', () => {
+  it('runs the same Mac shell probe in TypeScript and Rust and falls back for unusable sysctl output', () => {
     const probe = machineProbeCommand('mac');
     const rust = path.resolve(import.meta.dir, '../../../../crates/aac-agent/src/probes/mac.txt');
     expect(fs.readFileSync(rust, 'utf8')).toBe(probe + '\n');
@@ -562,10 +562,33 @@ describe('status collectors', () => {
     expect(
       run('printf 67', 'printf "System-wide memory free percentage: 70%%\\n"')?.memAvailableBytes
     ).toBe(11_510_512_353.28);
+    expect(run('printf "0\\n"', recordedPressure)?.memAvailableBytes).toBe(0);
     expect(run('return 1', recordedPressure)?.memAvailableBytes).toBe(11_510_512_353.28);
+    const malformed = ['printf "N/A\\n"', 'printf "   \\n"', 'printf "101\\n"'];
+    expect(malformed.map((level) => run(level, recordedPressure)?.memAvailableBytes)).toEqual([
+      11_510_512_353.28, 11_510_512_353.28, 11_510_512_353.28,
+    ]);
     const missing = run('return 1', 'return 127');
     expect(missing?.memAvailableBytes).toBeNull();
     expect(missing?.memoryError).toBe('The machine did not report its memory.');
+    const unusable = run(malformed[0], 'printf "System-wide memory free percentage: 101%%\\n"');
+    expect(unusable?.memAvailableBytes).toBeNull();
+    expect(unusable?.memoryError).toBe('The machine did not report its memory.');
+  });
+
+  it('rejects malformed and oversized Mac totals while retaining the other readings', () => {
+    expect(parseMachineProbe('mac', 'memTotalB=1e308\nmemAvailPct=100\n')).toBeNull();
+    const malformed = parseMachineProbe('mac', 'cores=8\nmemTotalB=1e308\nmemAvailPct=100\n');
+    expect(malformed?.cores).toBe(8);
+    expect(malformed?.memTotalBytes).toBeNull();
+    expect(malformed?.memAvailableBytes).toBeNull();
+    expect(malformed?.memoryError).toBe('The machine did not report its memory.');
+    const oversized = parseMachineProbe(
+      'mac',
+      'cores=8\nmemTotalB=18446744073709551615\nmemAvailPct=67\n'
+    );
+    expect(oversized?.memAvailableBytes).toBeNull();
+    expect(oversized?.memoryError).toBe('The machine did not report its memory.');
   });
 
   it('keeps a registry row through one ENOENT race and names a listed file gone twice in a row', async () => {

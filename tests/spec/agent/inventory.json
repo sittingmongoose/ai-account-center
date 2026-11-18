@@ -481,6 +481,55 @@
         "cpuError": "The machine did not report its CPU.",
         "cpuTimes": null
       }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:580",
+      "verb": "inventory",
+      "args": {
+        "platform": "mac",
+        "probe": "memTotalB=1e308\nmemAvailPct=100\n"
+      },
+      "expected": null
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:581",
+      "verb": "inventory",
+      "args": {
+        "platform": "mac",
+        "probe": "cores=8\nmemTotalB=1e308\nmemAvailPct=100\n"
+      },
+      "expected": {
+        "cores": 8,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:586",
+      "verb": "inventory",
+      "args": {
+        "platform": "mac",
+        "probe": "cores=8\nmemTotalB=18446744073709551615\nmemAvailPct=67\n"
+      },
+      "expected": {
+        "cores": 8,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      }
     }
   ]
 }

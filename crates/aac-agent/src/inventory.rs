@@ -12,7 +12,12 @@ fn parse_proven(platform: &str, text: &str) -> Value {
         return crate::proof::fallback();
     }
     for (key, value) in text.lines().filter_map(|l| l.split_once('=')) {
-        if crate::proof::strip(key) == "cpu" {
+        let key = crate::proof::strip(key);
+        // Invalid Mac totals are unavailable. The unsigned integer parser checks them below.
+        if platform == "mac" && key == "memTotalB" {
+            continue;
+        }
+        if key == "cpu" {
             for n in crate::proof::words(value) {
                 crate::proof::decimal(n);
             }
@@ -30,7 +35,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             "cpuLoad",
             "cpuPct",
         ]
-        .contains(&crate::proof::strip(key))
+        .contains(&key)
         {
             crate::proof::decimal(crate::proof::strip(value));
         }
@@ -69,8 +74,14 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             .collect::<Option<Vec<_>>>()
             .map(aac_num::ecma::sum)
     };
+    let unsigned = |key: &str| {
+        values
+            .get(key)
+            .filter(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()))
+            .and_then(|s| s.parse::<f64>().ok())
+    };
     let total = if platform == "mac" {
-        n("memTotalB")
+        unsigned("memTotalB").filter(|n| *n <= 9_007_199_254_740_991.0)
     } else {
         n("memTotalKb")
             .map(|n| n * 1024.0)
@@ -78,11 +89,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
     }
     .filter(|n| *n != 0.0);
     let avail = if platform == "mac" {
-        let pct = values
-            .get("memAvailPct")
-            .filter(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()))
-            .and_then(|s| s.parse::<f64>().ok())
-            .filter(|n| *n <= 100.0);
+        let pct = unsigned("memAvailPct").filter(|n| *n <= 100.0);
         total.zip(pct).map(|(total, pct)| total * pct / 100.0)
     } else {
         n("memAvailKb").map(|n| n * 1024.0)
