@@ -528,7 +528,9 @@ async function acquireWithinBudget(
       }
       if (layout.folders.length > 1)
         try {
-          await fs.promises.rmdir(layout.folders[layout.folders.length - 2]);
+          await mutateDescriptor(descriptor, () =>
+            fs.promises.rmdir(layout.folders[layout.folders.length - 2])
+          );
         } catch {
           /* Not empty, or already gone. */
         }
@@ -554,10 +556,14 @@ async function acquireWithinBudget(
   signal.addEventListener('abort', close, { once: true });
   try {
     signal.throwIfAborted();
-    for (const folder of layout.folders) {
-      await privateDirectory(folder);
+    // Cleanup may remove the shared short parent only outside this creation phase.
+    await mutateDescriptor(descriptor, async () => {
       signal.throwIfAborted();
-    }
+      for (const folder of layout.folders) {
+        await privateDirectory(folder);
+        signal.throwIfAborted();
+      }
+    });
     child = spawn(binary, [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {

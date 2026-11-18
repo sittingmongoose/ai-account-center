@@ -1,9 +1,10 @@
 /**
  * L1 lifecycle through the real bridge and lifecycle code, against a stand-in service on a real
  * Unix socket (fixtures/fake-aac-http.mjs; the VM builds no Rust). The same behaviours run against
- * the Nas1-built binary in tests/spec/rust-lifecycle.mjs. Each failed against 7bc46ca90.
+ * the Nas1-built binary in tests/spec/rust-lifecycle.mjs. The original regressions failed
+ * against 7bc46ca90; the shared-parent cleanup race failed against d3b27df54.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -191,6 +192,97 @@ describe('Rust service lifecycle (L1)', () => {
     expect(fs.existsSync(fresh)).toBe(true);
     expect(fs.existsSync(other)).toBe(true);
   });
+
+  it('keeps a new short socket parent while the old boot cleans up', async () => {
+    useRoot(makeRoot(path.join('p'.repeat(110), '.ccs')));
+    writeSettings('{"refreshIntervalSeconds":90}');
+    const binary = binaryCopy();
+    const old = await started('on', binary);
+    const previous = lease(old);
+    expect(previous).not.toBeNull();
+    const shared = path.dirname(path.dirname(previous!.connection.socketPath));
+    expect(shared).toContain(shortName(ccs));
+    const temporary = path.join(ccs, 'run', `.aac-http-${previous!.connection.bootId}.json`);
+    let allowOld!: () => void, oldPaused!: () => void, removed!: () => void;
+    let allowStat!: () => void, nextAtStat!: () => void;
+    const oldGate = new Promise<void>((resolve) => {
+      allowOld = resolve;
+    });
+    const paused = new Promise<void>((resolve) => {
+      oldPaused = resolve;
+    });
+    const removedGate = new Promise<void>((resolve) => {
+      removed = resolve;
+    });
+    const statGate = new Promise<void>((resolve) => {
+      allowStat = resolve;
+    });
+    const stating = new Promise<void>((resolve) => {
+      nextAtStat = resolve;
+    });
+    const rm = fs.promises.rm.bind(fs.promises);
+    const rmdir = fs.promises.rmdir.bind(fs.promises);
+    const lstat = fs.promises.lstat.bind(fs.promises);
+    let starting = false;
+    let removeCalled = false;
+    const rmSpy = spyOn(fs.promises, 'rm').mockImplementation(async (...args) => {
+      await rm(...args);
+      if (args[0] === temporary) {
+        oldPaused();
+        await oldGate;
+      }
+    });
+    const dirSpy = spyOn(fs.promises, 'rmdir').mockImplementation(async (...args) => {
+      if (args[0] === shared) removeCalled = true;
+      try {
+        await rmdir(...args);
+      } finally {
+        if (args[0] === shared) removed();
+      }
+    });
+    const statSpy = spyOn(fs.promises, 'lstat').mockImplementation((async (
+      ...args: Parameters<typeof lstat>
+    ) => {
+      const value = await lstat(...args);
+      if (starting && args[0] === shared) {
+        nextAtStat();
+        await statGate;
+      }
+      return value;
+    }) as typeof fs.promises.lstat);
+    let next: RustService | undefined;
+    try {
+      old.stop();
+      // The old boot and descriptor are removed; hold cleanup before its empty-parent rmdir.
+      await paused;
+      starting = true;
+      next = new RustService('on');
+      services.push(next);
+      const start = next.start(binary);
+      // Delay a real lstat result while the next start validates its short shared parent.
+      await stating;
+      allowOld();
+      // Drain cleanup's continuation, without a timer race: without the creation lock it
+      // enters rmdir immediately. Let that real removal finish before returning the stat.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const removedBeforeCreation = removeCalled;
+      if (removedBeforeCreation) await removedGate;
+      allowStat();
+      await start;
+      expect(lease(next)).not.toBeNull();
+      expect(next.stats.fallbacks).toBe(0);
+      expect(removedBeforeCreation).toBe(false);
+      expect(await settings(next)).toEqual({ refreshIntervalSeconds: 90 });
+    } finally {
+      allowOld();
+      allowStat();
+      rmSpy.mockRestore();
+      dirSpy.mockRestore();
+      statSpy.mockRestore();
+      old.stop();
+      next?.stop();
+    }
+  }, 15000);
 
   it('opens a route breaker after three timeouts and probes again after 30 s', async () => {
     let now = 1_000_000;
