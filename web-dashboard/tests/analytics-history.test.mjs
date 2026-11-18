@@ -202,6 +202,41 @@ test('a daylight-saving change cannot hide a week from the bucket count', () => 
   }
 });
 
+test('a skipped calendar date cannot drop a widened bucket (Pacific/Apia)', () => {
+  setDisplayTimeZone('Pacific/Apia');
+  try {
+    // Apia skipped local Friday Dec 30 2011: stepping local dates lands the fortnight after Dec 19 on
+    // Tuesday Jan 3, while the rows align to Monday Jan 2 — counting, enumeration and row lookup must
+    // share the civil week index so every row lands in exactly one bucket
+    const at = Date.parse('2026-11-16T11:00:00Z');
+    const from = Date.parse('2007-01-01T11:00:00Z');
+    const rows = [row('2012-01-01T11:00:00Z', 'codex', 100, 100), row('2012-01-09T10:00:00Z', 'codex', 25, 25), row('2026-11-15T10:00:00Z', 'codex', 7, 7)];
+    const p = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from, now: at, fetchedAt: at });
+    const view = usageView(p, state({ range: 'all' }), { now: at });
+    assert.equal(view.range.step, 14 * D);
+    assert.match(view.trend.sub, /^2-week buckets/);
+    const A = U.activityData(p, at), R = U.pageRange(state({ range: 'all' }), A, at);
+    const B = U.buckets(A, R, state({ range: 'all' }));
+    assert.equal(B.length, 520);
+    // every bucket starts on a Monday, even across the skipped date
+    for (const b of B) assert.equal(zonedWeekday(b.t), 0, `${new Date(b.t).toISOString()} starts on a Monday`);
+    // every row lands in exactly one bucket, and the totals match on both charts
+    for (const r of rows) assert.equal(B.filter(b => b.lo <= Date.parse(r.hour) && Date.parse(r.hour) < b.hi).length, 1, r.hour);
+    assert.equal(B.reduce((s, b) => s + b.in, 0), 132);
+    assert.equal(B.reduce((s, b) => s + b.cost, 0), 132);
+    // the fortnight the two 2012 rows align to is the Monday Jan 2 bucket, not a Tuesday drift
+    const jan2 = B.find(b => b.t === Date.parse('2012-01-01T10:00:00Z'));
+    assert.ok(jan2, 'the Monday Jan 2 2012 fortnight is enumerated');
+    assert.equal(jan2.in, 125);
+    assert.equal(jan2.cost, 125);
+    assert.ok(view.daily.bars.some(b => b.total === '$125.00'));
+    assert.ok(view.daily.bars.some(b => b.total === '$7.00'));
+    assert.equal(view.trend.buckets.length, B.length);
+  } finally {
+    setDisplayTimeZone('UTC');
+  }
+});
+
 test('a backfill in progress says so', () => {
   const p = payload({ history: { computers: [], sources: [], backfill: { running: true, sources: [{ host: 'ubuntu', tool: 'codex', state: 'running', filesRead: 40, filesTotal: 100 }] } } });
   const view = usageView(p, state({ range: '90d' }), { now });

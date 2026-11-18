@@ -98,12 +98,22 @@ const WEEK = 7 * D;
 const WEEK_EPOCH = Date.UTC(2001, 0, 1);
 /** t's local Monday as a whole number of weeks after WEEK_EPOCH. */
 const weekIndex = t => { const p = zonedParts(t); return Math.floor((Date.UTC(p.year, p.month - 1, p.day) - WEEK_EPOCH) / WEEK); };
+/** The first week index of the w-week bucket holding t: whole weeks on the civil calendar from WEEK_EPOCH. */
+const bucketWeek = (t, w) => { const wk = weekIndex(t); return wk - (((wk % w) + w) % w); };
+/** The display-zone midnight of the Monday `wk` weeks after WEEK_EPOCH, resolved on the civil calendar:
+ *  stepping local dates (zonedAddDays) drifts across a skipped date like Apia's 2011-12-30, so counting,
+ *  enumeration and row lookup all resolve their Mondays through this one index. */
+const weekMonday = wk => {
+  const civil = WEEK_EPOCH + wk * WEEK;
+  const start = zonedDayStart(civil);
+  const p = zonedParts(start);
+  // west of Greenwich the UTC-midnight guess sits in the previous local day: take the next day's midnight
+  return Date.UTC(p.year, p.month - 1, p.day) < civil ? zonedDayStart(civil + D) : start;
+};
 export function bucketStart(t, step) {
   if (step >= WEEK) {
-    const w = Math.max(1, Math.round(step / WEEK));
-    const wk = weekIndex(t);
-    // back to the Monday of t's week, then to the first Monday of the w-week bucket that holds it
-    return zonedAddDays(zonedDayStart(t), -zonedWeekday(t) - (((wk % w) + w) % w) * 7);
+    // the w-week bucket holding t: its target Monday on the civil week grid, resolved in the display zone
+    return weekMonday(bucketWeek(t, Math.max(1, Math.round(step / WEEK))));
   }
   if (step >= D) return zonedDayStart(t);
   const k = Math.round(step / H);
@@ -111,7 +121,7 @@ export function bucketStart(t, step) {
   return start + Math.floor((t - start) / (k * H)) * (k * H);
 }
 export function nextBucket(t, step) {
-  if (step >= WEEK) return zonedAddDays(bucketStart(t, step), 7 * Math.max(1, Math.round(step / WEEK)));
+  if (step >= WEEK) { const w = Math.max(1, Math.round(step / WEEK)); return weekMonday(bucketWeek(t, w) + w); }
   if (step >= D) return zonedAddDays(t, 1);
   return Math.min(bucketStart(t, step) + Math.round(step / H) * H, zonedAddDays(t, 1));
 }
@@ -482,7 +492,7 @@ export function activityData(payload, now = Date.now()) {
  *  a daylight-saving change shifts elapsed milliseconds (a local week is 167 or 169 hours) but never this. */
 function weekBucketCount(a, e, w) {
   if (!(e > a)) return 0;
-  const wk = weekIndex(a), lo = wk - (((wk % w) + w) % w);
+  const lo = bucketWeek(a, w);
   // an end exactly on a bucket's Monday midnight would start a bucket the enumeration's t < e excludes
   return Math.floor((weekIndex(e - 1) - lo) / w) + 1;
 }
