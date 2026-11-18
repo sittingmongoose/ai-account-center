@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Request, Response } from 'express';
 import { RustService } from '../../../src/web-server/rust-service';
-import { shortName } from '../../../src/web-server/rust-service-lifecycle';
+import { shortName, sweepStaleBoots } from '../../../src/web-server/rust-service-lifecycle';
 import { getRecentLogEntries, clearRecentLogEntries } from '../../../src/services/logging';
 import { rustServiceEnvironment } from '../../../src/web-server/rust-service-env';
 import { requestRustAgent } from '../../../src/web-server/rust-service-transport';
@@ -334,6 +334,68 @@ describe('Rust service lifecycle (L1)', () => {
         if (scenario === 'symlink') await fs.promises.unlink(shared);
       }
     });
+
+  it('sweeps only aged empty private foreign-root parents without following links', async () => {
+    const runtime = path.join(scratch, 'runtime');
+    fs.mkdirSync(runtime, { mode: 0o700 });
+    const savedRun = process.env.AAC_RUST_RUN_DIR;
+    process.env.AAC_RUST_RUN_DIR = runtime;
+    const names = ['old', 'recent', 'public', 'foreign', 'nonempty', 'link'] as const;
+    const dirs = Object.fromEntries(
+      names.map((name, index) => [name, path.join(runtime, `aac-${String(index + 1).repeat(12)}`)])
+    ) as Record<(typeof names)[number], string>;
+    const old = new Date(Date.now() - 24 * 60 * 60_000);
+    const current = path.join(runtime, `aac-${shortName(ccs)}`);
+    const invalid = path.join(runtime, 'aac-not-a-hash');
+    for (const folder of [
+      ...Object.values(dirs).filter((folder) => folder !== dirs.link),
+      current,
+      invalid,
+    ]) {
+      fs.mkdirSync(folder, { mode: 0o700 });
+      fs.utimesSync(folder, old, old);
+    }
+    fs.utimesSync(dirs.recent, new Date(), new Date());
+    fs.chmodSync(dirs.public, 0o755);
+    fs.writeFileSync(path.join(dirs.nonempty, 'foreign-content'), 'keep');
+    fs.utimesSync(dirs.nonempty, old, old);
+    fs.symlinkSync(dirs.nonempty, dirs.link);
+    const lstat = fs.promises.lstat.bind(fs.promises);
+    const statSpy = spyOn(fs.promises, 'lstat').mockImplementation((async (
+      ...args: Parameters<typeof lstat>
+    ) => {
+      const value = await lstat(...args);
+      if (args[0] === dirs.foreign)
+        Object.defineProperty(value, 'uid', { value: (process.getuid?.() ?? 0) + 1 });
+      return value;
+    }) as typeof fs.promises.lstat);
+    try {
+      expect(await sweepStaleBoots(ccs, null)).toBe(1);
+      expect(fs.existsSync(dirs.old)).toBe(false);
+      for (const folder of [
+        dirs.recent,
+        dirs.public,
+        dirs.foreign,
+        dirs.nonempty,
+        dirs.link,
+        current,
+        invalid,
+      ])
+        expect(fs.existsSync(folder)).toBe(true);
+      // Even a candidate with a safe name stays if its runtime base is a symlink.
+      fs.mkdirSync(dirs.old, { mode: 0o700 });
+      fs.utimesSync(dirs.old, old, old);
+      const linkedBase = path.join(scratch, 'linked-runtime');
+      fs.symlinkSync(runtime, linkedBase);
+      process.env.AAC_RUST_RUN_DIR = linkedBase;
+      await sweepStaleBoots(ccs, null);
+      expect(fs.existsSync(dirs.old)).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+      if (savedRun === undefined) delete process.env.AAC_RUST_RUN_DIR;
+      else process.env.AAC_RUST_RUN_DIR = savedRun;
+    }
+  });
 
   it('opens a route breaker after three timeouts and probes again after 30 s', async () => {
     let now = 1_000_000;

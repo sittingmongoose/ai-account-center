@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = fileURLToPath(new URL('../..', import.meta.url));
@@ -87,6 +88,72 @@ function masked(value, key = '') {
 }
 
 const checks = {
+  async deadParents() {
+    const runtime = fs.mkdtempSync('/tmp/aac-r2-');
+    const saved = process.env.AAC_RUST_RUN_DIR;
+    process.env.AAC_RUST_RUN_DIR = runtime;
+    const { sweepStaleBoots } = require(path.join(dist, 'web-server/rust-service-lifecycle.js'));
+    const children = [];
+    const parents = [];
+    const old = new Date(Date.now() - 24 * 60 * 60_000);
+    try {
+      for (let i = 0; i < 3; i++) {
+        const ccs = root(`retired-${i}-` + 'r'.repeat(150));
+        const child = spawn(process.execPath, ['-e', `
+          const { acquireRustServiceDetailed } = require(process.argv[1]);
+          acquireRustServiceDetailed(process.argv[2], process.argv[3], new Set()).then(({lease}) => {
+            if (!lease?.owned) process.exit(2);
+            process.send({ socket: lease.connection.socketPath });
+          });
+        `, path.join(dist, 'web-server/rust-service-lifecycle.js'), ccs, binary], {
+          env: { ...process.env }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+        });
+        children.push(child);
+        const info = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('front door did not acquire')), 8000);
+          child.once('message', (message) => { clearTimeout(timer); resolve(message); });
+          child.once('exit', () => { clearTimeout(timer); reject(new Error('front door exited early')); });
+        });
+        assert.ok(fs.existsSync(info.socket), 'production socket is live before front-door death');
+        const parent = path.dirname(path.dirname(info.socket));
+        assert.equal(path.dirname(parent), runtime, 'fixture uses the configured runtime');
+        parents.push(parent);
+        const exited = new Promise((resolve) => child.once('exit', resolve));
+        child.kill('SIGKILL');
+        await exited;
+        await until(() => !fs.existsSync(path.dirname(info.socket)), 3000);
+        assert.ok(fs.existsSync(parent), 'Rust leaves parent reclamation to the front door');
+      }
+      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 3,
+        'three fresh parents survive until the age threshold');
+      for (const parent of parents) fs.utimesSync(parent, old, old);
+      // The protected root's parent is aged too, but a live socket must survive the sweep.
+      const liveRoot = root('live-' + 'l'.repeat(150));
+      fs.writeFileSync(path.join(liveRoot, 'account-refresh-settings.json'), '{"refreshIntervalSeconds":90}');
+      const live = await start();
+      assert.ok(live.lease?.owned);
+      const liveParent = path.dirname(path.dirname(live.lease.connection.socketPath));
+      fs.utimesSync(liveParent, old, old);
+      // Recreate the three deaths if startup already swept them, then test direct sweep too.
+      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 0,
+        'an unrelated startup reclaims all three retired parents');
+      for (const parent of parents) { fs.mkdirSync(parent, { mode: 0o700 }); fs.utimesSync(parent, old, old); }
+      await sweepStaleBoots(liveRoot, null);
+      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 0);
+      await sweepStaleBoots(root('unrelated-sweep'), null);
+      assert.ok(fs.existsSync(live.lease.connection.socketPath), 'another root cannot remove a live parent');
+      assert.deepEqual(await settings(live), { refreshIntervalSeconds: 90 });
+      live.stop();
+    } finally {
+      for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      for (const service of services) service.stop();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (saved === undefined) delete process.env.AAC_RUST_RUN_DIR;
+      else process.env.AAC_RUST_RUN_DIR = saved;
+      fs.rmSync(runtime, { recursive: true, force: true });
+    }
+  },
+
   async sharedParentShutdown() {
     const ccs = root('p'.repeat(110));
     fs.writeFileSync(

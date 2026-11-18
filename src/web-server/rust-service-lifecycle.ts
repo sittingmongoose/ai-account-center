@@ -350,43 +350,101 @@ function refuses(socketPath: string): Promise<boolean> {
   });
 }
 
+const STALE_BOOT_AGE_MS = 60_000;
+
+/** Reclaim only old, empty, private root-hash folders; never traverse another root. */
+async function sweepEmptyParents(ccsDir: string, signal?: AbortSignal): Promise<number> {
+  const hash = shortName(ccsDir);
+  const locations = new Set([
+    process.env.AAC_RUST_RUN_DIR,
+    process.env.XDG_RUNTIME_DIR,
+    path.join('/tmp', `aac-${uid()}`),
+  ]);
+  let swept = 0;
+  for (const base of locations) {
+    signal?.throwIfAborted();
+    if (!base || !path.isAbsolute(base) || !(await isPrivateDirectory(base))) continue;
+    try {
+      const entries = await fs.promises.opendir(base, { bufferSize: 32 });
+      let examined = 0;
+      for await (const entry of entries) {
+        signal?.throwIfAborted();
+        // Bound work even in a runtime directory full of unrelated entries.
+        if (++examined > 256) break;
+        const pattern =
+          base === path.join('/tmp', `aac-${uid()}`)
+            ? /^(?:aac-)?[a-f0-9]{12}$/
+            : /^aac-[a-f0-9]{12}$/;
+        if (!pattern.test(entry.name) || entry.name === hash || entry.name === `aac-${hash}`)
+          continue;
+        const candidate = path.join(base, entry.name);
+        try {
+          const stat = await fs.promises.lstat(candidate);
+          if (
+            !stat.isDirectory() ||
+            stat.uid !== uid() ||
+            (stat.mode & 0o777) !== 0o700 ||
+            Date.now() - stat.mtimeMs < STALE_BOOT_AGE_MS
+          )
+            continue;
+          signal?.throwIfAborted();
+          // rmdir is deliberately nonrecursive: a live boot or any foreign content stays.
+          await fs.promises.rmdir(candidate);
+          swept++;
+        } catch {
+          // Nonempty, replaced or removed meanwhile; never recurse into another root.
+        }
+      }
+    } catch {
+      signal?.throwIfAborted();
+      // Missing or unreadable runtime directory; startup still uses its normal layout.
+    }
+  }
+  return swept;
+}
+
 /**
  * Remove boot folders left by killed owners: `aac-http-<id>` folders (in `<ccsDir>/run` and in
  * the short folder) older than a minute whose socket refuses a connection. Only private folders
- * of this account are touched; no process is signalled.
+ * of this account are touched; no process is signalled. Under the same descriptor lock as
+ * creation, also reclaim aged empty shared parents belonging to retired roots.
  */
 export async function sweepStaleBoots(
   ccsDir: string,
   keep: string | null,
   signal?: AbortSignal
 ): Promise<number> {
-  const parents = new Set<string>([path.join(ccsDir, 'run')]);
-  const short = socketLayout(ccsDir, '0'.repeat(24));
-  if (short) parents.add(path.dirname(path.dirname(short.socketPath)));
   let swept = 0;
-  for (const parent of parents) {
-    let names: string[];
-    try {
-      names = await fs.promises.readdir(parent);
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      signal?.throwIfAborted();
-      if (!/^aac-http-[a-f0-9]{24}$/.test(name) || name === keep) continue;
-      const folder = path.join(parent, name);
+  await mutateDescriptor(path.join(ccsDir, 'run', 'aac-http.json'), async () => {
+    const parents = new Set<string>([path.join(ccsDir, 'run')]);
+    const short = socketLayout(ccsDir, '0'.repeat(24));
+    if (short) parents.add(path.dirname(path.dirname(short.socketPath)));
+    for (const parent of parents) {
+      let names: string[];
       try {
-        const stat = await fs.promises.lstat(folder);
-        if (!(await isPrivateDirectory(folder)) || Date.now() - stat.mtimeMs < 60_000) continue;
-        if (!(await refuses(path.join(folder, 'http.sock')))) continue;
-        signal?.throwIfAborted();
-        await fs.promises.rm(folder, { recursive: true, force: true });
-        swept++;
+        names = await fs.promises.readdir(parent);
       } catch {
-        /* Changed meanwhile; the next start looks again. */
+        continue;
+      }
+      for (const name of names) {
+        signal?.throwIfAborted();
+        if (!/^aac-http-[a-f0-9]{24}$/.test(name) || name === keep) continue;
+        const folder = path.join(parent, name);
+        try {
+          const stat = await fs.promises.lstat(folder);
+          if (!(await isPrivateDirectory(folder)) || Date.now() - stat.mtimeMs < STALE_BOOT_AGE_MS)
+            continue;
+          if (!(await refuses(path.join(folder, 'http.sock')))) continue;
+          signal?.throwIfAborted();
+          await fs.promises.rm(folder, { recursive: true, force: true });
+          swept++;
+        } catch {
+          /* Changed meanwhile; the next start looks again. */
+        }
       }
     }
-  }
+    swept += await sweepEmptyParents(ccsDir, signal);
+  });
   return swept;
 }
 

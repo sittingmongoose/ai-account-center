@@ -195,6 +195,12 @@ An attachment does not terminate the owner on cleanup. The spawning front door
 owns the boot; its stdin closing ends that service. Normal shutdown also sends
 SIGTERM, with a one-second SIGKILL backstop.
 
+Rust removes its inode-matched socket and empty boot directory; TS owns shared-parent
+removal under the descriptor lock. Startup also reclaims empty private root-hash
+parents older than one minute, examining at most 256 entries per private runtime
+location. It excludes the current root's parent, refuses links and foreign owners
+or modes, and uses nonrecursive directory removal so live boots and other content stay.
+
 The child's environment is an allowlist (`rust-service-env.ts`): home and profile folders,
 the CCS and provider selectors, locale, temp and the Windows system names. The provider keys
 and proxy names a Local agent verb reads join only while the agent transport is on (Wonder
