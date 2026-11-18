@@ -96,7 +96,11 @@ After `bun run build:server`, copy an `aac-http` binary built on Nas1 into
 `AAC_RUST_SERVICE=off` and `AAC_RUST_SERVICE=on`, plus `AAC_RUST_SERVICE=shadow bun
 tests/spec/capture.ts`. The on/shadow fixture allows only that exact binary, with
 no arguments, through the closed process seam and requires actual Rust reply
-counts. Existing role/session/origin checks stay real. The signed-out health
+counts. Existing role/session/origin checks stay real. After pair-2 M1, the M0
+capture requires 27 Rust-served answers in on mode and 18 comparisons in shadow
+mode. The twelve admitted standalone profile calls instead require explicit
+`private_input` declines and zero Rust comparisons/serves for those routes. Their
+HTTP response goldens stay the same: TS still answers them. The signed-out health
 request carries an internal public-only envelope; it confers no private access.
 
 `rust-proxy.ts` adds real fixture-socket fault injection: boot mismatch, invalid
@@ -268,7 +272,9 @@ only a descriptor check can classify (FIFO, folder, oversized or dangling compan
 history reads, the Codex collector and renewal reader, and the Antigravity runtime are
 fixture closures; Codex logins are unsigned fixture JWTs in the temporary home. On mode
 requires each `rust` case to be served with zero calls of that route's TS reader/composer;
-shadow runs it exactly once with zero differences.
+shadow runs TS exactly once, keeps standalone profile facts out of the child (`private_input`),
+and preserves the same public bytes. The generated tables below are explicit fixture protocol
+tests; they do not change the production shadow admission policy.
 
 Generated tables then compare each TS composer with the Rust socket reply byte for byte:
 every plan label and alias parsed from `src/antigravity/plan.ts` with respellings, display

@@ -548,15 +548,30 @@ try {
   if (rustMode === 'shadow') {
     // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
     // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
-    // compared; the Analytics stub stops at its query check before any Rust composition. M3 part 4
-    // adds twelve profile reads: session/bar/device Claude desktop profiles and Antigravity
-    // profiles, session/bar Codex profiles and quotas and Antigravity quotas (the usage stub
-    // stops at its platform check).
-    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 30; i++)
+    // compared; the Analytics stub stops at its query check before any Rust composition.
+    // Pair-2 M1 keeps standalone profiles in TS until a minimal shadow DTO exists. These twelve
+    // authenticated profile calls must decline before building or sending a private input.
+    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)
       await new Promise((r) => setTimeout(r, 10));
-    assert.equal(instance.rustService.stats.shadowed, 30);
+    assert.equal(instance.rustService.stats.shadowed, 18);
     assert.equal(instance.rustService.stats.served, 0);
     assert.equal(instance.rustService.stats.differences, 0);
+    const counters = instance.rustService.diagnostics().routes as Record<
+      string,
+      { unavailable?: Record<string, number>; equal?: number; different?: number; served?: number }
+    >;
+    for (const [route, declined] of [
+      ['/api/claude/desktop-profiles', 3],
+      ['/api/codex/profiles', 2],
+      ['/api/codex/profiles/quotas', 2],
+      ['/api/antigravity/profiles', 3],
+      ['/api/antigravity/profiles/quotas', 2],
+    ] as const) {
+      assert.deepEqual(counters[route]?.unavailable, { private_input: declined }, route);
+      assert.equal(counters[route]?.equal ?? 0, 0, route);
+      assert.equal(counters[route]?.different ?? 0, 0, route);
+      assert.equal(counters[route]?.served ?? 0, 0, route);
+    }
   }
   if (rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
   // Caller headers cannot create a principal or bypass the TS session/query/origin guards.
