@@ -16,6 +16,13 @@ export const FRONT_DOOR_PRINCIPAL: VerifiedRustPrincipal = {
   role: 'service',
 };
 
+/** Reserved liveness envelope accepted by aac-api's principal validation. */
+export const PUBLIC_HEALTH_PRINCIPAL: VerifiedRustPrincipal = {
+  kind: 'session',
+  id: 'public-health',
+  role: 'public',
+};
+
 export interface RustConnection {
   socketPath: string;
   secret: string;
@@ -466,7 +473,11 @@ export interface RustStoreBoot extends RustStoreBootInput {
 interface RustStoreEntry {
   connection: RustConnection;
   active: Set<http.ClientRequest>;
-  health: { replied?: () => void; failed?: (kind: RustFailureKind) => void };
+  health: {
+    replied?: () => void;
+    failed?: (kind: RustFailureKind) => void;
+    unresponsive?: () => void;
+  };
 }
 
 /**
@@ -518,7 +529,7 @@ export function registerRustStoreConnection(
   root: string,
   connection: RustConnection,
   active: Set<http.ClientRequest>,
-  health: { replied?: () => void; failed?: (kind: RustFailureKind) => void },
+  health: RustStoreEntry['health'],
   owned: boolean
 ): () => void {
   const state = storeHostState(root);
@@ -575,11 +586,83 @@ export const RUST_STORE_REQUEST_CAP = 16 * 1024 * 1024;
 /** The longest store reply this front door reads (history answers are the big ones). */
 export const RUST_STORE_REPLY_CAP = 64 * 1024 * 1024;
 
+/** Read/control admission is bounded; long engine jobs are instead watched for liveness. */
+export const RUST_STORE_DEADLINE_MS = 2500;
+const STORE_LONG_JOBS = new Set([
+  'backup',
+  'maintain',
+  'restore',
+  'record',
+  'captureReports',
+  'activityIngest',
+  'activityImportCodexV1',
+  'activityBackfill',
+  'runsScan',
+  'runsRecord',
+  'setMeta',
+]);
+const storeWatches = new WeakMap<
+  RustStoreEntry,
+  {
+    requests: Set<http.ClientRequest>;
+    timer: ReturnType<typeof setTimeout> | null;
+    probing: boolean;
+  }
+>();
+
+/** One independent, bounded health probe per boot while store calls are pending. */
+function watchStore(entry: RustStoreEntry, request: http.ClientRequest): void {
+  let state = storeWatches.get(entry);
+  if (!state) {
+    state = { requests: new Set(), timer: null, probing: false };
+    storeWatches.set(entry, state);
+  }
+  const held = state;
+  held.requests.add(request);
+  const schedule = () => {
+    if (held.timer || held.probing || !held.requests.size) return;
+    held.timer = setTimeout(() => {
+      held.timer = null;
+      held.probing = true;
+      void requestRust(
+        { ...entry.connection, agent: undefined },
+        '/api/health',
+        PUBLIC_HEALTH_PRINCIPAL,
+        entry.active
+      )
+        .then((reply) => {
+          if (reply.status !== 200)
+            throw new RustTransportError('reply', 'Rust store health failed');
+        })
+        .catch(() => {
+          if (!held.requests.size) return;
+          entry.health.unresponsive?.();
+          // A lost response to a write is uncertain. Never retry it here.
+          for (const pending of held.requests)
+            pending.destroy(new RustTransportError('deadline', 'Rust store stopped answering'));
+        })
+        .finally(() => {
+          held.probing = false;
+          schedule();
+        });
+    }, 1000);
+    held.timer.unref();
+  };
+  request.once('close', () => {
+    held.requests.delete(request);
+    if (!held.requests.size && held.timer) {
+      clearTimeout(held.timer);
+      held.timer = null;
+    }
+  });
+  schedule();
+}
+
 /**
  * R3: one store method over the socket, the NAPI `call` contract: resolves to the answer's
  * JSON text, rejects with the store's `<code>: <message>` (a RustStoreError) or a
- * RustTransportError when the service did not answer. No deadline and never retried:
- * writes are not repeatable from here, and backup takes as long as it took in process.
+ * RustTransportError when the service did not answer. Read/control calls have a deadline;
+ * long writes/backup keep running while the independent health probe answers. Never retried.
  */
 export function requestRustStore(
   entry: RustStoreEntry,
@@ -602,7 +685,17 @@ export function requestRustStore(
       },
     });
     entry.active.add(request);
-    request.once('close', () => entry.active.delete(request));
+    watchStore(entry, request);
+    const timer = !STORE_LONG_JOBS.has(method)
+      ? setTimeout(
+          () => request.destroy(new RustTransportError('deadline', 'Rust store deadline')),
+          RUST_STORE_DEADLINE_MS
+        )
+      : null;
+    request.once('close', () => {
+      if (timer) clearTimeout(timer);
+      entry.active.delete(request);
+    });
     request.once('error', (error) => {
       entry.health.failed?.(rustFailureKind(error));
       reject(

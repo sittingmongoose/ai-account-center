@@ -19,6 +19,12 @@ const candidateRoots = ['tests/unit', 'tests/integration', 'tests/npm', 'src'];
 // (catches deletion drift) but CANNOT detect new undeclared slow tests.
 // Automated perf-budget enforcement tracked in issue #1071.
 const slowTests = [
+  // Pair-2 regressions use owned sockets, managed children and strict timer bounds.
+  'tests/unit/web-server/agent-default-runner.test.ts',
+  'tests/unit/web-server/ssh-dns-trust.test.ts',
+  'tests/unit/web-server/rust-shadow-private-input.test.ts',
+  'tests/unit/web-server/rust-slow-filesystem.test.ts',
+  'tests/unit/store/store-host-deadline.test.ts',
   'tests/unit/web-server/cursor-quota.test.ts',
   'tests/unit/web-server/reset-source-adapter.test.ts',
   'tests/integration/computer-registry.test.ts',
@@ -60,6 +66,11 @@ const slowTests = [
 const fastJsTests = new Set(['tests/unit/flag-parsing-simple.test.js']);
 
 const isolatedTests = new Set([
+  'tests/unit/web-server/status/status-machine-snapshot.test.ts',
+  'tests/unit/web-server/rust-shadow-private-input.test.ts',
+  'tests/unit/web-server/agent-default-runner.test.ts',
+  'tests/unit/web-server/rust-slow-filesystem.test.ts',
+  'tests/unit/store/store-host-deadline.test.ts',
   'tests/unit/commands/bar-command.test.ts',
   'tests/unit/utils/fetch-proxy-setup.test.ts',
   // Strict wall-clock fixtures must not share global mocks or a saturated worker pool.

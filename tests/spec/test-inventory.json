@@ -2275,6 +2275,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/store/store-host-deadline.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "tests/unit/store/store-host-jobs.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -2640,6 +2647,13 @@
       "evidence": [
         "helper",
         "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/agent-default-runner.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
       ]
     },
     {
@@ -3396,6 +3410,20 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/rust-shadow-private-input.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/rust-slow-filesystem.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/rust-view-reply.test.ts",
       "kind": "HTTP",
       "evidence": [
@@ -3557,6 +3585,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/ssh-dns-trust.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/ssh-policy.test.ts",
       "kind": "helper",
       "evidence": [
@@ -3673,6 +3708,12 @@
     },
     {
       "file": "tests/unit/web-server/status/status-fixture.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-machine-snapshot.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

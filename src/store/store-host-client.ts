@@ -16,6 +16,9 @@ import {
 } from '../web-server/rust-service-transport';
 import { loadNativeStore, type NativeLoadResult, type NativeStoreHandle } from './native-loader';
 
+/** Shutdown must reach the supervisor even when a store call never settles. */
+export const STORE_CLOSE_DEADLINE_MS = 3000;
+
 function serviceDown(): Error {
   return new RustStoreError('service_down: the store service is not answering');
 }
@@ -43,11 +46,17 @@ export class SocketStoreHandle implements NativeStoreHandle {
 
   call(method: string, args: string): Promise<string> {
     if (method === 'close') {
-      this.closing ??= (async () => {
-        await Promise.allSettled([...this.pending]);
-        await this.nativeOpening?.catch(() => undefined);
-        return this.native ? this.native.call('close', args) : this.closeOverSocket();
-      })();
+      if (!this.closing) {
+        const finish = (async () => {
+          await Promise.allSettled([...this.pending]);
+          await this.nativeOpening?.catch(() => undefined);
+          return this.native ? this.native.call('close', args) : this.closeOverSocket();
+        })();
+        this.closing = new Promise<string>((resolve, reject) => {
+          const timer = setTimeout(() => reject(serviceDown()), STORE_CLOSE_DEADLINE_MS);
+          void finish.then(resolve, reject).finally(() => clearTimeout(timer));
+        });
+      }
       return this.closing;
     }
     if (this.closing) return Promise.reject(new RustStoreError('closed: the store is stopping'));
@@ -153,8 +162,8 @@ export class SocketStoreHandle implements NativeStoreHandle {
     try {
       return await requestRustStore(entry, 'close', '{}');
     } catch {
-      // The service closes its engine itself when it ends; a lost close is not an error.
-      return '{"closed":true}';
+      // The supervisor still stops the child after this error; do not claim a clean seal.
+      throw serviceDown();
     }
   }
 

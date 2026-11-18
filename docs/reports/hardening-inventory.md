@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1116 |
-| Sync fs files affected (all) | 112 |
-| Sync fs occurrences (runtime hotpaths) | 544 |
-| Sync fs files affected (runtime hotpaths) | 62 |
+| Sync fs occurrences (all) | 1098 |
+| Sync fs files affected (all) | 111 |
+| Sync fs occurrences (runtime hotpaths) | 526 |
+| Sync fs files affected (runtime hotpaths) | 61 |
 | Legacy shim markers | 209 |
 | Legacy shim files affected | 62 |
 
@@ -23,10 +23,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/dashboard-preferences.ts` | 21 | closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync |
 | `src/web-server/services/usage-failover-cache.ts` | 19 | closeSync, fstatSync, lstatSync, mkdirSync, opendirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
-| `src/web-server/rust-service-lifecycle.ts` | 18 | existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync |
 | `src/web-server/status/answer-signing.ts` | 18 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync |
 | `src/web-server/status/writer-lock.ts` | 18 | closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync |
 | `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
+| `src/web-server/usage/t3-usage-roots.ts` | 14 | readdirSync, readFileSync, readlinkSync, realpathSync, statSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -51,14 +51,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 33.1% (227/686) |
+| typed-error adoption (typed/total throws) | 33.0% (227/687) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 55 (224 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
 | files with createLogger | 44/459 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
-| files > 600 LOC | 26 |
+| files > 600 LOC | 27 |
 
 ### Top Hotpath console.error/warn Files
 

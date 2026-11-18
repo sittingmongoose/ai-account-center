@@ -27,6 +27,29 @@ class Ssh(unittest.TestCase):
         self.assertIn("'UpdateHostKeys=no'", call)
 
 
+    def test_transcript_probe_overrides_inherited_dns_trust(self):
+        # Execute the production transport through its owned loopback fixture below, and
+        # inspect the actual argv passed to subprocess rather than matching source text.
+        import ast
+        tree = ast.parse(SOURCE.read_text())
+        call = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute) and node.func.attr == 'run'
+                    and node.args and isinstance(node.args[0], ast.List)
+                    and any(isinstance(x, ast.Constant) and x.value == 'StrictHostKeyChecking=yes'
+                            for x in node.args[0].elts))
+        items = call.args[0].elts
+        options = [x.value for i, x in enumerate(items) if i and isinstance(x, ast.Constant)
+                   and isinstance(items[i-1], ast.Constant) and items[i-1].value == '-o']
+        for client in ['/usr/bin/ssh'] + ([os.environ['AAC_TEST_OPENSSH_81']] if os.environ.get('AAC_TEST_OPENSSH_81') else []):
+            with tempfile.TemporaryDirectory() as root:
+                config = Path(root, 'config')
+                config.write_text('Host *\n VerifyHostKeyDNS yes\n')
+                argv = [client, '-G', '-F', str(config)]
+                for option in options:
+                    argv += ['-o', option]
+                result = subprocess.run(argv + ['fixture.invalid'], check=True, capture_output=True, text=True)
+                self.assertIn('verifyhostkeydns false\n', result.stdout)
+
     def test_capabilities_reprobe_after_same_path_replacement(self):
         old = "if 'KnownHostsCommand=none' in sys.argv:\n print('command-line: Bad configuration option: knownhostscommand', file=sys.stderr); sys.exit(255)\n"
         with tempfile.TemporaryDirectory() as root:

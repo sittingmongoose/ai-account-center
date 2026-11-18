@@ -326,6 +326,57 @@ async function crashDrill(method, point) {
 }
 
 const checks = {
+  async pausedReadAndClose() {
+    // Max pair 2 M6: a single public read must not wait for unrelated traffic to
+    // detect a paused host. Close must finish even while that admitted read waits.
+    const { service, store } = await startHosted('paused-read-close', { restartDelaysMs: [1000] });
+    await store.status();
+    const pid = service.lease.pid;
+    process.kill(pid, 'SIGSTOP');
+    let read;
+    let close;
+    try {
+      const req = {
+        method: 'GET',
+        sessionID: 'paused-fixture',
+        session: { authenticated: true },
+        headers: {},
+      };
+      read = service
+        .compose(
+          req,
+          '/api/store/status',
+          {},
+          () => store.status(),
+          () => true
+        )
+        .then(
+          () => 'answered',
+          (error) => String(error)
+        );
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      close = closeAacStore();
+      const outcome = await Promise.race([
+        Promise.all([read, close]).then(([value]) => value),
+        new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 3900)),
+      ]);
+      assert.notEqual(
+        outcome,
+        'still-waiting',
+        'one read and clean close finish before five seconds'
+      );
+      assert.ok(String(outcome).includes('service_down'), 'the paused read fails honestly');
+    } finally {
+      try {
+        process.kill(pid, 'SIGCONT');
+      } catch {
+        /* Already reaped by the supervisor. */
+      }
+      await read;
+      await close;
+      await stopHosted(service);
+    }
+  },
   async bothHandles() {
     const napiDir = path.join(scratch, 'napi-store');
     const napi = await napiStore(napiDir);
@@ -752,7 +803,10 @@ try {
   else {
     if (!process.argv.includes('--drills-only')) suites();
     let failures = 0;
-    for (const [name, check] of Object.entries(checks)) {
+    const selected = process.argv.find((a) => a.startsWith('--check='))?.slice(8);
+    const entries = Object.entries(checks).filter(([name]) => !selected || selected === name);
+    assert.ok(entries.length > 0, 'unknown store-host check');
+    for (const [name, check] of entries) {
       try {
         await check();
         console.log(`store-host ${name}: ok`);
@@ -765,7 +819,7 @@ try {
       }
     }
     assert.equal(failures, 0, `${failures} store host checks failed`);
-    console.log(`store-host: ${Object.keys(checks).length} checks passed`);
+    console.log(`store-host: ${entries.length} checks passed`);
   }
 } finally {
   for (const service of services) service.stop();

@@ -512,14 +512,22 @@ export class StatusService {
           data.memoryReadAt = before?.memoryReadAt ?? null;
           problems.push(nextProblem(earlier('memory'), 'memory', sample.memoryError, now));
         }
-        this.machines[id] =
-          problems.length === 0 ? succeeded(data, now) : { data, asOf: now, error: null, problems };
+        this.machines = {
+          ...this.machines,
+          [id]:
+            problems.length === 0
+              ? succeeded(data, now)
+              : { data, asOf: now, error: null, problems },
+        };
       } catch (error) {
-        this.machines[id] = failed(
-          this.machines[id],
-          errorReason(error, 'The machine did not answer.'),
-          this.now()
-        );
+        this.machines = {
+          ...this.machines,
+          [id]: failed(
+            this.machines[id],
+            errorReason(error, 'The machine did not answer.'),
+            this.now()
+          ),
+        };
       }
     };
     await Promise.all(MACHINES.map(read));

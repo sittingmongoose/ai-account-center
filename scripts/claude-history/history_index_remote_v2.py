@@ -666,7 +666,7 @@ class BoundProfile:
         pin = os.environ.get('AAC_AGENT_KNOWN_HOSTS_FILE', str(ssh_home / '.ssh/known_hosts'))
         if not Path(pin).is_absolute() or any(c in pin for c in '\n\r%"'):
             refuse('ssh_configuration_unknown')
-        result = subprocess.run([ssh_launch(executable, capabilities), '-T', *capabilities, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+        result = subprocess.run([ssh_launch(executable, capabilities), '-T', *capabilities, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'VerifyHostKeyDNS=no',
             '-o', 'UpdateHostKeys=no', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'GlobalKnownHostsFile=none',
             *identity_args, '-o', 'UserKnownHostsFile="' + pin + '"',
             '-o', 'Hostname=' + endpoint['hostname'], '-l', endpoint['username'], '-p', str(endpoint['port']),

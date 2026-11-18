@@ -255,6 +255,9 @@ export class RustSupervisor {
           {
             replied: () => this.replied(lease),
             failed: (kind) => this.transportFailed(lease, kind),
+            unresponsive: () => {
+              if (lease === this.lease) this.checkLease('unresponsive');
+            },
           },
           lease.owned
         )

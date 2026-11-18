@@ -254,6 +254,25 @@ try {
   localSample = { ...localSample, load1: 0.049999999999999996, busyPct: 99.995 };
   await owner.collect();
   await step('a machine reading changed');
+  // Max pair 2 M5: a machine collector can finish before its siblings. Keep the
+  // clock fixed so this proves the machine owner invalidates the feed by itself.
+  const oldMachine = await get(fedUrl);
+  localSample = { ...localSample, load1: 7.8, busyPct: 81 };
+  await owner.collectMachines();
+  const changedMachine = await step('machine-only collection before sibling collectors');
+  assert.notEqual(
+    changedMachine.headers.etag,
+    oldMachine.headers.etag,
+    'machine-only change moves ETag'
+  );
+  const revalidatedMachine = await get(fedUrl, { 'if-none-match': oldMachine.headers.etag });
+  assert.equal(revalidatedMachine.status, 200, 'old machine ETag cannot revalidate');
+  assert.equal(
+    revalidatedMachine.body,
+    changedMachine.body,
+    'new machine bytes survive revalidation'
+  );
+
   collectFails = true;
   await owner.collect();
   await step('a collection failed');

@@ -323,6 +323,7 @@ impl SshPolicy {
                 "ServerAliveCountMax=2"
             },
             "StrictHostKeyChecking=yes",
+            "VerifyHostKeyDNS=no",
             "UpdateHostKeys=no",
             "ForwardAgent=no",
             "ForwardX11=no",

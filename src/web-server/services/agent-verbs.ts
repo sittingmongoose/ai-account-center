@@ -256,7 +256,7 @@ async function runAgentVerbTsFallback(
 export async function runSignInAgent(
   host: UsageHost,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
-  run = runManagedCommand,
+  run: typeof runManagedCommand | undefined = undefined,
   mode: AgentVerbs = agentVerbs()
 ): Promise<string | null> {
   const result = await runAgentVerb(
@@ -295,7 +295,7 @@ export async function runQuotaAgent(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
   args: Record<string, unknown>,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
-  run = runManagedCommand,
+  run: typeof runManagedCommand | undefined = undefined,
   mode: AgentVerbs = agentVerbs()
 ): Promise<string | null> {
   const value = await runAgentVerb(host, 'quota-read', args, {
