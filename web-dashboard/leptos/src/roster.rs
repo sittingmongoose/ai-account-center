@@ -520,6 +520,7 @@ pub struct TaskRow {
     pub title: String,
     pub note: Option<String>,
     pub time: Option<PinnedTime>,
+    pub needs_you: Option<String>,
     /// The raw state of an item whose state is not one of the nine.
     pub odd_state: Option<String>,
 }
@@ -642,6 +643,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                         .or_else(|| item.note.clone())
                         .filter(|n| !n.is_empty()),
                     time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
                     odd_state: (!KNOWN.contains(&state)).then(|| state.to_string()),
                 },
             );
@@ -663,6 +665,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                     title: cut(&it.title, 60),
                     note: item.note.clone(),
                     time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
                     odd_state: odd,
                 },
             );
@@ -686,6 +689,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                         .or_else(|| item.note.clone())
                         .filter(|n| !n.is_empty()),
                     time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
                     odd_state: odd,
                 },
             );
@@ -702,6 +706,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                         .or_else(|| item.note.clone())
                         .filter(|n| !n.is_empty()),
                     time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
                     odd_state: None,
                 },
             );

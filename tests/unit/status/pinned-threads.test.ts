@@ -421,6 +421,7 @@ describe('PinnedThreadsCollector', () => {
       const note = 'The integration check is running on three machines before the batch can land.';
       const v3 = {
         note,
+        needsYou: 'vm.lead--C',
         due,
         dueDay: '2026-11-09',
         dueNote: 'after:review passes',

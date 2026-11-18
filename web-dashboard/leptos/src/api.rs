@@ -161,6 +161,7 @@ pub struct PinnedWait {
     pub task: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
+    pub until_time: Option<PinnedTime>,
     /// thread, tasks or status.
     #[serde(deserialize_with = "nullable")]
     pub from: String,
@@ -239,6 +240,7 @@ pub struct PinnedItem {
     pub note: Option<String>,
     pub time: Option<PinnedTime>,
     pub outcome: Option<String>,
+    pub needs_you: Option<String>,
     /// The item's own state, when the server passes it on.
     pub state: Option<String>,
 }
@@ -635,6 +637,7 @@ pub struct Card {
     #[serde(deserialize_with = "nullable")]
     pub asked_by: String,
     pub asker_state: Option<String>,
+    pub quiet_notice: Option<String>,
     #[serde(deserialize_with = "nullable")]
     pub title: String,
     #[serde(deserialize_with = "nullable")]

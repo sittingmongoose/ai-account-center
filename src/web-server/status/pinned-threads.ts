@@ -294,6 +294,7 @@ export class PinnedThreadsCollector {
           dueWas: item.dueWas,
           doneAt: item.doneAt,
           outcome: item.outcome,
+          needsYou: item.needsYou,
           state: item.state,
           reviews: item.reviews.map((review) => ({
             atMs: review.at ? Date.parse(review.at) : null,

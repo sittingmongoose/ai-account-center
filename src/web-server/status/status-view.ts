@@ -390,6 +390,21 @@ function askerState(inputs: StatusInputs, writer: string): CardView['askerState'
   return threadStale(thread, inputs) ? 'gone' : thread.doc.state;
 }
 
+const DAY_MS = 86_400_000;
+const EST_MS = 5 * 3_600_000;
+
+function quietCardNotice(inputs: StatusInputs, doc: CardDoc): string | undefined {
+  const age = inputs.now - Date.parse(doc.askedAt);
+  if (age <= 3 * DAY_MS) return undefined;
+  const thread = inputs.reports.threads.find((row) => row.writer === doc.writer);
+  if (!thread || thread.problem) return undefined;
+  const last = seenAt(thread);
+  if (inputs.now - last <= (thread.doc.ttlSeconds ?? NULL_TTL_DEFAULT_SECONDS) * 1000)
+    return undefined;
+  const date = new Date(last - EST_MS).toISOString().slice(0, 10);
+  return `asked ${Math.floor(age / DAY_MS)} days ago; thread quiet since ${date}`;
+}
+
 /** The URL an option image is served from: the writer's folder and the path, each segment encoded. */
 export function cardFileUrl(writer: string, file: string): string {
   return `/api/status/files/${encodeURIComponent(writer)}/${file
@@ -516,6 +531,8 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
         row.problem ??
         (older ? { file: row.file, reason: SEQ_WENT_BACK, since: inputs.now } : null);
       const card = cardView(inputs, row.doc, row.sha256, problem, notes.get(row.doc.id));
+      const quietNotice = quietCardNotice(inputs, row.doc);
+      if (quietNotice) card.quietNotice = quietNotice;
       if (inputs.answerHistoryProblem) {
         card.answerable = false;
         card.problem = inputs.answerHistoryProblem;

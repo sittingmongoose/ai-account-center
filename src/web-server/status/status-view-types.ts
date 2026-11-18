@@ -294,6 +294,7 @@ export interface CardView {
   askedAt: string;
   ageSeconds: number;
   askerState: ThreadDoc['state'] | 'gone' | 'unknown';
+  quietNotice?: string;
   cardSha256: string;
   /** The owner's notes already sent on this card, oldest first. */
   notes: CardNoteView[];

@@ -344,6 +344,23 @@ export const tests = {
     await t.check('answered: the answered card leads with its chip', answered?.text === 'R7' && answered.first, JSON.stringify(answered));
   },
 
+  async 'status keeps an old unanswered card open while its writer is quiet'(t) {
+    const data = view();
+    const old = data.cards.open[0];
+    const notice = 'asked 7 days ago; thread quiet since 2026-11-11';
+    old.quietNotice = notice;
+    for (const format of [FORMATS[0], FORMATS[2]]) {
+      await openStatus(t, format, data);
+      await t.text(`${CARD} .q-why`, notice);
+      await t.check(`${format.name}: the original card is still displayed`, (await t.page.locator(`${CARD} .q-title`).textContent()).includes(old.title));
+      await t.check(`${format.name}: the card can still be answered`, await t.page.locator(`${CARD} .opt-pick:not([disabled])`).count() > 0);
+      if (!format.mobile) {
+        const row = t.page.locator('.q-list .q-item', { hasText: old.title });
+        await t.check('the question list labels the same card', (await row.textContent()).includes(notice));
+      }
+    }
+  },
+
   async 'status legacy owner waits are kept with other waits'(t) {
     for (const format of [FORMATS[2], FORMATS[0], FORMATS[3]]) {
       await openStatus(t, format, view());

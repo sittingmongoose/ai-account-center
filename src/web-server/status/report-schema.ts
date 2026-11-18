@@ -27,6 +27,7 @@ import {
   THREAD_SCHEMA,
   type DocHead,
   Invalid,
+  isCardId,
   jsonFromBytes,
   link,
   list,
@@ -176,6 +177,7 @@ export interface TaskItem {
   dueWas?: string | null;
   doneAt?: string | null;
   outcome?: string | null;
+  needsYou?: string;
   updatedAt: string | null;
 }
 
@@ -199,6 +201,8 @@ function day(value: unknown, field: string): string | null {
 
 function item(value: unknown, field: string): TaskItem {
   const row = obj(value, field);
+  const needsYou = row.needsYou;
+  if (needsYou !== undefined && !isCardId(needsYou)) fail(`${field}.needsYou`);
   let landed: TaskItem['landed'] = null;
   if (row.landed !== null && row.landed !== undefined) {
     const value = obj(row.landed, `${field}.landed`);
@@ -223,6 +227,7 @@ function item(value: unknown, field: string): TaskItem {
       };
     }),
     landed,
+    ...(typeof needsYou === 'string' ? { needsYou } : {}),
     ...(row.due === undefined ? {} : { due: optIso(row.due, `${field}.due`) }),
     ...(row.dueDay === undefined ? {} : { dueDay: day(row.dueDay, `${field}.dueDay`) }),
     ...(row.dueNote === undefined ? {} : { dueNote: optText(row.dueNote, `${field}.dueNote`, 60) }),

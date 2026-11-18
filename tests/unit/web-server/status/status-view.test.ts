@@ -66,7 +66,13 @@ async function inputs(root: string, extra: Partial<StatusInputs> = {}): Promise<
     timeZone: 'America/New_York',
     reports: reader.snapshot(),
     registry: { data: [], asOf: NOW, error: null },
-    machines: { vm: ok(sample()), mac: ok(sample()), windows: ok(sample()), nas1: ok(sample()), alexis: ok(sample()) },
+    machines: {
+      vm: ok(sample()),
+      mac: ok(sample()),
+      windows: ok(sample()),
+      nas1: ok(sample()),
+      alexis: ok(sample()),
+    },
     browsers: none(),
     simlock: none(),
     usage: null,
@@ -76,6 +82,39 @@ async function inputs(root: string, extra: Partial<StatusInputs> = {}): Promise<
 }
 
 describe('status view', () => {
+  it('keeps old cards open and labels the last known heartbeat only for quiet writers', async () => {
+    const root = dirs.make();
+    const day = 86_400_000;
+    writeReport(
+      root,
+      'vm.quiet',
+      'thread.json',
+      threadDoc('vm.quiet', {
+        writtenAt: ago(2 * day),
+        state: 'waiting',
+        ttlSeconds: null,
+        blockedOn: { kind: 'owner', what: 'A comparison choice', since: ago(2 * day) },
+      })
+    );
+    writeReport(root, 'vm.active', 'thread.json', threadDoc('vm.active'));
+    for (const [writer, id, age] of [
+      ['vm.quiet', 'OLD', 4 * day],
+      ['vm.quiet', 'BOUNDARY', 3 * day],
+      ['vm.active', 'ACTIVE', 4 * day],
+      ['vm.missing', 'UNKNOWN', 4 * day],
+    ] as const) {
+      writeCard(root, cardDoc(writer, id, { askedAt: ago(age) }));
+    }
+    const cards = buildStatusView(await inputs(root)).cards.open;
+    expect(cards).toHaveLength(4);
+    const old = cards.find((card) => card.id === 'vm.quiet--OLD');
+    expect(old?.quietNotice).toBe('asked 4 days ago; thread quiet since 2026-11-04');
+    expect(old?.answerable).toBe(true);
+    expect(cards.filter((card) => card.quietNotice).map((card) => card.id)).toEqual([
+      'vm.quiet--OLD',
+    ]);
+  });
+
   it('counts completion, groups projects and shows board-only streams', async () => {
     const root = path.join(dirs.make(), 'agent-reports');
     writeReport(
@@ -609,7 +648,7 @@ describe('status view', () => {
             error: { reason: 'ssh did not answer in time.', since: NOW - 120_000 },
           },
           nas1: { data: sample({ memAvailableBytes: 4.2 * GIB }), asOf: NOW - 10_000, error: null },
-          alexis: {data:sample(), asOf:NOW-30_000, error:null},
+          alexis: { data: sample(), asOf: NOW - 30_000, error: null },
         },
         browsers: {
           data: [

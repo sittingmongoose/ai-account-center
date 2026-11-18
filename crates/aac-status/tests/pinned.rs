@@ -1440,3 +1440,49 @@ fn contract_v3_uses_card_titles_and_reads_dates_as_eastern_time() {
     assert_eq!(update["displayState"], "working");
     assert_eq!(update["blocked"]["waitingOnYou"], false);
 }
+
+#[test]
+fn agent_report_19_notes_deadlines_waits_and_open_task_cards() {
+    let mut fixture = json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread":"t1", "state":"waiting", "next":"Start the final check",
+            "nextBy":"2026-11-10T04:59:59Z",
+            "blockedOn":{"kind":"agent","who":"Browser tools","what":"a free browser slot","until":"2026-11-09T15:30:00Z"}
+        }))],
+        "statuses":[{
+            "writer":"vm.pm7-build","seq":1,"t3Thread":"t1","writtenAt":"2026-11-08T05:30:00Z",
+            "writtenAtMs":NOW-200_000,"summary":"The browser checks wait for a second machine.",
+            "blockers":[{"text":"Browser tools: a free browser slot","waitingOn":"agent","who":"Browser tools","until":"2026-11-09T15:30:00Z"}]
+        }],
+        "tasks": [{
+            "writer":"vm.pm7-build","writtenAtMs":NOW,"seq":1,"project":"pm7","stream":"f",
+            "items":[{"id":"a","title":"Run the check","state":"working","note":"The last check is running.",
+                "dueNote":"the machine has no reservation yet","needsYou":"vm.pm7-build--Q1",
+                "blockedOn":{"kind":"agent","who":"Browser tools","what":"a free browser slot"}}]
+        }],
+        "openCards":[{"id":"vm.pm7-build--Q1","writer":"vm.pm7-build","seq":1,"title":"Which check should run first?"}]
+    });
+    let update = as_json(&one_update(&input(fixture.clone())));
+    assert_eq!(update["nextTime"]["text"], "by Mon");
+    let waits = update["waits"].as_array().unwrap();
+    assert_eq!(waits.len(), 2);
+    assert!(waits[0].get("task").is_none());
+    assert_eq!(waits[1]["task"], "a");
+    assert_eq!(update["waits"][0]["untilTime"]["text"], "until Mon 10:30 AM");
+    assert_eq!(
+        update["left"][0]["time"]["text"],
+        "no time: the machine has no reservation yet"
+    );
+    assert_eq!(update["left"][0]["needsYou"], "Which check should run first?");
+    fixture["openCards"][0]["writer"] = json!("vm.another");
+    fixture["threads"][0]["nextBy"] = Value::Null;
+    fixture["threads"][0]["nextByNote"] = json!("the machine has no reservation yet");
+    let update = as_json(&one_update(&input(fixture)));
+    assert_eq!(
+        update["nextTime"]["text"],
+        "no time: the machine has no reservation yet"
+    );
+    assert!(update["left"][0].get("needsYou").is_none());
+    assert_eq!(update["blocked"]["waitingOnYou"], false);
+}

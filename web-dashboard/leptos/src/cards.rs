@@ -456,7 +456,15 @@ fn Deck(
                     .into_any()
             }
         };
-        view! { {first}" · "{second} }.into_any()
+        let quiet = card
+            .quiet_notice
+            .clone()
+            .map(|notice| view! { <span>{notice}</span> }.into_any());
+        match (draft, quiet) {
+            (Standing::Empty, Some(quiet)) => view! { {first}" · "{quiet} }.into_any(),
+            (_, Some(quiet)) => view! { {first}" · "{second}" · "{quiet} }.into_any(),
+            (_, None) => view! { {first}" · "{second} }.into_any(),
+        }
     };
     let list_items = move || {
         view! {
@@ -735,12 +743,13 @@ fn CardBody(
                 // Where the card belongs; without a place, its batch in words. Never a label made up from the id.
                 <span class="cap">{if place.is_empty() { c.batch.as_deref().map(crate::question_index::batch_words).unwrap_or_default() } else { place.clone() }}</span>
                 <span class="when" title=fmt::clock(&c.asked_at)>
-                    <span class="nw">{let asked_at = c.asked_at.clone(); move || format!("{} ·", fmt::age_words_since(&asked_at, live.now_ms.get()))}</span>
+                    {c.quiet_notice.is_none().then(|| view! { <span class="nw">{let asked_at = c.asked_at.clone(); move || format!("{} ·", fmt::age_words_since(&asked_at, live.now_ms.get()))}</span> })}
                     " "<span class="nw">{format!("from {asker}")}</span>
                 </span>
             </div>
             <h3 class="q-title">{labelled_title(&c)}</h3>
             <div class="q-why">
+                {c.quiet_notice.clone().map(|notice| view! { <p class="q3">{notice}</p> })}
                 {(c.kind == "sample").then(|| view! {
                     <p class="sample-banner">"Format sample · no answer wanted. Nothing on this card is sent."</p>
                 })}

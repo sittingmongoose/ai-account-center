@@ -1,467 +1,801 @@
 {
   "$defs": {
     "sectionCallout": {
-      "additionalProperties": false,
-      "description": "Callout section.",
+      "type": "object",
       "properties": {
-        "body": {
-          "type": "string"
-        },
-        "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
+        "type": {
+          "const": "callout"
         },
         "title": {
-          "description": "Short heading, or null.",
           "type": [
             "string",
             "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
           ]
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "$ref": "#/$defs/sectionSafeText"
         },
         "tone": {
           "enum": [
             "crit",
             "info",
             "warn"
-          ],
-          "type": "string"
-        },
-        "type": {
-          "const": "callout"
+          ]
         }
       },
       "required": [
+        "type",
         "body",
-        "tone",
-        "type"
+        "tone"
       ],
-      "type": "object"
+      "description": "Callout section."
     },
     "sectionCompare": {
-      "additionalProperties": false,
-      "description": "Compare section: what others do.",
+      "type": "object",
       "properties": {
+        "type": {
+          "const": "compare"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
         "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 12,
           "items": {
-            "additionalProperties": false,
+            "type": "object",
             "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "$ref": "#/$defs/sectionSafeText"
+              },
               "does": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 0,
+                "maxLength": 1000,
+                "$ref": "#/$defs/sectionSafeText"
+              },
+              "problem": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 0,
+                "maxLength": 1000,
+                "$ref": "#/$defs/sectionSafeText"
               },
               "link": {
-                "additionalProperties": false,
+                "type": [
+                  "object",
+                  "null"
+                ],
                 "properties": {
                   "label": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "$ref": "#/$defs/sectionSafeText"
                   },
                   "url": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 600,
+                    "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]?://[^/\\s][^\\s]*$|/|\\\\\\\\)"
                   }
                 },
                 "required": [
                   "label",
                   "url"
-                ],
-                "type": [
-                  "object",
-                  "null"
                 ]
               },
-              "name": {
-                "type": "string"
-              },
-              "problem": {
-                "type": "string"
-              },
               "version": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 0,
+                "maxLength": 60,
+                "$ref": "#/$defs/sectionSafeText"
               }
             },
             "required": [
-              "does",
-              "link",
-              "name",
-              "problem",
-              "version"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "title": {
-          "description": "Short heading, or null.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "const": "compare"
+              "name"
+            ]
+          }
         }
       },
       "required": [
-        "items",
         "type"
       ],
-      "type": "object"
+      "description": "Compare section: what others do."
     },
     "sectionFacts": {
-      "additionalProperties": false,
-      "description": "Facts section: short label/value pairs.",
+      "type": "object",
       "properties": {
+        "type": {
+          "const": "facts"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
         "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "rows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 30,
           "items": {
-            "additionalProperties": false,
+            "type": "object",
             "properties": {
               "label": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "$ref": "#/$defs/sectionSafeText"
               },
               "value": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "$ref": "#/$defs/sectionSafeText"
               }
             },
             "required": [
               "label",
               "value"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "title": {
-          "description": "Short heading, or null.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "const": "facts"
+            ]
+          }
         }
       },
       "required": [
-        "rows",
         "type"
       ],
-      "type": "object"
+      "description": "Facts section: short label/value pairs."
     },
     "sectionLinks": {
-      "additionalProperties": false,
-      "description": "Links section. Web links open in a new tab; share paths are shown to copy.",
+      "type": "object",
       "properties": {
+        "type": {
+          "const": "links"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
         "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 20,
           "items": {
-            "additionalProperties": false,
+            "type": "object",
             "properties": {
               "label": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "$ref": "#/$defs/sectionSafeText"
               },
               "url": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 600,
+                "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]?://[^/\\s][^\\s]*$|/|\\\\\\\\)"
               }
             },
             "required": [
               "label",
               "url"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "title": {
-          "description": "Short heading, or null.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "const": "links"
+            ]
+          }
         }
       },
       "required": [
-        "items",
         "type"
       ],
-      "type": "object"
+      "description": "Links section. Web links open in a new tab; share paths are shown to copy."
     },
     "sectionList": {
-      "additionalProperties": false,
-      "description": "List section.",
+      "type": "object",
       "properties": {
-        "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
-        },
-        "items": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "ordered": {
-          "type": "boolean"
-        },
-        "title": {
-          "description": "Short heading, or null.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "type": {
           "const": "list"
-        }
-      },
-      "required": [
-        "items",
-        "type"
-      ],
-      "type": "object"
-    },
-    "sectionMedia": {
-      "additionalProperties": false,
-      "description": "Media section.",
-      "properties": {
-        "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
-        },
-        "items": {
-          "items": {
-            "$ref": "#/$defs/media"
-          },
-          "type": "array"
         },
         "title": {
-          "description": "Short heading, or null.",
           "type": [
             "string",
             "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
           ]
         },
-        "type": {
-          "const": "media"
+        "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "$ref": "#/$defs/sectionSafeText"
+          }
+        },
+        "ordered": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
-        "items",
         "type"
       ],
-      "type": "object"
+      "description": "List section."
     },
-    "sectionNotCopying": {
-      "additionalProperties": false,
-      "description": "Not-copying section: what we deliberately don't take from others.",
+    "sectionMedia": {
+      "type": "object",
       "properties": {
+        "type": {
+          "const": "media"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
         "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 12,
           "items": {
-            "additionalProperties": false,
+            "$ref": "#/$defs/media"
+          }
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "description": "Media section."
+    },
+    "sectionNotCopying": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "notCopying"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 20,
+          "items": {
+            "type": "object",
             "properties": {
               "what": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "$ref": "#/$defs/sectionSafeText"
               },
               "why": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000,
+                "$ref": "#/$defs/sectionSafeText"
               }
             },
             "required": [
               "what",
               "why"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "title": {
-          "description": "Short heading, or null.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "const": "notCopying"
+            ]
+          }
         }
       },
       "required": [
-        "items",
         "type"
       ],
-      "type": "object"
+      "description": "Not-copying section: what we deliberately don't take from others."
     },
     "sectionTable": {
-      "additionalProperties": false,
-      "description": "Table section: scrolls sideways on a phone; keep it small.",
+      "type": "object",
       "properties": {
-        "columns": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
-        },
-        "rows": {
-          "items": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "type": "array"
+        "type": {
+          "const": "table"
         },
         "title": {
-          "description": "Short heading, or null.",
           "type": [
             "string",
             "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
           ]
         },
-        "type": {
-          "const": "table"
+        "columns": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "$ref": "#/$defs/sectionSafeText"
+          },
+          "minItems": 1
+        },
+        "rows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 30,
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 300,
+              "$ref": "#/$defs/sectionSafeText"
+            }
+          }
         }
       },
       "required": [
-        "columns",
-        "rows",
-        "type"
+        "type",
+        "columns"
       ],
-      "type": "object"
+      "description": "Table section: scrolls sideways on a phone; keep it small.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 1,
+                "maxItems": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 4,
+                "maxItems": 4
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 5,
+                "maxItems": 5
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 5,
+                  "maxItems": 5
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 6,
+                "maxItems": 6
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 6,
+                  "maxItems": 6
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 7,
+                "maxItems": 7
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 7,
+                  "maxItems": 7
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "columns": {
+                "minItems": 8,
+                "maxItems": 8
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "items": {
+                  "type": "array",
+                  "minItems": 8,
+                  "maxItems": 8
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "sectionTerms": {
-      "additionalProperties": false,
-      "description": "Terms section: plain meanings of words the card can't avoid.",
+      "type": "object",
       "properties": {
+        "type": {
+          "const": "terms"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
         "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 20,
           "items": {
-            "additionalProperties": false,
+            "type": "object",
             "properties": {
-              "meaning": {
-                "type": "string"
-              },
               "term": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "$ref": "#/$defs/sectionSafeText"
+              },
+              "meaning": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "$ref": "#/$defs/sectionSafeText"
               }
             },
             "required": [
-              "meaning",
-              "term"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "title": {
-          "description": "Short heading, or null.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "const": "terms"
+              "term",
+              "meaning"
+            ]
+          }
         }
       },
       "required": [
-        "items",
         "type"
       ],
-      "type": "object"
+      "description": "Terms section: plain meanings of words the card can't avoid."
     },
     "sectionText": {
-      "additionalProperties": false,
-      "description": "Text section: plain sentences, no markup; a blank line starts a new paragraph.",
+      "type": "object",
       "properties": {
-        "body": {
-          "type": "string"
-        },
-        "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
+        "type": {
+          "const": "text"
         },
         "title": {
-          "description": "Short heading, or null.",
           "type": [
             "string",
             "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
           ]
         },
-        "type": {
-          "const": "text"
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "$ref": "#/$defs/sectionSafeText"
         }
       },
       "required": [
-        "body",
-        "type"
+        "type",
+        "body"
       ],
-      "type": "object"
+      "description": "Text section: plain sentences, no markup; a blank line starts a new paragraph."
     },
     "sectionUnknown": {
       "additionalProperties": true,
       "description": "Catch-all for section types the page can't show yet; shown with their title, never dropped.",
       "properties": {
         "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "type"
-      ],
-      "type": "object"
-    },
-    "sectionUnknowns": {
-      "additionalProperties": false,
-      "description": "Unknowns section.",
-      "properties": {
-        "fold": {
-          "description": "True starts the section collapsed.",
-          "type": "boolean"
-        },
-        "items": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9-]{0,39}$"
         },
         "title": {
-          "description": "Short heading, or null.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
         },
-        "type": {
-          "const": "unknowns"
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
-        "items",
         "type"
       ],
-      "type": "object"
+      "type": "object",
+      "not": {
+        "properties": {
+          "type": {
+            "enum": [
+              "text",
+              "list",
+              "facts",
+              "table",
+              "compare",
+              "notCopying",
+              "unknowns",
+              "terms",
+              "callout",
+              "links",
+              "media",
+              "quote",
+              "planChange"
+            ]
+          }
+        }
+      }
+    },
+    "sectionUnknowns": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "unknowns"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "$ref": "#/$defs/sectionSafeText"
+          }
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "description": "Unknowns section."
     },
     "sections": {
       "description": "Ordered list of optional card sections. Unknown types validate via the catch-all.",
@@ -501,18 +835,32 @@
             "$ref": "#/$defs/sectionMedia"
           },
           {
+            "$ref": "#/$defs/sectionQuote"
+          },
+          {
+            "$ref": "#/$defs/sectionPlanChange"
+          },
+          {
             "$ref": "#/$defs/sectionUnknown"
           }
         ]
       },
-      "type": "array"
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "media": {
-      "additionalProperties": false,
       "description": "One image or video in the writer's own folder. Images PNG, JPEG or WebP up to 2 MB; videos MP4 (H.264) or WebM up to 50 MB.",
       "properties": {
         "caption": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 300,
+          "$ref": "#/$defs/sectionSafeText"
         },
         "kind": {
           "enum": [
@@ -534,18 +882,22 @@
           ]
         },
         "path": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}(?:/[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}){0,5}$"
         },
         "poster": {
-          "description": "Path of a still for a video, or null.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}(?:/[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}){0,5}$"
         }
       },
       "required": [
-        "caption",
         "kind",
         "path"
       ],
@@ -556,6 +908,176 @@
       "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
       "type": "string"
+    },
+    "sectionQuote": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "quote"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "items": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000,
+                "$ref": "#/$defs/sectionSafeText"
+              },
+              "where": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 0,
+                "maxLength": 300,
+                "$ref": "#/$defs/sectionSafeText"
+              },
+              "context": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "maxItems": 10,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "$ref": "#/$defs/sectionSafeText"
+                }
+              },
+              "source": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 0,
+                "maxLength": 300,
+                "$ref": "#/$defs/sectionSafeText"
+              },
+              "link": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "$ref": "#/$defs/sectionSafeText"
+                  },
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 600,
+                    "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]?://[^/\\s][^\\s]*$|/|\\\\\\\\)"
+                  }
+                },
+                "required": [
+                  "label",
+                  "url"
+                ]
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 0,
+                "maxLength": 60,
+                "$ref": "#/$defs/sectionSafeText"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "description": "Verbatim excerpts and their context."
+    },
+    "sectionPlanChange": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "planChange"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 0,
+          "maxLength": 120,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "fold": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "doc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "now": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "$ref": "#/$defs/sectionSafeText"
+        },
+        "proposed": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "$ref": "#/$defs/sectionSafeText"
+        }
+      },
+      "required": [
+        "type",
+        "doc",
+        "unit",
+        "now",
+        "proposed"
+      ],
+      "description": "Current and proposed wording for a plan unit."
+    },
+    "sectionSafeText": {
+      "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]*$"
     }
   },
   "$id": "agent-reports/card@1",
@@ -711,7 +1233,8 @@
         "properties": {
           "sections": {
             "$ref": "#/$defs/sections",
-            "description": "Sections specific to this option."
+            "description": "Sections specific to this option.",
+            "maxItems": 10
           },
           "costs": {
             "description": "What the option costs.",
@@ -887,7 +1410,8 @@
     },
     "sections": {
       "$ref": "#/$defs/sections",
-      "description": "Ordered list of optional card sections."
+      "description": "Ordered list of optional card sections.",
+      "maxItems": 30
     },
     "seq": {
       "description": "Increases on every write by this writer and never restarts: once the owner has answered seq N, a lower seq for this card is refused; to start over, use a higher seq or a new card id.",
@@ -931,7 +1455,7 @@
     },
     "writer": {
       "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-fo-lead.",
-      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1|alexis)\\.[a-z0-9][a-z0-9.-]{0,62}$",
       "type": "string"
     },
     "writtenAt": {

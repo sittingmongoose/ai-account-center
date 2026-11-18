@@ -223,6 +223,7 @@ pub struct ItemIn {
     pub due_was: Option<String>,
     pub done_at: Option<String>,
     pub outcome: Option<String>,
+    pub needs_you: Option<String>,
     pub id: String,
     pub title: String,
     pub state: String,
@@ -479,6 +480,8 @@ pub struct WaitOut {
     pub since: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until_time: Option<TimeView>,
     /// Where it was read: `thread`, `tasks` or `status`.
     pub from: &'static str,
 }
@@ -556,6 +559,8 @@ pub struct ItemOut {
     pub outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_you: Option<String>,
     pub id: String,
     pub title: String,
 }
@@ -777,7 +782,7 @@ fn due_words(
         let text = match note.split_once(':') {
             Some(("after", what)) => what.trim().to_string(),
             Some(("unknown", why)) => format!("no time: {}", why.trim()),
-            _ => note.to_string(),
+            _ => format!("no time: {note}"),
         };
         (text, false)
     };
@@ -798,7 +803,7 @@ fn finished_at(item: &ItemIn) -> Option<i64> {
         .or(item.updated_at_ms)
 }
 
-fn item_out(item: &ItemIn, now: i64) -> ItemOut {
+fn item_out(item: &ItemIn, now: i64, needs_you: Option<String>) -> ItemOut {
     let state = task_state(&item.state);
     let known = ["todo", "working", "review", "waiting", "blocked", "done", "dropped"].contains(&state);
     let time = if is_open(item) {
@@ -821,6 +826,7 @@ fn item_out(item: &ItemIn, now: i64) -> ItemOut {
         time,
         outcome: item.outcome.clone(),
         done_at: item.done_at.clone(),
+        needs_you,
         blocked_on: item
             .blocked_on
             .as_ref()
@@ -893,6 +899,7 @@ fn lite_out(item: &ItemLiteIn) -> ItemOut {
         time: None,
         outcome: None,
         done_at: None,
+        needs_you: None,
         blocked_on: None,
         id: item.id.clone(),
         title: item.title.clone(),
@@ -909,22 +916,18 @@ fn addition_text(additions: &std::collections::BTreeMap<String, Json>, key: &str
         .map(str::to_string)
 }
 
-/// Adds one wait unless the same wait is already there, by who it waits on and its words: the
-/// thread and its status repeat the same `--waiting-on-you`. Two tasks blocked on the same words
-/// are two waits (agents copy blocker words across items), so a repeat merges only when the tasks
-/// agree or one names none; unexplained blocks count once per task. A repeat fills what the first
-/// copy left out (its short form, task, since or due time).
+/// Merge copies of the same wait from the thread and status documents. Named waits keep
+/// separate thread and task timing. Older unnamed waits keep their existing grouping.
 fn push_wait(waits: &mut Vec<WaitOut>, wait: WaitOut) {
     let same = |held: &WaitOut| {
-        let tasks_agree = if wait.on == "unknown" {
-            held.task == wait.task
-        } else {
-            held.task.is_none() || wait.task.is_none() || held.task == wait.task
-        };
-        held.on == wait.on
+        let legacy_repeat = wait.on != "unknown"
+            && held.who.is_none()
+            && wait.who.is_none()
+            && (held.task.is_none() || wait.task.is_none());
+        (held.task == wait.task || legacy_repeat)
+            && held.on == wait.on
             && (held.who.is_none() || wait.who.is_none() || held.who == wait.who)
             && held.text.trim() == wait.text.trim()
-            && tasks_agree
     };
     if let Some(held) = waits.iter_mut().find(|held| same(held)) {
         held.who = held.who.take().or(wait.who);
@@ -932,6 +935,7 @@ fn push_wait(waits: &mut Vec<WaitOut>, wait: WaitOut) {
         held.short = held.short.take().or(wait.short);
         held.task = held.task.take().or(wait.task);
         held.until = held.until.take().or(wait.until);
+        held.until_time = held.until_time.take().or(wait.until_time);
         return;
     }
     waits.push(wait);
@@ -1299,14 +1303,28 @@ fn compose_update(
             let looping = loop_ids.contains(&item.id);
             !(blocked || looping)
         });
-        update.left = Some(left.into_iter().map(|item| item_out(item, input.now_ms)).collect());
+        update.left = Some(
+            left.into_iter()
+                .map(|item| {
+                    let card = item
+                        .needs_you
+                        .as_deref()
+                        .and_then(|id| cards.iter().find(|card| card.writer == board.writer && card.id == id));
+                    item_out(item, input.now_ms, card.map(|card| card.title.clone()))
+                })
+                .collect(),
+        );
         let mut done: Vec<&ItemIn> = board
             .items
             .iter()
             .filter(|item| task_state(&item.state) == "done")
             .collect();
         done.sort_by_key(|item| std::cmp::Reverse(finished_at(item)));
-        update.done = Some(done.into_iter().map(|item| item_out(item, input.now_ms)).collect());
+        update.done = Some(
+            done.into_iter()
+                .map(|item| item_out(item, input.now_ms, None))
+                .collect(),
+        );
     } else if let Some(doc) = status {
         update.left = Some(doc.left.iter().map(lite_out).collect());
         update.done = Some(doc.done.iter().map(lite_out).collect());
@@ -1415,6 +1433,13 @@ fn compose_update(
     let mut unexplained: Vec<String> = Vec::new();
     // The same waits, structured, for the page (`waits`).
     let mut waits: Vec<WaitOut> = Vec::new();
+    let until_words = |until: Option<&str>| {
+        let mut time = due_words(until, None, None, None, input.now_ms)?;
+        if !time.late {
+            time.text = format!("until {}", time.text);
+        }
+        Some(time)
+    };
     let blocked_wait = |kind: &BlockedIn, task: Option<&str>, from: &'static str| WaitOut {
         on: kind.kind.clone(),
         text: kind.what.clone(),
@@ -1423,6 +1448,7 @@ fn compose_update(
         task: task.map(str::to_string),
         since: kind.since.clone().filter(|since| !since.is_empty()),
         until: addition_text(&kind.additions, "until"),
+        until_time: until_words(addition_text(&kind.additions, "until").as_deref()),
         from,
     };
     if let Some(kind) = thread.and_then(|doc| doc.blocked_on.as_ref()) {
@@ -1444,6 +1470,7 @@ fn compose_update(
                 task: None,
                 since: None,
                 until: None,
+                until_time: None,
                 from: "thread",
             },
         );
@@ -1474,6 +1501,7 @@ fn compose_update(
                         task: Some(item.id.clone()),
                         since: None,
                         until: None,
+                        until_time: None,
                         from: "tasks",
                     },
                 );
@@ -1483,25 +1511,30 @@ fn compose_update(
     }
     if let Some(doc) = status {
         for blocker in &doc.blockers {
+            let who = addition_text(&blocker.additions, "who");
+            let text = who
+                .as_deref()
+                .and_then(|who| blocker.text.strip_prefix(&format!("{who}: ")))
+                .unwrap_or(&blocker.text);
+            let until = addition_text(&blocker.additions, "until");
             push_wait(
                 &mut waits,
                 WaitOut {
                     on: blocker.waiting_on.clone(),
-                    text: blocker.text.clone(),
+                    text: text.to_string(),
                     short: addition_text(&blocker.additions, "short"),
-                    who: addition_text(&blocker.additions, "who"),
+                    who: who.clone(),
                     task: None,
                     since: addition_text(&blocker.additions, "since"),
-                    until: addition_text(&blocker.additions, "until"),
+                    until_time: until_words(until.as_deref()),
+                    until,
                     from: "status",
                 },
             );
             blocked.push(format!(
                 "{} (waiting on {})",
-                blocker.text,
-                addition_text(&blocker.additions, "who")
-                    .as_deref()
-                    .unwrap_or(&blocker.waiting_on)
+                text,
+                who.as_deref().unwrap_or(&blocker.waiting_on)
             ));
         }
     }
@@ -1580,13 +1613,23 @@ fn compose_update(
 
     let has_next = addition_text(&update.additions, "next").is_some();
     if has_next {
-        update.next_time = due_words(
-            addition_text(&update.additions, "nextBy").as_deref(),
-            None,
-            addition_text(&update.additions, "nextByNote").as_deref(),
-            None,
-            input.now_ms,
-        );
+        let due = addition_text(&update.additions, "nextBy");
+        let note = addition_text(&update.additions, "nextByNote");
+        update.next_time = due_words(due.as_deref(), None, note.as_deref(), None, input.now_ms);
+        // Agent-report encodes a day without an explicit time as the last second of that New York day.
+        // Its minute-precision clock inputs always have zero seconds.
+        if let Some(at) = due.as_deref().and_then(report_instant)
+            && at.rem_euclid(3_600_000) == 3_599_000
+            && matches!((at + EST * 60_000).div_euclid(3_600_000).rem_euclid(24), 22 | 23)
+            && let Some(time) = update.next_time.as_mut()
+        {
+            let day = WEEKDAYS[civil::weekday(est_day(at))];
+            time.text = if time.late {
+                format!("late, was due by {day}")
+            } else {
+                format!("by {day}")
+            };
+        }
     }
     let rows = update.left.as_deref().unwrap_or_default();
     let missing = rows.iter().filter(|row| row.note.is_none()).count();

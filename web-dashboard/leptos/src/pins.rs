@@ -533,7 +533,10 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
             rows.push((
                 other_wait_head(w),
                 wait_words(w),
-                when(w.since.as_deref(), w.until.as_deref()),
+                w.until_time
+                    .as_ref()
+                    .map(|t| (t.text.clone(), t.late))
+                    .or_else(|| when(w.since.as_deref(), w.until.as_deref())),
             ));
         }
     } else {
@@ -716,6 +719,7 @@ fn TaskGroupView(g: Signal<TaskGroup>, group: &'static str) -> impl IntoView {
                                     {move || r.with(|r| r.odd_state.clone().map(|state| view! { <span data-tone="warn">{format!("reported as \"{state}\"")}</span>{r.note.is_some().then(|| view! { <br/> })} }))}
                                     {move || r.with(|r| r.note.clone().map(|note| view! { <span>{note}</span> }))}
                                     {move || r.with(|r| r.time.clone().map(|time| view! { {(r.note.is_some() || r.odd_state.is_some()).then(|| view! { <br/> })}<span data-tone=time.late.then_some("warn")>{time.text}</span> }))}
+                                    {move || r.with(|r| r.needs_you.clone().map(|title| view! { {(r.note.is_some() || r.odd_state.is_some() || r.time.is_some()).then(|| view! { <br/> })}<span data-tone="warn">{format!("Needs you: {title}")}</span> }))}
                                 </span>
                             </li> }
                         }/>

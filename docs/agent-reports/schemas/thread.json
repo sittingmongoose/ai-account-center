@@ -205,7 +205,10 @@
         "total",
         "unit"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "project": {
       "description": "Project id, e.g. puppet-master.",

@@ -1,0 +1,47 @@
+{
+  "reason": "sections[0].items[0].meaning is missing or not valid",
+  "document": {
+    "schema": "agent-reports/card@1",
+    "writer": "vm.fixture",
+    "id": "vm.fixture--Q1",
+    "label": "Q1",
+    "seq": 1,
+    "writtenAt": "2026-11-18T15:00:00Z",
+    "askedAt": "2026-11-18T15:00:00Z",
+    "askedBy": "fixture",
+    "project": "test-project",
+    "stream": null,
+    "title": "Which check should run first?",
+    "now": "Both checks are ready.",
+    "nowAsOf": "2026-11-18T15:00:00Z",
+    "replyTo": {
+      "pmMail": "fixture",
+      "t3Thread": null
+    },
+    "state": "open",
+    "options": [
+      {
+        "key": "A",
+        "label": "Check reports",
+        "gets": "A result to verify",
+        "costs": "One check"
+      },
+      {
+        "key": "B",
+        "label": "Check screenshots",
+        "gets": "A result to verify",
+        "costs": "One check"
+      }
+    ],
+    "sections": [
+      {
+        "type": "terms",
+        "items": [
+          {
+            "term": "Heartbeat"
+          }
+        ]
+      }
+    ]
+  }
+}

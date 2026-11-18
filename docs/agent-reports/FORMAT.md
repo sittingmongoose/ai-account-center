@@ -206,8 +206,12 @@ whole. `agent-report update` writes it together with `thread.json`.
 }
 ```
 
-- **Item `state`:** `todo`, `working`, `review`, `fixing`, `blocked`, `ready` (passed, waiting to land), `landed`,
-  `done` (finished with nothing to land) or `dropped` (with `why`). Ids don't repeat.
+- **Item `state`.** The writer uses `todo`, `working`, `review`, `waiting`, `blocked`, `done` or `dropped`.
+  Pinned Status maps old `fixing` to `review`, `landing` and `ready` to `working`, `landed` to `done`,
+  `queued` to `todo`, and `superseded` to `dropped`. Ids don't repeat.
+- **`needsYou`.** The full ID of an open question, judgement or action card filed by this writer.
+  The pinned task row shows the question while it remains open and unanswered. The dashboard checks that
+  relationship against its card reader because the task schema only has the ID.
 - **Completion** = (`landed` + `done`) / (every item except `dropped`). The page shows the count, never only a
   percentage.
 - **`reviews[].verdict`:** write `pass` or `fail` plainly, with any detail elsewhere. The loop rule reads these words.
