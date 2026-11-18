@@ -125,13 +125,19 @@ export const tests = {
 					}
 					const outside = await t.page.evaluate(() => {
 						const title = document.querySelector('.topbar .t-title').getBoundingClientRect();
-						const rail = document.querySelector('.rail').getBoundingClientRect();
-						return rail.width
-							? [rail.right - 4, rail.top + rail.height / 2]
-							: [title.left + title.width / 2, title.top + title.height / 2];
+						if (title.width) return [title.left + title.width / 2, title.top + title.height / 2];
+						// The folded rail has open space above its links. Stay clear of touch target adjustment.
+						const rail = document.querySelector('.rail');
+						const bounds = rail.getBoundingClientRect();
+						const first = rail.querySelector('a').getBoundingClientRect();
+						return [bounds.left + bounds.width / 2, (bounds.top + first.top) / 2];
 					});
 					await t.page.touchscreen.tap(...outside);
 					await t.check(`${layout.name}: outside tap dismisses meter ${i + 1}`, !await card.isVisible());
+					if (!await meter.isVisible()) {
+						await t.check(`${layout.name}: tapping outside keeps Home open`, false);
+						break;
+					}
 				} else {
 					await t.page.mouse.move(0, 0);
 				}
