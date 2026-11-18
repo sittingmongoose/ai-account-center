@@ -104,6 +104,19 @@
         "notes": null
       },
       {
+        "model": "openai/gpt-6.2-astra",
+        "label": "Astra 6.2",
+        "family": "GPT-6",
+        "runtimes": [
+          "codex"
+        ],
+        "efforts": [
+          "max"
+        ],
+        "prices": null,
+        "notes": null
+      },
+      {
         "model": "openai/gpt-6-luna",
         "label": "Luna",
         "family": "GPT-6",

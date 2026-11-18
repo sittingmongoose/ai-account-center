@@ -32,8 +32,10 @@ const packagedAliases = JSON.parse(packaged('model-aliases.json')) as {
   aliases: Record<string, string>;
   effortSuffixes: string[];
 };
-/** The models added after Nov 11 (2026-11-13 and 2026-11-16), which the share's Nov 11 models.json lacks. */
+/** The models added after Nov 11 (through 2026-11-17), which the share's Nov 11 models.json lacks. */
+// Keep packaged order: seedCatalog appends missing entries in that order.
 const NEW_MODELS = [
+  'openai/gpt-6.2-astra',
   'deepseek/deepseek-v4.1-flash',
   'alibaba/qwen3.8-max',
   'alibaba/qwen4-max-preview',
