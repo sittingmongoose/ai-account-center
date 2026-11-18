@@ -284,6 +284,57 @@ describe('Rust service lifecycle (L1)', () => {
     }
   }, 15000);
 
+  for (const scenario of ['once', 'stat', 'twice', 'public', 'symlink', 'owner'] as const)
+    it(`revalidates a vanished short parent with one retry: ${scenario}`, async () => {
+      useRoot(makeRoot(path.join('r'.repeat(110), '.ccs')));
+      writeSettings('{"refreshIntervalSeconds":90}');
+      const { socketLayout } = await import('../../../src/web-server/rust-service-lifecycle');
+      const folders = socketLayout(ccs, '0'.repeat(24))!.folders;
+      const shared = folders[folders.length - 2];
+      const lstat = fs.promises.lstat.bind(fs.promises);
+      let validations = 0;
+      const statSpy = spyOn(fs.promises, 'lstat').mockImplementation((async (
+        ...args: Parameters<typeof lstat>
+      ) => {
+        const value = await lstat(...args);
+        if (args[0] === shared) {
+          validations++;
+          if (validations === 1 || scenario === 'twice') {
+            await fs.promises.rmdir(shared);
+            if (scenario === 'stat')
+              throw Object.assign(new Error('fixture parent vanished before lstat'), {
+                code: 'ENOENT',
+              });
+          } else if (scenario === 'public') {
+            await fs.promises.chmod(shared, 0o755);
+            return lstat(...args);
+          } else if (scenario === 'symlink') {
+            await fs.promises.rmdir(shared);
+            await fs.promises.symlink(scratch, shared);
+            return lstat(...args);
+          } else if (scenario === 'owner') {
+            Object.defineProperty(value, 'uid', { value: (process.getuid?.() ?? 0) + 1 });
+          }
+        }
+        return value;
+      }) as typeof fs.promises.lstat);
+      try {
+        const service = await started('on', binaryCopy());
+        expect(validations).toBe(2);
+        if (scenario === 'once' || scenario === 'stat') {
+          expect(lease(service)?.owned).toBe(true);
+          expect(service.stats.fallbacks).toBe(0);
+          expect(await settings(service)).toEqual({ refreshIntervalSeconds: 90 });
+        } else {
+          expect(lease(service)).toBeNull();
+          expect(service.stats.fallbacks).toBe(1);
+        }
+      } finally {
+        statSpy.mockRestore();
+        if (scenario === 'symlink') await fs.promises.unlink(shared);
+      }
+    });
+
   it('opens a route breaker after three timeouts and probes again after 30 s', async () => {
     let now = 1_000_000;
     writeSettings('"hang"');

@@ -571,8 +571,8 @@ fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
 struct SocketGuard {
     path: PathBuf,
     inode: u64,
-    /// The boot folder, then a short socket folder: removed when empty, after our socket (L1),
-    /// so a front door that died without cleaning up leaves nothing behind once the service ends.
+    /// Only the boot folder is ours. The front door reclaims the shared short parent
+    /// under its creation lock; removing it here races a new boot's directory validation.
     folders: Vec<PathBuf>,
 }
 impl Drop for SocketGuard {
@@ -580,7 +580,7 @@ impl Drop for SocketGuard {
         if fs::symlink_metadata(&self.path).is_ok_and(|m| m.ino() == self.inode) {
             let _ = fs::remove_file(&self.path);
             for folder in &self.folders {
-                // Only an empty folder goes; another boot of the same root keeps the short one.
+                // Only our empty boot folder goes.
                 let _ = fs::remove_dir(folder);
             }
         }
@@ -601,9 +601,6 @@ pub async fn serve(
     let mut folders = Vec::new();
     if let Some(folder) = boot.socket_path.parent() {
         folders.push(folder.to_path_buf());
-        if let Some(short) = folder.parent().filter(|p| *p != boot.ccs_dir.join("run")) {
-            folders.push(short.to_path_buf());
-        }
     }
     let _guard = SocketGuard {
         path: boot.socket_path.clone(),

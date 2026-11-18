@@ -106,7 +106,8 @@ async function privateDirectory(directory: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
-  if (!(await isPrivateDirectory(directory)))
+  const stat = await fs.promises.lstat(directory);
+  if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700 || stat.uid !== uid())
     throw new ConfigError('Rust service requires a private run directory');
 }
 
@@ -559,9 +560,19 @@ async function acquireWithinBudget(
     // Cleanup may remove the shared short parent only outside this creation phase.
     await mutateDescriptor(descriptor, async () => {
       signal.throwIfAborted();
-      for (const folder of layout.folders) {
-        await privateDirectory(folder);
-        signal.throwIfAborted();
+      // Independent front doors have separate locks. If one reclaims an empty parent
+      // after our lstat, retry once, validating every directory's privacy again.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          for (const folder of layout.folders) {
+            await privateDirectory(folder);
+            signal.throwIfAborted();
+          }
+          break;
+        } catch (error) {
+          if (attempt !== 0 || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          signal.throwIfAborted();
+        }
       }
     });
     child = spawn(binary, [], {
