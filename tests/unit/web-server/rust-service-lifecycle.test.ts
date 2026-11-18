@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Request, Response } from 'express';
 import { RustService } from '../../../src/web-server/rust-service';
-import { shortName } from '../../../src/web-server/rust-service-lifecycle';
+import { shortName, sweepStaleBoots } from '../../../src/web-server/rust-service-lifecycle';
 import { getRecentLogEntries, clearRecentLogEntries } from '../../../src/services/logging';
 import { rustServiceEnvironment } from '../../../src/web-server/rust-service-env';
 import { requestRustAgent } from '../../../src/web-server/rust-service-transport';
@@ -283,6 +283,90 @@ describe('Rust service lifecycle (L1)', () => {
       next?.stop();
     }
   }, 15000);
+
+  for (const scenario of [
+    'once',
+    'stat',
+    'twice',
+    'exhausted',
+    'public',
+    'symlink',
+    'owner',
+  ] as const)
+    it(`revalidates a vanished short parent with bounded retries: ${scenario}`, async () => {
+      useRoot(makeRoot(path.join('r'.repeat(110), '.ccs')));
+      writeSettings('{"refreshIntervalSeconds":90}');
+      const { socketLayout } = await import('../../../src/web-server/rust-service-lifecycle');
+      const folders = socketLayout(ccs, '0'.repeat(24))!.folders;
+      const shared = folders[folders.length - 2];
+      const lstat = fs.promises.lstat.bind(fs.promises);
+      let validations = 0;
+      const statSpy = spyOn(fs.promises, 'lstat').mockImplementation((async (
+        ...args: Parameters<typeof lstat>
+      ) => {
+        const value = await lstat(...args);
+        if (args[0] === shared) {
+          validations++;
+          if (
+            validations === 1 ||
+            (scenario === 'twice' && validations === 2) ||
+            scenario === 'exhausted'
+          ) {
+            await fs.promises.rmdir(shared);
+            if (scenario === 'stat')
+              throw Object.assign(new Error('fixture parent vanished before lstat'), {
+                code: 'ENOENT',
+              });
+          } else if (scenario === 'public') {
+            await fs.promises.chmod(shared, 0o755);
+            return lstat(...args);
+          } else if (scenario === 'symlink') {
+            await fs.promises.rmdir(shared);
+            await fs.promises.symlink(scratch, shared);
+            return lstat(...args);
+          } else if (scenario === 'owner') {
+            Object.defineProperty(value, 'uid', { value: (process.getuid?.() ?? 0) + 1 });
+          }
+        }
+        return value;
+      }) as typeof fs.promises.lstat);
+      try {
+        const service = await started('on', binaryCopy());
+        expect(validations).toBe(scenario === 'twice' || scenario === 'exhausted' ? 3 : 2);
+        if (scenario === 'once' || scenario === 'stat' || scenario === 'twice') {
+          expect(lease(service)?.owned).toBe(true);
+          expect(service.stats.fallbacks).toBe(0);
+          expect(await settings(service)).toEqual({ refreshIntervalSeconds: 90 });
+        } else {
+          expect(lease(service)).toBeNull();
+          expect(service.stats.fallbacks).toBe(1);
+        }
+      } finally {
+        statSpy.mockRestore();
+        if (scenario === 'symlink') await fs.promises.unlink(shared);
+      }
+    });
+
+  it('never scans abandoned parents through a symlinked runtime ancestor', async () => {
+    const target = path.join(scratch, 'target');
+    const runtime = path.join(target, 'runtime');
+    fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
+    const ancestor = path.join(scratch, 'ancestor');
+    fs.symlinkSync(target, ancestor);
+    const candidate = path.join(runtime, 'aac-' + 'a'.repeat(12));
+    fs.mkdirSync(candidate, { mode: 0o700 });
+    const old = new Date(Date.now() - 24 * 60 * 60_000);
+    fs.utimesSync(candidate, old, old);
+    const savedRun = process.env.AAC_RUST_RUN_DIR;
+    process.env.AAC_RUST_RUN_DIR = path.join(ancestor, 'runtime');
+    try {
+      expect(await sweepStaleBoots(ccs, null)).toBe(0);
+      expect(fs.existsSync(candidate)).toBe(true);
+    } finally {
+      if (savedRun === undefined) delete process.env.AAC_RUST_RUN_DIR;
+      else process.env.AAC_RUST_RUN_DIR = savedRun;
+    }
+  });
 
   it('opens a route breaker after three timeouts and probes again after 30 s', async () => {
     let now = 1_000_000;

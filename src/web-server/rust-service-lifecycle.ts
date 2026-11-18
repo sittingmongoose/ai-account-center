@@ -106,7 +106,8 @@ async function privateDirectory(directory: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
-  if (!(await isPrivateDirectory(directory)))
+  const stat = await fs.promises.lstat(directory);
+  if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700 || stat.uid !== uid())
     throw new ConfigError('Rust service requires a private run directory');
 }
 
@@ -556,12 +557,22 @@ async function acquireWithinBudget(
   signal.addEventListener('abort', close, { once: true });
   try {
     signal.throwIfAborted();
-    // Cleanup may remove the shared short parent only outside this creation phase.
+    // Serialize this front door's creation and cleanup; Rust shutdown is independent.
     await mutateDescriptor(descriptor, async () => {
       signal.throwIfAborted();
-      for (const folder of layout.folders) {
-        await privateDirectory(folder);
-        signal.throwIfAborted();
+      // A Rust shutdown can remove an empty shared parent after lstat. Retry at most
+      // twice, recreating and revalidating every layout component before any spawn.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          for (const folder of layout.folders) {
+            await privateDirectory(folder);
+            signal.throwIfAborted();
+          }
+          break;
+        } catch (error) {
+          if (attempt === 2 || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          signal.throwIfAborted();
+        }
       }
     });
     child = spawn(binary, [], {

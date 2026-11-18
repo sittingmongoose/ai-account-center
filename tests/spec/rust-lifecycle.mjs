@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = fileURLToPath(new URL('../..', import.meta.url));
@@ -87,6 +88,133 @@ function masked(value, key = '') {
 }
 
 const checks = {
+  async deadParents() {
+    const runtime = fs.mkdtempSync('/tmp/aac-r2-');
+    const saved = process.env.AAC_RUST_RUN_DIR;
+    process.env.AAC_RUST_RUN_DIR = runtime;
+    const children = [];
+    const parents = [];
+    try {
+      for (let i = 0; i < 3; i++) {
+        const ccs = root(`retired-${i}-` + 'r'.repeat(150));
+        const child = spawn(process.execPath, ['-e', `
+          const { acquireRustServiceDetailed } = require(process.argv[1]);
+          acquireRustServiceDetailed(process.argv[2], process.argv[3], new Set()).then(({lease}) => {
+            if (!lease?.owned) process.exit(2);
+            process.send({ socket: lease.connection.socketPath });
+          });
+        `, path.join(dist, 'web-server/rust-service-lifecycle.js'), ccs, binary], {
+          env: { ...process.env }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+        });
+        children.push(child);
+        const info = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('front door did not acquire')), 8000);
+          child.once('message', (message) => { clearTimeout(timer); resolve(message); });
+          child.once('exit', () => { clearTimeout(timer); reject(new Error('front door exited early')); });
+        });
+        assert.ok(fs.existsSync(info.socket), 'production socket is live before front-door death');
+        const parent = path.dirname(path.dirname(info.socket));
+        assert.equal(path.dirname(parent), runtime, 'fixture uses the configured runtime');
+        parents.push(parent);
+        const exited = new Promise((resolve) => child.once('exit', resolve));
+        child.kill('SIGKILL');
+        await exited;
+        await until(() => !fs.existsSync(parent), 3000);
+        assert.equal(fs.existsSync(info.socket), false);
+        assert.equal(fs.existsSync(path.dirname(info.socket)), false);
+      }
+      assert.equal(parents.filter((parent) => fs.existsSync(parent)).length, 0,
+        'three front-door deaths leave no shared parents');
+      const unrelated = root('unrelated-' + 'l'.repeat(150));
+      fs.writeFileSync(path.join(unrelated, 'account-refresh-settings.json'), '{"refreshIntervalSeconds":90}');
+      const live = await start();
+      assert.ok(live.lease?.owned);
+      assert.deepEqual(await settings(live), { refreshIntervalSeconds: 90 });
+      live.stop();
+      root('retired-0-' + 'r'.repeat(150));
+      const revisited = await start();
+      assert.ok(revisited.lease?.owned, 'the retired root can start again');
+      revisited.stop();
+      await until(() => !fs.existsSync(parents[0]), 3000);
+    } finally {
+      for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      for (const service of services) service.stop();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (saved === undefined) delete process.env.AAC_RUST_RUN_DIR;
+      else process.env.AAC_RUST_RUN_DIR = saved;
+      fs.rmSync(runtime, { recursive: true, force: true });
+    }
+  },
+
+  async sharedParentShutdown() {
+    const ccs = root('p'.repeat(110));
+    fs.writeFileSync(
+      path.join(ccs, 'account-refresh-settings.json'),
+      '{"refreshIntervalSeconds":90}'
+    );
+    const old = await start();
+    assert.ok(old.lease?.owned);
+    const previous = old.lease;
+    const shared = path.dirname(path.dirname(previous.connection.socketPath));
+    const copy = path.join(scratch, 'aac-http-next');
+    fs.copyFileSync(binary, copy);
+    fs.chmodSync(copy, 0o755);
+    const lstat = fs.promises.lstat.bind(fs.promises);
+    let release, paused;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const atStat = new Promise((resolve) => {
+      paused = resolve;
+    });
+    let held = false;
+    fs.promises.lstat = async (...args) => {
+      const value = await lstat(...args);
+      if (args[0] === shared && !held) {
+        held = true;
+        paused();
+        await gate;
+      }
+      return value;
+    };
+    const next = new RustService('on');
+    services.push(next);
+    const starting = next.start(copy);
+    try {
+      await Promise.race([
+        atStat,
+        starting.then(() => {
+          throw new Error('start missed parent gate');
+        }),
+      ]);
+      old.stop();
+      // The real binary handles SIGTERM/stdin closure and drops its production SocketGuard.
+      // TS parent cleanup is blocked by the new start's descriptor lock.
+      await until(() => {
+        try {
+          process.kill(previous.pid, 0);
+          return false;
+        } catch (error) {
+          if (error.code !== 'ESRCH') throw error;
+          return true;
+        }
+      }, 3000);
+      assert.equal(fs.existsSync(path.dirname(previous.connection.socketPath)), false);
+      assert.equal(fs.existsSync(shared), false, 'production shutdown removes the empty shared parent');
+      release();
+      await starting;
+      assert.ok(next.lease?.owned, 'next start obtains a lease');
+      assert.equal(next.stats.fallbacks, 0);
+      assert.deepEqual(await settings(next), { refreshIntervalSeconds: 90 });
+    } finally {
+      release();
+      await starting;
+      fs.promises.lstat = lstat;
+      old.stop();
+      next.stop();
+    }
+  },
+
   async keepAlive() {
     const ccs = root('keep-alive');
     fs.writeFileSync(path.join(ccs, 'account-refresh-settings.json'), '{"refreshIntervalSeconds":90}');
@@ -159,8 +287,11 @@ const checks = {
     const ccs = root('sweep');
     const run = path.join(ccs, 'run');
     fs.mkdirSync(run, { mode: 0o700 });
-    const stale = path.join(run, 'aac-http-' + 'f'.repeat(24));
-    fs.mkdirSync(stale, { mode: 0o700 });
+    const { socketLayout } = require(path.join(dist, 'web-server/rust-service-lifecycle.js'));
+    const layout = socketLayout(ccs, 'f'.repeat(24));
+    assert.ok(layout, 'a valid socket layout');
+    const stale = path.dirname(layout.socketPath);
+    fs.mkdirSync(stale, { recursive: true, mode: 0o700 });
     const old = new Date(Date.now() - 10 * 60_000);
     fs.utimesSync(stale, old, old);
     await start();
