@@ -414,8 +414,8 @@ fn cpu_meter(m: &Machine) -> impl IntoView + use<> {
 fn mem_meter(m: &Machine) -> impl IntoView + use<> {
     let mem = m.memory.clone().unwrap_or_default();
     match (mem.available_gb, mem.total_gb) {
-        (Some(a), Some(t)) => view! { <Meter value=gb_free(a) unit=format!("free of {}", number_words(t)) used=free_share(Some(a), Some(t))/> }.into_any(),
-        (Some(a), None) => view! { <Meter value=gb_free(a) unit="free".to_string() used=None/> }.into_any(),
+        (Some(a), Some(t)) => view! { <Meter value=gb_free(a) unit=format!("available of {}", number_words(t)) used=free_share(Some(a), Some(t))/> }.into_any(),
+        (Some(a), None) => view! { <Meter value=gb_free(a) unit="available".to_string() used=None/> }.into_any(),
         _ => view! { <Meter value="-".to_string() unit="Not reported".to_string() used=None/> }.into_any(),
     }
 }
@@ -484,7 +484,7 @@ fn MachineCard(m: Machine) -> impl IntoView {
             </div>
             {notes.into_iter().map(|n| view! { <p style="font-size:13px">{n}</p> }).collect_view()}
             <div class="mrow"><span class="k">"CPU"</span>{bar(cpu.busy_pct)}<span class="v">{cpu_v}</span></div>
-            <div class="mrow"><span class="k">"Memory"</span>{bar(mem_share)}<span class="v">{mem.available_gb.map(|a| format!("{} free", gb_free(a))).unwrap_or_else(|| "Not reported".into())}</span></div>
+            <div class="mrow"><span class="k">"Memory"</span>{bar(mem_share)}<span class="v">{mem.available_gb.map(|a| format!("{} available", gb_free(a))).unwrap_or_else(|| "Not reported".into())}</span></div>
             <div class="mrow"><span class="k">"Disk"</span>{bar(disk_share)}<span class="v">{disk.free_gb.map(|f| format!("{} free", gb_free(f))).unwrap_or_else(|| "Not reported".into())}</span></div>
             <div class="mrow"><span class="k">"Browsers"</span><span class="q2" style="font-size:12.5px">{format!("{browsers} · {recordings}")}</span><span></span></div>
         </div>
