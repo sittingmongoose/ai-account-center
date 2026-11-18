@@ -64,54 +64,146 @@ const DASHBOARD_READS = {
 
 // An honest empty Analytics answer in the product's shape (account-analytics-compose.ts): no accounts, no
 // samples, the requested range. Made-up, never real; the frame draws its empty state instead of a console
-// 404 (TOOL-ISSUES rail3-T1).
+// 404 (TOOL-ISSUES rail3-T1). Custom ranges resolve like the product does (account-analytics-range.ts):
+// whole local days in the dashboard's zone, and the same 400 for a shape the product refuses.
+const ANALYTICS_TZ = 'America/New_York';
+const DAY_MS = 24 * 3600 * 1000;
+const PRESETS = ['24h', '7d', '30d', '90d', 'month', 'all', 'custom'];
+const MAX_CUSTOM_DAYS = 31;
+const BAD_RANGE = {
+  status: 400,
+  body: {
+    error: 'Select whole days from the oldest stored day through today, with the start date on or before the end date.',
+    code: 'invalid_range',
+  },
+};
+
+// A real calendar date in `YYYY-MM-DD` form (isCalendarDate in account-analytics-range.ts).
+function isCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const epoch = Date.UTC(year, month - 1, day);
+  return (
+    year >= 1970 &&
+    new Date(epoch).getUTCFullYear() === year &&
+    new Date(epoch).getUTCMonth() === month - 1 &&
+    new Date(epoch).getUTCDate() === day
+  );
+}
+
+// The first instant of a local calendar day (localMidnight in account-analytics-range.ts).
+function localMidnight(date, tz) {
+  const asUTCText = (epoch) => {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        hourCycle: 'h23',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+        .formatToParts(new Date(epoch))
+        .map((part) => [part.type, part.value])
+    );
+    return Date.parse(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}Z`);
+  };
+  const guess = Date.parse(`${date}T00:00:00Z`);
+  let epoch = guess - (asUTCText(guess) - guess);
+  epoch = guess - (asUTCText(epoch) - epoch);
+  return epoch;
+}
+
+function addCalendarDays(date, days) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+}
+
 function emptyAnalytics(url) {
   const q = url.searchParams;
   const now = Date.now();
   const preset = q.get('range') || '30d';
-  const day = 24 * 3600 * 1000;
-  const span = preset === '24h' ? day : preset === '7d' ? 7 * day : preset === '90d' ? 90 * day : 30 * day;
-  const custom = preset === 'custom' && q.get('from') && q.get('to');
-  const from = custom ? Date.parse(q.get('from')) : preset === 'all' ? now : now - span;
-  const to = custom ? Date.parse(q.get('to')) + day - 1 : now;
-  const tz = 'America/New_York';
+  const from = q.get('from');
+  const to = q.get('to');
+  const dayNumber = (date) => Math.round(Date.parse(`${date}T00:00:00Z`) / DAY_MS);
+  // The shape checks the product makes before anything else (validateAccountAnalyticsRangeShape); the
+  // clock-dependent checks (retention, future days) stay the product's, not a fixture's.
+  if (!PRESETS.includes(preset)) return BAD_RANGE;
+  if (preset !== 'custom' && (from !== null || to !== null)) return BAD_RANGE;
+  if (
+    preset === 'custom' &&
+    (!isCalendarDate(from) ||
+      !isCalendarDate(to) ||
+      from > to ||
+      dayNumber(to) - dayNumber(from) + 1 > MAX_CUSTOM_DAYS)
+  )
+    return BAD_RANGE;
+  const span = preset === '24h' ? DAY_MS : preset === '7d' ? 7 * DAY_MS : preset === '90d' ? 90 * DAY_MS : 30 * DAY_MS;
+  const custom = preset === 'custom';
+  const rangeFrom = custom ? localMidnight(from, ANALYTICS_TZ) : preset === 'all' ? now : now - span;
+  const rangeTo = custom ? localMidnight(addCalendarDays(to, 1), ANALYTICS_TZ) - 1000 : now;
+  const tz = ANALYTICS_TZ;
   return {
-    schemaVersion: 1,
-    updatedAt: new Date(now).toISOString(),
-    range: {
-      preset,
-      from: new Date(from).toISOString(),
-      to: new Date(to).toISOString(),
-      bucketMinutes: 60,
-      tz,
-      dayBucketTz: tz,
-      availableFrom: new Date(from).toISOString(),
-      resolution: 'hour',
-      ...(custom ? { days: { from: q.get('from'), to: q.get('to') } } : {}),
+    status: 200,
+    body: {
+      schemaVersion: 1,
+      updatedAt: new Date(now).toISOString(),
+      range: {
+        preset,
+        from: new Date(rangeFrom).toISOString(),
+        to: new Date(rangeTo).toISOString(),
+        bucketMinutes: 60,
+        tz,
+        dayBucketTz: tz,
+        availableFrom: new Date(rangeFrom).toISOString(),
+        resolution: 'hour',
+        ...(custom ? { days: { from, to } } : {}),
+      },
+      filters: {
+        platform: q.get('platform') || 'all',
+        provider: q.get('provider') || 'all',
+        account: q.get('account') || 'all',
+      },
+      history: {
+        status: 'ok',
+        retentionDays: 30,
+        collectedSince: null,
+        oldestSampleAt: null,
+        newestSampleAt: null,
+        sampleCount: 0,
+        message: 'No measured quota history is available for this selection yet.',
+      },
+      summary: {
+        accountCount: 0,
+        availableAccounts: 0,
+        activeCodexAccountId: null,
+        activeAccountIds: { codex: null, antigravity: null },
+        sampleCount: 0,
+      },
+      providers: [],
+      accounts: [],
+      // The kept-view validator requires an activity object (frame-analytics.mjs); this is the
+      // product's empty one (account-analytics-service.ts unavailableActivity): nothing in it.
+      activity: {
+        status: 'unavailable',
+        scope: 'multi-host-cli',
+        timezone: tz,
+        accountAttribution: 'unavailable',
+        costBasis: 'estimated-api-equivalent',
+        fetchedAt: null,
+        message: 'Fixture server: no local CLI activity.',
+        totals: null,
+        providers: [],
+        byDay: [],
+        byHour: [],
+        models: [],
+        byDayModel: [],
+        sessions: null,
+        anomalies: null,
+        sources: [],
+      },
     },
-    filters: {
-      platform: q.get('platform') || 'all',
-      provider: q.get('provider') || 'all',
-      account: q.get('account') || 'all',
-    },
-    history: {
-      status: 'ok',
-      retentionDays: 30,
-      collectedSince: null,
-      oldestSampleAt: null,
-      newestSampleAt: null,
-      sampleCount: 0,
-      message: 'No measured quota history is available for this selection yet.',
-    },
-    summary: {
-      accountCount: 0,
-      availableAccounts: 0,
-      activeCodexAccountId: null,
-      activeAccountIds: { codex: null, antigravity: null },
-      sampleCount: 0,
-    },
-    providers: [],
-    accounts: [],
   };
 }
 
@@ -161,7 +253,10 @@ http.createServer((req, res) => {
   // (TOOL-ISSUES Perf G5 row 39).
   else if (req.method === 'GET' && /^\/api\/accounts\/[^/]+\/reset-claims$/.test(p)) {
     json(res, 200, { status: 'ok', grants: [], history: [], pendingAttempt: null });
-  } else if (p === '/api/accounts/analytics' && req.method === 'GET') json(res, 200, emptyAnalytics(url));
+  } else if (p === '/api/accounts/analytics' && req.method === 'GET') {
+    const answer = emptyAnalytics(url);
+    json(res, answer.status, answer.body);
+  }
   else if (p === '/api/status' && req.method === 'GET') json(res, 200, liveView());
   else if (p === '/api/status/answers' && req.method === 'POST') {
     let body = '';
