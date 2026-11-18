@@ -164,6 +164,76 @@ const freshness = () => {
 };
 
 export const tests = {
+	async 'analytics model donut: the ring fills the space above its legend'(t) {
+		const layouts = [
+			{ name: 'desktop', width: 1760, height: 1080 },
+			{ name: 'iPhone 17 Pro', width: 402, height: 874, mobile: true, safe: '0,0,34,0' },
+			{ name: 'Duo folded', width: 466, height: 678, mobile: true, screen: { width: 466, height: 678 }, safe: '0,84,34,0' },
+		];
+		for (const f of layouts) {
+			await t.newContext({
+				viewport: { width: f.width, height: f.height }, screen: f.screen,
+				isMobile: !!f.mobile, hasTouch: !!f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block',
+			});
+			await t.app.signIn();
+			await stubData(t);
+			await openAnalytics(t, f.safe);
+			const card = t.page.locator('.donut-card');
+			const total = card.locator('.donut-centre b');
+			await card.locator('.donut-svg .arcs path').first().waitFor();
+			await t.page.evaluate(() => document.fonts.ready.then(() => true));
+			await card.evaluate((el) => {
+				el.scrollIntoView({ block: 'start' });
+				window.scrollBy(0, -80);
+			});
+			const measure = () => card.evaluate((el) => {
+				const cardBounds = el.getBoundingClientRect();
+				const svg = el.querySelector('.donut-svg');
+				const drawing = svg.getBoundingClientRect();
+				const legend = el.querySelector('.donut-legend').getBoundingClientRect();
+				const ring = svg.querySelector('circle');
+				const labels = [...svg.querySelectorAll('.d-labels text')];
+				const centre = el.querySelector('.donut-centre b');
+				const centreText = document.createRange();
+				centreText.selectNodeContents(centre);
+				const total = centreText.getBoundingClientRect();
+				const clippedLabels = labels.filter((label) => {
+					const bounds = label.getBoundingClientRect();
+					return bounds.left < drawing.left - 0.5 || bounds.right > drawing.right + 0.5
+						|| bounds.top < drawing.top - 0.5 || bounds.bottom > drawing.bottom + 0.5;
+				}).map((label) => label.textContent);
+				return {
+					above: drawing.bottom <= legend.top,
+					ringShare: (+ring.getAttribute('r') * 2 + +ring.getAttribute('stroke-width')) / cardBounds.width,
+					inside: cardBounds.left >= 0 && cardBounds.right <= document.documentElement.clientWidth
+						&& drawing.left >= cardBounds.left && drawing.right <= cardBounds.right
+						&& legend.left >= cardBounds.left && legend.right <= cardBounds.right
+						&& el.scrollWidth <= el.clientWidth + 1,
+					labels: labels.length,
+					clippedLabels,
+					totalFits: total.width > 0 && total.width <= centre.clientWidth + 1,
+				};
+			});
+			const assertLayout = async (mode) => {
+				const info = await measure();
+				await t.check(`${f.name} ${mode}: donut sits above the legend`, info.above, JSON.stringify(info));
+				if (f.mobile) {
+					await t.check(`${f.name} ${mode}: chart and legend fit, with percentage labels and total intact`,
+						info.inside && info.labels > 0 && !info.clippedLabels.length && info.totalFits, JSON.stringify(info));
+				} else {
+					await t.check(`${f.name} ${mode}: visible ring is at least 60% of the card width`, info.ringShare >= 0.6, JSON.stringify(info));
+				}
+			};
+			const tokens = await total.textContent();
+			await assertLayout('Tokens');
+			if (!f.mobile) await t.shot('analytics-model-usage', 'The Model usage donut and its legend at desktop width');
+			await card.locator('.seg button:has-text("Cost")').click();
+			await t.until('the center total switches to cost', () => document.querySelector('.donut-centre b')?.textContent.startsWith('$'));
+			await t.check(`${f.name}: Tokens and Cost show different totals`, !!tokens && tokens !== await total.textContent());
+			await assertLayout('Cost');
+		}
+	},
+
 	async 'analytics: a second open shows the kept numbers before any data read answers, says so, then shows current ones'(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 		await t.app.signIn();

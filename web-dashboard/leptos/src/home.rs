@@ -134,6 +134,7 @@ fn on_key_activate(ev: &web_sys::KeyboardEvent) -> bool {
 
 #[component]
 pub fn HomePage() -> impl IntoView {
+    crate::ui::meter::provide_meter_tips();
     let dash = expect_context::<DashCtx>();
     let state = Memo::new(move |_| dash.dashboard.with(|json| parse(json)));
     let vm = Memo::new(move |_| match state.get() {

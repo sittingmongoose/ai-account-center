@@ -192,8 +192,8 @@ fn arc_path(c: f64, r0: f64, r1: f64, a0: f64, a1: f64) -> Option<String> {
 
 /// The ring's radii for a donut `size` px across (the Slint page's proportions).
 fn radii(size: f64) -> (f64, f64) {
-    let r1 = size / 2.0 - 42.0;
-    let r0 = r1 - (size * 0.11).round().max(22.0);
+    let r1 = (size / 2.0 - 48.0).max(1.0);
+    let r0 = (r1 - (size * 0.11).round().max(22.0)).max(0.0);
     (r0, r1)
 }
 
@@ -226,12 +226,7 @@ pub fn DonutCard() -> impl IntoView {
     });
     let size = Memo::new(move |_| {
         let w = width.get();
-        // the share labels sit outside the ring: keep 12 px for them on each side
-        if w <= 0.0 {
-            0.0
-        } else {
-            (w - 24.0).clamp(180.0, 340.0).min(w)
-        }
+        w.min(640.0)
     });
     let show = Memo::new(move |_| {
         let p = pin.get();

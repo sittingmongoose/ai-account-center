@@ -7,8 +7,8 @@ import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 
 const ROW = (id) => `.hrow[data-row="${id}"]`;
 
-async function openHome(t, { width = 1440, height = 900, mobile = false, safe = '' } = {}) {
-	await t.newContext({ viewport: { width, height }, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+async function openHome(t, { width = 1440, height = 900, mobile = false, safe = '', screen } = {}) {
+	await t.newContext({ viewport: { width, height }, screen, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 	await t.app.signIn();
 	await t.app.stub('/api/accounts/dashboard', homeAccounts());
 	await t.app.stub('/api/claude/desktop-profiles', homeProfiles());
@@ -71,6 +71,86 @@ const layout = () => {
 };
 
 export const tests = {
+	async 'home meter cards: every meter is on top and inside the viewport'(t) {
+		const layouts = [
+			{ name: 'desktop', width: 1760, height: 1080 },
+			{ name: 'iPhone 17 Pro', width: 402, height: 874, mobile: true, safe: '0,0,34,0' },
+			{ name: 'Duo folded', width: 466, height: 678, mobile: true, screen: { width: 466, height: 678 }, safe: '0,84,34,0' },
+		];
+		for (const layout of layouts) {
+			await openHome(t, layout);
+			await t.app.noResets();
+			const meters = t.page.locator('.home .um');
+			const providers = await meters.evaluateAll((elements) => [...new Set(elements.map((el) =>
+				el.closest('.hsec')?.dataset.sec || (el.closest('.hcard') && 'other')))]);
+			await t.equal(`${layout.name}: all four provider sections have meters`, providers, ['claude', 'codex', 'antigravity', 'other']);
+			let flippedAtBottom = false;
+			for (let i = 0, count = await meters.count(); i < count; i++) {
+				const meter = meters.nth(i);
+				const card = meter.locator('.um-card');
+				if (layout.mobile) {
+					await meter.tap();
+				} else {
+					await meter.hover();
+					// The baseline's CSS hover transition delays visibility.
+					await card.waitFor({ state: 'visible', timeout: 1500 }).catch(() => {});
+				}
+				const probe = await card.evaluate((el) => {
+					const { left, top, right, bottom, width, height } = el.getBoundingClientRect();
+					const hit = document.elementFromPoint(left + width / 2, top + height / 2);
+					const anchor = el.closest('.um').getBoundingClientRect();
+					const viewportHeight = document.documentElement.clientHeight;
+					return {
+						onTop: el.contains(hit),
+						inside: width > 0 && height > 0 && left >= -0.5 && right <= document.documentElement.clientWidth + 0.5
+							&& top >= -0.5 && bottom <= viewportHeight + 0.5,
+						flipped: height > 0 && height > viewportHeight - anchor.bottom && bottom <= anchor.top + 1,
+						row: el.closest('.hrow')?.dataset.row,
+						cell: [...el.closest('.hrow')?.querySelectorAll('.hcell') || []].indexOf(el.closest('.hcell')),
+						hit: hit?.className,
+						rect: [left, top, right, bottom],
+					};
+				});
+				flippedAtBottom ||= probe.flipped;
+				await t.check(`${layout.name}: meter ${i + 1} paints its tooltip center inside the viewport`, probe.onTop && probe.inside, JSON.stringify(probe));
+				if (!layout.mobile && probe.row === 'claude:max-c' && probe.cell === 1) {
+					await t.shot('home-weekly-tip', 'Claude weekly usage card above the following rows');
+				}
+				if (layout.mobile) {
+					// A tap that opens Details instead leaves the fixture in a different screen.
+					const details = t.page.locator('[data-probe="details"]');
+					if (await details.isVisible()) {
+						await t.check(`${layout.name}: tap on meter ${i + 1} opens the tooltip without Details`, false);
+						break;
+					}
+					const outside = await t.page.evaluate(() => {
+						const title = document.querySelector('.topbar .t-title').getBoundingClientRect();
+						const rail = document.querySelector('.rail').getBoundingClientRect();
+						return rail.width
+							? [rail.right - 4, rail.top + rail.height / 2]
+							: [title.left + title.width / 2, title.top + title.height / 2];
+					});
+					await t.page.touchscreen.tap(...outside);
+					await t.check(`${layout.name}: outside tap dismisses meter ${i + 1}`, !await card.isVisible());
+				} else {
+					await t.page.mouse.move(0, 0);
+				}
+			}
+			if (!layout.mobile) {
+				await t.check('desktop: tooltip opens above a meter at the bottom edge', flippedAtBottom);
+				const first = meters.first();
+				await t.page.locator('.hrow').first().focus();
+				await t.page.keyboard.press('Tab');
+				await t.check('Tab moves focus into the meter', await first.evaluate((el) => document.activeElement === el));
+				const card = first.locator('.um-card');
+				await t.check('keyboard focus opens the tooltip', await card.isVisible());
+				await t.page.keyboard.press('Escape');
+				await t.check('Escape dismisses the tooltip and keeps focus', !await card.isVisible()
+					&& await first.evaluate((el) => document.activeElement === el));
+			}
+		}
+	},
+
 	async 'home: draws the dashboard view natively, with no Slint on screen'(t) {
 		await openHome(t);
 		await t.count('.hsec', 3);
