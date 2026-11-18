@@ -237,6 +237,23 @@ test('a skipped calendar date cannot drop a widened bucket (Pacific/Apia)', () =
   }
 });
 
+test('a clipped multi-week cost bar says the dates it covers, not just clocks', () => {
+  // All over [2011-01-05, 2026-05-07): the first fortnight is clipped to Jan 5-17 and the last to May 4-7;
+  // both readouts must carry the covered dates, while a same-day slice keeps the clock-only label
+  const at = Date.parse('2026-05-07T00:00:00Z');
+  const from = Date.parse('2011-01-05T00:00:00Z');
+  const rows = [row('2011-01-05T00:00:00Z', 'codex', 10, 1)];
+  const p = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from, now: at, fetchedAt: at });
+  const view = usageView(p, state({ range: 'all' }), { now: at });
+  assert.equal(view.range.step, 14 * D);
+  assert.equal(view.daily.bars[0].time, '2 WEEKS FROM MON, JAN 3, 2011 · JAN 5, 2011 TO JAN 17, 2011');
+  assert.equal(view.daily.bars.at(-1).time, '2 WEEKS FROM MON, MAY 4, 2026 · MAY 4 TO MAY 7');
+  // the read stops at noon on May 4: the last bar is a same-day slice and keeps the clock-only label
+  const q = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from, now: at, fetchedAt: Date.parse('2026-05-04T12:00:00Z') });
+  const view2 = usageView(q, state({ range: 'all' }), { now: at });
+  assert.equal(view2.daily.bars.at(-1).time, '2 WEEKS FROM MON, MAY 4, 2026 · 12:00 AM TO 12:00 PM');
+});
+
 test('a backfill in progress says so', () => {
   const p = payload({ history: { computers: [], sources: [], backfill: { running: true, sources: [{ host: 'ubuntu', tool: 'codex', state: 'running', filesRead: 40, filesTotal: 100 }] } } });
   const view = usageView(p, state({ range: '90d' }), { now });

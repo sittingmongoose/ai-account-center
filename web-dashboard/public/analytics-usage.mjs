@@ -1247,7 +1247,7 @@ function dailyView(A, R, state, size) {
     return {
       h: costOk && sc.top > 0 ? tot / sc.top : 0, cl: tot > 0 ? cl / tot : 0, cx: tot > 0 ? cx / tot : 0,
       label: i % every ? '' : step === H ? (zonedHour(b.t) === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
-      time: `${step === H ? `${dayTxt(b.t)} · ${hourTxt(b.t)}` : step > WEEK ? `${Math.round(step / WEEK)} weeks from ${dayTxt(b.t)}` : step === WEEK ? `Week of ${dayTxt(b.t)}` : dayTxt(b.t)}${b.partial && step !== WEEK ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
+      time: `${step === H ? `${dayTxt(b.t)} · ${hourTxt(b.t)}` : step > WEEK ? `${Math.round(step / WEEK)} weeks from ${dayTxt(b.t)}` : step === WEEK ? `Week of ${dayTxt(b.t)}` : dayTxt(b.t)}${b.partial && step !== WEEK ? ` · ${step > WEEK && !sameDay(b.lo, b.hi) ? dayPair(b.lo, b.hi, R.now) : `${clockTxt(b.lo)} to ${clockTxt(b.hi)}`}` : ''}`.toUpperCase(),
       gap: !!b.gap,
       rows: costOk ? served.map(p => ({ p: ownSeries(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
       total: b.gap ? 'Not read' : picked ? '' : !costOk ? 'Unavailable' : b.unk && !(tot > TINY) ? NOT_LOGGED : money(tot),
