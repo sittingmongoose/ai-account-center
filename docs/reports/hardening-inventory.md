@@ -96,5 +96,5 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-analytics-service.ts` | 887 |
 | `src/web-server/status/status-view.ts` | 870 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
-| `src/web-server/services/app-update-service.ts` | 803 |
+| `src/web-server/services/app-update-service.ts` | 807 |
 

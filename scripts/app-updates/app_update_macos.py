@@ -114,13 +114,20 @@ def gui_command(action, timeout):
 
 
 def _tail(path, limit=65536):
-    """The last bytes one of the agent's private output files holds, as text."""
+    """The last bytes one of the agent's private output files holds, as text.
+
+    Over the limit the tail is kept, from its first whole line: the end of the output
+    holds the app's own refusal words, and a cut first line could lose the marker a
+    credential line needs for safe scrubbing."""
     try:
         with pathlib.Path(path).open("rb") as stream:
             size = stream.seek(0, 2)
-            if size > limit:
-                return "<output omitted: diagnostic limit>"
-            stream.seek(0)
-            return stream.read(limit).decode("utf-8", "replace")
+            start = 0 if size <= limit else size - limit
+            stream.seek(start)
+            data = stream.read(limit)
+            if start:
+                cut = data.find(b"\n")
+                data = data[cut + 1:] if cut >= 0 else b""
+            return data.decode("utf-8", "replace")
     except OSError:
         return ""

@@ -202,7 +202,7 @@ const CREDENTIAL_REST = new RegExp(CREDENTIAL_FLAG_FORMS.join('|'), 'i');
 const CREDENTIAL_LINE = '<line removed: may contain a credential>';
 const CREDENTIAL_REST_NOTE = '<rest of output removed: may contain a credential>';
 const CREDENTIAL_WORD =
-  '(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential' +
+  '(?:token|secret|password|passwd|passphrase|pwd|apikey|api[_-]key|authorization|credential' +
   '|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)';
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   // Whole credential-carrying headers and npm config lines: everything after the marker goes.
@@ -230,7 +230,8 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
     '<redacted>',
   ],
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '<redacted>'],
-  [/\b(https?|wss?):\/\/[^/\s@]{1,200}@/gi, '$1://'],
+  // URL credentials on any scheme (postgres://, ssh://, ...): the userinfo goes whole.
+  [/\b([a-z][a-z0-9+.-]{1,20}):\/\/[^/\s@:]{1,200}(?::[^/\s@]{1,200})?@/gi, '$1://'],
   [/\b((?:https?|wss?):\/\/[^\s?#"']{1,600})[?#][^\s"']{0,600}/gi, '$1'],
   [/[\w.+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b/g, '<email>'],
   [
