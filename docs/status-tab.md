@@ -525,7 +525,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   clear from the pinned panel. A new sequence can wait again. A recovered copy does not establish that
   pm-mail rang, so its delivery line says the signed answer is on the share.
   If several signed copies match, Status picks the latest answer time, then the lexicographically greatest
-  base64 signature for an equal time. The card view and pinned waits are published together.
+  base64 signature for an equal time. The card view and pinned waits are published together. If a competing note read
+  runs out of time, the poll keeps its best verified copy.
 - `choice` keys must be the card's option keys, without repeats (one unless `multiple`).
 - One note box serves a different answer, a comment and a question. With a choice, the record is `kind: "answer"` and
   the card closes. With only a note, the record remains `kind: "note"` for compatibility: it is signed and delivered, closes that card version, and appears in answered history. The agent acts on the response or files a new card if clarification is needed. The agent may withdraw the source card

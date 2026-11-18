@@ -756,26 +756,43 @@ export class StatusAnswers {
     noteNames: () => Promise<string[]>,
     preferLatest = false
   ): Promise<SignedAnswer | null> {
-    let selected = await this.readSharedClosingAnswer(card, sha256, publicKey);
-    if ((!preferLatest && selected) || budget.left() === 0) return selected;
+    const withinBudget = <T>(read: () => Promise<T>, label: string): Promise<T> => {
+      const left = budget.left();
+      if (left === 0) throw new DeadlineExceededError(label);
+      return withDeadline(read(), left, undefined, label);
+    };
+    let selected = await withinBudget(
+      () => this.readSharedClosingAnswer(card, sha256, publicKey),
+      'Status signed answer read'
+    );
+    if (!preferLatest && selected) return selected;
     const prefix = `${card.id}.note-`;
-    for (const name of await noteNames()) {
-      if (budget.left() === 0) break;
-      if (!name.startsWith(prefix) || !/^[a-f0-9]{12}\.json$/.test(name.slice(prefix.length)))
-        continue;
-      const note = await this.readSharedClosingAnswer(card, sha256, publicKey, name);
-      if (!note) continue;
-      if (!preferLatest) return note;
-      // Use the signed instant and then the signature bytes' base64 spelling, independent of file order.
-      const timeOrder = selected
-        ? Date.parse(note.answeredAt) - Date.parse(selected.answeredAt)
-        : 0;
-      if (
-        !selected ||
-        timeOrder > 0 ||
-        (timeOrder === 0 && note.signature.value > selected.signature.value)
-      )
-        selected = note;
+    try {
+      // A late listing or note cannot discard a copy already verified during a poll.
+      const names = await withinBudget(noteNames, 'Status signed note listing');
+      for (const name of names) {
+        if (!name.startsWith(prefix) || !/^[a-f0-9]{12}\.json$/.test(name.slice(prefix.length)))
+          continue;
+        const note = await withinBudget(
+          () => this.readSharedClosingAnswer(card, sha256, publicKey, name),
+          'Status signed note read'
+        );
+        if (!note) continue;
+        if (!preferLatest) return note;
+        // Use the signed instant and then the signature bytes' base64 spelling, independent of file order.
+        const timeOrder = selected
+          ? Date.parse(note.answeredAt) - Date.parse(selected.answeredAt)
+          : 0;
+        if (
+          !selected ||
+          timeOrder > 0 ||
+          (timeOrder === 0 && note.signature.value > selected.signature.value)
+        )
+          selected = note;
+      }
+    } catch (error) {
+      // A send still needs to rule out an existing answer before recording a new one.
+      if (!preferLatest || !(error instanceof DeadlineExceededError)) throw error;
     }
     return selected;
   }
@@ -798,9 +815,13 @@ export class StatusAnswers {
     for (let at = 0; at < missing.length && budget.left() > 0; at += 16) {
       await Promise.all(
         missing.slice(at, at + 16).map(async (row) => {
-          const answer = await withDeadline(
-            this.findSharedClosingAnswer(row.doc, row.sha256, publicKey, budget, noteNames, true),
-            budget.left()
+          const answer = await this.findSharedClosingAnswer(
+            row.doc,
+            row.sha256,
+            publicKey,
+            budget,
+            noteNames,
+            true
           ).catch(() => null);
           if (answer) {
             const version = cardRowVersion(row);
@@ -1672,13 +1693,12 @@ export class StatusAnswers {
     if (publicKey) {
       try {
         const readBudget = startBudget(Math.min(this.timing.readMs, budget.left()));
-        const answer = await withDeadline(
-          this.findSharedClosingAnswer(parsed.doc, sha256, publicKey, readBudget, () =>
-            this.sharedNoteNames()
-          ),
-          readBudget.left(),
-          undefined,
-          'Status signed answer read'
+        const answer = await this.findSharedClosingAnswer(
+          parsed.doc,
+          sha256,
+          publicKey,
+          readBudget,
+          () => this.sharedNoteNames()
         );
         if (answer) return null;
       } catch {
