@@ -65,10 +65,23 @@ test('each new person-only step raises one notice', () => {
   assert.equal(needToasts(d, seen).length, 0);
 });
 
-test('a current renewal report shows its browser launch error on the row and in Details', () => {
-  const browserError = 'Node.js executable not found on the renewal runner.';
-  const d = data({ browserError });
-  assert.equal(claudeSignInLine(d, 'a@example.com', NOW), browserError);
-  assert.equal(detailsViewModel(d, 'c1', { now: NOW }).facts.find((f) => f.label === 'Sign-in renewal').value, browserError);
-  assert.equal(detailsViewModel(d, 'c1', { now: NOW }).signIns.rest, browserError);
-});
+for (const browserError of [
+  'Node.js executable not found on the renewal runner.',
+  'Node.js could not be launched on the renewal runner.',
+]) {
+  test(`a current renewal report shows the Node diagnostic in Home and Details (${browserError})`, () => {
+    const needsYou = browserError.includes('launched')
+      ? [{ email: 'a@example.com', reason: 'captcha' }]
+      : [];
+    const d = data({ browserError, needsYou });
+    assert.equal(claudeSignInLine(d, 'a@example.com', NOW), browserError);
+    assert.ok(dashboardViewModel(d, { now: NOW }).sections[0].rows[0].meta.includes(browserError));
+    assert.equal(detailsViewModel(d, 'c1', { now: NOW }).facts.find((f) => f.label === 'Sign-in renewal').value, browserError);
+    assert.equal(detailsViewModel(d, 'c1', { now: NOW }).signIns.rest, browserError);
+    assert.equal(claudeSignInLine(data({
+      browserError,
+      stale: true,
+      needsYou: [{ email: 'a@example.com', reason: 'captcha' }],
+    }), 'a@example.com', NOW), browserError);
+  });
+}
