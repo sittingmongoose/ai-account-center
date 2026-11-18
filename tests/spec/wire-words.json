@@ -4662,6 +4662,7 @@
       "src/web-server/services/account-dashboard-types.ts:UsageCacheReason",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
       "src/web-server/services/usage-failover-service.ts:response.failureCode",
+      "src/web-server/services/usage-failover-service.ts:state.primaryFailure",
       "src/web-server/services/usage-failover-transport.ts:value.failureCode"
     ]
   },

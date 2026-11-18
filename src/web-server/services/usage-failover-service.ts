@@ -12,6 +12,7 @@ import {
   holdUsageCooldown,
   identityUsageCooldownKey,
   readUsageCooldown,
+  readUsageCooldownState,
 } from './usage-failover-cooldown';
 import {
   projectClaudeFailoverExtras,
@@ -56,7 +57,6 @@ interface State {
   primary: UsageCandidate | null;
   saved: SavedReading | null;
   nextAttempt: number;
-  claude429Streak: number;
   pending: Promise<void> | null;
   fresh: boolean | null;
   freshUntil: number;
@@ -174,7 +174,6 @@ export class UsageFailoverService {
       primary: null,
       saved: null,
       nextAttempt: 0,
-      claude429Streak: 0,
       pending: null,
       fresh: null,
       freshUntil: 0,
@@ -200,16 +199,11 @@ export class UsageFailoverService {
         )
           state.primaryFailure = value.primaryFailure;
         const identity = parseUsageIdentity(value.identity);
-        if (
+        const identityMatchesTarget =
           identity &&
-          (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, identity))
-        ) {
+          (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, identity));
+        if (identityMatchesTarget) {
           state.identity = identity;
-          if (target.claudeDesktopCadence && Number.isInteger(value.claude429Streak))
-            state.claude429Streak = Math.max(
-              0,
-              Math.min(MAX_CLAUDE_429_STREAK, value.claude429Streak as number)
-            );
           state.observedPlan = tracksVerifiedPlan(target)
             ? safeUsageText(value.observedPlan)
             : null;
@@ -248,9 +242,15 @@ export class UsageFailoverService {
                 : null;
           if (typeof value.freshUntil === 'number' && Number.isFinite(value.freshUntil))
             state.freshUntil = Math.min(value.freshUntil, this.now() + 86400_000);
-          if (typeof value.nextAttempt === 'number' && Number.isFinite(value.nextAttempt))
-            state.nextAttempt = Math.min(value.nextAttempt, this.now() + 86400_000);
         }
+        // A 429 can invalidate the source binding without ending its scheduled hold.
+        if (
+          (identityMatchesTarget ||
+            (target.claudeDesktopCadence && state.primaryFailure === 'source_changed')) &&
+          typeof value.nextAttempt === 'number' &&
+          Number.isFinite(value.nextAttempt)
+        )
+          state.nextAttempt = Math.min(value.nextAttempt, this.now() + 86400_000);
       }
     } catch {
       /* Missing or damaged cache is not quota. */
@@ -277,7 +277,6 @@ export class UsageFailoverService {
       primary: state.primary,
       saved: state.saved,
       nextAttempt: state.nextAttempt,
-      ...(target.claudeDesktopCadence ? { claude429Streak: state.claude429Streak } : {}),
       fresh: state.fresh,
       freshUntil: state.freshUntil,
       primaryFailure: state.primaryFailure,
@@ -706,7 +705,6 @@ export class UsageFailoverService {
         continue;
       }
       if (!state.identity || !sameUsageIdentity(state.identity, candidate.identity)) {
-        state.claude429Streak = 0;
         state.identity = candidate.identity;
         state.saved = null;
         state.observedPlan = null;
@@ -886,18 +884,15 @@ export class UsageFailoverService {
             const providerUntil =
               now + Math.max(60, Math.min(86400, value.retryAfterSeconds ?? 60)) * 1000;
             let until = providerUntil;
+            let streak: number | undefined;
             if (target.claudeDesktopCadence) {
-              state.claude429Streak = Math.min(state.claude429Streak + 1, MAX_CLAUDE_429_STREAK);
+              const previous = readUsageCooldownState(target.ccsDir, cooldownKey, now);
+              streak = Math.min((previous.claude429Streak ?? 0) + 1, MAX_CLAUDE_429_STREAK);
               until =
-                now +
-                claudeDesktopDelayMs(
-                  this.key(target),
-                  (providerUntil - now) / 1000,
-                  state.claude429Streak
-                );
+                now + claudeDesktopDelayMs(this.key(target), (providerUntil - now) / 1000, streak);
               state.primaryFailure = 'rate_limited';
             }
-            state.nextAttempt = holdUsageCooldown(target.ccsDir, cooldownKey, until, now);
+            state.nextAttempt = holdUsageCooldown(target.ccsDir, cooldownKey, until, now, streak);
             this.cooldowns.set(cooldownKey, state.nextAttempt);
             if (peerKey)
               this.cooldowns.set(
@@ -1044,12 +1039,15 @@ export class UsageFailoverService {
       }
       if (blocked) return 'done';
       if (target.claudeDesktopCadence && reading.status === 'ok' && response.failureCode === null) {
-        state.claude429Streak = 0;
+        const now = this.now();
+        const cooldown = readUsageCooldownState(target.ccsDir, cooldownKey, now);
+        if (!cooldown.until && cooldown.claude429Streak)
+          holdUsageCooldown(target.ccsDir, cooldownKey, now, now, 0);
         const floor = Math.max(
           readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds,
           response.refreshAfterSeconds ?? 0
         );
-        state.nextAttempt = this.now() + claudeDesktopDelayMs(this.key(target), floor);
+        state.nextAttempt = now + claudeDesktopDelayMs(this.key(target), floor);
         if (state.fresh) state.freshUntil = state.nextAttempt;
         return 'done';
       }
