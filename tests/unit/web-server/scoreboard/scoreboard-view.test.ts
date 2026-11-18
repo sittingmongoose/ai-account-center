@@ -15,6 +15,7 @@ import {
   type ScoreboardView,
 } from '../../../../src/web-server/scoreboard/scoreboard-view';
 import { ScoreboardService } from '../../../../src/web-server/scoreboard/scoreboard-service';
+import { nodeReaderFs } from '../../../../src/web-server/status/agent-reports-reader';
 import { run as projectRun } from '../../../../src/web-server/status/run-schema';
 import { NOW, tempDirs } from '../status/status-test-helpers';
 import { runDoc } from './scoreboard-test-helpers';
@@ -419,15 +420,13 @@ describe('what is not scored', () => {
     expect(view.sources[0].detail).not.toContain('past the limit');
   });
 
-  it('a writer limit drops the older writer and counts its run as not read (scan limit)', async () => {
+  it('a writer limit leaves the writer with the older runs unlisted, named as a lower bound (scan limit)', async () => {
     const root = dirs.make('ccs-scan-writers-');
     const { writeRun } = await import('./scoreboard-test-helpers.ts');
     const { runDoc: makeDoc } = await import('./scoreboard-test-helpers.ts');
-    // vm.a's runs folder is older, vm.b's is newer, so a limit of 1 keeps vm.b.
-    writeRun(root, makeDoc('vm.a', 'A'), '2026-11-06');
+    // vm.b's newest run is newer, so a limit of 1 keeps it; vm.a is not listed at all.
+    writeRun(root, makeDoc('vm.a', 'A'), '2026-01-01');
     writeRun(root, makeDoc('vm.b', 'B'), '2026-11-06');
-    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.a', 'runs'), new Date(1000), new Date(1000));
-    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.b', 'runs'), new Date(3000), new Date(3000));
     const catalog = new CatalogReader({ root: () => root, now: () => NOW });
     await catalog.scan();
     const reader = new RunsReader({ root: () => root, now: () => NOW, limits: { writers: 1 } });
@@ -442,7 +441,8 @@ describe('what is not scored', () => {
       catalog: catalog.snapshot(),
       runs: state,
     });
-    expect(view.unscored.scanLimit).toBe(1);
+    // The unlisted writer's run files are not counted: the count is honestly a lower bound.
+    expect(view.unscored.scanLimit).toBe(0);
     expect(view.unscored.total).toBe(
       view.unscored.unreadable +
         view.unscored.noModel +
@@ -452,6 +452,7 @@ describe('what is not scored', () => {
         view.unscored.scanLimit
     );
     expect(view.sources[0].detail).toContain('writer folders past the limit');
+    expect(view.sources[0].detail).toContain('lower bound');
   });
 
   it('a file pushed past the cap leaves the read set at once, so read plus scanLimit equals files on disk', async () => {
@@ -506,7 +507,7 @@ describe('what is not scored', () => {
       skipped: { runFiles: 2, writerFolders: 0 },
       problems: [
         { file: 'writers/vm.a/runs/2026-11-06/b.json', reason: 'task.id is missing or not valid', since: NOW },
-        { file: 'limits/runs', reason: '2 run files past the limit of 2 runs or 1024 MB were not read (the newest days are kept)', since: NOW },
+        { file: 'limits/runs', reason: '2 run files past the limit of 2 run files or 1024 MB were not read (the newest days are kept)', since: NOW },
       ],
     };
     const view = buildScoreboardView({ ...base, runs: runsState });
@@ -886,10 +887,46 @@ describe('service', () => {
     });
     const view = await service.view();
     expect(view.sources.map((source) => [source.state, source.detail])).toEqual([
-      ['missing', 'Waiting for the first scan.'],
+      ['missing', 'Waiting for the first scan. The scan is still running; this view is partial.'],
       ['missing', 'Waiting for the first scan.'],
     ]);
     expect(view.uses).toEqual([]);
+  });
+
+  it('a view built while the scan still runs is marked partial and never cached', async () => {
+    const root = dirs.make('ccs-scoreboard-');
+    writeScoreboardFixture(root, { now: NOW });
+    let now = NOW;
+    let gate: (() => void) | null = null;
+    const waiting = new Promise<void>((open) => {
+      gate = open;
+    });
+    // A cold share whose first listing outlasts the wait: the scan runs on, the read must answer.
+    const slow: typeof nodeReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (path.basename(dir) === 'runs') await waiting;
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const service = new ScoreboardService({
+      root: () => root,
+      now: () => now,
+      timeZone: () => 'UTC',
+      fs: slow,
+      scanWaitMs: 500,
+    });
+    const first = await service.view();
+    expect(first.sources[0].detail).toContain('The scan is still running; this view is partial.');
+    expect(first.recent).toEqual([]);
+    // The scan finishes; the next read gets the complete view, not the partial one from cache.
+    gate?.();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    now += 30_000; // inside the cache time: a wrongly cached partial view would be served here
+    const second = await service.view();
+    expect(second.sources[0].detail).not.toContain('this view is partial');
+    expect(second.cacheAgeSeconds).toBe(0);
+    expect(second.recent.length).toBeGreaterThan(0);
   });
 
   it('shows a missing share as sources, never a crash', async () => {

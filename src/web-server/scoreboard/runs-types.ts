@@ -9,11 +9,18 @@ export interface RunsState {
   accepted?: ShareFile<RunDoc>[];
   /** missing: no `v1/writers` folder; error: the folder could not be listed. */
   state: 'ok' | 'missing' | 'error';
+  /** True when the snapshot was taken while a scan was still running: the runs read so far, not the whole share. */
+  partial?: boolean;
   scannedAt: number | null;
   /** The newest copy of each run, by run id. */
   runs: ShareFile<RunDoc>[];
   writers: number;
-  /** Files and writers left out by any cap (the newest days/writers are kept). */
+  /**
+   * Run files and writer folders left out by any cap (the newest days, and the writers with the
+   * newest run dates, are kept). `runFiles` counts files, not runs: a run copied into several date
+   * folders counts once per file. Below the writer cap it is exact; past it, and under a folder
+   * that could not be listed, it is a lower bound (the runs Source says so).
+   */
   skipped: { runFiles: number; writerFolders: number };
   problems: ReportProblem[];
 }

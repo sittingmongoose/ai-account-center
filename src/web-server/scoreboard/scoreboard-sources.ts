@@ -50,6 +50,20 @@ export function runsSource(
   unknownOutcomes: ReadonlyMap<string, number> = new Map(),
   negativeQuota: readonly string[] = []
 ) {
+  const source = runsSourceOf(inputs, unscored, ignoredReviews, unknownOutcomes, negativeQuota);
+  // A snapshot taken while the scan was still running is partial, whatever its state says.
+  return inputs.runs.partial === true
+    ? { ...source, detail: `${source.detail} The scan is still running; this view is partial.` }
+    : source;
+}
+
+function runsSourceOf(
+  inputs: ScoreboardInputs,
+  unscored: number,
+  ignoredReviews: number,
+  unknownOutcomes: ReadonlyMap<string, number> = new Map(),
+  negativeQuota: readonly string[] = []
+) {
   const { runs, now, timeZone, root } = inputs;
   const base = sourceBase('scoreboard-runs', 'Agent runs', runs.scannedAt, now);
   if (runs.scannedAt === null)

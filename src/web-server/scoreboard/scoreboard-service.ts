@@ -151,8 +151,13 @@ export class ScoreboardService {
     check.flushSoon();
   }
 
-  /** Share only: every run read, no filters. */
-  private async buildFromShare(composer?: ScoreboardComposer): Promise<ScoreboardView> {
+  /**
+   * Share only: every run read, no filters. The flag says the scan outlasted the wait, so the view
+   * holds only part of the share.
+   */
+  private async buildFromShare(
+    composer?: ScoreboardComposer
+  ): Promise<{ view: ScoreboardView; partial: boolean }> {
     await this.bounded(Promise.all([this.catalog.scan(), this.runs.scan()]));
     const runs = this.runs.snapshot();
     this.recordCheck(runs);
@@ -176,9 +181,10 @@ export class ScoreboardService {
     };
     const legacy = () =>
       this.finish({ ...buildScoreboardView(input), ...finish } as ScoreboardView);
-    return composer
-      ? composer.compose(input, { ...finish, native: this.native !== null }, legacy)
-      : legacy();
+    const view = composer
+      ? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)
+      : await legacy();
+    return { view, partial: runs.partial === true };
   }
 
   /** The store query of a filter: local days in the dashboard's zone. */
@@ -275,14 +281,20 @@ export class ScoreboardService {
       // the share-only view, which says the filters are unavailable.
       building = (
         storeOn
-          ? this.buildFromStore(filters, composer).catch(() => this.buildFromShare(composer))
+          ? this.buildFromStore(filters, composer)
+              .then((view) => ({ view, partial: false }))
+              .catch(() => this.buildFromShare(composer))
           : this.buildFromShare(composer)
       )
-        .then((view) => {
-          this.cached.delete(key);
-          this.cached.set(key, { at: this.now(), generation, view });
-          while (this.cached.size > VIEW_CACHE_ENTRIES)
-            this.cached.delete(this.cached.keys().next().value as string);
+        .then(({ view, partial }) => {
+          // A partial view (the scan outlasted the wait) is served once and never cached: the next
+          // read rebuilds it complete instead of holding a partial first view for the cache time.
+          if (!partial) {
+            this.cached.delete(key);
+            this.cached.set(key, { at: this.now(), generation, view });
+            while (this.cached.size > VIEW_CACHE_ENTRIES)
+              this.cached.delete(this.cached.keys().next().value as string);
+          }
           return view;
         })
         .finally(() => this.building.delete(key));

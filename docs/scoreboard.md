@@ -63,8 +63,11 @@ ENOENT and ESTALE keep the last good copy and retry (on a file or a folder listi
 row is named in the runs Source), a file absent from its listing stays for 2 minutes, temporary (dot)
 files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. The highest
 `seq` per run id wins, across date folders. A file that does not read is counted and named in the runs Source, never
-dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 256 MB. One scan reads at most 20,000 writer folders, 50,000 run files and 256 MB (over a limit the most recently changed
-`runs/` folders and the newest date folders are kept); the rest is named in the runs Source (`limits/run-writers`, `limits/runs`). More writers than the
+dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 256 MB. One scan lists at most 20,000 writers, newest run
+date first, and reads at most 50,000 run files and 256 MB (over the run-file or byte limit the newest days are
+kept); writers past the writer limit are not listed, so their run files are not read and not counted and the
+not-read count is a lower bound. The rest is named in the runs Source (`limits/run-writers`,
+`limits/runs`). More writers than the
 Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
 `wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too. A task type
 the catalog does not list, and a model that resolves to no catalog id (after the alias table), are not scored either: they
@@ -72,8 +75,9 @@ form no row and take no part in any verdict, and the catalog Source names them (
 model (`inCatalog` is always true). The view's `unscored` counts every run not scored, by one reason each: `unreadable`
 (run files the reader refused with no earlier good copy, the same files the runs Source names and the readers check
 refuses), then, for runs it read, `no-model`, `no-task-type`, `unknown-model`, `unknown-task-type`, in that precedence;
-plus `scanLimit` (run files past any cap, `RunsState.skipped.runFiles`, the newest days/writers kept,
-named in the runs Source), the six sum to `total`. The page names them in one line under its head ("48 runs not scored: 4 unreadable, 12 unknown
+plus `scanLimit` (run files past any cap or under a folder that could not be listed,
+`RunsState.skipped.runFiles`, the newest days kept and, past the writer cap or under an unlistable folder, a
+lower bound, named in the runs Source), the six sum to `total`, which counts runs and run files. The page names them in one line under its head ("48 runs not scored: 4 unreadable, 12 unknown
 model, 3 unknown task type, 23 no task type, 6 no model", hidden at none), which a tap, a click or a hover opens to the
 reasons and the unknown model ids with their runs.
 
@@ -174,7 +178,8 @@ Same rules as `/api/status`: a browser session (`authKind(req) === 'session'`; n
 token `403 device_scope`), `Cache-Control: private, no-cache` with an ETag (304 for unchanged data), no query (`400 unexpected_query`), errors `{ error, code }` with
 fixed sentences (`500 scoreboard_failed`).
 
-**Refresh.** A read older than 60 s starts a background rescan (16 parallel file visits, stat first, read only changed files). It immediately returns the previous view marked cached, with its age and refreshing flag; its Sources are marked stale while rescanning. A cold read waits at most 8 s. Nothing runs while nobody reads. The page
+**Refresh.** A read older than 60 s starts a background rescan (16 parallel file visits, stat first, read only changed files). It immediately returns the previous view marked cached, with its age and refreshing flag; its Sources are marked stale while rescanning. A cold read waits at most 8 s; a read that gives up on a still-running scan is marked partial in the runs
+Source and is not cached, so the next read rebuilds it complete. Nothing runs while nobody reads. The page
 re-reads every `refresh.pollSeconds` while visible. There is no `/ws` hint: scans happen only on reads, so there is
 nothing to push between them.
 
