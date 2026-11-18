@@ -3256,6 +3256,13 @@
     ]
   },
   {
+    "word": "private_input",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:reason"
+    ]
+  },
+  {
     "word": "probe-failed",
     "cause": "provider_error",
     "sources": [
