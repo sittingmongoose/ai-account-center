@@ -1,4 +1,4 @@
-import { count, fail, list, obj, oneOf, optIso, text } from './schema-helpers';
+import { count, fail, list, obj, oneOf, optIso, optText, text } from './schema-helpers';
 
 /** Additive report data, retained for the next version of the Status view. */
 export interface ReportV2 {
@@ -9,6 +9,18 @@ export interface ReportV2 {
   deliverables?: Record<string, unknown>[];
   readmeQuestions?: boolean;
   progress?: { done: number; total: number; unit: string | null } | null;
+}
+
+export function reportV3(doc: Record<string, unknown>) {
+  return {
+    ...(doc.goal === undefined ? {} : { goal: optText(doc.goal, 'goal', 100) }),
+    ...(doc.nextBy === undefined ? {} : { nextBy: optIso(doc.nextBy, 'nextBy') }),
+    ...(doc.nextByNote === undefined
+      ? {}
+      : { nextByNote: optText(doc.nextByNote, 'nextByNote', 60) }),
+    ...(doc.more === undefined ? {} : { more: optText(doc.more, 'more', 300) }),
+    ...(doc.saidAt === undefined ? {} : { saidAt: optIso(doc.saidAt, 'saidAt') }),
+  };
 }
 
 export function reportV2(doc: Record<string, unknown>): ReportV2 {

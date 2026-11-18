@@ -327,7 +327,6 @@ describe('the status endpoint from real files', () => {
         dbPath: db.file,
         readRemote: async () => '[]',
         now: () => NOW,
-        timeZone: () => 'America/New_York',
         reportsRoot: () => reports,
       });
       await collector.collect();
@@ -339,10 +338,10 @@ describe('the status endpoint from real files', () => {
       const update = pinned.updates[0];
       // The who line is the project label, the thread name and the catalog model label.
       expect(update.who).toBe('Puppet Master · lead · Opus 5.5 xhigh');
-      // The board's failing reviews loop, and the status document waits on the owner.
+      // The board's failing reviews loop. A legacy owner blocker stays in Waiting on.
       expect(update.looping.answer).toBe('yes');
       expect(update.looping.task).toBe('F-07');
-      expect(update.blocked?.waitingOnYou).toBe(true);
+      expect(update.blocked?.waitingOnYou).toBe(false);
       expect(update.blocked?.text).toContain('Pick the reviewers for batch B09');
 
       const empty = { data: null, asOf: null, error: null };
@@ -358,21 +357,37 @@ describe('the status endpoint from real files', () => {
         answers: [],
         pinned,
       });
-      // The /api/status headline names the looping and waiting pins, counts the question
+      // The /api/status headline names the looping pin, counts the question
       // and the decision, and never counts the sample.
       const line = view.headline.runs.map((run) => run.text).join('');
       expect(line).toContain('1 question for you');
       expect(line).toContain('1 decision to look at');
       expect(line).toContain(`1 pinned thread is looping (${PIN_TITLE}, task F-07)`);
-      expect(line).toContain(`1 pinned thread waits on you (${PIN_TITLE})`);
+      expect(line).not.toContain(`1 pinned thread waits on you (${PIN_TITLE})`);
       expect(view.headline.counts).toMatchObject({
         openCards: 3,
         questions: 1,
         decisions: 1,
         loopingPinned: 1,
-        waitingPinned: 1,
+        waitingPinned: 0,
       });
       expect(view.headline.tone).toBe('warn');
+
+      const card = cardDoc('vm.lead', 'B09', { title: 'Who should review batch B09?' });
+      const sha = writeCard(reports, card);
+      await reader.scan();
+      await collector.compose(reader.snapshot(), []);
+      expect(collector.view()).toMatchObject({
+        updates: [{ displayState: 'needsYou', cardTitle: card.title }],
+        counts: { waitingOnYou: 1 },
+      });
+      await collector.compose(reader.snapshot(), [
+        { answer: { kind: 'answer', cardId: card.id, cardSeq: card.seq, cardSha256: sha } },
+      ] as Parameters<PinnedThreadsCollector['compose']>[1]);
+      expect(collector.view()).toMatchObject({
+        updates: [{ displayState: 'working', cardTitle: null }],
+        counts: { waitingOnYou: 0 },
+      });
     } finally {
       db.cleanup();
       fs.rmSync(reports, { recursive: true, force: true });

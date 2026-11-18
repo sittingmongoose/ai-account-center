@@ -1080,13 +1080,21 @@ export const tests = {
   async 'status concept C v2 pinned threads'(t) {
     const c2 = fixture('status-c2-pins.json');
     const view = { ...fixture('status-design-view.json'), pinned: c2.pinned, projects: c2.projects };
+    const settings = c2.pinned.updates.find((pin) => pin.title.startsWith('Redesign Settings'));
+    const legacy = c2.pinned.updates.find((pin) => pin.title.startsWith('Build PMConcept7'));
+    settings.reported.writer = view.cards.open[0].writer;
+    legacy.reported = { state: 'idle' };
+    legacy.thinReport = 'Thin report: no next step, no times.';
+    settings.left[0].note = 'The last browser check is running on three machines before the batch can land.';
+    settings.left[0].time = { text: 'late, was due 6:30 PM', late: true };
+    settings.nextTime = { text: 'Thu 9:30 AM', late: false };
     await t.viewport(1440, 900);
     await openStatus(t, view);
     await t.page.waitForSelector('.c2-pane .c2-sheet');
     await t.count('.sec-progress', 0);
     await t.check('Needs you is the first group', /^Needs you/.test(await t.page.locator('.c2-group').first().textContent()));
-    await t.text('.c2-row.sel .c2-l2', /^Ready for you 2 things to open/);
-    await t.text('.c2-pane .c2-state', /^Ready for you/);
+    await t.text('.c2-row.sel .c2-l2', /^Waiting on you Sign in to the second Claude account on the Mac/);
+    await t.text('.c2-pane .c2-state', /^Waiting on you/);
     await t.check('five fixed facts, in order', async () =>
       JSON.stringify(await t.page.$$eval('.c2-pane .fx dt', (d) => d.map((x) => x.textContent))) ===
       JSON.stringify(['For you', 'Waiting on', 'Now', 'Next', 'Updated'])
@@ -1107,8 +1115,12 @@ export const tests = {
     await t.text('.c2-pane .to-row.main .to-mark', /^Opened /);
     await t.page.click('.c2-pane .to-row.main .to-sub button.link');
     await t.text('.c2-pane .to-older', /Superseded by v2/);
-    // Tasks: grouped; one unknown state marks one row; the big group folds.
-    await t.text('.c2-pane', /reported as "queued"/);
+    // Legacy queued rows go under To do.
+    await t.text('.c2-pane', /To do/i);
+    await t.text('.c2-pane .fx', /Thu 9:30 AM/);
+    const timedTask = '.c2-pane .c2-tg-rows li:has-text("The last browser check is running")';
+    await t.text(timedTask, /before the batch can land/);
+    await t.text(`${timedTask} [data-tone="warn"]`, /late, was due 6:30 PM/);
     await t.text('.c2-pane', /Show all 8/);
     await t.text('.c2-pane', /in work/i);
     // The README flag shows on its closed row only.
@@ -1116,8 +1128,10 @@ export const tests = {
     await t.check('the Progress section is gone', (await t.page.locator('text=Progress').count()) === 0);
     // A report written before the new fields: nothing invented.
     await t.page.locator('.c2-row', { hasText: 'Build PMConcept7' }).click();
-    await t.text('.c2-pane .c2-state', /^Reporting/);
-    await t.text('.c2-pane .fx', /Not reported/);
+    await t.text('.c2-pane .c2-state', /^Working/);
+    await t.text('.c2-pane .c2-sub', /Thin report: no next step, no times\./);
+    await t.check('no fill-in facts for the thin report', !(await t.page.locator('.c2-pane .fx').textContent()).includes('Not reported'));
+    await t.check('no Idle roster group', !(await t.page.locator('.c2-group').allTextContents()).some((text) => /^Idle\b/.test(text.trim())));
     await t.text('.c2-pane', /Own estimate 70%/);
     await t.text('.c2-silent', /Exact Agent Tooling Assessment/);
 

@@ -120,7 +120,6 @@ describe('PinnedThreadsCollector', () => {
       run: neverRun,
       readRemote: async () => '[]',
       now: () => 1_794_116_000_000,
-      timeZone: () => 'UTC',
       reportsRoot: () => '/fixture',
     });
     expect(collector.view()).toEqual({ unavailable: 'the pinned threads have not been read yet' });
@@ -132,7 +131,6 @@ describe('PinnedThreadsCollector', () => {
     const input = composeInputs[0] as Record<string, unknown>;
     expect((input.pins as unknown[]).map((row) => (row as { id: string }).id)).toEqual(['a', 'b']);
     expect(input.machineProblems).toEqual([]);
-    expect(input.utcOffsetMinutes).toBe(0);
     const view = collector.view();
     if ('unavailable' in view) throw new Error('expected a composed view');
     expect(view.head).toBe('fake head');
@@ -395,6 +393,93 @@ describe('PinnedThreadsCollector', () => {
       const input = composeInputs.at(-1) as Record<string, unknown>;
       const cards = input.openCards as Array<Record<string, unknown>>;
       expect(cards.map((card) => card.kind).sort()).toEqual(['objection', 'question', 'sample']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads contract v3 fields and removes only the answered card version and withdrawn cards', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-contract-v3-'));
+    try {
+      const writer = 'vm.lead';
+      const due = '2026-11-09T23:30:00.100Z';
+      const saidAt = '2026-11-06T16:20:00Z';
+      const blockedOn = { kind: 'agent', who: 'Browser tools', what: 'a free browser slot' };
+      writeReport(
+        dir,
+        writer,
+        'thread.json',
+        threadDoc(writer, {
+          goal: 'Finish the contract checks',
+          nextBy: due,
+          nextByNote: 'unknown:waiting for a slot',
+          more: 'The browser team is checking a second machine.',
+          saidAt,
+          blockedOn,
+        })
+      );
+      const note = 'The integration check is running on three machines before the batch can land.';
+      const v3 = {
+        note,
+        due,
+        dueDay: '2026-11-09',
+        dueNote: 'after:review passes',
+        dueWas: saidAt,
+        doneAt: saidAt,
+        outcome: 'The build passed on Nas1.',
+        blockedOn,
+      };
+      writeReport(
+        dir,
+        writer,
+        'tasks.json',
+        tasksDoc(writer, [
+          item('F-01', 'waiting', v3),
+          item('F-02', 'queued', { why: 'The slot opens after the first pass.' }),
+        ])
+      );
+      const answered = cardDoc(writer, 'A');
+      const sha = writeCard(dir, answered);
+      writeCard(dir, cardDoc(writer, 'B', { state: 'withdrawn' }));
+      const stillOpen = cardDoc(writer, 'C', { seq: 2, title: 'Which check runs first?' });
+      writeCard(dir, stillOpen);
+
+      const reader = new AgentReportsReader({ root: () => dir });
+      await reader.scan();
+      expect(reader.snapshot().problems).toEqual([]);
+      const { handle, composeInputs } = fakeHandle({ vm: () => ({ pinned: [pin('t1')] }) });
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        reportsRoot: () => dir,
+      });
+      await collector.collect();
+      await collector.compose(reader.snapshot(), [
+        { answer: { kind: 'answer', cardId: answered.id, cardSeq: 1, cardSha256: sha } },
+        { answer: { kind: 'answer', cardId: stillOpen.id, cardSeq: 1, cardSha256: sha } },
+      ] as Parameters<PinnedThreadsCollector['compose']>[1]);
+      expect(composeInputs.at(-1)).toMatchObject({
+        threads: [
+          {
+            goal: 'Finish the contract checks',
+            nextBy: due,
+            nextByNote: 'unknown:waiting for a slot',
+            more: 'The browser team is checking a second machine.',
+            saidAt,
+            blockedOn,
+          },
+        ],
+        tasks: [
+          {
+            items: [
+              { state: 'waiting', ...v3 },
+              { state: 'queued', why: 'The slot opens after the first pass.' },
+            ],
+          },
+        ],
+        openCards: [{ id: stillOpen.id, title: stillOpen.title }],
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

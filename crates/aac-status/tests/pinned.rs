@@ -174,7 +174,7 @@ fn a_standalone_status_refusal_attaches_to_its_pin() {
 }
 
 #[test]
-fn waiting_on_you_comes_from_every_source_that_names_it() {
+fn waiting_on_you_names_the_card_and_keeps_the_reported_waits() {
     let built = input(json!({
         "pins": [pin("t1", json!("a"))],
         "threads": [thread(json!({
@@ -205,8 +205,8 @@ fn waiting_on_you_comes_from_every_source_that_names_it() {
     assert!(update.blocked.as_ref().unwrap().waiting_on_you);
     assert_eq!(
         update.blocked.as_ref().unwrap().text,
-        "Waiting on you: Pick the reviewers for batch B09; Choose the icon set; \
-         Say yes or no to the tray icon; Which tray icon?. Blocked: A reviewer for F-02 (waiting on review)."
+        "Waiting on you: Which tray icon? Blocked: Pick the reviewers for batch B09 (waiting on owner); \
+         Choose the icon set (waiting on owner); A reviewer for F-02 (waiting on review); Say yes or no to the tray icon (waiting on owner)."
     );
 }
 
@@ -233,7 +233,7 @@ fn only_question_judgement_and_action_cards_make_a_pin_wait_on_you() {
     assert!(blocked.waiting_on_you);
     assert_eq!(
         blocked.text,
-        "Waiting on you: Measure the tray at 125%?; Which tray icon?."
+        "Waiting on you: Measure the tray at 125%?; Which tray icon?"
     );
     // Objection and sample cards alone leave the pin without a wait.
     let built = input(json!({
@@ -685,6 +685,7 @@ fn the_head_counts_looping_and_waiting_pins() {
                 "blockedOn": { "kind": "owner", "what": "Pick reviewers", "since": null } })),
             thread(json!({ "writer": "vm.pm7-build", "t3Thread": "t2", "project": "pm7", "stream": "g" }))
         ],
+        "openCards": [{"writer": "vm.pm7-design", "id": "pick", "seq": 1, "title": "Who should review?"}],
         "tasks": [
             json!({
                 "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
@@ -799,7 +800,7 @@ fn a_thread_waiting_on_a_question_card_is_never_stale() {
     assert_eq!(update.report_state, "fresh");
     let blocked = update.blocked.as_ref().unwrap();
     assert!(blocked.waiting_on_you);
-    assert_eq!(blocked.text, "Waiting on you: Which tray icon?.");
+    assert_eq!(blocked.text, "Waiting on you: Which tray icon?");
     // An objection card asks nothing of the owner: the same report is stale.
     let objected = input(json!({
         "pins": [pin("t1", json!("a"))],
@@ -838,10 +839,7 @@ fn a_blocked_or_waiting_state_without_a_heartbeat_is_never_stale() {
 }
 
 #[test]
-fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
-    // B2: a thread that ended its turn to wait on the owner cannot heartbeat; the older its
-    // last report, the more the update must keep saying it waits. Stale would hide exactly
-    // that, so it is never stale while the report says "waiting on you", whatever its ttl.
+fn a_legacy_owner_wait_without_a_card_does_not_exempt_a_lapsed_heartbeat() {
     let built = input(json!({
         "pins": [pin("t1", json!("a"))],
         "threads": [thread(json!({
@@ -855,11 +853,10 @@ fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
     }));
     let update = one_update(&built);
     assert_eq!(update.report_state, "fresh");
-    assert!(update.blocked.as_ref().unwrap().waiting_on_you);
-    // NOW - 90 min reads 11:03 PM in the dashboard's zone (offset -300).
+    assert!(!update.blocked.as_ref().unwrap().waiting_on_you);
     assert_eq!(
         update.blocked.as_ref().unwrap().text,
-        "Waiting on you since 11:03 PM: Approve the redesign."
+        "Blocked: Approve the redesign (waiting on owner)."
     );
     // A heartbeat that lapsed while it waits says nothing either.
     let lapsed = input(json!({
@@ -871,10 +868,10 @@ fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
         }))]
     }));
     let update = one_update(&lapsed);
-    assert_eq!(update.report_state, "fresh");
+    assert_eq!(update.report_state, "stale");
     assert_eq!(
         update.blocked.as_ref().unwrap().text,
-        "Waiting on you: Pick the reviewers."
+        "Blocked: Pick the reviewers (waiting on owner)."
     );
 }
 
@@ -1106,9 +1103,9 @@ fn a_thread_with_no_task_list_sends_nulls_not_invented_all_clears() {
     let update = one_update(&blocked);
     assert_eq!(
         update.blocked.as_ref().unwrap().text,
-        "Waiting on you: Approve the plan."
+        "Blocked: Approve the plan (waiting on owner)."
     );
-    assert!(update.blocked.as_ref().unwrap().waiting_on_you);
+    assert!(!update.blocked.as_ref().unwrap().waiting_on_you);
 }
 
 #[test]
@@ -1117,11 +1114,14 @@ fn one_unknown_task_state_only_marks_its_row() {
         "pins": [pin("t1", json!("a"))],
         "threads": [thread(json!({ "t3Thread": "t1", "project": "project", "stream": "work" }))],
         "tasks": [{ "writer": "vm.pm7-build", "writtenAtMs": NOW, "seq": 1, "project": "project", "stream": "work",
-            "items": [{ "id": "good", "title": "Good", "state": "done" }, { "id": "bad", "title": "Bad", "state": "queued" }] }]
+            "items": [{ "id": "good", "title": "Good", "state": "done" }, { "id": "bad", "title": "Bad", "state": "future-state" }] }]
     }));
     let update = one_update(&built);
     assert_eq!(update.done.unwrap().len(), 1);
-    assert_eq!(update.left.unwrap()[0].title, "Bad (state not recognised: queued)");
+    assert_eq!(
+        update.left.unwrap()[0].title,
+        "Bad (state not recognised: future-state)"
+    );
     assert!(update.unreadable_note.is_none());
     assert!(update.refusal.is_none());
 }
@@ -1206,14 +1206,10 @@ fn settings_shaped() -> ComposeInput {
 fn waits_on_others_are_kept_beside_an_owner_wait_and_the_owner_wait_shows_once() {
     let update = one_update(&settings_shaped());
     let blocked = update.blocked.as_ref().unwrap();
-    assert!(blocked.waiting_on_you);
-    // The owner wait the thread and its status both carry is said once, in the sentence too.
+    assert!(!blocked.waiting_on_you);
+    // The legacy wait the thread and its status both carry is said once, in the sentence too.
     assert_eq!(blocked.text.matches("answer card SM-0").count(), 1, "{}", blocked.text);
-    assert!(
-        blocked.text.contains("Blocked: Browsers on the VM and Nas1"),
-        "{}",
-        blocked.text
-    );
+    assert!(blocked.text.contains("Browsers on the VM and Nas1"), "{}", blocked.text);
     let waits = as_json(&update)["waits"].clone();
     let rows: Vec<(String, String, Option<String>)> = waits
         .as_array()
@@ -1348,4 +1344,99 @@ fn a_board_kept_by_the_same_pins_other_writer_is_its_own() {
     let board = as_json(&one_update(&built))["board"].clone();
     assert_eq!(board["writer"], "vm.pm7-perf");
     assert_eq!(board["shared"], false);
+}
+
+#[test]
+fn contract_v3_legacy_rows_determine_work_and_supply_their_lines() {
+    let why = "The second integration pass is running on three machines before the batch can land. The candidate is available for review.";
+    let mut fixture = json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({"t3Thread": "t1", "state": "idle"}))],
+        "tasks": [{
+            "writer": "vm.pm7-build", "writtenAtMs": NOW, "seq": 1,
+            "project": "pm7", "stream": "f",
+            "items": [
+                {"id":"a","title":"Batch","state":"landing","why":why},
+                {"id":"b","title":"Review","state":"fixing","note":"Checking the last browser run.","why":"Old reason"},
+                {"id":"c","title":"Another batch","state":"ready"},
+                {"id":"d","title":"Later","state":"queued"},
+                {"id":"e","title":"Replaced","state":"superseded"},
+                {"id":"f","title":"Previous batch","state":"landed"},
+                {"id":"g","title":"Dependencies","state":"waiting","blockedOn":{"kind":"owner","what":"Other agents must answer"}}
+            ]
+        }]
+    });
+    let update = as_json(&one_update(&input(fixture.clone())));
+    assert_eq!(update["displayState"], "working");
+    assert_eq!(update["blocked"]["waitingOnYou"], false);
+    assert_eq!(
+        update["thinReport"],
+        "Thin report: no next step, no times, 3 rows with no line."
+    );
+    let rows = update["left"].as_array().unwrap();
+    let row = |id| rows.iter().find(|r| r["id"] == id).unwrap();
+    assert_eq!(row("a")["state"], "working");
+    assert_eq!(
+        row("a")["note"],
+        "The second integration pass is running on three machines before the batch can land. The candidate is…"
+    );
+    assert_eq!(row("b")["state"], "review");
+    assert_eq!(row("b")["note"], "Checking the last browser run.");
+    assert_eq!(row("c")["state"], "working");
+    assert_eq!(row("d")["state"], "todo");
+    assert_eq!(row("g")["state"], "waiting");
+    assert_eq!(update["done"][0]["state"], "done");
+    assert_eq!(rows.len(), 5);
+    fixture["tasks"][0]["items"] = json!([row("g")]);
+    for state in ["idle", "working"] {
+        fixture["threads"][0]["state"] = json!(state);
+        assert_eq!(as_json(&one_update(&input(fixture.clone())))["displayState"], "waiting");
+    }
+}
+
+#[test]
+fn contract_v3_uses_card_titles_and_reads_dates_as_eastern_time() {
+    let mut fixture = json!({
+        "utcOffsetMinutes": 330,
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({"t3Thread":"t1", "state":"working"}))],
+        "statuses": [{
+            "writer":"vm.pm7-build", "seq":1,"t3Thread":"t1","writtenAt":"2026-11-08T05:30:00Z",
+            "writtenAtMs":NOW-200_000,"summary":"Running tests.", "next":"Send the result",
+            "goal":"Finish the integration check","nextBy":"2026-11-09T14:30:00Z",
+            "saidAt":"2026-11-08T04:00:00Z","more":"Each machine uses the same fixtures."
+        }],
+        "openCards": [{"writer":"vm.pm7-build","id":"card-1","seq":1,"title":"Which result should land first?"}],
+        "tasks": [{
+            "writer":"vm.pm7-build", "writtenAtMs":NOW, "seq":1,"project":"pm7","stream":"f",
+            "items":[
+                {"id":"a","title":"Run the check","state":"working","note":"The last check is running.",
+                 "due":"2026-11-08T23:30:00Z","dueWas":"2026-11-08T23:00:00Z",
+                 "blockedOn":{"kind":"agent","who":"Browser tools","what":"The final browser slot"}},
+                {"id":"b","title":"Send results","state":"todo","dueDay":"2026-11-09"},
+                {"id":"c","title":"Draft note","state":"todo","dueNote":"after:the checks pass"},
+                {"id":"d","title":"Publish note","state":"todo","dueNote":"unknown:waiting for a slot"},
+                {"id":"e","title":"Finish build","state":"done","doneAt":"2026-11-08T05:15:00Z","outcome":"The build passed on Nas1."}
+            ]
+        }]
+    });
+    let update = as_json(&one_update(&input(fixture.clone())));
+    assert_eq!(update["displayState"], "needsYou");
+    assert_eq!(update["cardTitle"], "Which result should land first?");
+    assert_eq!(update["nextTime"]["text"], "Mon 9:30 AM");
+    assert_eq!(update["statusUpdated"]["clock"], "Sat 11:00 PM");
+    assert_eq!(update["heartbeat"]["at"], "2026-11-08T05:30:00Z");
+    assert_eq!(update["reported"]["goal"], "Finish the integration check");
+    assert_eq!(update["reported"]["more"], "Each machine uses the same fixtures.");
+    assert_eq!(update["left"][0]["time"]["text"], "6:30 PM, was 6:00 PM");
+    assert_eq!(update["left"][1]["time"]["text"], "by Mon");
+    assert_eq!(update["left"][2]["time"]["text"], "the checks pass");
+    assert_eq!(update["left"][3]["time"]["text"], "no time: waiting for a slot");
+    assert_eq!(update["waits"][0]["who"], "Browser tools");
+    assert_eq!(update["done"][0]["outcome"], "The build passed on Nas1.");
+    assert_eq!(update["done"][0]["time"]["text"], "12:15 AM");
+    fixture["openCards"] = json!([]);
+    let update = as_json(&one_update(&input(fixture)));
+    assert_eq!(update["displayState"], "working");
+    assert_eq!(update["blocked"]["waitingOnYou"], false);
 }

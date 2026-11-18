@@ -1,4 +1,4 @@
-import { reportV2, type ReportV2 } from './report-v2';
+import { reportV2, reportV3, type ReportV2 } from './report-v2';
 /**
  * Agent report documents (agent-reports v1): every rule the Status tab applies to a file it reads
  * from `<reports>/v1/writers/<writer>/` lives here, so a field added to the format is added in one
@@ -57,6 +57,7 @@ export interface BlockedOn {
   what: string;
   since: string | null;
   short?: string | null;
+  who?: string | null;
   until?: string | null;
   card?: string | null;
 }
@@ -68,13 +69,14 @@ function blockedOn(value: unknown, field: string): BlockedOn | null {
     kind: slug(item.kind, `${field}.kind`),
     what: text(item.what, `${field}.what`, 500),
     since: optIso(item.since, `${field}.since`),
+    ...(item.who === undefined ? {} : { who: optText(item.who, `${field}.who`, 40) }),
     short: optText(item.short, `${field}.short`, 80),
     until: optIso(item.until, `${field}.until`),
     card: optText(item.card, `${field}.card`, 200),
   };
 }
 
-export interface ThreadDoc extends DocHead, ReportV2 {
+export interface ThreadDoc extends DocHead, ReportV2, ReturnType<typeof reportV3> {
   /**
    * Null for any state: a thread that ended its turn cannot heartbeat, whatever state it ended in
    * (blocked on the owner included). Such a thread is shown by age, never stale for lack of one.
@@ -121,6 +123,7 @@ function thread(doc: Record<string, unknown>, writer: string): ThreadDoc {
   return {
     ...head(doc, THREAD_SCHEMA, writer),
     ...reportV2(doc),
+    ...reportV3(doc),
     ttlSeconds: ttl,
     agent: {
       name: optText(agent.name, 'agent.name', 64),
@@ -167,6 +170,12 @@ export interface TaskItem {
   blockedOn: BlockedOn | null;
   note?: string | null;
   why: string | null;
+  due?: string | null;
+  dueDay?: string | null;
+  dueNote?: string | null;
+  dueWas?: string | null;
+  doneAt?: string | null;
+  outcome?: string | null;
   updatedAt: string | null;
 }
 
@@ -179,6 +188,13 @@ export interface TasksDoc extends DocHead, ReportV2 {
   goal: string | null;
   board: string | null;
   items: TaskItem[];
+}
+
+function day(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) fail(field);
+  optIso(`${value}T00:00:00Z`, field);
+  return value;
 }
 
 function item(value: unknown, field: string): TaskItem {
@@ -207,8 +223,14 @@ function item(value: unknown, field: string): TaskItem {
       };
     }),
     landed,
+    ...(row.due === undefined ? {} : { due: optIso(row.due, `${field}.due`) }),
+    ...(row.dueDay === undefined ? {} : { dueDay: day(row.dueDay, `${field}.dueDay`) }),
+    ...(row.dueNote === undefined ? {} : { dueNote: optText(row.dueNote, `${field}.dueNote`, 60) }),
+    ...(row.dueWas === undefined ? {} : { dueWas: optIso(row.dueWas, `${field}.dueWas`) }),
+    ...(row.doneAt === undefined ? {} : { doneAt: optIso(row.doneAt, `${field}.doneAt`) }),
+    ...(row.outcome === undefined ? {} : { outcome: optText(row.outcome, `${field}.outcome`, 90) }),
     blockedOn: blockedOn(row.blockedOn, `${field}.blockedOn`),
-    note: optText(row.note, `${field}.note`, 40),
+    note: optText(row.note, `${field}.note`, 110),
     why: optText(row.why, `${field}.why`, 500),
     updatedAt: optIso(row.updatedAt, `${field}.updatedAt`),
   };

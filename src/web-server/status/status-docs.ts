@@ -1,4 +1,4 @@
-import { reportV2 } from './report-v2';
+import { reportV2, reportV3 } from './report-v2';
 /**
  * The `agent-reports/status@1` documents agents write at `writers/<writer>/status.json`: one
  * optional file per reporting thread, holding what `thread@1` and `tasks.json` lack for a
@@ -457,7 +457,9 @@ async function parseStatus(
   const checked = jsonFromBytes(bytes, STATUS_SIZE_CAP);
   if (!checked.ok) return { ok: false, reason: checked.reason };
   try {
-    reportV2(obj(checked.value, 'document'));
+    const doc = obj(checked.value, 'document');
+    reportV2(doc);
+    reportV3(doc);
   } catch (error) {
     return {
       ok: false,
