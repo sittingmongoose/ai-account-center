@@ -204,7 +204,7 @@
   "src/web-server/status/report-v2.ts": "62499f7bd23855eb3ac5960e72be2bb29be7ff5ce97a901c1db21b17cd0af4d5",
   "src/web-server/status/schema-helpers.ts": "2a7f17c55281704e982bef51484b4824a0e81c4d3c715a6051d4c5073603dd5b",
   "src/web-server/status/spend-by-stream.ts": "6f22d204c4238cdf6b7a9539274ab81c5ca6befc70a17b5d7056efd4b62a2be7",
-  "src/web-server/status/status-collectors.ts": "888fa5bef33be3f412254d85f669077ec3742d344ca1e63ca60ec91c8348b8a2",
+  "src/web-server/status/status-collectors.ts": "128d6faa408db499d70267342fd571e0ec7ac1ecc8683d47ca1d5752fc422d4e",
   "src/web-server/status/status-docs.ts": "f4ba06f362ee47ca3de57d672fc71cc9ee93b05356936b2945afc831f15bc0dc",
   "src/web-server/status/status-feed.ts": "061b3c8f5eed9077c583f2068c78d55179a97ac5ad915814019229d11b9cbe7a",
   "src/web-server/status/status-files.ts": "58dfe4cd46ff0bd481d2fdf92cae9805470a9c3fda6db48f53a8e73e45b9102c",
