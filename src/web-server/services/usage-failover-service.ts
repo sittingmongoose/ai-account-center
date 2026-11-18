@@ -19,6 +19,7 @@ import {
   stripClaudeFailoverExtras,
 } from './usage-failover-claude-extras';
 import { readUsageCache, writeUsageCache } from './usage-failover-cache';
+import { claudeDesktopDelayMs, MAX_CLAUDE_429_STREAK } from './usage-failover-claude-cadence';
 import { readAccountRefreshSettings } from './account-refresh-settings';
 import {
   isBoundMusePeer,
@@ -55,6 +56,7 @@ interface State {
   primary: UsageCandidate | null;
   saved: SavedReading | null;
   nextAttempt: number;
+  claude429Streak: number;
   pending: Promise<void> | null;
   fresh: boolean | null;
   freshUntil: number;
@@ -172,6 +174,7 @@ export class UsageFailoverService {
       primary: null,
       saved: null,
       nextAttempt: 0,
+      claude429Streak: 0,
       pending: null,
       fresh: null,
       freshUntil: 0,
@@ -202,6 +205,11 @@ export class UsageFailoverService {
           (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, identity))
         ) {
           state.identity = identity;
+          if (target.claudeDesktopCadence && Number.isInteger(value.claude429Streak))
+            state.claude429Streak = Math.max(
+              0,
+              Math.min(MAX_CLAUDE_429_STREAK, value.claude429Streak as number)
+            );
           state.observedPlan = tracksVerifiedPlan(target)
             ? safeUsageText(value.observedPlan)
             : null;
@@ -269,6 +277,7 @@ export class UsageFailoverService {
       primary: state.primary,
       saved: state.saved,
       nextAttempt: state.nextAttempt,
+      ...(target.claudeDesktopCadence ? { claude429Streak: state.claude429Streak } : {}),
       fresh: state.fresh,
       freshUntil: state.freshUntil,
       primaryFailure: state.primaryFailure,
@@ -697,6 +706,7 @@ export class UsageFailoverService {
         continue;
       }
       if (!state.identity || !sameUsageIdentity(state.identity, candidate.identity)) {
+        state.claude429Streak = 0;
         state.identity = candidate.identity;
         state.saved = null;
         state.observedPlan = null;
@@ -872,9 +882,22 @@ export class UsageFailoverService {
           () => !applyCooldown() && !peerHeld(),
           (value) => {
             if (value.action !== 'collect' || !responseIsRateLimited(value)) return;
-            const until =
-              this.now() + Math.max(60, Math.min(86400, value.retryAfterSeconds ?? 60)) * 1000;
-            state.nextAttempt = holdUsageCooldown(target.ccsDir, cooldownKey, until, this.now());
+            const now = this.now();
+            const providerUntil =
+              now + Math.max(60, Math.min(86400, value.retryAfterSeconds ?? 60)) * 1000;
+            let until = providerUntil;
+            if (target.claudeDesktopCadence) {
+              state.claude429Streak = Math.min(state.claude429Streak + 1, MAX_CLAUDE_429_STREAK);
+              until =
+                now +
+                claudeDesktopDelayMs(
+                  this.key(target),
+                  (providerUntil - now) / 1000,
+                  state.claude429Streak
+                );
+              state.primaryFailure = 'rate_limited';
+            }
+            state.nextAttempt = holdUsageCooldown(target.ccsDir, cooldownKey, until, now);
             this.cooldowns.set(cooldownKey, state.nextAttempt);
             if (peerKey)
               this.cooldowns.set(
@@ -1020,6 +1043,16 @@ export class UsageFailoverService {
           );
       }
       if (blocked) return 'done';
+      if (target.claudeDesktopCadence && reading.status === 'ok' && response.failureCode === null) {
+        state.claude429Streak = 0;
+        const floor = Math.max(
+          readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds,
+          response.refreshAfterSeconds ?? 0
+        );
+        state.nextAttempt = this.now() + claudeDesktopDelayMs(this.key(target), floor);
+        if (state.fresh) state.freshUntil = state.nextAttempt;
+        return 'done';
+      }
       if (
         response.failureCode === null &&
         response.refreshAfterSeconds &&

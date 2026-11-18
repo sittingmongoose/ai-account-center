@@ -67,6 +67,8 @@ export interface ClaudeSignInRenewal {
   generatedAt: string;
   /** The runner has not written for longer than it promised: renewals may not be happening. */
   stale: boolean;
+  /** Fixed diagnostic for a runner that could not start its browser helper. */
+  browserError?: string;
   renewWithinHours: number;
   needsYou: ClaudeSignInNeed[];
   hosts: Array<{ host: string; readAt: string | null; error: string | null }>;
@@ -157,7 +159,14 @@ export function parseClaudeSignInRenewal(
       : 3600;
   const list = (value: unknown, limit: number): unknown[] =>
     Array.isArray(value) ? value.slice(0, limit) : [];
+  const browserError =
+    doc.browserError === 'no_node'
+      ? 'Node.js executable not found on the renewal runner.'
+      : doc.browserError === 'node_launch_failed'
+        ? 'Node.js could not be launched on the renewal runner.'
+        : null;
   return {
+    ...(browserError ? { browserError } : {}),
     runner: str(doc.runner, NAME) ?? 'unknown',
     runnerVersion: str(doc.runnerVersion, /^\d{1,3}\.\d{1,3}\.\d{1,3}$/) ?? 'unknown',
     generatedAt,

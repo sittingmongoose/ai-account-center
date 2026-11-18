@@ -47,6 +47,74 @@ class Home(unittest.TestCase):
         return root
 
 
+class NodeTests(Home):
+    def executable(self, relative):
+        path = self.home / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/missing-fixture-interpreter\n")
+        path.chmod(0o700)
+        return str(path)
+
+    def test_missing_and_non_executable_config_fall_back_to_path_then_homebrew(self):
+        configured = self.home / "configured-node"
+        path_node = self.executable("bin/node")
+        arm_node = self.executable("opt/homebrew/bin/node")
+        intel_node = self.executable("usr/local/bin/node")
+        cfg = dict(CFG, nodePath=str(configured))
+        with mock.patch.object(runner, "NODE_LOCATIONS", (arm_node, intel_node)), \
+                mock.patch.dict(os.environ, {"PATH": str(self.home / "bin")}):
+            self.assertEqual(runner.node_path(cfg), path_node)
+            configured.touch()
+            configured.chmod(0o600)
+            self.assertEqual(runner.node_path(cfg), path_node)
+            configured.chmod(0o700)
+            self.assertEqual(runner.node_path(cfg), str(configured))
+            cfg["nodePath"] = None
+            pathlib.Path(path_node).unlink()
+            self.assertEqual(runner.node_path(cfg), arm_node)
+            pathlib.Path(arm_node).unlink()
+            self.assertEqual(runner.node_path(cfg), intel_node)
+
+    def test_popen_falls_back_if_configured_node_cannot_launch(self):
+        bad = self.executable("configured-node")
+        good = self.executable("opt/homebrew/bin/node")
+        proc = mock.Mock(stdout=[b'{"result":"ok"}'], stderr=mock.Mock())
+        proc.stderr.read.return_value = b""
+        st = {"browserError": "no_node"}
+        with mock.patch.object(runner, "NODE_LOCATIONS", (good,)), \
+                mock.patch.dict(os.environ, {"PATH": str(self.home / "empty")}), \
+                mock.patch.object(runner.subprocess, "Popen", side_effect=[OSError("private"), proc]) as popen:
+            self.assertEqual(runner.browser(dict(CFG, nodePath=bad), "session", "fixture@example.test", state=st),
+                             {"result": "ok"})
+        self.assertEqual([call.args[0][0] for call in popen.call_args_list], [bad, good])
+        self.assertNotIn("browserError", st)
+
+    def test_tick_publishes_missing_or_unlaunchable_node_and_preserves_session_time(self):
+        for reason in ("no_node", "node_launch_failed"):
+            with self.subTest(reason=reason):
+                folder = self.home / reason
+                folder.mkdir()
+                configured = (self.executable("broken-node") if reason == "node_launch_failed"
+                              else str(self.home / "missing"))
+                cfg = dict(CFG, nodePath=configured, publishDir=str(folder), hosts=[], chromeProfilesDir=str(self.home / "chrome"))
+                checked = NOW - 1000
+                st = {"profiles": {"mac/fixture": {"email": "fixture@example.test", "state": "ok"}},
+                      "accounts": {"fixture@example.test": {"sessionCheckedAt": checked, "signedIn": True}}}
+                # The broken fixture needs a browser operation to exercise the launch error.
+                with mock.patch.object(runner, "NODE_LOCATIONS", ()), \
+                        mock.patch.dict(os.environ, {"PATH": str(self.home / "empty")}), \
+                        mock.patch.object(runner, "Lock"), mock.patch.object(runner, "load_state", return_value=st), \
+                        mock.patch.object(runner, "sync_from_share"), mock.patch.object(runner, "scan", return_value=[]), \
+                        mock.patch.object(runner, "renew_due"), mock.patch.object(runner, "save_state"):
+                    self.assertEqual(runner.cmd_tick(None, cfg), 0)
+                doc = json.loads((folder / runner.PUBLISH_JSON).read_text())
+                self.assertEqual(doc["browserError"], reason)
+                self.assertIsNotNone(doc["generatedAt"])
+                self.assertEqual(doc["browserSessions"][0]["checkedAt"], runner.iso(checked))
+                self.assertIn(runner.NODE_ERRORS[reason], (folder / runner.PUBLISH_MD).read_text())
+                self.assertNotIn(configured, json.dumps(doc))
+
+
 class CollectTests(Home):
     def test_reads_times_and_email_never_tokens(self):
         self.profile("gmail", {"accessToken": "sk-ant-oat01-SECRET", "refreshToken": "sk-ant-ort01-SECRET",

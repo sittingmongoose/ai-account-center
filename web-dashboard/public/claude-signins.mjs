@@ -88,6 +88,7 @@ export function claudeSignInLine(data, email, now = Date.now()) {
   const renewal = renewalOf(data);
   const rows = signInsFor(data, email);
   if (!renewal || rows.length === 0) return '';
+  if (renewal.browserError) return renewal.browserError;
   if (needsFor(data, email).length > 0) return 'Sign-in renewal needs you';
   if (renewal.stale) return 'Sign-in renewal stopped';
   const out = rows.filter((r) => r.state === 'logged_out' || r.state === 'no_refresh_token');
@@ -109,9 +110,9 @@ export function claudeSignInFacts(data, email, now = Date.now()) {
   }));
   facts.push({
     label: 'Sign-in renewal',
-    value: renewal.stale
+    value: renewal.browserError || (renewal.stale
       ? `Stopped: the runner on ${hostWord(renewal.runner)} last reported ${valid(renewal.generatedAt) ? when.format(new Date(renewal.generatedAt)) : 'long ago'}`
-      : `Automatic, by the runner on ${hostWord(renewal.runner)}`,
+      : `Automatic, by the runner on ${hostWord(renewal.runner)}`),
     mono: false,
   });
   const session = (renewal.browserSessions || []).find((b) => b?.email === String(email || '').trim().toLowerCase());
@@ -181,7 +182,10 @@ export function claudeSignInGroup(data, email, now = Date.now()) {
   const runner = hostWord(renewal.runner);
   let lead;
   let rest;
-  if (needs.length) {
+  if (renewal.browserError) {
+    lead = 'Renewal browser unavailable.';
+    rest = renewal.browserError;
+  } else if (needs.length) {
     lead = 'Needs you.';
     rest = `${needs.join('. ')}.`;
   } else if (renewal.stale) {

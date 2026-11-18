@@ -585,19 +585,44 @@ class Prompt:
 
 # ---------------------------------------------------------------- browser and mail
 
+NODE_LOCATIONS = ("/opt/homebrew/bin/node", "/usr/local/bin/node")
+NODE_ERRORS = {
+    "no_node": "Node.js executable not found. Check the renewal runner nodePath or PATH.",
+    "node_launch_failed": "Node.js could not be launched. Check the renewal runner's Node.js installation.",
+}
+
+
+def node_paths(cfg):
+    configured = cfg.get("nodePath")
+    paths = [configured, shutil.which("node"), *NODE_LOCATIONS, os.path.expanduser("~/.local/bin/node")]
+    for candidate in dict.fromkeys(p for p in paths if isinstance(p, str) and "\x00" not in p):
+        if os.path.isabs(candidate) and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            yield candidate
+
+
 def node_path(cfg):
-    return cfg.get("nodePath") or shutil.which("node") or next(
-        (p for p in ("/opt/homebrew/bin/node", "/usr/local/bin/node", os.path.expanduser("~/.local/bin/node")) if os.path.isfile(p)), None)
+    return next(node_paths(cfg), None)
 
 
-def browser(cfg, command, email, stdin_text=None, on_event=None, timeout=1800, extra=None):
+def browser(cfg, command, email, stdin_text=None, on_event=None, timeout=1800, extra=None, state=None):
     """Runs one browser_auth.mjs command; returns its result dict. Secrets stay in the dict."""
-    node = node_path(cfg)
-    if not node:
-        return {"result": "error", "reason": "no_node"}
-    argv = [node, os.path.join(HERE, "browser_auth.mjs"), command, email,
+    args = [os.path.join(HERE, "browser_auth.mjs"), command, email,
             "--profiles", cfg["chromeProfilesDir"], "--wait-minutes", str(cfg["humanWaitMinutes"])] + (extra or [])
-    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    reason = "no_node"
+    for node in node_paths(cfg):
+        try:
+            proc = subprocess.Popen([node, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError:
+            reason = "node_launch_failed"
+            continue
+        if state is not None:
+            state.pop("browserError", None)
+        break
+    else:
+        if state is not None and state.get("browserError") != reason:
+            state["browserError"] = reason
+            log(NODE_ERRORS[reason])
+        return {"result": "error", "reason": reason}
     try:
         if stdin_text is not None:
             proc.stdin.write((stdin_text + "\n").encode())
@@ -778,7 +803,7 @@ def sign_in_browser(cfg, st, email):
     since = time.time() - 5
     on_captcha, told = captcha_hook(cfg, st, email)
 
-    res = browser(cfg, "request-link", email, on_event=on_captcha)
+    res = browser(cfg, "request-link", email, on_event=on_captcha, state=st)
     acc["linkRequestedAt"] = now
     if res.get("result") == "signed_in":
         return True
@@ -800,7 +825,7 @@ def sign_in_browser(cfg, st, email):
         notify(cfg, "Claude sign-in needs you", how)
         return False
     log("%s: opening the sign-in link from the mail" % email)
-    res = browser(cfg, "open-link", email, stdin_text=link, on_event=on_captcha, timeout=cfg["humanWaitMinutes"] * 60 + 120)
+    res = browser(cfg, "open-link", email, stdin_text=link, on_event=on_captcha, timeout=cfg["humanWaitMinutes"] * 60 + 120, state=st)
     link = None
     if res.get("result") == "signed_in":
         clear_need(st, email)
@@ -835,7 +860,7 @@ def renew_one(cfg, st, host, data, row, until_link=False):
         if until_link:
             return "link_captured"
         on_captcha, _ = captcha_hook(cfg, st, email)
-        res = browser(cfg, "authorize", email, stdin_text=url, on_event=on_captcha)
+        res = browser(cfg, "authorize", email, stdin_text=url, on_event=on_captcha, state=st)
         url = None
         if res.get("result") == "signed_out":
             return "signed_out"
@@ -1020,10 +1045,10 @@ def browser_sessions(cfg, st, force=False):
     emails = sorted({p.get("email") for p in st["profiles"].values() if p.get("email")})
     for email in emails:
         acc = st["accounts"].setdefault(email, {})
-        if not force and now - (acc.get("sessionCheckedAt") or 0) < 6 * HOUR_MS:
+        if not force and not st.get("browserError") and now - (acc.get("sessionCheckedAt") or 0) < 6 * HOUR_MS:
             continue
         visit = acc.get("signedIn") and now - (acc.get("visitedAt") or 0) > 24 * HOUR_MS and not acc.get("needs")
-        res = browser(cfg, "session", email, extra=["--visit"] if visit else None, timeout=120)
+        res = browser(cfg, "session", email, extra=["--visit"] if visit else None, timeout=120, state=st)
         if res.get("result") != "ok":
             continue
         acc["sessionCheckedAt"] = now
@@ -1064,7 +1089,7 @@ def close_browsers(cfg, st):
     """Quits the Chrome profiles this run used, except one a person is still working in."""
     for email, acc in st["accounts"].items():
         if acc.get("needs") not in ("captcha",):
-            browser(cfg, "close", email, timeout=60)
+            browser(cfg, "close", email, timeout=60, state=st)
 
 
 def drop_stale_captchas(cfg, st, results):
@@ -1093,7 +1118,7 @@ def check_browser_waits(cfg, st):
             acc["remindedAt"] = now
             notify(cfg, "Claude sign-in still needs you", acc.get("needsHow") or email)
             if acc.get("needs") == "captcha":
-                browser(cfg, "front", email, timeout=60)
+                browser(cfg, "front", email, timeout=60, state=st)
 
 
 SHARE_WRITE = r"""
@@ -1216,6 +1241,8 @@ def publish(cfg, st):
         "renewWithinHours": cfg["renewWithinHours"], "needsYou": needs, "hosts": hosts_out, "signIns": rows,
         "browserSessions": sessions,
     }
+    if st.get("browserError") in NODE_ERRORS:
+        doc["browserError"] = st["browserError"]
     # The JSON last: its generatedAt says the markdown beside it is from the same run.
     return share_write(cfg, {PUBLISH_MD: render_markdown(doc)}) and \
         share_write(cfg, {PUBLISH_JSON: json.dumps(doc, indent=1) + "\n"})
@@ -1234,6 +1261,8 @@ def render_markdown(doc):
         lines += ["## Needs you (a person)", ""]
         lines += ["- **%s**: %s (since %s)" % (n["email"], n["how"] or n["reason"], when(n["since"])) for n in doc["needsYou"]]
         lines.append("")
+    if doc.get("browserError") in NODE_ERRORS:
+        lines += [NODE_ERRORS[doc["browserError"]], ""]
     for h in doc["hosts"]:
         if h.get("error"):
             lines.append("- **%s** could not be read: %s (last read %s)" % (h["host"], h["error"], when(h.get("readAt"))))
@@ -1289,6 +1318,9 @@ def cmd_tick(args, cfg):
     with Lock():
         st = load_state()
         st["lastTickAt"] = now_ms()
+        if node_path(cfg) is None and st.get("browserError") != "no_node":
+            st["browserError"] = "no_node"
+            log(NODE_ERRORS["no_node"])
         sync_from_share(cfg)
         results = scan(cfg, st)
         save_state(st)

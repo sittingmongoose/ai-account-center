@@ -58,6 +58,8 @@ export interface UsageFailoverTarget {
   /** Full account/source configuration, including identity/revision where the registry supplies it. */
   binding: string;
   primarySources: UsagePrimarySource[];
+  /** Windows Desktop quota uses a slower, staggered cadence. */
+  claudeDesktopCadence?: boolean;
   expectedEmail?: string | null;
   expectedIdentity?: UsageIdentity | null;
 }
