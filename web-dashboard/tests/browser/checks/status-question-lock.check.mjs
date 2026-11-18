@@ -127,13 +127,15 @@ export const tests = {
     const answerHistoryProblem = "The answer history can't be read right now.";
     let current = fixture.view({ answered: false, answerHistoryProblem });
     await openStatus(t, () => current);
-    await t.text('.sec-questions .plate-note.problem', answerHistoryProblem);
+    const historyNote = t.page.locator('.sec-questions .plate-note.problem').filter({ hasText: answerHistoryProblem });
+    await t.equal('Questions shows the answer-history error', await historyNote.innerText(), answerHistoryProblem);
     await t.text(notice, /It can be answered once the answer history can be read again\./);
     await t.check('the card stays locked during the outage', await t.page.locator(`${card} .opt-pick`).first().isDisabled());
 
     current = fixture.view({ answered: false });
     await reloadStatus(t, () => !!document.querySelector('article.q-card .opt-pick:not([disabled])'));
     await t.count(notice, 0);
-    await t.count('.sec-questions .plate-note.problem', 0);
+    await historyNote.waitFor({ state: 'detached' });
+    await t.equal('the answer-history error clears', await historyNote.count(), 0);
   },
 };
