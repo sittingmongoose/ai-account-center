@@ -604,6 +604,17 @@ pub fn board_for<'a>(u: &PinnedUpdate, projects: &'a [Project]) -> Option<&'a St
     hits.next().is_none().then_some(first)
 }
 
+fn task_note(item: &PinnedItem, closed: bool) -> Option<String> {
+    let outcome = item
+        .outcome
+        .as_ref()
+        .filter(|text| closed && !text.is_empty());
+    outcome
+        .or(item.note.as_ref())
+        .filter(|text| !text.is_empty())
+        .cloned()
+}
+
 /// The task groups, in the fixed order, without empty groups. With the board's item states each item goes to its
 /// state's group; without them only what the pin itself says is used: Left (blocked ones first) and Done, with an
 /// unknown state still in its own group.
@@ -637,11 +648,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&title, 60),
-                    note: item
-                        .outcome
-                        .clone()
-                        .or_else(|| item.note.clone())
-                        .filter(|n| !n.is_empty()),
+                    note: task_note(item, state == "done"),
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: (!KNOWN.contains(&state)).then(|| state.to_string()),
@@ -663,7 +670,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&it.title, 60),
-                    note: item.note.clone(),
+                    note: task_note(item, state == "done"),
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: odd,
@@ -683,11 +690,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&title, 60),
-                    note: item
-                        .outcome
-                        .clone()
-                        .or_else(|| item.note.clone())
-                        .filter(|n| !n.is_empty()),
+                    note: task_note(item, false),
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: odd,
@@ -700,11 +703,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&split_odd(&item.title).0, 60),
-                    note: item
-                        .outcome
-                        .clone()
-                        .or_else(|| item.note.clone())
-                        .filter(|n| !n.is_empty()),
+                    note: task_note(item, true),
                     time: item.time.clone(),
                     needs_you: item.needs_you.clone(),
                     odd_state: None,

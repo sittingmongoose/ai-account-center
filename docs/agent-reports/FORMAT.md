@@ -152,11 +152,18 @@ whole. `agent-report update` writes it together with `thread.json`.
 | `title` | no | RULES-v2 (wave 3): the name of the work, 1 to 60 characters; set when the T3 pin title isn't one |
 | `now` | no | RULES-v2: one sentence, 1 to 140 characters: what the thread is doing now. Missing: the page takes the summary's first sentence |
 | `next` | no | RULES-v2: the next milestone, 1 to 100 characters |
+| `nextByDay` | no | The calendar deadline for `next`, as `YYYY-MM-DD`, or null for a precise `nextBy` timestamp |
 | `stages` | no | RULES-v2: the thread's own steps, 2 to 7, in order: `{ "label", "state", "by", "waitingOn", "round", "of", "note" }` |
 | `deliverables` | no | RULES-v2: everything there is to open, up to 12, each with a version (below) |
 | `progress` | no | RULES-v2: a count the thread can prove, `{ "done", "total", "unit" }`, or null |
 | `readmeQuestions` | no | RULES-v2 section 5 (wave 3): a boolean. `agent-report` doesn't write it yet |
 
+- **Next deadlines in status and thread reports.** For a day-only deadline, write the date in `nextByDay`.
+  For a precise deadline, set `nextBy` to the timestamp and `nextByDay` to null. AAC displays a
+  calendar deadline through the end of that day in fixed EST (UTC−05:00). Agent-report 1.9 writes
+  a day-only deadline as the final second of the New York day. AAC still recognizes that legacy
+  encoding when `nextByDay` is absent. A precise deadline at the same instant is ambiguous in a
+  legacy report.
 - **Items:** `id` 1 to 64 characters (such as `F-08`, named as in the stream's task list when it has one); `title` 1
   to 300. An id may appear only once in `done` and once in `left`: AAC refuses a repeat.
 - **RULES-v2 fields (AAC's wave 3, published 2026-11-11 22:54Z; RULES-v2 sections 1 to 4).** All optional and additive. `agent-report update`

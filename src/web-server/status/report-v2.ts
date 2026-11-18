@@ -1,4 +1,4 @@
-import { count, fail, list, obj, oneOf, optIso, optText, text } from './schema-helpers';
+import { count, fail, list, obj, oneOf, optDay, optIso, optText, text } from './schema-helpers';
 
 /** Additive report data, retained for the next version of the Status view. */
 export interface ReportV2 {
@@ -15,6 +15,7 @@ export function reportV3(doc: Record<string, unknown>) {
   return {
     ...(doc.goal === undefined ? {} : { goal: optText(doc.goal, 'goal', 100) }),
     ...(doc.nextBy === undefined ? {} : { nextBy: optIso(doc.nextBy, 'nextBy') }),
+    ...(doc.nextByDay === undefined ? {} : { nextByDay: optDay(doc.nextByDay, 'nextByDay') }),
     ...(doc.nextByNote === undefined
       ? {}
       : { nextByNote: optText(doc.nextByNote, 'nextByNote', 60) }),

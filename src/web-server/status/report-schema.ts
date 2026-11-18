@@ -33,6 +33,7 @@ import {
   list,
   obj,
   oneOf,
+  optDay,
   optIso,
   optSlug,
   optText,
@@ -192,13 +193,6 @@ export interface TasksDoc extends DocHead, ReportV2 {
   items: TaskItem[];
 }
 
-function day(value: unknown, field: string): string | null {
-  if (value === null) return null;
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) fail(field);
-  optIso(`${value}T00:00:00Z`, field);
-  return value;
-}
-
 function item(value: unknown, field: string): TaskItem {
   const row = obj(value, field);
   const needsYou = row.needsYou;
@@ -229,7 +223,7 @@ function item(value: unknown, field: string): TaskItem {
     landed,
     ...(typeof needsYou === 'string' ? { needsYou } : {}),
     ...(row.due === undefined ? {} : { due: optIso(row.due, `${field}.due`) }),
-    ...(row.dueDay === undefined ? {} : { dueDay: day(row.dueDay, `${field}.dueDay`) }),
+    ...(row.dueDay === undefined ? {} : { dueDay: optDay(row.dueDay, `${field}.dueDay`) }),
     ...(row.dueNote === undefined ? {} : { dueNote: optText(row.dueNote, `${field}.dueNote`, 60) }),
     ...(row.dueWas === undefined ? {} : { dueWas: optIso(row.dueWas, `${field}.dueWas`) }),
     ...(row.doneAt === undefined ? {} : { doneAt: optIso(row.doneAt, `${field}.doneAt`) }),

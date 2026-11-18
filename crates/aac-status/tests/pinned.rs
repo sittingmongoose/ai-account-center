@@ -1,6 +1,7 @@
 //! The composer's words, over small fixture inputs. No share, no database, no clock: every
 //! test passes `nowMs` itself.
 
+use aac_num::ecma::parse_instant;
 use aac_status::pinned::{ComposeInput, PinnedUpdate, compose};
 use serde_json::{Value, json};
 
@@ -40,6 +41,97 @@ fn thread(fields: Value) -> Value {
 
 fn one_update(input: &ComposeInput) -> PinnedUpdate {
     compose(input).updates.into_iter().next().unwrap()
+}
+
+fn check_day_only_rollover(day: &str, encoded: &str, midnight: &str, offset_ms: i64) {
+    let midnight = parse_instant(midnight).unwrap();
+    let mut fixture = json!({
+        "nowMs": midnight - offset_ms,
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "writtenAtMs": midnight - 1_800_000,
+            "next": "Send the result", "nextBy": encoded
+        }))],
+        "tasks": [{
+            "writer":"vm.pm7-build", "writtenAtMs": midnight - 1_800_000, "seq":1,
+            "project":"pm7", "stream":"f",
+            "items":[{"id":"a","title":"Send results","state":"todo","dueDay":day}]
+        }]
+    });
+    for (now, label, late) in [
+        (midnight - offset_ms, "by Wed", false),
+        (midnight - 1, "by Wed", false),
+        (midnight, "late, was due by Wed", true),
+    ] {
+        fixture["nowMs"] = json!(now);
+        let update = as_json(&one_update(&input(fixture.clone())));
+        assert_eq!(update["nextTime"], json!({"text": label, "late": late}));
+        assert_eq!(update["left"][0]["time"], update["nextTime"]);
+        assert_eq!(update["lateCount"], if late { 2 } else { 0 });
+    }
+}
+
+#[test]
+fn november_writer_day_only_next_and_task_turn_late_together() {
+    check_day_only_rollover("2026-11-18", "2026-11-19T04:59:59Z", "2026-11-19T05:00:00Z", 500);
+}
+
+#[test]
+fn july_writer_day_only_next_and_task_turn_late_at_est_midnight() {
+    check_day_only_rollover("2026-07-15", "2026-07-16T03:59:59Z", "2026-07-16T05:00:00Z", 1_800_000);
+}
+
+#[test]
+fn explicitly_timed_next_can_use_the_same_instant_as_a_legacy_day_marker() {
+    let mut fixture = json!({
+        "nowMs": parse_instant("2026-11-19T04:59:59.500Z").unwrap(),
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "writtenAtMs": parse_instant("2026-11-19T04:50:00Z").unwrap(),
+            "next": "Send the result", "nextBy": "2026-11-19T04:59:59Z", "nextByDay": null
+        }))]
+    });
+    let view = one_update(&input(fixture.clone()));
+    assert_eq!(
+        as_json(&view)["nextTime"],
+        json!({"text":"late, was due 11:59 PM","late":true})
+    );
+
+    let thread = &mut fixture["threads"][0];
+    thread["nextByDay"] = json!("2026-11-18");
+    thread.as_object_mut().unwrap().remove("nextBy");
+    let view = one_update(&input(fixture));
+    assert_eq!(as_json(&view)["nextTime"], json!({"text":"by Wed","late":false}));
+}
+
+#[test]
+fn an_alias_board_wins_over_a_newer_shared_board() {
+    let mut fixture = json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [
+            thread(json!({"t3Thread":"t1","project":"pm7","stream":"f"})),
+            thread(json!({"t3Thread":"t1","writer":"vm.old-name","writtenAtMs":NOW-300_000,
+                          "project":"pm7","stream":"f"}))
+        ],
+        "tasks": [
+            {"writer":"vm.old-name","writtenAtMs":NOW-100_000,"seq":1,"project":"pm7","stream":"f",
+             "items":[{"id":"own","title":"Wait for the test logs","state":"waiting"}]},
+            {"writer":"vm.peer-fixture","writtenAtMs":NOW,"seq":9,"project":"pm7","stream":"f",
+             "items":[{"id":"peer","title":"Run the next batch","state":"working"}]}
+        ]
+    });
+    let update = as_json(&one_update(&input(fixture.clone())));
+    assert_eq!(update["displayState"], "waiting");
+    assert_eq!(update["board"]["writer"], "vm.old-name");
+    assert_eq!(update["board"]["shared"], false);
+    assert_eq!(update["left"][0]["id"], "own");
+
+    fixture["tasks"].as_array_mut().unwrap().remove(0);
+    let update = as_json(&one_update(&input(fixture)));
+    assert_eq!(update["displayState"], "working");
+    assert_eq!(update["board"]["writer"], "vm.peer-fixture");
+    assert_eq!(update["board"]["shared"], true);
+    assert_eq!(update["left"][0]["id"], "peer");
 }
 
 #[test]

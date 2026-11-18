@@ -550,6 +550,15 @@
         }
       ]
     },
+    "nextByDay": {
+      "description": "Calendar deadline as YYYY-MM-DD. Use null for a precise timestamp.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
     "nextByNote": {
       "type": "string",
       "maxLength": 60

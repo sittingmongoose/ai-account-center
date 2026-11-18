@@ -161,6 +161,7 @@ pub fn parse_status_file(bytes: &[u8], writer: &str) -> Result<ParsedStatus, Str
                     "next",
                     "goal",
                     "nextBy",
+                    "nextByDay",
                     "nextByNote",
                     "more",
                     "saidAt",

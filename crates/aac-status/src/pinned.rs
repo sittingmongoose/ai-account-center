@@ -762,21 +762,33 @@ fn date_clock(at: i64, now: i64) -> String {
     }
 }
 
-fn due_words(
-    due: Option<&str>,
-    day: Option<&str>,
-    note: Option<&str>,
-    was: Option<&str>,
-    now: i64,
-) -> Option<TimeView> {
+fn report_day(day: &str) -> Option<i64> {
+    report_instant(&format!("{day}T00:00:00Z")).map(|at| at.div_euclid(DAY_MS))
+}
+
+fn calendar_due(day: i64, now: i64) -> (String, bool) {
+    (format!("by {}", WEEKDAYS[civil::weekday(day)]), day < est_day(now))
+}
+
+fn next_due_day(marker: Option<&Json>, due: Option<&str>) -> Option<i64> {
+    if let Some(day) = marker {
+        // A date names a calendar day. An explicit null leaves the timestamp precise.
+        return day.as_str().and_then(report_day);
+    }
+    // Agent-report 1.9 encodes a day as 23:59:59 New York time, which can be
+    // 22:59:59 EST in summer. Older reports did not distinguish that instant.
+    let at = due.and_then(report_instant)?;
+    (at.rem_euclid(3_600_000) == 3_599_000
+        && matches!((at + EST * 60_000).div_euclid(3_600_000).rem_euclid(24), 22 | 23))
+    .then(|| est_day(at))
+}
+
+fn due_words(due: Option<&str>, day: Option<i64>, note: Option<&str>, was: Option<&str>, now: i64) -> Option<TimeView> {
     let moment = due.and_then(report_instant);
-    let date = day
-        .and_then(|day| report_instant(&format!("{day}T00:00:00Z")))
-        .map(|at| at.div_euclid(DAY_MS));
     let (mut text, late) = if let Some(at) = moment {
         (date_clock(at, now), at < now)
-    } else if let Some(day) = date {
-        (format!("by {}", WEEKDAYS[civil::weekday(day)]), day < est_day(now))
+    } else if let Some(day) = day {
+        calendar_due(day, now)
     } else {
         let note = note?.trim();
         let text = match note.split_once(':') {
@@ -806,10 +818,11 @@ fn finished_at(item: &ItemIn) -> Option<i64> {
 fn item_out(item: &ItemIn, now: i64, needs_you: Option<String>) -> ItemOut {
     let state = task_state(&item.state);
     let known = ["todo", "working", "review", "waiting", "blocked", "done", "dropped"].contains(&state);
-    let time = if is_open(item) {
+    let open = is_open(item);
+    let time = if open {
         due_words(
             item.due.as_deref(),
-            item.due_day.as_deref(),
+            item.due_day.as_deref().and_then(report_day),
             item.due_note.as_deref(),
             item.due_was.as_deref(),
             now,
@@ -824,8 +837,8 @@ fn item_out(item: &ItemIn, now: i64, needs_you: Option<String>) -> ItemOut {
         state: Some(state.to_string()),
         note: task_line(item),
         time,
-        outcome: item.outcome.clone(),
-        done_at: item.done_at.clone(),
+        outcome: if open { None } else { item.outcome.clone() },
+        done_at: if open { None } else { item.done_at.clone() },
         needs_you,
         blocked_on: item
             .blocked_on
@@ -976,6 +989,7 @@ fn compose_update(
     {
         if source.contains_key("next") {
             additions.remove("nextBy");
+            additions.remove("nextByDay");
             additions.remove("nextByNote");
         }
         for key in [
@@ -984,6 +998,7 @@ fn compose_update(
             "next",
             "goal",
             "nextBy",
+            "nextByDay",
             "nextByNote",
             "more",
             "saidAt",
@@ -1615,21 +1630,14 @@ fn compose_update(
     if has_next {
         let due = addition_text(&update.additions, "nextBy");
         let note = addition_text(&update.additions, "nextByNote");
-        update.next_time = due_words(due.as_deref(), None, note.as_deref(), None, input.now_ms);
-        // Agent-report encodes a day without an explicit time as the last second of that New York day.
-        // Its minute-precision clock inputs always have zero seconds.
-        if let Some(at) = due.as_deref().and_then(report_instant)
-            && at.rem_euclid(3_600_000) == 3_599_000
-            && matches!((at + EST * 60_000).div_euclid(3_600_000).rem_euclid(24), 22 | 23)
-            && let Some(time) = update.next_time.as_mut()
-        {
-            let day = WEEKDAYS[civil::weekday(est_day(at))];
-            time.text = if time.late {
-                format!("late, was due by {day}")
-            } else {
-                format!("by {day}")
-            };
-        }
+        let day = next_due_day(update.additions.get("nextByDay"), due.as_deref());
+        update.next_time = due_words(
+            due.as_deref().filter(|_| day.is_none()),
+            day,
+            note.as_deref(),
+            None,
+            input.now_ms,
+        );
     }
     let rows = update.left.as_deref().unwrap_or_default();
     let missing = rows.iter().filter(|row| row.note.is_none()).count();
@@ -1670,29 +1678,6 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
             .iter()
             .filter(|doc| same_thread_id(&doc.t3_thread, &pin.id))
             .max_by_key(|doc| (doc.written_at_ms, doc.seq));
-        // The board comes from the report's project and stream; a thread that reports only
-        // `status.json` names neither, so the same writer's `tasks.json` is its board (B8).
-        let tasks = thread
-            .and_then(|thread| thread.project.as_ref().zip(thread.stream.as_ref()))
-            .and_then(|(project, stream)| {
-                input
-                    .tasks
-                    .iter()
-                    .filter(|board| &board.project == project && &board.stream == stream)
-                    .max_by_key(|board| (board.written_at_ms, board.seq))
-            })
-            .or_else(|| {
-                let writer = thread
-                    .map(|thread| thread.writer.as_str())
-                    .or(status.map(|doc| doc.writer.as_str()));
-                writer.and_then(|writer| {
-                    input
-                        .tasks
-                        .iter()
-                        .filter(|board| board.writer == writer)
-                        .max_by_key(|board| (board.written_at_ms, board.seq))
-                })
-            });
         // A standalone status refusal (no good copy) for this pin's writer attaches to
         // the pin itself (F13), matched the way B8 matches: the report whose thread
         // names this pin by the normalised id. The panel entry stays, too.
@@ -1719,6 +1704,19 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
                 pin_writers.push(writer);
             }
         }
+        let tasks = input
+            .tasks
+            .iter()
+            .filter(|board| pin_writers.contains(&board.writer.as_str()))
+            .max_by_key(|board| (board.written_at_ms, board.seq))
+            .or_else(|| {
+                let (project, stream) = thread.and_then(|doc| doc.project.as_ref().zip(doc.stream.as_ref()))?;
+                input
+                    .tasks
+                    .iter()
+                    .filter(|board| &board.project == project && &board.stream == stream)
+                    .max_by_key(|board| (board.written_at_ms, board.seq))
+            });
         updates.push(compose_update(
             pin,
             input,

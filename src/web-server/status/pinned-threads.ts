@@ -264,6 +264,7 @@ export class PinnedThreadsCollector {
         doing: row.doc.doing,
         goal: row.doc.goal,
         nextBy: row.doc.nextBy,
+        nextByDay: row.doc.nextByDay,
         nextByNote: row.doc.nextByNote,
         more: row.doc.more,
         saidAt: row.doc.saidAt,

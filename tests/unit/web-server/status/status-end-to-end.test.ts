@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from 'bun:test';
 import { createHash } from 'crypto';
 import { Database } from 'bun:sqlite';
 import express from 'express';
+import { execFileSync } from 'node:child_process';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import * as fs from 'fs';
@@ -27,6 +28,7 @@ import {
   item,
   NOW,
   tasksDoc,
+  tempDirs,
   threadDoc,
   writeCard,
   writeReport,
@@ -51,6 +53,8 @@ const hasModule = fs.existsSync(PREBUILT);
 // job never builds the module, so forcing it there would go red on every push (N2).
 const required = Boolean(process.env.AAC_REQUIRE_NATIVE);
 const withModule = hasModule || required ? it : it.skip;
+// Point at tools/agent-report/agent-report from t3-superpowers commit 42f1866.
+const agentReport19 = process.env.AAC_AGENT_REPORT_19;
 
 const PIN_ID = 'pin-1';
 const PIN_TITLE = 'Build PMConcept7';
@@ -241,6 +245,100 @@ withModule(
 );
 
 describe('the status endpoint from real files', () => {
+  (agentReport19 ? withModule : it.skip)(
+    'drops the old completion when the 1.9 writer reopens a task',
+    async () => {
+      const dirs = tempDirs();
+      const reports = dirs.make('aac-status-reopen-');
+      const db = fixturePinDb();
+      try {
+        const v1 = path.join(reports, 'v1');
+        const writer = 'vm.round2-fixture';
+        const board = path.join(reports, 'board.json');
+        const outcome = 'First pass found the expected status.';
+        const note = 'Rerun all filters after reopening.';
+        fs.cpSync(
+          path.join(import.meta.dir, '../../../../docs/agent-reports/schemas'),
+          path.join(v1, 'schemas'),
+          { recursive: true }
+        );
+        fs.mkdirSync(path.join(reports, 'registry'));
+        writeReport(
+          reports,
+          writer,
+          'thread.json',
+          threadDoc(writer, {
+            writtenAt: new Date().toISOString(),
+            agent: { name: 'round2-fixture', t3Thread: PIN_ID },
+          })
+        );
+        fs.writeFileSync(
+          board,
+          JSON.stringify({
+            project: 'proj',
+            stream: 'S',
+            items: [{ id: 'A1', title: 'Check filters', state: 'todo' }],
+          })
+        );
+        const run = (...args: string[]) =>
+          execFileSync('node', [agentReport19!, ...args], {
+            cwd: reports,
+            env: {
+              PATH: process.env.PATH,
+              T3SP_CONFIG_HOME: reports,
+              PM_MAIL_ROOT: reports,
+              PM_MAIL_NAME: 'round2-fixture',
+              AGENT_REPORTS_ROOT: v1,
+              AGENT_REPORT_MACHINE: 'vm',
+              AGENT_REPORT_T3: 'none',
+              AGENT_REPORT_READER_TIMEOUT: '0',
+              T3CODE_THREAD_ID: PIN_ID,
+            },
+          });
+        run('tasks', '--file', board);
+        run('task', 'A1', '--done', outcome);
+
+        const reader = new AgentReportsReader({ root: () => reports, now: Date.now });
+        const collector = new PinnedThreadsCollector({
+          file: PREBUILT,
+          dbPath: db.file,
+          readRemote: async () => '[]',
+          now: Date.now,
+          reportsRoot: () => reports,
+        });
+        await collector.collect();
+        const read = async () => {
+          await reader.scan();
+          const state = reader.snapshot();
+          expect(state.problems).toEqual([]);
+          await collector.compose(state, []);
+          const view = collector.view();
+          if ('unavailable' in view) throw new Error(`panel unavailable: ${view.unavailable}`);
+          return view.updates[0];
+        };
+        expect((await read()).done).toEqual([
+          expect.objectContaining({ id: 'A1', outcome, doneAt: expect.any(String) }),
+        ]);
+
+        run('task', 'A1', '--state', 'working', '--note', note, '--due', 'tomorrow');
+        const raw = JSON.parse(
+          fs.readFileSync(path.join(v1, 'writers', writer, 'tasks.json'), 'utf8')
+        );
+        expect(raw.items[0]).toMatchObject({ note, outcome, doneAt: expect.any(String) });
+        const reopened = await read();
+        expect(reopened.done ?? []).toEqual([]);
+        expect(reopened.left).toEqual([
+          expect.objectContaining({ id: 'A1', note, state: 'working' }),
+        ]);
+        expect(reopened.left?.[0]).not.toHaveProperty('outcome');
+        expect(reopened.left?.[0]).not.toHaveProperty('doneAt');
+      } finally {
+        db.cleanup();
+        dirs.cleanup();
+      }
+    }
+  );
+
   withModule('reads report files and pins through the real readers and composer', async () => {
     const reports = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-status-e2e-reports-'));
     const db = fixturePinDb();
