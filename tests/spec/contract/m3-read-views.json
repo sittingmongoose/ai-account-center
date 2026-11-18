@@ -166584,6 +166584,18 @@
         "batches": [],
         "complete": true
       },
+      "reportProblems": [
+        {
+          "file": "writers/vm.fixture/thread.json",
+          "reason": "Fixture malformed.",
+          "since": 1793982540000
+        },
+        {
+          "file": "limits/writers",
+          "reason": "Fixture scan limit.",
+          "since": 1793982540000
+        }
+      ],
       "pinned": {
         "asOfMs": 1793982600000,
         "head": "Fixture pins",
@@ -167612,6 +167624,18 @@
         "batches": [],
         "complete": true
       },
+      "reportProblems": [
+        {
+          "file": "writers/vm.fixture/thread.json",
+          "reason": "Fixture malformed.",
+          "since": 1793982540000
+        },
+        {
+          "file": "limits/writers",
+          "reason": "Fixture scan limit.",
+          "since": 1793982540000
+        }
+      ],
       "pinned": {
         "asOfMs": 1793982600000,
         "head": "Fixture pins",
@@ -168640,6 +168664,18 @@
         "batches": [],
         "complete": true
       },
+      "reportProblems": [
+        {
+          "file": "writers/vm.fixture/thread.json",
+          "reason": "Fixture malformed.",
+          "since": 1793982540000
+        },
+        {
+          "file": "limits/writers",
+          "reason": "Fixture scan limit.",
+          "since": 1793982540000
+        }
+      ],
       "pinned": {
         "asOfMs": 1793982600000,
         "head": "Fixture pins",

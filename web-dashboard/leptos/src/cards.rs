@@ -113,14 +113,6 @@ fn steady(cards: &[Card]) -> Vec<Card> {
 #[component]
 pub fn CardsPanel() -> impl IntoView {
     let live = expect_context::<Live>();
-    let source = Signal::derive(move || {
-        let view = live.view.get()?;
-        view.sources
-            .iter()
-            .find(|s| s.id == view.cards.source)
-            .cloned()
-            .map(|source| crate::status::report_source_for_cards(source, view.pinned.as_ref()))
-    });
     let open = Memo::new(move |_| {
         live.view.with(|v| {
             v.as_ref()
@@ -228,12 +220,11 @@ pub fn CardsPanel() -> impl IntoView {
                 }
                 fallback=move || view! {
                     <div class="plate-head"><h2>"Questions for you"</h2><span class="plate-meta">"None waiting"</span></div>
-                    {source_note(source.get(), "No reading from the agent reports yet.")}
                     {history_problem().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
                     <p class="q-empty">"No questions waiting."</p>
                 }
             >
-                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem source=source history_problem=Signal::derive(history_problem) list_open=list_open/>
+                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem history_problem=Signal::derive(history_problem) list_open=list_open/>
             </Show>
             <UnsentClosed open=open drafts=drafts/>
             <Show when=move || !answered().is_empty()>
@@ -258,7 +249,6 @@ fn Deck(
     deck_view: RwSignal<DeckView>,
     sending: RwSignal<bool>,
     problem: RwSignal<Option<String>>,
-    source: Signal<Option<Source>>,
     history_problem: Signal<Option<String>>,
     list_open: RwSignal<bool>,
 ) -> impl IntoView {
@@ -510,7 +500,6 @@ fn Deck(
                 </div>
             </Show>
         </div>
-        {move || source_note(source.get(), "No reading from the agent reports yet.")}
         {move || history_problem.get().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
         // below desktop the head's tools are hidden: the recommendations button sits in the body
         <Show when=can_use_rec>
@@ -637,7 +626,19 @@ fn CardBody(
     } else {
         c.asked_by.clone()
     };
+    let live = expect_context::<Live>();
     // A card the server can't vouch for right now is shown but can't be answered.
+    let report_problem = c.problem.as_ref().is_some_and(|reason| {
+        let file = format!("writers/{}/cards/{}.json", c.writer, c.id);
+        live.view.with_untracked(|view| {
+            view.as_ref().is_some_and(|view| {
+                view.report_problems
+                    .iter()
+                    .any(|problem| problem.file == file && problem.reason == *reason)
+                    || view.cards.answer_history_problem.as_ref() == Some(reason)
+            })
+        })
+    });
     let locked = !c.can_answer();
     let standing = move || drafts.with(|d| drafts::standing(d, &card.get_value()));
     let chosen = move |key: &str| {
@@ -654,7 +655,6 @@ fn CardBody(
         ),
         _ => None,
     };
-    let live = expect_context::<Live>();
     // The facts line under the question, in the card guide's terms.
     let mut facts: Vec<(&'static str, String)> = Vec::new();
     facts.push((
@@ -739,7 +739,7 @@ fn CardBody(
                 {(c.kind != "sample" && (locked || c.problem.is_some())).then(|| view! {
                     <p class="q-problem">
                         {if locked { "Can't be answered right now. " } else { "" }}
-                        {c.problem.clone().unwrap_or_else(|| "The card could not be checked.".into())}
+                        {(!report_problem).then(|| c.problem.clone().unwrap_or_else(|| "The card could not be checked.".into()))}
                         {locked.then_some(" The last good version is shown; it can be answered once the agent rewrites it.")}
                     </p>
                 })}

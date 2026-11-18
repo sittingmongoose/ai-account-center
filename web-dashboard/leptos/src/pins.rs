@@ -73,10 +73,10 @@ impl Pin {
                     .into(),
             ));
         }
-        if let Some(problem) = self.board.as_ref().and_then(|b| b.problem.clone()) {
+        if self.board.as_ref().is_some_and(|b| b.problem.is_some()) {
             out.push((
                 "Task list unreadable.".into(),
-                format!("Task list unreadable: {problem} Showing its last good copy."),
+                "Task list unreadable. Showing its last good copy.".into(),
             ));
         }
         out
@@ -1070,11 +1070,8 @@ pub fn PinnedPanelView() -> impl IntoView {
     });
     let close_sheet = Callback::new(move |_: ()| sheet_id.set(None));
     let report_problems = Memo::new(move |_| {
-        data.with(|d| {
-            d.as_ref()
-                .map(|(p, _)| report_problem_lines(p))
-                .unwrap_or_default()
-        })
+        live.view
+            .with(|v| v.as_ref().map(report_problem_lines).unwrap_or_default())
     });
     if let Some(frame) = use_context::<crate::frame::FrameCtx>() {
         Effect::new(move |_| {

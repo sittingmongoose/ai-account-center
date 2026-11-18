@@ -832,6 +832,7 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     },
     sources,
     cards,
+    ...(inputs.reports.problems.length ? { reportProblems: inputs.reports.problems } : {}),
     // Pass-through only: the pinned panel's own words, or its unavailability (pinned-threads.ts).
     ...(inputs.pinned ? { pinned: inputs.pinned } : {}),
     // Pass-through only: the spend-by-stream panel's own words (spend-by-stream.ts).

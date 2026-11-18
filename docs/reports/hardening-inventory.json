@@ -791,7 +791,7 @@
         },
         {
           "file": "src/web-server/status/status-view.ts",
-          "loc": 870
+          "loc": 871
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",

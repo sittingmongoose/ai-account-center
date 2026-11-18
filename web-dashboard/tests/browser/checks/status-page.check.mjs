@@ -284,9 +284,9 @@ export const tests = {
     view.pinned.statusProblems.push(view.pinned.statusProblems[0]);
     view.pinned.machineProblems = [{ machine: 'alexis', label: 'Alexis PC', text: 'Pinned threads unavailable on Alexis PC: it did not answer.' }];
     const reportSource = view.sources.find((s) => s.id === 'agent-reports');
-    const otherReport = 'vm.other/card.json (invalid card)';
+    view.reportProblems = writers.map((writer) => ({ file: `writers/${writer}`, reason, since: 1 }));
     reportSource.state = 'unreadable';
-    reportSource.detail = `3 files unreadable since 1:10 PM: ${writers.map((writer) => `${writer} (${reason})`).join(', ')}, ${otherReport}.`;
+    reportSource.detail = `2 files unreadable since 1:10 PM: ${writers.map((writer) => `${writer} (${reason})`).join(', ')}.`;
     view.headline.strip.items.push({
       key: 'sources', value: '1', label: 'source not current', short: 'not current', tone: 'warn',
       detail: `Not current: Agent reports: ${reportSource.detail}`,
@@ -312,10 +312,112 @@ export const tests = {
       await t.check('the problem list stays open while its contents update', await drawer.evaluate((el) => el.open));
     }
     await t.page.locator('.st-head .sum-i[data-key="sources"]').click();
-    await t.text('.st-head .sum-more', /Agent reports: 3 files unreadable since 1:10 PM/);
+    await t.text('.st-head .sum-more', /Agent reports: 2 files unreadable since 1:10 PM/);
     await t.check('the source summary does not repeat file problems', !/muse-run|invalid card/.test(await t.page.locator('.st-head .sum-more').innerText()));
-    await t.text('.sec-questions .plate-note', /vm\.other\/card\.json/);
-    await t.check('questions keep unrelated file warnings without repeating pinned reports', !/muse-run/.test(await t.page.locator('.sec-questions').innerText()));
+    await t.check('Questions omit the report file warnings', !/muse-run/.test(await t.page.locator('.sec-questions').innerText()));
+  },
+
+  async 'status report collection: malformed thread file from the server scan'(t) {
+    await t.viewport(1440, 900);
+    const writer = 'vm.review-malformed';
+    const folder = path.join(t.state.reports, 'v1', 'writers', writer);
+    fs.mkdirSync(path.join(folder, 'cards'), { recursive: true });
+    fs.writeFileSync(path.join(folder, 'thread.json'), '{oops');
+    await t.app.signIn();
+    // Keep the pin source fixed at the reviewer's five failures, and send the real report
+    // reader's result through. Wait for its next scan if the server started before the write.
+    await t.page.route((u) => new URL(u).pathname === '/api/status', async (route) => {
+      let view;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const response = await route.fetch();
+        view = await response.json();
+        if (view.sources.find((s) => s.id === 'agent-reports')?.detail.includes(writer)) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      view.pinned = {
+        ...fixture('status-design-view.json').pinned,
+        updates: [],
+        statusProblems: [],
+        machineProblems: Array.from({ length: 5 }, (_, i) => ({
+          machine: `fixture-${i}`,
+          text: `Test computer ${i + 1} did not answer for pinned threads.`,
+        })),
+      };
+      if (view.reportProblems) view.reportProblems = view.reportProblems.filter((p) => p.file === `writers/${writer}/thread.json`);
+      await route.fulfill({ json: view });
+    });
+    const answer = t.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/status');
+    await t.goto('/app/status', { settleMs: 300 });
+    const view = await (await answer).json();
+    const source = view.sources.find((s) => s.id === 'agent-reports');
+    await t.check('the real reader refused the malformed thread', source?.state === 'unreadable' && source.detail.includes(`${writer}/thread.json`));
+    const drawer = t.page.locator('.c2-report-problems');
+    await t.text('.c2-report-problems summary', '6 report problems');
+    await drawer.locator('summary').click();
+    await t.check('the drawer names the writer and the malformed thread once', await drawer.locator('li').filter({ hasText: /vm\.review-malformed.*thread report.*not valid JSON/i }).count() === 1);
+    await t.check('Questions omit the malformed thread error', !(await t.page.locator('.sec-questions').innerText()).includes(writer));
+    await t.crop('malformed-thread-report', '.sec-pinned', 'Malformed thread included with five pin-source failures');
+  },
+
+  async 'status report collection: writer listing failure from both readers'(t) {
+    await t.viewport(1440, 900);
+    const view = fixture('status-design-view.json');
+    const writer = 'vm.review-writer';
+    const file = `writers/${writer}`;
+    const reason = 'folder could not be listed';
+    view.reportProblems = [{ file, reason, since: 1 }];
+    view.pinned.machineProblems = [];
+    view.pinned.statusProblems = [{ file: `${file}/status.json`, reason: `its ${reason}`, sinceMs: 1 }];
+    const source = view.sources.find((s) => s.id === 'agent-reports');
+    source.state = 'unreadable';
+    source.detail = `1 file unreadable since 1:10 PM: ${writer} (${reason}).`;
+    view.headline.strip.items.push({
+      key: 'sources', value: '1', label: 'source not current', short: 'not current', tone: 'warn',
+      detail: `Not current: Agent reports: ${source.detail}`,
+    });
+    view.cards.answerHistoryProblem = 'The answer history could not be read.';
+    await openStatus(t, view);
+    const drawer = t.page.locator('.c2-report-problems');
+    await t.text('.c2-report-problems summary', '1 report problem');
+    await drawer.locator('summary').click();
+    await t.count('.c2-report-problems li', 1);
+    await t.text('.c2-report-problems li', /vm\.review-writer.*report folder could not be listed/);
+    await t.text('.sec-questions .plate-note', 'The answer history could not be read.');
+    await t.check('Questions omit the writer-folder error', !(await t.page.locator('.sec-questions').innerText()).includes(writer));
+    await t.page.locator('.st-head .sum-i[data-key="sources"]').click();
+    await t.text('.st-head .sum-more', 'Not current: Agent reports: 1 file unreadable since 1:10 PM.');
+    await t.crop('writer-folder-report', '.sec-pinned', 'One drawer entry for both readers’ writer-folder failure');
+  },
+
+  async 'status report collection: distinct files and cached folder children'(t) {
+    await t.viewport(1440, 900);
+    const view = fixture('status-design-view.json');
+    const card = view.cards.open[0];
+    view.cards.open = [card];
+    card.problem = 'not valid JSON';
+    card.answerable = false;
+    const cardFile = `writers/${card.writer}/cards/${card.id}.json`;
+    const folder = 'writers/vm.cached-writer';
+    const listing = 'folder could not be listed';
+    view.reportProblems = [
+      [folder, listing],
+      [`${folder}/thread.json`, `its ${listing}`],
+      [`${folder}/cards/vm.cached-writer--Q1.json`, `its ${listing}`],
+      ['writers/vm.distinct/tasks.json', 'not valid JSON'],
+      [cardFile, card.problem],
+    ].map(([file, reason]) => ({ file, reason, since: 1 }));
+    view.pinned.machineProblems = [];
+    view.pinned.statusProblems = [
+      { file: `${folder}/status.json`, reason: `its ${listing}`, sinceMs: 1 },
+      { file: 'writers/vm.distinct/status.json', reason: 'status.json not valid JSON', sinceMs: 1 },
+    ];
+    await openStatus(t, view);
+    await t.text('.c2-report-problems summary', '4 report problems');
+    await t.page.locator('.c2-report-problems summary').click();
+    await t.count('.c2-report-problems li', 4);
+    await t.text('.c2-report-problems ul', /vm\.cached-writer.*report folder.*vm\.distinct.*task report.*question card.*vm\.distinct.*status report/s);
+    await t.text('article.q-card .q-problem', /Can't be answered right now.*last good version/);
+    await t.check('the cached card explains its lock without repeating the file problem', !(await t.page.locator('article.q-card .q-problem').innerText()).includes(card.problem));
   },
 
   async 'status question disclosures retain their choices when the card changes'(t) {
@@ -517,7 +619,8 @@ export const tests = {
     await t.text('.sec-questions .plate-meta', /\b9 open/);
     await t.text('.sec-machines', /ssh refused/);
     await t.text('.sec-machines', /under the 50 GB floor/);
-    await t.text('.sec-questions .plate-note', /unreadable/i);
+    await t.page.locator('.st-head .sum-i[data-key="sources"]').click();
+    await t.text('.st-head .sum-more', /unreadable/i);
     await t.check('nothing reads as zero for a machine with no reading', async () =>
       t.page.evaluate(() => {
         const nas = [...document.querySelectorAll('.mach-table .row')].find((m) =>

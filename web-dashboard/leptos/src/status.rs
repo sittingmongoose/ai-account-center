@@ -164,123 +164,128 @@ pub(crate) fn cached_notice(p: &PinnedUpdate) -> impl IntoView + use<> {
     }
 }
 
-/// A refusal can occur in both the status reader's list and the pin it matched.
-fn report_refusals(panel: &PinnedPanel) -> Vec<(&StatusProblem, Option<&str>)> {
-    let mut seen = std::collections::BTreeSet::new();
-    panel
-        .updates
+/// The readers mark a folder and its cached children, and the status reader can carry the same
+/// failure under status.json. Use the failing folder's path for all of those observations.
+fn problem_path<'a>(
+    file: &'a str,
+    reason: &str,
+    folders: &std::collections::BTreeSet<&str>,
+) -> &'a str {
+    if reason == "folder name is not a writer name" {
+        return file.strip_suffix("/status.json").unwrap_or(file);
+    }
+    if reason.starts_with("its folder could not be listed")
+        && let Some((parent, _)) = file.rsplit_once('/')
+    {
+        if let Some(writer) = parent.strip_suffix("/cards")
+            && folders.contains(writer)
+            && !folders.contains(parent)
+        {
+            return writer;
+        }
+        return parent;
+    }
+    file
+}
+
+fn problem_words(path: &str, reason: &str, title: Option<&str>) -> String {
+    if path.starts_with("limits/") {
+        return format!("{reason}.");
+    }
+    let relative = path.strip_prefix("writers/").unwrap_or(path);
+    let (writer, file) = relative.split_once('/').unwrap_or((relative, ""));
+    if reason == "folder name is not a writer name" {
+        return format!("The report folder for {writer} has an invalid writer name.");
+    }
+    let reason = reason.strip_prefix("its ").unwrap_or(reason);
+    if let Some(more) = reason.strip_prefix("folder could not be listed") {
+        let folder = if file == "cards" {
+            "card folder"
+        } else {
+            "report folder"
+        };
+        return format!("{writer}’s {folder} could not be listed{more}.");
+    }
+    let name = match file {
+        "status.json" => "status report".to_string(),
+        "thread.json" => "thread report".to_string(),
+        "tasks.json" => "task report".to_string(),
+        "" => "report".to_string(),
+        file => file.strip_prefix("cards/").map_or_else(
+            || format!("report file {file}"),
+            |card| {
+                format!(
+                    "question card {}",
+                    card.strip_suffix(".json").unwrap_or(card)
+                )
+            },
+        ),
+    };
+    let owner = title.filter(|t| !t.trim().is_empty()).unwrap_or(writer);
+    let subject = if owner.is_empty() {
+        "A report".to_string()
+    } else {
+        format!("{owner}’s {name}")
+    };
+    let reason = reason.strip_prefix("status.json ").unwrap_or(reason);
+    if reason.is_empty() {
+        format!("{subject} could not be read.")
+    } else {
+        format!("{subject} could not be read ({reason}).")
+    }
+}
+
+pub(crate) fn report_problem_lines(view: &StatusView) -> Vec<String> {
+    let panel = view.pinned.as_ref();
+    let updates = panel.into_iter().flat_map(|p| &p.updates);
+    let refusals: std::collections::BTreeMap<_, _> = updates
+        .clone()
+        .filter_map(|u| Some((u.refusal.as_ref()?.file.as_str(), u.title.as_str())))
+        .collect();
+    let problems = view
+        .report_problems
         .iter()
-        .filter_map(|u| Some((u.refusal.as_ref()?, Some(u.title.as_str()))))
-        .chain(panel.status_problems.iter().map(|problem| (problem, None)))
-        .filter(|(p, _)| seen.insert((p.file.trim(), p.reason.trim().trim_end_matches('.'))))
-        .collect()
-}
-
-fn report_writer(file: &str) -> &str {
-    let file = file.trim();
-    let file = file.strip_prefix("writers/").unwrap_or(file);
-    file.strip_suffix("/status.json").unwrap_or(file)
-}
-
-pub(crate) fn report_problem_lines(panel: &PinnedPanel) -> Vec<String> {
-    let mut seen = std::collections::BTreeSet::new();
+        .chain(panel.into_iter().flat_map(|p| &p.status_problems))
+        .chain(updates.filter_map(|u| u.refusal.as_ref()));
+    let folders = problems
+        .clone()
+        .filter(|p| p.reason.starts_with("folder could not be listed"))
+        .map(|p| p.file.trim())
+        .collect();
+    let mut machines = std::collections::BTreeSet::new();
     let mut lines: Vec<_> = panel
-        .machine_problems
-        .iter()
+        .into_iter()
+        .flat_map(|p| &p.machine_problems)
         .map(|m| m.text.trim())
-        .filter(|text| !text.is_empty() && seen.insert(*text))
+        .filter(|text| !text.is_empty() && machines.insert(*text))
         .map(str::to_owned)
         .collect();
-    lines.extend(report_refusals(panel).into_iter().map(|(problem, title)| {
-        let writer = report_writer(&problem.file);
-        let subject = title
-            .filter(|title| !title.trim().is_empty())
-            .or_else(|| (!writer.is_empty()).then_some(writer));
-        let head = subject.map_or_else(
-            || "A status report could not be read".to_string(),
-            |name| format!("{name}’s status report could not be read"),
-        );
-        match problem.reason.trim().trim_end_matches('.') {
-            "" => format!("{head}."),
-            "folder name is not a writer name" => {
-                format!("{head} because the folder name is invalid.")
-            }
-            reason => format!("{head} ({reason})."),
+    let mut seen = std::collections::BTreeSet::new();
+    for p in problems {
+        let reason = p.reason.trim().trim_end_matches('.');
+        let file = p.file.trim();
+        let path = problem_path(file, reason, &folders);
+        // A missing file label gives no identity. Preserve distinct reasons in that case.
+        if seen.insert((path, path.is_empty().then_some(reason))) {
+            let title = (path == file)
+                .then(|| refusals.get(file).copied())
+                .flatten();
+            lines.push(problem_words(path, reason, title));
         }
-    }));
+    }
     lines
-}
-
-/// The report reader includes a short file preview in its source detail. The count and time still
-/// describe the source when a pinned report's full problem is displayed below.
-fn report_source_parts(source: &Source) -> Option<(&str, &str)> {
-    if source.id == "agent-reports"
-        && source.state == "unreadable"
-        && source.detail.contains(" unreadable since ")
-    {
-        source.detail.split_once(": ")
-    } else {
-        None
-    }
-}
-
-fn omit_report_preview(preview: &mut String, file: &str, reason: &str) {
-    let entry = format!("{file} ({reason})");
-    while let Some((start, end)) = preview.match_indices(&entry).find_map(|(start, entry)| {
-        let end = start + entry.len();
-        let before = &preview[..start];
-        let after = &preview[end..];
-        match (
-            before.is_empty(),
-            before.ends_with(", "),
-            after.starts_with(", "),
-            after.starts_with('.'),
-        ) {
-            (true, _, true, _) => Some((start, end + 2)),
-            (_, true, true, _) | (_, true, _, true) => Some((start - 2, end)),
-            (true, _, _, true) => Some((start, end + 1)),
-            _ => None,
-        }
-    }) {
-        preview.replace_range(start..end, "");
-    }
-    if preview.starts_with(' ') {
-        *preview = preview.trim_start().to_string();
-    }
-}
-
-pub(crate) fn report_source_for_cards(mut source: Source, panel: Option<&PinnedPanel>) -> Source {
-    if let Some((head, preview)) = report_source_parts(&source) {
-        let mut preview = preview.to_string();
-        for (problem, _) in panel.into_iter().flat_map(report_refusals) {
-            let file = problem
-                .file
-                .strip_prefix("writers/")
-                .unwrap_or(&problem.file);
-            omit_report_preview(&mut preview, file, &problem.reason);
-            // The directory scan reports this refusal against the folder, the status scan
-            // against the status file in it.
-            if problem.reason == "folder name is not a writer name"
-                && let Some(folder) = file.strip_suffix("/status.json")
-            {
-                omit_report_preview(&mut preview, folder, &problem.reason);
-            }
-        }
-        source.detail = if preview.is_empty() {
-            format!("{head}.")
-        } else {
-            format!("{head}: {preview}")
-        };
-    }
-    source
 }
 
 fn headline_strip(view: &StatusView) -> Option<Strip> {
     let mut strip = view.headline.strip.clone()?;
-    if let Some((source, (head, _))) = view
-        .sources
-        .iter()
-        .find_map(|s| report_source_parts(s).map(|parts| (s, parts)))
+    // Older servers send these details only in the summary. Keep that fallback until the
+    // response also includes the complete list for the report-problems disclosure.
+    if !view.report_problems.is_empty()
+        && let Some(source) = view
+            .sources
+            .iter()
+            .find(|s| s.id == "agent-reports" && s.state == "unreadable")
+        && let Some((head, _)) = source.detail.split_once(": ")
         && let Some(item) = strip.items.iter_mut().find(|i| i.key == "sources")
     {
         item.detail = item
