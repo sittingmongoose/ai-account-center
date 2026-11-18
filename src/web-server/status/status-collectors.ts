@@ -666,7 +666,9 @@ export const REMOTE_MACHINES = Object.freeze(
 
 const LINUX_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk / | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
-const MAC_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(sysctl -n hw.ncpu)"; printf 'load=%s\n' "$(sysctl -n vm.loadavg | awk '{print $2}')"; printf 'memTotalB=%s\n' "$(sysctl -n hw.memsize)"; vm_stat | awk '/page size of/{print "pageSize="$8} /^Pages (free|inactive|speculative|purgeable):/{v=$NF; sub(/\.$/,"",v); print "pagesAvail="v}'; c=$(ps -A -o %cpu=) && p=$(printf '%s\n' "$c" | awk '$1 ~ /^[0-9]+([.][0-9]+)?$/ {s+=$1; n++} END {if (n) print s}') && [ -n "$p" ] && printf 'cpuPct=%s\n' "$p"; d=/System/Volumes/Data; [ -d "$d" ] || d=/; df -Pk "$d" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
+const MAC_MEMORY_PROBE = String.raw`printf 'memTotalB=%s\n' "$(sysctl -n hw.memsize)"; m=$(sysctl -n kern.memorystatus_level 2>/dev/null) || m=; if [ -z "$m" ]; then m=$(memory_pressure 2>/dev/null | awk '/^System-wide memory free percentage:[[:space:]]+[0-9]+%[[:space:]]*$/ {sub(/%$/, "", $5); print $5; exit}'); fi; printf 'memAvailPct=%s\n' "$m"`;
+
+const MAC_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(sysctl -n hw.ncpu)"; printf 'load=%s\n' "$(sysctl -n vm.loadavg | awk '{print $2}')"; ${MAC_MEMORY_PROBE}; c=$(ps -A -o %cpu=) && p=$(printf '%s\n' "$c" | awk '$1 ~ /^[0-9]+([.][0-9]+)?$/ {s+=$1; n++} END {if (n) print s}') && [ -n "$p" ] && printf 'cpuPct=%s\n' "$p"; d=/System/Volumes/Data; [ -d "$d" ] || d=/; df -Pk "$d" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
 const WINDOWS_PROBE_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
@@ -768,21 +770,18 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
     const value = n(key);
     return value === null ? null : value * 1024;
   };
-  let memTotal = kib('memTotalKb') ?? n('memTotalB');
+  const memTotal =
+    (hostOs === 'mac' ? n('memTotalB') : (kib('memTotalKb') ?? n('memTotalB'))) || null;
   let memAvail = kib('memAvailKb');
   if (hostOs === 'mac') {
-    const pageSize = n('pageSize');
-    const pages = stdout
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('pagesAvail='))
-      .map((line) => Number(line.slice('pagesAvail='.length)))
-      .filter((value) => Number.isFinite(value));
+    const pct = values.get('memAvailPct');
     memAvail =
-      pageSize !== null && pages.length > 0 ? pages.reduce((a, b) => a + b, 0) * pageSize : null;
+      memTotal !== null && pct !== undefined && /^\d+$/.test(pct) && Number(pct) <= 100
+        ? (memTotal * Number(pct)) / 100
+        : null;
   }
   const diskTotal = kib('diskTotalKb') ?? n('diskTotalB');
   const diskFree = kib('diskFreeKb') ?? n('diskFreeB');
-  if (memTotal === 0) memTotal = null;
   if (cores === null && memTotal === null && diskTotal === null) return null;
   const cpuPct = n('cpuPct');
   const cpuTimes = hostOs === 'linux' ? linuxCpuTimes(values.get('cpu')) : null;
@@ -831,27 +830,45 @@ export function localMachineId(
   return COMPUTERS[localComputer(host, platform)].machineId;
 }
 
-/** This computer, read directly (no process). */
+/** This computer, read locally. macOS reports available memory through the probe. */
 export async function readLocalMachine(
   options: {
     statfs?: (target: string) => Promise<fs.StatsFs>;
     readFile?: (file: string) => Promise<string>;
     platform?: NodeJS.Platform;
+    run?: CommandRunner;
   } = {}
 ): Promise<MachineSample> {
-  let memAvail: number | null = os.freemem();
+  const platform = options.platform ?? process.platform;
+  const mac = platform === 'darwin';
+  let memTotal: number | null = mac ? null : os.totalmem();
+  let memAvail: number | null = mac ? null : os.freemem();
+  let memoryError: string | undefined;
   let cpuTimes: MachineSample['cpuTimes'] = null;
   let cpuError: string | undefined;
   const readFile = options.readFile ?? ((file: string) => fs.promises.readFile(file, 'utf8'));
-  const linux = (options.platform ?? process.platform) === 'linux';
-  try {
-    const meminfo = await readFile('/proc/meminfo');
-    const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(meminfo);
-    if (match) memAvail = Number(match[1]) * 1024;
-  } catch {
-    /* The os module's figure stands (libuv reads the same MemAvailable). */
+  if (mac) {
+    const result = await (options.run ?? runCommand)(
+      '/bin/sh',
+      ['-c', `export LC_ALL=C; ${MAC_MEMORY_PROBE}`],
+      { timeoutMs: 5_000, maxBytes: 1024 }
+    );
+    const sample = result.code === 0 ? parseMachineProbe('mac', result.stdout) : null;
+    memTotal = sample?.memTotalBytes ?? null;
+    memAvail = sample?.memAvailableBytes ?? null;
+    if (memTotal === null || memAvail === null) {
+      memoryError = 'The machine did not report its memory.';
+    }
+  } else {
+    try {
+      const meminfo = await readFile('/proc/meminfo');
+      const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(meminfo);
+      if (match) memAvail = Number(match[1]) * 1024;
+    } catch {
+      /* The os module's figure stands (on Linux libuv reads the same MemAvailable). */
+    }
   }
-  if (linux) {
+  if (platform === 'linux') {
     try {
       const stat = await readFile('/proc/stat');
       cpuTimes = linuxCpuTimes(/^cpu\s+(.*)$/m.exec(stat)?.[1]);
@@ -880,10 +897,11 @@ export async function readLocalMachine(
     load1: process.platform === 'win32' ? null : os.loadavg()[0],
     busyPct: null,
     memAvailableBytes: memAvail,
-    memTotalBytes: os.totalmem(),
+    memTotalBytes: memTotal,
     disk,
     ...(diskError ? { diskError } : {}),
     ...(cpuError ? { cpuError } : {}),
+    ...(memoryError ? { memoryError } : {}),
     cpuTimes,
   };
 }

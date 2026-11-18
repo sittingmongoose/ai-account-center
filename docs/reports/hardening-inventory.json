@@ -771,7 +771,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1080
+          "loc": 1098
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",

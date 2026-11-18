@@ -23,8 +23,6 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             "memTotalKb",
             "memTotalB",
             "memAvailKb",
-            "pageSize",
-            "pagesAvail",
             "diskTotalKb",
             "diskTotalB",
             "diskFreeKb",
@@ -71,24 +69,21 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             .collect::<Option<Vec<_>>>()
             .map(aac_num::ecma::sum)
     };
-    let total = n("memTotalKb")
-        .map(|n| n * 1024.0)
-        .or_else(|| n("memTotalB"))
-        .filter(|n| *n != 0.0);
+    let total = if platform == "mac" {
+        n("memTotalB")
+    } else {
+        n("memTotalKb")
+            .map(|n| n * 1024.0)
+            .or_else(|| n("memTotalB"))
+    }
+    .filter(|n| *n != 0.0);
     let avail = if platform == "mac" {
-        let pages: Vec<_> = lines("pagesAvail=")
-            .iter()
-            .filter_map(|s| {
-                if s.is_empty() {
-                    Some(0.0)
-                } else {
-                    s.parse::<f64>().ok().filter(|n| n.is_finite())
-                }
-            })
-            .collect();
-        n("pageSize")
-            .filter(|_| !pages.is_empty())
-            .map(|n| n * aac_num::ecma::sum(pages.iter().copied()))
+        let pct = values
+            .get("memAvailPct")
+            .filter(|s| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()))
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|n| *n <= 100.0);
+        total.zip(pct).map(|(total, pct)| total * pct / 100.0)
     } else {
         n("memAvailKb").map(|n| n * 1024.0)
     };
@@ -298,7 +293,7 @@ fn executable(path: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod sum_tests {
+mod tests {
     /// status-collectors.ts sums with `reduce((sum, v) => sum + v, 0)`, from +0, so a list of `-0` sums to +0 there
     /// (tests/spec/num/ecma.json `sums`). Rust's `Iterator::sum` starts from -0 and kept the -0 these readings had.
     #[test]
@@ -310,10 +305,23 @@ mod sum_tests {
             "coreCount=2\nmemTotalB=1\ncpuLoad=-0\ncpuLoad=-0\n",
         );
         assert!(positive_zero(&windows["busyPct"]), "{windows}");
-        let mac = super::parse_proven(
-            "mac",
-            "cores=2\nmemTotalB=8\npageSize=4096\npagesAvail=-0\n",
+    }
+
+    #[test]
+    fn mac_memory_uses_the_reported_percentage_and_ignores_page_counts() {
+        let probe = "memTotalB=17179869184\npageSize=16384\npagesAvail=368894\n";
+        let measured = super::parse("mac", &format!("{probe}memAvailPct=67\n"));
+        assert_eq!(
+            measured["memAvailableBytes"].as_f64(),
+            Some(11_510_512_353.28)
         );
-        assert!(positive_zero(&mac["memAvailableBytes"]), "{mac}");
+        assert!(measured.get("memoryError").is_none());
+
+        let missing = super::parse("mac", probe);
+        assert!(missing["memAvailableBytes"].is_null());
+        assert_eq!(
+            missing["memoryError"],
+            "The machine did not report its memory."
+        );
     }
 }

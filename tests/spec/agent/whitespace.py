@@ -30,7 +30,8 @@ def inventory():
       key=insert(field,point,position) if location=='key' else field
       value={'cpu':'1 2 3 4','mount':'/fixture'}.get(field,'16')
       if location=='value':value=insert(value,point,position)
-      rows.append({'platform':platform,'probe':'cores=4\nmemTotalKb=100\nmemAvailKb=50\ndiskTotalKb=100\ndiskFreeKb=50\n'+key+'='+value+'\n'})
+      mem='memTotalB=102400\n' if platform=='mac' else 'memTotalKb=100\nmemAvailKb=50\n'
+      rows.append({'platform':platform,'probe':'cores=4\n'+mem+'diskTotalKb=100\ndiskFreeKb=50\n'+key+'='+value+'\n'})
       meta.append([platform,field,location,point,position])
  return rows,meta
 

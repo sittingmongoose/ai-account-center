@@ -51,8 +51,8 @@ calls: `python3 tests/spec/agent/capture-signin.py`. The table lists all 90
 source tests, including helper/safety checks that still run in Python; 96 calls
 become agent requests. Synthetic credentials only.
 
-`bun tests/spec/agent/capture-inventory.ts` extracts the 9 literal machine probe
-requests from the unchanged status collector tests and evaluates the real TS
+`bun tests/spec/agent/capture-inventory.ts` extracts literal machine probe
+requests from the status collector tests and evaluates the real TS
 parser. `bun tests/spec/agent/inventory.ts /path/to/aac-agent` can re-evaluate
 these TS expectations against a fixture-enabled binary. Inventory has no prior
 Python helper; its reference is `status-collectors.ts`.
@@ -110,7 +110,7 @@ use their own 1,048,576-byte cap and optional UTF-8 BOM.
 Regenerate with the original capture scripts followed by
 `python3 tests/spec/agent/review-cases.py`. The latter records explicit delegation
 expectations independently of the agent and adds real-file review cases. Compare
-105 sign-in cases (including 9 direct-file regressions) and 15 inventory cases
+105 sign-in cases (including 9 direct-file regressions) and the inventory cases
 (including 6 numeric-boundary regressions). A fallback case must return the exact
 fixed value, while Python still must equal the recorded reference output.
 
@@ -161,7 +161,7 @@ python3 tests/spec/agent/whitespace.py /path/to/fixture-agent /path/to/aac-white
 python3 tests/spec/agent/whitespace.py /path/to/production-agent --signin-only --production
 ```
 
-The first run checks all three inventory platforms, all 16 reading keys/values,
+The first run checks all three inventory platforms, all 15 reading keys/values,
 and 12 sign-in/settings/credential/argument/selector fields at start/middle/end.
 The real TS parser computes inventory references; the original Python helper
 computes sign-in references on real fixture files. Every response must be the

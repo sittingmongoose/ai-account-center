@@ -17,6 +17,7 @@ import {
   type CommandRunner,
 } from '../../../../src/web-server/status/status-collectors';
 import { PERSISTENT_SHARE_ERROR } from '../../../../src/web-server/status/agent-reports-reader';
+import { machineWarnings } from '../../../../src/web-server/status/status-view-panels';
 import { tempDirs } from './status-test-helpers';
 
 const dirs = tempDirs();
@@ -233,9 +234,9 @@ describe('status collectors', () => {
     expect(busyBetween({ busy: 150, total: 1000 }, { busy: 250, total: 1200 })).toBe(50);
     const mac = parseMachineProbe(
       'mac',
-      'cores=8\nload=2.84\nmemTotalB=17179869184\npageSize=16384\npagesAvail=100000\npagesAvail=50000\ncpuPct=32\ndiskTotalKb=482766932\ndiskFreeKb=18378524\nmount=/System/Volumes/Data\n'
+      'cores=8\nload=2.84\nmemTotalB=17179869184\nmemAvailPct=67\ncpuPct=32\ndiskTotalKb=482766932\ndiskFreeKb=18378524\nmount=/System/Volumes/Data\n'
     );
-    expect(mac?.memAvailableBytes).toBe(150000 * 16384);
+    expect(mac?.memAvailableBytes).toBe(11_510_512_353.28);
     expect(mac?.busyPct).toBe(4);
     expect(mac?.disk?.mount).toBe('/System/Volumes/Data');
     const windows = parseMachineProbe(
@@ -373,13 +374,30 @@ describe('status collectors', () => {
     });
     expect(noMeminfo.cpuTimes).toEqual({ busy: 150, total: 1000 });
     expect(noMeminfo.cpuError).toBeUndefined();
-    // No /proc on other systems: the busy figure is simply not a thing measured there.
+    // A dashboard hosted on the Mac uses the same available-memory reading.
+    const macMemory =
+      (stdout: string): CommandRunner =>
+      async (file, args) => {
+        expect(file).toBe('/bin/sh');
+        expect(args[1]).toContain('kern.memorystatus_level');
+        return { code: 0, stdout, timedOut: false, missing: false };
+      };
     const mac = await readLocalMachine({
       statfs,
       readFile: proc('/proc/stat'),
       platform: 'darwin',
+      run: macMemory('memTotalB=17179869184\nmemAvailPct=67\n'),
     });
     expect(mac.cpuError).toBeUndefined();
+    expect(mac.memAvailableBytes).toBe(11_510_512_353.28);
+    expect(mac.memTotalBytes).toBe(16 * 1024 ** 3);
+    const unknownMac = await readLocalMachine({
+      statfs,
+      platform: 'darwin',
+      run: macMemory('memTotalB=17179869184\nmemAvailPct=\n'),
+    });
+    expect(unknownMac.memAvailableBytes).toBeNull();
+    expect(unknownMac.memoryError).toBe('The machine did not report its memory.');
   });
 
   it('a host probe whose CPU command fails reports no CPU, never 0% busy', () => {
@@ -390,7 +408,7 @@ describe('status collectors', () => {
       .replace(/"\$\(sysctl -n hw\.ncpu\)"/, '8')
       .replace(/"\$\(sysctl -n vm\.loadavg \| awk '\{print \$2\}'\)"/, '1.5')
       .replace(/"\$\(sysctl -n hw\.memsize\)"/, '17179869184')
-      .replace(/vm_stat \| awk '[^']*'/, "printf 'pageSize=16384\\npagesAvail=1000\\n'")
+      .replace('sysctl -n kern.memorystatus_level', 'printf 67')
       .replace('ps -A -o %cpu=', 'false')
       .replace(
         /df -Pk "\$d"/,
@@ -477,7 +495,7 @@ describe('status collectors', () => {
     // A Mac answer without its core count cannot divide the summed ps: no figure, named.
     const macNoCores = parseMachineProbe(
       'mac',
-      'cores=\nmemTotalB=17179869184\npageSize=16384\npagesAvail=1000\ncpuPct=320\ndiskTotalKb=10\ndiskFreeKb=5\n'
+      'cores=\nmemTotalB=17179869184\nmemAvailPct=67\ncpuPct=320\ndiskTotalKb=10\ndiskFreeKb=5\n'
     );
     expect(macNoCores?.busyPct).toBeNull();
     expect(macNoCores?.cpuError).toBe('The machine did not report its CPU.');
@@ -486,6 +504,68 @@ describe('status collectors', () => {
       'cores=6\nmemTotalKb=2\nmemAvailKb=1\ndiskTotalKb=10\ndiskFreeKb=5\n'
     );
     expect(linux?.cpuError).toBe('The machine did not report its CPU.');
+  });
+
+  it('reports recorded Mac available memory and ignores old page counters', () => {
+    // November 18 capture: 16 GiB, 16 KiB pages, sysctl and memory_pressure both at 67%.
+    // The old vm_stat probe summed free, inactive, speculative and purgeable pages.
+    const oldBytes = (6344 + 318459 + 37964 + 6127) * 16384;
+    expect(oldBytes / 1024 ** 3).toBeCloseTo(5.63);
+    const measured = parseMachineProbe(
+      'mac',
+      'memTotalB=17179869184\nmemAvailPct=67\npageSize=16384\npagesAvail=6344\npagesAvail=318459\npagesAvail=37964\npagesAvail=6127\n'
+    );
+    expect(measured?.memTotalBytes).toBe(16 * 1024 ** 3);
+    expect(measured?.memAvailableBytes).toBe(11_510_512_353.28);
+    expect(measured?.memoryError).toBeUndefined();
+    expect(machineWarnings(measured)).toEqual([]);
+
+    const missing = parseMachineProbe(
+      'mac',
+      'memTotalB=17179869184\nmemAvailPct=\npageSize=16384\npagesAvail=6344\npagesAvail=318459\npagesAvail=37964\npagesAvail=6127\n'
+    );
+    expect(missing?.memAvailableBytes).toBeNull();
+    expect(missing?.memoryError).toBe('The machine did not report its memory.');
+    expect(machineWarnings(missing)).toEqual([]);
+
+    const zero = parseMachineProbe('mac', 'memTotalB=17179869184\nmemAvailPct=0\n');
+    expect(zero?.memAvailableBytes).toBe(0);
+    expect(machineWarnings(zero)).toEqual(['Memory 0.0 GB available, under the 6 GB floor']);
+    expect(
+      parseMachineProbe('mac', 'memTotalB=17179869184\nmemAvailPct=101\n')?.memAvailableBytes
+    ).toBeNull();
+    expect(parseMachineProbe('mac', 'cores=8\nmemAvailPct=67\n')?.memAvailableBytes).toBeNull();
+  });
+
+  it('runs the same Mac shell probe in TypeScript and Rust and falls back only for a missing sysctl', () => {
+    const probe = machineProbeCommand('mac');
+    const rust = path.resolve(import.meta.dir, '../../../../crates/aac-agent/src/probes/mac.txt');
+    expect(fs.readFileSync(rust, 'utf8')).toBe(probe + '\n');
+    const run = (level: string, pressure: string) => {
+      const commands = String.raw`
+        sysctl() {
+          case "$2" in
+            hw.ncpu) printf '8\n' ;;
+            vm.loadavg) printf '{ 1.50 1.50 1.50 }\n' ;;
+            hw.memsize) printf '17179869184\n' ;;
+            kern.memorystatus_level) ${level} ;;
+          esac
+        }
+        memory_pressure() { ${pressure}; }
+        ps() { printf '32\n'; }
+        df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 50 50 50%% /\n'; }
+      `;
+      const out = execFileSync('/bin/sh', ['-c', commands + probe], { encoding: 'utf8' });
+      return parseMachineProbe('mac', out);
+    };
+    const recordedPressure = String.raw`printf 'Pages free: 6344 \nPages purgeable: 6127 \nPages inactive: 318459 \nPages speculative: 37964 \n\nSystem-wide memory free percentage: 67%%\n'`;
+    expect(
+      run('printf 67', 'printf "System-wide memory free percentage: 70%%\\n"')?.memAvailableBytes
+    ).toBe(11_510_512_353.28);
+    expect(run('return 1', recordedPressure)?.memAvailableBytes).toBe(11_510_512_353.28);
+    const missing = run('return 1', 'return 127');
+    expect(missing?.memAvailableBytes).toBeNull();
+    expect(missing?.memoryError).toBe('The machine did not report its memory.');
   });
 
   it('keeps a registry row through one ENOENT race and names a listed file gone twice in a row', async () => {
