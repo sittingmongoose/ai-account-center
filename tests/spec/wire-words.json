@@ -436,6 +436,7 @@
       "src/web-server/services/additional-account-service.ts:result.status",
       "src/web-server/services/additional-account-service.ts:status",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:entry.state",
       "src/web-server/services/analytics-remote-sources.ts:read.state",
       "src/web-server/services/analytics-remote-sources.ts:read?.state",
       "src/web-server/services/analytics-remote-sources.ts:state",
@@ -805,6 +806,9 @@
       "src/antigravity/runtime-refresh.ts:status",
       "src/antigravity/terminal-refresh.ts:result.status",
       "src/web-server/agent-usage/agent-usage-markdown.ts:STATUS_WORDS",
+      "src/web-server/services/analytics-remote-sources.ts:clock.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-transport.ts:state",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:row.status"
@@ -1378,6 +1382,13 @@
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
       "src/codex-auth/codex-renewal-types.ts:reason",
       "src/web-server/status/status-view-types.ts:reportState"
+    ]
+  },
+  {
+    "word": "freshness_unverified",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:entry.cause"
     ]
   },
   {
@@ -2377,6 +2388,13 @@
     ]
   },
   {
+    "word": "newer_activity",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:entry.cause"
+    ]
+  },
+  {
     "word": "no_browser_cookie",
     "cause": null,
     "sources": [
@@ -2862,6 +2880,7 @@
       "src/web-server/services/additional-account-service.ts:result.status",
       "src/web-server/services/additional-account-service.ts:status",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:entry.state",
       "src/web-server/services/analytics-remote-sources.ts:read?.state",
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-sources.ts:state.state",
@@ -4672,6 +4691,14 @@
       "scripts/antigravity/rebuild_bundle.py:status",
       "src/web-server/scoreboard/scoreboard-service.ts:state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:clock?.state",
+      "src/web-server/services/analytics-remote-sources.ts:entry.state",
+      "src/web-server/services/analytics-remote-sources.ts:read.state",
+      "src/web-server/services/analytics-remote-sources.ts:read?.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-transport.ts:state",
       "src/web-server/status/status-view-panels.ts:source.state",
       "src/web-server/status/status-view-panels.ts:state",
       "src/web-server/status/status-view-quota.ts:state",
@@ -5336,6 +5363,9 @@
       "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState",
       "src/store/store-service.ts:jobs.lastErrorCode",
       "src/web-server/index.ts:error.code",
+      "src/web-server/services/analytics-remote-sources.ts:clock?.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-transport.ts:state",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:status",
