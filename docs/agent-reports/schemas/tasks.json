@@ -49,6 +49,10 @@
             "string",
             "null"
           ]
+        },
+        "who": {
+          "type": "string",
+          "maxLength": 40
         }
       },
       "required": [
@@ -153,7 +157,7 @@
             "type": "array"
           },
           "state": {
-            "description": "Reported state; unknown values mark only this item.",
+            "description": "Reported state: working, review, waiting, blocked, todo, done or dropped. Legacy states remain accepted; unknown values mark only this item.",
             "type": "string",
             "minLength": 1,
             "maxLength": 64
@@ -175,7 +179,46 @@
               "string",
               "null"
             ],
-            "maxLength": 40
+            "maxLength": 110
+          },
+          "due": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueDay": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "dueNote": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "dueWas": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "doneAt": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "outcome": {
+            "type": "string",
+            "maxLength": 90
           }
         },
         "required": [
@@ -218,7 +261,7 @@
     },
     "writer": {
       "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-fo-lead.",
-      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1|alexis)\\.[a-z0-9][a-z0-9.-]{0,62}$",
       "type": "string"
     },
     "writtenAt": {
