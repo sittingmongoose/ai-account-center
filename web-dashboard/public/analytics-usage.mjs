@@ -94,15 +94,24 @@ export const dayStart = t => zonedDayStart(t);
 export const addDays = (t, n) => zonedAddDays(t, n);
 /** Weeks start on Monday, like the picker's grid. */
 const WEEK = 7 * D;
+/** Multi-week buckets ("All" over more than about 15 years) stay aligned to whole weeks from this Monday. */
+const WEEK_EPOCH = Date.UTC(2001, 0, 1);
+/** t's local Monday as a whole number of weeks after WEEK_EPOCH. */
+const weekIndex = t => { const p = zonedParts(t); return Math.floor((Date.UTC(p.year, p.month - 1, p.day) - WEEK_EPOCH) / WEEK); };
 export function bucketStart(t, step) {
-  if (step >= WEEK) return zonedAddDays(zonedDayStart(t), -zonedWeekday(t));
+  if (step >= WEEK) {
+    const w = Math.max(1, Math.round(step / WEEK));
+    const wk = weekIndex(t);
+    // back to the Monday of t's week, then to the first Monday of the w-week bucket that holds it
+    return zonedAddDays(zonedDayStart(t), -zonedWeekday(t) - (((wk % w) + w) % w) * 7);
+  }
   if (step >= D) return zonedDayStart(t);
   const k = Math.round(step / H);
   const start = zonedDayStart(t);
   return start + Math.floor((t - start) / (k * H)) * (k * H);
 }
 export function nextBucket(t, step) {
-  if (step >= WEEK) return zonedAddDays(bucketStart(t, step), 7);
+  if (step >= WEEK) return zonedAddDays(bucketStart(t, step), 7 * Math.max(1, Math.round(step / WEEK)));
   if (step >= D) return zonedAddDays(t, 1);
   return Math.min(bucketStart(t, step) + Math.round(step / H) * H, zonedAddDays(t, 1));
 }
@@ -469,6 +478,14 @@ export function activityData(payload, now = Date.now()) {
   return { ...rows, win0, win1 };
 }
 
+/** How many w-week Monday buckets [a, e) is cut into, counted on the local calendar the buckets enumerate:
+ *  a daylight-saving change shifts elapsed milliseconds (a local week is 167 or 169 hours) but never this. */
+function weekBucketCount(a, e, w) {
+  if (!(e > a)) return 0;
+  const wk = weekIndex(a), lo = wk - (((wk % w) + w) % w);
+  // an end exactly on a bucket's Monday midnight would start a bucket the enumeration's t < e excludes
+  return Math.floor((weekIndex(e - 1) - lo) / w) + 1;
+}
 /** The page range in local time: [a2, b) clipped to the logs that were read; step is the bucket size. */
 export function pageRange(state, A, now) {
   const range = state?.range || '7d';
@@ -491,9 +508,13 @@ export function pageRange(state, A, now) {
   // day rows (ranges over 92 days from the store) cannot be cut finer than a day
   if (A.resolution === 'day' && step < D) step = D;
   const end = Math.min(b, A.win1);
+  // a range longer than the chart's 800 buckets is never cut off silently: the week grows (2 weeks, 4, ...)
+  // until the buckets cover the whole range, and the labels say the wider bucket. The count is the calendar
+  // one the bucket enumeration uses, so a daylight-saving change cannot hide the last local week
+  while (step >= WEEK && weekBucketCount(a2, end, Math.round(step / WEEK)) > 800) step *= 2;
   return { range, a, b, a2, end, step, now, clipped: a < A.win0 - H, unread: A.win1 < b ? b - A.win1 : 0 };
 }
-export const stepWord = s => s >= WEEK ? 'Weekly' : s >= D ? 'Daily' : s === H ? 'Hourly' : `${Math.round(s / H)}-hour`;
+export const stepWord = s => s > WEEK ? `${Math.round(s / WEEK)}-week` : s >= WEEK ? 'Weekly' : s >= D ? 'Daily' : s === H ? 'Hourly' : `${Math.round(s / H)}-hour`;
 /** The provider filter: a picked provider narrows every block to the usage it served. */
 const provOK = (state, p) => !state?.prov || state.prov === 'all' || state.prov === p;
 const allPicked = state => !state?.prov || state.prov === 'all';
@@ -747,7 +768,7 @@ export function trendView(A, R, state, size) {
   const partial = costOk && B.some(b => b.unk);
   const bucketsOut = B.map(b => {
     const top = inc.reduce((s, t) => s + b[t.k], 0), all = b.in + b.out + b.cw + b.cr;
-    const when = R.step >= WEEK ? `Week of ${dayTxt(b.t)}` : R.step >= D ? `${dayTxt(b.t)}${b.partial ? `, ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`
+    const when = R.step > WEEK ? `${Math.round(R.step / WEEK)} weeks from ${dayTxt(b.t)}` : R.step >= WEEK ? `Week of ${dayTxt(b.t)}` : R.step >= D ? `${dayTxt(b.t)}${b.partial ? `, ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`
       : `${dayTxt(b.t)} · ${hourTxt(b.lo)} to ${b.hi === b.t1 ? hourTxt(b.hi) : clockTxt(b.hi)}`;
     // a bucket no computer was read for has no split: never a $0.00 for what was not read
     const split = showSplit && !b.gap ? ['claude', 'codex'].map(p => `${A.label(p)} ${money(b.pc[p] || 0)}`).join(' · ') : '';
@@ -1190,7 +1211,7 @@ function heatView(A, R, state, width, height, cellWidth) {
  */
 function dailyView(A, R, state, size) {
   const dayTxt = readoutDay(R);
-  const step = R.step >= WEEK ? WEEK : R.end - R.a2 <= 2 * D + H ? H : D;
+  const step = R.step >= WEEK ? R.step : R.end - R.a2 <= 2 * D + H ? H : D;
   const B = A.available ? buckets(A, { ...R, step }, state) : [];
   const W = Math.max(200, size?.w || DEFAULT_SIZES.daily.w), Hc = Math.max(120, size?.h || DEFAULT_SIZES.daily.h);
   const pad = DAILY_PAD;
@@ -1216,7 +1237,7 @@ function dailyView(A, R, state, size) {
     return {
       h: costOk && sc.top > 0 ? tot / sc.top : 0, cl: tot > 0 ? cl / tot : 0, cx: tot > 0 ? cx / tot : 0,
       label: i % every ? '' : step === H ? (zonedHour(b.t) === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
-      time: `${step === H ? `${dayTxt(b.t)} · ${hourTxt(b.t)}` : step === WEEK ? `Week of ${dayTxt(b.t)}` : dayTxt(b.t)}${b.partial && step !== WEEK ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
+      time: `${step === H ? `${dayTxt(b.t)} · ${hourTxt(b.t)}` : step > WEEK ? `${Math.round(step / WEEK)} weeks from ${dayTxt(b.t)}` : step === WEEK ? `Week of ${dayTxt(b.t)}` : dayTxt(b.t)}${b.partial && step !== WEEK ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
       gap: !!b.gap,
       rows: costOk ? served.map(p => ({ p: ownSeries(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
       total: b.gap ? 'Not read' : picked ? '' : !costOk ? 'Unavailable' : b.unk && !(tot > TINY) ? NOT_LOGGED : money(tot),
@@ -1227,7 +1248,7 @@ function dailyView(A, R, state, size) {
   const unlogged = B.some(b => b.unk);
   const who = picked ? A.label(picked) : '';
   return {
-    title: step === H ? 'Hourly cost by provider' : step === WEEK ? 'Weekly cost by provider' : 'Daily cost by provider',
+    title: step === H ? 'Hourly cost by provider' : step >= WEEK ? `${stepWord(step)} cost by provider` : 'Daily cost by provider',
     sub: `${picked ? `${who} · estimated` : 'Estimated'}, USD · ${dateLabel(R)}`,
     yTicks, bars, empty,
     emptyText: !A.available ? (A.message || 'CLI usage logs are unavailable.') : !empty ? '' : !costOk ? 'Cost is unavailable for this range.'

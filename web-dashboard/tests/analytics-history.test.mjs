@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // Analytics history (docs/store.md section 12): the 90D range, answers keyed by range, the
 // multi-month picker, weekly buckets for long ranges and gaps that are never drawn as zero.
 process.env.TZ = 'UTC';
-const { setDisplayTimeZone } = await import('../public/time-format.mjs');
+const { setDisplayTimeZone, zonedWeekday } = await import('../public/time-format.mjs');
 setDisplayTimeZone('UTC');
 const U = await import('../public/analytics-usage.mjs');
 const P = await import('../public/analytics-page.mjs');
@@ -15,13 +15,13 @@ const H = 3_600_000;
 const now = Date.parse('2026-11-13T12:00:00Z');
 const row = (iso, provider, inputTokens, cost) => ({ hour: iso, provider, inputTokens, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCostUsd: cost });
 const state = (overrides = {}) => ({ range: '7d', from: null, to: null, prov: 'all', split: false, cache: false, donut: 'tokens', heat: 'cost', ...overrides });
-function payload({ preset = '90d', from = now - 90 * D, rows = [], history = null, resolution = 'hour', availableFrom = Date.parse('2026-08-20T10:00:00Z'), days } = {}) {
+function payload({ preset = '90d', from = now - 90 * D, rows = [], history = null, resolution = 'hour', availableFrom = Date.parse('2026-08-20T10:00:00Z'), days, now: at = now, fetchedAt = at - 60_000 } = {}) {
   const tot = rows.reduce((t, r) => ({ ...t, inputTokens: t.inputTokens + r.inputTokens, estimatedCostUsd: t.estimatedCostUsd + r.estimatedCostUsd }), { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCostUsd: 0 });
   return {
     schemaVersion: 1,
-    range: { preset, from: new Date(from).toISOString(), to: new Date(now).toISOString(), bucketMinutes: 1440, availableFrom: new Date(availableFrom).toISOString(), resolution, ...(days ? { days } : {}) },
+    range: { preset, from: new Date(from).toISOString(), to: new Date(at).toISOString(), bucketMinutes: 1440, availableFrom: new Date(availableFrom).toISOString(), resolution, ...(days ? { days } : {}) },
     activity: {
-      status: 'ok', fetchedAt: new Date(now - 60_000).toISOString(), message: '', resolution, totals: tot, byHour: rows,
+      status: 'ok', fetchedAt: new Date(fetchedAt).toISOString(), message: '', resolution, totals: tot, byHour: rows,
       providers: [{ provider: 'codex', label: 'Codex', totals: tot, usageEvents: rows.length, sessionCount: 1, tools: ['codex'] }],
       models: [{ model: 'gpt-6', provider: 'codex', ...tot }],
       ...(history ? { history } : {}),
@@ -132,6 +132,74 @@ test('a time no computer was read for is a gap, never a zero; a partly read one 
   }
   // the scope says what is kept and since when
   assert.match(view.scope.find(l => l.icon === 'database').text, /since Oct 1, 2026\. Hours a computer could not be read show as gaps, never as zero/);
+});
+
+test('multi-week buckets align to whole weeks and step by their own width', () => {
+  // the fortnight buckets "All" grows to past 800 weeks: every bucket is a Monday, buckets never overlap,
+  // and a row always maps back to the bucket that holds it
+  const fortnight = 14 * D;
+  const starts = new Set();
+  for (let m = Date.parse('2001-01-01T00:00:00Z'); m <= Date.parse('2026-11-30T00:00:00Z'); m += 7 * D) {
+    const s = U.bucketStart(m, fortnight);
+    assert.equal(zonedWeekday(s), 0, `${new Date(s).toISOString()} starts on a Monday`);
+    assert.equal(U.bucketStart(s, fortnight), s, 'an aligned Monday is its own bucket start');
+    assert.equal(U.nextBucket(s, fortnight) - s, fortnight, 'the next bucket is a fortnight away');
+    assert.ok(s <= m && m < U.nextBucket(s, fortnight), 'the Monday falls inside its bucket');
+    starts.add(s);
+  }
+  // a fortnight grid keeps every other Monday: 1353 Mondays, 677 distinct bucket starts
+  assert.equal(starts.size, 677);
+});
+
+test('"All" over more than 800 weeks grows the bucket instead of silently cutting the range off', () => {
+  // one bogus 2001 record puts the store's oldest hour 25 years back: about 1329 weeks, past the 800 buckets
+  const from = Date.parse('2001-06-04T00:00:00Z');
+  const rows = [row('2001-06-04T04:00:00Z', 'codex', 111, 1.11), row('2026-11-10T05:00:00Z', 'codex', 7, 0.07)];
+  const p = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from });
+  const view = usageView(p, state({ range: 'all' }), { now });
+  // the week doubles until the buckets cover the whole range, and the labels say the wider bucket
+  assert.equal(view.range.step, 14 * D);
+  assert.match(view.trend.sub, /^2-week buckets/);
+  assert.equal(view.daily.title, '2-week cost by provider');
+  assert.ok(view.trend.buckets.length <= 800);
+  // the last bucket is the one holding the latest record: the buckets reach the end of the range
+  assert.match(view.trend.buckets.at(-1).time, /^2 WEEKS FROM MON, NOV 2, 2026/);
+  const A = U.activityData(p, now), R = U.pageRange(state({ range: 'all' }), A, now);
+  const B = U.buckets(A, R, state({ range: 'all' }));
+  assert.equal(B.length, view.trend.buckets.length);
+  for (const b of B) assert.equal(U.bucketStart(b.t, R.step), b.t);
+  // no data is dropped silently: the bogus 2001 record and the latest one are both in the chart
+  assert.equal(B.reduce((s, b) => s + b.in, 0), 111 + 7);
+  assert.ok(view.daily.bars.some(b => b.total === '$1.11'));
+  assert.ok(view.daily.bars.some(b => b.total === '$0.07'));
+});
+
+test('a daylight-saving change cannot hide a week from the bucket count', () => {
+  setDisplayTimeZone('America/New_York');
+  try {
+    // 800 full New York weeks plus 30 minutes of week 801: the elapsed time is under 800 fixed 168-hour
+    // weeks, so a millisecond count misses that the 801st local bucket exists and the range truncates
+    const at = Date.parse('2026-05-04T04:30:00Z');
+    const from = Date.parse('2011-01-03T05:00:00Z');
+    const rows = [row('2011-01-03T05:00:00Z', 'codex', 10, 1), row('2026-05-04T04:00:00Z', 'codex', 37, 3.7)];
+    const p = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from, now: at });
+    const view = usageView(p, state({ range: 'all' }), { now: at });
+    assert.equal(view.range.step, 14 * D, 'the 801st local week widens the bucket');
+    assert.match(view.trend.sub, /^2-week buckets/);
+    const A = U.activityData(p, at), R = U.pageRange(state({ range: 'all' }), A, at);
+    assert.equal(U.buckets(A, R, state({ range: 'all' })).reduce((s, b) => s + b.in, 0), 47);
+    assert.ok(view.daily.bars.some(b => b.total === '$3.70'), 'the newest record is in the daily bars');
+    // the reverse offset change widens nothing: exactly 800 local weeks stay weekly
+    const at2 = Date.parse('2026-11-02T05:00:00Z');
+    const from2 = Date.parse('2011-07-04T04:00:00Z');
+    const q = payload({ preset: 'all', from: from2, rows: [row('2011-07-04T04:00:00Z', 'codex', 5, 0.5)], resolution: 'day', availableFrom: from2, now: at2 });
+    const view2 = usageView(q, state({ range: 'all' }), { now: at2 });
+    assert.equal(view2.range.step, 7 * D);
+    assert.match(view2.trend.sub, /^Weekly buckets/);
+    assert.equal(view2.trend.buckets.length, 800);
+  } finally {
+    setDisplayTimeZone('UTC');
+  }
 });
 
 test('a backfill in progress says so', () => {
