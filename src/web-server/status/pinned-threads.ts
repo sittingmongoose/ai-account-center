@@ -231,15 +231,15 @@ export class PinnedThreadsCollector {
     reports: AgentReportsState,
     answers: readonly AnswerHistoryEntry[],
     docs?: StatusDocsState
-  ): Promise<void> {
+  ): Promise<PinnedPanel> {
     const statuses = docs ?? this.docs.snapshot();
     // Check receipts describe reader acceptance even when pins or native composition are unavailable.
     this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
     this.deps.readersCheck?.flushSoon();
-    if (!this.handle) return;
+    if (!this.handle) return this.view();
     // Before the first collect there are no pins to compose over; the reports scan that runs
     // first must not publish an empty panel.
-    if (!this.collected) return;
+    if (!this.collected) return this.view();
     const closed = closingCardVersions(answers);
     const answered = resolvedCardWaits(reports, closed);
     const input = {
@@ -330,8 +330,10 @@ export class PinnedThreadsCollector {
       })),
     };
     const composed = await composePinned(input, { handle: this.handle });
-    if ('view' in composed) this.composed = composed.view as unknown as PinnedView;
-    // A refused compose keeps the last good view; its own asOfMs shows its age.
+    // The returned panel belongs to these inputs even when composition fails.
+    if ('unavailable' in composed) return composed;
+    this.composed = composed.view as unknown as PinnedView;
+    return this.composed;
   }
 
   /** The merged pins of the last collect, for the pin match the check file reports. */

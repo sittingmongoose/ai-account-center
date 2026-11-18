@@ -11,12 +11,13 @@ import {
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
 import { PinnedThreadsCollector } from '../../../../src/web-server/status/pinned-threads';
 import { StatusService } from '../../../../src/web-server/status/status-service';
+import { buildStatusView } from '../../../../src/web-server/status/status-view';
 import { cardDoc, tempDirs, threadDoc, writeReport } from './status-test-helpers';
 
 const dirs = tempDirs();
 afterEach(() => dirs.cleanup());
 
-async function exercise(exact?: string) {
+async function fixture(exact?: string) {
   const home = dirs.make();
   const root = path.join(home, 'agent-reports');
   const store = path.join(home, '.ccs', 'status');
@@ -115,9 +116,16 @@ async function exercise(exact?: string) {
             return JSON.stringify({
               asOfMs: now,
               head: 'Fixture',
-              counts: { pinned: 0, looping: 0, waitingOnYou: 0 },
+              counts: { pinned: 1, looping: 0, waitingOnYou: Number(input.openCards.length > 0) },
               machineProblems: [],
-              updates: [],
+              updates: [
+                {
+                  id: threadId,
+                  title: 'Fixture',
+                  looping: { answer: 'no' },
+                  blocked: input.openCards.length ? { text: what, waitingOnYou: true } : null,
+                },
+              ],
             });
           default:
             throw new Error('Unexpected pin operation');
@@ -132,6 +140,7 @@ async function exercise(exact?: string) {
     storeDir: () => store,
     reportsRoot: () => root,
     readCard: (id: string) => reader.readCardNow(id),
+    doorbell: async () => ({ ok: true, detail: 'Fixture doorbell.' }),
     ...(exact
       ? { readPublicKey: () => fs.readFileSync(path.join(exact, 'answer.pub'), 'utf8') }
       : {}),
@@ -157,6 +166,36 @@ async function exercise(exact?: string) {
       },
     });
   const service = createService(answers);
+  return {
+    home,
+    root,
+    card,
+    cardFile,
+    key,
+    answerFile,
+    answer,
+    service,
+    pinned,
+    what,
+    restart: () => createService(new StatusAnswers(answerDeps)),
+    pinnedInput: () => pinnedInput,
+  };
+}
+
+async function exercise(exact?: string) {
+  const {
+    home,
+    root,
+    card,
+    cardFile,
+    key,
+    answerFile,
+    answer,
+    service,
+    restart,
+    pinnedInput,
+    what,
+  } = await fixture(exact);
   // Same seq and hash signed by a different key cannot close the card, even if its key is on the share.
   const otherKey = loadOrCreateAnswerKey(path.join(home, 'untrusted'));
   const keyDir = path.join(root, 'v1', 'keys');
@@ -199,10 +238,10 @@ async function exercise(exact?: string) {
   ]);
 
   // The old signed answer is still present when another Dashboard starts.
-  expect(pinnedInput?.openCards).toMatchObject([{ id: card.id }]);
-  expect(pinnedInput?.threads[0].blockedOn).toMatchObject({ what });
-  expect(pinnedInput?.statuses[0].blockers).toHaveLength(2);
-  const fresh = createService(new StatusAnswers(answerDeps));
+  expect(pinnedInput()?.openCards).toMatchObject([{ id: card.id }]);
+  expect(pinnedInput()?.threads[0].blockedOn).toMatchObject({ what });
+  expect(pinnedInput()?.statuses[0].blockers).toHaveLength(2);
+  const fresh = restart();
   await fresh.scanReports();
   expect(fresh.view().cards.open).toMatchObject([{ id: card.id, seq: 2309 }]);
 
@@ -240,8 +279,8 @@ async function exercise(exact?: string) {
   );
   await fresh.scanReports();
   expect(fresh.view().cards.open).toEqual([]);
-  expect(pinnedInput?.threads[0].blockedOn).toBeNull();
-  expect(pinnedInput?.statuses[0].blockers).toEqual([{ text: 'CI', waitingOn: 'review' }]);
+  expect(pinnedInput()?.threads[0].blockedOn).toBeNull();
+  expect(pinnedInput()?.statuses[0].blockers).toEqual([{ text: 'CI', waitingOn: 'review' }]);
 }
 
 it('uses a signed answer when the local journal lacks it, and leaves re-asks open', () =>
@@ -249,3 +288,131 @@ it('uses a signed answer when the local journal lacks it, and leaves re-asks ope
 
 const exact = process.env.AAC_SR1_FIXTURE;
 if (exact) it('uses the original SR1 card and signed answer', () => exercise(exact));
+
+function counts(view: ReturnType<StatusService['view']>) {
+  return [
+    view.headline.counts.questions,
+    view.cards.answered?.length,
+    view.headline.counts.waitingPinned,
+  ];
+}
+
+it('publishes the answer and linked pinned wait together across a held poll', async () => {
+  const { answerFile, service, pinned } = await fixture();
+  const signed = fs.readFileSync(answerFile);
+  fs.unlinkSync(answerFile);
+  await service.scanReports();
+  expect(counts(service.view())).toEqual([1, 0, 1]);
+
+  fs.writeFileSync(answerFile, signed);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const scanStatusDocs = pinned.scanStatusDocs.bind(pinned);
+  pinned.scanStatusDocs = async () => {
+    entered.resolve();
+    await release.promise;
+    await scanStatusDocs();
+  };
+  const poll = service.scanReports();
+  try {
+    await entered.promise;
+    expect(
+      counts(
+        buildStatusView(
+          typeof service.readRequestInputs === 'function'
+            ? await service.readRequestInputs()
+            : service.readInputs()
+        )
+      )
+    ).toEqual([1, 0, 1]);
+  } finally {
+    release.resolve();
+    await poll;
+  }
+  expect(counts(service.view())).toEqual([0, 1, 0]);
+});
+
+it('publishes a local send with its recomposed pins before the next reports poll', async () => {
+  const { answerFile, answer, service } = await fixture();
+  fs.unlinkSync(answerFile);
+  await service.scanReports();
+  expect(counts(service.view())).toEqual([1, 0, 1]);
+
+  const results = await service.answers.submitSet(
+    [
+      {
+        cardId: answer.cardId,
+        cardSeq: answer.cardSeq,
+        cardSha256: answer.cardSha256,
+        choice: ['A'],
+        note: '',
+        via: 'deck',
+      },
+    ],
+    'iPhone'
+  );
+  expect(results[0].outcome).toBe('recorded');
+  expect(counts(service.view())).toEqual([1, 0, 1]);
+  expect(counts(buildStatusView(await service.readRequestInputs()))).toEqual([0, 1, 0]);
+});
+
+it('applies the same signed-copy precedence during a poll and after restart', async () => {
+  const { answer, answerFile, key, service, restart } = await fixture();
+  const { signature: _signature, ...unsigned } = answer;
+  const noteFile = path.join(path.dirname(answerFile), answer.cardId + '.note-0123456789ab.json');
+  const write = (file: string, doc: typeof unsigned) => {
+    const signed = signAnswer(doc, key!);
+    fs.writeFileSync(file, JSON.stringify(signed));
+    return signed;
+  };
+  fs.unlinkSync(answerFile);
+  write(noteFile, { ...unsigned, kind: 'note', choice: [], note: 'Earlier.' });
+  const recovered = (owner: StatusService) => owner.view().cards.answered?.map((row) => row.answer);
+  await service.scanReports();
+  expect(recovered(service)).toMatchObject([{ kind: 'note', note: 'Earlier.' }]);
+
+  const choice = write(answerFile, {
+    ...unsigned,
+    choice: ['B'],
+    answeredAt: '2026-11-18T18:50:55Z',
+  });
+  const cold = restart();
+  await cold.scanReports();
+  await service.scanReports();
+  expect(recovered(service)).toEqual(recovered(cold));
+  expect(recovered(cold)).toMatchObject([{ kind: 'answer', choice: ['B'] }]);
+
+  const tied = write(noteFile, {
+    ...unsigned,
+    kind: 'note',
+    choice: [],
+    note: 'Same instant.',
+    answeredAt: '2026-11-18T18:50:55.000Z',
+  });
+  const expected = tied.signature.value > choice.signature.value ? tied : choice;
+  await service.scanReports();
+  const restarted = restart();
+  await restarted.scanReports();
+  expect(recovered(service)).toEqual(recovered(restarted));
+  expect(recovered(restarted)).toMatchObject([
+    { kind: expected.kind, choice: expected.choice, note: expected.note },
+  ]);
+
+  write(noteFile, {
+    ...unsigned,
+    kind: 'note',
+    choice: [],
+    note: 'Latest.',
+    answeredAt: '2026-11-18T18:50:59Z',
+  });
+  await service.scanReports();
+  await restarted.scanReports();
+  expect(recovered(service)).toEqual(recovered(restarted));
+  expect(recovered(service)).toMatchObject([{ kind: 'note', note: 'Latest.' }]);
+
+  // A missing copy during a poll doesn't resurrect a verified version.
+  fs.unlinkSync(noteFile);
+  fs.unlinkSync(answerFile);
+  await service.scanReports();
+  expect(recovered(service)).toMatchObject([{ kind: 'note', note: 'Latest.' }]);
+});

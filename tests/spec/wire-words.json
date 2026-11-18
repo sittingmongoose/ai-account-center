@@ -2967,6 +2967,7 @@
       "src/web-server/status/card-schema.ts:reason",
       "src/web-server/status/card-schema.ts:state",
       "src/web-server/status/pinned-threads.ts:row.doc.state",
+      "src/web-server/status/status-service.ts:row.doc.state",
       "src/web-server/status/status-view.ts:card.doc.state",
       "src/web-server/status/status-view.ts:row.doc.state"
     ]

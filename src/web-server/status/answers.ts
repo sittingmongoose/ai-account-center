@@ -222,6 +222,22 @@ export interface AnswerHistoryEntry {
   doorbell: StepState;
 }
 
+/** Journal entries win when they record the same closing answer version and its delivery. */
+export function mergeSharedAnswers(
+  local: AnswerHistoryEntry[],
+  shared: readonly AnswerHistoryEntry[]
+): AnswerHistoryEntry[] {
+  if (shared.length === 0) return local;
+  const closed = closingCardVersions(local);
+  const recovered = shared.filter(
+    ({ answer }) => !closed.has(cardVersion(answer.cardId, answer.cardSeq, answer.cardSha256))
+  );
+  if (recovered.length === 0) return local;
+  return [...local, ...recovered].sort(
+    (a, b) => Date.parse(a.answer.answeredAt) - Date.parse(b.answer.answeredAt)
+  );
+}
+
 export interface SendRecord {
   sendId: string;
   at: string;
@@ -672,18 +688,12 @@ export class StatusAnswers {
     return loaded;
   }
 
-  /** Add verified share copies for current open versions where the journal has no closing record. */
-  withSharedAnswers(local: AnswerHistoryEntry[], cards: readonly CardRow[]): AnswerHistoryEntry[] {
-    const closed = closingCardVersions(local);
-    const shared = cards.flatMap((row) => {
-      const version = cardRowVersion(row);
-      const entry = this.sharedAnswers.get(version);
-      return row.doc.state === 'open' && entry && !closed.has(version) ? [entry] : [];
+  /** Verified share copies for the current open versions. The returned list belongs to this read. */
+  sharedAnswersFor(cards: readonly CardRow[]): AnswerHistoryEntry[] {
+    return cards.flatMap((row) => {
+      const entry = this.sharedAnswers.get(cardRowVersion(row));
+      return row.doc.state === 'open' && entry ? [entry] : [];
     });
-    if (shared.length === 0) return local;
-    return [...local, ...shared].sort(
-      (a, b) => Date.parse(a.answer.answeredAt) - Date.parse(b.answer.answeredAt)
-    );
   }
 
   private trustedPublicKey(): string | null {
@@ -743,19 +753,31 @@ export class StatusAnswers {
     sha256: string,
     publicKey: string,
     budget: Budget,
-    noteNames: () => Promise<string[]>
+    noteNames: () => Promise<string[]>,
+    preferLatest = false
   ): Promise<SignedAnswer | null> {
-    const primary = await this.readSharedClosingAnswer(card, sha256, publicKey);
-    if (primary || budget.left() === 0) return primary;
+    let selected = await this.readSharedClosingAnswer(card, sha256, publicKey);
+    if ((!preferLatest && selected) || budget.left() === 0) return selected;
     const prefix = `${card.id}.note-`;
     for (const name of await noteNames()) {
       if (budget.left() === 0) break;
       if (!name.startsWith(prefix) || !/^[a-f0-9]{12}\.json$/.test(name.slice(prefix.length)))
         continue;
       const note = await this.readSharedClosingAnswer(card, sha256, publicKey, name);
-      if (note) return note;
+      if (!note) continue;
+      if (!preferLatest) return note;
+      // Use the signed instant and then the signature bytes' base64 spelling, independent of file order.
+      const timeOrder = selected
+        ? Date.parse(note.answeredAt) - Date.parse(selected.answeredAt)
+        : 0;
+      if (
+        !selected ||
+        timeOrder > 0 ||
+        (timeOrder === 0 && note.signature.value > selected.signature.value)
+      )
+        selected = note;
     }
-    return null;
+    return selected;
   }
 
   /** Read outside the request path. Retain a verified copy while the same version remains current. */
@@ -768,7 +790,7 @@ export class StatusAnswers {
     const closed = closingCardVersions(local);
     const missing = cards.filter((row) => {
       const version = cardRowVersion(row);
-      return row.doc.state === 'open' && !closed.has(version) && !this.sharedAnswers.has(version);
+      return row.doc.state === 'open' && !closed.has(version);
     });
     const budget = startBudget(this.timing.readMs);
     let names: Promise<string[]> | null = null;
@@ -777,7 +799,7 @@ export class StatusAnswers {
       await Promise.all(
         missing.slice(at, at + 16).map(async (row) => {
           const answer = await withDeadline(
-            this.findSharedClosingAnswer(row.doc, row.sha256, publicKey, budget, noteNames),
+            this.findSharedClosingAnswer(row.doc, row.sha256, publicKey, budget, noteNames, true),
             budget.left()
           ).catch(() => null);
           if (answer) {

@@ -152,7 +152,10 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       sendRevalidatedView(res, current.view());
       return;
     }
-    const input = current.readInputs();
+    const input =
+      typeof current.readRequestInputs === 'function'
+        ? await current.readRequestInputs()
+        : current.readInputs();
     // R2 (`rustService.groups.status: on`): the same answer from fed generations; on any decline the handler
     // below answers from this same read, as before.
     const fed = statusFedService(res);

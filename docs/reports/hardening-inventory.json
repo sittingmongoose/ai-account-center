@@ -755,7 +755,7 @@
         },
         {
           "file": "src/web-server/status/answers.ts",
-          "loc": 1899
+          "loc": 1921
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",

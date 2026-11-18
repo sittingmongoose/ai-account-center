@@ -32,8 +32,19 @@ import {
 import { ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { AgentReportsReader, ensureReportsLayout, publishSchemas } from './agent-reports-reader';
-import { activeBlocker, resolvedCardWaits, closingCardVersions } from './answered-cards';
-import { DOORBELL_SENDER, StatusAnswers } from './answers';
+import {
+  activeBlocker,
+  cardRowVersion,
+  resolvedCardWaits,
+  closingCardVersions,
+} from './answered-cards';
+import {
+  DOORBELL_SENDER,
+  mergeSharedAnswers,
+  StatusAnswers,
+  type AnswerHistoryEntry,
+  type SendRecord,
+} from './answers';
 import { QuotaReportReader } from './quota-report';
 import { MACHINES, type MachineId } from './report-schema';
 import {
@@ -69,6 +80,7 @@ import { ReadersCheckWriter } from './readers-check';
 import { buildSpend } from './status-view-quota';
 import { SPEND_BY_STREAM_UNAVAILABLE, composeSpendByStream } from './spend-by-stream';
 import type { SpendByStreamPanel } from './status-view-types';
+import type { StatusDocsState } from './status-docs';
 import { openStatusHandle } from '../../status-native/pinned';
 import type { NativeStatusHandle } from '../../status-native/native-loader';
 
@@ -133,6 +145,23 @@ export interface StatusServiceDeps {
   spendNative?: NativeStatusHandle | null;
 }
 
+interface AnswerHistorySnapshot {
+  answers: AnswerHistoryEntry[];
+  sends: SendRecord[];
+  answerHistoryProblem: string | null;
+}
+
+interface StatusReportSnapshot {
+  reports: ReturnType<AgentReportsReader['snapshot']>;
+  docs: StatusDocsState;
+  shared: AnswerHistoryEntry[];
+}
+
+interface StatusPresentation extends StatusReportSnapshot {
+  history: AnswerHistorySnapshot;
+  pinned: StatusInputs['pinned'];
+}
+
 export class StatusService {
   readonly reader: AgentReportsReader;
   readonly quotaReader: QuotaReportReader;
@@ -158,7 +187,8 @@ export class StatusService {
   private hintTimer: ReturnType<typeof setTimeout> | null = null;
   private lastHint = 0;
   private readonly recent = new RecentReadings();
-  private reportsBeforeScan: ReturnType<AgentReportsReader['snapshot']> | null = null;
+  private presentation: StatusPresentation;
+  private publishingStatus = Promise.resolve();
   private scanningReports: Promise<void> | null = null;
   private readonly resolvedThreads = new WeakMap<
     StatusInputs['reports']['threads'][number],
@@ -190,6 +220,13 @@ export class StatusService {
           now: () => this.now(),
         }),
       });
+    this.presentation = {
+      reports: this.reader.snapshot(),
+      docs: this.pinned.docs.snapshot(),
+      shared: [],
+      history: { answers: [], sends: [], answerHistoryProblem: null },
+      pinned: this.pinned.view?.(),
+    };
     if (deps.spendNative !== undefined) {
       this.spendNative = deps.spendNative;
     } else {
@@ -242,21 +279,22 @@ export class StatusService {
   }
 
   private async runReportsScan(): Promise<void> {
-    // A cold read must not publish open cards while their signed copies are still being checked.
-    this.reportsBeforeScan = this.reader.snapshot();
     try {
       await this.reader.scan().catch(() => undefined);
       await this.quotaReader.scan().catch(() => undefined);
       const reports = this.reader.snapshot();
-      await this.answers.scanSharedAnswers(reports.cards, this.listAnswersSafe());
+      await this.answers.scanSharedAnswers(reports.cards, this.readAnswerHistory([]).answers);
       await this.pinned.scanStatusDocs();
-      await this.composePinned();
+      await this.publishStatus({
+        reports,
+        docs: this.pinned.docs.snapshot(),
+        shared: this.answers.sharedAnswersFor(reports.cards),
+      });
     } catch {
-      /* The collectors keep their last good copies. */
-    } finally {
-      this.reportsBeforeScan = null;
-      this.answers.pruneSharedAnswers(this.reader.snapshot().cards);
+      /* Keep the last published presentation when a scan throws. */
       this.changed();
+    } finally {
+      this.answers.pruneSharedAnswers(this.reader.snapshot().cards);
     }
     await this.captureReportHistory();
     // The spend-by-stream panel recomposes over the quota scan's latest accepted report.
@@ -377,20 +415,50 @@ export class StatusService {
     this.spendByStream = panel;
   }
 
-  private async composePinned(): Promise<void> {
-    const reports = this.reader.snapshot();
-    await this.pinned.compose(
-      reports,
-      this.answers.withSharedAnswers(this.listAnswersSafe(), reports.cards)
-    );
+  /** Stage one presentation and replace it only once its pin view is ready. */
+  private publishStatus(scanned?: StatusReportSnapshot): Promise<void> {
+    const publication = this.publishingStatus.then(async () => {
+      const { reports, docs, shared } = scanned ?? this.presentation;
+      const history = this.readAnswerHistory(shared);
+      const pinned = await this.pinned.compose(reports, history.answers, docs);
+      this.presentation = {
+        reports,
+        docs,
+        shared,
+        history,
+        pinned: pinned ?? this.pinned.view?.(),
+      };
+      this.changed();
+    });
+    this.publishingStatus = publication.catch(() => undefined);
+    return publication;
   }
 
-  private listAnswersSafe(): ReturnType<StatusAnswers['list']> {
+  private readAnswerHistory(shared: readonly AnswerHistoryEntry[]): AnswerHistorySnapshot {
     try {
-      return this.answers.list();
+      return {
+        answers: mergeSharedAnswers([...this.answers.list()], shared),
+        sends: this.answers.sendList(),
+        answerHistoryProblem: null,
+      };
     } catch {
-      return [];
+      return {
+        answers: [...shared],
+        sends: [],
+        answerHistoryProblem: "The answer history can't be read right now.",
+      };
     }
+  }
+
+  /** Delivery can advance independently while the closed versions used by pins still agree. */
+  private pinsNeedComposition(view: StatusPresentation, live: AnswerHistorySnapshot): boolean {
+    if (!view.pinned || 'unavailable' in view.pinned) return false;
+    const before = closingCardVersions(view.history.answers);
+    const after = closingCardVersions(live.answers);
+    return view.reports.cards.some((row) => {
+      const version = cardRowVersion(row);
+      return row.doc.state === 'open' && before.has(version) !== after.has(version);
+    });
   }
 
   async scanRegistry(): Promise<void> {
@@ -580,8 +648,7 @@ export class StatusService {
     try {
       await this.pinned.collect();
       await this.scanningReports;
-      await this.composePinned();
-      this.changed();
+      await this.publishStatus();
     } catch {
       /* The panel keeps its last good pins and its last composed view. */
     }
@@ -609,25 +676,29 @@ export class StatusService {
     }
   };
 
-  /** The view now. A read counts as demand for the process-starting collectors. */
   readInputs(): StatusInputs {
+    const view = this.presentation;
+    const live = this.readAnswerHistory(view.shared);
+    return this.inputsFrom(view, this.pinsNeedComposition(view, live) ? view.history : live);
+  }
+
+  /** A request after a local send can publish its new closures without waiting for the share poll. */
+  async readRequestInputs(): Promise<StatusInputs> {
+    const view = this.presentation;
+    const live = this.readAnswerHistory(view.shared);
+    if (!this.pinsNeedComposition(view, live)) return this.inputsFrom(view, live);
+    await this.publishStatus().catch(() => undefined);
+    return this.readInputs();
+  }
+
+  /** A read counts as demand for the process-starting collectors. */
+  private inputsFrom(view: StatusPresentation, history: AnswerHistorySnapshot): StatusInputs {
     const now = this.now();
     const idle = !this.wanted();
     this.lastDemand = now;
     if (idle || now - this.lastCollect >= COLLECT_EVERY_MS) void this.collect();
-    // A failed private source must not hide the independently collected panels.
-    let answers: ReturnType<StatusAnswers['list']> = [];
-    let sends: ReturnType<StatusAnswers['sendList']> = [];
-    let answerHistoryProblem: string | null = null;
-    try {
-      answers = this.answers.list();
-      sends = this.answers.sendList();
-    } catch {
-      answers = [];
-      answerHistoryProblem = "The answer history can't be read right now.";
-    }
-    const reports = this.reportsBeforeScan ?? this.reader.snapshot();
-    answers = this.answers.withSharedAnswers(answers, reports.cards);
+    const { reports } = view;
+    const { answers, sends, answerHistoryProblem } = history;
     const answered = resolvedCardWaits(reports, closingCardVersions(answers));
     // Keep the scan intact. Both view composers receive the same resolved thread waits.
     const threads = reports.threads.map((row) => {
@@ -654,7 +725,7 @@ export class StatusService {
       answerHistoryProblem,
       hiddenThreadNames: [DOORBELL_SENDER],
       quota: this.quotaReader.snapshot(),
-      pinned: this.pinned.view(),
+      pinned: view.pinned,
       spendByStream: this.spendByStream,
     };
   }
