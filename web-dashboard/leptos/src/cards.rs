@@ -628,14 +628,22 @@ fn CardBody(
     };
     let live = expect_context::<Live>();
     // A card the server can't vouch for right now is shown but can't be answered.
-    let report_problem = c.problem.as_ref().is_some_and(|reason| {
-        let file = format!("writers/{}/cards/{}.json", c.writer, c.id);
-        live.view.with_untracked(|view| {
-            view.as_ref().is_some_and(|view| {
-                view.report_problems
+    let reason = c.problem.clone();
+    let file = format!("writers/{}/cards/{}.json", c.writer, c.id);
+    // The report list can change even when the current card is identical. Read it from the
+    // paragraph's reactive children so a poll can update the words without rebuilding the card.
+    let problem_location = Memo::new(move |_| {
+        let Some(reason) = reason.as_ref() else {
+            return (false, false);
+        };
+        live.view.with(|view| {
+            view.as_ref().map_or((false, false), |view| {
+                let history = view.cards.answer_history_problem.as_ref() == Some(reason);
+                let drawer = view
+                    .report_problems
                     .iter()
-                    .any(|problem| problem.file == file && problem.reason == *reason)
-                    || view.cards.answer_history_problem.as_ref() == Some(reason)
+                    .any(|problem| problem.file == file && problem.reason == *reason);
+                (history, drawer)
             })
         })
     });
@@ -739,8 +747,17 @@ fn CardBody(
                 {(c.kind != "sample" && (locked || c.problem.is_some())).then(|| view! {
                     <p class="q-problem">
                         {if locked { "Can't be answered right now. " } else { "" }}
-                        {(!report_problem).then(|| c.problem.clone().unwrap_or_else(|| "The card could not be checked.".into()))}
-                        {locked.then_some(" The last good version is shown; it can be answered once the agent rewrites it.")}
+                        {let reason = c.problem.clone(); move || {
+                            let (history, drawer) = problem_location.get();
+                            (!history && !drawer).then(|| reason.clone().unwrap_or_else(|| "The card could not be checked.".into()))
+                        }}
+                        {move || locked.then(|| {
+                            if problem_location.with(|(history, _)| *history) {
+                                "It can be answered once the answer history can be read again."
+                            } else {
+                                " The last good version is shown. It can be answered once the agent rewrites it."
+                            }
+                        })}
                     </p>
                 })}
                 {c.exception.clone().map(|e| view! {
