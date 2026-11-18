@@ -402,7 +402,8 @@ pub fn omp_config_roots(home: &Path, instances: &[T3Instance]) -> Vec<PathBuf> {
     roots
 }
 
-fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
+fn binary_mtime(home: &Path, env: &Env, names: &[&str]) -> Option<i64> {
+    let mut newest: Option<i64> = None;
     let mut dirs: Vec<PathBuf> = env
         .get("PATH")
         .map(|path| std::env::split_paths(path).collect())
@@ -425,18 +426,36 @@ fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
                     {
                         use std::os::unix::fs::PermissionsExt;
                         if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
-                            return true;
+                            newest = newest.into_iter().chain([util::mtime_ms(&meta)]).max();
                         }
                     }
                     #[cfg(not(unix))]
                     if meta.is_file() {
-                        return true;
+                        newest = newest.into_iter().chain([util::mtime_ms(&meta)]).max();
                     }
                 }
             }
         }
     }
-    false
+    newest
+}
+
+fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
+    binary_mtime(home, env, names).is_some()
+}
+
+fn tool_binaries(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "antigravity" => &["agy", "antigravity"],
+        "claude" => &["claude"],
+        "codex" => &["codex"],
+        "omp" => &["omp"],
+        "muse" => &["muse"],
+        "zcode" => &["zcode"],
+        "cursor" => &["cursor-agent"],
+        "devin" => &["devin"],
+        _ => &[],
+    }
 }
 
 fn driver_enabled(instances: &[T3Instance], drivers: &[&str], word: Option<&str>) -> bool {
@@ -475,19 +494,7 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
     {
         homes.push(dir);
     }
-    let binaries: &[&str] = match kind {
-        "antigravity" => &["agy", "antigravity"],
-        other => match other {
-            "claude" => &["claude"],
-            "codex" => &["codex"],
-            "omp" => &["omp"],
-            "muse" => &["muse"],
-            "zcode" => &["zcode"],
-            "cursor" => &["cursor-agent"],
-            "devin" => &["devin"],
-            _ => &[],
-        },
-    };
+    let binaries = tool_binaries(kind);
     let (drivers, word): (&[&str], Option<&str>) = match kind {
         "claude" => (&["claudeAgent"], None),
         "codex" => (&["codex"], None),
@@ -514,39 +521,148 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
 
 fn count_files(root: &Path, accept: &dyn Fn(&str) -> bool, deadline: Instant) -> (usize, i64, bool) {
     let (mut files, mut newest, mut entries) = (0usize, 0i64, 0usize);
+    let mut incomplete = false;
     let mut pending = vec![(root.to_path_buf(), 0usize)];
     while let Some((directory, depth)) = pending.pop() {
         if Instant::now() >= deadline {
             return (files, newest, true);
         }
         if fsx::avoided(&directory) {
+            incomplete = true;
             continue;
         }
-        let Ok(list) = fs::read_dir(&directory) else {
-            continue;
+        let list = match fs::read_dir(&directory) {
+            Ok(list) => list,
+            Err(error) => {
+                incomplete |= error.kind() != std::io::ErrorKind::NotFound;
+                continue;
+            }
         };
-        for entry in list.flatten() {
+        for entry in list {
             entries += 1;
             if entries > PRESENCE_MAX_ENTRIES {
                 return (files, newest, true);
             }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    incomplete |= error.kind() != std::io::ErrorKind::NotFound;
+                    continue;
+                }
+            };
             let name = entry.file_name().to_string_lossy().into_owned();
-            let Ok(kind) = entry.file_type() else {
-                continue;
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(error) => {
+                    incomplete |= error.kind() != std::io::ErrorKind::NotFound;
+                    continue;
+                }
             };
             if kind.is_dir() {
-                if depth < PRESENCE_MAX_DEPTH && !skipped(&name) {
-                    pending.push((entry.path(), depth + 1));
+                if !skipped(&name) {
+                    if depth < PRESENCE_MAX_DEPTH {
+                        pending.push((entry.path(), depth + 1));
+                    } else {
+                        incomplete = true;
+                    }
                 }
             } else if kind.is_file() && accept(&name) {
                 files += 1;
-                if let Ok(meta) = entry.metadata() {
-                    newest = newest.max(util::mtime_ms(&meta));
+                match entry.metadata() {
+                    Ok(meta) => newest = newest.max(util::mtime_ms(&meta)),
+                    Err(error) => incomplete |= error.kind() != std::io::ErrorKind::NotFound,
                 }
             }
         }
     }
-    (files, newest, false)
+    (files, newest, incomplete)
+}
+
+/// Current CLI chat locations in addition to the older `.cursor/chats`. These stores contain
+/// blobs and metadata, not exposed token counters. Discover their activity without decoding any
+/// conversation blobs or treating a file as a numeric usage event.
+pub fn cursor_chat_roots(home: &Path, env: &Env) -> Vec<PathBuf> {
+    let config = env_dir(env, "XDG_CONFIG_HOME", home).unwrap_or_else(|| home.join(".config"));
+    let mut roots = vec![home.join(".cursor/chats"), config.join("cursor/chats")];
+    roots.push(app_dir(home, env, "cursor").join("chats"));
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// One normal Analytics scan cycle. Filesystem/T3 activity is evidence of a possible coverage
+/// gap, never proof of token use. Nevertheless it must not be advertised as current usage.
+pub const FRESHNESS_CYCLE_MS: i64 = 5 * 60 * 1000;
+
+pub fn freshness(
+    newest_data: Option<i64>,
+    newest_activity: Option<i64>,
+    min_date: i64,
+    activity_complete: bool,
+) -> Value {
+    let state = match (newest_data, newest_activity) {
+        (Some(data), Some(activity)) if activity.saturating_sub(data) > FRESHNESS_CYCLE_MS => "stale",
+        (None, Some(activity)) if activity >= min_date => "stale",
+        (Some(_), _) if activity_complete => "current",
+        _ => "unknown",
+    };
+    json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity, "activityComplete": activity_complete})
+}
+
+fn install_activity(home: &Path, env: &Env, kind: &str) -> Option<i64> {
+    let relative = match kind {
+        "claude" => ".claude",
+        "codex" => ".codex",
+        "omp" => ".omp",
+        "muse" => ".local/share/muse",
+        "zcode" => ".zcode",
+        "antigravity" => ".gemini/antigravity",
+        "cursor" => ".cursor",
+        "devin" => ".local/share/devin",
+        _ => return None,
+    };
+    // Stat a link itself: its target may be an unavailable mount.
+    fs::symlink_metadata(home.join(relative))
+        .ok()
+        .map(|m| util::mtime_ms(&m))
+        .into_iter()
+        .chain(binary_mtime(home, env, tool_binaries(kind)))
+        .max()
+}
+
+/// Read only T3's provider projection metadata. The tool's own instance configuration resolves
+/// generic ACP drivers (OMP/zcode); titles, requests, responses and auth tables are never read.
+fn t3_activity(home: &Path, kind: &str, instances: &[T3Instance], deadline: Instant) -> Option<i64> {
+    let db = home.join(".t3/userdata/statev2.sqlite");
+    if !fsx::exists(&db) || Instant::now() >= deadline {
+        return None;
+    }
+    let (connection, _) = crate::read::sqlite::open(&db, deadline)?;
+    let mut statement = connection.prepare(
+        "SELECT driver, provider_instance_id, MAX(updated_at) FROM orchestration_v2_projection_provider_threads GROUP BY driver, provider_instance_id"
+    ).ok()?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .ok()?;
+    rows.filter_map(Result::ok)
+        .filter_map(|(driver, instance, at)| {
+            let matches = match kind {
+                "claude" => driver == "claudeAgent",
+                "codex" | "cursor" | "muse" | "antigravity" => driver == kind,
+                "omp" | "zcode" => instances
+                    .iter()
+                    .any(|i| i.id == instance && names_tool(&i.config, kind)),
+                _ => false,
+            };
+            matches.then(|| util::iso_ms(&at)).flatten()
+        })
+        .max()
 }
 
 fn app_dir(home: &Path, env: &Env, name: &str) -> PathBuf {
@@ -583,17 +699,65 @@ pub fn presence(home: &Path, env: &Env, instances: &[T3Instance], budget: Durati
     let data = env_dir(env, "XDG_DATA_HOME", home).unwrap_or_else(|| home.join(".local").join("share"));
     let specs = vec![
         Spec {
-            tool: "cursor",
+            tool: "claude-desktop",
+            dirs: vec![(
+                app_dir(home, env, "Claude"),
+                Box::new(|n: &str| n.ends_with(".log") || n.ends_with(".jsonl")),
+            )],
+            homes: vec![app_dir(home, env, "Claude")],
+            binaries: &[],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
+        Spec {
+            tool: "codex-app",
+            dirs: vec![(
+                app_dir(home, env, "Codex"),
+                Box::new(|n: &str| n.ends_with(".log") || n.ends_with(".jsonl")),
+            )],
+            homes: vec![app_dir(home, env, "Codex")],
+            binaries: &[],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
+        Spec {
+            tool: "cursor-ide",
+            dirs: vec![(
+                app_dir(home, env, "Cursor"),
+                Box::new(|n: &str| n.ends_with(".vscdb") || n.ends_with(".log")),
+            )],
+            homes: vec![app_dir(home, env, "Cursor")],
+            binaries: &[],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
+        Spec {
+            tool: "windsurf",
             dirs: vec![
                 (
-                    home.join(".cursor").join("chats"),
-                    Box::new(|n: &str| n == "store.db") as Accept,
+                    app_dir(home, env, "Windsurf"),
+                    Box::new(|n: &str| n.ends_with(".vscdb") || n.ends_with(".log")),
                 ),
                 (
-                    home.join(".cursor").join("projects"),
-                    Box::new(|n: &str| n == "store.db"),
+                    home.join(".codeium/windsurf"),
+                    Box::new(|n: &str| n.ends_with(".pb") || n.ends_with(".json")),
                 ),
             ],
+            homes: vec![app_dir(home, env, "Windsurf"), home.join(".codeium/windsurf")],
+            binaries: &["windsurf"],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
+        Spec {
+            tool: "cursor",
+            dirs: cursor_chat_roots(home, env)
+                .into_iter()
+                .map(|root| (root, Box::new(|n: &str| n == "store.db") as Accept))
+                .chain(vec![(
+                    home.join(".cursor").join("projects"),
+                    Box::new(|n: &str| n == "store.db") as Accept,
+                )])
+                .collect(),
             homes: vec![home.join(".cursor"), app_dir(home, env, "Cursor")],
             binaries: &["cursor-agent"],
             drivers: &["cursor"],
@@ -820,10 +984,63 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
     }) + failed.map_or(0, |s| s.len());
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
+    let mut activity = newest.into_iter().chain(install_activity(home, env, kind)).max();
+    let activity_deadline = collector.deadline().min(Instant::now() + Duration::from_millis(750));
+    let mut activity_limited = false;
+    // Independent metadata also catches log formats the usage reader did not recognize.
+    for (root, _) in collector.root_origins.get(kind).into_iter().flatten() {
+        if collector.absent_roots.contains(&(kind.to_string(), root.clone()))
+            || collector.root_failures.contains_key(&(kind.to_string(), root.clone()))
+        {
+            continue;
+        }
+        let (_, last, cut) = count_files(
+            root,
+            &|n| {
+                [
+                    ".jsonl",
+                    ".jsonl.zst",
+                    ".db",
+                    ".sqlite",
+                    ".db-wal",
+                    ".sqlite-wal",
+                    ".pb",
+                ]
+                .iter()
+                .any(|suffix| n.ends_with(suffix))
+            },
+            activity_deadline,
+        );
+        activity = activity.into_iter().chain((last > 0).then_some(last)).max();
+        activity_limited |= cut;
+        if cut {
+            break;
+        }
+    }
+    let mut unmeasured_files = 0usize;
+    if kind == "cursor" {
+        for root in cursor_chat_roots(home, env) {
+            let (files, last, cut) = count_files(&root, &|n| n == "store.db" || n == "store.db-wal", activity_deadline);
+            activity_limited |= cut;
+            unmeasured_files += files;
+            activity = activity.into_iter().chain((last > 0).then_some(last)).max();
+        }
+    }
+    activity = activity
+        .into_iter()
+        .chain(t3_activity(home, kind, instances, collector.deadline()))
+        .max();
+    let newest_data = collector
+        .fresh
+        .get(kind)
+        .and_then(|prints| prints.values().filter_map(|p| p.newest_usage_ms).max());
     let signals = installed_signals(home, env, kind, instances);
+    let coverage = freshness(newest_data, activity, collector.min_date_ms, !activity_limited);
     json!({
         "installed": !roots.is_empty() || !signals.is_empty(),
         "signals": signals,
+        "freshness": coverage,
+        "unmeasuredFiles": unmeasured_files,
         "roots": roots,
         "counts": {
             "roots": roots.len(),

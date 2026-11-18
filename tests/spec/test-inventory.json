@@ -815,7 +815,20 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/cross_platform_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "native/aac-usage/tests/discovery.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/freshness.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2704,6 +2717,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/analytics-local-freshness.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "tests/unit/web-server/analytics-local-scanner.test.ts",

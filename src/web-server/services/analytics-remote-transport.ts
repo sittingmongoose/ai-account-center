@@ -151,6 +151,8 @@ const MAX_ROWS = 100_000;
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
+  /** Native reader's measured event clock; null means no numeric usage event in this file. */
+  newestUsageMs?: number | null;
   mtimeMs: number;
   head?: string;
   tail?: string;
@@ -301,6 +303,10 @@ const ROOT_ORIGINS: ReadonlySet<string> = new Set([
 const SIGNALS: ReadonlySet<string> = new Set(['home', 'binary', 't3_instance']);
 /** Tools Analytics has no usage reader for; the scanner reports only where they are present. */
 export const NO_READER_TOOLS = [
+  'claude-desktop',
+  'codex-app',
+  'cursor-ide',
+  'windsurf',
   'cursor',
   'gemini-cli',
   'opencode',
@@ -354,6 +360,15 @@ export interface AnalyticsDiscoveryKind {
   signals: string[];
   roots: AnalyticsDiscoveryRoot[];
   counts: AnalyticsDiscoveryCounts;
+  freshness?: {
+    state: 'current' | 'stale' | 'unknown';
+    newestDataMs: number | null;
+    newestActivityMs: number | null;
+    /** False when a bound or I/O failure left independent activity unchecked. */
+    activityComplete?: boolean;
+  };
+  /** Local data files without numeric usage (Cursor CLI blobs and WAL files, for example). */
+  unmeasuredFiles?: number;
 }
 
 /** A tool without a reader that this computer has. */
@@ -411,6 +426,18 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const entry = value as Record<string, unknown>;
   const counts = entry.counts as Record<string, unknown> | undefined;
+  const freshness = entry.freshness as Record<string, unknown> | undefined;
+  if (
+    freshness !== undefined &&
+    (!freshness ||
+      typeof freshness !== 'object' ||
+      !['current', 'stale', 'unknown'].includes(String(freshness.state)) ||
+      !epoch(freshness.newestDataMs) ||
+      !epoch(freshness.newestActivityMs) ||
+      (freshness.activityComplete !== undefined && typeof freshness.activityComplete !== 'boolean'))
+  )
+    return null;
+  if (entry.unmeasuredFiles !== undefined && !count(entry.unmeasuredFiles)) return null;
   if (
     typeof entry.installed !== 'boolean' ||
     !signalsOk(entry.signals) ||
@@ -460,6 +487,21 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
   }
   return {
     installed: entry.installed,
+    ...(freshness
+      ? {
+          freshness: {
+            state: freshness.state as 'current' | 'stale' | 'unknown',
+            newestDataMs: freshness.newestDataMs as number | null,
+            newestActivityMs: freshness.newestActivityMs as number | null,
+            ...(freshness.activityComplete !== undefined
+              ? { activityComplete: freshness.activityComplete as boolean }
+              : {}),
+          },
+        }
+      : {}),
+    ...(entry.unmeasuredFiles !== undefined
+      ? { unmeasuredFiles: entry.unmeasuredFiles as number }
+      : {}),
     signals: [...(entry.signals as string[])],
     roots,
     counts: {
@@ -777,6 +819,7 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
   return (
     nonNegative(print.size) &&
     nonNegative(print.mtimeMs) &&
+    (print.newestUsageMs === undefined || epoch(print.newestUsageMs)) &&
     (print.head === undefined || (typeof print.head === 'string' && SHA256_HEX.test(print.head))) &&
     (print.tail === undefined || (typeof print.tail === 'string' && SHA256_HEX.test(print.tail))) &&
     (print.claudeName === undefined ||
@@ -1187,7 +1230,9 @@ export async function runAnalyticsRemoteHelper(
       request: {
         kinds: [...new Set(request.kinds)],
         minDateMs: Math.floor(request.minDateMs),
-        immutableSqlite: true,
+        // Read-only SQLite includes committed WAL records. Immutable mode sees an older
+        // checkpoint and silently misses active zcode usage.
+        immutableSqlite: !request.kinds.includes('zcode'),
         fingerprints: request.fingerprints,
         extraRoots: request.extraRoots ?? {},
         deadlineMs: 20_000,
@@ -1289,7 +1334,7 @@ export function usageScanRequest(
   return {
     kinds: [...new Set(request.kinds)],
     minDateMs: Math.floor(request.minDateMs),
-    immutableSqlite: true,
+    immutableSqlite: !request.kinds.includes('zcode'),
     fingerprints: request.fingerprints,
     extraRoots: request.extraRoots ?? {},
     ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)

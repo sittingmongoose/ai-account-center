@@ -57,7 +57,12 @@ export function parityView(answer: Record<string, unknown>): unknown {
                   Object.values(
                     (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
                   ).map((print) => {
-                    const { msgThrough: _sent, mtimeMs: _time, ...rest } = print;
+                    const {
+                      msgThrough: _sent,
+                      mtimeMs: _time,
+                      newestUsageMs: _clock,
+                      ...rest
+                    } = print;
                     return rowKey(rest);
                   })
                 ),
@@ -66,7 +71,7 @@ export function parityView(answer: Record<string, unknown>): unknown {
                 Object.entries(
                   (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
                 ).map(([key, print]) => {
-                  const { msgThrough: _sent, ...rest } = print;
+                  const { msgThrough: _sent, newestUsageMs: _clock, ...rest } = print;
                   return [key, rest];
                 })
               ),
@@ -104,7 +109,20 @@ export function rustParity(
     Record<string, Record<string, unknown>>
   >;
   const keyed = [...BY_VALUE].filter((kind) => Object.keys(prior[kind] ?? {}).length);
-  let translated = request;
+  // The native upgrade rereads old fingerprints once to establish usage clocks. Python has no
+  // clock metadata. Compare its established incremental protocol here; the upgrade itself is
+  // covered by native fixture tests rather than silently treating it as an unchanged read.
+  let translated = {
+    ...request,
+    fingerprints: Object.fromEntries(
+      Object.entries(prior).map(([kind, prints]) => [
+        kind,
+        Object.fromEntries(
+          Object.entries(prints).map(([key, print]) => [key, { newestUsageMs: null, ...print }])
+        ),
+      ])
+    ),
+  } as Record<string, unknown>;
   if (keyed.length) {
     const own = run({ ...request, fingerprints: {} });
     const kinds = (own.kinds ?? {}) as Record<
@@ -112,7 +130,7 @@ export function rustParity(
       { fingerprints?: Record<string, Record<string, unknown>> }
     >;
     const content = (print: Record<string, unknown>) => `${print.size}:${print.head}:${print.tail}`;
-    const fingerprints = { ...prior };
+    const fingerprints = { ...(translated.fingerprints as typeof prior) };
     for (const kind of keyed) {
       const byContent = new Map(
         Object.entries(kinds[kind]?.fingerprints ?? {}).map(([key, print]) => [content(print), key])
@@ -120,11 +138,14 @@ export function rustParity(
       fingerprints[kind] = Object.fromEntries(
         Object.values(prior[kind]).flatMap((print) => {
           const key = byContent.get(content(print));
-          return key ? [[key, print]] : [];
+          return key ? [[key, { newestUsageMs: null, ...print }]] : [];
         })
       );
     }
-    translated = { ...request, fingerprints };
+    translated = {
+      ...translated,
+      fingerprints: { ...(translated.fingerprints as Record<string, unknown>), ...fingerprints },
+    };
   }
   expect(parityView(run(translated))).toEqual(parityView(python));
 }

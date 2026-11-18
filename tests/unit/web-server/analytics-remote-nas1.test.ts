@@ -174,7 +174,11 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       expect(
         createHash('sha256').update(Buffer.from(payload.helperSource, 'utf8')).digest('hex')
       ).toBe(ANALYTICS_HELPER_SHA256);
-      expect(payload.request.immutableSqlite).toBe(true);
+      // zcode needs mode=ro's committed WAL view. All other helper requests retain immutable
+      // reads; the pinned helper still contains only read queries and the same SSH guards.
+      expect(payload.request.immutableSqlite).toBe(
+        !(payload.request.kinds as string[]).includes('zcode')
+      );
       expect(Object.keys(payload.request).sort()).toEqual([
         'deadlineMs',
         'extraRoots',

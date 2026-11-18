@@ -186,6 +186,10 @@ pub struct Print {
     pub unreadable_records: Option<u64>,
     /// The last read was immutable while the write-ahead log held rows: said again while unchanged.
     pub wal_unread: Option<bool>,
+    /// The newest measured usage event in this file, retained through unchanged scans. None
+    /// means no event was measured, not a zero-token event. `usage_clock` versions this evidence.
+    pub newest_usage_ms: Option<i64>,
+    pub usage_clock: bool,
 }
 
 /// A resumable read's place in one file (DESIGN 16.1). `through` is the decoded byte offset after
@@ -254,11 +258,19 @@ impl Print {
             progress: None,
             unreadable_records: None,
             wal_unread: None,
+            newest_usage_ms: None,
+            usage_clock: false,
         }
     }
 
     pub fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
+        if self.usage_clock {
+            map.insert(
+                "newestUsageMs".into(),
+                self.newest_usage_ms.map(Value::from).unwrap_or(Value::Null),
+            );
+        }
         map.insert("size".into(), Value::from(self.size));
         map.insert("mtimeMs".into(), Value::from(self.mtime_ms));
         if !self.head.is_empty() || self.wal_size.is_none() {

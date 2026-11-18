@@ -28,6 +28,8 @@ fn same(prior: Option<&Value>, current: &Print) -> bool {
     };
     let get = |k: &str| prior.get(k).and_then(Value::as_i64).unwrap_or(0);
     get("size") == current.size as i64
+        && prior.contains_key("newestUsageMs")
+        && prior.get("walUnread").and_then(Value::as_bool).unwrap_or(false) == current.wal_unread.unwrap_or(false)
         && get("mtimeMs") == current.mtime_ms
         && get("walSize") == current.wal_size.unwrap_or(0) as i64
         && get("walMtimeMs") == current.wal_mtime_ms.unwrap_or(0)
@@ -73,13 +75,14 @@ fn scan_db(collector: &mut Collector, db: &Path, immutable: bool) -> &'static st
     let filekey = util::filekey("zcode", db);
     // Only probed databases reach here, so a print that cannot be taken is a named read
     // failure, never an absence (RECHECK-BIG-1 M3).
-    let Some(current) = print_of(db) else {
+    let Some(mut current) = print_of(db) else {
         collector.read_failure("zcode", filekey);
         return "error";
     };
     if immutable && current.wal_size.unwrap_or(0) > 0 {
         // An immutable open never reads the write-ahead log.
         collector.wal_unread = true;
+        current.wal_unread = Some(true);
     }
     let unchanged = same(collector.prior_print("zcode", &filekey), &current);
     collector

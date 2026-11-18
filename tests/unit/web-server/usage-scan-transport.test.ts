@@ -14,6 +14,7 @@ import {
   parseAnalyticsRemoteResponse,
   resetScannerState,
   runAnalyticsRemoteScan,
+  usageScanRequest,
   type AnalyticsRemoteKind,
   type AnalyticsRemoteRequest,
   type AnalyticsRemoteResponse,
@@ -39,6 +40,13 @@ import {
 } from '../../../src/web-server/services/analytics-capture-settings';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
+
+it('asks for read-only WAL-visible zcode usage rather than an immutable older checkpoint', () => {
+  expect(
+    usageScanRequest({ kinds: ['zcode'], minDateMs: MIN_DATE, fingerprints: {} }, 20000)
+      .immutableSqlite
+  ).toBe(false);
+});
 const KINDS: AnalyticsRemoteKind[] = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
 const FILE_1 = 'a1'.repeat(32);
 const ROOT_1 = 'b2'.repeat(8);

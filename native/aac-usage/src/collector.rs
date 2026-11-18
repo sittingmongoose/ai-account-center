@@ -229,6 +229,10 @@ impl Collector {
             if let Ok(meta) = std::fs::metadata(path) {
                 newest = newest.max(util::mtime_ms(&meta));
             }
+            // SQLite activity can live entirely in the WAL while the main file stays old.
+            if let Ok(meta) = std::fs::metadata(format!("{}-wal", util::path_text(path))) {
+                newest = newest.max(util::mtime_ms(&meta));
+            }
         }
         let entry = self
             .root_counts
@@ -315,6 +319,11 @@ impl Collector {
             current.tail = util::sha256_hex(format!("{}\n{}", current.tail, deps).as_bytes());
         }
         let same = util::same_print(self.prior_print(kind, &key), &current);
+        // Old fingerprints carry no usage clock. Read them once to establish one; keeping an
+        // unchanged old print forever would keep both its usage and freshness unverified.
+        let clock_known = self
+            .prior_print(kind, &key)
+            .is_some_and(|p| p.get("newestUsageMs").is_some());
         // An unchanged file an earlier call left part-read is read on from where it stopped.
         let resume = if same && resumable(kind) {
             self.prior_print(kind, &key).and_then(|prior| {
@@ -346,7 +355,11 @@ impl Collector {
             .entry(kind.to_string())
             .or_default()
             .insert(key.clone(), current);
-        if same && !unsent && !resuming { None } else { Some(key) }
+        if same && clock_known && !unsent && !resuming {
+            None
+        } else {
+            Some(key)
+        }
     }
 
     /// Where a resumed read of this file starts (0 for a whole read), and the state to restore.

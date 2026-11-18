@@ -126,6 +126,91 @@ function codexAnswer(complete: boolean, input = 150) {
 const noRemote = async () => ({ mac: null, windows: null, nas1: null, alexis: null });
 
 describe('the scanner on this computer', () => {
+  it('checks freshness with the native reader for every local Analytics tool', async () => {
+    const asked: string[] = [];
+    const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
+      cacheDir: path.join(dir, 'all-tools'),
+      hosts: noRemote,
+      force: true,
+      now: () => NOW,
+      localScanner: () => ({ ok: true }),
+      runLocal: async (request) => {
+        asked.push(...request.kinds);
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify({
+            version: 2,
+            truncated: false,
+            kinds: Object.fromEntries(
+              request.kinds.map((kind) => [
+                kind,
+                {
+                  state: 'ok',
+                  fingerprints: {
+                    [FILE]: { ...PRINT, ...(kind === 'claude' ? { claudeGroup: FILE } : {}) },
+                  },
+                  ...(kind === 'claude' ? { replacedFiles: [FILE] } : {}),
+                },
+              ])
+            ),
+            rows: request.kinds.map((kind) => ({
+              k: kind,
+              f: FILE,
+              m: 'fixture-model',
+              h: '2026-11-13 15:00',
+              i: 100,
+              o: 5,
+              cr: 0,
+              cw: 0,
+              c: 0,
+              n: 3,
+            })),
+            srows: [],
+            discovery: {
+              kinds: Object.fromEntries(
+                request.kinds.map((kind) => [
+                  kind,
+                  {
+                    installed: true,
+                    roots: [],
+                    signals: ['home'],
+                    counts: {
+                      roots: 0,
+                      filesFound: 1,
+                      filesRead: 1,
+                      filesFailed: 0,
+                      newestMtime: NOW,
+                    },
+                    freshness: {
+                      state: 'stale',
+                      newestDataMs: NOW - 86400000,
+                      newestActivityMs: NOW,
+                      activityComplete: true,
+                    },
+                  },
+                ])
+              ),
+            },
+          })
+        );
+      },
+    });
+    expect([...new Set(asked)].sort()).toEqual([
+      'antigravity',
+      'claude',
+      'codex',
+      'cursor',
+      'devin',
+      'muse',
+      'omp',
+      'zcode',
+    ]);
+    for (const kind of new Set(asked)) {
+      const cell = answer.states.find((entry) => entry.host === 'ubuntu' && entry.tool === kind);
+      expect(cell).toMatchObject({ state: 'stale', cause: 'newer_activity', rowCount: 3 });
+      expect(cell?.detail).toContain(new Date(NOW - 86400000).toISOString());
+      expect(cell?.detail).toContain(new Date(NOW).toISOString());
+    }
+  });
   // Sol M7 (FIX-ROUND-BIG 6): more experiment folders than the scanner takes, after it took Codex
   // over, hands Codex back to the built-in reader, which then reads it; never neither reader.
   it('hands a kind back to the built-in reader when its roots overflow after a take-over', async () => {
@@ -185,7 +270,16 @@ describe('the scanner on this computer', () => {
       'rollout-2026-11-03T03-38-31-0123456789abcdef.jsonl.zst'
     );
     // A cold computer gets one call per kind; each carries the experiment folders.
-    expect(asked.flatMap((request) => request.kinds).sort()).toEqual(['codex', 'cursor', 'devin']);
+    expect(asked.flatMap((request) => request.kinds).sort()).toEqual([
+      'antigravity',
+      'claude',
+      'codex',
+      'cursor',
+      'devin',
+      'muse',
+      'omp',
+      'zcode',
+    ]);
     expect(asked.find((request) => request.kinds.includes('codex'))?.experimentRoots).toEqual({
       codex: ['/home/u/t3setup/retained-usage/run/codex'],
     });
@@ -227,7 +321,12 @@ describe('the scanner on this computer', () => {
         throw new Error('must not run');
       },
     });
-    expect(none.local).toEqual({ owned: [], catchingUp: {}, unavailable: 'binary_not_built' });
+    expect(none.local).toEqual({
+      owned: [],
+      catchingUp: {},
+      unavailable: 'binary_not_built',
+      freshness: {},
+    });
     expect(none.results).toEqual([]);
   });
 });

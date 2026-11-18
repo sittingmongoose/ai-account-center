@@ -113,6 +113,7 @@ export type AccountAnalyticsUsageProvider = DashboardProvider | 'other';
 
 export type AccountAnalyticsSourceState =
   | 'ok'
+  | 'stale'
   | 'cached'
   | 'unavailable'
   | 'not_installed'
@@ -131,7 +132,19 @@ export type AccountAnalyticsSourceState =
 
 /** Tools without a usage reader that a computer can report as present. */
 export type AccountAnalyticsNoReaderTool =
-  'cursor' | 'gemini-cli' | 'opencode' | 'qwen' | 'kimi' | 'grok' | 'kiro' | 'pi' | 'fx';
+  | 'claude-desktop'
+  | 'codex-app'
+  | 'cursor-ide'
+  | 'windsurf'
+  | 'cursor'
+  | 'gemini-cli'
+  | 'opencode'
+  | 'qwen'
+  | 'kimi'
+  | 'grok'
+  | 'kiro'
+  | 'pi'
+  | 'fx';
 
 export interface AccountAnalyticsSource {
   tool: AccountAnalyticsActivityProvider | AccountAnalyticsNoReaderTool;

@@ -420,6 +420,37 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     if collector.truncated {
         collector.keep_confirmed();
     }
+    // Persist measured clocks with each confirmed file. Fresh scans use session event times;
+    // unchanged files retain the clock established by their previous read. No mtime is ever
+    // substituted for a usage time, including for a file that has no numeric usage records.
+    let mut data_clocks: std::collections::HashMap<(&str, &str), i64> = std::collections::HashMap::new();
+    for row in &collector.srow_list {
+        data_clocks
+            .entry((&row.kind, &row.filekey))
+            .and_modify(|at| *at = (*at).max(row.last))
+            .or_insert(row.last);
+    }
+    for (kind, prints) in &mut collector.fresh {
+        for (key, print) in prints {
+            let newest = data_clocks.get(&(kind.as_str(), key.as_str())).copied();
+            let prior = collector.prior.get(kind).and_then(|p| p.get(key));
+            let unchanged = if print.wal_size.is_some() {
+                read::sqlite::same(prior, print)
+                    && prior
+                        .and_then(|p| p.get("walUnread"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        == print.wal_unread.unwrap_or(false)
+            } else {
+                util::same_print(prior, print)
+            };
+            let retained = (unchanged || print.progress.is_some())
+                .then(|| prior.and_then(|p| p.get("newestUsageMs")).and_then(Value::as_i64))
+                .flatten();
+            print.newest_usage_ms = newest.into_iter().chain(retained).max();
+            print.usage_clock = true;
+        }
+    }
     let mut kinds = Map::new();
     for kind in &request.kinds {
         let prints: Map<String, Value> = collector
@@ -519,10 +550,29 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     let mut discovery_kinds = Map::new();
     for kind in &request.kinds {
         if states.contains_key(kind) {
-            discovery_kinds.insert(
-                kind.clone(),
-                discover::discovery_kind(&collector, home, env, kind, &instances),
-            );
+            let mut discovered = discover::discovery_kind(&collector, home, env, kind, &instances);
+            // A partial scan keeps earlier rows from unconfirmed files. Their measured clocks
+            // remain part of the source too; an incomplete read must not claim no data date.
+            if kinds.get(kind).is_some_and(|entry| entry["partial"] == true) {
+                let retained = collector
+                    .prior_kind(kind)
+                    .into_iter()
+                    .flat_map(|p| p.iter())
+                    .filter(|(key, _)| !collector.fresh.get(kind).is_some_and(|p| p.contains_key(*key)))
+                    .filter_map(|(_, p)| p.get("newestUsageMs").and_then(Value::as_i64))
+                    .max();
+                let data = discovered["freshness"]["newestDataMs"]
+                    .as_i64()
+                    .into_iter()
+                    .chain(retained)
+                    .max();
+                let activity = discovered["freshness"]["newestActivityMs"].as_i64();
+                if retained.is_some() {
+                    let complete = discovered["freshness"]["activityComplete"] == true;
+                    discovered["freshness"] = discover::freshness(data, activity, collector.min_date_ms, complete);
+                }
+            }
+            discovery_kinds.insert(kind.clone(), discovered);
         }
     }
     let mut discovery = json!({"kinds": discovery_kinds});

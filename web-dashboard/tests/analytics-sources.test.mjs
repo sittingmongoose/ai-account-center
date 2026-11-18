@@ -570,3 +570,13 @@ test('cached protected folders and offline hosts state the gap without promising
     assert.ok(cell.tip.includes(detail));
   }
 });
+
+test('newer independent activity displays Stale with its measured-data and activity dates', () => {
+  const detail = 'usage is stale: newest measured data 2026-09-29T12:00:00.000Z; newer activity 2026-10-01T11:00:00.000Z; activity does not establish token counts or cost';
+  const inc = includedView(payload({sources:[{tool:'cursor',host:'nas1',state:'stale',cause:'newer_activity',lastScanAt:at(1),rowCount:42,detail}]}),now);
+  const cell = inc.rows.find(r => r.tool === 'Cursor').cells.find(c => c.id === 'nas1');
+  assert.equal(cell.text, 'Stale');
+  assert.equal(cell.tone, 'cached');
+  assert.match(cell.tip, /2026-09-29T12:00:00.000Z/);
+  assert.match(cell.tip, /2026-10-01T11:00:00.000Z/);
+});

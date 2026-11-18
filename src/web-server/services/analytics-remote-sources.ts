@@ -67,6 +67,8 @@ import type { AccountAnalyticsActivityProvider } from './account-analytics-types
 export type AnalyticsSourceTool = AnalyticsTool | 'cursor' | 'devin' | AnalyticsNoReaderTool;
 export type AnalyticsSourceState =
   | 'ok'
+  /** Independent activity is newer than the newest measured usage by a scan cycle. */
+  | 'stale'
   | 'cached'
   | 'unavailable'
   | 'not_installed'
@@ -127,7 +129,92 @@ function sourceCounts(kind: AnalyticsDiscoveryKind | undefined): {
   };
 }
 
+/** Project the native reader's coverage verdict. The dates are evidence, not guessed usage. */
+function applyFreshness(
+  entry: Pick<AnalyticsRemoteSourceState, 'state' | 'detail' | 'cause'>,
+  found: Pick<AnalyticsDiscoveryKind, 'freshness' | 'unmeasuredFiles'> | undefined
+): void {
+  if (!found) return;
+  const clock = found.freshness;
+  if (clock?.state === 'unknown' && entry.state === 'ok') {
+    entry.state = 'cached';
+    entry.cause = 'freshness_unverified';
+    if (!entry.detail?.includes('current usage coverage is unverified')) {
+      entry.detail = [
+        entry.detail,
+        'the independent activity check is incomplete; current usage coverage is unverified',
+      ]
+        .filter(Boolean)
+        .join('; ');
+    }
+  }
+  if (
+    clock?.state === 'stale' &&
+    ['ok', 'no_usage', 'cached', 'stale'].includes(entry.state) &&
+    !entry.cause
+  ) {
+    entry.state = 'stale';
+    entry.cause = 'newer_activity';
+    const data =
+      clock.newestDataMs === null
+        ? 'no measured usage date'
+        : new Date(clock.newestDataMs).toISOString();
+    const activity =
+      clock.newestActivityMs === null ? 'unknown' : new Date(clock.newestActivityMs).toISOString();
+    const note = `usage is stale: newest measured data ${data}; newer activity ${activity}; activity does not establish token counts or cost`;
+    entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+  }
+  if (found.unmeasuredFiles && !entry.detail?.includes('no numeric usage')) {
+    const note = `${found.unmeasuredFiles} local chat data file${found.unmeasuredFiles === 1 ? '' : 's'} expose no numeric usage; their tokens and cost are not counted`;
+    entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+  }
+}
+
+type SourceFreshness = NonNullable<AnalyticsDiscoveryKind['freshness']>;
+type LocalFreshness = Partial<Record<AnalyticsRemoteKind, SourceFreshness>>;
+
+/** Independent coverage is useful even before the native reader owns any numeric rows. */
+function localFreshnessOf(discovery: AnalyticsRemoteDiscovery | undefined): LocalFreshness {
+  const result: LocalFreshness = {};
+  for (const tool of LOCAL_SCANNER_KINDS) {
+    const clock = discovery?.kinds[tool]?.freshness;
+    if (clock) result[tool] = { ...clock };
+  }
+  return result;
+}
+
+/** Reconcile native evidence only with an actual collector event, never its scan/read time. */
+export function applyLocalScannerFreshness(
+  entry: Pick<AnalyticsRemoteSourceState, 'state' | 'detail' | 'cause'>,
+  clock: SourceFreshness | undefined,
+  collectorDataMs?: number
+): void {
+  if (!clock) return;
+  let resolved = clock;
+  if (
+    collectorDataMs !== undefined &&
+    Number.isFinite(collectorDataMs) &&
+    (clock.newestDataMs === null || collectorDataMs > clock.newestDataMs)
+  ) {
+    const stale =
+      clock.newestActivityMs !== null && clock.newestActivityMs - collectorDataMs > 5 * 60_000;
+    const incomplete =
+      clock.activityComplete === false ||
+      (clock.activityComplete === undefined && clock.state !== 'current');
+    resolved = {
+      ...clock,
+      newestDataMs: collectorDataMs,
+      state: stale ? 'stale' : incomplete ? 'unknown' : 'current',
+    };
+  }
+  applyFreshness(entry, { freshness: resolved });
+}
+
 const NO_READER_LABELS: Record<AnalyticsNoReaderTool, string> = {
+  'claude-desktop': 'Claude desktop',
+  'codex-app': 'Codex app',
+  'cursor-ide': 'Cursor IDE',
+  windsurf: 'Windsurf',
   cursor: 'Cursor',
   'gemini-cli': 'Gemini CLI',
   opencode: 'OpenCode',
@@ -295,7 +382,7 @@ const REMOTE_TARGETS = {
   ...Object.fromEntries(
     REMOTE_ANALYTICS_HOSTS.map((host) => [host, [...ANALYTICS_TOOLS, 'cursor', 'devin']])
   ),
-  ubuntu: ['codex', 'cursor', 'devin'],
+  ubuntu: [...ANALYTICS_TOOLS, 'cursor', 'devin'],
 } as Record<AnalyticsScanHost, AnalyticsRemoteKind[]>;
 
 /**
@@ -303,10 +390,10 @@ const REMOTE_TARGETS = {
  * at its first complete read there (DESIGN 16.0 B). Cursor and Devin have no collector, so the
  * scanner owns them from its first answer.
  */
-const TAKEOVER_KINDS: readonly AnalyticsRemoteKind[] = ['codex'];
+const TAKEOVER_KINDS: readonly AnalyticsRemoteKind[] = ANALYTICS_TOOLS;
 
 /**
- * The kinds the scanner reads on the dashboard's own computer (DESIGN 16.0 B). Codex moves from the
+ * The kinds the scanner reads on the dashboard's own computer (DESIGN 16.0 B). Existing tools move from the
  * TypeScript collector; each kind is owned by the scanner from its first complete read there,
  * which replaces the collector's rows in one step.
  */
@@ -320,6 +407,8 @@ export interface LocalScannerAnswer {
   owned: AnalyticsRemoteKind[];
   /** Kinds still catching up, with what the collector's cell should add. */
   catchingUp: Partial<Record<AnalyticsRemoteKind, string>>;
+  /** Coverage evidence survives takeover, unavailable binaries and cache-only restarts. */
+  freshness?: LocalFreshness;
   /** Why the scanner did not run here (the collector reads everything, labelled). */
   unavailable?: string;
   /** Kinds with more extra roots than the scanner takes: the collector keeps them. */
@@ -1111,7 +1200,12 @@ function cachedHostSources(
       states.push({
         tool,
         host,
-        state: !failed && read?.state === 'ok' ? 'ok' : 'cached',
+        state:
+          !failed && read?.state === 'stale'
+            ? 'stale'
+            : !failed && read?.state === 'ok'
+              ? 'ok'
+              : 'cached',
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
         detail:
@@ -1144,6 +1238,7 @@ function cachedHostSources(
         host,
         state:
           read?.state === 'no_usage' ||
+          read?.state === 'stale' ||
           read?.state === 'not_installed' ||
           read?.state === 'installed_no_logs' ||
           read?.state === 'unreadable' ||
@@ -1164,11 +1259,17 @@ function cachedHostSources(
               : read
                 ? null
                 : detail),
-        ...(read?.state === 'unreadable' ? { cause: 'read_failed' } : {}),
+        ...(read?.state === 'unreadable'
+          ? { cause: 'read_failed' }
+          : read?.cause
+            ? { cause: read.cause }
+            : {}),
         ...found,
       });
     }
   }
+  for (const entry of states)
+    applyFreshness(entry, cached.discovery?.kinds[entry.tool as AnalyticsRemoteKind]);
   return { results, states };
 }
 
@@ -1326,7 +1427,11 @@ export function loadAnalyticsRemoteCachedSources(
     states,
     fetchedAt,
     reconcileClaudeMirrors,
-    local: { owned: [...owned], catchingUp: {} },
+    local: {
+      owned: [...owned],
+      catchingUp: {},
+      freshness: localFreshnessOf(loadCache(cacheFile(cacheDir, 'ubuntu')).discovery),
+    },
   };
 }
 
@@ -1524,6 +1629,7 @@ export async function loadAnalyticsRemoteSources(
 }> {
   const now = deps.now ?? Date.now;
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
+  let localFreshness = localFreshnessOf(loadCache(cacheFile(cacheDir, 'ubuntu')).discovery);
   const hosts = await (deps.hosts ?? resolveAnalyticsRemoteHosts)().catch(() =>
     fixedAnalyticsRemoteAliases()
   );
@@ -1850,6 +1956,7 @@ export async function loadAnalyticsRemoteSources(
           const found = response.discovery?.kinds[tool];
           if (found) discovery.kinds[tool] = found;
         }
+        if (host === 'ubuntu') localFreshness = localFreshnessOf(discovery);
         let toolsAt = cached.toolsAt;
         if (response.discovery?.tools) {
           discovery.tools = response.discovery.tools;
@@ -2113,6 +2220,7 @@ export async function loadAnalyticsRemoteSources(
         for (const entry of states.slice(firstState)) {
           if (entry.host !== host) continue;
           const found = discovery.kinds[entry.tool as AnalyticsRemoteKind];
+          applyFreshness(entry, found);
           if (!entry.counts) Object.assign(entry, sourceCounts(found), { reader });
           // A log folder that could not be reached is said, never silently left out (16.4).
           const links = (found?.roots ?? []).filter(
@@ -2142,6 +2250,7 @@ export async function loadAnalyticsRemoteSources(
           if (entry.host !== host) continue;
           const read = kindReads[entry.tool as AnalyticsRemoteKind];
           if (read) {
+            if (entry.state === 'stale') read.state = 'stale';
             read.detail = entry.detail;
             read.cause = entry.cause ?? undefined;
           }
@@ -2225,8 +2334,9 @@ export async function loadAnalyticsRemoteSources(
       ? {
           owned: [...localOwned],
           catchingUp,
+          freshness: localFreshness,
           ...(local.overflow.length ? { tooManyRoots: local.overflow } : {}),
         }
-      : { owned: [], catchingUp: {}, unavailable: localReady.cause },
+      : { owned: [], catchingUp: {}, unavailable: localReady.cause, freshness: localFreshness },
   };
 }
