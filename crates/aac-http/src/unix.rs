@@ -1164,6 +1164,97 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // The page's answer history from the owned feed: the journal and its verified share
+        // copies, newest first, in the route's projection.
+        Handler::StatusAnswersRead => {
+            let Some(limit) = crate::status_answers_route::read_limit(req.uri().query()) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Some(produce) = shared.status_produce.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if !body.is_empty() {
+                return decline(row.handler, Decline::Shape);
+            }
+            match shared
+                .limits
+                .blocking(row.pool, move || Ok(produce.answers_view(limit)))
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        // The route's answer set: the same record path as the forwarded send, with the route
+        // body (`answers`, `sendId`) and the browser's device word read here.
+        Handler::StatusAnswersPost => {
+            let Some(owner) = shared.answers_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let device =
+                crate::status_answers_route::device_of(one_header(req.headers(), "user-agent"));
+            let Ok(bytes) = to_bytes(req.into_body(), crate::answers_owned::SEND_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(body) = crate::status_answers_route::submit_body(&value, device) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match owner.submit(body.to_string().as_bytes()).await {
+                Ok(value) => {
+                    if let Some(produce) = &shared.status_produce {
+                        produce.mark_answers();
+                    }
+                    Json(value).into_response()
+                }
+                Err("shape") => decline(row.handler, Decline::Shape),
+                Err(_) => store_error("answers_failed: the answer store could not finish"),
+            }
+        }
+        // The history store's reads: the binding's own methods over the hosted Engine.
+        Handler::UsageHistory | Handler::UsageAt | Handler::UsageBurn => {
+            let handler = row.handler;
+            let raw = req.uri().query().map(str::to_owned);
+            let valid = match handler {
+                Handler::UsageHistory => {
+                    crate::usage_routes::valid_history(raw.as_deref(), aac_store::engine::now_ms())
+                }
+                Handler::UsageAt => crate::usage_routes::valid_at(raw.as_deref()),
+                _ => crate::usage_routes::valid_burn(raw.as_deref()),
+            };
+            if !valid {
+                return decline(handler, Decline::Shape);
+            }
+            let Some(host) = shared.store.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let answer = match handler {
+                Handler::UsageHistory => {
+                    crate::usage_routes::history(&host, raw.as_deref(), aac_store::engine::now_ms())
+                        .await
+                }
+                Handler::UsageAt => {
+                    crate::usage_routes::at(&host, raw.as_deref(), aac_store::engine::now_ms())
+                        .await
+                }
+                _ => {
+                    crate::usage_routes::burn(&host, raw.as_deref(), aac_store::engine::now_ms())
+                        .await
+                }
+            };
+            match answer {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(handler, reason),
+            }
+        }
         // G16b: one forwarded send, recorded by the service's answer store.
         Handler::StatusAnswers => {
             let Some(owner) = shared.answers_owned.clone() else {

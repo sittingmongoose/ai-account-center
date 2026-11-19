@@ -38,11 +38,11 @@ sha1 = "0.10"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case"] }
 tempfile = "3"
 fs2 = "0.4"
-# The IANA zone table: the dashboard's saved display zone must accept what Intl accepts.
-chrono-tz = { version = "0.10", default-features = false }
 libc = "0.2"
 serde_yaml = "0.9"
 yaml-rust2 = { version = "0.13", default-features = false }
+# The IANA table serves dashboard preference validation and Status/Scoreboard display offsets.
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "time", "sync", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 

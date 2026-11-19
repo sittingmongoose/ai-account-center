@@ -7,13 +7,13 @@ mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
+#[cfg(unix)]
+mod native_group;
 mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
-// Merged before its first registering group: the host is exercised by the groups that land
-// on top of it (W-status-home first), so its API is not dead in the composed cut.
-#[allow(dead_code)]
+#[cfg_attr(not(unix), allow(dead_code))]
 mod owner_host;
 mod policy;
 mod request_log;
@@ -105,6 +105,23 @@ impl DashboardAccess {
             })
             .unwrap_or("session")
             .to_owned()
+    }
+
+    /// The verified principal the private service's table adjudicates for this request: the
+    /// front door has already done public admission, and the service trusts this word only on
+    /// its private socket (the boot secret). A device principal stays a device principal.
+    #[cfg(unix)]
+    pub(crate) fn service_principal(&self) -> Option<String> {
+        match &self.principal {
+            DashboardPrincipal::Browser { .. } => self
+                .session_id
+                .as_ref()
+                .map(|id| json!({"kind": "session", "id": id, "role": "admin"}).to_string()),
+            DashboardPrincipal::Device { id, .. } => {
+                Some(json!({"kind": "device", "id": id, "role": "device"}).to_string())
+            }
+            DashboardPrincipal::Anonymous => None,
+        }
     }
 }
 
@@ -216,7 +233,18 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream, cache, ui_root, None, false, None, None, None, None, None,
+            downstream,
+            cache,
+            ui_root,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            #[cfg(unix)]
+            None,
         )
     }
 
@@ -236,6 +264,7 @@ impl DashboardAuth {
         native_owners: Option<native_owners::NativeOwners>,
         native_settings: Option<native_settings::Settings>,
         analytics_hop: Option<analytics_routes::Hop>,
+        #[cfg(unix)] native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
@@ -278,6 +307,15 @@ impl DashboardAuth {
                 {
                     return reply;
                 }
+            }
+            #[cfg(unix)]
+            if let Some(group) = &native_group
+                && group.owns(request.method(), request.uri().path().trim_end_matches('/'))
+            {
+                let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
+                    return service_error();
+                };
+                return native_group::handle(group.as_ref(), &access, request).await;
             }
             if let Some(native) = &native_owners
                 && native_owners::NativeOwners::owns(
@@ -442,6 +480,9 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
+    // The one owner host: it starts this boot's public owners (the same `NativeOwners` the cut
+    // used) and, on Unix, reaches the private service for the service-owned groups. Windows
+    // hosts the widened owners in-process.
     let owner_host =
         owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let (native, native_jobs) = if let Some(groups) = groups {
@@ -484,6 +525,10 @@ pub(crate) async fn run_public_at(
         });
     #[cfg(not(unix))]
     let analytics_hop: Option<analytics_routes::Hop> = None;
+    #[cfg(unix)]
+    let group_routes = owner_host
+        .as_ref()
+        .map(|host| Arc::new(native_group::Routes::new(host.clone())));
     let mut api = Router::new();
     if let Some(host) = &owner_host {
         api = host.mount(api);
@@ -508,6 +553,8 @@ pub(crate) async fn run_public_at(
         native,
         native_settings,
         analytics_hop,
+        #[cfg(unix)]
+        group_routes,
     );
     let router = auth
         .protect(reset_routes::mount(
@@ -1716,6 +1763,8 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
+            None,
+            #[cfg(unix)]
             None,
         ));
         let handle = tokio::spawn(async move {

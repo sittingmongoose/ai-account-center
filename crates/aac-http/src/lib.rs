@@ -64,6 +64,8 @@ mod runs_ingest_gate;
 #[cfg(unix)]
 mod scoreboard_owned;
 mod signins;
+#[cfg(unix)]
+mod status_answers_route;
 mod status_cache;
 mod status_fed;
 #[cfg(unix)]
@@ -77,9 +79,13 @@ mod table;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
+mod usage_routes;
+#[cfg(unix)]
 mod usage_snapshot;
 pub mod view_reply;
 mod visibility_write;
+#[cfg(unix)]
+mod zone_facts;
 pub use identity::PROTOCOL;
 #[cfg(unix)]
 pub use unix::{

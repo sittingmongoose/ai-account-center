@@ -14,7 +14,7 @@ if (process.argv.includes('--cut-rust-only') || legacyResetGroup) {
       binary,
       '--cut-rust-only',
       '--require-complete',
-      ...process.argv.slice(2),
+      ...process.argv.slice(2).filter((arg) => arg !== '--cut-rust-only'),
     ],
     { cwd, stdio: 'inherit' }
   );
