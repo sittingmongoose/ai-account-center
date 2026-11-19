@@ -117,6 +117,18 @@ struct Feed {
     facts: String,
 }
 
+/// Removes its key from the composing set however the compose ends.
+struct Composing<'a> {
+    set: &'a Mutex<std::collections::HashSet<String>>,
+    key: String,
+}
+
+impl Drop for Composing<'_> {
+    fn drop(&mut self) {
+        self.set.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
+    }
+}
+
 struct CachedView {
     at: u64,
     view: Json,
@@ -138,6 +150,8 @@ pub(crate) struct ScoreboardOwned {
     views: Mutex<IndexMap<String, CachedView>>,
     /// The last pushed facts generation, parsed once: (its id, its presentation).
     parsed_facts: Mutex<Option<(String, std::sync::Arc<Presentation>)>>,
+    /// The view-cache keys being composed now: one compose per key at a time.
+    composing: Mutex<std::collections::HashSet<String>>,
     last_full_at: AtomicU64,
     /// The readers-check rows this owner shares with the Status owner (one file per writer).
     check: Arc<Mutex<ReadersCheckWriter>>,
@@ -166,6 +180,7 @@ impl ScoreboardOwned {
             reads: Mutex::new(IndexMap::new()),
             views: Mutex::new(IndexMap::new()),
             parsed_facts: Mutex::new(None),
+            composing: Mutex::new(std::collections::HashSet::new()),
             last_full_at: AtomicU64::new(0),
             check,
             owners,
@@ -702,6 +717,15 @@ impl ScoreboardOwned {
                 }
             }
         }
+        // One compose per view-cache key: a request that finds its key being composed (its
+        // first request outlived the budget and still runs) is `busy`; today's handler answers.
+        let _composing = {
+            let mut composing = self.composing.lock().unwrap_or_else(|p| p.into_inner());
+            if !composing.insert(cache_key.clone()) {
+                return Err(Decline::Busy);
+            }
+            Composing { set: &self.composing, key: cache_key.clone() }
+        };
         // The facts generation is pushed once per runs generation and shared by its requests;
         // parsed once per id. The request's own `now` comes from its header words.
         let presentation = {

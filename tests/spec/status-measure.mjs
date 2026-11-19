@@ -290,8 +290,26 @@ try {
         uncached.push(reply.ms);
       }
     }
+    // The owned compose of a filter not asked before: its first request falls back while the
+    // service composes (a compose outliving the 500 ms hop still fills the view cache), so its
+    // time is from that request until the same filter is answered by Rust.
+    const composeMs = [];
+    for (let k = 0; k < 10; k++) {
+      const route = `/api/scoreboard?from=${day(70 + k)}&to=${day(1)}`;
+      const started = process.hrtime.bigint();
+      for (let tries = 0; tries < 600; tries++) {
+        const reply = await get(route);
+        if (reply.view === 'scoreboard@1') {
+          composeMs.push(Number(process.hrtime.bigint() - started) / 1e6);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    }
     const s = await stats(ownedServer);
     scoreboard = {
+      ownedCompose: composeMs.length ? quantiles(composeMs) : null,
+      ownedComposeAnswered: composeMs.length,
       runsIngested: ready.runs,
       viewBytes: bytes,
       cached: quantiles(cached),
