@@ -1,6 +1,5 @@
-/** Retained legacy bin names provide migration guidance without launching old engines. */
-import * as path from 'path';
-
+// Historical TypeScript CLI output for the M6 golden recorder.
+const path = require('node:path');
 const invokedName = path
   .basename(process.argv[1] || 'legacy CCS alias')
   .replace(/\.(?:js|ts)$/, '');

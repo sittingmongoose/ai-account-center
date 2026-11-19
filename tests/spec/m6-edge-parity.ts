@@ -377,7 +377,7 @@ function compatWrapper(home: string): CliTarget {
   const wrapper = path.join(home, 'ccs-droid.js');
   fs.writeFileSync(
     wrapper,
-    `require(${JSON.stringify(path.join(repo, 'dist/bin/compat-cli.js'))});\n`
+    `require(${JSON.stringify(path.join(repo, 'tests/spec/m6-retired-bin-reference.cjs'))});\n`
   );
   return { command: process.execPath, prefix: [wrapper], typescript: true };
 }

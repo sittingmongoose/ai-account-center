@@ -5,11 +5,11 @@ const fs = require('fs');
 const path = require('path');
 
 function getExecutablePaths() {
-  return ['ccs.js', 'bin/compat-cli.js'].map((file) => path.join(__dirname, '../dist', file));
+  return [path.join(__dirname, '../dist/ccs.js')];
 }
 
 /**
- * Add shebangs to the retained reference CLI scripts. Published bins are native.
+ * Add a shebang to the retained reference CLI. Published bins are native.
  * Run after: tsc
  */
 function addShebang() {
@@ -26,7 +26,9 @@ function addShebang() {
     if (!content.startsWith('#!/usr/bin/env node')) {
       content = '#!/usr/bin/env node\n' + content;
       fs.writeFileSync(executablePath, content);
-      console.log(`[OK] Shebang added to ${path.relative(path.join(__dirname, '..'), executablePath)}`);
+      console.log(
+        `[OK] Shebang added to ${path.relative(path.join(__dirname, '..'), executablePath)}`
+      );
     }
 
     if (process.platform !== 'win32') {

@@ -42,16 +42,15 @@ was rebuilt.
 | Invalid directory | A missing global config directory fails before command execution. |
 | Retired commands | Old profile, provider, Docker, API, install/uninstall, and doctor invocations fail with product migration guidance. |
 | Retired Codex shell commands | `codex-auth use` and `switch` emit no shell exports and point to `codex-auth activate <saved-login>`. |
-| Five retired launcher bins | `ccsx`, `ccs-codex`, `ccsd`, `ccs-droid`, and `ccsxp` map to the migration-only stub; its invocation fails explicitly and writes no shell output. |
+| Five retired launcher bins | `ccsx`, `ccs-codex`, `ccsd`, `ccs-droid`, and `ccsxp` run native migration guidance and write no shell output. |
 | Retired self-update | Old self-update forms return migration guidance without invoking package installation; installed-application updates remain a separate product control. |
 
 Every CLI case checks that four synthetic files retain their exact bytes:
 `.ccs/config.yaml` with dashboard authentication settings,
 `.ccs/codex-profiles.yaml`, `.ccs/profiles.json`, and `.codex/auth.json`.
-The supported `ai-account-center` bin and compatible `ccs` alias both map to
-`dist/ccs.js`; the five retired launchers map to `dist/bin/compat-cli.js`.
-See [the migration stub](../../src/bin/compat-cli.ts) and
-[command routing tests](../unit/commands/root-command-router.test.ts).
+Build the native entries in `dist/native` before running the suite. Windows
+package staging adds `.exe` to each packaged target. The entry points share
+the [native CLI parser](../../crates/aac-http/src/cli.rs).
 
 ## Lifecycle preservation
 

@@ -145,7 +145,7 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
             if subcommand == Some("help")
                 || args
                     .iter()
-                    .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+                    .any(|arg| matches!(arg.split('=').next(), Some("-h" | "--help")))
             {
                 print!("{DASHBOARD_HELP}");
             } else if let Some(name @ ("channels" | "image-analysis" | "thinking")) = subcommand {
