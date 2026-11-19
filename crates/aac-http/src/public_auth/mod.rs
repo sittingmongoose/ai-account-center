@@ -425,20 +425,14 @@ pub(crate) async fn run_public_at(
     let native_lifecycle = native_lifecycle || (cut && !composed && lifecycle_available);
     let owner_host = (enabled || native_lifecycle)
         .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
-    let local_lifecycle = native_lifecycle && !has_external;
-    let (native, native_jobs) = if let Some(groups) = groups {
+    let (native, native_jobs) = if let Some(mut groups) = groups {
+        groups.lifecycle = native_lifecycle && !has_external;
         let worker_directory = snapshot
             .as_deref()
             .and_then(std::path::Path::parent)
             .map(std::path::Path::to_owned);
         if let Some(host) = &owner_host {
-            host.start_public(
-                groups,
-                hub.clone(),
-                auth.events(),
-                worker_directory,
-                local_lifecycle,
-            )?;
+            host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
             (host.public_owners(), None)
         } else {
             let (native, jobs) = native_owners::NativeOwners::start(
@@ -447,7 +441,6 @@ pub(crate) async fn run_public_at(
                 hub.clone(),
                 auth.events(),
                 worker_directory,
-                local_lifecycle,
             )?;
             (Some(native), Some(jobs))
         }

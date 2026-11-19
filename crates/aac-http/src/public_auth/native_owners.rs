@@ -49,6 +49,7 @@ mod recheck;
 #[derive(Clone, Copy, Default)]
 pub(super) struct Groups {
     pub(super) collection: bool,
+    pub(super) lifecycle: bool,
     writes: bool,
     app_updates: bool,
     home: bool,
@@ -77,6 +78,7 @@ impl Groups {
             }
         };
         Self {
+            lifecycle: false,
             store,
             analytics_writers: on("analytics-writers", "AAC_RUST_GROUP_ANALYTICS_WRITERS")
                 && on("analytics", "AAC_RUST_GROUP_ANALYTICS"),
@@ -161,7 +163,6 @@ impl NativeOwners {
         hub: HubCache,
         events: DashboardEvents,
         worker_directory: Option<PathBuf>,
-        owns_lifecycle_here: bool,
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
         let agents = Arc::new(Agents::with_default(root.clone(), true));
@@ -195,7 +196,7 @@ impl NativeOwners {
                 let owner = if (groups.collection
                     && row.moves_with.as_deref() == Some("collection"))
                     || (groups.writes && row.moves_with.as_deref() == Some("writes"))
-                    || (owns_lifecycle_here && row.moves_with.as_deref() == Some("lifecycle"))
+                    || (groups.lifecycle && row.moves_with.as_deref() == Some("lifecycle"))
                 {
                     Role::RustService
                 } else {
@@ -206,8 +207,10 @@ impl NativeOwners {
             .collect();
         let owners = Owners::from_boot(rows, &files).map_err(io::Error::other)?;
         let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
-        let lifecycle_jobs = owns_lifecycle_here.then(|| Arc::new(lifecycle_jobs::Jobs::default()));
-        let trash = owns_lifecycle_here.then(|| {
+        let lifecycle_jobs = groups
+            .lifecycle
+            .then(|| Arc::new(lifecycle_jobs::Jobs::default()));
+        let trash = groups.lifecycle.then(|| {
             Arc::new(lifecycle_trash::Trash::new(
                 root.clone(),
                 owners.clone(),
@@ -271,7 +274,7 @@ impl NativeOwners {
                 server,
                 store: groups.store && worker_directory.is_some(),
                 worker_directory,
-                native_lifecycle: owns_lifecycle_here,
+                native_lifecycle: groups.lifecycle,
                 analytics_writers: groups.analytics_writers,
                 owners: owners.clone(),
                 agents: agents.clone(),

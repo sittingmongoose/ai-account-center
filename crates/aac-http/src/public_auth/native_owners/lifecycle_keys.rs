@@ -713,12 +713,12 @@ mod tests {
             root.clone(),
             super::super::Groups {
                 writes: true,
+                lifecycle: true,
                 ..Default::default()
             },
             HubCache::default(),
             DashboardEvents(tokio::sync::broadcast::channel(4).0),
             None,
-            true,
         )
         .unwrap();
         let provider = "zai";
