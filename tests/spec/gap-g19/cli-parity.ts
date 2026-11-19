@@ -1037,13 +1037,24 @@ for (const testCase of IMPORT_CASES) {
     const authA = fs.readFileSync(path.join(a.ccs, `codex-instances/${profileName}/auth.json`));
     const authB = fs.readFileSync(path.join(b.ccs, `codex-instances/${profileName}/auth.json`));
     check(`import-default ${testCase.name} auth bytes`, authA.equals(authB));
-    const linkA = fs.readlinkSync(path.join(a.ccs, `codex-instances/${profileName}/config.toml`));
-    const linkB = fs.readlinkSync(path.join(b.ccs, `codex-instances/${profileName}/config.toml`));
-    check(
-      `import-default ${testCase.name} config link`,
-      linkA === path.join(homeA, '.codex/config.toml') &&
-        linkB === path.join(homeB, '.codex/config.toml')
-    );
+    const configA = path.join(a.ccs, `codex-instances/${profileName}/config.toml`);
+    const configB = path.join(b.ccs, `codex-instances/${profileName}/config.toml`);
+    const sharedA = path.join(homeA, '.codex/config.toml');
+    const sharedB = path.join(homeB, '.codex/config.toml');
+    const typeA = fs.lstatSync(configA);
+    const typeB = fs.lstatSync(configB);
+    const linksMatch =
+      typeA.isSymbolicLink() &&
+      typeB.isSymbolicLink() &&
+      fs.readlinkSync(configA) === sharedA &&
+      fs.readlinkSync(configB) === sharedB;
+    const copiesMatch =
+      process.platform === 'win32' &&
+      typeA.isFile() &&
+      typeB.isFile() &&
+      fs.readFileSync(configA).equals(fs.readFileSync(sharedA)) &&
+      fs.readFileSync(configB).equals(fs.readFileSync(sharedB));
+    check(`import-default ${testCase.name} config link`, linksMatch || copiesMatch);
     if (testCase.history) {
       check(
         `import-default ${testCase.name} history files`,

@@ -17,6 +17,7 @@ import { ok } from '../../utils/ui';
 import { initUI } from '../../utils/ui';
 import { exitWithError } from '../../errors';
 import { ExitCode } from '../../errors/exit-codes';
+import { replaceFileAtomically } from '../codex-atomic-file';
 import { resolveCodexProfileDir, ensureSharedConfigSymlink, decodeIdToken } from '../index';
 import { hasStructurallyValidIdToken } from '../decode-id-token';
 import { parseArgs, rejectUnsupportedOptions, getProfileNameError } from './types';
@@ -170,36 +171,13 @@ async function readAuthJsonSafe(authSrcPath: string): Promise<Record<string, unk
 }
 
 /**
- * Atomic copy: write to tmp.<pid>.<rand>, fsync, rename to dest.
- * Preserves 0600 permissions.
- */
-function atomicWriteFile(dest: string, content: string): void {
-  const tmpPath = `${dest}.tmp.${process.pid}.${Math.random().toString(36).slice(2)}`;
-  try {
-    fs.writeFileSync(tmpPath, content, { mode: 0o600 });
-    // fsync via close-and-reopen pattern (Bun/Node doesn't expose fd fsync easily)
-    const fd = fs.openSync(tmpPath, 'r');
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fs.renameSync(tmpPath, dest);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-      // best-effort cleanup
-    }
-    throw err;
-  }
-}
-
-/**
  * Copy a file if it exists; silently skip if not.
  * Returns 'copied' | 'missing'.
  */
 function copyIfPresent(src: string, dest: string): 'copied' | 'missing' {
   if (!fs.existsSync(src)) return 'missing';
   const content = fs.readFileSync(src, 'utf8');
-  atomicWriteFile(dest, content);
+  replaceFileAtomically(dest, content);
   return 'copied';
 }
 
@@ -343,7 +321,7 @@ export async function handleImportDefaultCodex(
   }
 
   // Atomic write (C3)
-  atomicWriteFile(destAuthPath, JSON.stringify(authData, null, 2));
+  replaceFileAtomically(destAuthPath, JSON.stringify(authData, null, 2));
   logger.stage('dispatch', 'codex-auth.import-default.copied', 'Copied auth.json to profile', {
     name: args.name,
     dest: destAuthPath,

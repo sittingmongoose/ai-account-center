@@ -593,7 +593,23 @@ fn ensure_shared_config_symlink(profile_dir: &Path) -> Result<(), String> {
             Err(error) => Err(error.to_string()),
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        match std::os::windows::fs::symlink_file(&target, &link) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+                ) || error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) =>
+            {
+                symlink_copy_fallback(&target, &link)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         symlink_copy_fallback(&target, &link)
     }
