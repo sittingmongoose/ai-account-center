@@ -244,6 +244,7 @@ impl StatusOwned {
         let pins: Vec<(String, String)> = self
             .feeds
             .latest("owned-pins")
+            .ok()
             .and_then(|generation| {
                 serde_json::from_str::<Json>(generation.data.get()).ok()
             })

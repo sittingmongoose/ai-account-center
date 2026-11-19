@@ -331,12 +331,6 @@ impl Feeds {
         }))
     }
 
-    /// The latest generation held for a source, whatever its id (R4: the owned readers'
-    /// flushes read the front door's last pins without naming a generation).
-    pub(crate) fn latest(&self, source: &str) -> Option<Arc<Generation>> {
-        self.held.lock().ok()?.get(source).cloned()
-    }
-
     /// Publish one event on the front door's stream (R4: `status-changed`, `scoreboard-changed`).
     pub(crate) fn publish_event(&self, event: serde_json::Value) {
         self.publish(event);
