@@ -732,10 +732,12 @@ mod tests {
         assert!(!added.to_string().contains(old));
         let entries = registry_entries(&root).unwrap();
         assert_eq!(entries.len(), baseline.len() + 1);
-        assert_eq!(
-            serde_json::to_value(&entries[..baseline.len()]).unwrap(),
-            serde_json::to_value(&baseline).unwrap()
-        );
+        assert!(entries.iter().zip(&baseline).all(|(migrated, prior)| {
+            key_binding(migrated, prior)
+                && migrated.label == prior.label
+                && migrated.created_by.as_deref() == Some("migration")
+                && migrated.created_at.is_some()
+        }));
         let source = entries.last().unwrap();
         assert_eq!(added["account"]["id"], source.id);
         assert!(matches!(
