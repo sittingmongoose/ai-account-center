@@ -915,6 +915,66 @@ def update_resources(install):
     return resources
 
 
+def update_one_app(app_id, platform, install, deadline, phase, cancelled, t3_row=None):
+    with row_diagnostics() as record:
+        if install is not None and install.owner:
+            record.owner = install.owner
+        try:
+            row = attempt_one(app_id, platform, install, record, deadline, phase, cancelled, t3_row)
+        except Exception:
+            record.blame("unknown", "helper_exception")
+            row = result(app_id, platform, "failed", install.version if install else None,
+                         install.version if install else None, install.manager if install else None, "update_failed")
+        return with_diagnostics(row, record)
+
+
+def attempt_one(app_id, platform, install, record, deadline, phase, cancelled, t3_row=None):
+    if cancelled():
+        return result(app_id, platform, "skipped", code="skipped_cancelled")
+    if install is None:
+        return result(app_id, platform, "not_installed")
+    if install.probe == "timeout":
+        return result(app_id, platform, "unknown", None, None, install.manager, "check_timeout")
+    if install.probe is not None:
+        if install.probe_reason == "policy_blocked":
+            record.blame("policy_blocked", "execution_policy")
+            return result(app_id, platform, "action_required", None, None, install.manager, "policy_blocked")
+        record.blame("unknown", install.probe_reason or "probe_failed")
+        return result(app_id, platform, "unknown", None, None, None, "readiness_unknown")
+    if time.monotonic() >= deadline:
+        return result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout")
+    if platform == "ubuntu" and ("npm" in update_resources(install) or app_id == "t3-code") and ubuntu_unit_busy():
+        return result(app_id, platform, "action_required", install.version, install.version, install.manager, "busy")
+    try:
+        phase(app_id, "checking")
+        if app_id == "claude-code":
+            try:
+                newest = claude_current(install)
+            except Exception:
+                newest = None
+            if newest is not None:
+                return newest
+        gate = check_readiness(install)
+        if gate is not None:
+            status, code = gate
+            return result(app_id, platform, status, install.version, install.version, install.manager, code)
+        if cancelled():
+            return result(app_id, platform, "skipped", code="skipped_cancelled")
+        phase(app_id, "updating")
+        if app_id.endswith("-desktop") or app_id in OWN_UPDATERS:
+            # A desktop app reports its long steps (a package download,
+            # then the install) so the page shows what it waits on.
+            if app_id == "antigravity-acp":
+                return update_antigravity_acp(install, deadline, lambda name: phase(app_id, name),
+                                              t3_row=t3_row)
+            update = {"zcode": update_zcode, "t3-acp-adapters": update_adapters, "t3-code": update_t3,
+                      "cursor-cli": update_cursor}.get(app_id, update_desktop)
+            return update(install, deadline, lambda name: phase(app_id, name))
+        return update_cli(install, deadline)
+    except Exception:
+        record.blame("unknown", "helper_exception")
+        return result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed")
+
 def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     """Run independent updates together; serialize shared installers and restart T3 last.
 
@@ -989,64 +1049,8 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
             return dependencies.get(app_id, set())
 
         def update_one(app_id):
-            with row_diagnostics() as record:
-                install = installations[app_id]
-                if install is not None and install.owner:
-                    record.owner = install.owner
-                try:
-                    row = attempt(app_id, install, record)
-                except Exception:
-                    record.blame("unknown", "helper_exception")
-                    row = result(app_id, platform, "failed", install.version if install else None,
-                                 install.version if install else None, install.manager if install else None, "update_failed")
-                return with_diagnostics(row, record)
-
-        def attempt(app_id, install, record):
-            if cancelled():
-                return result(app_id, platform, "skipped", code="skipped_cancelled")
-            if install is None:
-                return result(app_id, platform, "not_installed")
-            if install.probe == "timeout":
-                return result(app_id, platform, "unknown", None, None, install.manager, "check_timeout")
-            if install.probe is not None:
-                if install.probe_reason == "policy_blocked":
-                    record.blame("policy_blocked", "execution_policy")
-                    return result(app_id, platform, "action_required", None, None, install.manager, "policy_blocked")
-                record.blame("unknown", install.probe_reason or "probe_failed")
-                return result(app_id, platform, "unknown", None, None, None, "readiness_unknown")
-            if time.monotonic() >= deadline:
-                return result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout")
-            if platform == "ubuntu" and ("npm" in update_resources(install) or app_id == "t3-code") and ubuntu_unit_busy():
-                return result(app_id, platform, "action_required", install.version, install.version, install.manager, "busy")
-            try:
-                phase(app_id, "checking")
-                if app_id == "claude-code":
-                    try:
-                        newest = claude_current(install)
-                    except Exception:
-                        newest = None
-                    if newest is not None:
-                        return newest
-                gate = check_readiness(install)
-                if gate is not None:
-                    status, code = gate
-                    return result(app_id, platform, status, install.version, install.version, install.manager, code)
-                if cancelled():
-                    return result(app_id, platform, "skipped", code="skipped_cancelled")
-                phase(app_id, "updating")
-                if app_id.endswith("-desktop") or app_id in OWN_UPDATERS:
-                    # A desktop app reports its long steps (a package download,
-                    # then the install) so the page shows what it waits on.
-                    if app_id == "antigravity-acp":
-                        return update_antigravity_acp(install, deadline, lambda name: phase(app_id, name),
-                                                      t3_row=results.get("t3-code"))
-                    update = {"zcode": update_zcode, "t3-acp-adapters": update_adapters, "t3-code": update_t3,
-                              "cursor-cli": update_cursor}.get(app_id, update_desktop)
-                    return update(install, deadline, lambda name: phase(app_id, name))
-                return update_cli(install, deadline)
-            except Exception:
-                record.blame("unknown", "helper_exception")
-                return result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed")
+            return update_one_app(app_id, platform, installations[app_id], deadline, phase,
+                                  cancelled, t3_row=results.get("t3-code"))
 
         # Ubuntu's T3 row only schedules the detached restart, so it closes the
         # pool after every other worker, and Antigravity ACP follows it; the
@@ -1079,7 +1083,7 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     return {"results": [results[app_id] for app_id in order]}
 
 
-def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
+def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None, app=None, budget=None):
     """The fixed separate InteractiveToken task owns GUI/terminal restarts.
 
     The task child writes its progress to a private file; this coordinator
@@ -1139,24 +1143,33 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
         for stale in (progress_path, cancel_path):
             stale.unlink(missing_ok=True)
         request = {"nonce": nonce}
+        if app is not None:
+            request.update(appId=app, workerSeconds=budget)
         if agy_reviewed is not None:
             request["agyReviewed"] = sorted(agy_reviewed)
         write_private_json(request_path, request)
         task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; if($t.Settings.ExecutionTimeLimit -ne 'PT35M'){$t.Settings.ExecutionTimeLimit='PT35M'; $t | Set-ScheduledTask | Out-Null}; Start-ScheduledTask -TaskName 'CCS App Updates'")
         started = time.monotonic()
-        deadline, next_check = started + 31 * 60, started + 5
-        relayed, cancel_sent = 0, False
+        deadline, next_check = started + min(31 * 60, budget or 31 * 60), started + 5
+        relayed, cancel_sent, cancel_deadline = 0, False, None
         while (now := time.monotonic()) < deadline:
             if not cancel_sent and cancelled():
                 try:
                     write_private_json(cancel_path, {"nonce": nonce})
                     cancel_sent = True
+                    if app is not None:
+                        cancel_deadline = now + 7
                 except OSError:
                     pass
             relayed = relay_progress(nonce, relayed)
             final = final_result(nonce)
             if final is not None:
                 return final
+            if cancel_deadline is not None and now >= cancel_deadline:
+                # Only the coordinator that created the nonce holds the task lease.
+                # The task normally kills its own worker before reporting this row.
+                task_command("$ErrorActionPreference='Stop'; Stop-ScheduledTask -TaskName 'CCS App Updates'")
+                return {"results": [result(app, "windows", "skipped", code="skipped_cancelled")]}
             if now >= next_check:
                 next_check = now + 5
                 try:
@@ -1170,9 +1183,11 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
                     if final is not None:
                         return final
                     relay_progress(nonce, relayed)
-                    return {"results": [completed.get(app_id) or result(app_id, "windows", "unknown", code="task_failed") for app_id in APP_LABELS]}
+                    return {"results": [completed.get(app_id) or result(app_id, "windows", "unknown", code="task_failed") for app_id in ([app] if app else APP_LABELS)]}
             time.sleep(1)
-        return {"results": [completed.get(app_id) or result(app_id, "windows", "unknown", code="host_timeout") for app_id in APP_LABELS]}
+        if app is not None and not cancel_sent:
+            write_private_json(cancel_path, {"nonce": nonce})
+        return {"results": [completed.get(app_id) or result(app_id, "windows", "unknown", code="host_timeout") for app_id in ([app] if app else APP_LABELS)]}
 
 
 def task_child_progress(nonce):
@@ -1196,7 +1211,7 @@ def task_child_progress(nonce):
     return emit, cancelled
 
 
-def stream_progress():
+def stream_progress(cancel_on_eof=False):
     """emit/cancelled pair for a dashboard that asked for live progress.
 
     Events go to stdout as one JSON object per line, flushed at once; the final
@@ -1220,6 +1235,8 @@ def stream_progress():
             except OSError:
                 return
             if not chunk:
+                if cancel_on_eof:
+                    stop.set()
                 return
             seen = (seen + chunk)[-64:]
             if b"cancel\n" in seen or b"cancel\r\n" in seen:
@@ -1255,6 +1272,97 @@ def read_task_request(request_path):
         return None, None
 
 
+def apply_single_app(app, platform, emit, budget, t3_restart_pending=False):
+    deadline = time.monotonic() + min(budget, HOST_DEADLINE_SECONDS)
+    install = detect_one(app, platform)
+
+    def phase(app_id, name):
+        diagnostics().phase(name)
+        emit({"event": "app", "appId": app_id, "phase": name})
+
+    dependency = {"messageCode": "t3_restart_scheduled"} if t3_restart_pending else None
+    row = update_one_app(app, platform, install, deadline, phase, lambda: False, dependency)
+    if getattr(install, "strays", None):
+        row["strays"] = install.strays
+    return {"results": [row]}
+
+
+def detect_one(app, platform):
+    try:
+        return _detect_one(app, platform)
+    except Exception:
+        return Install(app, platform, None, probe="failed")
+
+
+def supervised_app(args, emit, cancelled):
+    """Run one worker under a parent that owns its process tree and its input pipe."""
+    import subprocess
+    from app_update_common import _stop_group, environment
+
+    argv = [sys.executable, "-B", "-u", str(pathlib.Path(__file__).resolve()),
+            "--apply", "--platform", args.platform, "--app", args.app,
+            "--agent-worker-child", "--worker-seconds", str(args.worker_seconds)]
+    if args.t3_restart_pending:
+        argv.append("--t3-restart-pending")
+    flags = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
+    budget = time.monotonic() + min(args.worker_seconds, HOST_DEADLINE_SECONDS)
+    code = "host_timeout"
+    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          env=environment({"AAC_UPDATE_PROGRESS": "1"}), **flags) as child:
+        # The child emits only small JSON frames. The queue lets the parent check
+        # for aborts even while a downloader has produced no progress for minutes.
+        from queue import Empty, Full, Queue
+        output = Queue(16)
+        done = threading.Event()
+
+        def read():
+            try:
+                while not done.is_set():
+                    line = child.stdout.readline(65537)
+                    if not line or len(line) > 65536:
+                        break
+                    output.put(line, timeout=0.2)
+            except (OSError, ValueError, Full):
+                pass
+            finally:
+                done.set()
+
+        threading.Thread(target=read, daemon=True).start()
+        final = None
+        try:
+            while time.monotonic() < budget:
+                if cancelled():
+                    code = "skipped_cancelled"
+                    break
+                try:
+                    line = output.get(timeout=0.05)
+                except Empty:
+                    if done.is_set() and child.poll() is not None:
+                        if child.returncode == 0 and final is not None:
+                            return final
+                        code = "helper_invalid"
+                        break
+                    continue
+                try:
+                    data = json.loads(line)
+                except (ValueError, UnicodeError):
+                    code = "helper_invalid"
+                    break
+                if isinstance(data, dict) and data.get("event") == "app" and data.get("appId") == args.app:
+                    emit(data)
+                elif isinstance(data, dict) and isinstance(data.get("results"), list) and len(data["results"]) == 1:
+                    final = data
+                else:
+                    code = "helper_invalid"
+                    break
+        finally:
+            done.set()
+            if child.poll() is None:
+                _stop_group(child, tree=True)
+    return {"results": [result(args.app, args.platform, "skipped" if code == "skipped_cancelled" else
+                               "unknown" if code == "host_timeout" else "failed", code=code)]}
+
+
 def inventory_payload(platform):
     installations = detect(platform)
     return {"inventory": True, "apps": [
@@ -1270,6 +1378,12 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--inventory", action="store_true")
     mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--agent-capabilities", action="store_true")
+    parser.add_argument("--app", choices=APP_LABELS)
+    parser.add_argument("--agent-worker-child", action="store_true")
+    parser.add_argument("--agent-managed", action="store_true")
+    parser.add_argument("--worker-seconds", type=int, default=HOST_DEADLINE_SECONDS)
+    parser.add_argument("--t3-restart-pending", action="store_true")
     parser.add_argument("--platform", choices=("ubuntu", "mac", "windows"), required=True)
     parser.add_argument("--task-child", action="store_true")
     parser.add_argument("--state-dir", type=pathlib.Path)
@@ -1282,6 +1396,13 @@ def main():
     native = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"
     if args.platform != native:
         parser.error("The selected platform must match this computer.")
+    if args.agent_capabilities:
+        print('{"appWorker":1}')
+        return
+    if (args.app and not args.apply or args.agent_worker_child and not args.app
+            or args.agent_managed and not args.app
+            or not 1 <= args.worker_seconds <= HOST_DEADLINE_SECONDS):
+        parser.error("Invalid single-app worker arguments.")
     if args.state_dir is not None:
         if not args.state_dir.is_absolute():
             parser.error("The update state directory must be absolute.")
@@ -1293,14 +1414,22 @@ def main():
     task_nonce = None
     agy_reviewed = parse_reviewed_versions(args.agy_reviewed) if args.agy_reviewed is not None else read_release_versions()
     if args.task_child and args.apply and args.platform == "windows":
-        task_nonce, agy_reviewed = read_task_request(pathlib.Path.home() / ".ccs/app-updates/windows-task-request.json")
+        request_path = pathlib.Path.home() / ".ccs/app-updates/windows-task-request.json"
+        task_nonce, agy_reviewed = read_task_request(request_path)
+        if task_nonce:
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            if request.get("nonce") == task_nonce and request.get("appId") in APP_LABELS:
+                budget = request.get("workerSeconds")
+                if type(budget) is not int or not 1 <= budget <= HOST_DEADLINE_SECONDS:
+                    parser.error("Invalid task worker budget.")
+                args.app, args.worker_seconds = request["appId"], budget
     emit = cancelled = None
     if args.apply and args.task_child and task_nonce:
         emit, cancelled = task_child_progress(task_nonce)
     elif args.apply and os.environ.get("AAC_UPDATE_PROGRESS") == "1":
         # Only a dashboard that reads line-by-line progress sets this; an
         # older one keeps receiving exactly one JSON document.
-        emit, cancelled = stream_progress()
+        emit, cancelled = stream_progress(cancel_on_eof=bool(args.app and not args.agent_worker_child))
     completed = {}
     progress = emit or (lambda event: None)
     def remember(event):
@@ -1310,17 +1439,32 @@ def main():
                 completed[row["appId"]] = row
         progress(event)
     emit = remember
-    try:
+    def invoke():
         if not args.apply:
-            payload = inventory_payload(args.platform)
-        elif args.platform == "windows" and not args.task_child:
-            payload = windows_interactive_apply(emit, cancelled, agy_reviewed)
+            return inventory_payload(args.platform)
+        if args.app and args.agent_worker_child:
+            return apply_single_app(args.app, args.platform, emit, args.worker_seconds, args.t3_restart_pending)
+        if args.platform == "windows" and not args.task_child:
+            if args.app:
+                return windows_interactive_apply(emit, cancelled, agy_reviewed, args.app, args.worker_seconds)
+            return windows_interactive_apply(emit, cancelled, agy_reviewed)
+        if args.app:
+            return supervised_app(args, emit, cancelled or (lambda: False))
+        return run_apply(args.platform, emit, cancelled, agy_reviewed)
+
+    try:
+        if args.app and not args.agent_worker_child and not args.task_child:
+            state = os.environ.get("AAC_UPDATE_STATE_DIR")
+            lock = (execution_lock("agent-worker-" + args.app + ".lock", pathlib.Path(state) if state else None)
+                    if args.agent_managed else execution_lock())
+            with lock:
+                payload = invoke()
         else:
-            payload = run_apply(args.platform, emit, cancelled, agy_reviewed)
+            payload = invoke()
     except UpdateFailure as error:
-        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "unknown" if error.code == "timeout" else "failed", code="host_timeout" if error.code == "timeout" else error.code) for app_id in APP_LABELS]}
+        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "unknown" if error.code == "timeout" else "failed", code="host_timeout" if error.code == "timeout" else error.code) for app_id in ([args.app] if args.app else APP_LABELS)]}
     except Exception:
-        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "failed", code="update_failed") for app_id in APP_LABELS]}
+        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "failed", code="update_failed") for app_id in ([args.app] if args.app else APP_LABELS)]}
     if args.task_child and args.apply and args.platform == "windows":
         request_path = pathlib.Path.home() / ".ccs/app-updates/windows-task-request.json"
         try:

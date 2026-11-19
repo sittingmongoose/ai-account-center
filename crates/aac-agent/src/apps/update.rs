@@ -1,58 +1,102 @@
-//! Host update coordinator exercised with fixed installers in parity builds.
-use super::*;
+//! Host update coordinator with durable results and a fixed one-app installer adapter.
+use super::{python::Python, *};
 use aac_files::{BackupClass, Class, OwnedStore, Registry, StoreSpec};
 use aac_protocol::{Event, Request};
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
-use tokio::{io::AsyncWrite, task::JoinSet};
+use tokio::{io::AsyncWrite, sync::mpsc, task::JoinSet, time::Instant};
 
-const ROOT_ENV: &str = "AAC_APPS_FIXTURE_ROOT";
 const MAX_JOURNAL: usize = 64 * 1024;
 const DESKTOP: &str = "codex-desktop";
 const TAILED: [&str; 2] = ["t3-code", "antigravity-acp"];
 const MAX_PARALLEL: usize = 4;
 const NEXT_VERSION: &str = "26.1113.36452.0";
+#[cfg(feature = "parity-fixtures")]
 const OLD_VERSION: &str = "26.1101.9.0";
 
-pub(crate) struct Fixture {
-    root: PathBuf,
+#[derive(Clone)]
+enum Installer {
+    Python(Python),
+    #[cfg(feature = "parity-fixtures")]
+    Fixture,
 }
 
-impl Fixture {
-    pub(crate) fn open() -> Option<Self> {
-        let root = std::env::var_os(ROOT_ENV).map(PathBuf::from)?;
-        if !root.is_absolute() {
-            return None;
+#[derive(Clone)]
+struct Worker {
+    root: PathBuf,
+    helper_lock_root: PathBuf,
+    installer: Installer,
+}
+
+pub(crate) async fn run(
+    request: &Request,
+    out: &mut (impl AsyncWrite + Unpin),
+) -> Result<Value, Failure> {
+    let platform = match request.args["platform"].as_str() {
+        Some("ubuntu") => Platform::Ubuntu,
+        Some("mac") => Platform::Mac,
+        Some("windows") => Platform::Windows,
+        _ => return Err(refused()),
+    };
+    let Some(job) = request.args["jobId"].as_str().filter(|job| valid_job(job)) else {
+        return Err(refused());
+    };
+    if request.args.as_object().is_none_or(|args| args.len() != 3) {
+        return Err(refused());
+    }
+    let Some(worker) = Worker::open(platform) else {
+        return Ok(crate::proof::fallback());
+    };
+    match request.args["action"].as_str() {
+        Some("update") => worker.update(request, out, platform, job).await,
+        Some("cancel") => worker.cancel(platform, job),
+        _ => Err(refused()),
+    }
+}
+
+impl Worker {
+    fn open(platform: Platform) -> Option<Self> {
+        #[cfg(feature = "parity-fixtures")]
+        if let Some(root) = std::env::var_os("AAC_APPS_FIXTURE_ROOT").map(PathBuf::from)
+            && root.is_absolute()
+            && read_text(&root.join("app-updates-fixture"), 64)
+                .is_some_and(|marker| marker.trim() == "AAC fixture installers v1")
+        {
+            return Some(Self {
+                helper_lock_root: root.clone(),
+                root,
+                installer: Installer::Fixture,
+            });
         }
-        let marker = read_text(&root.join("app-updates-fixture"), 64)?;
-        if marker.trim() != "AAC fixture installers v1" {
-            return None;
-        }
-        Some(Self { root })
+        let host = Platform::native()
+            .filter(|native| *native == platform)
+            .and_then(Host::native)?;
+        let helper_lock_root = host.home.join(".ccs").join("app-updates");
+        let root = std::env::var_os("AAC_APP_UPDATE_STATE_DIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| helper_lock_root.clone());
+        let installer = Installer::Python(Python::resolve(&host)?);
+        Some(Self {
+            root,
+            helper_lock_root,
+            installer,
+        })
     }
 
-    pub(crate) async fn run(
-        self,
-        request: &Request,
-        out: &mut (impl AsyncWrite + Unpin),
-    ) -> Result<Value, Failure> {
-        let platform = match request.args["platform"].as_str() {
-            Some("ubuntu") => Platform::Ubuntu,
-            Some("mac") => Platform::Mac,
-            Some("windows") => Platform::Windows,
-            _ => return Err(refused()),
-        };
-        let Some(job) = request.args["jobId"].as_str().filter(|job| valid_job(job)) else {
-            return Err(refused());
-        };
-        if request.args.as_object().is_none_or(|args| args.len() != 3) {
-            return Err(refused());
+    fn fixture(&self) -> bool {
+        match self.installer {
+            Installer::Python(_) => false,
+            #[cfg(feature = "parity-fixtures")]
+            Installer::Fixture => true,
         }
-        match request.args["action"].as_str() {
-            Some("update") => self.update(request, out, platform, job).await,
-            Some("cancel") => self.cancel(platform, job),
-            _ => Err(refused()),
-        }
+    }
+
+    fn name(&self, suffix: &str) -> String {
+        format!(
+            "{}-{suffix}",
+            if self.fixture() { "fixture" } else { "agent" }
+        )
     }
 
     async fn update(
@@ -62,11 +106,22 @@ impl Fixture {
         platform: Platform,
         job: &str,
     ) -> Result<Value, Failure> {
-        let journal_store = claim(&self.root, "fixture-journal.json")?;
-        let saved = journal(&self.root)?;
+        // The same kernel lease as the old helper covers all Python children
+        // and the deferred T3 restarter. The journal has its own writer lease.
+        let _host_lease = claim(&self.helper_lock_root, "helper-update")?;
+        let journal_store = claim(&self.root, &self.name("journal.json"))?;
+        let saved = self.journal()?;
+        if !self.fixture() {
+            for app in APPS {
+                // An orphaned supervisor still owns this lease while it reaps children.
+                claim(&self.root, &format!("agent-worker-{app}"))?;
+            }
+        }
         // Know exactly which partial belongs to this installer. Never search
         // for or remove executables, installed versions or other scratch files.
-        self.clear_partial()?;
+        if self.fixture() {
+            self.clear_partial()?;
+        }
         if let Some(mut journal) = saved
             && journal.job == job
         {
@@ -87,6 +142,15 @@ impl Fixture {
             return Ok(journal.payload(platform));
         }
 
+        if let Installer::Python(python) = &self.installer
+            && !python.compatible(platform).await
+        {
+            return Ok(crate::proof::fallback());
+        }
+
+        if !self.fixture() {
+            eprintln!("aac-agent apps installer fallback: python");
+        }
         let mut journal = Journal {
             job: job.into(),
             platform: platform.name().into(),
@@ -101,7 +165,17 @@ impl Fixture {
             visible: None,
         };
         progress.app(None, "checking").await?;
-        let all_installed = self.root.join("fixture-install-all").is_file();
+        let all_installed = !self.fixture() || self.root.join("fixture-install-all").is_file();
+        // Leave time for a timed-out Python supervisor to stop a tree, flush
+        // its terminal row and settle the host journal before the wire deadline.
+        let deadline = Instant::now()
+            + Duration::from_millis(
+                request
+                    .deadline_ms
+                    .saturating_sub((request.deadline_ms / 10).min(12_000))
+                    .min(1_800_000),
+            );
+        let (phase_tx, mut phases) = mpsc::channel(24);
         let mut pending = ordered(platform);
         let mut workers = JoinSet::new();
         while !pending.is_empty() || !workers.is_empty() {
@@ -111,7 +185,7 @@ impl Fixture {
                 let cancelled = self.cancelled(job)?;
                 let installed_here = all_installed || app == DESKTOP;
                 let needed = if installed_here && !cancelled {
-                    resources(platform, app)
+                    self.resources(platform, app)
                 } else {
                     0
                 };
@@ -119,13 +193,13 @@ impl Fixture {
                     || journal
                         .running
                         .iter()
-                        .any(|active| needed & resources(platform, active) != 0)
+                        .any(|active| needed & self.resources(platform, active) != 0)
                 {
                     position += 1;
                     continue;
                 }
                 pending.remove(position);
-                if cancelled || !installed_here {
+                if cancelled || !installed_here || Instant::now() >= deadline && !self.fixture() {
                     let row = if cancelled {
                         result(
                             platform,
@@ -136,7 +210,7 @@ impl Fixture {
                             None,
                             None,
                         )
-                    } else {
+                    } else if !installed_here {
                         result(
                             platform,
                             app,
@@ -146,6 +220,8 @@ impl Fixture {
                             None,
                             None,
                         )
+                    } else {
+                        result(platform, app, "unknown", "host_timeout", None, None, None)
                     };
                     journal.finish(app, row.clone());
                     journal.save(&journal_store)?;
@@ -154,23 +230,58 @@ impl Fixture {
                 }
                 journal.running.push(app.into());
                 journal.save(&journal_store)?;
-                progress.app(Some(app), "checking").await?;
-                progress.app(Some(app), "updating").await?;
-                let installed = self.installed(app)?;
-                if app == DESKTOP && !installed {
-                    self.start_download()?;
-                    progress.app(Some(app), "downloading").await?;
+                if self.fixture() {
+                    progress.app(Some(app), "checking").await?;
+                    progress.app(Some(app), "updating").await?;
+                    if app == DESKTOP && !self.installed(app)? {
+                        self.start_download()?;
+                        progress.app(Some(app), "downloading").await?;
+                    }
                 }
-                let root = self.root.clone();
+                let installer = self.clone();
+                let phases = phase_tx.clone();
+                let job = job.to_owned();
+                let pending_restart = journal
+                    .results
+                    .get("t3-code")
+                    .is_some_and(|row| row["messageCode"] == "t3_restart_scheduled");
                 workers.spawn(async move {
-                    let fixture = Fixture { root };
-                    let row = fixture.install(platform, app, installed).await?;
-                    Ok::<_, Failure>((app, row))
+                    let update = installer
+                        .run_app(app, platform, &job, deadline, pending_restart, phases)
+                        .await;
+                    let row = match update {
+                        Ok(row) => row,
+                        Err(failure) => {
+                            if installer.cancelled(&job).unwrap_or(false) {
+                                result(
+                                    platform,
+                                    app,
+                                    "skipped",
+                                    "skipped_cancelled",
+                                    None,
+                                    None,
+                                    None,
+                                )
+                            } else if failure.cause == Cause::Timeout {
+                                result(platform, app, "unknown", "host_timeout", None, None, None)
+                            } else {
+                                result(platform, app, "failed", "helper_invalid", None, None, None)
+                            }
+                        }
+                    };
+                    (app, row)
                 });
             }
-            if let Some(result) = workers.join_next().await {
-                let (app, row) = result
-                    .map_err(|_| Failure::new(Cause::Bug, "app installer worker failed"))??;
+            let finished = loop {
+                tokio::select! {
+                    biased;
+                    Some((app, phase)) = phases.recv() => progress.app(Some(app), phase).await?,
+                    result = workers.join_next() => break result,
+                }
+            };
+            if let Some(result) = finished {
+                let (app, row) =
+                    result.map_err(|_| Failure::new(Cause::Bug, "app installer worker failed"))?;
                 journal.finish(app, row.clone());
                 journal.save(&journal_store)?;
                 progress.result(app, row).await?;
@@ -179,6 +290,59 @@ impl Fixture {
             }
         }
         Ok(journal.payload(platform))
+    }
+
+    fn resources(&self, platform: Platform, app: &str) -> u8 {
+        // Windows GUI work shares the pre-registered InteractiveToken task.
+        // Its nonce and output file admit one request at a time.
+        if platform == Platform::Windows && !self.fixture() {
+            16
+        } else {
+            resources(platform, app)
+        }
+    }
+
+    async fn run_app(
+        &self,
+        app: &'static str,
+        platform: Platform,
+        job: &str,
+        deadline: Instant,
+        pending_restart: bool,
+        phases: mpsc::Sender<(&'static str, &'static str)>,
+    ) -> Result<Value, Failure> {
+        match &self.installer {
+            Installer::Python(python) => {
+                python
+                    .install(
+                        app,
+                        platform,
+                        &self.root,
+                        job,
+                        deadline.saturating_duration_since(Instant::now()),
+                        pending_restart,
+                        || self.cancelled(job),
+                        move |phase| {
+                            let phases = phases.clone();
+                            async move {
+                                let phase = match phase.as_str() {
+                                    "checking" => "checking",
+                                    "updating" => "updating",
+                                    "downloading" => "downloading",
+                                    _ => return,
+                                };
+                                let _ = phases.send((app, phase)).await;
+                            }
+                        },
+                    )
+                    .await
+            }
+            #[cfg(feature = "parity-fixtures")]
+            Installer::Fixture => {
+                self.fixture_install(platform, app, self.installed(app)?)
+                    .await
+            }
+        }
     }
 
     fn installed(&self, app: &str) -> Result<bool, Failure> {
@@ -201,7 +365,8 @@ impl Fixture {
         }
     }
 
-    async fn install(
+    #[cfg(feature = "parity-fixtures")]
+    async fn fixture_install(
         &self,
         platform: Platform,
         app: &str,
@@ -236,7 +401,7 @@ impl Fixture {
     }
 
     fn cancelled(&self, job: &str) -> Result<bool, Failure> {
-        let path = self.root.join(format!("fixture-cancel-{job}.json"));
+        let path = self.root.join(self.name(&format!("cancel-{job}.json")));
         match read::read(&path, &ReadPolicy::capped(4)) {
             Read::Absent => Ok(false),
             Read::Bytes(bytes, _) if bytes == b"true" => Ok(true),
@@ -244,14 +409,26 @@ impl Fixture {
         }
     }
 
+    fn journal(&self) -> Result<Option<Journal>, Failure> {
+        match read::read(
+            &self.root.join(self.name("journal.json")),
+            &ReadPolicy::capped(MAX_JOURNAL as u64),
+        ) {
+            Read::Absent => Ok(None),
+            Read::Bytes(bytes, _) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|_| damaged()),
+            _ => Err(damaged()),
+        }
+    }
     fn cancel(&self, platform: Platform, job: &str) -> Result<Value, Failure> {
-        let active = journal(&self.root)?.is_some_and(|journal| {
+        let active = self.journal()?.is_some_and(|journal| {
             journal.job == job
                 && journal.platform == platform.name()
                 && journal.results.len() < APPS.len()
         });
         if active {
-            claim(&self.root, &format!("fixture-cancel-{job}.json"))?.write(b"true")?;
+            claim(&self.root, &self.name(&format!("cancel-{job}.json")))?.write(b"true")?;
         }
         Ok(json!({"cancelled": active}))
     }
@@ -324,11 +501,11 @@ fn ready_to_start(app: &str, platform: Platform, journal: &Journal) -> bool {
 }
 
 fn refused() -> Failure {
-    Failure::new(Cause::Refused, "invalid app update fixture request")
+    Failure::new(Cause::Refused, "invalid app update request")
 }
 
 fn damaged() -> Failure {
-    Failure::new(Cause::Damaged, "invalid app update fixture journal")
+    Failure::new(Cause::Damaged, "invalid app update journal")
 }
 
 fn claim(root: &Path, path: &str) -> Result<OwnedStore, Failure> {
@@ -338,11 +515,11 @@ fn claim(root: &Path, path: &str) -> Result<OwnedStore, Failure> {
         class: Class::State,
         mode: 0o600,
         max_size: MAX_JOURNAL,
-        owner: "fixture-apps".into(),
-        schema: "fixture-apps-v1".into(),
+        owner: "app-updates".into(),
+        schema: "app-updates-v1".into(),
         backup: BackupClass::Rebuild,
     })?;
-    registry.claim(root, Path::new(path), "fixture-apps")
+    registry.claim(root, Path::new(path), "app-updates")
 }
 
 #[derive(Serialize, Deserialize)]
@@ -352,19 +529,6 @@ struct Journal {
     platform: String,
     results: serde_json::Map<String, Value>,
     running: Vec<String>,
-}
-
-fn journal(root: &Path) -> Result<Option<Journal>, Failure> {
-    match read::read(
-        &root.join("fixture-journal.json"),
-        &ReadPolicy::capped(MAX_JOURNAL as u64),
-    ) {
-        Read::Absent => Ok(None),
-        Read::Bytes(bytes, _) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|_| damaged()),
-        _ => Err(damaged()),
-    }
 }
 
 impl Journal {

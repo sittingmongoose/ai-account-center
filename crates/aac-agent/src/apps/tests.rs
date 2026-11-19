@@ -161,27 +161,16 @@ async fn rejects_callers_selecting_a_path_or_foreign_platform() {
         json!({"action":"inventory","platform":if cfg!(windows) { "mac" } else { "windows" }}),
     ] {
         assert_eq!(
-            run(&invalid).await.expect_err("refused").cause,
+            run_inventory(&invalid).await.expect_err("refused").cause,
             Cause::Refused
         );
     }
 }
 
-#[tokio::test]
-async fn normal_update_and_cancel_requests_decline_to_python() {
-    for action in ["update", "cancel"] {
-        let value = json!({
-            "action": action, "platform": "windows",
-            "jobId": "cdc2d248a04f48a894be80bd777d866d"
-        });
-        assert_eq!(
-            run(&value).await.expect("fallback"),
-            crate::proof::fallback()
-        );
-        let invalid = json!({"action":action,"platform":"windows","jobId":"../../fixture"});
-        assert_eq!(
-            run(&invalid).await.expect_err("refused").cause,
-            Cause::Refused
-        );
+#[test]
+fn job_ids_cannot_select_a_path() {
+    assert!(valid_job("cdc2d248a04f48a894be80bd777d866d"));
+    for invalid in ["", "../../fixture", "cDc2d248a04f48a894be80bd777d866d"] {
+        assert!(!valid_job(invalid));
     }
 }

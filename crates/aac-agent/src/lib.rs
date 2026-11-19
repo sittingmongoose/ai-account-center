@@ -131,12 +131,10 @@ pub async fn run(
                         }
                     };
                     let work = async {
-                        #[cfg(feature = "parity-fixtures")]
                         if request.verb == "apps"
                             && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
-                            && let Some(fixture) = apps::update::Fixture::open()
                         {
-                            return fixture.run(&request, &mut writer).await;
+                            return apps::update::run(&request, &mut writer).await;
                         }
                         dispatch(&request).await
                     };
@@ -236,7 +234,7 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
         return scan::run(&request.args).await;
     }
     if request.verb == "apps" {
-        return apps::run(&request.args).await;
+        return apps::run_inventory(&request.args).await;
     }
     if request.verb == "inventory" {
         return inventory::run(&request.args).await;

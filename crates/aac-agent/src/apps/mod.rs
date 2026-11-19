@@ -2,7 +2,7 @@
 mod adapters;
 mod cli;
 mod packages;
-#[cfg(feature = "parity-fixtures")]
+mod python;
 pub(crate) mod update;
 
 use aac_core::{Cause, Failure};
@@ -305,15 +305,7 @@ impl Probe for NativeProbe {
             .env("DISABLE_AUTOUPDATER", "1")
             .env("NO_UPDATE_NOTIFIER", "1")
             .env("CODEX_NON_INTERACTIVE", "1");
-        for (key, _) in std::env::vars_os() {
-            let name = key.to_string_lossy().to_ascii_uppercase();
-            if name == "CCS_SESSION_SECRET"
-                || name.starts_with("CCS_DASHBOARD_")
-                || name.ends_with("_PASSWORD_HASH")
-            {
-                command.env_remove(key);
-            }
-        }
+        strip_dashboard_secrets(&mut command);
         #[cfg(windows)]
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         if !program.is_absolute() {
@@ -338,6 +330,18 @@ impl Probe for NativeProbe {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Failed(String::new()),
             Err(_) => Timeout,
+        }
+    }
+}
+
+fn strip_dashboard_secrets(command: &mut tokio::process::Command) {
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy().to_ascii_uppercase();
+        if name == "CCS_SESSION_SECRET"
+            || name.starts_with("CCS_DASHBOARD_")
+            || name.ends_with("_PASSWORD_HASH")
+        {
+            command.env_remove(key);
         }
     }
 }
@@ -418,7 +422,7 @@ async fn inventory(host: &Host, probe: &impl Probe) -> Value {
     json!({"inventory": true, "apps": apps})
 }
 
-pub(crate) async fn run(value: &Value) -> Result<Value, Failure> {
+pub(crate) async fn run_inventory(value: &Value) -> Result<Value, Failure> {
     let input = value
         .as_object()
         .ok_or_else(|| Failure::new(Cause::Refused, "invalid apps request"))?;
@@ -440,15 +444,6 @@ pub(crate) async fn run(value: &Value) -> Result<Value, Failure> {
                 ));
             }
             Ok(inventory(&host, &NativeProbe).await)
-        }
-        Some("update" | "cancel")
-            if input.len() == 3
-                && input
-                    .get("jobId")
-                    .and_then(Value::as_str)
-                    .is_some_and(valid_job) =>
-        {
-            Ok(crate::proof::fallback())
         }
         _ => Err(Failure::new(Cause::Refused, "invalid apps action")),
     }

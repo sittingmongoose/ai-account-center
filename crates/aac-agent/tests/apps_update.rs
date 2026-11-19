@@ -35,19 +35,31 @@ fn put(root: &TempDir, path: &str, value: &str) {
 type LinesFromAgent = Lines<BufReader<ChildStdout>>;
 
 async fn agent(root: &Path, platform: &str, job: &str, action: &str) -> (Child, LinesFromAgent) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_aac-agent"))
-        .kill_on_drop(true)
+    spawn_agent(root, platform, job, action, &[]).await
+}
+
+async fn spawn_agent(
+    root: &Path,
+    platform: &str,
+    job: &str,
+    action: &str,
+    extra: &[(&str, &Path)],
+) -> (Child, LinesFromAgent) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aac-agent"));
+    cmd.kill_on_drop(true)
         .env_clear()
         .env(
             "SystemRoot",
             std::env::var_os("SystemRoot").unwrap_or_default(),
         )
         .env("CCS_HOME", root)
+        .env("HOME", root)
+        .env("USERPROFILE", root)
         .env("AAC_APPS_FIXTURE_ROOT", root)
+        .envs(extra.iter().copied())
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn fixture agent");
+        .stdout(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn fixture agent");
     let mut stdin = child.stdin.take().expect("agent stdin");
     let request = json!({
         "protocol":1,"verb":"apps","id":job,"deadlineMs":15000,
@@ -88,8 +100,9 @@ async fn terminal(child: &mut Child, lines: &mut LinesFromAgent) -> (Vec<Value>,
 async fn downloading(lines: &mut LinesFromAgent) -> Vec<Value> {
     let mut seen = Vec::new();
     loop {
-        let Event::Progress { data, .. } = event(lines).await else {
-            panic!("expected download progress");
+        let frame = event(lines).await;
+        let Event::Progress { data, .. } = frame else {
+            panic!("expected download progress, got {frame:?}");
         };
         let download = data["appId"] == "codex-desktop" && data["phase"] == "downloading";
         seen.push(data);
@@ -314,4 +327,63 @@ async fn all_app_fixtures_match_python_and_respect_parallel_installer_gates() {
         assert_eq!(peak, 4);
         assert_eq!(finished.len(), 12);
     }
+}
+
+#[tokio::test]
+async fn production_backend_streams_the_one_app_worker_and_routes_cancel() {
+    let root = tempfile::tempdir().expect("production test root");
+    put(&root, "fake-python-installer-root", "");
+    put(&root, "hold-fixture-worker", "");
+    let python = std::env::var_os("AAC_TEST_PYTHON").unwrap_or_else(|| {
+        if cfg!(windows) {
+            "python".into()
+        } else {
+            "python3".into()
+        }
+    });
+    let bin = std::process::Command::new(python)
+        .args(["-B", "-c", "import sys; print(sys.executable)"])
+        .output()
+        .expect("python location");
+    assert!(bin.status.success());
+    let bin = Path::new(
+        std::str::from_utf8(&bin.stdout)
+            .expect("python path")
+            .trim(),
+    );
+    let helper = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/spec/agent/app-worker-fixture.py"
+    ));
+    let env = [
+        ("AAC_APP_UPDATE_PYTHON", bin),
+        ("AAC_APP_UPDATE_HELPER", helper),
+        ("AAC_APP_UPDATE_STATE_DIR", root.path()),
+    ];
+    let platform = if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "mac"
+    } else {
+        "ubuntu"
+    };
+    let (mut child, mut lines) = spawn_agent(root.path(), platform, JOB, "update", &env).await;
+    let _ = downloading(&mut lines).await;
+    let (mut cancel, mut reply) = spawn_agent(root.path(), platform, JOB, "cancel", &env).await;
+    assert_eq!(
+        terminal(&mut cancel, &mut reply).await.1,
+        json!({"cancelled":true})
+    );
+    let (progress, result) = terminal(&mut child, &mut lines).await;
+    assert!(root.path().join("fixture-cancel-observed").is_file());
+    assert!(
+        progress
+            .iter()
+            .any(|ev| ev["result"]["appId"] == "codex-desktop"
+                && ev["result"]["messageCode"] == "skipped_cancelled")
+    );
+    let rows = result["results"].as_array().expect("complete result");
+    assert_eq!(rows.len(), 12);
+    assert!(rows.iter().any(|row| row["status"] == "held"));
+    assert!(rows.iter().any(|row| row["parts"][0]["inUse"] == true));
 }
