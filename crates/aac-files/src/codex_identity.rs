@@ -53,13 +53,15 @@ pub struct Display {
 }
 
 /// Node's lenient base64url decode: indifferent padding and non-canonical trailing bits accepted.
+/// Encoding is unpadded, the JWT form.
 fn b64() -> base64::engine::GeneralPurpose {
-    use base64::engine::{GeneralPurpose, GeneralPurposeConfig, DecodePaddingMode};
+    use base64::engine::{DecodePaddingMode, EncodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
     GeneralPurpose::new(
         &base64::alphabet::URL_SAFE,
         GeneralPurposeConfig::new()
             .with_decode_padding_mode(DecodePaddingMode::Indifferent)
-            .with_decode_allow_trailing_bits(true),
+            .with_decode_allow_trailing_bits(true)
+            .with_encode_padding_mode(EncodePaddingMode::None),
     )
 }
 
