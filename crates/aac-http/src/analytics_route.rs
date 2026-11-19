@@ -293,3 +293,28 @@ impl aac_views::analytics_owned::AnalyticsStore for EngineStore {
             .map_err(|_| aac_views::decline::Decline::Internal)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_analytics_reads_quota_history_from_the_hosted_store() {
+        let root = tempfile::tempdir().expect("fixture root");
+        let store = root.path().join("store");
+        let engine = aac_store::ops::open_engine(store.to_str().expect("store path"), None, None)
+            .expect("open fixture store");
+        let answer = compose(
+            Arc::new(engine),
+            root.path(),
+            None,
+            &crate::analytics_live::Live::default(),
+            Some("range=7d&tz=UTC"),
+            1_795_046_400_000,
+        )
+        .expect("compose with the real store method schema");
+        assert_eq!(answer["range"]["preset"], "7d");
+        assert_eq!(answer["range"]["tz"], "UTC");
+        assert!(answer["accounts"].is_array());
+    }
+}
