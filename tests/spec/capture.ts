@@ -500,6 +500,19 @@ try {
         });
         continue;
       }
+      // Antigravity's sign-in preflight answers a host-dependent reason off Linux (the first read sees
+      // `preflight_failed`, later ones `tool_missing`); the corpus pins the Linux answer.
+      if (
+        process.platform !== 'linux' &&
+        route.path === '/api/accounts/registry' &&
+        (role === 'session' || role === 'bar')
+      ) {
+        console.log(
+          `[SKIP] contract/${String(index).padStart(3, '0')}-${role}.json: ` +
+            '/api/accounts/registry (host-dependent Antigravity sign-in reason)'
+        );
+        continue;
+      }
       const method = route.method === 'ALL' ? 'POST' : route.method;
       // The Codex summary's 5-second memo would otherwise answer /api/codex/profiles from the
       // quota route's read, making the Rust reply count depend on timing.
