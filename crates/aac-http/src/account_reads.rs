@@ -17,68 +17,6 @@ use aac_providers::{LEGACY_STORAGE_HOSTS, USAGE_LOG_FIELD_MAPPING, is_dashboard_
 
 pub(crate) const COMPUTERS: &str = include_str!("../../../web-dashboard/public/computers.json");
 
-/// IANA zones Rust admits for the saved display zone. `tests/spec/account-read-parity.ts`
-/// requires the running TS `isAccountAnalyticsTimeZone` to accept every one; any other zone
-/// (valid or not) is decided by the TS reader, whose answer depends on the engine's zone data.
-pub(crate) const ADMITTED_TIME_ZONES: &[&str] = &[
-    "UTC",
-    "Africa/Cairo",
-    "Africa/Johannesburg",
-    "Africa/Lagos",
-    "Africa/Nairobi",
-    "America/Anchorage",
-    "America/Argentina/Buenos_Aires",
-    "America/Bogota",
-    "America/Chicago",
-    "America/Denver",
-    "America/Halifax",
-    "America/Los_Angeles",
-    "America/Mexico_City",
-    "America/New_York",
-    "America/Phoenix",
-    "America/Sao_Paulo",
-    "America/St_Johns",
-    "America/Toronto",
-    "America/Vancouver",
-    "Asia/Bangkok",
-    "Asia/Dubai",
-    "Asia/Hong_Kong",
-    "Asia/Jakarta",
-    "Asia/Jerusalem",
-    "Asia/Karachi",
-    "Asia/Kathmandu",
-    "Asia/Manila",
-    "Asia/Seoul",
-    "Asia/Shanghai",
-    "Asia/Singapore",
-    "Asia/Taipei",
-    "Asia/Tehran",
-    "Asia/Tokyo",
-    "Atlantic/Reykjavik",
-    "Australia/Adelaide",
-    "Australia/Brisbane",
-    "Australia/Melbourne",
-    "Australia/Perth",
-    "Australia/Sydney",
-    "Europe/Amsterdam",
-    "Europe/Athens",
-    "Europe/Berlin",
-    "Europe/Dublin",
-    "Europe/Helsinki",
-    "Europe/Istanbul",
-    "Europe/Lisbon",
-    "Europe/London",
-    "Europe/Madrid",
-    "Europe/Moscow",
-    "Europe/Paris",
-    "Europe/Rome",
-    "Europe/Stockholm",
-    "Europe/Warsaw",
-    "Europe/Zurich",
-    "Pacific/Auckland",
-    "Pacific/Honolulu",
-];
-
 /// Whether the private-store folder logs its group-writable line, or refuses (`None`).
 /// The boot root is canonical, so it is never the symlinked-folder case (the bridge sends a
 /// symlinked or other folder to TS before forwarding).
@@ -264,8 +202,9 @@ pub(crate) fn usage_hosts() -> Option<Vec<(String, String)>> {
         .collect()
 }
 
-/// `isAccountAnalyticsTimeZone`: `Some(false)` where TS decides without zone data, `None`
-/// where only the engine's zone data could decide.
+/// `isAccountAnalyticsTimeZone`: the shape, then the IANA table. TS asks `Intl` for the same
+/// database; every zone the Settings page can name is here, and a zone the table lacks is
+/// one the engine would refuse as well.
 pub(crate) fn time_zone(value: Option<&Value>) -> Option<bool> {
     let Some(Value::String(zone)) = value else {
         return Some(false);
@@ -287,7 +226,17 @@ pub(crate) fn time_zone(value: Option<&Value>) -> Option<bool> {
     if !shaped || zone.len() > 64 {
         return Some(false);
     }
-    ADMITTED_TIME_ZONES.contains(&zone.as_str()).then_some(true)
+    Some(admits_zone(zone))
+}
+
+/// One IANA name, by the same table `Intl` is built from. The engine also resolves a case
+/// variant (`utc`, `america/new_york`) to the table's spelling, so a case-folded match counts.
+/// A backward-compatibility link the table omits (`US/Eastern`) is still refused.
+fn admits_zone(zone: &str) -> bool {
+    zone.parse::<chrono_tz::Tz>().is_ok()
+        || chrono_tz::TZ_VARIANTS
+            .iter()
+            .any(|tz| tz.name().eq_ignore_ascii_case(zone))
 }
 
 pub(crate) fn public_source_id(id: &str) -> bool {
@@ -712,5 +661,49 @@ mod table_tests {
             false,
             &hosts
         ));
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+
+    #[test]
+    fn every_zone_the_settings_page_offers_is_admitted() {
+        // `web-dashboard/public/accounts-view.mjs` TIME_ZONE_OPTIONS.
+        for zone in [
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles",
+            "America/Anchorage",
+            "Pacific/Honolulu",
+            "Europe/London",
+            "Europe/Paris",
+            "Asia/Tokyo",
+            "Australia/Sydney",
+            "UTC",
+        ] {
+            assert_eq!(time_zone(Some(&json!(zone))), Some(true), "{zone}");
+        }
+        // A modern IANA name the old hand list lacked, and the engine's own spelling.
+        assert_eq!(time_zone(Some(&json!("Europe/Kyiv"))), Some(true));
+        assert_eq!(time_zone(Some(&json!("Etc/GMT+5"))), Some(true));
+        assert_eq!(
+            time_zone(Some(&json!("America/Argentina/Ushuaia"))),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_zone_the_engine_refuses_is_refused() {
+        for zone in ["", "Not/AZone", "Europe/", "/Europe/Paris", "Europe Paris"] {
+            assert_eq!(time_zone(Some(&json!(zone))), Some(false), "{zone}");
+        }
+        assert_eq!(time_zone(None), Some(false));
+        assert_eq!(time_zone(Some(&json!(1))), Some(false));
+        // The engine resolves a case variant; so does this.
+        assert_eq!(time_zone(Some(&json!("utc"))), Some(true));
+        assert_eq!(time_zone(Some(&json!("america/new_york"))), Some(true));
     }
 }

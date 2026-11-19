@@ -81,50 +81,10 @@ impl Producer {
         if !supported {
             return template();
         }
-        if let Ok(reading) = self.coordinate(source, legacy, now).await {
-            return rows::additional(source, &host, &name, reading.as_ref());
-        }
-        let quota = aac_providers::provider(&source.provider).is_some_and(|row| row.quota);
-        // quota-read's existing selectors are relative to that computer's normal home.
-        let standard_root = std::env::var_os("HOME")
-            .is_some_and(|home| self.root == std::path::PathBuf::from(home).join(".ccs"));
-        let raw = if quota
-            && !matches!(source.credential, Credential::ConfigHome { .. })
-            && (source.ssh_host.is_some() || standard_root)
-        {
-            let mut args = json!({"provider":source.provider,"platform":source.platform});
-            let explicit = !matches!(source.credential, Credential::Discover);
-            if explicit {
-                args["account"] = json!(source.id);
-                args["credential"] = json!(source.credential);
-            }
-            let expected = if explicit {
-                source.id.clone()
-            } else {
-                format!("plan-{}-{}", source.provider, source.platform)
-            };
-            match self
-                .ask(
-                    &source.platform,
-                    source.ssh_host.as_deref(),
-                    "quota-read",
-                    &args,
-                )
-                .await
-            {
-                Ok(row)
-                    if row["id"] == expected
-                        && row["provider"] == source.provider
-                        && row["platform"] == source.platform =>
-                {
-                    Some(row)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        rows::additional(source, &host, &name, raw.as_ref())
+        // The coordinator owns the read, the peer fallback and the display projection; the
+        // template is the same `rows::additional` row TS handed the failover service.
+        let target = super::failover::additional_target(&self.root, source, legacy);
+        self.failover().collect(&target, &template()).await
     }
 
     async fn wallet(&self, now: i64) -> Option<Value> {

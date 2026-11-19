@@ -7,17 +7,10 @@ use aac_views::decline::Decline;
 use serde_json::{Value, json};
 use std::path::Path;
 
-/// The TS reader's `nlink === 1`. Rust's stable Windows metadata exposes no link count, so the
-/// single-link refusal stays a Linux guarantee, as in `aac-renewal`'s file identity.
-#[cfg(unix)]
-fn one_link(meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn one_link(_meta: &std::fs::Metadata) -> bool {
-    true
+/// The TS reader's `nlink === 1`, from the file's own metadata on Unix and one handle query
+/// on Windows.
+fn one_link(file: &std::path::Path) -> bool {
+    aac_files::link_count(file) == Some(1)
 }
 
 pub(crate) const WALLET_ACCOUNT: &str = "opencode-wallet-account";
@@ -43,27 +36,11 @@ pub(super) fn load(
         .ancestors(Ancestors::NoLinkBelow(root));
     match aac_files::read::read(&file, &policy) {
         Read::Absent => Ok(None),
-        Read::Bytes(bytes, stat) if !single_link || one_link(&stat) => {
-            serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|_| Decline::Shape)
-        }
+        Read::Bytes(bytes, _) if !single_link || one_link(&file) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| Decline::Shape),
         _ => Err(Decline::Unsupported),
     }
-}
-
-pub(super) fn usage_observation(root: &Path, key: &str) -> Option<Value> {
-    if !hex(key, 64) {
-        return None;
-    }
-    load(
-        root,
-        crate::collection_cache::OBSERVATIONS,
-        Some(&format!("{key}.json")),
-        true,
-    )
-    .ok()
-    .flatten()
 }
 
 /// Read the last Windows Claude sample only for the caller's current manifest hash.

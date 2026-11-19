@@ -497,7 +497,7 @@ impl OwnedStore {
             .parent()
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         let owner = fs::symlink_metadata(parent)?;
-        if !private_cache_metadata(&owner, true) {
+        if !private_cache_metadata(&owner, true, true) {
             return Err(Failure::new(
                 Cause::Refused,
                 "cache directory is not private",
@@ -505,7 +505,8 @@ impl OwnedStore {
         }
         match fs::symlink_metadata(&self.path) {
             Ok(meta)
-                if private_cache_metadata(&meta, false) && meta.len() <= self.max_size as u64 => {}
+                if private_cache_metadata(&meta, false, single_link(&self.path))
+                    && meta.len() <= self.max_size as u64 => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             _ => return Err(Failure::new(Cause::Refused, "cache file is not private")),
         }
@@ -518,7 +519,7 @@ impl OwnedStore {
             .path
             .parent()
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        if !private_cache_metadata(&fs::symlink_metadata(parent)?, true) {
+        if !private_cache_metadata(&fs::symlink_metadata(parent)?, true, true) {
             return Err(Failure::new(
                 Cause::Refused,
                 "cache directory is not private",
@@ -526,7 +527,8 @@ impl OwnedStore {
         }
         match fs::symlink_metadata(&self.path) {
             Ok(meta)
-                if private_cache_metadata(&meta, false) && meta.len() <= self.max_size as u64 =>
+                if private_cache_metadata(&meta, false, single_link(&self.path))
+                    && meta.len() <= self.max_size as u64 =>
             {
                 fs::remove_file(&self.path)?;
                 sync_directory(parent)
@@ -556,7 +558,7 @@ impl OwnedStore {
         let same = |a: &fs::Metadata, b: &fs::Metadata| same_file(a, b);
         let unchanged = || {
             fs::symlink_metadata(parent)
-                .is_ok_and(|meta| private_cache_metadata(&meta, true) && same(&meta, &folder))
+                .is_ok_and(|meta| private_cache_metadata(&meta, true, true) && same(&meta, &folder))
         };
         if count == 0 || !unchanged() {
             return;
@@ -587,7 +589,7 @@ impl OwnedStore {
             let Ok(stat) = fs::symlink_metadata(&path) else {
                 continue;
             };
-            if !private_cache_metadata(&stat, false) {
+            if !private_cache_metadata(&stat, false, single_link(&path)) {
                 continue;
             }
             let Read::Bytes(bytes, _) = read::read(&path, &policy) else {
@@ -606,7 +608,7 @@ impl OwnedStore {
                 return;
             }
             if fs::symlink_metadata(&path).is_ok_and(|after| {
-                private_cache_metadata(&after, false)
+                private_cache_metadata(&after, false, single_link(&path))
                     && same(&before, &after)
                     && before.len() == after.len()
                     && before.modified().ok() == after.modified().ok()
@@ -855,14 +857,14 @@ pub fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, Failure> {
 }
 
 #[cfg(unix)]
-fn private_cache_metadata(meta: &fs::Metadata, directory: bool) -> bool {
+fn private_cache_metadata(meta: &fs::Metadata, directory: bool, single: bool) -> bool {
     use std::os::unix::fs::MetadataExt;
     meta.mode() & 0o077 == 0
         && meta.uid() == path::uid()
         && if directory {
             meta.is_dir()
         } else {
-            meta.is_file() && meta.nlink() == 1
+            meta.is_file() && single
         }
 }
 
@@ -870,13 +872,58 @@ fn private_cache_metadata(meta: &fs::Metadata, directory: bool) -> bool {
 /// the TS cache reader treats it. Rust's stable metadata exposes no link count there, so the
 /// hard-link refusal is a Linux guarantee (the TS reader sees Node's `nlink` on both).
 #[cfg(not(unix))]
-fn private_cache_metadata(meta: &fs::Metadata, directory: bool) -> bool {
+fn private_cache_metadata(meta: &fs::Metadata, directory: bool, single: bool) -> bool {
     !meta.file_type().is_symlink()
         && if directory {
             meta.is_dir()
         } else {
-            meta.is_file()
+            meta.is_file() && single
         }
+}
+
+/// The platform's link count for one path, or `None` when it cannot be read.
+pub fn link_count(path: &Path) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(fs::symlink_metadata(path).ok()?.nlink())
+    }
+    #[cfg(not(unix))]
+    {
+        windows_links(path)
+    }
+}
+
+/// Whether a cache file has exactly one name. The TS cache reader refuses a hard link on
+/// every platform; Unix reads the count from `lstat`, Windows from one handle query.
+#[cfg(unix)]
+fn single_link(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.nlink() == 1)
+}
+
+#[cfg(not(unix))]
+fn single_link(path: &Path) -> bool {
+    windows_links(path).is_some_and(|links| links == 1)
+}
+
+/// `GetFileInformationByHandle`'s `nNumberOfLinks` for one regular file.
+#[cfg(windows)]
+#[allow(unsafe_code)] // The Win32 call fills a zeroed struct from a handle this function owns.
+fn windows_links(path: &Path) -> Option<u32> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let file = fs::File::open(path).ok()?;
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    // SAFETY: `file` owns a valid handle for the call, and `info` is writable storage of the
+    // exact struct the API fills.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, info.as_mut_ptr()) };
+    (ok != 0).then(|| {
+        // SAFETY: the API returned success, so it initialised the whole struct.
+        unsafe { info.assume_init() }.nNumberOfLinks
+    })
 }
 
 /// The folder the writer leased: its own handle on Unix, its recorded identity on Windows.
@@ -1178,5 +1225,22 @@ mod tests {
         // Refused before anything touches the link's target: no file, no mode change.
         assert!(names(&elsewhere).is_empty());
         assert_eq!(fs::metadata(&elsewhere).unwrap().mode() & 0o777, 0o755);
+    }
+
+    /// The TS cache reader refuses a hard link on every platform; so does the cache writer.
+    #[test]
+    fn a_hard_linked_cache_file_is_refused_and_only_one_name_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let store = store(&root, Parents::Private, Lease::File);
+        store.write_private_cache(b"{}").unwrap();
+        let file = store.path().to_path_buf();
+        assert_eq!(link_count(&file), Some(1));
+        let link = root.join("d/cache-link.json");
+        fs::hard_link(&file, &link).unwrap();
+        assert_eq!(link_count(&file), Some(2));
+        assert!(store.write_private_cache(b"{\"two\":1}").is_err());
+        fs::remove_file(&link).unwrap();
+        assert!(store.write_private_cache(b"{\"again\":1}").is_ok());
     }
 }
