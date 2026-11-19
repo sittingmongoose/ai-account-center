@@ -2,8 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { ConfigError } from '../../errors/error-types';
 import { canonicalRoot, controlRustAgent, requestRustAgent } from '../rust-service-transport';
 import { parseJournalReply } from './signin-journal-read';
-import type { SignInFlowSpec, SignInJob } from './signin-job-types';
-import type { SignInCommand } from './signin-process';
+import type { SignInCommand, SignInFlowSpec, SignInJob } from './signin-job-types';
 
 export interface NativeSignInSession {
   start(
@@ -19,6 +18,33 @@ export interface NativeSignInSession {
 
 const MAX_REPLY_BYTES = 1024 * 1024;
 const local = { platform: 'ubuntu', sshHost: null } as const;
+
+/** Null is an authoritative missing identity. Undefined leaves the legacy probe eligible. */
+export async function readMuseLoginThroughAgent(
+  root: string,
+  sshHost: string,
+  homeId: string | null,
+  enabled: boolean
+): Promise<string | null | undefined> {
+  if (!enabled) return undefined;
+  const reply = await requestRustAgent(
+    root,
+    'muse-login-identity',
+    {
+      computer: { platform: 'mac', sshHost },
+      args: { homeId },
+      deadlineMs: 58_000,
+      timeoutMs: 60_000,
+      maxBytes: 4096,
+      callId: randomBytes(16).toString('hex'),
+    },
+    undefined,
+    true
+  );
+  if (reply === undefined || reply === null) return undefined;
+  const { email } = JSON.parse(reply) as { email?: unknown };
+  return typeof email === 'string' ? email : null;
+}
 
 export function nativeSignInSession(
   root: string,

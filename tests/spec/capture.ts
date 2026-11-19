@@ -503,6 +503,15 @@ function normalize(value: any, key = ''): any {
   return value;
 }
 try {
+  // The HTTP listener starts before its private service. Dispatch parity needs a running service.
+  if (rustMode !== 'off' && process.platform !== 'win32') {
+    const serviceState = () =>
+      (instance.rustService.diagnostics().service as { state: string }).state;
+    const deadline = Date.now() + 7000;
+    while (serviceState() === 'down' && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(serviceState(), 'ready', 'the fixture Rust service must be ready before replay');
+  }
   emit('routes.json', inventory);
   // Guards also cover middleware-only routes and top-level static/upgrade registration changes.
   const routeSources = [

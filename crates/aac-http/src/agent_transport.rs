@@ -271,6 +271,7 @@ impl Call {
         [
             "health",
             "cursor-open",
+            "muse-login-identity",
             "inventory",
             "signin-expiry",
             "quota-read",
@@ -290,6 +291,7 @@ impl Call {
             && [
                 "health",
                 "cursor-open",
+                "muse-login-identity",
                 "inventory",
                 "apps",
                 "signin-expiry",
@@ -563,6 +565,15 @@ impl Agents {
             let terminal = match result {
                 Ok(events) => match events.last() {
                     Some(Event::Result { value, .. }) if value == &json!({"fallback":"python"}) => {
+                        fallback(&request.id, "unsupported")
+                    }
+                    Some(Event::Failure { failure, .. })
+                        if matches!(
+                            request.verb.as_str(),
+                            "cursor-open" | "muse-login-identity" | "signin-session"
+                        ) && failure.cause == Cause::Refused
+                            && failure.detail.as_str() == "unsupported agent verb" =>
+                    {
                         fallback(&request.id, "unsupported")
                     }
                     Some(event) => {

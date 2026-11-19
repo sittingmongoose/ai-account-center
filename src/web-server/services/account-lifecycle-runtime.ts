@@ -2,7 +2,7 @@ import os from 'os';
 import { RENEWAL_EFFECTS, type DispatchLiveRenewal } from '../../antigravity/live-login-renewal';
 import { runLifecycleEffects } from './lifecycle-effect-pipe';
 import { agentTransport, agentVerbs } from './agent-verbs';
-import { nativeSignInSession } from './lifecycle-signin-session';
+import { nativeSignInSession, readMuseLoginThroughAgent } from './lifecycle-signin-session';
 import { activeFileWriterBinary } from '../../shared/private-file-lease';
 import { startLifecycleMaintenance, type MaintenanceStep } from './account-maintenance';
 import { getCcsDir } from '../../utils/config-manager';
@@ -93,6 +93,12 @@ let claude: ClaudeAccountLifecycle | null = null;
 let antigravity: AntigravityAccountLifecycle | null = null;
 let muse: MuseAccountLifecycle | null = null;
 
+function nativeLifecycleAgentEnabled(root: string): boolean {
+  return (
+    activeFileWriterBinary(root) !== undefined && agentTransport() === 'on' && agentVerbs() === 'on'
+  );
+}
+
 /** A runner wired like the server's: the /ws push, the audit line and the accounts-changed hint. */
 export function createSignInJobRunner(
   deps: Omit<SignInJobRunnerDeps, 'onChange' | 'onFinish'> = {}
@@ -110,9 +116,7 @@ export function createSignInJobRunner(
             flow.kind === 'device-code' &&
             flow.platform === 'mac' &&
             flow.mode === 'signin-again')) &&
-          activeFileWriterBinary(root) !== undefined &&
-          agentTransport() === 'on' &&
-          agentVerbs() === 'on'
+          nativeLifecycleAgentEnabled(root)
       );
     },
     ...deps,
@@ -166,7 +170,13 @@ export function getAntigravityLifecycle(): AntigravityAccountLifecycle {
 }
 
 export function getMuseLifecycle(): MuseAccountLifecycle {
-  muse ??= new MuseAccountLifecycle({ enabled: museSignInEnabled() });
+  muse ??= new MuseAccountLifecycle({
+    enabled: museSignInEnabled(),
+    identity: (host, homeId) => {
+      const root = getCcsDir();
+      return readMuseLoginThroughAgent(root, host, homeId, nativeLifecycleAgentEnabled(root));
+    },
+  });
   return muse;
 }
 

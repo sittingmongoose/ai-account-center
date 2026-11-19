@@ -683,7 +683,8 @@ export async function requestRustAgent(
               result = fallbackProven ? null : value;
             } else if (event.type === 'fallback') {
               fallbackProven =
-                (collect || verb === 'cursor-open' || verb === 'lifecycle-signin') &&
+                (collect ||
+                  ['cursor-open', 'lifecycle-signin', 'muse-login-identity'].includes(verb)) &&
                 ['shape', 'unavailable', 'busy', 'unsupported'].includes(event.reason);
             } else if (event.type !== 'failure') {
               throw new RustTransportError('reply', 'Invalid agent stream');

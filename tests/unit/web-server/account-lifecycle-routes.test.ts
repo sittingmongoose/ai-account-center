@@ -1579,10 +1579,10 @@ describe('registry, re-check, open, label and trash', () => {
     });
     let entered = false;
     const collect = f.env.refreshAdditional;
-    f.env.refreshAdditional = async (id) => {
+    f.env.refreshAdditional = async (id, source) => {
       entered = true;
       await continueProbe;
-      return collect(id);
+      return collect(id, source);
     };
     let published = 0;
     f.env.replaceRow = () => {

@@ -8,6 +8,7 @@ mod history;
 mod inventory;
 mod key_store;
 mod launch;
+mod muse_login;
 mod pins;
 mod proof;
 mod quota;
@@ -235,6 +236,7 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
             | "signin-expiry"
             | "launch"
             | "claude-host"
+            | "muse-login-identity"
     ) {
         let args = request.args.clone();
         let verb = request.verb.clone();
@@ -245,6 +247,7 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
             "t3-pins" => pins::run(&args),
             "failover-inventory" => failover::run(&args),
             "signin-expiry" => signin::run(&args),
+            "muse-login-identity" => muse_login::run(&args),
             _ => history::run(&args),
         })
         .await;
