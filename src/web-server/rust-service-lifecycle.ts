@@ -37,6 +37,8 @@ export interface RustBoot extends RustConnection {
   files: Readonly<Record<string, PrivateFileRole>>;
   /** R3: the store host's config this boot was started with; null keeps the store in TS. */
   store: RustStoreBoot | null;
+  /** R4: the owned readers' config this boot was started with; null keeps them in TS. */
+  owned: RustOwnedBoot | null;
 }
 
 /**
@@ -49,6 +51,19 @@ export function expectedStoreBoot(
   input: RustStoreBootInput | null | undefined
 ): RustStoreBoot | null {
   return input ? { dir: path.join(ccsDir, 'store'), ...input } : null;
+}
+
+/** R4: the owned Status readers and Scoreboard config (the service's `OwnedBoot`). */
+export interface RustOwnedBoot {
+  reportsRoot: string;
+  registryDir: string;
+  status: boolean;
+  scoreboard: boolean;
+}
+
+/** The same owned config in a stable spelling, for the attach check. */
+function ownedKey(owned: unknown): string {
+  return storeKey(owned);
 }
 
 /** The same store config in a stable spelling, for the attach check. */
@@ -277,7 +292,8 @@ async function readBoot(
   file: string,
   ccsDir: string,
   binary: string,
-  store: RustStoreBoot | null = null
+  store: RustStoreBoot | null = null,
+  owned: RustOwnedBoot | null = null
 ): Promise<RustBoot | null> {
   try {
     const text = await privateDescriptor(file);
@@ -292,7 +308,9 @@ async function readBoot(
       // A boot started with other file owners is never attached (L2): one writer per file.
       ownersKey(boot.files) !== ownersKey(privateFileOwners()) ||
       // R3: likewise a boot hosting the store for another config (or none) is never attached.
-      storeKey(boot.store) !== storeKey(store)
+      storeKey(boot.store) !== storeKey(store) ||
+      // R4: likewise a boot running the owned readers for another config (or none).
+      ownedKey(boot.owned) !== ownedKey(owned)
     )
       return null;
     const layout = socketLayout(ccsDir, boot.bootId);
@@ -309,6 +327,7 @@ async function readBoot(
       build: boot.build,
       files: boot.files,
       store: boot.store ?? null,
+      owned: boot.owned ?? null,
     };
   } catch {
     return null;
@@ -414,14 +433,15 @@ export async function acquireRustServiceDetailed(
   binaryPath: string,
   active: Set<http.ClientRequest>,
   signal?: AbortSignal,
-  storeInput?: RustStoreBootInput | null
+  storeInput?: RustStoreBootInput | null,
+  ownedInput?: RustOwnedBoot | null
 ): Promise<AcquireResult> {
   if (acquiring >= FILESYSTEM_LIMIT)
     return { lease: null, failure: 'unhealthy', refusedAttach: false, swept: 0 };
   acquiring++;
   const budget = AbortSignal.timeout(5000);
   const stopped = signal ? AbortSignal.any([signal, budget]) : budget;
-  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput).finally(
+  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput, ownedInput).finally(
     () => acquiring--
   );
   // Async filesystem work may finish late; every continuation checks the signal before adoption.
@@ -443,7 +463,8 @@ async function acquireWithinBudget(
   binaryPath: string,
   active: Set<http.ClientRequest>,
   signal: AbortSignal,
-  storeInput?: RustStoreBootInput | null
+  storeInput?: RustStoreBootInput | null,
+  ownedInput?: RustOwnedBoot | null
 ): Promise<AcquireResult> {
   const result: AcquireResult = { lease: null, failure: null, refusedAttach: false, swept: 0 };
   if (process.platform === 'win32') return { ...result, failure: 'platform' };
@@ -457,7 +478,8 @@ async function acquireWithinBudget(
   signal.throwIfAborted();
   const descriptor = path.join(run, 'aac-http.json');
   const store = expectedStoreBoot(ccsDir, storeInput);
-  const existing = await readBoot(descriptor, ccsDir, binary, store);
+  const owned = ownedInput ?? null;
+  const existing = await readBoot(descriptor, ccsDir, binary, store, owned);
   signal.throwIfAborted();
   if (existing) {
     const agent = rustAgent();
@@ -502,6 +524,7 @@ async function acquireWithinBudget(
     build: { commit: 'unknown', sha256, protocol: RUST_SERVICE_PROTOCOL, storeSchema: 0 },
     files: privateFileOwners(),
     store,
+    owned,
     agent,
   };
   let child: ChildProcess | undefined;
@@ -609,6 +632,7 @@ async function acquireWithinBudget(
         bootId,
         files: boot.files,
         store: boot.store,
+        owned: boot.owned,
       }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.

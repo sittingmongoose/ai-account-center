@@ -7,6 +7,7 @@ import {
   canonicalRoot,
   pushRustFeedText,
   requestRust,
+  FRONT_DOOR_PRINCIPAL,
   RUST_VIEW_CAP,
   rustFailureKind,
   type RustReply,
@@ -501,6 +502,25 @@ export class RustService extends RustSupervisor {
   /** R1: a fed request the front door itself declined before asking Rust (its reason is counted). */
   fedDeclined(route: string, reason: string): void {
     this.fallback(route, { kind: 'unavailable', reason });
+  }
+
+  /**
+   * R4: an internal GET the front door's background owners read (the owned Status snapshots,
+   * the Scoreboard input the facts are computed over). The reserved front-door principal, the
+   * boot secret, no caller credentials. Null when the service is absent or declines; the
+   * transport failure tells the supervisor, as any request's does.
+   */
+  async internalJson(path: string): Promise<unknown | null> {
+    const lease = this.lease;
+    if (!lease || this.stopped || this.mode !== 'on') return null;
+    try {
+      const result = await requestRust(lease.connection, path, FRONT_DOOR_PRINCIPAL, this.active);
+      this.replied(lease);
+      return result.status === 200 ? result.body : null;
+    } catch (error) {
+      this.transportFailed(lease, rustFailureKind(error));
+      return null;
+    }
   }
 
   async respond(

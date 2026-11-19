@@ -14,6 +14,7 @@ import {
   acquireRustServiceDetailed,
   PUBLIC_HEALTH_PRINCIPAL,
   type RustLease,
+  type RustOwnedBoot,
 } from './rust-service-lifecycle';
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
 import {
@@ -25,7 +26,17 @@ import {
   type RustStoreBootInput,
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
-import { rustStoreSwitchOn } from './rust-service-groups';
+import {
+  rustGroupOn,
+  rustOwnedScoreboardOn,
+  rustOwnedStatusOn,
+  rustStoreSwitchOn,
+  type RustGroup,
+} from './rust-service-groups';
+import { openRustEvents } from './rust-service-transport';
+import { dispatchRustServiceEvent } from './rust-service-events';
+import { agentReportsRoot } from './status/agent-reports-reader';
+import { pmMailRegistryDir } from './status/status-collectors';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
@@ -109,6 +120,9 @@ export class RustSupervisor {
   protected checking = false;
   /** Transport timeouts in a row on the current lease, any route (review L3). */
   protected timeouts = 0;
+  /** R4: the owned readers' boot config, resolved once in `start`; null keeps them in TS. */
+  protected ownedBoot: RustOwnedBoot | null = null;
+  private removeEvents: (() => void) | null = null;
 
   /** `options` exists for tests: a clock for the breakers and the restart budget, and delays. */
   constructor(
@@ -117,8 +131,15 @@ export class RustSupervisor {
   ) {
     this.mode = rustServiceMode(mode);
     // L2: each registered private file's writer, resolved once at start and sent in the boot
-    // JSON. A row moves with its route group; the service has one mode for every group today.
-    settlePrivateFileOwners(() => this.mode === 'on');
+    // JSON. R4: the readers-check row moves with the status group, but one file carries both
+    // owners' rows (status scans and runs), so it flips only when both owned groups run; the
+    // catalog seed moves with the scoreboard group. Other rows move with their own group.
+    settlePrivateFileOwners((group) => {
+      if (this.mode !== 'on') return false;
+      if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
+      if (group === 'scoreboard') return rustOwnedScoreboardOn();
+      return rustGroupOn(group as RustGroup);
+    });
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }
@@ -169,6 +190,15 @@ export class RustSupervisor {
       if (this.stopped) return;
       this.storeBoot.snapshotDirectory = snapshotDirectory;
     }
+    // R4: the owned readers run under the store host; resolve their share roots once.
+    if (this.storeBoot && (rustOwnedStatusOn() || rustOwnedScoreboardOn())) {
+      this.ownedBoot = {
+        reportsRoot: agentReportsRoot(),
+        registryDir: pmMailRegistryDir(),
+        status: rustOwnedStatusOn(),
+        scoreboard: rustOwnedScoreboardOn(),
+      };
+    }
     this.minuteTimer = setInterval(() => this.logMinute(), 60_000);
     this.minuteTimer.unref();
     // The Rust child's RSS joins the event-loop monitor's minute line (design 4.2).
@@ -180,7 +210,8 @@ export class RustSupervisor {
         binary,
         this.active,
         this.acquisition.signal,
-        this.storeBoot
+        this.storeBoot,
+        this.ownedBoot
       );
       failure = result.failure;
       if (this.stopped) {
@@ -224,6 +255,8 @@ export class RustSupervisor {
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
+    this.removeEvents?.();
+    this.removeEvents = null;
     if (this.storeBoot) setRustStoreHosted(getCcsDir(), false);
     this.lease?.close();
     this.lease = null;
@@ -264,6 +297,12 @@ export class RustSupervisor {
       : null;
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
+    // R4: the service's event stream (status-changed, scoreboard-changed, facts-needed).
+    // A refused stream is not fatal; the front door keeps answering from its own reads.
+    this.removeEvents?.();
+    const events = openRustEvents(lease.connection, dispatchRustServiceEvent);
+    events.ready.catch(() => undefined);
+    this.removeEvents = events.close;
   }
 
   /** The service died or stopped answering: TS answers until a restart succeeds (L1). */
@@ -273,6 +312,8 @@ export class RustSupervisor {
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
+    this.removeEvents?.();
+    this.removeEvents = null;
     this.lease = null;
     lease.close();
     logger.warn('rust.service.lost', 'Rust service stopped; TypeScript answers', {
@@ -308,7 +349,8 @@ export class RustSupervisor {
             binary,
             this.active,
             this.acquisition.signal,
-            this.storeBoot
+            this.storeBoot,
+            this.ownedBoot
           );
           failure = result.failure;
           if (result.lease) {
