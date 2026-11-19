@@ -1,4 +1,6 @@
 import os from 'os';
+import { RENEWAL_EFFECTS, type DispatchLiveRenewal } from '../../antigravity/live-login-renewal';
+import { runLifecycleEffects } from './lifecycle-effect-pipe';
 import { agentTransport, agentVerbs } from './agent-verbs';
 import { nativeSignInSession } from './lifecycle-signin-session';
 import { activeFileWriterBinary } from '../../shared/private-file-lease';
@@ -149,8 +151,17 @@ export function getClaudeLifecycle(): ClaudeAccountLifecycle {
   return claude;
 }
 
+export function antigravityRenewalDispatch(ccs: () => string): DispatchLiveRenewal {
+  return (perform, fallback) =>
+    runLifecycleEffects(ccs(), ['--antigravity-renew-login'], RENEWAL_EFFECTS, perform, fallback);
+}
+
 export function getAntigravityLifecycle(): AntigravityAccountLifecycle {
-  antigravity ??= new AntigravityAccountLifecycle({ ccsDir: getCcsDir, home: os.homedir });
+  antigravity ??= new AntigravityAccountLifecycle({
+    ccsDir: getCcsDir,
+    home: os.homedir,
+    dispatchLiveRenewal: antigravityRenewalDispatch(getCcsDir),
+  });
   return antigravity;
 }
 

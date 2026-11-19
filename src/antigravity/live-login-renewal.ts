@@ -1,7 +1,6 @@
 import { createHash, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { runLifecycleEffects } from '../web-server/services/lifecycle-effect-pipe';
 import {
   checkedIdentity,
   credentialFingerprint,
@@ -87,6 +86,14 @@ export async function liveLoginToRenew(
   return sameGrant(native, saved) ? fingerprint : null;
 }
 
+export const RENEWAL_EFFECTS = ['save', 'install', 'verify', 'restore'] as const;
+type RenewalEffect = (typeof RENEWAL_EFFECTS)[number];
+type PerformRenewal = (effect: RenewalEffect) => Promise<boolean | void>;
+export type DispatchLiveRenewal = (
+  perform: PerformRenewal,
+  fallback: (perform: PerformRenewal) => Promise<boolean>
+) => Promise<boolean>;
+
 /**
  * Commit a Sign in again that renews the live login too: the saved profile
  * first (`save`), then the live login through the guarded store's atomic
@@ -105,48 +112,44 @@ export async function renewLiveLogin(
   credential: NativeCredential,
   expected: string,
   save: () => void,
-  root: string
+  dispatch?: DispatchLiveRenewal
 ): Promise<'renewed' | 'write_failed' | 'live_login_not_updated'> {
   let restored = false;
-  const renewed = await runLifecycleEffects(
-    root,
-    ['--antigravity-renew-login'],
-    ['save', 'install', 'verify', 'restore'] as const,
-    async (effect) => {
-      switch (effect) {
-        case 'save':
-          save();
+  const perform = async (effect: RenewalEffect) => {
+    switch (effect) {
+      case 'save':
+        save();
+        return true;
+      case 'install':
+        try {
+          await live.install(credential, expected);
           return true;
-        case 'install':
-          try {
-            await live.install(credential, expected);
-            return true;
-          } catch {
-            return false;
-          }
-        case 'verify':
-          try {
-            return credentialFingerprint(await live.read()) === credentialFingerprint(credential);
-          } catch {
-            return false;
-          }
-        case 'restore':
-          try {
-            registry.restoreProfile(previous);
-            restored = true;
-          } catch {
-            restored = false;
-          }
-          return restored;
-      }
-    },
-    async (perform) => {
-      await perform('save');
-      if ((await perform('install')) || (await perform('verify'))) return true;
-      await perform('restore');
-      return false;
+        } catch {
+          return false;
+        }
+      case 'verify':
+        try {
+          return credentialFingerprint(await live.read()) === credentialFingerprint(credential);
+        } catch {
+          return false;
+        }
+      case 'restore':
+        try {
+          registry.restoreProfile(previous);
+          restored = true;
+        } catch {
+          restored = false;
+        }
+        return restored;
     }
-  );
+  };
+  const fallback = async (execute: PerformRenewal) => {
+    await execute('save');
+    if ((await execute('install')) || (await execute('verify'))) return true;
+    await execute('restore');
+    return false;
+  };
+  const renewed = await (dispatch ? dispatch(perform, fallback) : fallback(perform));
   return renewed ? 'renewed' : restored ? 'write_failed' : 'live_login_not_updated';
 }
 
