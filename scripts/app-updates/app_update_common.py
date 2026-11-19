@@ -420,6 +420,18 @@ def environment(extra=None):
     return strip_dashboard_secrets(result)
 
 
+# What an SSH login sets. AAC's helpers reach the Mac over SSH, and `open` hands its own
+# environment to the app it starts: T3 relaunched that way kept SSH_CONNECTION, so the
+# Antigravity CLI it runs took every instance for a remote session ("No browser is available
+# here") and its in-app Google sign-in failed (2026-11-19).
+SSH_SESSION_ENV = ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK", "SSH_ORIGINAL_COMMAND")
+
+
+def gui_launch_environment(extra=None):
+    """The environment for a Mac app started with `open`: this helper's, without its SSH session."""
+    return {key: value for key, value in environment(extra).items() if key.upper() not in SSH_SESSION_ENV}
+
+
 def sanitize_unit_fragment(value):
     cleaned = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
     return cleaned or "app"

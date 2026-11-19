@@ -183,7 +183,7 @@ class AcpTests(Fixtures):
         return acp.detect_antigravity_acp(host), directory
 
     def fake_t3(self, install, phase="succeeded", offer="1.5.8", failure=None, installed=None, newest=None,
-                refresh=None, first_null=False, providers=None):
+                refresh=None, first_null=False, providers=None, install_on="agy-custom-id"):
         import app_update_t3_rpc as rpc
         self.calls, self.auth, self.connections, self.ready = [], [], [], []
         self.failure = failure
@@ -242,14 +242,14 @@ class AcpTests(Fixtures):
                         # What Rpc.receive keeps of T3's failure: the error's tag and detail, never the instance name.
                         raise common.UpdateFailure("t3_install_failed:rpc", output="ProviderSetupError\n" + refresh)
                     return {"providers": [{"instanceId": payload["instanceId"], "driver": "antigravity", "auth": {"status": "authenticated"}}]}
-                owner.assertEqual(payload, {"instanceId": "agy-custom-id"})
+                owner.assertEqual(payload, {"instanceId": install_on})
                 self.started = True
                 if failure == "ambiguous":
                     raise OSError(owner.TOKEN)
                 return {**idle, "operationId": "op", "phase": "downloading"}
             def request(self, method, payload):
                 owner.calls.append((method, payload))
-                owner.assertEqual(payload, {"instanceId": "agy-custom-id"})
+                owner.assertEqual(payload, {"instanceId": install_on})
                 return "subscription"
             def receive(self, identifier):
                 if not self.started:
@@ -397,6 +397,62 @@ class AcpTests(Fixtures):
                 self.assertEqual(self.started(), 0)
                 self.assertEqual((install.path / "active.json").read_bytes(), pointer)
                 self.assert_revoked()
+
+    def t3_settings(self, instances):
+        settings = pathlib.Path.home() / ".t3/userdata/settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(json.dumps({"providerInstances": instances}), encoding="utf-8")
+
+    def test_installs_through_a_managed_instance_when_the_enabled_ones_run_a_custom_executable(self):
+        # 2026-11-19: both enabled instances run a per-instance sign-in wrapper, and T3 refuses to
+        # install through an instance with a custom executable. The install goes through T3's
+        # disabled default instead, and every enabled instance is still refreshed afterwards.
+        install, _ = self.runtime("windows", "1.5.7", native=True)
+        wrapper = {"driver": "antigravity", "enabled": True, "config": {"authMethod": "oauth-personal", "binaryPath": "C:\\w\\agy.cmd"}}
+        self.t3_settings({"agy-custom-id": wrapper, "agy-second-id": wrapper,
+                          "other": {"driver": "codex", "config": {"binaryPath": " "}}})
+        self.fake_t3(install, offer="1.5.8", install_on="antigravity", providers=[
+            {"driver": "antigravity", "instanceId": "antigravity", "enabled": False, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": True, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-second-id", "enabled": True, "setup": {"canInstall": True}},
+        ])
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.8"))
+        self.assertEqual([payload["instanceId"] for method, payload in self.calls if method == "provider.install.start"], ["antigravity"])
+        self.assertEqual([payload["instanceId"] for method, payload in self.calls if method == "server.refreshProviders"],
+                         ["agy-custom-id", "agy-second-id"])
+        self.assert_revoked()
+
+    def test_an_enabled_managed_instance_still_comes_before_the_disabled_default(self):
+        install, _ = self.runtime("windows", "1.5.7", native=True)
+        self.t3_settings({"agy-custom-id": {"config": {"binaryPath": "/w/antigravity"}}, "agy-second-id": {"config": {"binaryPath": ""}}})
+        self.fake_t3(install, offer="1.5.8", install_on="agy-second-id", providers=[
+            {"driver": "antigravity", "instanceId": "antigravity", "enabled": False, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": True, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-second-id", "enabled": True, "setup": {"canInstall": True}},
+        ])
+        row = self.run_update(install)
+        self.assertEqual(row["status"], "updated")
+        self.assertEqual(self.started(), 1)
+
+    def test_every_installable_instance_on_a_custom_executable_fails_before_any_install(self):
+        install, _ = self.runtime("windows", "1.5.7", native=True)
+        self.t3_settings({"agy-custom-id": {"config": {"binaryPath": "/w/antigravity"}}})
+        self.fake_t3(install, providers=[{"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": True, "setup": {"canInstall": True}}])
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["reason"]),
+                         ("failed", "t3_install_failed:provider_unavailable", "no_managed_instance"))
+        self.assertEqual(self.started(), 0)
+
+    def test_unreadable_t3_settings_name_no_custom_executable(self):
+        settings = pathlib.Path.home() / ".t3/userdata/settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        for text in ("{", "[]", '{"providerInstances": []}', '{"providerInstances": {"a": {"config": "x"}}}'):
+            with self.subTest(text=text):
+                settings.write_text(text, encoding="utf-8")
+                self.assertEqual(acp.custom_executable_instances(), set())
+        settings.unlink()
+        self.assertEqual(acp.custom_executable_instances(), set())
 
     def test_no_enabled_instance_fails_before_any_install(self):
         install, _ = self.runtime("windows", "1.3.0")

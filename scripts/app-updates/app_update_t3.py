@@ -22,7 +22,8 @@ import uuid
 import zipfile
 
 from app_update_common import (
-    Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, powershell, private_temporary,
+    Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, gui_launch_environment, powershell,
+    private_temporary,
     ps_quote, result, write_private_json, process_identity,
 )
 from app_update_processes import family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
@@ -374,7 +375,8 @@ def update_mac(install, version, temporary, deadline, phase):
         if contexts:
             restart_desktops(install, contexts)
         else:
-            command(["/usr/bin/open", "-a", install.path], timeout=15, stderr_tail=False)
+            command(["/usr/bin/open", "-a", install.path], timeout=15, stderr_tail=False,
+                    env=gui_launch_environment(), preserve_env=True)
         # The same migration risk the Windows relaunch has: a 30-second wait
         # failed a good install and rolled it back.
         health_check("mac", health_budget(deadline))

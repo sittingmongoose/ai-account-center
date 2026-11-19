@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 
-from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, sanitize_unit_fragment, strip_dashboard_secrets, systemd_run_environment, systemd_user_service_argv
+from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, gui_launch_environment, sanitize_unit_fragment, strip_dashboard_secrets, systemd_run_environment, systemd_user_service_argv
 from app_update_processes import scan, user_family
 
 
@@ -99,7 +99,8 @@ def _broker_terminal(install, context, args):
             script = root / ("terminal-" + nonce + ".command")
             script.write_text("#!/bin/sh\nexec " + shlex.join(["/usr/bin/python3", str(child), "--socket", str(endpoint)]) + "\n", encoding="utf-8")
             script.chmod(0o700)
-            command(["/usr/bin/open", "-a", "Terminal", str(script)], timeout=15, stderr_tail=False)
+            command(["/usr/bin/open", "-a", "Terminal", str(script)], timeout=15, stderr_tail=False,
+                    env=gui_launch_environment(), preserve_env=True)
         else:
             # Task Scheduler launches pythonw without a console. The terminal
             # child must use python.exe so the reopened CLI receives WT's PTY.
