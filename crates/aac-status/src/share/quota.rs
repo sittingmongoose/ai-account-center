@@ -229,7 +229,7 @@ impl QuotaReportReader {
     fn absent(&mut self, now: u64) {
         self.misses.clear(REPORT);
         let missing_since = *self.missing_since.get_or_insert(now);
-        if self.good.is_none() || now - missing_since >= MISSING_GRACE_MS {
+        if self.good.is_none() || now.saturating_sub(missing_since) >= MISSING_GRACE_MS {
             self.good = None;
             self.problem = None;
             self.stat_key = String::new();

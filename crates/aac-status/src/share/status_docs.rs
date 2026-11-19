@@ -208,7 +208,7 @@ impl StatusDocsReader {
                 continue;
             }
             let missing_since = *entry.missing_since.get_or_insert(now);
-            if now - missing_since > MISSING_GRACE_MS {
+            if now.saturating_sub(missing_since) > MISSING_GRACE_MS {
                 self.entries.shift_remove(&rel);
                 changed = true;
             }
@@ -306,7 +306,7 @@ impl StatusDocsReader {
                 None => false,
                 Some(entry) => {
                     let missing_since = *entry.missing_since.get_or_insert(now);
-                    if now - missing_since > MISSING_GRACE_MS {
+                    if now.saturating_sub(missing_since) > MISSING_GRACE_MS {
                         self.entries.shift_remove(&rel);
                         return true;
                     }
@@ -513,4 +513,16 @@ fn newest_folders(
     });
     dated.truncate(limit);
     dated.into_iter().map(|(name, _)| name).collect()
+}
+
+/// The snapshot as the pinned panel's status documents member.
+pub fn state_json(state: &StatusDocsState) -> Json {
+    json!({
+        "state": state.state,
+        "scannedAt": state.scanned_at,
+        "docs": state.docs,
+        "problems": state.problems.iter().map(|problem| {
+            json!({"file": problem.file, "reason": problem.reason, "since": problem.since})
+        }).collect::<Vec<_>>(),
+    })
 }

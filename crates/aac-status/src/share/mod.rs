@@ -154,17 +154,15 @@ pub fn is_missing(error: &io::Error) -> bool {
 }
 
 /// ENOENT or ESTALE: the share is between a delete and a rename, or holds a stale handle.
-/// Node reports Linux ESTALE as "Unknown system error -116"; the raw code is the same fact.
+/// Node reports Linux ESTALE as "Unknown system error -116" on every platform it reads the
+/// share from, so the raw code (116 or -116) is the fact, not the host's own errno table;
+/// macOS also spells ESTALE 70.
 pub fn is_transient(error: &io::Error) -> bool {
     if error.kind() == io::ErrorKind::NotFound {
         return true;
     }
-    #[cfg(target_os = "linux")]
-    return error.raw_os_error() == Some(116);
-    #[cfg(target_os = "macos")]
-    return error.raw_os_error() == Some(70);
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    return false;
+    let raw = error.raw_os_error();
+    raw == Some(116) || raw == Some(-116) || (cfg!(target_os = "macos") && raw == Some(70))
 }
 
 /// Consecutive transient errors per listed file: the first failure's time when the file
@@ -348,9 +346,9 @@ mod tests {
         assert!(is_missing(&io::Error::from_raw_os_error(2)));
         assert!(is_missing(&io::Error::from_raw_os_error(20)));
         assert!(!is_missing(&io::Error::from_raw_os_error(116)));
-        // ESTALE is the Linux share's stale handle (Node reports it as -116).
-        #[cfg(target_os = "linux")]
+        // ESTALE is the share's stale handle, as Node reports it (-116) on every platform.
         assert!(is_transient(&io::Error::from_raw_os_error(116)));
+        assert!(is_transient(&io::Error::from_raw_os_error(-116)));
     }
 
     #[test]

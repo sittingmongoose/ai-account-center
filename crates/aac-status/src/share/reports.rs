@@ -135,20 +135,6 @@ impl AgentReportsReader {
         &self.root
     }
 
-    fn folder_problem(&mut self, file: &str, reason: &str, since: u64) {
-        let since = match self.folder_problems.get(file) {
-            Some(before) if before.reason == reason => before.since,
-            _ => since,
-        };
-        self.folder_problems.insert(
-            file.to_string(),
-            Problem {
-                file: file.to_string(),
-                reason: reason.to_string(),
-                since,
-            },
-        );
-    }
 
     fn set_problem(
         &mut self,
@@ -337,6 +323,8 @@ impl AgentReportsReader {
         seen: &mut HashSet<String>,
         failed_listings: &mut HashSet<String>,
         now: u64,
+        folder_problems: &mut IndexMap<String, Problem>,
+        before: &IndexMap<String, Problem>,
     ) -> bool {
         self.scan_partial = true;
         let rel = if folder.is_empty() {
@@ -357,7 +345,7 @@ impl AgentReportsReader {
             }
         }
         if let Some(reason) = &reason {
-            self.folder_problem(&rel, reason, since);
+            put_folder_problem(folder_problems, before, &rel, reason, since);
         }
         let prefix = format!("writers/{name}/{folder}");
         let keys: Vec<String> = self
@@ -414,20 +402,7 @@ impl AgentReportsReader {
         self.state = "ok";
         let mut seen = HashSet::new();
         let mut folder_problems = IndexMap::new();
-        let mut folder_problem = |file: &str, reason: &str, since: u64, before: &IndexMap<String, Problem>| {
-            let since = match before.get(file) {
-                Some(prior) if prior.reason == reason => prior.since,
-                _ => since,
-            };
-            folder_problems.insert(
-                file.to_string(),
-                Problem {
-                    file: file.to_string(),
-                    reason: reason.to_string(),
-                    since,
-                },
-            );
-        };
+        let before = self.folder_problems.clone();
         let mut failed_listings = HashSet::new();
         let mut names = Vec::new();
         for dirent in &writers {
@@ -437,11 +412,12 @@ impl AgentReportsReader {
             }
             if !is_writer_name(name) {
                 if showable(name) {
-                    folder_problem(
+                    put_folder_problem(
+                        &mut folder_problems,
+                        &before,
                         &format!("writers/{name}"),
                         "folder name is not a writer name",
                         now,
-                        &self.folder_problems,
                     );
                 }
                 continue;
@@ -451,7 +427,9 @@ impl AgentReportsReader {
         let kept = newest_folders(names.clone(), self.limits.writers, fs, &writers_dir);
         if kept.len() < names.len() {
             self.scan_partial = true;
-            folder_problem(
+            put_folder_problem(
+                &mut folder_problems,
+                &before,
                 "limits/writers",
                 &format!(
                     "{} active writers past the limit of {} were not read; the most recently changed are kept",
@@ -459,7 +437,6 @@ impl AgentReportsReader {
                     self.limits.writers
                 ),
                 now,
-                &self.folder_problems,
             );
         }
         let mut cards_visited = 0usize;
@@ -470,7 +447,7 @@ impl AgentReportsReader {
             let listed: HashSet<String> = match fs.list(&base) {
                 Ok(entries) => entries.into_iter().map(|entry| entry.name).collect(),
                 Err(error) => {
-                    if self.listing_failed(name, "", &error, &mut seen, &mut failed_listings, now) {
+                    if self.listing_failed(name, "", &error, &mut seen, &mut failed_listings, now, &mut folder_problems, &before) {
                         changed = true;
                     }
                     continue;
@@ -492,7 +469,7 @@ impl AgentReportsReader {
                 Ok(cards) => cards,
                 Err(error) => {
                     // A listing failure is not a withdrawal: keep the cards already known.
-                    if self.listing_failed(name, "cards/", &error, &mut seen, &mut failed_listings, now) {
+                    if self.listing_failed(name, "cards/", &error, &mut seen, &mut failed_listings, now, &mut folder_problems, &before) {
                         changed = true;
                     }
                     Vec::new()
@@ -518,7 +495,7 @@ impl AgentReportsReader {
                             changed = true;
                         }
                     } else {
-                        folder_problem(&rel, "is not a regular file", now, &self.folder_problems);
+                        put_folder_problem(&mut folder_problems, &before, &rel, "is not a regular file", now);
                     }
                     continue;
                 }
@@ -543,19 +520,22 @@ impl AgentReportsReader {
         }
         if cards_over > 0 {
             self.scan_partial = true;
-            folder_problem(
+            put_folder_problem(
+                &mut folder_problems,
+                &before,
                 "limits/cards",
                 &format!(
                     "{cards_over} card files past the limit of {} were not read",
                     self.limits.cards
                 ),
                 now,
-                &self.folder_problems,
             );
         }
         if self.over_bytes > 0 {
             self.scan_partial = true;
-            folder_problem(
+            put_folder_problem(
+                &mut folder_problems,
+                &before,
                 "limits/bytes",
                 &format!(
                     "{} files past the limit of {} MB were not read",
@@ -563,7 +543,6 @@ impl AgentReportsReader {
                     self.limits.bytes / (1024 * 1024)
                 ),
                 now,
-                &self.folder_problems,
             );
         }
         let keys: Vec<String> = self.entries.keys().cloned().collect();
@@ -574,7 +553,7 @@ impl AgentReportsReader {
                 continue;
             }
             let missing_since = *entry.missing_since.get_or_insert(now);
-            if now - missing_since >= MISSING_GRACE_MS {
+            if now.saturating_sub(missing_since) >= MISSING_GRACE_MS {
                 self.entries.shift_remove(&key);
                 changed = true;
             }
@@ -750,6 +729,28 @@ fn same_problems(before: &IndexMap<String, Problem>, after: &IndexMap<String, Pr
         && after
             .iter()
             .all(|(key, value)| before.get(key).map(|p| p.reason.as_str()) == Some(value.reason.as_str()))
+}
+
+/// One scan's folder problem: the prior scan's `since` stays while the reason does.
+fn put_folder_problem(
+    folder_problems: &mut IndexMap<String, Problem>,
+    before: &IndexMap<String, Problem>,
+    file: &str,
+    reason: &str,
+    since: u64,
+) {
+    let since = match before.get(file) {
+        Some(prior) if prior.reason == reason => prior.since,
+        _ => since,
+    };
+    folder_problems.insert(
+        file.to_string(),
+        Problem {
+            file: file.to_string(),
+            reason: reason.to_string(),
+            since,
+        },
+    );
 }
 
 /// The snapshot as the Status envelope's `reports` member: Maps become objects, in order.

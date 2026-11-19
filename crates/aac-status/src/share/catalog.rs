@@ -476,7 +476,7 @@ impl ShareFiles {
                 continue;
             }
             let missing_since = *entry.missing_since.get_or_insert(now);
-            if now - missing_since >= MISSING_GRACE_MS {
+            if now.saturating_sub(missing_since) >= MISSING_GRACE_MS {
                 self.entries.shift_remove(&file);
             }
         }
