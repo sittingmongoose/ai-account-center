@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
 import { ConfigError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
-import { assertTsWritesFile } from '../../shared/private-files';
+import { assertTsWritesFile, withTsPrivateFileLeases } from '../../shared/private-files';
 
 export interface AccountRefreshSettings {
   refreshIntervalSeconds: number;
@@ -116,33 +116,35 @@ export function writeAccountRefreshSettings(
   if (!isAccountRefreshSettings(value)) throw new ConfigError('Invalid usage refresh interval');
   const file = path.join(ccsDir, ACCOUNT_REFRESH_SETTINGS_FILE);
   assertTsWritesFile(file, ccsDir);
-  fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;
-  let fd: number | undefined;
-  try {
-    fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, `${JSON.stringify(value)}\n`);
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(temporary, file);
-    syncDirectory(ccsDir);
-    removeLeftoverTemporaries(ccsDir);
-  } finally {
-    if (fd !== undefined) {
+  return withTsPrivateFileLeases(ccsDir, ['account-refresh-settings'], () => {
+    fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(temporary, 'wx', 0o600);
+      fs.writeFileSync(fd, `${JSON.stringify(value)}\n`);
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      fs.renameSync(temporary, file);
+      syncDirectory(ccsDir);
+      removeLeftoverTemporaries(ccsDir);
+    } finally {
+      if (fd !== undefined) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* The descriptor may already be unusable. */
+        }
+      }
       try {
-        fs.closeSync(fd);
+        fs.unlinkSync(temporary);
       } catch {
-        /* The descriptor may already be unusable. */
+        // The rename normally removed the temporary file.
       }
     }
-    try {
-      fs.unlinkSync(temporary);
-    } catch {
-      // The rename normally removed the temporary file.
-    }
-  }
-  return { ...value };
+    return { ...value };
+  });
 }
 
 export function getAccountRefreshIntervalSeconds(): number {

@@ -1,6 +1,9 @@
 //! Unix-only skeleton service; its boot secret arrives on stdin, never argv or logs.
 #[cfg(unix)]
 fn main() {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--file-lease")) {
+        std::process::exit(file_lease());
+    }
     // Two async workers; at most 20 blocking threads: the 8 read, 4 store and 4 fed-Status
     // permits, plus spare. The permits, not this cap, are the bound the routes rely on.
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -13,6 +16,25 @@ fn main() {
         std::process::exit(1);
     };
     runtime.block_on(run());
+}
+
+#[cfg(unix)]
+fn file_lease() -> i32 {
+    use std::fs::{File, TryLockError};
+    use std::os::fd::AsFd;
+    let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() else {
+        return 74;
+    };
+    let file = File::from(fd);
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return 74;
+    }
+    match file.try_lock() {
+        Ok(()) => 0,
+        Err(TryLockError::WouldBlock) => 73,
+        Err(TryLockError::Error(_)) => 74,
+    }
+    // The parent keeps its copy of the open file description.
 }
 
 #[cfg(unix)]

@@ -8,7 +8,6 @@ import { broadcastDashboardEvent } from '../dashboard-events';
 import { readOwnedWithRust, writeWithRust } from '../rust-service';
 import { acceptRustVisibility } from '../rust-account-input';
 import {
-  ACCOUNT_VISIBILITY_FILE,
   parseVisibilityBody,
   parseVisibilityDelta,
   patchAccountVisibility,
@@ -20,9 +19,6 @@ import {
   type AccountVisibilityUpdate,
   type AccountVisibilityUpdateResult,
 } from '../services/account-visibility';
-import { withPrivateFileLock } from '../services/private-json-store';
-import { tsWritesRow } from '../../shared/private-files';
-import path from 'node:path';
 
 /**
  * GET and PUT /api/accounts/visibility (CONTRACT-registry-lifecycle section 4).
@@ -67,7 +63,6 @@ function bodyTooLarge(req: Request): boolean {
 export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps = {}): Router {
   const router = createApiRouter();
   const read = deps.read ?? (() => readAccountVisibility(getCcsDir()));
-  const write = deps.write ?? ((update) => updateAccountVisibility(getCcsDir(), update));
 
   router.use('/visibility', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -140,54 +135,37 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
     }
     let saved: AccountVisibility;
     try {
-      const legacy = () =>
-        patch
-          ? (deps.patch ?? ((delta) => patchAccountVisibility(getCcsDir(), delta)))(
-              update as AccountVisibilityDelta
-            )
-          : write(update as AccountVisibilityUpdate);
-      let result: AccountVisibilityUpdateResult;
-      if ((patch ? deps.patch : deps.write) || tsWritesRow('account-visibility')) {
-        result = await legacy();
-      } else {
-        const directory = getCcsDir();
-        const accept = acceptRustVisibility(directory);
-        result = await withPrivateFileLock(
-          path.join(directory, ACCOUNT_VISIBILITY_FILE),
-          async () => {
-            const reply = await writeWithRust<
-              AccountVisibilityUpdateResult & { folderWarnings?: unknown }
-            >(
-              req,
-              res,
-              '/api/accounts/visibility',
-              'account-visibility',
-              update,
-              (body): body is AccountVisibilityUpdateResult & { folderWarnings?: unknown } => {
-                if (!body || typeof body !== 'object' || !('state' in body)) return false;
-                if (body.state === 'unavailable') return Object.keys(body).length === 1;
-                if (
-                  body.state !== 'saved' ||
-                  !('visibility' in body) ||
-                  !('folderWarnings' in body)
-                )
-                  return false;
-                return !!accept({
-                  visibility: body.visibility,
-                  folderWarnings: body.folderWarnings,
-                });
-              },
-              legacy
-            );
-            if (reply.state === 'saved' && reply.folderWarnings)
-              accept({
-                visibility: reply.visibility,
-                folderWarnings: reply.folderWarnings,
-              })?.effect();
-            return reply;
-          }
+      const directory = getCcsDir();
+      const accept = acceptRustVisibility(directory);
+      const forward = async (legacy: () => Promise<AccountVisibilityUpdateResult>) => {
+        const reply = await writeWithRust<
+          AccountVisibilityUpdateResult & { folderWarnings?: unknown }
+        >(
+          req,
+          res,
+          '/api/accounts/visibility',
+          'account-visibility',
+          () => update,
+          (body): body is AccountVisibilityUpdateResult & { folderWarnings?: unknown } => {
+            if (!body || typeof body !== 'object' || !('state' in body)) return false;
+            if (body.state === 'unavailable') return Object.keys(body).length === 1;
+            if (body.state !== 'saved' || !('visibility' in body) || !('folderWarnings' in body))
+              return false;
+            return !!accept({ visibility: body.visibility, folderWarnings: body.folderWarnings });
+          },
+          legacy
         );
-      }
+        if (reply.state === 'saved' && reply.folderWarnings)
+          accept({ visibility: reply.visibility, folderWarnings: reply.folderWarnings })?.effect();
+        return reply;
+      };
+      const result = patch
+        ? await (deps.patch
+            ? deps.patch(update as AccountVisibilityDelta)
+            : patchAccountVisibility(directory, update as AccountVisibilityDelta, forward))
+        : await (deps.write
+            ? deps.write(update as AccountVisibilityUpdate)
+            : updateAccountVisibility(directory, update as AccountVisibilityUpdate, forward));
       if (result.state !== 'saved') {
         // A partial update cannot merge into a file that cannot be read safely.
         fail(res, 500, 'visibility_unavailable', 'Account visibility could not be read safely.');

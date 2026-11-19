@@ -250,6 +250,37 @@ impl OwnedStore {
         self.write_staged(|out| out.write_all(bytes), &mut |_| Ok(()), true)
     }
 
+    /// Confirm that a settings leaf is absent or can be replaced without following it.
+    pub fn can_replace_settings(&self) -> Result<(), Failure> {
+        if self.parents == Parents::Private {
+            require_absolute(&self.path)?;
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+            Ok(_) => Err(Failure::new(
+                Cause::Refused,
+                "settings leaf cannot be replaced",
+            )),
+        }
+    }
+
+    /// Remove this settings leaf without following it. An absent leaf is equivalent.
+    pub fn remove_settings(&self) -> Result<(), Failure> {
+        self.can_replace_settings()?;
+        match fs::remove_file(&self.path) {
+            Ok(()) => {
+                if let Some(parent) = self.path.parent() {
+                    let _ = sync_directory(parent);
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Remove legacy settings staging files beside this store after a successful replacement.
     /// The writer lease is still held. Unlink never follows a symlink.
     pub fn clean_settings_temporaries(&self) {

@@ -47,7 +47,9 @@ describe('account usage refresh settings', () => {
     writeAccountRefreshSettings({ refreshIntervalSeconds: 300 }, dir);
     expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 300 });
     expect(fs.statSync(path.join(dir, 'account-refresh-settings.json')).mode & 0o777).toBe(0o600);
-    expect(fs.readdirSync(dir)).toEqual(['account-refresh-settings.json']);
+    expect(fs.readdirSync(dir).filter((name) => !name.endsWith('.lock'))).toEqual([
+      'account-refresh-settings.json',
+    ]);
   });
 
   it('defaults on malformed or oversized state and never reads a symlink target', () => {
@@ -102,7 +104,9 @@ describe('account usage refresh settings', () => {
     }
     expect(fs.readFileSync(file, 'utf8')).toBe('{"refreshIntervalSeconds":300}\n');
     expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 300 });
-    expect(fs.readdirSync(dir)).toEqual(['account-refresh-settings.json']);
+    expect(fs.readdirSync(dir).filter((name) => !name.endsWith('.lock'))).toEqual([
+      'account-refresh-settings.json',
+    ]);
   });
 
   it('an empty or truncated file falls back to the default with one warning and stays in place', () => {
@@ -136,7 +140,9 @@ describe('account usage refresh settings', () => {
     expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 60 });
     expect(fs.existsSync(leftover)).toBe(true);
     writeAccountRefreshSettings({ refreshIntervalSeconds: 120 }, dir);
-    expect(fs.readdirSync(dir)).toEqual(['account-refresh-settings.json']);
+    expect(fs.readdirSync(dir).filter((name) => !name.endsWith('.lock'))).toEqual([
+      'account-refresh-settings.json',
+    ]);
     expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 120 });
   });
 

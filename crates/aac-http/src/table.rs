@@ -17,6 +17,7 @@ pub(crate) enum Handler {
     Settings,
     WriteSettings,
     WriteVisibility,
+    WritePreferences,
     Home,
     Accounts,
     Profiles,
@@ -42,6 +43,7 @@ impl Handler {
             "settings" => Handler::Settings,
             "write-settings" => Handler::WriteSettings,
             "write-visibility" => Handler::WriteVisibility,
+            "write-preferences" => Handler::WritePreferences,
             "home" => Handler::Home,
             "accounts" => Handler::Accounts,
             "profiles" => Handler::Profiles,
@@ -220,7 +222,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (method == axum::http::Method::PUT
                 && !matches!(
                     handler,
-                    Handler::Feed | Handler::WriteSettings | Handler::WriteVisibility
+                    Handler::Feed
+                        | Handler::WriteSettings
+                        | Handler::WriteVisibility
+                        | Handler::WritePreferences
                 ))
             || (handler == Handler::WriteSettings
                 && (method != axum::http::Method::PUT
@@ -238,7 +243,16 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (handler == Handler::Approvals
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/account-confirmations"))
-            || (method == axum::http::Method::PATCH && handler != Handler::WriteVisibility)
+            || (method == axum::http::Method::PATCH
+                && !matches!(
+                    handler,
+                    Handler::WriteVisibility | Handler::WritePreferences
+                ))
+            || (handler == Handler::WritePreferences
+                && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
+                    || row.group != "writes"
+                    || roles != [Role::Admin]
+                    || row.path != "/api/accounts/preferences"))
             || (handler == Handler::WriteVisibility
                 && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
                     || row.group != "writes"

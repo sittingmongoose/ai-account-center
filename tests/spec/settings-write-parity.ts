@@ -21,6 +21,7 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
 });
 
+const { withTsPrivateFileLeases } = await import('../../src/shared/private-files');
 const { RustService } = await import('../../src/web-server/rust-service');
 const { createAccountRefreshSettingsRouter } = await import(
   '../../src/web-server/routes/account-refresh-settings-routes'
@@ -354,6 +355,41 @@ async function run(mode: 'off' | 'shadow' | 'on'): Promise<void> {
     assert.equal(visibilityChanges, 3, mode);
     assert.equal(service.stats.served, mode === 'on' ? writes + 1 : 0, mode);
     assert.equal(service.stats.fallbacks, 0, mode);
+    if (mode === 'on') {
+      const save = (seconds: number) =>
+        fetch(base + '/api/accounts/settings', {
+          method: 'PUT',
+          headers: { origin: base, 'content-type': 'application/json', 'x-fixture-session': 'yes' },
+          body: JSON.stringify({ refreshIntervalSeconds: seconds }),
+        });
+      const before = fs.readFileSync(file, 'utf8');
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const held = withTsPrivateFileLeases(ccs, ['account-refresh-settings'], () => gate, true);
+      try {
+        const blocked = await save(123);
+        assert.equal(blocked.status, 500);
+        await blocked.arrayBuffer();
+        assert.equal(
+          fs.readFileSync(file, 'utf8'),
+          before,
+          'live TS descriptor excludes the Rust writer'
+        );
+      } finally {
+        release();
+        await held;
+      }
+      const accepted = await save(123);
+      assert.equal(accepted.status, 200);
+      assert.equal(await accepted.text(), '{"refreshIntervalSeconds":123}');
+      service.stop();
+      const handedOff = await save(124);
+      assert.equal(handedOff.status, 200, 'TS can take the lock after the Rust writer goes away');
+      assert.equal(await handedOff.text(), '{"refreshIntervalSeconds":124}');
+      assert.equal(fs.readFileSync(file, 'utf8'), '{"refreshIntervalSeconds":124}\n');
+    }
   } finally {
     service.stop();
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));

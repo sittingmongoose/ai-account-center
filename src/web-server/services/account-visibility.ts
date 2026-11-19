@@ -1,4 +1,5 @@
 import path from 'path';
+import { withTsPrivateFileLeases } from '../../shared/private-files';
 import { ConfigError } from '../../errors/error-types';
 import type { DashboardProvider } from './account-dashboard-types';
 import { isDashboardProviderId } from './dashboard-provider-table';
@@ -61,33 +62,59 @@ export function parseVisibilityDelta(value: unknown): AccountVisibilityDelta | n
   return delta;
 }
 
+type VisibilityForward = (
+  legacy: () => Promise<AccountVisibilityUpdateResult>
+) => Promise<AccountVisibilityUpdateResult>;
+
+function withVisibilityWriter<T>(ccsDir: string, task: () => Promise<T>): Promise<T> {
+  return withPrivateFileLock(accountVisibilityPath(ccsDir), () =>
+    withTsPrivateFileLeases(ccsDir, ['account-visibility'], task)
+  );
+}
+
+function forwardVisibility(
+  ccsDir: string,
+  legacy: () => Promise<AccountVisibilityUpdateResult>,
+  forward?: VisibilityForward
+): Promise<AccountVisibilityUpdateResult> {
+  return forward
+    ? withPrivateFileLock(accountVisibilityPath(ccsDir), () => forward(legacy))
+    : withVisibilityWriter(ccsDir, legacy);
+}
+
 export async function patchAccountVisibility(
   ccsDir: string,
-  delta: AccountVisibilityDelta
+  delta: AccountVisibilityDelta,
+  forward?: VisibilityForward
 ): Promise<AccountVisibilityUpdateResult> {
   const file = accountVisibilityPath(ccsDir);
-  return withPrivateFileLock(file, async () => {
-    const current = await readAccountVisibility(ccsDir);
-    if (current.state !== 'ok') return { state: 'unavailable' };
-    const next = { ...current.visibility };
-    for (const key of VISIBILITY_KEYS) {
-      const operation = delta[key];
-      if (operation) {
-        const values = new Set<string>(next[key]);
-        operation.show.forEach((id) => values.delete(id));
-        operation.hide.forEach((id) => values.add(id));
-        Object.assign(next, { [key]: [...values] });
+  return forwardVisibility(
+    ccsDir,
+    async () => {
+      const current = await readAccountVisibility(ccsDir);
+      if (current.state !== 'ok') return { state: 'unavailable' };
+      const next = { ...current.visibility };
+      for (const key of VISIBILITY_KEYS) {
+        const operation = delta[key];
+        if (operation) {
+          const values = new Set<string>(next[key]);
+          operation.show.forEach((id) => values.delete(id));
+          operation.hide.forEach((id) => values.add(id));
+          Object.assign(next, { [key]: [...values] });
+        }
       }
-    }
-    const saved = parseVisibilityBody(next);
-    if (!saved) throw new ConfigError('Visibility limits exceeded');
-    await writePrivateJsonFile(file, { version: 1, ...next });
-    return { state: 'saved', visibility: next };
-  });
+      const saved = parseVisibilityBody(next);
+      if (!saved) throw new ConfigError('Visibility limits exceeded');
+      await writePrivateJsonFile(file, { version: 1, ...next });
+      return { state: 'saved', visibility: next };
+    },
+    forward
+  );
 }
 
 export type AccountVisibilityRead =
-  { state: 'ok'; visibility: AccountVisibility } | { state: 'unavailable' };
+  | { state: 'ok'; visibility: AccountVisibility }
+  | { state: 'unavailable' };
 
 export function isPublicAccountId(value: unknown): value is string {
   return typeof value === 'string' && (ACCOUNT_ID.test(value) || WALLET_ACCOUNT_ID.test(value));
@@ -245,21 +272,26 @@ export function writeAccountVisibility(
   ccsDir: string,
   visibility: AccountVisibility
 ): Promise<AccountVisibility> {
-  const file = accountVisibilityPath(ccsDir);
-  return withPrivateFileLock(file, async () => {
-    const saved = {
-      hiddenProviders: [...visibility.hiddenProviders],
-      hiddenAccountIds: [...visibility.hiddenAccountIds],
-      trayHiddenProviders: [...visibility.trayHiddenProviders],
-      trayHiddenAccountIds: [...visibility.trayHiddenAccountIds],
-    };
-    await writePrivateJsonFile(file, { version: 1, ...saved });
-    return saved;
-  });
+  return withVisibilityWriter(ccsDir, () => saveVisibility(ccsDir, visibility));
+}
+
+async function saveVisibility(
+  ccsDir: string,
+  visibility: AccountVisibility
+): Promise<AccountVisibility> {
+  const saved = {
+    hiddenProviders: [...visibility.hiddenProviders],
+    hiddenAccountIds: [...visibility.hiddenAccountIds],
+    trayHiddenProviders: [...visibility.trayHiddenProviders],
+    trayHiddenAccountIds: [...visibility.trayHiddenAccountIds],
+  };
+  await writePrivateJsonFile(accountVisibilityPath(ccsDir), { version: 1, ...saved });
+  return saved;
 }
 
 export type AccountVisibilityUpdateResult =
-  { state: 'saved'; visibility: AccountVisibility } | { state: 'unavailable' };
+  | { state: 'saved'; visibility: AccountVisibility }
+  | { state: 'unavailable' };
 
 /**
  * The PUT semantics: every list the update names replaces the stored one; a
@@ -271,39 +303,36 @@ export type AccountVisibilityUpdateResult =
  */
 export async function updateAccountVisibility(
   ccsDir: string,
-  update: AccountVisibilityUpdate
+  update: AccountVisibilityUpdate,
+  forward?: VisibilityForward
 ): Promise<AccountVisibilityUpdateResult> {
-  if (
-    update.hiddenProviders !== undefined &&
-    update.hiddenAccountIds !== undefined &&
-    update.trayHiddenProviders !== undefined &&
-    update.trayHiddenAccountIds !== undefined
-  ) {
-    const visibility = await writeAccountVisibility(ccsDir, {
-      hiddenProviders: update.hiddenProviders,
-      hiddenAccountIds: update.hiddenAccountIds,
-      trayHiddenProviders: update.trayHiddenProviders,
-      trayHiddenAccountIds: update.trayHiddenAccountIds,
-    });
-    return { state: 'saved', visibility };
-  }
-  const file = accountVisibilityPath(ccsDir);
-  return withPrivateFileLock(file, async (): Promise<AccountVisibilityUpdateResult> => {
-    const current = await readAccountVisibility(ccsDir);
-    if (current.state !== 'ok') return { state: 'unavailable' };
-    const saved: AccountVisibility = {
-      hiddenProviders: [...(update.hiddenProviders ?? current.visibility.hiddenProviders)],
-      hiddenAccountIds: [...(update.hiddenAccountIds ?? current.visibility.hiddenAccountIds)],
-      trayHiddenProviders: [
-        ...(update.trayHiddenProviders ?? current.visibility.trayHiddenProviders),
-      ],
-      trayHiddenAccountIds: [
-        ...(update.trayHiddenAccountIds ?? current.visibility.trayHiddenAccountIds),
-      ],
-    };
-    await writePrivateJsonFile(file, { version: 1, ...saved });
-    return { state: 'saved', visibility: saved };
-  });
+  return forwardVisibility(
+    ccsDir,
+    async () => {
+      const { hiddenProviders, hiddenAccountIds, trayHiddenProviders, trayHiddenAccountIds } =
+        update;
+      if (hiddenProviders && hiddenAccountIds && trayHiddenProviders && trayHiddenAccountIds) {
+        const visibility = await saveVisibility(ccsDir, {
+          hiddenProviders,
+          hiddenAccountIds,
+          trayHiddenProviders,
+          trayHiddenAccountIds,
+        });
+        return { state: 'saved', visibility };
+      }
+
+      const current = await readAccountVisibility(ccsDir);
+      if (current.state !== 'ok') return { state: 'unavailable' };
+      const visibility = await saveVisibility(ccsDir, {
+        hiddenProviders: hiddenProviders ?? current.visibility.hiddenProviders,
+        hiddenAccountIds: hiddenAccountIds ?? current.visibility.hiddenAccountIds,
+        trayHiddenProviders: trayHiddenProviders ?? current.visibility.trayHiddenProviders,
+        trayHiddenAccountIds: trayHiddenAccountIds ?? current.visibility.trayHiddenAccountIds,
+      });
+      return { state: 'saved', visibility };
+    },
+    forward
+  );
 }
 
 /** What the dashboard shows: the hidden lists, and whether they come from a good read. */

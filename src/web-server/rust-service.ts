@@ -10,7 +10,7 @@ import {
 } from './services/account-confirmations';
 import routes from './rust-service-routes.json';
 import { rustGroupOn } from './rust-service-groups';
-import { tsWritesRow } from '../shared/private-files';
+import { tsWritesRow, withTsPrivateFileLeases } from '../shared/private-files';
 import { getCcsDir } from '../utils/config-manager';
 import type { RustLease } from './rust-service-lifecycle';
 import {
@@ -435,40 +435,52 @@ export class RustService extends RustSupervisor {
    * upgrade) starts with none and the front door pushes again. Null without a lease, or when the service
    * reads another root than `scope` (the TS readers answer for another root).
    */
-  /** A guarded write to a store assigned to this boot. A lost or invalid reply can follow a
-   * committed replacement, so this method never retries a request or invokes a second writer. */
+  /** Null is a handoff before dispatch or an explicit refusal before any write. */
   async mutate<T>(
     req: Request,
     route: string,
-    input: unknown,
+    input: () => unknown,
     accepts: (body: unknown) => body is T
-  ): Promise<T> {
+  ): Promise<T | null> {
+    if (!this.writesOn) return null;
     const row = routes.find(
       (r) =>
         r.path === route && r.method === req.method && r.group === 'writes' && r.owner === 'rust'
     );
     const verified = principal(req, route);
     if (
-      this.mode !== 'on' ||
-      (req.method !== 'PUT' && req.method !== 'PATCH') ||
+      (req.method !== 'PUT' && req.method !== 'PATCH' && req.method !== 'POST') ||
       !row ||
       !verified ||
-      !row.roles?.includes(verified.role) ||
+      !row.roles?.includes(verified.role)
+    )
+      throw new Error('Rust write admission refused');
+    if (
+      this.stopped ||
       this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
-      this.inFlight >= IN_FLIGHT
+      this.inFlight >= IN_FLIGHT ||
+      this.breakers.blocked(route)
     ) {
-      throw new Error('Rust writer unavailable');
+      this.fallback(route, { kind: 'unavailable', reason: 'writer' });
+      return null;
     }
+    const body = input();
+    if (body === undefined) return null;
     const started = now();
     let result: RustReply;
     try {
-      result = await this.forward(route, verified, input, '', undefined, req.method);
+      result = await this.forward(route, verified, body, '', undefined, req.method);
     } catch (error) {
       this.failed(route, error);
+      if (rustFailureKind(error) === 'connect') return null;
       throw error;
     }
     if (result.status !== 200) {
       this.declined(route, result);
+      // These outcomes occur before a write begins. Other failures may arrive
+      // after a rename, so they never authorize replay.
+      if (result.status === 503 && ['unsupported', 'stale', 'busy'].includes(result.decline ?? ''))
+        return null;
       throw new Error('Rust write declined');
     }
     if (!accepts(result.body)) throw new Error('Rust write reply refused');
@@ -821,18 +833,22 @@ export async function readOwnedValueWithRust(
     : legacy();
 }
 
-/** The guarded adapter keeps the TS handler whenever the registry assigns TS the file. */
+/** The front door may resume the existing writer only after claiming its registry leases. */
 export async function writeWithRust<T>(
   req: Request,
   res: Response,
   route: string,
-  store: string,
-  input: unknown,
+  store: string | readonly string[],
+  input: () => unknown,
   accepts: (body: unknown) => body is T,
   legacy: () => T | Promise<T>
 ): Promise<T> {
-  if (tsWritesRow(store)) return legacy();
+  const stores = typeof store === 'string' ? [store] : store;
   const service: unknown = res.locals.rustService;
-  if (!(service instanceof RustService)) throw new Error('Rust writer unavailable');
-  return service.mutate(req, route, input, accepts);
+  const preferredRust = stores.some((id) => !tsWritesRow(id));
+  if (preferredRust && service instanceof RustService) {
+    const result = await service.mutate(req, route, input, accepts);
+    if (result !== null) return result;
+  }
+  return withTsPrivateFileLeases(getCcsDir(), stores, legacy, preferredRust);
 }

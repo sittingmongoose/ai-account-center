@@ -461,8 +461,50 @@ fn primary(root: &Path, hosts: &[(String, String)]) -> Option<Object> {
     )
 }
 
+/// Recompose the persisted reply for a write already validated by the TS route.
+pub(crate) fn prepared_preferences(primary: Value, companion: &mut Vec<Value>) -> Option<Value> {
+    let hosts = hosts()?;
+    let mut proof = primary.as_object()?.clone();
+    let zone = proof.get("timeZone")?.as_str()?;
+    if zone.is_empty() || zone.len() > 128 {
+        return None;
+    }
+    // TS validates the time zone against its Intl tables before preparing the
+    // documents. Check all remaining fields against the shared Rust schema.
+    proof.insert("timeZone".into(), json!("UTC"));
+    if !preferences_valid(&proof, &hosts)? {
+        return None;
+    }
+    let primary_sources = proof.get("usageLogSources")?.as_array()?;
+    let legacy = |source: &Value| {
+        source
+            .get("host")
+            .and_then(Value::as_str)
+            .is_some_and(|host| LEGACY_STORAGE_HOSTS.contains(&host))
+    };
+    if primary_sources.iter().any(|source| !legacy(source)) || companion.iter().any(legacy) {
+        return None;
+    }
+    let mut sources = primary_sources.clone();
+    sources.append(companion);
+    proof.insert("usageLogSources".into(), json!(sources));
+    if !preferences_valid(&proof, &hosts)? {
+        return None;
+    }
+    Some(json!({
+        "timeZone": primary["timeZone"],
+        "snapshotCleanup": primary["snapshotCleanup"],
+        "usageLogSources": proof["usageLogSources"],
+    }))
+}
+
 /// The preferences reply, or `None` for the TS reader.
 pub(crate) fn preferences(root: &Path) -> Option<Value> {
+    let (transaction, policy) =
+        crate::registered::file(root, crate::preferences_write::TRANSACTION)?;
+    if !matches!(aac_files::read::read(&transaction, &policy), Read::Absent) {
+        return None;
+    }
     let hosts = hosts()?;
     let primary = primary(root, &hosts)?;
     // TS keeps the primary for an absent, symlinked or oversized companion; a non-file or an

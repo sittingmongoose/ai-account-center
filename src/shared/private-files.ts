@@ -10,6 +10,9 @@
  * row they do not own (`assertTsWritesFile`, `assertTsWritesRow`), so each file has one writer.
  */
 import path from 'path';
+import fs from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { claimFileLease } from './private-file-lease';
 import { ConfigError } from '../errors/error-types';
 
 export type PrivateFileRole = 'ts' | 'rust-service' | 'agent';
@@ -215,5 +218,71 @@ export function assertTsWritesRow(id: string): void {
  */
 export function assertTsWritesFile(file: string, ccsDir: string): void {
   const row = privateFileRowFor(file, ccsDir);
-  if (row) assertTsWritesRow(row.id);
+  if (!row) return;
+  const grant = tsWriterGrant.getStore();
+  if (grant?.active && grant.root === canonicalWriterRoot(ccsDir) && grant.rows.has(row.id)) return;
+  assertTsWritesRow(row.id);
+}
+
+// The grant lets the guarded fallback use the original write functions. It is
+// scoped to the exact root, rows and lifetime of the kernel leases.
+const tsWriterGrant = new AsyncLocalStorage<{ root: string; rows: Set<string>; active: boolean }>();
+
+function canonicalWriterRoot(root: string): string {
+  try {
+    return fs.realpathSync(root);
+  } catch {
+    return path.resolve(root);
+  }
+}
+
+/** Run a legacy writer under the registry leases shared with the Rust writer. */
+export function withTsPrivateFileLeases<T>(
+  root: string,
+  ids: readonly string[],
+  task: () => T,
+  handoff = false
+): T {
+  if (process.platform !== 'win32') fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const previous = tsWriterGrant.getStore();
+  const canonical = canonicalWriterRoot(root);
+  const inherited =
+    previous?.active && previous.root === canonical ? previous.rows : new Set<string>();
+  const requested = [...new Set(ids)].filter((id) => !inherited.has(id)).sort();
+  if (!requested.length) return task();
+  if (!handoff) requested.forEach(assertTsWritesRow);
+  if (process.platform === 'win32') return task();
+
+  const releases: Array<() => void> = [];
+  const grant = { root: canonical, rows: new Set([...inherited, ...requested]), active: true };
+  function release() {
+    grant.active = false;
+    for (const close of releases.reverse()) {
+      try {
+        close();
+      } catch {
+        /* A failed release keeps the shared lock unavailable. */
+      }
+    }
+  }
+  try {
+    for (const id of requested) {
+      const row = PRIVATE_FILE_ROWS.find((entry) => entry.id === id);
+      if (!row?.movesWith || row.root !== 'ccs' || row.lease !== 'file' || row.path.includes('*'))
+        throw new Error('Private file lease is unavailable for this store.');
+      const file = path.resolve(canonical, row.path);
+      const parent = path.dirname(file);
+      fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+      if (fs.realpathSync(parent) !== parent)
+        throw new Error('Private file lease directory changed.');
+      releases.push(claimFileLease(root, file + '.lock'));
+    }
+    const result = tsWriterGrant.run(grant, task);
+    if (result instanceof Promise) return result.finally(release) as T;
+    release();
+    return result;
+  } catch (error) {
+    if (grant.active) release();
+    throw error;
+  }
 }

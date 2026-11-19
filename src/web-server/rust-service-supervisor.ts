@@ -25,6 +25,7 @@ import {
   type RustStoreBootInput,
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
+import { rememberFileLeaseBinary } from '../shared/private-file-lease';
 import { rustGroupOn, rustStoreSwitchOn } from './rust-service-groups';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
@@ -129,6 +130,7 @@ export class RustSupervisor {
     binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
   ): Promise<void> {
     if (this.stopped) return;
+    rememberFileLeaseBinary(getCcsDir(), binary);
     if (this.mode === 'off') {
       let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
       if (transport === undefined) {

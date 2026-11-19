@@ -261,6 +261,7 @@ fn decline(handler: Handler, reason: Decline) -> Response {
         Handler::Settings => "TypeScript settings fallback required",
         Handler::WriteSettings => "Usage refresh settings could not be saved.",
         Handler::WriteVisibility => "Account visibility could not be saved.",
+        Handler::WritePreferences => "Dashboard preferences could not be saved.",
         _ => "TypeScript read fallback required",
     };
     let mut response = (
@@ -529,6 +530,34 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                         file.clean_settings_temporaries();
                     }
                     Ok(value)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::WritePreferences => {
+            if req.uri().query().is_some_and(|query| !query.is_empty()) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Unexpected preferences query."})),
+                )
+                    .into_response();
+            }
+            let patch = req.method() == axum::http::Method::PATCH;
+            let Ok(bytes) = to_bytes(req.into_body(), crate::preferences_write::INPUT_CAP).await
+            else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(owners) = shared.boot.owners() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::preferences_write::save(&root, &owners, patch, &bytes)
                 })
                 .await
             {

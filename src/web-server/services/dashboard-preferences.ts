@@ -7,13 +7,13 @@ import {
 import fs from 'fs';
 import { withPrivateFileLock } from './private-json-store';
 import path from 'path';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
 import { ConfigError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { isAccountAnalyticsTimeZone } from './account-analytics-range';
 import { TOOL_TABLE, type TableUsageLogTool } from '../../shared/tables';
-import { assertTsWritesFile } from '../../shared/private-files';
+import { assertTsWritesFile, withTsPrivateFileLeases } from '../../shared/private-files';
 
 /**
  * Dashboard preferences (Settings): the display time zone, the Claude history
@@ -155,6 +155,22 @@ export function defaultDashboardPreferences(): DashboardPreferences {
 const PREFERENCES_FILE = 'dashboard-preferences.json';
 const EXTRA_SOURCES_FILE = 'dashboard-preferences-extra-sources.json';
 const MAX_PREFERENCES_BYTES = 64 * 1024;
+const PREFERENCES_TRANSACTION = 'dashboard-preferences-transaction.json';
+const MAX_TRANSACTION_BYTES = 512 * 1024;
+export const PREFERENCES_STORE_IDS = [
+  'dashboard-preferences',
+  'dashboard-preferences-extra-sources',
+  'dashboard-preferences-transaction',
+] as const;
+
+interface PreferencesDocuments {
+  primary: string;
+  companion: string | null;
+}
+
+interface PreferencesMutation extends PreferencesDocuments {
+  previous: readonly [string | null, string | null] | null;
+}
 
 const logger = createLogger('dashboard-preferences');
 let warned = false;
@@ -165,7 +181,7 @@ let warned = false;
  * at most that plus one byte is read. A FIFO or a larger file swapped in after the callers'
  * `lstat` throws here, which they read as unreadable, instead of blocking or over-reading.
  */
-function readPreferencesFile(file: string): string {
+function readPreferencesBytes(file: string, cap = MAX_PREFERENCES_BYTES): Buffer {
   const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
   const fd = fs.openSync(
     file,
@@ -173,20 +189,67 @@ function readPreferencesFile(file: string): string {
   );
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_PREFERENCES_BYTES)
+    if (!stat.isFile() || stat.size > cap)
       throw new ConfigError('Dashboard preferences file changed while it was read.');
-    const buffer = Buffer.alloc(MAX_PREFERENCES_BYTES + 1);
+    const buffer = Buffer.alloc(cap + 1);
     let length = 0;
     while (length < buffer.length) {
       const read = fs.readSync(fd, buffer, length, buffer.length - length, null);
       if (read === 0) break;
       length += read;
     }
-    if (length > MAX_PREFERENCES_BYTES)
+    if (length > cap)
       throw new ConfigError('Dashboard preferences file changed while it was read.');
-    return buffer.toString('utf8', 0, length);
+    return buffer.subarray(0, length);
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+function readPreferencesFile(file: string): string {
+  return readPreferencesBytes(file).toString('utf8');
+}
+
+function readPendingPreferences(ccsDir: string): PreferencesDocuments | null {
+  try {
+    const file = path.join(ccsDir, PREFERENCES_TRANSACTION);
+    const value = JSON.parse(readPreferencesBytes(file, MAX_TRANSACTION_BYTES).toString('utf8'));
+    if (!readDocuments(value)) throw new Error('Invalid preferences transaction.');
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function readDocuments(documents: unknown): DashboardPreferences | null {
+  if (!documents || typeof documents !== 'object') return null;
+  const { primary, companion } = documents as PreferencesDocuments;
+  if (
+    typeof primary !== 'string' ||
+    Buffer.byteLength(primary) > MAX_PREFERENCES_BYTES ||
+    (companion !== null &&
+      (typeof companion !== 'string' || Buffer.byteLength(companion) > MAX_PREFERENCES_BYTES))
+  )
+    return null;
+  try {
+    const saved: unknown = JSON.parse(primary);
+    if (!isDashboardPreferences(saved)) return null;
+    const extra = companion === null ? { usageLogSources: [] } : JSON.parse(companion);
+    if (
+      !extra ||
+      Object.keys(extra).join(',') !== 'usageLogSources' ||
+      !Array.isArray(extra.usageLogSources)
+    )
+      return null;
+    const merged = {
+      timeZone: saved.timeZone,
+      snapshotCleanup: saved.snapshotCleanup,
+      usageLogSources: [...saved.usageLogSources, ...extra.usageLogSources],
+    };
+    return isDashboardPreferences(merged) ? merged : null;
+  } catch {
+    return null;
   }
 }
 
@@ -204,13 +267,42 @@ function warnCorrupt(): void {
 }
 
 export function readDashboardPreferences(ccsDir = getCcsDir()): DashboardPreferences {
-  const primary = readPrimaryPreferences(ccsDir);
   try {
-    const file = path.join(ccsDir, EXTRA_SOURCES_FILE);
-    const stat = fs.lstatSync(file);
-    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_PREFERENCES_BYTES)
-      return primary;
-    const value: unknown = JSON.parse(readPreferencesFile(file));
+    const pending = readPendingPreferences(ccsDir);
+    const committed = pending && readDocuments(pending);
+    if (committed) return committed;
+  } catch {
+    // The last materialized files are still readable if the transaction was edited.
+  }
+  const saved = readMaterializedPreferences(ccsDir);
+  try {
+    const pending = readPendingPreferences(ccsDir);
+    return (pending && readDocuments(pending)) ?? saved;
+  } catch {
+    return saved;
+  }
+}
+
+type PreferencesSnapshot = readonly [Buffer | null, Buffer | null];
+
+function readMaterializedPreferences(
+  ccsDir: string,
+  snapshot?: PreferencesSnapshot
+): DashboardPreferences {
+  const primary = readPrimaryPreferences(ccsDir, snapshot?.[0]);
+  try {
+    let companionText: string;
+    if (snapshot) {
+      if (snapshot[1] === null) return primary;
+      companionText = snapshot[1].toString('utf8');
+    } else {
+      const file = path.join(ccsDir, EXTRA_SOURCES_FILE);
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_PREFERENCES_BYTES)
+        return primary;
+      companionText = readPreferencesFile(file);
+    }
+    const value: unknown = JSON.parse(companionText);
     if (!value || typeof value !== 'object' || Array.isArray(value)) return primary;
     const extra = value as Record<string, unknown>;
     if (Object.keys(extra).some((key) => key !== 'usageLogSources')) return primary;
@@ -232,14 +324,19 @@ export function readDashboardPreferences(ccsDir = getCcsDir()): DashboardPrefere
   }
 }
 
-function readPrimaryPreferences(ccsDir: string): DashboardPreferences {
+function readPrimaryPreferences(ccsDir: string, captured?: Buffer | null): DashboardPreferences {
   const file = path.join(ccsDir, PREFERENCES_FILE);
   let corrupt = false;
   try {
-    const stat = fs.lstatSync(file);
-    if (stat.isSymbolicLink() || !stat.isFile()) return defaultDashboardPreferences();
-    if (stat.size <= MAX_PREFERENCES_BYTES) {
-      let value: unknown = JSON.parse(readPreferencesFile(file));
+    if (captured === null) return defaultDashboardPreferences();
+    let text = captured?.toString('utf8');
+    if (text === undefined) {
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || !stat.isFile()) return defaultDashboardPreferences();
+      if (stat.size <= MAX_PREFERENCES_BYTES) text = readPreferencesFile(file);
+    }
+    if (text !== undefined) {
+      let value: unknown = JSON.parse(text);
       // Older releases accepted remote JSONL roots. Migrate only those entries;
       // strict write validation must never reset unrelated saved preferences.
       if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -313,7 +410,9 @@ function removeLeftoverTemporaries(directory: string): void {
   }
   for (const entry of entries) {
     if (
-      ![PREFERENCES_FILE, EXTRA_SOURCES_FILE].some((file) => entry.startsWith(`${file}.`)) ||
+      ![PREFERENCES_FILE, EXTRA_SOURCES_FILE, PREFERENCES_TRANSACTION].some((file) =>
+        entry.startsWith(`${file}.`)
+      ) ||
       !entry.endsWith('.tmp')
     )
       continue;
@@ -325,10 +424,7 @@ function removeLeftoverTemporaries(directory: string): void {
   }
 }
 
-export function writeDashboardPreferences(
-  value: DashboardPreferences,
-  ccsDir = getCcsDir()
-): DashboardPreferences {
+function preparePreferencesDocuments(value: DashboardPreferences): PreferencesDocuments {
   if (value?.usageLogSources?.some((source) => source.tool === 'jsonl' && source.host !== 'ubuntu'))
     throw new ConfigError('Generic JSONL usage log sources are supported only on ubuntu');
   if (!isDashboardPreferences(value)) throw new ConfigError('Invalid dashboard preferences');
@@ -398,37 +494,77 @@ export function writeDashboardPreferences(
         );
     }
   }
-  fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   const legacy = value.usageLogSources.filter((source) =>
     LEGACY_STORAGE_HOSTS.includes(source.host)
   );
   const extra = value.usageLogSources.filter(
     (source) => !LEGACY_STORAGE_HOSTS.includes(source.host)
   );
-  writePreferencesFile(PREFERENCES_FILE, { ...value, usageLogSources: legacy }, ccsDir);
-  if (extra.length > 0) {
-    writePreferencesFile(EXTRA_SOURCES_FILE, { usageLogSources: extra }, ccsDir);
-  } else {
-    try {
-      fs.unlinkSync(path.join(ccsDir, EXTRA_SOURCES_FILE));
-      syncDirectory(ccsDir);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
+  return {
+    primary: JSON.stringify({ ...value, usageLogSources: legacy }) + '\n',
+    companion: extra.length ? JSON.stringify({ usageLogSources: extra }) + '\n' : null,
+  };
+}
+
+function removePreferenceFile(name: string, ccsDir: string): void {
+  const target = path.join(ccsDir, name);
+  assertTsWritesFile(target, ccsDir);
+  try {
+    fs.unlinkSync(target);
+    syncDirectory(ccsDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+}
+
+function materializePreferences(documents: PreferencesDocuments, ccsDir: string): void {
+  if (documents.companion === null) removePreferenceFile(EXTRA_SOURCES_FILE, ccsDir);
+  else writePreferencesFile(EXTRA_SOURCES_FILE, documents.companion, ccsDir);
+  writePreferencesFile(PREFERENCES_FILE, documents.primary, ccsDir);
+}
+
+function persistPreferences(documents: PreferencesDocuments, ccsDir: string): DashboardPreferences {
+  fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
+  const pending = readPendingPreferences(ccsDir);
+  if (pending) {
+    materializePreferences(pending, ccsDir);
+    removePreferenceFile(PREFERENCES_TRANSACTION, ccsDir);
+  }
+
+  // Check both destinations before publishing the intent. Regular files and
+  // symlink leaves can be atomically replaced, while directory leaves cannot.
+  for (const name of [PREFERENCES_FILE, EXTRA_SOURCES_FILE]) {
+    if (fs.lstatSync(path.join(ccsDir, name), { throwIfNoEntry: false })?.isDirectory())
+      throw new Error('Invalid preferences file.');
+  }
+  const bounded = readDocuments(documents) !== null;
+  if (bounded)
+    writePreferencesFile(PREFERENCES_TRANSACTION, JSON.stringify(documents) + '\n', ccsDir);
+  materializePreferences(documents, ccsDir);
+  if (bounded) removePreferenceFile(PREFERENCES_TRANSACTION, ccsDir);
   removeLeftoverTemporaries(ccsDir);
   return readDashboardPreferences(ccsDir);
 }
 
+export function writeDashboardPreferences(
+  value: DashboardPreferences,
+  ccsDir = getCcsDir()
+): DashboardPreferences {
+  const documents = preparePreferencesDocuments(value);
+  return withTsPrivateFileLeases(ccsDir, PREFERENCES_STORE_IDS, () =>
+    persistPreferences(documents, ccsDir)
+  );
+}
+
 /** Both files use the same owner-only, fsynced atomic replacement. */
-function writePreferencesFile(name: string, value: unknown, ccsDir: string): void {
+function writePreferencesFile(name: string, contents: string, ccsDir: string): void {
   const file = path.join(ccsDir, name);
   assertTsWritesFile(file, ccsDir);
   const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;
   let fd: number | undefined;
   try {
     fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, `${JSON.stringify(value)}\n`);
+    fs.writeFileSync(fd, contents);
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = undefined;
@@ -491,22 +627,80 @@ export function withDashboardPreferencesLock<T>(
   return withPrivateFileLock(path.join(ccsDir, PREFERENCES_FILE), task);
 }
 
+export function applyDashboardPreferencesPatch(
+  patch: DashboardPreferencesPatch,
+  ccsDir = getCcsDir()
+): DashboardPreferences {
+  return patchedPreferences(readDashboardPreferences(ccsDir), patch);
+}
+
+function patchedPreferences(
+  current: DashboardPreferences,
+  patch: DashboardPreferencesPatch
+): DashboardPreferences {
+  if (patch.timeZone !== undefined) current.timeZone = patch.timeZone;
+  if (patch.snapshotCleanup !== undefined) current.snapshotCleanup = patch.snapshotCleanup;
+  if (patch.removeUsageLogSource !== undefined)
+    current.usageLogSources = current.usageLogSources.filter(
+      (source) => source.id !== patch.removeUsageLogSource
+    );
+  if (patch.addUsageLogSource !== undefined) current.usageLogSources.push(patch.addUsageLogSource);
+  return current;
+}
+
+function preferencesSnapshot(ccsDir: string): PreferencesSnapshot | undefined {
+  try {
+    if (readPendingPreferences(ccsDir)) return undefined;
+    const read = (name: string) => {
+      try {
+        return readPreferencesBytes(path.join(ccsDir, name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    };
+    return [read(PREFERENCES_FILE), read(EXTRA_SOURCES_FILE)];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Prepare the TS-validated documents. Rust checks the PATCH revision under its writer leases. */
+export function prepareRustPreferenceWrite(
+  body: DashboardPreferences | DashboardPreferencesPatch,
+  patch: boolean,
+  ccsDir: string
+): PreferencesMutation | undefined {
+  if (!patch) {
+    const documents = preparePreferencesDocuments(body as DashboardPreferences);
+    return readDocuments(documents) ? { ...documents, previous: null } : undefined;
+  }
+  const snapshot = preferencesSnapshot(ccsDir);
+  if (!snapshot) return undefined;
+  const documents = preparePreferencesDocuments(
+    patchedPreferences(
+      readMaterializedPreferences(ccsDir, snapshot),
+      body as DashboardPreferencesPatch
+    )
+  );
+  const version = (bytes: Buffer | null) =>
+    bytes === null ? null : createHash('sha256').update(bytes).digest('hex');
+  return readDocuments(documents)
+    ? { ...documents, previous: [version(snapshot[0]), version(snapshot[1])] }
+    : undefined;
+}
+
 export function patchDashboardPreferences(
   patch: DashboardPreferencesPatch,
   ccsDir = getCcsDir()
 ): Promise<DashboardPreferences> {
   if (!isDashboardPreferencesPatch(patch))
     throw new ConfigError('Invalid dashboard preferences patch');
-  return withDashboardPreferencesLock(async () => {
-    const current = readDashboardPreferences(ccsDir);
-    if (patch.timeZone !== undefined) current.timeZone = patch.timeZone;
-    if (patch.snapshotCleanup !== undefined) current.snapshotCleanup = patch.snapshotCleanup;
-    if (patch.removeUsageLogSource !== undefined)
-      current.usageLogSources = current.usageLogSources.filter(
-        (source) => source.id !== patch.removeUsageLogSource
-      );
-    if (patch.addUsageLogSource !== undefined)
-      current.usageLogSources.push(patch.addUsageLogSource);
-    return writeDashboardPreferences(current, ccsDir);
-  }, ccsDir);
+  return withDashboardPreferencesLock(
+    async () =>
+      withTsPrivateFileLeases(ccsDir, PREFERENCES_STORE_IDS, () =>
+        writeDashboardPreferences(applyDashboardPreferencesPatch(patch, ccsDir), ccsDir)
+      ),
+    ccsDir
+  );
 }

@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
-import { assertTsWritesFile } from '../../shared/private-files';
+import { assertTsWritesFile, withTsPrivateFileLeases } from '../../shared/private-files';
 
 export interface AnalyticsCaptureSettings {
   cwd: boolean;
@@ -33,10 +33,12 @@ export function writeAnalyticsCaptureSettings(
 ): void {
   const file = path.join(ccsDir, ANALYTICS_CAPTURE_FILE);
   assertTsWritesFile(file, ccsDir);
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(temporary, `${JSON.stringify({ cwd: settings.cwd === true })}\n`, {
-    mode: 0o600,
+  return withTsPrivateFileLeases(ccsDir, ['analytics-capture'], () => {
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporary, `${JSON.stringify({ cwd: settings.cwd === true })}\n`, {
+      mode: 0o600,
+    });
+    fs.renameSync(temporary, file);
   });
-  fs.renameSync(temporary, file);
 }

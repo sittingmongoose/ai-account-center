@@ -68,7 +68,7 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
                 res,
                 '/api/accounts/settings',
                 'account-refresh-settings',
-                input,
+                () => input,
                 (value): value is AccountRefreshSettings =>
                   isAccountRefreshSettings(value) &&
                   value.refreshIntervalSeconds === input.refreshIntervalSeconds,

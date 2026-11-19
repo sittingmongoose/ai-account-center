@@ -18,6 +18,8 @@ mod json_object;
 #[cfg(unix)]
 mod limits;
 #[cfg(unix)]
+mod preferences_write;
+#[cfg(unix)]
 mod profile_reads;
 #[cfg(unix)]
 mod read_files;

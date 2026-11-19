@@ -193,7 +193,7 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
             res,
             '/api/accounts/analytics/capture',
             'analytics-capture',
-            { cwd },
+            () => ({ cwd }),
             (value): value is AnalyticsCaptureSettings =>
               !!value &&
               typeof value === 'object' &&
