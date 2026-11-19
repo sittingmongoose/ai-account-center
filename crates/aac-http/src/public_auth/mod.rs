@@ -12,10 +12,6 @@ mod native_reads;
 mod native_settings;
 #[cfg(unix)]
 mod native_group;
-// Merged before its first registering group: the host is exercised by the groups that land
-// on top of it (W-status-home first), so its API is not dead in the composed cut.
-#[cfg(unix)]
-#[allow(dead_code)]
 mod owner_host;
 mod policy;
 mod request_log;
@@ -419,29 +415,35 @@ pub(crate) async fn run_public_at(
         )
     };
     let hub = HubCache::default();
+    let composed = backend.is_some();
+    // The one owner host: it starts this boot's public owners (the same `NativeOwners` the cut
+    // used) and, on Unix, reaches the private service for the service-owned groups. Windows
+    // hosts the widened owners in-process.
+    let owner_host =
+        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let (native, native_jobs) = if let Some(groups) = groups {
-        let (native, jobs) = native_owners::NativeOwners::start(
-            root.clone(),
-            groups,
-            hub.clone(),
-            auth.events(),
-            snapshot
-                .as_deref()
-                .and_then(std::path::Path::parent)
-                .map(std::path::Path::to_owned),
-        )?;
-        (Some(native), Some(jobs))
+        let worker_directory = snapshot
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_owned);
+        if let Some(host) = &owner_host {
+            host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
+            (host.public_owners(), None)
+        } else {
+            let (native, jobs) = native_owners::NativeOwners::start(
+                root.clone(),
+                groups,
+                hub.clone(),
+                auth.events(),
+                worker_directory,
+            )?;
+            (Some(native), Some(jobs))
+        }
     } else {
         (None, None)
     };
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
-    let composed = backend.is_some();
-    // The one owner host: the running service's descriptor, or the same service in-process for
-    // a worker-less cut boot. Every worker-removal group registers with this one host.
-    #[cfg(unix)]
-    let owner_host =
-        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     #[cfg(unix)]
     let group_routes = owner_host
         .as_ref()
@@ -503,7 +505,6 @@ pub(crate) async fn run_public_at(
         println!("aac-http public TLS listening on {address}");
     }
     println!("aac-http public listening on {address}");
-    #[cfg(unix)]
     if let Some(host) = &owner_host {
         let host = host.clone();
         tokio::spawn(async move { host.warm().await });
@@ -562,13 +563,12 @@ pub(crate) async fn run_public_at(
         feed.abort();
         let _ = feed.await;
     }
-    #[cfg(unix)]
+    if let Some(host) = &owner_host {
+        host.stop_public().await;
+    }
     if let Some(jobs) = native_jobs {
         jobs.stop().await;
     }
-    #[cfg(not(unix))]
-    let _ = native_jobs;
-    #[cfg(unix)]
     if let Some(host) = &owner_host {
         host.stop().await;
     }
