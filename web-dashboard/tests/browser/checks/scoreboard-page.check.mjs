@@ -121,6 +121,35 @@ export const tests = {
 		await t.audit('scoreboard unavailable');
 	},
 
+	// No stubs: the real server's Scoreboard over the kit's fixture runs and catalog. R4 (`--set rustOwned=1`): the Rust
+	// service ingested the runs into the hosted store and answered the page's reads itself; off, it served none.
+	async 'scoreboard end to end on the server'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		// The owned ingest is a background pass: the page's first read may come before it lands, so wait for the data.
+		await t.until('the server answers with the fixture runs', async () => {
+			const r = await fetch('/api/scoreboard', { credentials: 'same-origin' });
+			if (!r.ok) return false;
+			const view = await r.json();
+			return Array.isArray(view.uses) && view.uses.length > 0 && (view.history?.runs ?? 0) > 0;
+		}, null, { timeout: 60000 });
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.waitForSelector('.picks');
+		await t.count('.sb-unavail', 0);
+		await t.audit('scoreboard end to end 1440');
+		const bridge = await t.page.evaluate(async () => {
+			const r = await fetch('/api/diag?bridge=1', { credentials: 'same-origin' });
+			return r.ok ? (await r.json()).bridge : null;
+		});
+		const route = bridge?.routes?.['/api/scoreboard'] ?? null;
+		if (t.args.rustOwned) {
+			await t.check('the owned path served the real Scoreboard reads', (route?.served ?? 0) > 0, JSON.stringify(route));
+			// A read racing a new generation answers through today's handler (`stale`); any other reason is a finding.
+			const reasons = [...Object.keys(route?.declined ?? {}), ...Object.keys(route?.unavailable ?? {})];
+			await t.check('no Scoreboard read fell back but for a race', reasons.every((r) => r === 'stale'), reasons.join(', '));
+		} else await t.check('switch off: no Rust Scoreboard read', (route?.served ?? 0) === 0, JSON.stringify(route));
+	},
+
 	async 'scoreboard desktop'(t) {
 		await t.viewport(1440, 900);
 		await openBoard(t);

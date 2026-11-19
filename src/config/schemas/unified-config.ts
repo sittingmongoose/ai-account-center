@@ -63,6 +63,7 @@ export interface UnifiedConfig {
       status?: 'off' | 'on';
       scoreboard?: 'off' | 'on';
       analytics?: 'off' | 'on';
+      'analytics-writers'?: 'off' | 'on';
       collection?: 'off' | 'on';
       writes?: 'off' | 'on';
       'app-updates'?: 'off' | 'on';
