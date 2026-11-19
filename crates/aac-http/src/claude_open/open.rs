@@ -644,6 +644,11 @@ impl ClaudeOpen {
             Some(joined) => Some(joined),
             None => match start_or_join().await {
                 Ok(operation) => operation,
+                // Only the hold of an Open running now is joined; a durable hold keeps 409.
+                Err(OpenErrorKind::HistoryHeld) => match running() {
+                    Some(joined) => Some(joined),
+                    None => return refusal(OpenErrorKind::HistoryHeld),
+                },
                 Err(kind) => return refusal(kind),
             },
         };
