@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ConfigError } from '../errors/error-types';
 
 const binaries = new Map<string, string>();
+const handoffRoots = new Set<string>();
 const writers = new Map<string, { binary: string; committed: () => void }>();
 
 export function registerFileWriter(
@@ -12,6 +13,7 @@ export function registerFileWriter(
   committed: () => void
 ): () => void {
   const writer = { binary: path.resolve(binary), committed };
+  handoffRoots.add(root);
   writers.set(root, writer);
   return () => {
     if (writers.get(root) === writer) writers.delete(root);
@@ -30,11 +32,14 @@ export function commitWithFileLease(
   root: string,
   id: string,
   lease: FileLease,
-  bytes: string
+  bytes: string | Buffer,
+  filename?: string
 ): boolean {
   const writer = writers.get(root);
   if (!writer || lease.descriptor === undefined) return false;
-  const result = spawnSync(writer.binary, ['--registered-write', id, root], {
+  const args = ['--registered-write', id, root];
+  if (filename) args.push(filename);
+  const result = spawnSync(writer.binary, args, {
     input: bytes,
     stdio: ['pipe', 'ignore', lease.descriptor],
     timeout: 5000,
@@ -51,8 +56,22 @@ export function commitWithFileLease(
 }
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
-export function rememberFileLeaseBinary(root: string, binary: string): void {
-  binaries.set(path.resolve(root), path.resolve(binary));
+export function rememberFileLeaseBinary(root: string, binary: string, writesOn = false): void {
+  const realRoot = canonicalLeaseRoot(root);
+  binaries.set(realRoot, path.resolve(binary));
+  if (writesOn) handoffRoots.add(realRoot);
+}
+
+export function canonicalLeaseRoot(root: string): string {
+  try {
+    return fs.realpathSync(root);
+  } catch {
+    return path.resolve(root);
+  }
+}
+
+export function hasFileWriterHandoff(root: string): boolean {
+  return handoffRoots.has(canonicalLeaseRoot(root));
 }
 
 function executable(file: string): boolean {
@@ -69,13 +88,16 @@ function executable(file: string): boolean {
  * on stdin. The kernel keeps the lock with the open file description, including
  * after the helper exits, until this process closes its descriptor.
  */
-export function claimFileLease(root: string, file: string): FileLease {
+export function claimFileLease(root: string, file: string): FileLease;
+export function claimFileLease(root: string, file: string, folder: true): FileLease | null;
+export function claimFileLease(root: string, file: string, folder = false): FileLease | null {
   const binary =
-    binaries.get(path.resolve(root)) ?? process.env.AAC_RUST_SERVICE_BINARY ?? defaultBinary;
+    binaries.get(canonicalLeaseRoot(root)) ?? process.env.AAC_RUST_SERVICE_BINARY ?? defaultBinary;
   const helper = executable(binary) ? binary : undefined;
   const flock =
     process.platform === 'linux' ? ['/usr/bin/flock', '/bin/flock'].find(executable) : undefined;
   if (!helper && !flock) {
+    if (folder) return null;
     // A fresh legacy installation can reserve the lock name by mkdir. Rust's
     // open_lock refuses a directory there. Keep an existing inode for flock
     // readers that might already hold it.
@@ -83,14 +105,16 @@ export function claimFileLease(root: string, file: string): FileLease {
     return { close: () => fs.rmdirSync(file) };
   }
 
-  const { O_RDWR, O_CREAT, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
-  const fd = fs.openSync(file, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o600);
+  const { O_RDONLY, O_RDWR, O_CREAT, O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  const access = folder ? O_RDONLY | O_DIRECTORY : O_RDWR | O_CREAT;
+  const fd = fs.openSync(file, access | O_NOFOLLOW | O_NONBLOCK, 0o600);
   let locked = false;
   try {
     const metadata = fs.fstatSync(fd);
     const current = fs.lstatSync(file);
     if (
-      !metadata.isFile() ||
+      !(folder ? metadata.isDirectory() : metadata.isFile()) ||
+      current.isSymbolicLink() ||
       metadata.ino !== current.ino ||
       metadata.dev !== current.dev ||
       (process.getuid && metadata.uid !== process.getuid()) ||

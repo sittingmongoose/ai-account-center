@@ -233,19 +233,35 @@ impl OwnedStore {
 
     /// Accept a lease descriptor from the front door for a registered private file.
     #[cfg(unix)]
-    fn inherit(root: &Path, row: &registry::Row, lock: File) -> Result<Self, Failure> {
+    fn inherit(
+        root: &Path,
+        row: &registry::Row,
+        name: Option<&str>,
+        lock: File,
+    ) -> Result<Self, Failure> {
         use std::os::unix::fs::MetadataExt;
 
         require_absolute(root)?;
-        let file = path::node::resolve(root, Path::new(&row.file(None)?))?;
-        let mut lock_path = file.as_os_str().to_os_string();
-        lock_path.push(".lock");
-        let lock_path = PathBuf::from(lock_path);
+        let file = path::node::resolve(root, Path::new(&row.file(name)?))?;
+        let lock_path = match row.lease {
+            Lease::File => {
+                let mut lock_path = file.as_os_str().to_os_string();
+                lock_path.push(".lock");
+                PathBuf::from(lock_path)
+            }
+            Lease::Folder => file
+                .parent()
+                .ok_or_else(|| Failure::new(Cause::Refused, "missing store parent"))?
+                .to_path_buf(),
+        };
         require_absolute(&lock_path)?;
         let current = fs::symlink_metadata(lock_path)?;
         let held = lock.metadata()?;
-        if !current.is_file()
-            || !held.is_file()
+        let same_kind = match row.lease {
+            Lease::File => current.is_file() && held.is_file(),
+            Lease::Folder => current.is_dir() && held.is_dir(),
+        };
+        if !same_kind
             || held.uid() != path::uid()
             || held.mode() & 0o077 != 0
             || held.dev() != current.dev()

@@ -35,7 +35,10 @@ fn file_lease() -> i32 {
         return 74;
     };
     let file = File::from(fd);
-    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+    if !file
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir())
+    {
         return 74;
     }
     match file.try_lock() {

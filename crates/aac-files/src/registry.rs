@@ -171,19 +171,24 @@ fn id_word(id: &str) -> bool {
 
 /// Use a cooperating front door's open-file-description lock for a delegated write.
 #[cfg(unix)]
-pub fn inherit_writer(id: &str, root: &Path, lock: std::fs::File) -> Result<OwnedStore, Failure> {
+pub fn inherit_writer(
+    id: &str,
+    root: &Path,
+    name: Option<&str>,
+    lock: std::fs::File,
+) -> Result<OwnedStore, Failure> {
     let row = row(id)?;
-    if row.root != Root::Ccs
-        || row.parents != Parents::Private
-        || row.lease != Lease::File
-        || row.moves_with.as_deref() != Some("writes")
-    {
+    let supports_inherit = matches!(
+        (row.parents, row.lease),
+        (Parents::Private, Lease::File) | (Parents::Reference, Lease::Folder)
+    );
+    if row.root != Root::Ccs || !supports_inherit || row.moves_with.as_deref() != Some("writes") {
         return Err(Failure::new(
             Cause::Refused,
             "store cannot inherit a writer lease",
         ));
     }
-    OwnedStore::inherit(root, row, lock)
+    OwnedStore::inherit(root, row, name, lock)
 }
 
 /// Parse and check a registry document: the same rules TS applies.

@@ -36,10 +36,10 @@ for (const mode of modes) {
     await store.delete('zai', 'aabbccdd');
     await store.delete('zai', 'aabbccdd');
     assert.equal(await store.info('zai', 'aabbccdd'), null);
-    assert.equal(nativeWrites, mode === 'on' ? 3 : 0);
+    assert.equal(nativeWrites, mode === 'on' ? 4 : 0);
     stop();
     await put();
-    assert.equal(nativeWrites, mode === 'on' ? 3 : 0);
+    assert.equal(nativeWrites, mode === 'on' ? 4 : 0);
   } finally {
     stop();
     settlePrivateFileOwners(() => false);

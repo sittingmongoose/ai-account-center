@@ -9,6 +9,13 @@ import { isSafeUsageSshAlias } from './dashboard-hosts';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import { collectAgentWithFallback, runKeyStoreAgent } from './agent-verbs';
 import { assertTsWritesRow } from '../../shared/private-files';
+import {
+  canonicalLeaseRoot,
+  claimFileLease,
+  commitWithFileLease,
+  hasFileWriterHandoff,
+} from '../../shared/private-file-lease';
+import { withPrivateFileLock } from './private-json-store';
 
 /**
  * The AAC-owned API-key store (CONTRACT-registry-lifecycle section 3.2).
@@ -17,8 +24,8 @@ import { assertTsWritesRow } from '../../shared/private-files';
  *   in a 0700 folder. The record is `{version:1, provider, keyId, secret,
  *   fingerprint, last4, createdAt}`, the format `plan_common.aac_key_credential`
  *   reads (scripts/account-usage/README.md, "Key file format").
- * - The dashboard host (Ubuntu) writes its own keys in-process: no child
- *   process, so the secret is never in any argv or environment.
+ * - The dashboard host keeps the existing key folder lease through a local
+ *   write. The native writer receives the private record only on stdin.
  * - Another host is written through the fixed helper `key_store.py
  *   put|delete --provider <id> --key-id <hex>` over ssh, with the secret on
  *   stdin only; the helper prints only `{"ok":true,"fingerprint","last4"}`.
@@ -84,7 +91,10 @@ export class LocalKeyStore implements KeyStoreBackend {
   readonly platform: DashboardPlatform;
   private readonly directory: string;
 
-  constructor(ccsDir: string, platform: DashboardPlatform = 'ubuntu') {
+  constructor(
+    private readonly ccsDir: string,
+    platform: DashboardPlatform = 'ubuntu'
+  ) {
     this.directory = path.join(ccsDir, 'account-usage', 'keys');
     this.platform = platform;
   }
@@ -94,8 +104,8 @@ export class LocalKeyStore implements KeyStoreBackend {
   }
 
   /** The folder is created at 0700, never a link, and tightened to 0700 if it was looser. */
-  private async ensureDirectory(): Promise<void> {
-    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
+  private async ensureDirectory(create: boolean): Promise<void> {
+    if (create) await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     const stat = await fs.lstat(this.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new KeyStoreError();
     const uid = process.getuid?.();
@@ -105,11 +115,46 @@ export class LocalKeyStore implements KeyStoreBackend {
     }
   }
 
+  private async mutate(
+    target: string,
+    contents: string | null,
+    legacy: () => Promise<void>
+  ): Promise<void> {
+    const root = canonicalLeaseRoot(this.ccsDir);
+    const handoff = hasFileWriterHandoff(root);
+    if (!handoff) assertTsWritesRow('account-keys');
+    await withPrivateFileLock(this.directory, async () => {
+      try {
+        await this.ensureDirectory(contents !== null);
+      } catch (error) {
+        if (contents === null && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw error;
+      }
+      const lease =
+        process.platform === 'win32' ? null : claimFileLease(root, this.directory, true);
+      try {
+        if (
+          lease &&
+          commitWithFileLease(
+            root,
+            'account-keys',
+            lease,
+            contents ?? 'null',
+            path.basename(target)
+          )
+        )
+          return;
+        if (!lease && handoff) throw new KeyStoreError();
+        await legacy();
+      } finally {
+        lease?.close();
+      }
+    });
+  }
+
   async put(provider: KeyProvider, keyId: string, secret: string): Promise<StoredKeyInfo> {
     checkIds(provider, keyId);
     if (!API_KEY_PATTERN.test(secret)) throw new KeyStoreError();
-    assertTsWritesRow('account-keys');
-    await this.ensureDirectory();
     const info = { fingerprint: keyFingerprint(secret), last4: keyLast4(secret) };
     const record = {
       version: 1,
@@ -120,37 +165,40 @@ export class LocalKeyStore implements KeyStoreBackend {
       createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     };
     const target = this.file(provider, keyId);
-    const temporary = path.join(this.directory, `.${provider}-${keyId}.${newKeyId()}.tmp`);
-    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-    try {
-      handle = await fs.open(temporary, 'wx', 0o600);
-      await handle.writeFile(`${JSON.stringify(record)}\n`, 'utf8');
-      await handle.chmod(0o600);
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await fs.rename(temporary, target);
-    } catch {
-      throw new KeyStoreError();
-    } finally {
-      await handle?.close().catch(() => undefined);
-      await fs.rm(temporary, { force: true }).catch(() => undefined);
-    }
+    const bytes = `${JSON.stringify(record)}\n`;
+    await this.mutate(target, bytes, async () => {
+      const temporary = `${target}.${newKeyId()}.tmp`;
+      const handle = await fs.open(temporary, 'wx', 0o600);
+      try {
+        await handle.writeFile(bytes, 'utf8');
+        await handle.chmod(0o600);
+        await handle.sync();
+        await handle.close();
+        await fs.rename(temporary, target);
+      } catch {
+        throw new KeyStoreError();
+      } finally {
+        await handle.close().catch(() => undefined);
+        await fs.rm(temporary, { force: true }).catch(() => undefined);
+      }
+    });
     return { ...info, storedOn: this.platform };
   }
 
   async delete(provider: KeyProvider, keyId: string): Promise<void> {
     checkIds(provider, keyId);
-    assertTsWritesRow('account-keys');
-    try {
-      const stat = await fs.lstat(this.file(provider, keyId));
-      if (!stat.isFile() && !stat.isSymbolicLink()) throw new KeyStoreError();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw new KeyStoreError();
-    }
-    await fs.rm(this.file(provider, keyId), { force: true }).catch(() => {
-      throw new KeyStoreError();
+    const target = this.file(provider, keyId);
+    await this.mutate(target, null, async () => {
+      try {
+        const stat = await fs.lstat(target);
+        if (!stat.isFile() && !stat.isSymbolicLink()) throw new KeyStoreError();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw new KeyStoreError();
+      }
+      await fs.rm(target, { force: true }).catch(() => {
+        throw new KeyStoreError();
+      });
     });
   }
 

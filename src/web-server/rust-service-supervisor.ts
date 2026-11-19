@@ -132,7 +132,7 @@ export class RustSupervisor {
     binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
   ): Promise<void> {
     if (this.stopped) return;
-    rememberFileLeaseBinary(getCcsDir(), binary);
+    rememberFileLeaseBinary(getCcsDir(), binary, this.writesOn);
     if (this.mode === 'off') {
       let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
       if (transport === undefined) {

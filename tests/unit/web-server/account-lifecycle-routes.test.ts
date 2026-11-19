@@ -522,7 +522,7 @@ it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
       fs.readFileSync(path.join(ccsDir, 'accounts/claude-pending.json'), 'utf8')
     );
     expect(pending.profiles.map((value: { id: string }) => value.id)).toContain('work2');
-    expect(f.rustService?.registeredWrites).toBe(writeParityMode === 'on' ? 4 : 0);
+    expect(f.rustService?.registeredWrites).toBe(writeParityMode === 'on' ? 6 : 0);
     const prepare = await f.request('POST', '/claude:party/remove', {});
     const removeToken = (prepare.body.confirmation as { token: string }).token;
     const moved = await f.request('POST', '/claude:party/remove', {
@@ -540,7 +540,7 @@ it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
     });
     expect(restored.body).toEqual({ restored: true, accountId: 'claude:party' });
     const writes = f.rustService?.registeredWrites ?? 0;
-    if (writeParityMode === 'on') expect(writes).toBeGreaterThan(4);
+    if (writeParityMode === 'on') expect(writes).toBeGreaterThan(6);
     else expect(writes).toBe(0);
     f.rustService?.stop();
     expect((await f.request('PATCH', '/zai:usage', { label: 'Fallback' })).status).toBe(200);
