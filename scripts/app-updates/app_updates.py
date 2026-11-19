@@ -545,6 +545,32 @@ def muse_catalog_fresh(platform, started_at):
         return False
 
 
+# Muse's warm session can meet a used-up subscription quota (HTTP 429 underneath):
+# the CLI answers with its fixed sentence, naming the quota and, when it knows one,
+# the usage window's reset time. That answer means Muse itself is fine, so it is
+# classified from its words, in memory, and the reset time is Muse's own, passed on
+# verbatim and never computed or invented.
+MUSE_QUOTA_MARKER = "subscription quota exhausted"
+MUSE_QUOTA_RESET_AT = re.compile(r"usage window resets at[ \t]+([^\r\n]+)", re.IGNORECASE)
+MUSE_QUOTA_RESET_MAX = 64
+
+
+def muse_quota_reset(output):
+    """(quota, reset) from a warm failure's text.
+
+    quota is True only when the text is Muse's used-up-subscription answer; reset
+    is the reset time Muse itself printed, or None when it printed none (or one
+    too long to pass on verbatim, which is dropped rather than truncated).
+    """
+    if not isinstance(output, str) or MUSE_QUOTA_MARKER not in output.lower():
+        return False, None
+    match = MUSE_QUOTA_RESET_AT.search(output)
+    reset = match.group(1).strip() if match else None
+    if reset is not None and (not reset or len(reset) > MUSE_QUOTA_RESET_MAX):
+        return True, None
+    return True, reset
+
+
 def muse_warm_catalog(refreshed, deadline, started_at):
     """Refresh the new binary's model catalog with one headless session; True when fresh after.
 
@@ -598,6 +624,12 @@ def muse_warm_catalog(refreshed, deadline, started_at):
     except UpdateFailure as error:
         if error.code.startswith("mac_"):
             raise
+        quota, reset = muse_quota_reset(error.output)
+        if quota:
+            # Muse is installed and signed in; only its quota is used up. The
+            # caller reports the update (or the healed current) with the quota
+            # note instead of a failed catalog warm.
+            raise UpdateFailure("muse_quota_exhausted", quota_reset=reset) from None
         return False
     return muse_catalog_fresh(refreshed.platform, started_at)
 
@@ -776,6 +808,7 @@ def update_cli(install, deadline):
         needs_restart = marker_version == refreshed.version and marker_version != before
         catalog_ok = True
         catalog_code = "model_catalog_unrefreshed"
+        catalog_reset = None
         if install.app_id == "muse-code" and refreshed.version != before:
             # Changed binary: never warm while the launcher's own updater holds
             # the lock; the gate below then refuses to claim "updated".
@@ -785,7 +818,7 @@ def update_cli(install, deadline):
                 try:
                     catalog_ok = muse_warm_catalog(refreshed, deadline, install_started)
                 except UpdateFailure as error:
-                    catalog_ok, catalog_code = False, error.code
+                    catalog_ok, catalog_code, catalog_reset = False, error.code, error.quota_reset
         if refreshed.version == before and not needs_restart:
             if install.app_id == "muse-code" and muse_update_busy(install.path.parent):
                 # The launcher's own updater holds the lock, so Meta's installer
@@ -807,8 +840,21 @@ def update_cli(install, deadline):
             if install.app_id == "muse-code" and not muse_catalog_fresh(install.platform, install_started):
                 # Same version, stale or absent catalog: a previously unwarmed
                 # update heals here, without Claiming an update that never
-                # happened. A failed warm surfaces honestly, never as "current".
-                if not muse_warm_catalog(refreshed, deadline, install_started):
+                # happened. A failed warm surfaces honestly, never as "current";
+                # Muse's used-up quota is the one exception, because the binary
+                # is current and the catalog returns with Muse's next session.
+                try:
+                    warmed = muse_warm_catalog(refreshed, deadline, install_started)
+                except UpdateFailure as error:
+                    if error.code != "muse_quota_exhausted":
+                        raise
+                    # The quota note on this path says current, never "updated":
+                    # no version changed here, only the catalog waits for the quota.
+                    healed = result(install.app_id, install.platform, "current", before, before, install.manager, "muse_quota_current", attempted=True)
+                    if error.quota_reset is not None:
+                        healed["quotaReset"] = error.quota_reset
+                    return outcome(healed)
+                if not warmed:
                     raise UpdateFailure("model_catalog_unrefreshed")
             if marker_version == before:
                 # Stale pre-stop bookkeeping from an earlier run. Dropping it
@@ -833,6 +879,15 @@ def update_cli(install, deadline):
         value.update(restartTargets=sessions, forcedStops=forced)
         pending.unlink(missing_ok=True)
         if not catalog_ok:
+            if catalog_code == "muse_quota_exhausted":
+                # Muse itself updated and its sessions restarted; only the warm
+                # met a used-up subscription quota. The row stays updated and
+                # says so, with the reset time Muse printed (when it printed
+                # one), so the job never fails for an install that worked.
+                value["messageCode"] = catalog_code
+                if catalog_reset is not None:
+                    value["quotaReset"] = catalog_reset
+                return outcome(value)
             # The binary changed but the warm session did not refresh the
             # catalog: say so, never "updated". Sessions above were still
             # restarted; keep their counts and targets and let the next click

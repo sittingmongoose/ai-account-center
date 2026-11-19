@@ -476,7 +476,17 @@ the row reports `restart_failed` with `model_catalog_unrefreshed` (the sessions 
 restarted, the next click heals the catalog). An unchanged version with a stale or absent
 catalog still warms, so a previously unwarmed update heals on the next click and stays
 `current`; a failed warm there reports `failed` with `model_catalog_unrefreshed` instead of a
-clean `current`.
+clean `current`. One warm failure is not a failure at all: when Muse answers the session with its
+used-up-subscription sentence ("Subscription quota exhausted", HTTP 429 underneath, and "Your
+usage window resets at <time>" when it knows one), Muse itself is installed and signed in, only its
+quota is spent. The helper classifies that answer from the run's words in memory, and the row stays
+`updated` (or `current` on the heal path, where no version changed) with `muse_quota_exhausted` /
+`muse_quota_current` — words like "Updated Muse. Its quota is used up until <time>, so the new
+models appear after its next session" — so the job never ends `failed` for it. The reset time is
+Muse's own, carried verbatim in the row's `quotaReset` (one line, at most 64 characters; dropped,
+never truncated or invented, when Muse printed none or a longer one), and the classification reads
+only the answer's fixed words: every other warm failure, sign-in problems included, keeps
+`model_catalog_unrefreshed` and its "Check Muse sign-in" wording.
 
 ### Live verification after deployment
 

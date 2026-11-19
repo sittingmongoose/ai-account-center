@@ -550,6 +550,83 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     expect(job.results).toEqual([pending, stale]);
   });
 
+  it('reports a Muse quota answer as updated or current, never a failed job', () => {
+    const row = (
+      messageCode: string,
+      status: string,
+      quotaReset?: string,
+      appId: UpdateAppId = 'muse-code'
+    ) =>
+      normalizeAppUpdateRow(
+        {
+          appId,
+          status,
+          messageCode,
+          previousVersion: '1.4.2',
+          version: status === 'updated' ? '1.5.0' : '1.4.2',
+          manager: 'native',
+          updateAttempted: true,
+          restartedProcesses: 0,
+          ...(quotaReset === undefined ? {} : { quotaReset }),
+        },
+        appId,
+        'ubuntu'
+      );
+    // The binary moved but Muse's quota is used up: still an update, with the
+    // reset time Muse itself printed, and a status that never fails the job.
+    const withReset = row('muse_quota_exhausted', 'updated', '2026-11-20 05:00 UTC');
+    expect(withReset).toMatchObject({
+      status: 'updated',
+      version: '1.5.0',
+      quotaReset: '2026-11-20 05:00 UTC',
+    });
+    expect(withReset.message).toBe(
+      'Updated Muse. Its quota is used up until 2026-11-20 05:00 UTC, so the new models appear after its next session.'
+    );
+    // Muse printed no reset time: the words say so without inventing one.
+    const withoutReset = row('muse_quota_exhausted', 'updated');
+    expect(withoutReset.message).toBe(MESSAGES.muse_quota_exhausted);
+    expect(withoutReset.message).not.toContain('until');
+    expect(withoutReset.quotaReset).toBeUndefined();
+    // The heal path on the next click: the version never changed, so the quota
+    // note rides a current row, never an "updated" one.
+    const healed = row('muse_quota_current', 'current', '2026-11-20 05:00 UTC');
+    expect(healed).toMatchObject({ status: 'current', quotaReset: '2026-11-20 05:00 UTC' });
+    expect(healed.message).toBe(
+      'Muse is current. Its quota is used up until 2026-11-20 05:00 UTC, so the new models appear after its next session.'
+    );
+    // Only those two shapes: a quota code anywhere else, or a reset time on a
+    // row that cannot carry one, reads helper_invalid.
+    for (const status of ['current', 'failed', 'restart_failed', 'not_installed', 'skipped'])
+      expect(row('muse_quota_exhausted', status).message).toBe(MESSAGES.helper_invalid);
+    for (const status of ['updated', 'failed', 'restart_failed'])
+      expect(row('muse_quota_current', status).message).toBe(MESSAGES.helper_invalid);
+    for (const appId of ['claude-code', 'codex-cli', 'omp'] as const) {
+      expect(row('muse_quota_exhausted', 'updated', '2026-11-20 05:00 UTC', appId).message).toBe(
+        MESSAGES.helper_invalid
+      );
+      expect(row('muse_quota_current', 'current', undefined, appId).message).toBe(
+        MESSAGES.helper_invalid
+      );
+    }
+    expect(row('model_catalog_unrefreshed', 'restart_failed', '2026-11-20 05:00 UTC').message).toBe(
+      MESSAGES.helper_invalid
+    );
+    expect(row('muse_quota_exhausted', 'updated', 'x'.repeat(65)).message).toBe(
+      MESSAGES.helper_invalid
+    );
+    expect(row('muse_quota_exhausted', 'updated', '5 pm\nquota').message).toBe(
+      MESSAGES.helper_invalid
+    );
+    // A saved quota row restores as itself: its reset time is part of its words.
+    const root = directory();
+    saveJob(root, { results: [withReset, healed], expectedResults: 40 });
+    const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
+      .job!;
+    expect(job.results).toEqual([withReset, healed]);
+    expect(job.state).toBe('completed');
+  });
+
   it('limits forced-session messages to Windows Codex and truthful outcomes', () => {
     const row = (messageCode: string, status: string, appId: UpdateAppId = 'codex-cli') => ({
       appId,
