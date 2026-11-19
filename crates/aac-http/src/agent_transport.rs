@@ -118,17 +118,28 @@ fn unavailable(id: &str, reason: &str) -> Response {
     response(Body::from(fallback(id, reason)))
 }
 
+/// Resolve the installed package from the trusted boot override or the packaged binary.
+pub(crate) fn package_root() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("AAC_AGENT_PACKAGE_ROOT") {
+        let root = PathBuf::from(root);
+        return root.is_absolute().then_some(root);
+    }
+    let exe = std::env::current_exe().ok()?;
+    let native = exe.parent()?;
+    let dist = native.parent()?;
+    if native.file_name()? != "native" || dist.file_name()? != "dist" {
+        return None;
+    }
+    Some(dist.parent()?.to_owned())
+}
+
 impl Registry {
     fn load(root: &Path) -> Result<Self, Failure> {
         // No real-home discovery. The package paths are supplied by the trusted front door.
         if std::env::var("AAC_AGENT_TRANSPORT").is_ok_and(|v| v != "on") {
             return Err(refused());
         }
-        let package =
-            PathBuf::from(std::env::var_os("AAC_AGENT_PACKAGE_ROOT").ok_or_else(refused)?);
-        if !package.is_absolute() {
-            return Err(refused());
-        }
+        let package = package_root().ok_or_else(refused)?;
         let mut options = LoadOptions::new(
             root.into(),
             package.join("web-dashboard/public/computers.json"),

@@ -172,7 +172,7 @@
   "src/web-server/services/codex-profile-quota-service.ts": "a9c2e826fa3d60e96fd034e43563419ad6d04c6a485023df8a1c0170bea18598",
   "src/web-server/services/codex-profile-renewal-service.ts": "354202c515a891a9e001a54a732a3d9f00fbc01907529f07143fa22898317720",
   "src/web-server/services/codex-renewal-notes.ts": "c0039ea4c6d4e6b459b82cc11127f83a1c1c4a562cdff1d7cdd08cf02db99623",
-  "src/web-server/services/cursor-account-reader.ts": "8d0edd449c125e9d10dbe587a9f3804131534f5c28cd0951a5e4284ad741da68",
+  "src/web-server/services/cursor-account-reader.ts": "2d350519ead7117e6b7451c863bf5e14326fc816bda05755bb2095b89258d4f0",
   "src/web-server/services/dashboard-auth-files.ts": "e51edc6b07b481a364220a4dad74d12476920657c187fa2cfbeba2f39f7da794",
   "src/web-server/services/dashboard-auth-state.ts": "3c0ba2b6e580cd52116dfb0e7cb0d31fc6edb3f8d6cd6cc067456a48f4b0c131",
   "src/web-server/services/dashboard-device-records.ts": "97d3e89758420fac79ba42b45d260f830792b85be1ff8ca535532dd5cccc42ee",
