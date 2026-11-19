@@ -175,6 +175,22 @@ impl OwnerHost {
     async fn start_embedded(&self) -> Option<Embedded> {
         let config = self.boot_config()?;
         let socket = PathBuf::from(config.get("socketPath")?.as_str()?);
+        // The supervisor creates the private run folders before it spawns the service; a
+        // worker-less boot owns that step here. The link checks both folders at 0700.
+        let parent = socket.parent()?;
+        std::fs::create_dir_all(parent).ok()?;
+        std::fs::set_permissions(
+            parent,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+        )
+        .ok()?;
+        if let Some(run) = parent.parent() {
+            std::fs::set_permissions(
+                run,
+                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+            )
+            .ok()?;
+        }
         let ccs = PathBuf::from(config.get("ccsDir")?.as_str()?);
         let secret = config.get("secret")?.as_str()?.to_owned();
         let boot_id = config.get("bootId")?.as_str()?.to_owned();
