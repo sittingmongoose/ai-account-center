@@ -329,6 +329,12 @@ export function registerRustAgentConnection(
   return () => agentConnections.delete(key);
 }
 
+/** Whether a live service connection is registered for this root (the M4c adapter's gate). */
+export function rustAgentConnected(root: string): boolean {
+  const scope = canonicalRoot(root);
+  return [...agentConnections.values()].some((entry) => entry.root === scope);
+}
+
 /**
  * POST is never retried: key-store may write. Undefined means an absent/old service, so the
  * labelled TS transport can run. Null means a handled refusal/failure and goes to the helper.
@@ -448,6 +454,70 @@ export async function requestRustAgent(
     });
     request.end(bytes);
   });
+}
+
+/**
+ * M4c: one interactive control frame for a running agent call (`{"input":"..."}` or
+ * `{"cancel":true}`). Input acknowledgement means queued; cancel acknowledgement is true
+ * only after the agent's cancelled terminal frame and the child exit. Null when the
+ * service is absent or the call is unknown; the caller keeps its labelled fallback.
+ */
+export async function controlRustAgent(
+  root: string,
+  callId: string,
+  frame: { input: string } | { cancel: true }
+): Promise<{ accepted?: boolean; cancelled?: boolean } | null | undefined> {
+  const scope = canonicalRoot(root);
+  const held = [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
+  if (!held) return undefined;
+  const bytes = JSON.stringify(frame);
+  if (Buffer.byteLength(bytes) > 65536) return null;
+  const { promise, resolve } = Promise.withResolvers<{
+    accepted?: boolean;
+    cancelled?: boolean;
+  } | null>();
+  const request = http.request({
+    socketPath: held.connection.socketPath,
+    path: `/internal/agent/${encodeURIComponent(callId)}/control`,
+    method: 'POST',
+    agent: held.connection.agent ?? false,
+    headers: {
+      'x-aac-boot-secret': held.connection.secret,
+      'x-aac-principal': JSON.stringify(FRONT_DOOR_PRINCIPAL),
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(bytes),
+    },
+  });
+  held.active.add(request);
+  const timer = setTimeout(() => request.destroy(new Error('control deadline')), 2_500);
+  request.once('close', () => {
+    clearTimeout(timer);
+    held.active.delete(request);
+  });
+  request.once('error', () => resolve(null));
+  request.once('response', (response) => {
+    if (response.statusCode !== 200) {
+      response.resume();
+      resolve(response.statusCode === 404 || response.statusCode === 405 ? undefined : null);
+      return;
+    }
+    let body = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk: string) => {
+      body += chunk;
+      if (Buffer.byteLength(body) > 4096) request.destroy();
+    });
+    response.once('end', () => {
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        resolve(null);
+      }
+    });
+    response.once('error', () => resolve(null));
+  });
+  request.end(bytes);
+  return promise;
 }
 
 /**

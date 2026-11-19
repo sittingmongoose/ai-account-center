@@ -17,6 +17,7 @@ import { MuseAccountLifecycle, museSignInEnabled } from './muse-account-lifecycl
 import type { ProviderRegistryFacts } from './dashboard-provider-registry';
 import type { DashboardSignInUnavailableReason } from './account-dashboard-types';
 import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './signin-jobs';
+import { AgentSignInJobRunner } from './signin-session-agent';
 
 /**
  * The lifecycle runtime: one sign-in job runner, the Codex and Claude flows,
@@ -110,7 +111,7 @@ let muse: MuseAccountLifecycle | null = null;
 export function createSignInJobRunner(
   deps: Omit<SignInJobRunnerDeps, 'onChange' | 'onFinish'> = {}
 ): SignInJobRunner {
-  return new SignInJobRunner({
+  return new AgentSignInJobRunner({
     ...deps,
     onChange: (job: SignInJob) => {
       broadcastDashboardEvent((client) => signInJobEvent(job, client));
