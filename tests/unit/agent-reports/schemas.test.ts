@@ -29,10 +29,18 @@ const ALLOWED_KEYWORDS = new Set([
   'maximum',
   'oneOf',
   'anyOf',
+  // agent-report 1.9 card sections: table width rules (allOf of if/then) and the unknown-type catch-all (not)
+  'allOf',
+  'if',
+  'then',
+  'not',
   'description',
-  // only `"format": "date-time"` (beside a timestamp's pattern; agent-report and AAC both check real calendar dates)
+  // only `"format": "date-time"` beside a timestamp's pattern, or `"format": "date"` beside a day's pattern
+  // (contract v3 day-only deadlines); agent-report and AAC both check real calendar dates
   'format',
 ]);
+
+const ALLOWED_FORMATS = new Set(['date-time', 'date']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -63,8 +71,11 @@ function collectKeywordViolations(node: unknown, path: string, out: string[]): v
     if (!ALLOWED_KEYWORDS.has(key)) {
       out.push(`${path}: unknown keyword "${key}"`);
     }
-    if (key === 'format' && (node[key] !== 'date-time' || typeof node.pattern !== 'string')) {
-      out.push(`${path}: "format" is only "date-time", beside a pattern`);
+    if (
+      key === 'format' &&
+      (!ALLOWED_FORMATS.has(String(node[key])) || typeof node.pattern !== 'string')
+    ) {
+      out.push(`${path}: "format" is only "date-time" or "date", beside a pattern`);
     }
     collectKeywordViolations(node[key], `${path}.${key}`, out);
   }
