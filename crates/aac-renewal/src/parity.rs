@@ -703,6 +703,55 @@ impl FetchScript {
     }
 }
 
+/// Sort the collections whose order the filesystem decides (readdir order
+/// differs across platforms): the files map, source lists, guard hits and
+/// process homes. DTO key order and registry-ordered arrays stay untouched.
+pub fn canonicalize(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = Map::new();
+            for (key, item) in map {
+                let mut item = canonicalize(item);
+                match key.as_str() {
+                    "files" => {
+                        if let Some(obj) = item.as_object() {
+                            let sorted: std::collections::BTreeMap<&String, &Value> =
+                                obj.iter().collect();
+                            let mut sorted_map = Map::new();
+                            for (k, v) in sorted {
+                                sorted_map.insert(k.clone(), v.clone());
+                            }
+                            item = Value::Object(sorted_map);
+                        }
+                    }
+                    "sources" | "sharedWith" | "uncheckable" => {
+                        if let Some(arr) = item.as_array_mut() {
+                            arr.sort_by(|a, b| {
+                                a.get("path")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .cmp(b.get("path").and_then(Value::as_str).unwrap_or(""))
+                            });
+                        }
+                    }
+                    "processHomes" => {
+                        if let Some(arr) = item.as_array_mut() {
+                            arr.sort_by(|a, b| {
+                                a.as_str().unwrap_or("").cmp(b.as_str().unwrap_or(""))
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                out.insert(key.clone(), item);
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
+        other => other.clone(),
+    }
+}
+
 /// Normalize an answer: sandbox paths become `<root>/...` with forward slashes.
 pub fn normalize_answer(value: &Value, root: &Path) -> Value {
     let root_text = root.to_string_lossy().into_owned();
@@ -811,7 +860,6 @@ fn visit_files(dir: &Path, root: &Path, out: &mut Map<String, Value>) {
 pub fn files_map(root: &Path) -> Value {
     let mut out = Map::new();
     visit_files(root, root, &mut out);
-    out.sort_keys();
     Value::Object(out)
 }
 
@@ -1042,7 +1090,7 @@ pub async fn run_case(case: &Case) -> Value {
         }
         other => panic!("unknown case kind {other}"),
     };
-    normalize_answer(&answer, &root)
+    normalize_answer(&canonicalize(&answer), &root)
 }
 
 async fn run_service_case(case: &Case, prepared: &Prepared) -> Value {
@@ -1345,8 +1393,8 @@ pub async fn run_goldens(manifest: &Manifest) -> Vec<(String, bool, String)> {
     let mut results = Vec::new();
     for golden in &manifest.cases {
         let answer = run_case(&golden.case).await;
-        let ok = serde_json::to_string_pretty(&answer).unwrap_or_default()
-            == serde_json::to_string_pretty(&golden.expected).unwrap_or_default();
+        let ok = serde_json::to_string_pretty(&canonicalize(&answer)).unwrap_or_default()
+            == serde_json::to_string_pretty(&canonicalize(&golden.expected)).unwrap_or_default();
         let detail = if ok {
             String::new()
         } else {
