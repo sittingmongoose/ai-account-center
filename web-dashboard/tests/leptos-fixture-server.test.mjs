@@ -138,3 +138,53 @@ test('a bad custom Analytics range answers the product 400, and the server stays
   const ok = await fetch(`${base}/api/accounts/analytics?range=7d`);
   assert.equal(ok.status, 200);
 });
+
+test('an empty range and an invalid zone answer the product 400 codes (lane-c Low 2)', async () => {
+  // range= present but empty is not a preset: the product refuses it, the fixture must not default it.
+  const empty = await fetch(`${base}/api/accounts/analytics?range=`);
+  assert.equal(empty.status, 400);
+  assert.equal((await empty.json()).code, 'invalid_range');
+  for (const query of ['range=7d&tz=not-a-zone', 'range=7d&tz=', 'range=7d&tz=Not/AZone']) {
+    const r = await fetch(`${base}/api/accounts/analytics?${query}`);
+    assert.equal(r.status, 400, query);
+    const body = await r.json();
+    assert.equal(body.code, 'invalid_tz', `${query}: ${JSON.stringify(body)}`);
+    assert.equal(body.error, 'Select a valid IANA time zone.');
+  }
+  const ok = await fetch(`${base}/api/accounts/analytics?range=7d`);
+  assert.equal(ok.status, 200);
+});
+
+test('a custom range honors the requested zone, not only the dashboard zone (lane-c Low 2)', async () => {
+  // 2026-03-08 is New York's spring-forward day; asked for UTC it is a plain 24-hour UTC day.
+  const r = await fetch(
+    `${base}/api/accounts/analytics?range=custom&from=2026-03-08&to=2026-03-08&tz=UTC`
+  );
+  assert.equal(r.status, 200);
+  const view = await r.json();
+  assert.equal(view.range.from, '2026-03-08T00:00:00.000Z');
+  assert.equal(view.range.to, '2026-03-08T23:59:59.000Z');
+  assert.equal(view.range.tz, 'UTC');
+  assert.equal(view.range.dayBucketTz, 'UTC');
+  assert.equal(view.activity.timezone, 'UTC');
+  // A case variant of a listed zone echoes the listed spelling, like the product.
+  const ny = await fetch(
+    `${base}/api/accounts/analytics?range=custom&from=2026-11-01&to=2026-11-01&tz=america/new_york`
+  );
+  assert.equal(ny.status, 200);
+  const nyView = await ny.json();
+  assert.equal(nyView.range.tz, 'America/New_York');
+  assert.equal(nyView.range.from, '2026-11-01T04:00:00.000Z');
+});
+
+test('a custom date whose next day leaves the calendar answers 400, never crashes (lane-c Low 2)', async () => {
+  // 9999-12-31 + 1 day expands the ISO year; the product refuses the range and the fixture must
+  // answer 400 instead of throwing RangeError and disconnecting the client.
+  const r = await fetch(
+    `${base}/api/accounts/analytics?range=custom&from=9999-12-31&to=9999-12-31`
+  );
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).code, 'invalid_range');
+  const ok = await fetch(`${base}/api/accounts/analytics?range=7d`);
+  assert.equal(ok.status, 200);
+});

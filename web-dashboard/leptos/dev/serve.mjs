@@ -77,6 +77,10 @@ const BAD_RANGE = {
     code: 'invalid_range',
   },
 };
+const BAD_TZ = {
+  status: 400,
+  body: { error: 'Select a valid IANA time zone.', code: 'invalid_tz' },
+};
 
 // A real calendar date in `YYYY-MM-DD` form (isCalendarDate in account-analytics-range.ts).
 function isCalendarDate(value) {
@@ -120,16 +124,63 @@ function addCalendarDays(date, days) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
+// A valid IANA zone (isAccountAnalyticsTimeZone in account-analytics-range.ts): UTC, a zone the
+// engine lists, or any name Intl.DateTimeFormat accepts; offset strings and non-zones are refused.
+function isTimeZone(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(value))
+    return false;
+  if (value.length > 64) return false;
+  if (value === 'UTC') return true;
+  try {
+    if (Intl.supportedValuesOf?.('timeZone').includes(value)) return true;
+  } catch {
+    /* the engine may not list zones; the formatter below still decides */
+  }
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The spelling a valid zone is echoed under (canonicalAccountAnalyticsTimeZone): a listed name as
+// sent, a case variant of a listed name in its listed spelling, else the engine's resolved name.
+function canonicalTimeZone(value) {
+  if (value === 'UTC') return 'UTC';
+  let zones = null;
+  try {
+    zones = Intl.supportedValuesOf?.('timeZone') ?? null;
+  } catch {
+    zones = null;
+  }
+  if (zones?.includes(value)) return value;
+  if (zones) {
+    const listed = zones.find((zone) => zone.toLowerCase() === value.toLowerCase());
+    if (listed !== undefined) return listed;
+  }
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
+  } catch {
+    return value;
+  }
+}
+
 function emptyAnalytics(url) {
   const q = url.searchParams;
   const now = Date.now();
-  const preset = q.get('range') || '30d';
+  const preset = q.get('range') ?? '30d';
   const from = q.get('from');
   const to = q.get('to');
   const dayNumber = (date) => Math.round(Date.parse(`${date}T00:00:00Z`) / DAY_MS);
   // The shape checks the product makes before anything else (validateAccountAnalyticsRangeShape); the
   // clock-dependent checks (retention, future days) stay the product's, not a fixture's.
   if (!PRESETS.includes(preset)) return BAD_RANGE;
+  // The zone the request asks for, validated like the product (invalid_tz); absent keeps the
+  // dashboard's zone. Canonicalized so a case variant or alias echoes the engine's spelling.
+  const tzParam = q.get('tz');
+  if (tzParam !== null && !isTimeZone(tzParam)) return BAD_TZ;
+  const tz = tzParam === null ? ANALYTICS_TZ : canonicalTimeZone(tzParam);
   if (preset !== 'custom' && (from !== null || to !== null)) return BAD_RANGE;
   if (
     preset === 'custom' &&
@@ -141,9 +192,12 @@ function emptyAnalytics(url) {
     return BAD_RANGE;
   const span = preset === '24h' ? DAY_MS : preset === '7d' ? 7 * DAY_MS : preset === '90d' ? 90 * DAY_MS : 30 * DAY_MS;
   const custom = preset === 'custom';
-  const rangeFrom = custom ? localMidnight(from, ANALYTICS_TZ) : preset === 'all' ? now : now - span;
-  const rangeTo = custom ? localMidnight(addCalendarDays(to, 1), ANALYTICS_TZ) - 1000 : now;
-  const tz = ANALYTICS_TZ;
+  const rangeFrom = custom ? localMidnight(from, tz) : preset === 'all' ? now : now - span;
+  const rangeTo = custom ? localMidnight(addCalendarDays(to, 1), tz) - 1000 : now;
+  // Guard the date arithmetic before constructing the response: a day whose next-day conversion
+  // leaves the calendar (e.g. 9999-12-31 + 1) yields a non-finite instant; the product refuses such
+  // a range, and the fixture must answer 400, never throw and disconnect the client.
+  if (!Number.isFinite(rangeFrom) || !Number.isFinite(rangeTo)) return BAD_RANGE;
   return {
     status: 200,
     body: {
