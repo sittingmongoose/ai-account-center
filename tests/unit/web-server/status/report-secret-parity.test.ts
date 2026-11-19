@@ -14,7 +14,7 @@ it('exports an independent shared policy and preserves the Status compatibility 
   const shared = await import('../../../../src/shared/secret-policy');
   const status = await import('../../../../src/web-server/status/schema-helpers');
   const policy = shared.loadSecretPolicy();
-  expect(shared.SECRET_POLICY_PATH).toBe('src/shared/secret-policy.json');
+  expect(shared.SECRET_POLICY_PATH).toBe('config/secret-policy.json');
   expect(policy.version).toBe(3);
   policy.patterns.splice(0);
   expect(shared.loadSecretPolicy().patterns.length).toBeGreaterThan(0);

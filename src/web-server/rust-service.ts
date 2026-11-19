@@ -1,7 +1,7 @@
 /** M3 strangler: existing endpoint guards run before any verified principal is constructed. */
 import type { Request, Response } from 'express';
 import { performance } from 'perf_hooks';
-import routes from './rust-service-routes.json';
+import routes from '../../config/rust-service-routes.json';
 import type { RustLease } from './rust-service-lifecycle';
 import {
   canonicalRoot,

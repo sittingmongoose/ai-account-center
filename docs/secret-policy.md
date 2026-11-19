@@ -1,6 +1,6 @@
 # Shared AAC secret policy
 
-The canonical packaged resource is `src/shared/secret-policy.json`. Both shared detectors use this data;
+The canonical packaged resource is `config/secret-policy.json`. Both shared detectors use this data;
 Status has compatibility exports and no private pattern list. The policy retains the reader/native
 union, Basic/Token/Digest forms, URL userinfo (including undotted/internal hosts), and a generic
 `sk-` suffix of **20 or more characters**. Scheme-less `user:password@host[:port]` is also

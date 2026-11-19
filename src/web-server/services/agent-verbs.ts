@@ -11,7 +11,7 @@ import { runManagedCommand } from '../../utils/managed-process';
 import { getCcsDir } from '../../utils/config-manager';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { UsageHost, UsageHelperRequest } from './usage-failover-contract';
-import manifest from './agent-artifacts.json';
+import manifest from '../../../config/agent-artifacts.json';
 import { PROVIDER_ROWS } from '../../shared/tables';
 
 const logger = createLogger('agent-verbs');

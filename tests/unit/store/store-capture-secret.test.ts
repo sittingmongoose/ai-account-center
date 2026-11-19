@@ -145,7 +145,7 @@ it('exposes the compiled shared detector to callers outside Status', () => {
     require('../../../dist/shared/secret-policy.js') as typeof import('../../../src/shared/secret-policy');
   const compatibility =
     require('../../../dist/web-server/status/schema-helpers.js') as typeof import('../../../src/web-server/status/schema-helpers');
-  expect(shared.SECRET_POLICY_PATH).toBe('src/shared/secret-policy.json');
+  expect(shared.SECRET_POLICY_PATH).toBe('config/secret-policy.json');
   expect(shared.loadSecretPolicy().version).toBe(3);
   expect(shared.findSecret('Basic dTpw')).toBe('an authorization credential');
   expect(shared.findSecret('https://svc:pass@localhost/api')).toBe('URL userinfo');

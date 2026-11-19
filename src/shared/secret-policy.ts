@@ -1,8 +1,8 @@
 /** Shared AAC refusal policy. Status keeps compatibility exports; new callers import here. */
-import packagedPolicy from './secret-policy.json';
+import packagedPolicy from '../../config/secret-policy.json';
 import { ValidationError } from '../errors/error-types';
 
-export const SECRET_POLICY_PATH = 'src/shared/secret-policy.json';
+export const SECRET_POLICY_PATH = 'config/secret-policy.json';
 export type SecretPolicy = typeof packagedPolicy;
 
 /** Return an independent copy so consumers cannot mutate the detector's cached rules. */

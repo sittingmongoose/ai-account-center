@@ -20,7 +20,7 @@
 //!
 //! Every key is fixed-width big-endian; values carry a leading version byte. Scanning, the
 //! run@1 projection and normalization are here in Rust. Every text passes the shared secret
-//! policy (src/shared/secret-policy.json) twice: TypeScript's `jsonFromBytes` and `findSecret`
+//! policy (config/secret-policy.json) twice: TypeScript's `jsonFromBytes` and `findSecret`
 //! before `record`, then `record` itself over run documents, file paths and writer folders,
 //! thread keys, documents and the values taken from them, catalog texts, refusal reasons and
 //! the ids and identity of each run. It is the one detector; this module has no thresholds.
