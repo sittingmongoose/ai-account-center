@@ -317,14 +317,15 @@ try {
     await fs.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
   }
-  // Home rows: recorded from the host's own composed answer, like the other groups' rows; the
-  // replay asks the same route with the worker gone. Worker-vs-native bytes are home-read-parity's.
+  // Home rows: recorded in the cutover's end state, no worker directory, because the lifecycle
+  // facts a worker supplies (a provider's sign-in capability) leave with it; the replay asks the
+  // same route in the same state. Worker-vs-native bytes are `home-read-parity`'s.
   if (group === 'store-usage-home') {
     Object.assign(environment, {
       AAC_RUST_CUT_NATIVE_ROUTES: 'on',
       AAC_RUST_GROUP_HOME: 'on',
-      // The worker's Home answer is the service-fed view when the view group is on.
-      AAC_RUST_HOME_VIEW: 'on',
+      // The record is taken through the shipped cut's own boot, without the sidecar.
+      AAC_TS_SIDECAR: 'off',
       AAC_AGENT_VERBS: 'off',
       AAC_AGENT_TRANSPORT: 'off',
     });
