@@ -96,3 +96,26 @@ fn the_rust_signer_matches_the_typescript_signer_case_for_case() {
         assert_eq!(held.err().as_deref(), Some(refusal.reason.as_str()), "{}", refusal.name);
     }
 }
+
+#[test]
+fn new_answer_keys_use_v1_and_existing_v2_keys_keep_their_identity() {
+    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey, PrivateKeyInfo};
+    use pkcs8::Version;
+    use pem_rfc7468::LineEnding;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("answer-key.pem");
+    let created = load_or_create_answer_key(dir.path()).expect("create key");
+    let pem = std::fs::read_to_string(&path).expect("read created key");
+    let (_, der) = pem_rfc7468::decode_vec(pem.as_bytes()).expect("decode PEM");
+    let info = PrivateKeyInfo::try_from(der.as_slice()).expect("decode PKCS#8");
+    assert_eq!(info.version(), Version::V1);
+
+    let signing = SigningKey::from_pkcs8_der(&der).expect("load private key");
+    let old_pem = signing.to_pkcs8_pem(LineEnding::LF).expect("encode v2");
+    std::fs::write(path, old_pem.as_bytes()).expect("write old key");
+    let existing = load_or_create_answer_key(dir.path()).expect("reload existing key");
+    assert_eq!(existing.key_id, created.key_id);
+    assert_eq!(existing.public_key_pem, created.public_key_pem);
+}

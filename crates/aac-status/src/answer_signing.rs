@@ -7,12 +7,13 @@
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use ed25519_dalek::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey,
+    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, KeypairBytes,
 };
 use pem_rfc7468::LineEnding;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -189,7 +190,11 @@ fn create_private(path: &Path) -> std::io::Result<fs::File> {
 /// temp file, synced, then linked into place; where hard links fail, created in place exclusively.
 fn create_key_file(dir: &Path, file: &Path) -> Result<(), String> {
     let signing = SigningKey::generate(&mut rand_core::OsRng);
-    let created = signing
+    // Node and Bun both read PKCS#8 v1. Omitting the optional public key keeps the
+    // same format as the TS writer, and the loader still accepts existing v2 files.
+    let mut keypair = KeypairBytes::from(&signing);
+    keypair.public_key = None;
+    let created = keypair
         .to_pkcs8_pem(LineEnding::LF)
         .map_err(|e| e.to_string())?;
     let temp = dir.join(format!(
@@ -198,17 +203,20 @@ fn create_key_file(dir: &Path, file: &Path) -> Result<(), String> {
         random_hex()
     ));
     let result = (|| -> Result<(), String> {
-        create_private(&temp).map_err(|e| e.to_string())?;
-        fs::write(&temp, created.as_bytes()).map_err(|e| e.to_string())?;
-        let handle = fs::File::open(&temp).map_err(|e| e.to_string())?;
+        let mut handle = create_private(&temp).map_err(|e| e.to_string())?;
+        handle
+            .write_all(created.as_bytes())
+            .map_err(|e| e.to_string())?;
         handle.sync_all().map_err(|e| e.to_string())?;
+        drop(handle);
         match fs::hard_link(&temp, file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(_) => {
                 match create_private(file) {
-                    Ok(_) => {
-                        fs::write(file, created.as_bytes()).map_err(|e| e.to_string())?;
+                    Ok(mut handle) => {
+                        handle.write_all(created.as_bytes()).map_err(|e| e.to_string())?;
+                        handle.sync_all().map_err(|e| e.to_string())?;
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(error) => return Err(error.to_string()),
