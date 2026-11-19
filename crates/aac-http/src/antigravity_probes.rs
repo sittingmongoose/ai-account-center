@@ -583,7 +583,7 @@ pub fn native_update_paused(
     value
 }
 
-fn current_uid() -> Option<u32> {
+pub(crate) fn current_uid() -> Option<u32> {
     #[cfg(unix)]
     {
         Some(aac_files::path::uid())

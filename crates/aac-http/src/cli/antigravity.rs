@@ -5,12 +5,12 @@
 //! lane G's signin-session verb takes a prepared command, and the Antigravity prepare/complete
 //! (staging, sandbox, registry writes) stay in TS by design until M5 (README-G "What is left").
 
-use crate::antigravity_probes::{self as probes, NativeRelease};
+use crate::antigravity_probes::{self as probes, NativeRelease, current_uid};
 use crate::antigravity_runtime;
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -102,10 +102,6 @@ fn scripts_dir() -> PathBuf {
             })
         })
         .unwrap_or_default()
-}
-
-fn current_uid() -> Option<u32> {
-    probes::current_uid()
 }
 
 pub fn run(args: &[String], ccs: &Path) -> i32 {
@@ -219,11 +215,11 @@ fn same_native_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 
 /// hashOwnedAntigravityNative: one owned fd, identity checked before, during and after.
 fn hash_owned_native(binary: &Path) -> Option<String> {
-    use sha2::{Digest, Sha256};
     let uid = current_uid()?;
     let before = fs::symlink_metadata(binary).ok()?;
     #[cfg(unix)]
     {
+        use sha2::{Digest, Sha256};
         if !safe_native_file(&before, uid) {
             return None;
         }
@@ -305,7 +301,7 @@ fn read_descriptor_bytes(file: &Path, directory: &Path) -> Option<Vec<u8>> {
     let uid = current_uid()?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
+        use std::{io::Read, os::unix::fs::MetadataExt};
         if !parent.is_dir()
             || parent.file_type().is_symlink()
             || parent.mode() & 0o777 != 0o700
