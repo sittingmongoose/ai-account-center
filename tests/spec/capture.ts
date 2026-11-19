@@ -591,6 +591,12 @@ function emit(relative: string, data: any, view: string | null = null) {
       body.openedAt = null;
       body.logs = null;
       body.meta = null;
+      body.redbBytes = null;
+      body.redbStats = null;
+      body.instanceId = null;
+      body.integrity = null;
+      body.capture = null;
+      body.storageHealth = null;
     }
   }
   const bytes = JSON.stringify(data, null, 2) + '\n';

@@ -163,6 +163,10 @@ function normalize(value: unknown, key = ''): unknown {
   // A store boot's own identity (capture.ts nulls the same members when it records the row),
   // the workers' live host readings (capture.ts does the same), and clock numbers.
   if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
+  // The Engine's file and page figures depend on the boot's own store files.
+  if (key === 'redbBytes' || key === 'redbStats') return null;
+  if (key === 'instanceId' || key === 'integrity' || key === 'capture' || key === 'storageHealth')
+    return null;
   if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
   if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
     return '<elapsed-seconds>';
