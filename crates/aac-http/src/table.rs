@@ -28,6 +28,7 @@ pub(crate) enum Handler {
     StoreStatus,
     StatusInputs,
     StatusAnswers,
+    StatusUsage,
     ScoreboardInputs,
     Feed,
     FeedStatus,
@@ -72,6 +73,7 @@ impl Handler {
             "store-status" => Handler::StoreStatus,
             "status-inputs" => Handler::StatusInputs,
             "status-answers" => Handler::StatusAnswers,
+            "status-usage" => Handler::StatusUsage,
             "scoreboard-inputs" => Handler::ScoreboardInputs,
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
@@ -301,6 +303,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ProviderCache
                         | Handler::CursorAccount
                         | Handler::StatusAnswers
+                        | Handler::StatusUsage
                         | Handler::SignInHealth
                         | Handler::SignInPoll
                 ))
@@ -308,6 +311,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                 && (method != axum::http::Method::PUT
                     || row.path != "/internal/status/answers"
                     || row.budget_ms != 0))
+            || (handler == Handler::StatusUsage
+                && (method != axum::http::Method::PUT || row.path != "/internal/status/usage"))
             || (handler == Handler::WriteSettings
                 && (method != axum::http::Method::PUT
                     || row.group != "writes"

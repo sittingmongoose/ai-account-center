@@ -37,6 +37,7 @@ import {
 } from '../rust-read-input';
 import { sendRustView } from '../rust-view-reply';
 import { MACHINE_IDS, MACHINE_LABELS } from '../services/dashboard-hosts';
+import { serverZoneFacts } from '../views/home-zone';
 import { BootFeeds, ensure, type Generation } from '../views/home-feed';
 import type { StatusInputs } from './status-view';
 
@@ -233,6 +234,37 @@ export function statusFedService(res: Response): RustService | null {
     groups.set(service, on);
   }
   return on ? service : null;
+}
+
+/**
+ * G16c: answer GET /api/status from the service's own producers (the owned Status group). The service holds
+ * every generation and composes the view; the request carries only its clock and the display zone's offsets
+ * (the one `Intl` fact a server cannot reproduce, `serverZoneFacts`). True when the Rust answer was written.
+ * False means the service declined or did not answer: the Status owner restarts its own producers and this
+ * process answers from them for the rest of its life, so no page ever sees a half-produced view.
+ */
+export async function answerStatusOwned(
+  req: Request,
+  res: Response,
+  service: RustService,
+  input: StatusInputs
+): Promise<boolean> {
+  if (!Number.isSafeInteger(input.now) || typeof input.timeZone !== 'string') return false;
+  const zone = serverZoneFacts(input.timeZone, input.now);
+  if (!zone) return false;
+  const reply = await service.fedView(
+    req,
+    ROUTE,
+    {
+      'x-aac-owned': '1',
+      'x-aac-now': String(input.now),
+      'x-aac-zone': JSON.stringify({ timeZone: input.timeZone, ...zone }),
+    },
+    STATUS_FED_VIEW
+  );
+  if (typeof reply === 'string' || !reply) return false;
+  sendRustView(res, reply);
+  return true;
 }
 
 /**

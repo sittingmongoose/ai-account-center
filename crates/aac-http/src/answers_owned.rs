@@ -11,8 +11,9 @@
 
 use aac_status::answer_delivery::RingResult;
 use aac_status::answers_engine::{
-    AnswerHost, AnswersEngine, Budget, CardRead, Prepared, RingClaim, Timing,
+    AnswerHost, AnswersEngine, Budget, CardRead, Prepared, RingClaim, Timing, closing_card_versions,
 };
+use aac_status::produce::answers_feed::{AnswersFeed, merge_shared};
 use aac_status::share::NodeFs;
 use aac_status::share::reports::{AgentReportsReader, Limits};
 use serde_json::{Value as Json, json};
@@ -145,6 +146,30 @@ impl AnswersOwned {
         let owner = Arc::clone(self);
         tokio::task::spawn_blocking(move || owner.ring(claim, None));
         Ok(json!({ "results": results }))
+    }
+
+    /// G16c: the feed's answer history. The cards' shared copies are scanned into the store first
+    /// (`scanSharedAnswers`), then the journal's records and the verified share copies are merged
+    /// (`mergeSharedAnswers`), the sends with them and the share map pruned to the open cards.
+    pub(crate) fn feed(&self, cards: &[(Json, String)]) -> AnswersFeed {
+        let mut engine = lock(&self.engine);
+        let history = engine.list().map(|entries| entries.to_vec());
+        let sends = engine.send_list();
+        let closed = history
+            .as_ref()
+            .map(|entries| closing_card_versions(entries))
+            .unwrap_or_default();
+        engine.scan_shared_answers(cards, &closed);
+        let shared = engine.shared_answers_for(cards);
+        engine.prune_shared_answers(cards);
+        match (history, sends) {
+            (Ok(history), Ok(sends)) => AnswersFeed {
+                answers: merge_shared(&history, &shared),
+                sends,
+                problem: None,
+            },
+            _ => AnswersFeed::unavailable(shared),
+        }
     }
 
     /// The exit hook: pending completions and void lines, then the lock.

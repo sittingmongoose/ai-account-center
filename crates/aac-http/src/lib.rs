@@ -89,6 +89,10 @@ mod status_fed;
 #[cfg(unix)]
 mod status_owned;
 #[cfg(unix)]
+mod status_produce;
+#[cfg(unix)]
+mod status_run;
+#[cfg(unix)]
 mod store_host;
 #[cfg(unix)]
 mod table;

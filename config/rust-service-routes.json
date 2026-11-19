@@ -47,6 +47,7 @@
   { "method": "POST", "path": "/internal/store/{method}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "store" },
   { "method": "GET", "path": "/internal/status/inputs", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "status-inputs" },
   { "method": "PUT", "path": "/internal/status/answers", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "status-answers" },
+  { "method": "PUT", "path": "/internal/status/usage", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "status-usage" },
   { "method": "GET", "path": "/internal/scoreboard/inputs", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "scoreboard-inputs" },
   { "method": "POST", "path": "/internal/usage-snapshot/sample", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "usage-sample" },
   { "method": "POST", "path": "/internal/claude-open", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "claude-open" },

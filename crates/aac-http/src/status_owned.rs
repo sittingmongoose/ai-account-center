@@ -10,14 +10,14 @@
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
 use aac_files::registry::{Owners, Role};
+use aac_status::share::NodeFs;
 use aac_status::share::check::ReadersCheckWriter;
 use aac_status::share::quota::{self, QuotaReportReader, QuotaReportState};
 use aac_status::share::registry::PmMailRegistryReader;
 use aac_status::share::reports::{self, AgentReportsReader, AgentReportsState, Limits};
 use aac_status::share::status_docs::{self, StatusDocsReader, StatusDocsState};
-use aac_status::share::NodeFs;
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,6 +40,16 @@ struct OwnedState {
     quota: Json,
     registry: Json,
     docs: Json,
+}
+
+/// G16c: one pass's snapshots for the producers. The front door's `GET
+/// /internal/status/inputs` still reads the JSON the state holds; the producers read these.
+pub(crate) struct Scan {
+    pub generation: u64,
+    pub reports: AgentReportsState,
+    pub docs: StatusDocsState,
+    pub quota: Json,
+    pub registry: Json,
 }
 
 /// One pass's outcome: the typed snapshots the check writer rows, and the JSON the front
@@ -171,8 +181,9 @@ impl StatusOwned {
     }
 
     /// One full pass: scan, capture the new revisions into the hosted store, flush the
-    /// readers-check rows, hold the snapshots and tell the front door.
-    pub(crate) async fn pass(self: &Arc<Self>, registry_due: bool) {
+    /// readers-check rows, hold the snapshots and tell the front door. The snapshots come back
+    /// for the producers that feed the Status generations (G16c).
+    pub(crate) async fn pass(self: &Arc<Self>, registry_due: bool) -> Scan {
         let now = now_ms();
         let owner = Arc::clone(self);
         let outcome = tokio::task::spawn_blocking(move || owner.scan_blocking(now, registry_due))
@@ -206,13 +217,20 @@ impl StatusOwned {
             state.reports = reports::state_json(&outcome.reports);
             state.quota = quota::state_json(&outcome.quota);
             state.docs = status_docs::state_json(&outcome.docs);
-            state.registry = outcome.registry;
+            state.registry = outcome.registry.clone();
         }
         if outcome.changed {
             self.feeds.publish_event(json!({
                 "event": "status-changed",
                 "generation": generation,
             }));
+        }
+        Scan {
+            generation,
+            reports: outcome.reports,
+            docs: outcome.docs,
+            quota: quota::state_json(&outcome.quota),
+            registry: outcome.registry,
         }
     }
 
@@ -239,9 +257,7 @@ impl StatusOwned {
             .feeds
             .latest("owned-pins")
             .ok()
-            .and_then(|generation| {
-                serde_json::from_str::<Json>(generation.data.get()).ok()
-            })
+            .and_then(|generation| serde_json::from_str::<Json>(generation.data.get()).ok())
             .and_then(|value| {
                 value.as_array().map(|rows| {
                     rows.iter()
@@ -270,13 +286,34 @@ impl StatusOwned {
     async fn capture(&self, reports: &AgentReportsState, docs: &StatusDocsState) {
         let mut input: Vec<(String, String, Json, i64, u64, String)> = Vec::new(); // kind, writer, doc, writtenAtMs, firstSeenAt, sha
         for row in &reports.threads {
-            input.push(("thread".into(), row.writer.clone(), row.doc.clone(), row.written_at_ms, row.first_seen_at, row.sha256.clone()));
+            input.push((
+                "thread".into(),
+                row.writer.clone(),
+                row.doc.clone(),
+                row.written_at_ms,
+                row.first_seen_at,
+                row.sha256.clone(),
+            ));
         }
         for row in &reports.tasks {
-            input.push(("tasks".into(), row.writer.clone(), row.doc.clone(), row.written_at_ms, row.first_seen_at, row.sha256.clone()));
+            input.push((
+                "tasks".into(),
+                row.writer.clone(),
+                row.doc.clone(),
+                row.written_at_ms,
+                row.first_seen_at,
+                row.sha256.clone(),
+            ));
         }
         for row in &reports.cards {
-            input.push(("card".into(), row.writer.clone(), row.doc.clone(), row.written_at_ms, row.first_seen_at, row.sha256.clone()));
+            input.push((
+                "card".into(),
+                row.writer.clone(),
+                row.doc.clone(),
+                row.written_at_ms,
+                row.first_seen_at,
+                row.sha256.clone(),
+            ));
         }
         for row in &docs.docs {
             let sha = row["sha256"].as_str().unwrap_or_default();
@@ -306,7 +343,11 @@ impl StatusOwned {
                 if accepted.get(&key).map(String::as_str) == Some(sha.as_str()) {
                     continue;
                 }
-                let agent = doc.get("agent").filter(|a| a.is_object()).cloned().unwrap_or(json!({}));
+                let agent = doc
+                    .get("agent")
+                    .filter(|a| a.is_object())
+                    .cloned()
+                    .unwrap_or(json!({}));
                 let machine = writer.split('.').next().unwrap_or_default();
                 let t3_thread = doc
                     .get("t3Thread")
@@ -314,15 +355,20 @@ impl StatusOwned {
                     .or_else(|| agent.get("t3Thread").filter(|v| !v.is_null()))
                     .cloned()
                     .unwrap_or(Json::Null);
-                let project = doc.get("project").filter(|v| v.is_string()).map(|v| {
-                    json!({"source": "agent-report", "id": v})
-                });
-                let stream = doc.get("stream").filter(|v| v.is_string()).map(|v| {
-                    json!({"source": "agent-report", "id": v})
-                });
+                let project = doc
+                    .get("project")
+                    .filter(|v| v.is_string())
+                    .map(|v| json!({"source": "agent-report", "id": v}));
+                let stream = doc
+                    .get("stream")
+                    .filter(|v| v.is_string())
+                    .map(|v| json!({"source": "agent-report", "id": v}));
                 let mut doc = doc.clone();
                 if let Some(object) = doc.as_object_mut() {
-                    object.insert("schema".to_string(), json!(format!("agent-reports/{kind}@1")));
+                    object.insert(
+                        "schema".to_string(),
+                        json!(format!("agent-reports/{kind}@1")),
+                    );
                 }
                 captures.push(json!({
                     "kind": kind,
@@ -375,11 +421,18 @@ impl StatusOwned {
                         let sha = row["sourceSha256"].as_str().unwrap_or_default().to_string();
                         if self
                             .store
-                            .call("captureReports".to_string(), Json::Array(vec![row.clone()]).to_string())
+                            .call(
+                                "captureReports".to_string(),
+                                Json::Array(vec![row.clone()]).to_string(),
+                            )
                             .await
                             .is_ok()
                         {
-                            acknowledge(&self.accepted, std::slice::from_ref(key), std::slice::from_ref(&sha));
+                            acknowledge(
+                                &self.accepted,
+                                std::slice::from_ref(key),
+                                std::slice::from_ref(&sha),
+                            );
                         }
                     }
                 }
@@ -409,7 +462,6 @@ fn error_code(error: &str) -> &str {
     }
 }
 
-
 /// The registry's collected wrapper on a failed scan: the last good rows with their own time,
 /// the named error since it began, and whether the folder is missing.
 fn failed_registry(before: &Json, reason: &str, now: u64) -> Json {
@@ -422,7 +474,10 @@ fn failed_registry(before: &Json, reason: &str, now: u64) -> Json {
     let mut out = serde_json::Map::new();
     out.insert("data".to_string(), before["data"].clone());
     out.insert("asOf".to_string(), before["asOf"].clone());
-    out.insert("error".to_string(), json!({"reason": reason, "since": since}));
+    out.insert(
+        "error".to_string(),
+        json!({"reason": reason, "since": since}),
+    );
     out.insert("missing".to_string(), json!(missing));
     if let Some(problems) = before.get("problems") {
         out.insert("problems".to_string(), problems.clone());
@@ -446,13 +501,20 @@ fn empty_reports() -> AgentReportsState {
 
 /// The job loop: a pass every 10 s, the registry every third pass, single-flight (the loop
 /// awaits each pass), until the service ends.
-pub(crate) async fn jobs(owner: Arc<StatusOwned>, stop: Arc<std::sync::atomic::AtomicBool>) {
+pub(crate) async fn jobs(
+    owner: Arc<StatusOwned>,
+    produce: Option<Arc<crate::status_produce::Produce>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
     let mut tick: u64 = 0;
     loop {
         if stop.load(Ordering::Acquire) {
             return;
         }
-        owner.pass(tick % REGISTRY_EVERY_PASSES == 0).await;
+        let scan = owner.pass(tick % REGISTRY_EVERY_PASSES == 0).await;
+        if let Some(produce) = &produce {
+            produce.after_scan(scan).await;
+        }
         tick = tick.wrapping_add(1);
         tokio::time::sleep(std::time::Duration::from_millis(SCAN_EVERY_MS)).await;
     }

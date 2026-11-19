@@ -205,6 +205,13 @@ export class StatusService {
   >();
   /** R4: the service reads the share itself; this side forwards its snapshots. */
   private readonly owned: boolean;
+  /**
+   * G16c: the service's producers own the feed inputs (the owned Status group). Until the first
+   * request the service cannot answer (no lease, a decline, another root), this side restarts its
+   * own scanners and collectors and answers from them for the rest of the process.
+   */
+  private produceOwned: boolean;
+  private lastOwnedHint = 0;
   private ownedInputs: {
     generation: number;
     reports: AgentReportsState;
@@ -255,6 +262,7 @@ export class StatusService {
       this.spendNative = 'unavailable' in opened ? null : opened;
     }
     this.owned = rustOwnedStatusOn();
+    this.produceOwned = this.owned;
   }
 
   private now(): number {
@@ -272,6 +280,9 @@ export class StatusService {
 
   /** A hint to `/ws` clients, at most one per HINT_GAP_MS (the last change always gets one). */
   changed(): void {
+    // G16c: with the service producing, it times the hint (one `status-changed` per window) and
+    // this side only rebroadcasts it; a local reader's change is not the page's to hear.
+    if (this.owned && this.produceOwned && this.started) return;
     if (this.hintTimer) return;
     const wait = Math.max(0, this.lastHint + HINT_GAP_MS - Date.now());
     this.hintTimer = setTimeout(() => {
@@ -284,6 +295,61 @@ export class StatusService {
       }
     }, wait);
     this.hintTimer.unref?.();
+  }
+
+  /** G16c: whether the service's producers answer this process's `/api/status` requests. */
+  producingOwned(): boolean {
+    return this.owned && this.produceOwned;
+  }
+
+  /** G16c: the service's hint, at most one per window, put on the dashboard's socket. */
+  private broadcastOwnedHint(): void {
+    const now = Date.now();
+    if (now - this.lastOwnedHint < HINT_GAP_MS) return;
+    this.lastOwnedHint = now;
+    try {
+      broadcastDashboardEvent((client) =>
+        client.authKind === 'session' ? { type: 'status-changed' } : null
+      );
+    } catch {
+      /* A hint never fails a request. */
+    }
+  }
+
+  /**
+   * G16c: the service's producers did not answer (no lease, a decline, another root). This side
+   * restarts the scanners and collectors it stopped and answers from them for the rest of the
+   * process, exactly as the owned readers' fallback does.
+   */
+  handBackProducers(): void {
+    if (!this.owned || !this.produceOwned) return;
+    this.produceOwned = false;
+    logger.warn(
+      'status.produce_fallback',
+      'The Rust Status producers did not answer; the TypeScript collectors restart'
+    );
+    if (!this.started) return;
+    const every = (ms: number, work: () => Promise<void>) => {
+      let running = false;
+      const timer = setInterval(() => {
+        if (running) return;
+        running = true;
+        void work()
+          .catch(() => undefined)
+          .finally(() => {
+            running = false;
+          });
+      }, ms);
+      timer.unref?.();
+      this.fallbackTimers.push(timer);
+    };
+    every(REPORTS_EVERY_MS, () => this.scanReports());
+    every(REGISTRY_EVERY_MS, () => this.scanRegistry());
+    every(COLLECT_EVERY_MS, async () => {
+      if (this.wanted()) await this.collect();
+    });
+    void this.collect();
+    this.changed();
   }
 
   scanReports(): Promise<void> {
@@ -677,7 +743,8 @@ export class StatusService {
    * as the `owned-pins` feed source; the service reads the latest at its check flush.
    */
   private pushOwnedPins(): void {
-    if (!this.owned || this.ownedFallenBack) return;
+    // G16c: the service composes the pins itself and pushes the check file's pin match.
+    if (!this.owned || this.produceOwned || this.ownedFallenBack) return;
     const service = rustServiceForStatus;
     const boot = service?.feedBoot(getCcsDir());
     if (!service || !boot) return;
@@ -708,6 +775,13 @@ export class StatusService {
         sampledAt: event.sampledAt,
         staleAfterSeconds: snapshot.staleAfterSeconds,
       };
+      if (this.owned && this.produceOwned) {
+        // G16c: the service holds the sample its feed carries; a failed push leaves the local
+        // input for the fallback and never fails the sample.
+        void rustServiceForStatus
+          ?.internalSend('/internal/status/usage', this.usage, 10_000)
+          .catch(() => undefined);
+      }
       this.changed();
     } catch {
       /* The usage panel keeps its last sample. */
@@ -734,7 +808,9 @@ export class StatusService {
     const now = this.now();
     const idle = !this.wanted();
     this.lastDemand = now;
-    if (idle || now - this.lastCollect >= COLLECT_EVERY_MS) void this.collect();
+    // G16c: the service runs the 60 s collect and its demand rule; this side only counts the read.
+    if (!(this.owned && this.produceOwned) && (idle || now - this.lastCollect >= COLLECT_EVERY_MS))
+      void this.collect();
     const { reports } = view;
     const { answers, sends, answerHistoryProblem } = history;
     const answered = resolvedCardWaits(reports, closingCardVersions(answers));
@@ -833,18 +909,22 @@ export class StatusService {
     // over the service's snapshots; report captures run in the service.
     const { reports, docs } = this.ownedInputs;
     try {
-      await this.answers.scanSharedAnswers(reports.cards, this.readAnswerHistory([]).answers);
+      // G16c: the service's own scan feeds the shared answers into its answer store; this side
+      // only reads what it needs for the fallback.
+      if (!(this.owned && this.produceOwned)) {
+        await this.answers.scanSharedAnswers(reports.cards, this.readAnswerHistory([]).answers);
+      }
       await this.publishStatus({
         reports,
         docs,
-        shared: this.answers.sharedAnswersFor(reports.cards),
+        shared: this.owned && this.produceOwned ? [] : this.answers.sharedAnswersFor(reports.cards),
       });
       this.pushOwnedPins();
     } catch {
       /* Keep the last published presentation. */
       this.changed();
     } finally {
-      this.answers.pruneSharedAnswers(reports.cards);
+      if (!(this.owned && this.produceOwned)) this.answers.pruneSharedAnswers(reports.cards);
     }
     await this.composeSpendByStream();
   }
@@ -979,15 +1059,21 @@ export class StatusService {
     if (this.owned) {
       every(REPORTS_EVERY_MS, () => this.ownedRefresh());
       this.removeOwnedEvents = onRustServiceEvent((event) => {
-        if (event.event === 'status-changed') void this.ownedRefresh();
+        if (event.event !== 'status-changed') return;
+        // G16c: the service times the hint; this side puts it on the dashboard's socket.
+        if (this.owned && this.produceOwned) this.broadcastOwnedHint();
+        void this.ownedRefresh();
       });
     } else {
       every(REPORTS_EVERY_MS, () => this.scanReports());
       every(REGISTRY_EVERY_MS, () => this.scanRegistry());
     }
-    every(COLLECT_EVERY_MS, async () => {
-      if (this.wanted()) await this.collect();
-    });
+    // G16c: with the service producing, it runs the 60 s collect and its demand rule.
+    if (!(this.owned && this.produceOwned)) {
+      every(COLLECT_EVERY_MS, async () => {
+        if (this.wanted()) await this.collect();
+      });
+    }
     // G16b: owned, the service's answer store runs the retry pass; TS only once it takes them back.
     this.started = true;
     this.answersLocal = this.answersLocal || !this.owned;

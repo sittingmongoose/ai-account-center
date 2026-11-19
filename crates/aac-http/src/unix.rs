@@ -39,6 +39,26 @@ use subtle::ConstantTimeEq;
 use tokio::net::UnixListener;
 
 const SECRET_HEADER: &str = "x-aac-boot-secret";
+
+/// G16c: the display zone's facts the front door sends with an owned Status request.
+#[derive(Deserialize)]
+struct ZoneHeader {
+    #[serde(rename = "timeZone")]
+    time_zone: String,
+    from: i64,
+    to: i64,
+    offsets: Vec<[i64; 2]>,
+}
+
+impl ZoneHeader {
+    fn facts(&self) -> aac_status::produce::facts::ZoneFacts {
+        aac_status::produce::facts::ZoneFacts {
+            from: self.from,
+            to: self.to,
+            offsets: self.offsets.clone(),
+        }
+    }
+}
 const PRINCIPAL_HEADER: &str = "x-aac-principal";
 /// The named reason of a private 503 (L1).
 const DECLINE_HEADER: &str = "x-aac-decline";
@@ -132,6 +152,8 @@ struct Shared {
     claude_open: Option<Arc<crate::claude_open::open::ClaudeOpen>>,
     /// G16b: the answer store's writer, with the owned Status readers.
     answers_owned: Option<Arc<crate::answers_owned::AnswersOwned>>,
+    /// G16c: the Status feed's producers, with the owned Status readers.
+    status_produce: Option<Arc<crate::status_produce::Produce>>,
 }
 
 #[derive(Clone)]
@@ -987,6 +1009,37 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // G16c: Status from this service's own producers (no body; the clock and the display
+        // zone's offsets in `x-aac-now`/`x-aac-zone`). Without a zone it declines and the front
+        // door answers with its own producers.
+        Handler::Status if req.headers().contains_key("x-aac-owned") => {
+            let Some(produce) = shared.status_produce.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let now = one_header(req.headers(), "x-aac-now").and_then(|text| text.parse::<u64>().ok());
+            let zone = one_header(req.headers(), "x-aac-zone")
+                .and_then(|text| serde_json::from_str::<ZoneHeader>(text).ok());
+            let query = req.uri().query().is_some();
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(now), Some(zone), false, true) = (now, zone, query, body.is_empty()) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared
+                .limits
+                .blocking_status(move || produce.view(now, &zone.time_zone, &zone.facts()))
+                .await
+            {
+                Ok((bytes, etag)) => crate::view_reply::respond_tagged(
+                    crate::status_fed::VIEW,
+                    crate::status_fed::VERSION,
+                    bytes,
+                    &etag,
+                ),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         // R2: Status from the fed generations, the same way (no body; the ids and the clock in `x-aac-feed`).
         // Without it, the envelope or snapshot read below.
         Handler::Status if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
@@ -1070,11 +1123,42 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(row.handler, Decline::Shape);
             }
             match owner.submit(&bytes).await {
-                Ok(value) => Json(value).into_response(),
+                Ok(value) => {
+                    if let Some(produce) = &shared.status_produce {
+                        produce.mark_answers();
+                    }
+                    Json(value).into_response()
+                }
                 Err("shape") => decline(row.handler, Decline::Shape),
                 // Started and failed: not a decline (the front door must not record it again).
                 Err(_) => store_error("answers_failed: the answer store could not finish"),
             }
+        }
+        // G16c: the dashboard's usage sample, built by the Analytics owner and held for the feed.
+        Handler::StatusUsage => {
+            let Some(produce) = shared.status_produce.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let query = req.uri().query().is_some();
+            let Ok(bytes) = to_bytes(req.into_body(), 4 * 1024 * 1024).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if query {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let usage = if value.is_null() {
+                None
+            } else {
+                match crate::status_produce::UsageInput::parse(&value) {
+                    Some(usage) => Some(usage),
+                    None => return decline(row.handler, Decline::Shape),
+                }
+            };
+            produce.set_usage(usage);
+            Json(json!({"ok": true})).into_response()
         }
         // R4: the owned Scoreboard input the front door computes the facts over.
         Handler::ScoreboardInputs => {
@@ -1458,6 +1542,14 @@ async fn serve_inner(
         ),
     ));
     let check_flushing = Arc::new(AtomicBool::new(false));
+    // G16b: the answer store moves with the owned Status group.
+    let answers_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(_)) if owned.status => Some(crate::answers_owned::AnswersOwned::new(
+            boot.ccs_dir.clone(),
+            owned.reports_root.clone(),
+        )),
+        _ => None,
+    };
     let status_owned = match (&boot.owned, &store) {
         (Some(owned), Some(host)) if owned.status => Some(crate::status_owned::StatusOwned::new(
             owned.reports_root.clone(),
@@ -1467,6 +1559,16 @@ async fn serve_inner(
             owners.clone(),
             Arc::clone(&check),
             Arc::clone(&check_flushing),
+        )),
+        _ => None,
+    };
+    // G16c: the producers of the fed Status generations (the owned Status group).
+    let status_produce = match (&boot.owned, &answers_owned) {
+        (Some(owned), Some(answers)) if owned.status => Some(crate::status_produce::Produce::new(
+            boot.ccs_dir.clone(),
+            owned.reports_root.clone(),
+            feeds.clone(),
+            Arc::clone(answers),
         )),
         _ => None,
     };
@@ -1481,14 +1583,6 @@ async fn serve_inner(
                 Arc::clone(&check_flushing),
             ))
         }
-        _ => None,
-    };
-    // G16b: the answer store moves with the owned Status group.
-    let answers_owned = match (&boot.owned, &store) {
-        (Some(owned), Some(_)) if owned.status => Some(crate::answers_owned::AnswersOwned::new(
-            boot.ccs_dir.clone(),
-            owned.reports_root.clone(),
-        )),
         _ => None,
     };
     let owned_reports_root = boot.owned.as_ref().map(|owned| owned.reports_root.clone());
@@ -1543,6 +1637,7 @@ async fn serve_inner(
         usage,
         claude_open,
         answers_owned: answers_owned.clone(),
+        status_produce: status_produce.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -1649,7 +1744,13 @@ async fn serve_inner(
     if let Some(owner) = &status_owned {
         let jobs = Arc::clone(owner);
         let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(async move { crate::status_owned::jobs(jobs, stop).await });
+        let produce = status_produce.clone();
+        tokio::spawn(async move { crate::status_owned::jobs(jobs, produce, stop).await });
+    }
+    if let Some(owner) = &status_produce {
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::status_produce::Produce::jobs(jobs, stop).await });
     }
     if let Some(owner) = &answers_owned {
         let jobs = Arc::clone(owner);

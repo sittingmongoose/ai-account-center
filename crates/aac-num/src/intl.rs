@@ -372,6 +372,21 @@ impl Zone {
         ))
     }
 
+    /// The zone's UTC offset in minutes at `ms`, or `None` outside the window: the same offsets every word is
+    /// written from.
+    pub fn offset_minutes(&self, ms: i64) -> Option<i64> {
+        if ms < self.from || ms > self.to {
+            return None;
+        }
+        Some(
+            self.offsets
+                .iter()
+                .take_while(|(start, _)| *start <= ms)
+                .last()
+                .map_or(0, |(_, minutes)| *minutes),
+        )
+    }
+
     /// The en-US `{hour:'numeric', minute:'2-digit'}` and `{month:'short', day:'numeric'}` words for `ms` ("3:05 PM",
     /// "Nov 14", ASCII space), or `None` outside the window.
     pub fn words(&self, ms: i64) -> Option<(String, String)> {
