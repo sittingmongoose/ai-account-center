@@ -9,6 +9,7 @@
  * boot JSON, which refuses a map that differs from its own registry. TS writers then refuse a
  * row they do not own (`assertTsWritesFile`, `assertTsWritesRow`), so each file has one writer.
  * The public-auth group is claimed only by the standalone Rust front door.
+ * The collection group transfers its quota caches when explicitly enabled.
  */
 import path from 'path';
 import fs from 'node:fs';
@@ -185,6 +186,7 @@ export function privateFileRowFor(file: string, ccsDir: string): PrivateFileRow 
   const relative = path.relative(path.resolve(ccsDir), path.resolve(file));
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
   const posix = relative.split(path.sep).join('/');
+  // Narrow companion patterns (cooldowns and peer grants) precede the observation wildcard.
   return PRIVATE_FILE_ROWS.find((row) => row.root === 'ccs' && matches(row.path, posix));
 }
 

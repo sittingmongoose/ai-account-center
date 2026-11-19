@@ -50,6 +50,24 @@ describe('the registry rules', () => {
         'account-refresh-settings'
       ]
     ).toBe('rust-service');
+    const moved = files.resolvePrivateFileOwners(
+      files.PRIVATE_FILE_ROWS,
+      (g) => g === 'collection'
+    );
+    expect(Object.keys(moved).filter((id) => moved[id] === 'rust-service')).toEqual([
+      'account-usage-observations',
+      'claude-live-snapshots',
+    ]);
+    expect(
+      files.privateFileRowFor(path.join(home, 'account-usage-failover', 'cooldown-key.json'), home)
+        ?.id
+    ).toBe('account-usage-cooldown');
+    expect(
+      files.privateFileRowFor(
+        path.join(home, 'account-usage-failover', 'key.muse-peers.json'),
+        home
+      )?.id
+    ).toBe('muse-usage-peer-links');
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {
@@ -281,8 +299,9 @@ describe('one writer per file', () => {
     expect(supervisor).toContain("this.mode === 'on'");
     expect(supervisor).toContain("rustGroupOn('writes')");
     expect(supervisor).toContain(
-      "settlePrivateFileOwners((group) => group === 'writes' && this.writesOn)"
+      "group === 'writes' && this.writesOn"
     );
+    expect(supervisor).toContain("group === 'collection' && collectionOn");
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());
   });

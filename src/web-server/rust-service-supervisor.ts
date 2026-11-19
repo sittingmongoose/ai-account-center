@@ -123,7 +123,11 @@ export class RustSupervisor {
     // L2: the writer assignment sent in the private boot. Writes have their own switch and
     // need the Unix service. Shadow keeps the TS writer.
     this.writesOn = this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('writes');
-    settlePrivateFileOwners((group) => group === 'writes' && this.writesOn);
+    const collectionOn =
+      this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('collection');
+    settlePrivateFileOwners(
+      (group) => (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn)
+    );
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }

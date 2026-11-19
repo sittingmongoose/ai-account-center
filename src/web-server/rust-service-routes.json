@@ -1,5 +1,6 @@
 [
   { "method": "GET", "path": "/api/health", "owner": "rust", "group": "core", "roles": ["public", "admin", "device", "hub"], "budgetMs": 400, "handler": "health" },
+  { "method": "GET", "path": "/api/accounts/dashboard", "owner": "rust", "group": "collection", "roles": ["admin", "device"], "budgetMs": 400, "handler": "dashboard" },
   { "method": "GET", "path": "/api/accounts/settings", "owner": "rust", "group": "core", "roles": ["admin"], "budgetMs": 400, "handler": "settings" },
   { "method": "PUT", "path": "/api/accounts/settings", "owner": "rust", "group": "writes", "roles": ["admin"], "budgetMs": 400, "handler": "write-settings" },
   { "method": "PUT", "path": "/api/accounts/analytics/capture", "owner": "rust", "group": "writes", "roles": ["admin"], "budgetMs": 400, "handler": "write-settings" },
@@ -30,6 +31,9 @@
   { "method": "PUT", "path": "/internal/feed/{source}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "feed" },
   { "method": "GET", "path": "/internal/feed/{source}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "feed-status" },
   { "method": "GET", "path": "/internal/events", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "events" },
+  { "method": "PUT", "path": "/internal/collection-tick", "owner": "rust", "group": "collection", "roles": ["service"], "budgetMs": 0, "handler": "collection-tick" },
+  { "method": "PUT", "path": "/internal/collection-cache/{kind}/{key}", "owner": "rust", "group": "collection", "roles": ["service"], "budgetMs": 450, "handler": "collection-cache" },
+  { "method": "POST", "path": "/internal/collect/{verb}", "owner": "rust", "group": "collection", "roles": ["service"], "budgetMs": 0, "handler": "collect" },
   { "method": "POST", "path": "/internal/agent/{verb}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "agent" },
   { "method": "POST", "path": "/internal/agent/{callId}/control", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 2500, "handler": "agent-control" },
   { "method": "POST", "path": "/internal/account-confirmations", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "account-approvals" },

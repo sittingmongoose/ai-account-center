@@ -13,6 +13,7 @@ import concurrent.futures
 import contextlib
 import hashlib
 import http.client
+import http.server
 import json
 import os
 from pathlib import Path
@@ -39,7 +40,7 @@ class UnixHttp(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 class Service:
-    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None):
+    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False):
         self.temp = tempfile.TemporaryDirectory(prefix='a5-')
         self.root = Path(self.temp.name)
         self.agent = str(Path(agent).resolve())
@@ -60,7 +61,7 @@ class Service:
         folder = run / ('aac-http-' + BOOT)
         folder.mkdir(mode=0o700)
         self.socket = folder / 'http.sock'
-        config = {'agentTransport': mode, 'computers': {'fixture': {
+        config = {'version': 1, 'agentTransport': mode, 'computers': {'fixture': {
             'label': 'Fixture', 'os': 'linux', 'sshAlias': 'fixture',
             'transport': {'kind': 'ssh', 'host': 'fixture.invalid', 'key': str(self.root / 'no-key'), 'user': None, 'port': None}}},
             'agentTransportSsh': {'knownHostsFile': str(self.root / 'no-known-hosts')}}
@@ -76,8 +77,13 @@ class Service:
         env.pop('AAC_AGENT_TRANSPORT', None)
         self.child = subprocess.Popen([str(Path(service).resolve())], stdin=subprocess.PIPE,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
-        self.child.stdin.write((json.dumps({'ccsDir': str(self.root), 'socketPath': str(self.socket),
-                                           'secret': SECRET, 'bootId': BOOT}) + '\n').encode())
+        boot = {'ccsDir': str(self.root), 'socketPath': str(self.socket),
+                'secret': SECRET, 'bootId': BOOT}
+        if collection:
+            rows = json.loads((ROOT / 'config/private-files.json').read_text())['rows']
+            boot['files'] = {row['id']: ('rust-service' if row['movesWith'] == 'collection' else row['owner'])
+                             for row in rows}
+        self.child.stdin.write((json.dumps(boot) + '\n').encode())
         self.child.stdin.flush()
         until = time.monotonic() + 10
         while True:
@@ -138,6 +144,13 @@ def record(root, agent, harness_env=None):
             identity['version'] = '0.0.0'
             print(json.dumps(identity)); sys.exit(0)
         os.execv(agent, [agent, '--version'])
+    if scenario == 'collect-slow':
+        request = json.loads(sys.stdin.buffer.readline())
+        while not (root / 'barrier').exists():
+            time.sleep(.01)
+        print(json.dumps({'type': 'result', 'protocol': 1, 'id': request['id'],
+                          'value': {'schemaVersion': 1, 'profiles': []}}), flush=True)
+        sys.exit(0)
     if scenario == 'burst':
         request = json.loads(sys.stdin.buffer.readline())
         for n in range(16):
@@ -181,7 +194,7 @@ def record(root, agent, harness_env=None):
     else:
         os.execv(agent, [agent])
 
-def proxy(agent, service):
+def proxy(agent, service, collection=False):
     wire = sys.stdin.read()
     request = json.loads(wire)
     # Keep raw args: serde must not erase duplicate keys before the verb's original proof gate.
@@ -193,11 +206,13 @@ def proxy(agent, service):
     # the original whole-request cap witness without changing any semantic argument.
     trailing = len(wire.rstrip('\n')) - len(wire.rstrip())
     if trailing and args.endswith('}'): args = args[:-1] + ' ' * trailing + '}'
-    with Service(agent, service) as fixture:
+    with Service(agent, service, collection=collection) as fixture:
+        family = 'collect' if collection and request['verb'] in (
+            'quota-read', 'signin-expiry', 'failover-inventory') else 'agent'
         payload = fixture.payload(id=request['id'], deadline=request['deadlineMs'], cap=16*1024*1024 if request['verb']=='scan-usage' else 1024*1024)
         payload.pop('args')
         body = json.dumps(payload)[:-1] + ',"args":' + args + '}'
-        status, response = fixture.ask('/internal/agent/' + request['verb'], body)
+        status, response = fixture.ask('/internal/' + family + '/' + request['verb'], body)
         assert status == 200, (status, response)
         events = [json.loads(line) for line in response.splitlines()]
         assert len(events) == 1, events
@@ -278,13 +293,122 @@ def gates(agent, service):
             conn.close()
     print('PASS L5 service: reuse, principal, breaker, hash, artifact cap, off, existing-only, progress/input, exit-confirmed cancel and no-ack termination')
 
+def collection_gates(agent, service):
+    with Service(agent, service) as s:
+        status, _ = s.ask('/internal/collect/signin-expiry', s.payload())
+        assert status == 503 and not s.traces()
+
+    with Service(agent, service, collection=True, scenario='collect-slow') as s:
+        route = '/internal/collect/signin-expiry'
+        public = {'kind': 'session', 'id': 'fixture-admin', 'role': 'admin'}
+        assert s.ask(route, s.payload(), principal=public)[0] == 401
+        assert json.loads(s.ask('/internal/collect/failover-inventory',
+                                s.payload({'action': 'collect'}))[1])['reason'] == 'shape'
+        assert not s.traces()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(s.ask, route, s.payload(id='collection-a'))
+            b = pool.submit(s.ask, route, s.payload(id='collection-b'))
+            until = time.monotonic() + 5
+            while not any(t['stage'] == 'run' for t in s.traces()):
+                assert time.monotonic() < until, s.traces()
+                time.sleep(.01)
+            time.sleep(.1)
+            (s.root / 'barrier').touch()
+            for expected, future in [('collection-a', a), ('collection-b', b)]:
+                code, raw = future.result()
+                assert code == 200
+                assert json.loads(raw) == {'type':'result','protocol':1,'id':expected,
+                                           'value':{'schemaVersion':1,'profiles':[]}}
+        assert [t['stage'] for t in s.traces()] == ['probe', 'run']
+
+        key = 'a' * 64
+        route = '/internal/collection-cache/account-usage-observations/' + key
+        sample = {'version':1,'key':key,'identity':None,'primary':None,'saved':None,'nextAttempt':1234}
+        assert s.ask(route, sample, method='PUT', principal=public)[0] == 401
+        assert s.ask(route, {**sample, 'nextAttempt': 'bad'}, method='PUT') == (200, '{"saved":false}')
+        assert s.ask(route, sample, method='PUT') == (200, '{"saved":true}')
+        disk = s.root / 'account-usage-failover' / (key + '.json')
+        assert disk.read_text() == json.dumps(sample)
+        assert disk.stat().st_mode & 0o777 == 0o600
+        link = disk.with_name('b' * 64 + '.json')
+        link.hardlink_to(disk)
+        assert s.ask(route, {**sample, 'nextAttempt': 5678}, method='PUT') == (200, '{"saved":false}')
+        assert json.loads(disk.read_text()) == sample
+        # Invalid files and peer/cooldown state are outside observation retention.
+        for n in range(257):
+            old = format(n, '064x')
+            entry = disk.with_name(old + '.json')
+            entry.write_text(json.dumps({**sample, 'key': old}))
+            entry.chmod(0o600)
+        name = 'c' * 64
+        cooldown = disk.with_name('cooldown-' + name + '.json')
+        cooldown.write_text('{}')
+        write_route = '/internal/collection-cache/account-usage-observations/' + name
+        assert s.ask(write_route, {**sample, 'key': name}, method='PUT') == (200, '{"saved":true}')
+        assert disk.exists() and link.exists() and cooldown.exists()
+        valid = [p for p in disk.parent.iterdir()
+                 if re.fullmatch('[a-f0-9]{64}.json', p.name) and p.stat().st_nlink == 1]
+        assert len(valid) == 256 and disk.with_name(name + '.json') in valid
+        profile = 'fixture-profile'
+        remote_route = '/internal/collection-cache/claude-live-snapshots/' + profile
+        remote = {'schemaVersion':1, 'manifestHash':'b'*64,
+                  'sample':{'profileId':profile, 'platform':'windows', 'windows':[]}}
+        assert s.ask(remote_route, remote, method='PUT') == (200, '{"saved":true}')
+        assert (s.root / 'claude-desktop-live-cache' / (profile + '.json')).read_text() == json.dumps(remote)
+    print('PASS H2 collection: switch, principal, read-only verbs, coalescing, row bytes and private cache writes')
+
+
+def collection_projection(agent, service):
+    import threading
+    from unittest import mock
+    from quota import (Handler, LocalOpener, KIMI, NOW, STAMP, common, response, usage)
+    import failover_usage
+
+    with Service(agent, service, collection=True) as s:
+        home = s.root / 'fixture-home'
+        auth = home / '.local/share/opencode/auth.json'
+        auth.parent.mkdir(parents=True)
+        auth.write_text(json.dumps({'kimi-for-coding': {'type': 'api', 'key': 'fixture-dummy-token'}}))
+        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            endpoint = 'http://127.0.0.1:' + str(server.server_port)
+            Handler.queue = [response(KIMI), response(KIMI)]
+            Handler.calls = []
+            client = common.HttpClient()
+            client.opener = LocalOpener(client.opener, endpoint)
+            try:
+                with mock.patch.dict(os.environ, {}, clear=True), \
+                        mock.patch.object(common, 'utc_now', return_value=STAMP), \
+                        mock.patch.object(usage, 'utc_now', return_value=STAMP):
+                    reference = usage.collect('kimi-code', 'ubuntu', home=home, client=client)
+                    inventory = failover_usage.run({
+                        'version': 1, 'action': 'inventory', 'provider': 'kimi-code',
+                        'homeDir': str(home), 'ccsDir': str(s.root),
+                    })
+                payload = {'root': str(s.root), 'socketPath': str(s.socket), 'secret': SECRET, 'bootId': BOOT,
+                           'args': {'provider': 'kimi-code', 'platform': 'ubuntu', 'home': str(home),
+                                    'endpoint': endpoint, 'now': NOW}, 'reference': reference, 'inventory': inventory}
+                command = [os.environ.get('BUN', 'bun'), str(Path(__file__).with_name('collection-dashboard.ts'))]
+                env = {**os.environ, 'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config')}
+                subprocess.run(command, input=json.dumps(payload), env=env, text=True, check=True)
+                assert len(Handler.calls) == 2 and not Handler.queue
+                assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'run']
+            finally:
+                server.shutdown()
+
+
 def main():
     agent, service = map(lambda p: str(Path(p).resolve()), sys.argv[1:3])
-    gates(agent,service)
+    collection = '--collection' in sys.argv
+    if collection:
+        collection_gates(agent, service)
+        collection_projection(agent, service)
+    else:
+        gates(agent, service)
     if '--gates-only' in sys.argv: return
     with tempfile.TemporaryDirectory(prefix='aac-l5-proxy-') as tmp:
         wrapper = Path(tmp)/'agent-proxy'
-        wrapper.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,'+repr(str(Path(__file__).parent))+')\nfrom transport import proxy\nsys.exit(proxy('+repr(agent)+','+repr(service)+'))\n')
+        wrapper.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,'+repr(str(Path(__file__).parent))+')\nfrom transport import proxy\nsys.exit(proxy('+repr(agent)+','+repr(service)+','+repr(collection)+'))\n')
         wrapper.chmod(0o700)
         for suite in [('run.py','--part3','--part4'), ('signin_review.py',), ('quota.py',), ('quota-review.py',), ('deadline_review.py',)]:
             outputs=[]
@@ -296,5 +420,5 @@ def main():
             # Deadline timings and temporary paths vary; all harness counts and result labels stay.
             mask=lambda t: re.sub(r'in \d+\.\d+s', 'in <time>s', re.sub(r'after \d+\.\d+ s','after <time>',t))
             assert mask(outputs[0])==mask(outputs[1]), ('harness counts changed',suite,outputs)
-            print('PASS identical harness counts in-place / service:',suite[0],flush=True)
+            print('PASS identical harness counts in-place / ' + ('collection' if collection else 'service') + ':', suite[0], flush=True)
 if __name__=='__main__': main()

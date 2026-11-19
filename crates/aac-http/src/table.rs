@@ -20,6 +20,7 @@ pub(crate) enum Handler {
     WritePreferences,
     Home,
     Accounts,
+    Dashboard,
     Profiles,
     Files,
     Status,
@@ -29,6 +30,9 @@ pub(crate) enum Handler {
     FeedStatus,
     Events,
     Agent,
+    Collect,
+    CollectionTick,
+    CollectionCache,
     AgentControl,
     Approvals,
     AppUpdates,
@@ -48,6 +52,7 @@ impl Handler {
             "write-preferences" => Handler::WritePreferences,
             "home" => Handler::Home,
             "accounts" => Handler::Accounts,
+            "dashboard" => Handler::Dashboard,
             "profiles" => Handler::Profiles,
             "files" => Handler::Files,
             "status" => Handler::Status,
@@ -56,6 +61,9 @@ impl Handler {
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
             "events" => Handler::Events,
+            "collection-cache" => Handler::CollectionCache,
+            "collect" => Handler::Collect,
+            "collection-tick" => Handler::CollectionTick,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "account-approvals" => Handler::Approvals,
@@ -213,9 +221,23 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (row.budget_ms == 0
                 && !matches!(
                     handler,
-                    Handler::Events | Handler::Agent | Handler::ResetClaims | Handler::Store
+                    Handler::Events
+                        | Handler::Agent
+                        | Handler::Collect
+                        | Handler::CollectionTick
+                        | Handler::ResetClaims
+                        | Handler::Store
                 ))
-            || internal != (row.group == "internal")
+            || (row.group == "internal" && !internal)
+            || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
+            || (row.group == "collection"
+                && !matches!(
+                    handler,
+                    Handler::Dashboard
+                        | Handler::CollectionCache
+                        | Handler::CollectionTick
+                        | Handler::Collect
+                ))
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
@@ -224,6 +246,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     handler,
                     Handler::Agent
                         | Handler::AgentControl
+                        | Handler::Collect
                         | Handler::AppUpdates
                         | Handler::Approvals
                         | Handler::ResetClaims
@@ -233,6 +256,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                 && !matches!(
                     handler,
                     Handler::Feed
+                        | Handler::CollectionCache
+                        | Handler::CollectionTick
                         | Handler::WriteSettings
                         | Handler::WriteVisibility
                         | Handler::WritePreferences
@@ -312,7 +337,12 @@ mod tests {
         assert!(rows.iter().all(|r| r.budget_ms > 0
             || matches!(
                 r.handler,
-                Handler::Events | Handler::Agent | Handler::ResetClaims | Handler::Store
+                Handler::Events
+                    | Handler::Agent
+                    | Handler::Collect
+                    | Handler::CollectionTick
+                    | Handler::ResetClaims
+                    | Handler::Store
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.

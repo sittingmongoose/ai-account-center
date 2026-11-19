@@ -12,7 +12,7 @@ import { getCcsDir } from '../utils/config-manager';
 import { attachDashboardEventFeed } from './dashboard-events';
 import { startServer, type ServerInstance, type ServerOptions } from './index';
 import { peekAccountDashboard } from './services/account-dashboard-service';
-import type { AccountDashboard } from './services/account-dashboard-types';
+import type { AccountDashboard, ClaudeDashboardPlatform } from './services/account-dashboard-types';
 
 function launched(child: ChildProcess): Promise<AddressInfo> {
   if (!child.stdout) return Promise.reject(new Error('Rust dashboard stdout was unavailable'));
@@ -83,14 +83,27 @@ function hubRows(dashboard: AccountDashboard) {
   };
 }
 
-async function publishHubCache(target: string): Promise<void> {
-  const dashboards = await Promise.allSettled([
-    peekAccountDashboard('mac'),
-    peekAccountDashboard('windows'),
-  ]);
-  const cached = dashboards.flatMap((result) =>
-    result.status === 'fulfilled' ? [hubRows(result.value)] : []
+type Rendered = { at: number; updatedAt: string; rows: ReturnType<typeof hubRows> };
+const PLATFORMS = ['mac', 'windows'] as const;
+
+async function publishHubCache(
+  target: string,
+  native: ReadonlyMap<ClaudeDashboardPlatform, Rendered>
+): Promise<void> {
+  const dashboards = await Promise.allSettled(
+    PLATFORMS.map((platform) => peekAccountDashboard(platform))
   );
+  const cached = dashboards.flatMap((result, index) => {
+    const rendered = native.get(PLATFORMS[index]);
+    const update = result.status === 'fulfilled' ? result.value : undefined;
+    if (
+      rendered &&
+      Date.now() - rendered.at < 5000 &&
+      (!update || rendered.updatedAt >= update.updatedAt)
+    )
+      return [rendered.rows];
+    return update ? [hubRows(update)] : [];
+  });
   if (!cached.length) return;
   const bytes = JSON.stringify(cached);
   if (Buffer.byteLength(bytes) > 4 * 1024 * 1024) return;
@@ -121,6 +134,7 @@ export async function startComposedServer(
   let detach: (() => void) | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let writing: Promise<void> | undefined;
+  const native = new Map<ClaudeDashboardPlatform, Rendered>();
   let closing = false;
   const close = () => {
     if (closing) return;
@@ -138,7 +152,7 @@ export async function startComposedServer(
   };
   const refresh = () => {
     if (!writing)
-      writing = publishHubCache(cache)
+      writing = publishHubCache(cache, native)
         .catch(() => {})
         .finally(() => {
           writing = undefined;
@@ -151,6 +165,14 @@ export async function startComposedServer(
       port: 0,
       rustServiceBinary: binary,
       compositionProof: proof,
+      onRustDashboard(platform, dashboard) {
+        native.set(platform, {
+          at: Date.now(),
+          updatedAt: dashboard.updatedAt,
+          rows: hubRows(dashboard),
+        });
+        refresh();
+      },
     });
     const address = backend.server.address() as AddressInfo;
     refresh();

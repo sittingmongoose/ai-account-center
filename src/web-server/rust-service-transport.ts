@@ -68,6 +68,7 @@ export interface RustRequestOptions {
   text?: string;
   /** M5 lane K: a longer total deadline for a write whose work takes seconds (a reset source read). */
   deadlineMs?: number;
+  signal?: AbortSignal;
 }
 
 /**
@@ -123,6 +124,7 @@ function once(
       path: route,
       method,
       highWaterMark: RUST_SOCKET_HWM,
+      signal: options.signal,
       agent: connection.agent ?? false,
       headers: {
         ...options.headers,
@@ -318,6 +320,7 @@ const agentConnections = new Map<
     root: string;
     connection: RustConnection;
     active: Set<http.ClientRequest>;
+    cacheWrites: Map<string, Promise<boolean>>;
     health: { replied?: () => void; failed?: (kind: RustFailureKind) => void };
   }
 >();
@@ -343,6 +346,10 @@ export function canonicalRoot(root: string): string {
 /** Resolved root spellings, cached: a store call resolves its root several times, and the
  * dashboard's roots do not change under it. Only successful resolutions are kept. */
 const rootKeys = new Map<string, string>();
+function rustAgentConnection(root: string) {
+  const scope = canonicalRoot(root);
+  return [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
+}
 
 export function registerRustAgentConnection(
   root: string,
@@ -351,7 +358,7 @@ export function registerRustAgentConnection(
   health: { replied?: () => void; failed?: (kind: RustFailureKind) => void } = {}
 ): () => void {
   const key = Symbol();
-  agentConnections.set(key, { root, connection, active, health });
+  agentConnections.set(key, { root, connection, active, health, cacheWrites: new Map() });
   return () => agentConnections.delete(key);
 }
 
@@ -359,6 +366,82 @@ export function registerRustAgentConnection(
 export function rustAgentConnected(root: string): boolean {
   const scope = canonicalRoot(root);
   return [...agentConnections.values()].some((entry) => entry.root === scope);
+}
+
+/** Hold the idle sampling interval on Rust's clock, with no pooled socket or read breaker. */
+export function scheduleRustCollection(
+  root: string,
+  intervalMs: number,
+  settled: (due: boolean) => void
+): (() => void) | undefined {
+  const held = rustAgentConnection(root);
+  if (!held) return undefined;
+  const stop = new AbortController();
+  void once(
+    { ...held.connection, agent: undefined },
+    '/internal/collection-tick',
+    FRONT_DOOR_PRINCIPAL,
+    held.active,
+    JSON.stringify({ intervalMs }),
+    'PUT',
+    1024,
+    Date.now() + intervalMs + RUST_DEADLINE_MS,
+    { signal: stop.signal }
+  ).then(
+    (reply) => {
+      if (!stop.signal.aborted)
+        settled(reply.status === 200 && (reply.body as { due?: unknown } | null)?.due === true);
+    },
+    () => {
+      if (!stop.signal.aborted) settled(false);
+    }
+  );
+  return () => stop.abort();
+}
+
+/** Save only through the owner selected at boot. A lost service leaves the in-memory quota usable. */
+export async function writeRustCollectionCache(
+  root: string,
+  kind: 'account-usage-observations' | 'claude-live-snapshots',
+  key: string,
+  bytes: string
+): Promise<boolean> {
+  const held = rustAgentConnection(root);
+  if (!held) return false;
+  const id = `${kind}/${key}`;
+  const write = async () => {
+    try {
+      const reply = await requestRust(
+        held.connection,
+        `/internal/collection-cache/${kind}/${encodeURIComponent(key)}`,
+        FRONT_DOOR_PRINCIPAL,
+        held.active,
+        undefined,
+        'PUT',
+        { text: bytes, cap: 1024 }
+      );
+      return reply.status === 200 && (reply.body as { saved?: unknown } | null)?.saved === true;
+    } catch {
+      return false;
+    }
+  };
+  // A later cooldown or completed result must not be overwritten by the
+  // earlier "attempt started" record on a different socket.
+  const pending = (held.cacheWrites.get(id) ?? Promise.resolve()).then(write);
+  held.cacheWrites.set(id, pending);
+  try {
+    return await pending;
+  } finally {
+    if (held.cacheWrites.get(id) === pending) held.cacheWrites.delete(id);
+  }
+}
+
+/** A native quota read may have reached the provider before its reply was lost. */
+export class CollectionReadIndeterminate extends Error {
+  constructor() {
+    super('Account usage request failed.');
+    this.name = 'CollectionReadIndeterminate';
+  }
 }
 
 /**
@@ -378,21 +461,23 @@ export async function requestRustAgent(
     callId: string;
   },
   onProgress?: (data: unknown) => void,
-  singleShot = false
+  singleShot = false,
+  collect = false
 ): Promise<string | null | undefined> {
-  const scope = canonicalRoot(root);
-  const held = [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
+  const held = rustAgentConnection(root);
   if (!held) return undefined;
   const bytes = JSON.stringify(payload);
   if (Buffer.byteLength(bytes) > 8 * 1024 * 1024 + 8192) return null;
   return new Promise((resolve, reject) => {
     const uncertain = () => {
-      if (singleShot) reject(new RustTransportError('reply', 'Agent write outcome unconfirmed'));
+      if (collect && verb === 'quota-read') reject(new CollectionReadIndeterminate());
+      else if (singleShot)
+        reject(new RustTransportError('reply', 'Agent write outcome unconfirmed'));
       else resolve(null);
     };
     const request = http.request({
       socketPath: held.connection.socketPath,
-      path: `/internal/agent/${encodeURIComponent(verb)}`,
+      path: `/internal/${collect ? 'collect' : 'agent'}/${encodeURIComponent(verb)}`,
       method: 'POST',
       agent: held.connection.agent ?? false,
       headers: {
@@ -470,8 +555,12 @@ export async function requestRustAgent(
               const value = JSON.stringify(event.value);
               fallbackProven = value === '{"fallback":"python"}';
               result = fallbackProven ? null : value;
-            } else if (!['fallback', 'failure'].includes(event.type))
+            } else if (event.type === 'fallback') {
+              fallbackProven =
+                collect && ['shape', 'unavailable', 'busy', 'unsupported'].includes(event.reason);
+            } else if (event.type !== 'failure') {
               throw new RustTransportError('reply', 'Invalid agent stream');
+            }
           } catch {
             result = null;
             request.destroy();

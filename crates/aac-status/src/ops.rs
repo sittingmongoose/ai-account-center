@@ -166,5 +166,13 @@ pub fn dispatch(method: &str, args: &str) -> Result<String> {
         "parseStatus" => parse_status(args)?,
         _ => fail!("unknown_method", "unknown method"),
     };
+    let mut answer = answer;
+    if matches!(
+        method,
+        "resetClaims" | "resetCodexSource" | "resetClaudeSource" | "resetNormalizeClaude"
+    ) {
+        // Keep the pre-share-reader ABI on the confirmation and ledger routes.
+        answer.sort_all_objects();
+    }
     Ok(answer.to_string())
 }

@@ -1,3 +1,4 @@
+import type { AccountDashboard, ClaudeDashboardPlatform } from './services/account-dashboard-types';
 import { compositionGuard } from './compose-request';
 /**
  * AI Account Center - Web Server
@@ -90,6 +91,8 @@ export interface ServerOptions {
   rustServiceBinary?: string;
   /** Per-boot proof for a single loopback-only Rust composition companion. */
   compositionProof?: string;
+  /** Publishes an admitted Rust-held account snapshot to the usage hub. */
+  onRustDashboard?: (platform: ClaudeDashboardPlatform, dashboard: AccountDashboard) => void;
   /** Optional inherited stdin of the Rust public dashboard event receiver. */
   dashboardEventFeed?: Writable;
   host?: string;
@@ -241,6 +244,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   void rustService.start(options.rustServiceBinary);
   app.use('/api', (_req, res, next) => {
     res.locals.rustService = rustService;
+    if (options.onRustDashboard) res.locals.onRustDashboard = options.onRustDashboard;
     next();
   });
   const { apiRoutes } = await import('./routes/index');

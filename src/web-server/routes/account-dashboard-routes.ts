@@ -1,18 +1,24 @@
 import type { Router } from 'express';
 import { createApiRouter } from './api-router';
+import { getCcsDir } from '../../utils/config-manager';
 import { authKind } from '../middleware/request-auth';
 import {
   getAccountDashboard,
+  readAccountDashboardForHome,
+  withPassedResetsAt,
   type AccountDashboardRequestContext,
 } from '../services/account-dashboard-service';
 import { isSecureTransport } from '../middleware/secure-transport';
-import { withOfferedViews } from '../views/offered-views';
+import { dashboardCollectionService, withOfferedViews } from '../views/offered-views';
+import { answerDashboardFed } from '../views/dashboard-feed';
 import type {
   AccountDashboard,
   ClaudeDashboardPlatform,
 } from '../services/account-dashboard-types';
 
 export interface AccountDashboardRouterDeps {
+  readDashboard?: typeof readAccountDashboardForHome;
+  scope?: () => string;
   getDashboard?: (
     platform: ClaudeDashboardPlatform,
     refresh: boolean,
@@ -39,12 +45,33 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
     }
     res.setHeader('Cache-Control', 'no-store');
     try {
+      // providers[].signIn constrains flows carrying a key or code to secure transport.
+      const secureTransport = isSecureTransport(req);
+      const context = { secureTransport };
+      const service = dashboardCollectionService(res);
+      if (service && (!deps.getDashboard || deps.readDashboard)) {
+        const read = await (deps.readDashboard ?? readAccountDashboardForHome)(
+          platform,
+          refresh === 'true',
+          context
+        );
+        const dashboard = withOfferedViews(read.dashboard, res);
+        if (
+          await answerDashboardFed(req, res, service, {
+            platform,
+            secure: secureTransport,
+            dashboard,
+            now: read.now,
+            scope: (deps.scope ?? getCcsDir)(),
+          })
+        )
+          return;
+        res.json(withPassedResetsAt(dashboard, read.now));
+        return;
+      }
       res.json(
         withOfferedViews(
-          await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
-            // providers[].signIn: flows that carry a key or code need a secure transport.
-            secureTransport: isSecureTransport(req),
-          }),
+          await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', context),
           res
         )
       );

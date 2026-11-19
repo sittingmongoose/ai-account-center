@@ -267,10 +267,10 @@ export class UsageFailoverService {
     }
     return state;
   }
-  private persist(target: UsageFailoverTarget, state: State): void {
+  private persist(target: UsageFailoverTarget, state: State): void | Promise<void> {
     // A remote attempt may outlive a grant, including when that attempt fails.
     this.validateSaved(target, state);
-    writeUsageCache(this.file(target), {
+    return writeUsageCache(this.file(target), {
       version: 1,
       key: this.key(target),
       identity: state.identity,
@@ -626,7 +626,7 @@ export class UsageFailoverService {
     state.nextAttempt = Math.max(state.nextAttempt, until);
     state.fresh = false;
     state.primaryFailure = 'rate_limited';
-    this.persist(target, state);
+    void this.persist(target, state);
     return until;
   }
   private async run(
@@ -641,9 +641,12 @@ export class UsageFailoverService {
         .catch(() => {
           state.nextAttempt = this.now() + 30_000;
         })
-        .finally(() => {
-          state.pending = null;
-          this.persist(target, state);
+        .finally(async () => {
+          try {
+            await this.persist(target, state);
+          } finally {
+            state.pending = null;
+          }
         });
     }
     if (state.pending) await state.pending;
@@ -669,7 +672,7 @@ export class UsageFailoverService {
     state.fresh = false;
     state.primaryFailure = template.status === 'needs_sign_in' ? 'needs_sign_in' : null;
     // A process exit during I/O must not preserve the previous successful outcome.
-    this.persist(target, state);
+    await this.persist(target, state);
     const primaries: Array<{ host: UsageHost; candidate: UsageCandidate }> = [];
     let missingPrimary = false;
     for (const source of target.primarySources) {

@@ -59,6 +59,7 @@ export interface UnifiedConfig {
       home?: 'off' | 'on';
       status?: 'off' | 'on';
       analytics?: 'off' | 'on';
+      collection?: 'off' | 'on';
       writes?: 'off' | 'on';
       'app-updates'?: 'off' | 'on';
     };

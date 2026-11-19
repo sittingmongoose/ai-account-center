@@ -10,7 +10,7 @@ use axum::{
     body::{Body, Bytes},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use std::{
     collections::BTreeMap,
@@ -36,21 +36,21 @@ struct Artifact {
     sha256: String,
     file: PathBuf,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Selector {
+pub(crate) struct Selector {
     platform: String,
     ssh_host: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Call {
-    computer: Selector,
-    args: Box<RawValue>,
-    deadline_ms: u64,
-    timeout_ms: u64,
-    max_bytes: usize,
-    call_id: String,
+pub(crate) struct Call {
+    pub(crate) computer: Selector,
+    pub(crate) args: Box<RawValue>,
+    pub(crate) deadline_ms: u64,
+    pub(crate) timeout_ms: u64,
+    pub(crate) max_bytes: usize,
+    pub(crate) call_id: String,
 }
 struct Entry {
     config: aac_config::ComputerConfig,
@@ -74,7 +74,7 @@ pub(crate) struct Agents {
 }
 
 /// The service's deadline is this much earlier than the caller's `timeoutMs`.
-const FRONT_DOOR_MARGIN_MS: u64 = 250;
+pub(crate) const FRONT_DOOR_MARGIN_MS: u64 = 250;
 
 fn refused() -> Failure {
     Failure::new(Cause::Refused, "agent transport unavailable")
@@ -96,15 +96,15 @@ fn word(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
 }
-fn line(value: &Value) -> Bytes {
+pub(crate) fn line(value: &Value) -> Bytes {
     let mut bytes = value.to_string().into_bytes();
     bytes.push(b'\n');
     bytes.into()
 }
-fn fallback(id: &str, reason: &str) -> Bytes {
+pub(crate) fn fallback(id: &str, reason: &str) -> Bytes {
     line(&json!({"type":"fallback","protocol":1,"id":id,"fallback":"python","reason":reason}))
 }
-fn response(body: Body) -> Response {
+pub(crate) fn response(body: Body) -> Response {
     (
         [
             ("content-type", "application/x-ndjson"),
@@ -240,7 +240,69 @@ impl Registry {
     }
 }
 
+impl Call {
+    pub(crate) fn parse(bytes: &[u8]) -> Option<Self> {
+        crate::json_object::from_slice::<Call>(
+            bytes,
+            &[
+                "computer",
+                "args",
+                "deadlineMs",
+                "timeoutMs",
+                "maxBytes",
+                "callId",
+            ],
+        )
+        .ok()
+    }
+
+    pub(crate) fn valid(&self, verb: &str) -> bool {
+        word(&self.call_id)
+            && [
+                "health",
+                "inventory",
+                "apps",
+                "signin-expiry",
+                "quota-read",
+                "scan-usage",
+                "t3-pins",
+                "key-store",
+                "claude-history",
+                "failover-inventory",
+                "launch",
+                "claude-host",
+                "signin-session",
+            ]
+            .contains(&verb)
+            && self.deadline_ms != 0
+            && self.deadline_ms
+                <= if verb == "apps" {
+                    aac_protocol::APP_UPDATE_DEADLINE_MS
+                } else {
+                    aac_protocol::max_deadline_ms(verb)
+                }
+            && self.timeout_ms != 0
+            && self.timeout_ms <= self.deadline_ms + 5000
+            && self.max_bytes != 0
+            && self.max_bytes <= frame_cap(verb) * 2
+            && self.args.get().trim_start().starts_with('{')
+    }
+
+    pub(crate) fn wire(&self, verb: &str) -> String {
+        format!(
+            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{}\",\"deadlineMs\":{},\"args\":{}}}",
+            self.call_id,
+            self.deadline_ms,
+            self.args.get()
+        )
+    }
+}
+
 impl Agents {
+    pub(crate) fn permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.slots.clone().try_acquire_owned().ok()
+    }
+
     pub(crate) fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -250,7 +312,7 @@ impl Agents {
             active: Mutex::new(BTreeMap::new()),
         }
     }
-    async fn client(
+    pub(crate) async fn client(
         &self,
         selector: &Selector,
         deadline: tokio::time::Instant,
@@ -344,49 +406,10 @@ impl Agents {
 
     pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
         let started = tokio::time::Instant::now();
-        let Ok(call) = crate::json_object::from_slice::<Call>(
-            bytes,
-            &[
-                "computer",
-                "args",
-                "deadlineMs",
-                "timeoutMs",
-                "maxBytes",
-                "callId",
-            ],
-        ) else {
+        let Some(call) = Call::parse(bytes) else {
             return unavailable("", "shape");
         };
-        if !word(&call.call_id)
-            || ![
-                "health",
-                "inventory",
-                "apps",
-                "signin-expiry",
-                "quota-read",
-                "scan-usage",
-                "t3-pins",
-                "key-store",
-                "claude-history",
-                "failover-inventory",
-                "launch",
-                "claude-host",
-                "signin-session",
-            ]
-            .contains(&verb)
-            || call.deadline_ms == 0
-            || call.deadline_ms
-                > if verb == "apps" {
-                    aac_protocol::APP_UPDATE_DEADLINE_MS
-                } else {
-                    aac_protocol::max_deadline_ms(verb)
-                }
-            || call.timeout_ms == 0
-            || call.timeout_ms > call.deadline_ms + 5000
-            || call.max_bytes == 0
-            || call.max_bytes > frame_cap(verb) * 2
-            || !call.args.get().trim_start().starts_with('{')
-        {
+        if !call.valid(verb) {
             return unavailable(&call.call_id, "shape");
         }
         // End before the front door's own `timeoutMs` timer, leaving time to reap the owned child
@@ -399,7 +422,7 @@ impl Agents {
         else {
             return unavailable(&call.call_id, "deadline");
         };
-        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+        let Some(permit) = self.permit() else {
             return unavailable(&call.call_id, "busy");
         };
         let deadline = started + Duration::from_millis(budget);
@@ -407,12 +430,7 @@ impl Agents {
         let Some(client) = client else {
             return unavailable(&call.call_id, "unavailable");
         };
-        let wire = format!(
-            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{}\",\"deadlineMs\":{},\"args\":{}}}",
-            call.call_id,
-            call.deadline_ms,
-            call.args.get()
-        );
+        let wire = call.wire(verb);
         let Ok(request) = serde_json::from_str::<Request>(&wire) else {
             return unavailable(&call.call_id, "shape");
         };

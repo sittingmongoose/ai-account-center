@@ -57,8 +57,7 @@ impl ResetClaims {
     }
 }
 
-/// The native module builds without `preserve_order`, so its objects serialize with sorted keys;
-/// this service builds with it. Sorting here keeps the answers byte-equal.
+/// The reset ABI has always serialized object keys in sorted order.
 pub(crate) fn sorted(value: Value) -> Value {
     match value {
         Value::Object(map) => {

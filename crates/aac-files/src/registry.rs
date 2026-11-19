@@ -362,6 +362,18 @@ mod tests {
             assert_eq!(row.owner, Role::Ts);
             assert_eq!(defaults.owner(&row.id), Some(Role::Ts));
         }
+        let moved: Vec<_> = rows
+            .iter()
+            .filter(|r| r.moves_with.as_deref() == Some("collection"))
+            .map(|r| (r.id.as_str(), "collection"))
+            .collect();
+        assert_eq!(
+            moved,
+            [
+                ("account-usage-observations", "collection"),
+                ("claude-live-snapshots", "collection"),
+            ]
+        );
     }
 
     #[test]

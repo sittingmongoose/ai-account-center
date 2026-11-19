@@ -1,9 +1,9 @@
 {
   "src/web-server/compose-request.ts": "3b0b2c5bc1fe0f05e449b415956d70c2fc86a1698b1fa4644ef816e32a7f89a4",
-  "src/web-server/compose-server.ts": "2cbf312c23b050117d41e2450c5f839805c3434cc2c6469aa8dad2ebf823e198",
-  "src/web-server/index.ts": "df42e87668b2aefb14a731e30cbd76988f371394decd998c2b117358f25f21ec",
+  "src/web-server/compose-server.ts": "2dc8e24a8785099c98c4766a8ff976eb11c7f576e17c8f93723458aeb21907a5",
+  "src/web-server/index.ts": "3e508d1240f321ba04318b5e7d89f45c40d9646805920b0ddbb246ff7c36e0bb",
   "src/web-server/routes/account-analytics-routes.ts": "a4daee027847dcaa7aa7649f1c10af734f97a79b31d2ef6856af6ef72c2bb1b6",
-  "src/web-server/routes/account-dashboard-routes.ts": "d570e88fed1efb73d4dfb8169e9c5f8f6e1549af036ec4a29627dc602d5bcf7c",
+  "src/web-server/routes/account-dashboard-routes.ts": "181ab43db5cf1dcf3b709cbcc973c0bbb39f58a06c272b7372aa130ab11a3362",
   "src/web-server/routes/account-lifecycle-routes.ts": "63b227987076621fd3033f8d58d8224f729699740c907f929533553f8d47040f",
   "src/web-server/routes/account-preferences-routes.ts": "1719e97c57e2d7d41f70db5738c6aea161166731f2fcab1d2250f49c049ff971",
   "src/web-server/routes/account-refresh-settings-routes.ts": "31285595a36841869e0e5c48e7c2351962c22244dab514888b389e89f20d9f8a",
@@ -32,10 +32,10 @@
   "src/web-server/routes/status-routes.ts": "fc41227abc8b4270fe396fefa55bca404bebed330c0ced7893ead3869670c778",
   "src/web-server/routes/store-routes.ts": "b7f7b45814d7b252a4fb1204eda744cc1c2b231b285ea07c8b4c2c337b18ba20",
   "src/web-server/rust-service-health.ts": "05a67c876dea55b6f9a17e9d9132d9b954f02ec748a3334ce42798a030d21c39",
-  "src/web-server/rust-service-lifecycle.ts": "7a145e5efcce42e840221f84b7508f31a3b61c7b74658495265e9551a471e12c",
-  "src/web-server/rust-service-routes.json": "7bb1727ac694216f0b97d95a86b12a9c5e4d397454355d07a93d5ceab224e1a8",
-  "src/web-server/rust-service-supervisor.ts": "6286358e00c35662d3fef4972b3fb685baccd6bc46d2a21deb00bcde7711f625",
-  "src/web-server/rust-service-transport.ts": "fb18377b731b6557e8090ddd1a0ebf688857bc052f1476530d989a222bd3ae32",
+  "src/web-server/rust-service-lifecycle.ts": "0a04eae39741a13d1d0cc1edfcded23145f403d521dbf6170b634b911883b3a1",
+  "src/web-server/rust-service-routes.json": "8d2015a26185a1c44986b59257f79e7ade767459ff41555cdd781941b5bc8d82",
+  "src/web-server/rust-service-supervisor.ts": "e4e87193a5a74f869babea367b3bcd4154fc372908e205b22825492f744d55f1",
+  "src/web-server/rust-service-transport.ts": "d89d7ae814eeeec074be0c529738a287f0f2d77e669381f392568d1d3ae10fac",
   "src/web-server/rust-service.ts": "21bb6b84d4a6a7e9313e4001251a3516fb4d1a2c393304a90a44bfe055dc1797",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
 }
