@@ -200,7 +200,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
+                && !matches!(
+                    handler,
+                    Handler::Events | Handler::Agent | Handler::Store | Handler::StatusAnswers
+                ))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
@@ -210,7 +213,9 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     handler,
                     Handler::Agent | Handler::AgentControl | Handler::Store
                 ))
-            || (method == axum::http::Method::PUT && handler != Handler::Feed)
+            // G16b: the forwarded answer send is the one other internal write.
+            || (method == axum::http::Method::PUT
+                && !matches!(handler, Handler::Feed | Handler::StatusAnswers))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)
