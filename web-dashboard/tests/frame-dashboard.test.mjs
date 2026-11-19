@@ -113,9 +113,10 @@ test('a session that ends under the page says why once, and forgets what it read
       else assert.ok(['ended', 'expired'].includes(end.reason));
       assert.equal(ctl.c.state().authenticated, false);
       assert.equal(ctl.c.state().hasData, false);
-      // nothing runs after it
+      // nothing runs after it: the ended session refuses its page's work at the door (the lifetime predicate at the
+      // entry points, Sol L3)
       const calls = ctl.calls.length;
-      await ctl.act('refresh-interval', '60s');
+      assert.equal(ctl.c.act('refresh-interval', '60s'), false, "the page's action is refused once the session has ended");
       assert.equal(ctl.calls.length, calls);
       assert.equal(ctl.toasts().some((t) => t.title === 'Refresh failed'), false, 'no failure toast over the sign-in');
     } finally { ctl.c.stop(); }
@@ -495,6 +496,27 @@ test('M1 (Sol): a Claude Add that already started sends no follow-up Open after 
   releaseAdd();
   await flush(32);
   assert.deepEqual(sent, ['POST /api/accounts/add'], 'its Open never follows once the page has gone');
+  assert.equal(ctl.emitted.length, out, 'and nothing is drawn or said');
+});
+
+test('M1: once a session ends under a request, the entry points refuse its page\'s work until the frame stops it', async () => {
+  // Sol L2 / Astra L1 follow-up (g5stop-R1-L2): `act`, `command` and `page` checked only `stopped`, so between the 401
+  // that ends the session and the frame's stop() a page action could still open Details and push or consume a Back
+  // entry for a session that is over. The entry points use the transport's lifetime (gone) now, as `send` does.
+  const { s, server } = fixtureServer();
+  const ctl = await loadController(server, { page: 'home', width: 900 });
+  s.revoked = true;
+  await ctl.command('refresh');
+  assert.ok(ctl.emitted.some((e) => e.key === 'signed-out'), 'the session ended under the refresh');
+  assert.equal(ctl.c.state().stopped, false, 'the frame has not stopped the controller yet');
+  const history = ctl.historyCalls.length;
+  const out = ctl.emitted.length;
+  assert.equal(ctl.c.act('details', 'codex:one'), false, 'a page action is refused once the session has ended');
+  assert.equal(ctl.c.act('details-closed', ''), false, 'and so is closing one');
+  assert.equal(ctl.c.command('refresh'), false, 'and the header\'s Refresh');
+  ctl.c.page('accounts');
+  await flush(16);
+  assert.equal(ctl.historyCalls.length, history, 'no Back entry is pushed or consumed after session end');
   assert.equal(ctl.emitted.length, out, 'and nothing is drawn or said');
 });
 
