@@ -5,6 +5,10 @@
 //! `no-store` on every answer. The job owner (Lane H) runs beside the front door on Unix and
 //! Windows; the M0 fixture owner replaces it only in a `parity-fixtures` build.
 
+// Unix's NativeOwners serves the same three rows, so this owner is constructed on Windows
+// only; the whole module is intentionally unreachable there.
+#![allow(dead_code)]
+
 use super::{DashboardAccess, DashboardEvents, DashboardPrincipal, Reply};
 use crate::app_update_routes::{BoundJobs, LaneHJobs, Operation};
 use crate::app_updates::AppUpdates;

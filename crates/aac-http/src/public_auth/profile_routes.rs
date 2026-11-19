@@ -65,6 +65,8 @@ pub(super) struct Profiles {
     /// The one owner host when this boot answers its groups through it.
     #[cfg(unix)]
     host: Option<Arc<super::owner_host::OwnerHost>>,
+    #[cfg(all(test, unix))]
+    host_requests: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// One profile's history read: the reference's three states.
@@ -102,6 +104,8 @@ impl Profiles {
             quota_rows,
             #[cfg(unix)]
             host: None,
+            #[cfg(all(test, unix))]
+            host_requests: Arc::default(),
         }
     }
 
@@ -120,6 +124,12 @@ impl Profiles {
         }
     }
 
+    /// How many times this owner asked the private-service host (tests only).
+    #[cfg(all(test, unix))]
+    pub(super) fn host_requests(&self) -> usize {
+        self.host_requests.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Ask the one owner host; `None` is no owner or an explicit service decline (answer the
     /// route yourself).
     #[cfg(unix)]
@@ -132,6 +142,9 @@ impl Profiles {
         body: Option<&[u8]>,
     ) -> Option<super::service_link::ServiceReply> {
         let host = self.host.as_ref()?;
+        #[cfg(test)]
+        self.host_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let reply = host.request(method, uri, principal, headers, body).await?;
         (reply.status != 503 || reply.headers.get("x-aac-decline").is_none()).then_some(reply)
     }
@@ -208,19 +221,6 @@ impl Profiles {
     async fn desktop_profiles(&self, access: &DashboardAccess) -> Reply {
         if let Some(reply) = session_guard(access) {
             return reply;
-        }
-        #[cfg(unix)]
-        if let Some(reply) = self
-            .host_request(
-                "GET",
-                "/api/claude/desktop-profiles",
-                &access.host_principal(),
-                &[],
-                None,
-            )
-            .await
-        {
-            return Self::relay(reply, false);
         }
         let root = self.root.clone();
         let open = Arc::clone(&self.open);
@@ -437,22 +437,6 @@ impl Profiles {
         {
             return super::plain(400, "History snapshot cleanup takes no fields.");
         }
-        #[cfg(unix)]
-        {
-            let service = r#"{"kind":"session","id":"front-door","role":"service"}"#;
-            if let Some(reply) = self
-                .host_request(
-                    "POST",
-                    "/internal/claude-history-cleanup",
-                    service,
-                    &[("content-type", "application/json")],
-                    Some(b"{}"),
-                )
-                .await
-            {
-                return Self::relay(reply, false);
-            }
-        }
         open_reply(self.open.cleanup().await, false)
     }
 
@@ -501,7 +485,7 @@ impl Profiles {
         let root = self.root.clone();
         let now = super::now();
         let rows = quota_rows_for(&self.quota_rows, Arc::clone(&self.rows), now).await;
-        let value = tokio::task::spawn_blocking(move || codex_quota_answer(&root, rows, now))
+        let value = tokio::task::spawn_blocking(move || crate::codex_quotas::answer(&root, rows, now))
             .await
             .ok()
             .flatten();
@@ -724,7 +708,7 @@ fn codex_facts(root: &Path) -> Option<Value> {
             "authValid": identity.valid,
         }));
     }
-    let live_home = home_dir().join(".codex");
+    let live_home = crate::codex_quotas::home_dir().join(".codex");
     let live_auth = live_home.join("auth.json");
     let live_identity = read_auth(&live_auth);
     let activated = match &live_identity.email {
@@ -837,14 +821,6 @@ fn process_env() -> (Option<String>, Option<String>) {
     )
 }
 
-fn home_dir() -> PathBuf {
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
-    #[cfg(not(windows))]
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    home.map(PathBuf::from).unwrap_or_default()
-}
-
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -864,140 +840,34 @@ async fn quota_rows_for(quota: &QuotaRows, cached: RowsSource, now: i64) -> Vec<
         .unwrap_or_default()
 }
 
-fn codex_quota_answer(root: &Path, dashboard_rows: Vec<Value>, now: i64) -> Option<Value> {
-    let (_, records) = read_codex_profile_registry(root).ok()?;
-    let profiles: Vec<Value> = records
-        .iter()
-        .map(|record| {
-            let identity = read_auth(
-                &root
-                    .join("codex-instances")
-                    .join(&record.name)
-                    .join("auth.json"),
-            );
-            json!({"name": record.name, "authValid": identity.valid})
-        })
-        .collect();
-    if profiles.is_empty() {
-        return aac_views::codex_profiles::quotas(empty_envelope(json!({
-            "profiles": [],
-            "rows": [],
-            "renewals": [],
-            "now": now as f64,
-        })))
-        .ok();
-    }
-    let mut quota_rows = Vec::new();
-    let mut epochs = Map::new();
-    for profile in &profiles {
-        let name = profile["name"].as_str().unwrap_or_default();
-        let Some(row) = dashboard_rows.iter().find(|row| {
-            row.get("capabilities")
-                .and_then(|caps| caps.get("codexProfile"))
-                .and_then(Value::as_str)
-                == Some(name)
-        }) else {
-            continue;
-        };
-        let status = row["status"].as_str().unwrap_or("unavailable");
-        let (quota_status, needs_reauth) = match status {
-            "ok" | "cached" => ("ok", false),
-            "needs_sign_in" | "reauth_required" => ("error", true),
-            _ => ("error", false),
-        };
-        for field in ["fetchedAt", "sampledAt"] {
-            if let Some(text) = row[field].as_str() {
-                remember_instant(&mut epochs, text);
-            }
-        }
-        let mut windows = Vec::new();
-        for window in row["windows"].as_array().into_iter().flatten() {
-            let key = window["key"].as_str().unwrap_or_default();
-            let label = match key {
-                "five_hour" => "5-hour limit",
-                "seven_day" => "Weekly limit",
-                _ => window["label"].as_str().unwrap_or("Usage"),
-            };
-            let reset = window["resetAt"].as_str();
-            if let Some(text) = reset {
-                remember_instant(&mut epochs, text);
-            }
-            windows.push(json!({
-                "key": key,
-                "label": label,
-                "usedPercent": window["usedPercent"],
-                "resetAt": reset,
-            }));
-        }
-        quota_rows.push(json!({
-            "profile": name,
-            "quotaStatus": quota_status,
-            "needsReauth": needs_reauth,
-            "fetchedAt": row["fetchedAt"],
-            "staleAsOf": row["sampledAt"],
-            "quotaWindows": windows,
-        }));
-    }
-    let renewals = renewal_entries(root, now);
-    let data = json!({
-        "profiles": profiles,
-        "rows": quota_rows,
-        "renewals": renewals,
-        "now": now as f64,
-    });
-    let envelope = serde_json::from_value(json!({
-        "data": data,
-        "presentation": {"dates": {}, "epochs": epochs, "order": {}},
-    }))
-    .ok()?;
-    aac_views::codex_profiles::quotas(envelope).ok()
-}
-
-fn empty_envelope(data: Value) -> Envelope {
-    serde_json::from_value(json!({
-        "data": data,
-        "presentation": {"dates": {}, "epochs": {}, "order": {}},
-    }))
-    .expect("empty presentation facts parse")
-}
-
-fn remember_instant(epochs: &mut Map<String, Value>, text: &str) {
-    if let Some(ms) = aac_num::ecma::parse_instant(text) {
-        epochs.insert(text.to_owned(), json!(ms));
-    }
-}
-
-/// The renewal notes for the profiles the dashboard shows, read from the status store only.
-fn renewal_entries(root: &Path, now: i64) -> Vec<Value> {
-    let options = aac_renewal::renewal::CodexProfileRenewalOptions {
-        env: aac_renewal::planner::CodexRenewalEnvironment {
-            ccs_dir: root.to_path_buf(),
-            codex_home: Some(home_dir().join(".codex")),
-            home_dir: Some(home_dir()),
-            ..Default::default()
-        },
-        now: Arc::new(move || now),
-        ..Default::default()
-    };
-    match aac_renewal::renewal::get_codex_profile_renewal_status(&options) {
-        Ok(status) => status
-            .profiles
-            .iter()
-            .map(|profile| {
-                json!([
-                    profile.name,
-                    {"state": profile.state.word(), "message": profile.message}
-                ])
-            })
-            .collect(),
-        Err(()) => Vec::new(),
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_public_profiles_get_never_asks_a_different_open_owner() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let root = directory.path().to_path_buf();
+        let host = super::super::owner_host::OwnerHost::new(root.clone(), false);
+        let rows: RowsSource = Arc::new(Vec::new);
+        let quota: QuotaRows = Arc::new(|_now| Box::pin(async { Vec::new() }));
+        let profiles = Profiles::start_with_host(
+            root,
+            rows,
+            Arc::new(Agents::new(directory.path().to_path_buf())),
+            quota,
+            host,
+        );
+        let reply = profiles
+            .desktop_profiles(&super::super::DashboardAccess::test_browser())
+            .await;
+        assert_eq!(reply.status().as_u16(), 200);
+        // The POST starts and the GET reads the same Profiles::open owner; neither may hop to
+        // the private service's separate ClaudeOpen.
+        assert_eq!(profiles.host_requests(), 0);
+    }
 
     #[test]
     fn the_route_shapes_match_the_retired_router() {

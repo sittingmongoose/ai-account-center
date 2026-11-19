@@ -71,28 +71,6 @@ pub fn publish_native_hub(
     hub::publish_native_snapshot(directory, cache.hub_dashboards(&timestamp, now));
 }
 
-/// The latest native Accounts rows that carry a saved Codex profile, one per name. The public
-/// Codex quota route reads these same collector rows the Accounts dashboard shows.
-fn codex_dashboard_rows(cache: &crate::account_usage::AccountUsageCache) -> Vec<Value> {
-    let at = now();
-    let Some(timestamp) = storage::iso(at) else {
-        return Vec::new();
-    };
-    let mut seen = std::collections::HashSet::new();
-    let mut rows = Vec::new();
-    for dashboard in cache.hub_dashboards(&timestamp, at) {
-        for row in dashboard["accounts"].as_array().into_iter().flatten() {
-            let Some(name) = row["capabilities"]["codexProfile"].as_str() else {
-                continue;
-            };
-            if seen.insert(name.to_owned()) {
-                rows.push(row.clone());
-            }
-        }
-    }
-    rows
-}
-
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
 pub struct DashboardAccess {
@@ -130,6 +108,28 @@ impl DashboardAccess {
             DashboardPrincipal::Anonymous => ("session", "admin", "dashboard"),
         };
         json!({"kind":kind,"id":id,"role":role}).to_string()
+    }
+}
+
+#[cfg(test)]
+impl DashboardAccess {
+    /// A signed-in browser for the public-route tests (no listener or store needed).
+    pub(super) fn test_browser() -> Self {
+        Self {
+            auth_enabled: true,
+            principal: DashboardPrincipal::Browser {
+                username: "fixture".into(),
+            },
+            secure_transport: true,
+            same_origin: true,
+            origin_present: true,
+            local_access: true,
+            session_id: Some("f".repeat(64)),
+            credential_transport: "loopback",
+            direct_loopback: true,
+            lan_proxy: false,
+            client_address: None,
+        }
     }
 }
 
@@ -510,7 +510,7 @@ pub(crate) async fn run_public_at(
     let (profiles, app_updates) = if cut {
         let rows: profile_routes::RowsSource = {
             let cache = account_usage.clone();
-            Arc::new(move || codex_dashboard_rows(&cache))
+            Arc::new(move || crate::codex_quotas::rows_from_cache(&cache, now()))
         };
         #[cfg(unix)]
         let profiles = match &owner_host {

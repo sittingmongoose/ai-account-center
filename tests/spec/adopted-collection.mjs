@@ -15,7 +15,10 @@ const serviceBinary = process.env.AAC_RUST_SERVICE_BINARY;
 assert(launcher && path.isAbsolute(launcher), 'set AAC_M6_TARGET_CLI to a native build');
 assert(serviceBinary && path.isAbsolute(serviceBinary), 'set AAC_RUST_SERVICE_BINARY');
 
-const root = await mkdtemp(path.join(os.tmpdir(), 'aac-adopted-'));
+const base = await mkdtemp(path.join(os.tmpdir(), 'aac-adopted-'));
+// `codex_local` only reads a rollout under `$HOME/.ccs`; make that the fixture root.
+const root = path.join(base, '.ccs');
+await mkdir(root, { recursive: true, mode: 0o700 });
 const children = [];
 const accountId = 'zai:acct:0123abcd';
 const accountPath = '/api/accounts/' + encodeURIComponent(accountId);
@@ -24,7 +27,9 @@ const credentials = { username: 'fixture-owner', password: 'fixture-password-onl
 const env = {
   ...process.env,
   CCS_DIR: root,
-  CCS_HOME: root,
+  CCS_HOME: base,
+  HOME: base,
+  CODEX_HOME: path.join(root, '.codex'),
   AAC_TS_SIDECAR: 'off',
   AAC_AGENT_VERBS: 'off',
   AAC_AGENT_TRANSPORT: 'off',
@@ -97,6 +102,23 @@ try {
     { mode: 0o600 }
   );
   await writeSource('Before');
+  await writeFile(
+    path.join(root, 'codex-profiles.yaml'),
+    "version: '1.0'\ndefault: default\nprofiles:\n  default:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+    { mode: 0o600 }
+  );
+  await mkdir(path.join(root, '.codex/sessions/2026/11/19'), { recursive: true, mode: 0o700 });
+  await writeFile(
+    path.join(root, '.codex/sessions/2026/11/19/rollout-fixture.jsonl'),
+    JSON.stringify({
+      payload: {
+        rate_limits: {
+          primary: { used_percent: 24, resets_at: 1795090800, window_minutes: 300 },
+        },
+      },
+    }) + '\n',
+    { mode: 0o600 }
+  );
   const registry = JSON.parse(
     await readFile(new URL('../../config/private-files.json', import.meta.url), 'utf8')
   );
@@ -161,6 +183,14 @@ try {
     'the adopted service supplies the public dashboard and existing Re-check admission'
   );
   assert.equal(label(await initial.json()), 'Before');
+  const quotas = await send('/api/codex/profiles/quotas', { headers: { cookie } });
+  assert.equal(quotas.status, 200);
+  const quotaBody = await quotas.json();
+  assert.equal(quotaBody.profiles.length, 1, 'the saved profile is listed');
+  assert.equal(quotaBody.profiles[0].profileName, 'default');
+  assert.equal(quotaBody.profiles[0].status, 'available');
+  assert.equal(quotaBody.profiles[0].windows[0].key, 'five_hour');
+  assert.equal(quotaBody.profiles[0].windows[0].usedPercent, 24);
   assert.equal((await noOrigin.json()).code, 'origin_required');
   const tag = initial.headers.get('etag');
   assert(tag);
@@ -227,5 +257,5 @@ try {
   );
 } finally {
   for (const child of children.reverse()) await stop(child);
-  await rm(root, { recursive: true, force: true });
+  await rm(base, { recursive: true, force: true });
 }

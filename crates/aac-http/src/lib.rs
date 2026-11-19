@@ -20,6 +20,7 @@ mod claude_account_store;
 pub mod claude_lifecycle;
 pub mod claude_open;
 pub mod cli;
+mod codex_quotas;
 mod collection;
 mod collection_cache;
 mod dashboard_fed;

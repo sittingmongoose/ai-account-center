@@ -85,7 +85,12 @@ fn envelope(bytes: &[u8]) -> Option<Envelope> {
     crate::json_object::from_slice(bytes, &["data", "presentation"]).ok()
 }
 
-pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
+pub(crate) fn answer(
+    path: &str,
+    root: &Path,
+    bytes: &[u8],
+    cache: Option<&crate::account_usage::AccountUsageCache>,
+) -> Option<Value> {
     match path {
         "/api/claude/desktop-profiles" if bytes.is_empty() => desktop_profiles(root),
         "/api/claude/desktop-profiles/usage" => {
@@ -101,6 +106,13 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
             )
             .ok()?;
             aac_views::codex_profiles::summary(&input).ok()
+        }
+        // M3: an adopted collection answers the quota route from the generation it holds; the
+        // public route no longer has to wait for a local cache that the adoption switched off.
+        "/api/codex/profiles/quotas" if bytes.is_empty() => {
+            let at = now_ms();
+            let rows = crate::codex_quotas::rows_from_cache(cache?, at);
+            crate::codex_quotas::answer(root, rows, at)
         }
         "/api/codex/profiles/quotas" => aac_views::codex_profiles::quotas(envelope(bytes)?).ok(),
         // G6: the installed runtime answers with its own live proof, workers and probes once TS
