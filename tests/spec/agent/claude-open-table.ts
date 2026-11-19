@@ -855,7 +855,9 @@ async function main(): Promise<void> {
     table.operations.push({ name: test.name, expected: await runOperations(test) });
   }
   const file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'claude-open-table.json');
-  const text = JSON.stringify(table, null, 2) + '\n';
+  // Operation ids are random on both sides; the table pins one token (the Rust test
+  // normalizes its own ids the same way before comparing).
+  const text = JSON.stringify(table, null, 2).replace(/op_[0-9a-f]{24}/g, 'op_ID') + '\n';
   if (process.argv.includes('--check')) {
     const existing = fs.readFileSync(file, 'utf8');
     if (existing !== text) {
