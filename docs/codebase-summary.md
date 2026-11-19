@@ -1,15 +1,15 @@
 # AI Account Center Codebase Summary
 
-AI Account Center is a Leptos 0.9 account dashboard with a TypeScript backend
-and native Swift/WPF clients. It retains existing account/private-state
-contracts from the original CCS fork.
+AI Account Center is a Leptos 0.9 account dashboard with a Rust public service,
+a private TypeScript compatibility worker, and Swift/WPF clients. It retains
+the account and private-state contracts from the original CCS fork.
 
 | Surface | Current source |
 | --- | --- |
-| Primary CLI/bootstrap | [src/ccs.ts](../src/ccs.ts), [command router](../src/commands/root-command-router.ts) |
+| Primary CLI/bootstrap | [Native command entry points](../crates/aac-http/src/cli.rs) |
 | Installed command and compatibility bins | [package.json](../package.json) |
-| Dashboard HTTP/session boundary | [web server](../src/web-server/index.ts), [auth middleware](../src/web-server/middleware/auth-middleware.ts) |
-| Account projection | [account dashboard service](../src/web-server/services/account-dashboard-service.ts) |
+| Dashboard HTTP/session boundary | [Rust public listener](../crates/aac-http/src/public_auth/mod.rs), [private compatibility worker](../src/web-server/sidecar.ts) |
+| Account projection | [native producer](../crates/aac-http/src/account_usage/producer.rs), [compatibility collection](../src/web-server/services/account-dashboard-service.ts) |
 | Codex saved logins | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [renewal](../src/codex-auth/codex-profile-renewal.ts), [quota reader](../src/web-server/usage/codex-quota/quota-fetcher-codex.ts) |
 | Analytics | [analytics service](../src/web-server/services/account-analytics-service.ts) |
 | Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
@@ -44,7 +44,8 @@ tool, edit the JSON. `tests/spec/tables.test.ts`, `cargo test -p aac-providers` 
 `tsc` then name each hand list (Python helpers, page JS, Leptos, native modules)
 and each typed union that still needs the new row.
 
-The root TypeScript build compiles `src/` into `dist/` and
+The service build stages the native commands in `dist/native/`, compiles the
+compatibility worker into `dist/` and
 [bundles](../scripts/build-codex-update-runtime.js) the Codex stop/start runtime
 into `dist/app-updates/`; the update helpers carry that bundle to Linux hosts
 without AAC, such as Nas1. The

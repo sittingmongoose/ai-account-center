@@ -5,29 +5,17 @@ fast it is being used and when it resets. The dashboard writes its own readings 
 folder after every refresh; agents read the files. There is no key, no network route and no client
 library: any agent that can read the network share can read the snapshot.
 
-Source: `src/web-server/agent-usage/`. Command: `src/commands/usage-snapshot-command.ts`. Reader
-and folder guide: `scripts/agent-usage/` (`aac-usage`, `aac-usage.cmd`, `README.md`).
+The publisher is in `crates/aac-snapshot/`, with its compatibility sample
+adapter in `src/web-server/agent-usage/`. The reader and folder guide live in
+`scripts/agent-usage/`.
 
-## Turn it on
+## Existing snapshot configuration
 
-```
-ai-account-center dashboard usage-snapshot set /mnt/share/aac-usage \
-  --location "Linux=/mnt/share/aac-usage" \
-  --location "the Mac=/Volumes/share/aac-usage" \
-  --location "Windows=\\nas\share\aac-usage"
-ai-account-center dashboard usage-snapshot status
-ai-account-center dashboard usage-snapshot off
-```
-
-The folder (absolute, created when its parent exists) is saved in
-`~/.ccs/agent-usage-snapshot.json` (0600). The running dashboard reads it after each refresh, so no
-restart is needed. `off` stops writing; files already written stay.
-
-Each `--location <where>=<path>` (at most 8) says where a group of computers finds the same folder.
-They are saved with the folder, published as `locations.json`, and listed in the rules block that
-`aac-usage rules` prints, so an agent on any computer knows where to look. Your own share names and
-mount points stay in this private setting and the shared folder, never in the package. `set`
-without `--location` keeps the saved locations.
+The existing folder is saved in `~/.ccs/agent-usage-snapshot.json` (0600).
+The dashboard reads it after each refresh. Saved mount locations appear in
+`locations.json` and in the rules block printed by `aac-usage rules`.
+The former snapshot commands are retired. Setup, destination changes and
+disabling the snapshot through Settings are open migration work.
 
 ## What it writes
 
