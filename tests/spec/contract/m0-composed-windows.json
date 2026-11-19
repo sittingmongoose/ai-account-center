@@ -2796,5 +2796,197 @@
         "code": "not_found"
       }
     }
+  },
+  "native/contract/061-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/scoreboard",
+      "role": "session"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "private, no-cache",
+        "etag": "<etag>",
+        "vary": "Cookie",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "version": 1,
+        "generatedAt": "<timestamp>",
+        "refresh": {
+          "pollSeconds": 60
+        },
+        "sources": [
+          {
+            "id": "scoreboard-runs",
+            "label": "Agent runs",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 180,
+            "state": "ok",
+            "detail": "0 runs from 0 writers read <clock> (0 observed, 0 benchmark)."
+          },
+          {
+            "id": "scoreboard-catalog",
+            "label": "Scoreboard catalog",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "No catalog folder in the agent reports."
+          }
+        ],
+        "catalog": {
+          "minRuns": 5,
+          "models": [],
+          "taskTypes": [],
+          "measures": [],
+          "uses": [],
+          "benchmarks": []
+        },
+        "uses": [],
+        "recent": [],
+        "unscored": {
+          "total": 0,
+          "scanLimit": 0,
+          "unreadable": 0,
+          "noModel": 0,
+          "noTaskType": 0,
+          "unknownModel": 0,
+          "unknownTaskType": 0,
+          "unknownModels": [],
+          "examples": []
+        },
+        "filters": {
+          "from": null,
+          "to": null,
+          "source": "all",
+          "taskType": null,
+          "available": true,
+          "taskTypes": []
+        },
+        "identity": {
+          "catalogHash": "",
+          "families": [],
+          "models": {},
+          "efforts": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultrathink"
+          ]
+        },
+        "history": {
+          "store": "on",
+          "runs": 0,
+          "importing": false
+        },
+        "cached": true,
+        "cacheAgeSeconds": "<elapsed-seconds>",
+        "refreshing": false
+      }
+    }
+  },
+  "native/contract/061-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/scoreboard",
+      "role": "bar"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "private, no-cache",
+        "etag": "<etag>",
+        "vary": "Cookie",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "version": 1,
+        "generatedAt": "<timestamp>",
+        "refresh": {
+          "pollSeconds": 60
+        },
+        "sources": [
+          {
+            "id": "scoreboard-runs",
+            "label": "Agent runs",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "No agent reports folder at <fixture-home>\\reports."
+          },
+          {
+            "id": "scoreboard-catalog",
+            "label": "Scoreboard catalog",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "No catalog folder in the agent reports."
+          }
+        ],
+        "catalog": {
+          "minRuns": 5,
+          "models": [],
+          "taskTypes": [],
+          "measures": [],
+          "uses": [],
+          "benchmarks": []
+        },
+        "uses": [],
+        "recent": [],
+        "unscored": {
+          "total": 0,
+          "scanLimit": 0,
+          "unreadable": 0,
+          "noModel": 0,
+          "noTaskType": 0,
+          "unknownModel": 0,
+          "unknownTaskType": 0,
+          "unknownModels": [],
+          "examples": []
+        },
+        "filters": {
+          "from": null,
+          "to": null,
+          "source": "all",
+          "taskType": null,
+          "available": true,
+          "taskTypes": []
+        },
+        "identity": {
+          "catalogHash": "bd283c0c8c6f4c6b18903e75147690b8b28fa7b57594ac3d00641141fe62e6d3",
+          "families": [],
+          "models": {},
+          "efforts": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultrathink"
+          ]
+        },
+        "history": {
+          "store": "on",
+          "runs": 0,
+          "importing": false
+        },
+        "cached": true,
+        "cacheAgeSeconds": "<elapsed-seconds>",
+        "refreshing": false
+      }
+    }
   }
 }
