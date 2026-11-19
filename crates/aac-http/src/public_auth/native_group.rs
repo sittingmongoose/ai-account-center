@@ -837,6 +837,7 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
             .map(str::to_owned)
     };
     let (Some(etag), Some(view)) = (header("etag"), header("x-aac-view")) else {
+        eprintln!("aac-http: fed view missing its etag or view header");
         return super::decline();
     };
     if !matches!(
@@ -845,6 +846,7 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
     ) || !etag.starts_with("W/\"")
         || etag.len() != 67
     {
+        eprintln!("aac-http: fed view refused: {view} {etag}");
         return super::decline();
     }
     let mut out = if not_modified(if_none_match, &etag) {
