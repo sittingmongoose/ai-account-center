@@ -10,6 +10,7 @@ import { loadUnifiedConfig } from '../config/unified-config-loader';
 import { addEventLoopMonitorFields } from '../utils/event-loop-monitor';
 import { createLogger } from '../services/logging';
 import { getCcsDir } from '../utils/config-manager';
+import { broadcastDashboardEvent, type DashboardEvent } from './dashboard-events';
 import {
   acquireRustServiceDetailed,
   PUBLIC_HEALTH_PRINCIPAL,
@@ -18,6 +19,7 @@ import {
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
 import {
   notifyRustStoreGaveUp,
+  openRustEvents,
   registerRustStoreConnection,
   requestRust,
   registerRustAgentConnection,
@@ -26,7 +28,7 @@ import {
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
 import { registerFileWriter, rememberFileLeaseBinary } from '../shared/private-file-lease';
-import { rustGroupOn, rustStoreSwitchOn } from './rust-service-groups';
+import { rustComposeSelected, rustGroupOn, rustStoreSwitchOn } from './rust-service-groups';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
@@ -96,6 +98,7 @@ export class RustSupervisor {
   protected lease: RustLease | null = null;
   private removeAgentConnection: (() => void) | null = null;
   private removeStoreConnection: (() => void) | null = null;
+  private closeEvents: (() => void) | null = null;
   /** R3: the store host's boot input, resolved once in `start`; null keeps the store in TS. */
   protected storeBoot: RustStoreBootInput | null = null;
   protected active = new Set<http.ClientRequest>();
@@ -236,6 +239,8 @@ export class RustSupervisor {
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
+    this.closeEvents?.();
+    this.closeEvents = null;
     if (this.storeBoot) setRustStoreHosted(getCcsDir(), false);
     this.lease?.close();
     this.lease = null;
@@ -280,6 +285,22 @@ export class RustSupervisor {
         ? registerFileWriter(lease.connection.ccsDir, this.binary, () => this.registeredWrites++)
         : null;
     this.lease = lease;
+    this.closeEvents?.();
+    this.closeEvents = null;
+    if (rustComposeSelected() && rustGroupOn('app-updates')) {
+      const events = openRustEvents(lease.connection, ({ type, job }) => {
+        if (this.lease !== lease || type !== 'app-update-job' || !job || typeof job !== 'object')
+          return;
+        // The private Rust owner sends only its public progress DTO. The Rust
+        // listener validates this envelope again and applies its session policy.
+        broadcastDashboardEvent({
+          type,
+          job: job as Extract<DashboardEvent, { type: 'app-update-job' }>['job'],
+        });
+      });
+      this.closeEvents = events.close;
+      void events.ready.catch(events.close);
+    }
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
   }
 
@@ -292,6 +313,8 @@ export class RustSupervisor {
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
+    this.closeEvents?.();
+    this.closeEvents = null;
     this.lease = null;
     lease.close();
     logger.warn('rust.service.lost', 'Rust service stopped; TypeScript answers', {

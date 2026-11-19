@@ -291,6 +291,7 @@ export function openRustEvents(
       resolve();
       let buffer = '';
       response.setEncoding('utf8');
+      response.once('error', () => request?.destroy());
       response.on('data', (chunk: string) => {
         buffer += chunk;
         let end: number;

@@ -1035,16 +1035,19 @@ async fn serve_inner(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
+    let feeds = Feeds::new();
     let app_update_jobs = app_update_jobs.or_else(|| {
         native_app_updates.then(|| {
-            let jobs =
-                crate::app_updates::AppUpdates::with_pool(boot.ccs_dir.clone(), agents.clone());
+            let jobs = crate::app_updates::AppUpdates::with_pool(
+                boot.ccs_dir.clone(),
+                agents.clone(),
+                Some(feeds.clone()),
+            );
             Arc::new(crate::app_update_routes::LaneHJobs(jobs)) as Arc<dyn AppUpdateJobs>
         })
     });
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
     let collection = Arc::new(crate::collection::Collection::default());
-    let feeds = Feeds::new();
     // R4: the owned readers run under the store host, with the boot's share roots and the
     // registry writers TS resolved at start.
     let owners = boot.owners()?;

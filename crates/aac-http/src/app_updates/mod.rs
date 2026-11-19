@@ -2,6 +2,10 @@
 mod rows;
 mod storage;
 
+use crate::{
+    feed::Feeds,
+    public_auth::{AppUpdateHostProgress, AppUpdateProgress, DashboardEvent},
+};
 use aac_protocol::{APP_UPDATE_HOST_TIMEOUT_MS, Event};
 use aac_transport::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -293,6 +297,7 @@ pub struct AppUpdates {
     directory: PathBuf,
     agents: Arc<crate::agent_transport::Agents>,
     active: Mutex<Option<Active>>,
+    events: Option<Feeds>,
 }
 
 impl AppUpdates {
@@ -300,18 +305,48 @@ impl AppUpdates {
     /// for the service lifetime so status and cancel see the same job owner.
     pub fn new(root: PathBuf) -> Arc<Self> {
         let agents = Arc::new(crate::agent_transport::Agents::new(root.clone()));
-        Self::with_pool(root, agents)
+        Self::with_pool(root, agents, None)
     }
 
     pub(crate) fn with_pool(
         root: PathBuf,
         agents: Arc<crate::agent_transport::Agents>,
+        events: Option<Feeds>,
     ) -> Arc<Self> {
         Arc::new(Self {
             directory: root.join("app-updates"),
             agents,
             active: Mutex::new(None),
+            events,
         })
+    }
+
+    fn publish(&self, job: &Job) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        let hosts = job.hosts.iter().flatten().map(|(host, progress)| {
+            AppUpdateHostProgress {
+                host: host.clone(),
+                state: progress["state"].as_str().unwrap_or("waiting").to_owned(),
+                current_app: progress["currentApp"].as_str().map(str::to_owned),
+                phase: progress["phase"].as_str().map(str::to_owned),
+                phase_since: progress["phaseSince"].as_str().map(str::to_owned),
+            }
+        }).collect();
+        let event = DashboardEvent::AppUpdateJob {
+            job: AppUpdateProgress {
+                id: job.id.clone(),
+                state: job.state.clone(),
+                cancel_requested: job.cancel_requested,
+                completed_results: u32::try_from(job.results.len()).unwrap_or(u32::MAX),
+                expected_results: job.expected_results.and_then(|total| u32::try_from(total).ok()),
+                hosts,
+            },
+        };
+        if let Ok(value) = serde_json::to_value(event) {
+            events.publish_event(value);
+        }
     }
 
     /// Read a job without launching or reconciling any host process.
@@ -349,6 +384,7 @@ impl AppUpdates {
             Err(_) => return reply(500, json!({"error":"App updates could not start safely."})),
         };
         let cancel = CancellationToken::new();
+        self.publish(&job);
         let result = reply(202, json!({"job":job}));
         *active = Some(Active {
             job,
@@ -369,6 +405,7 @@ impl AppUpdates {
             state.job.cancel_requested = true;
             state.cancel.cancel();
             let _ = state.lease.save(&state.job);
+            self.publish(&state.job);
             return reply(202, json!({"job":state.job,"cancelling":true}));
         }
         let job = storage::load(&self.directory);
@@ -389,6 +426,7 @@ impl AppUpdates {
         if let Some(active) = self.active.lock().await.as_mut() {
             update(&mut active.job);
             let _ = active.lease.save(&active.job);
+            self.publish(&active.job);
         }
     }
 
@@ -419,6 +457,7 @@ impl AppUpdates {
             }
             active.job.finish();
             let _ = active.lease.save(&active.job);
+            self.publish(&active.job);
         }
     }
 
