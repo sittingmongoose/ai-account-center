@@ -56,7 +56,20 @@ const inventory = (spent = false, pending = null) => ({
 /** The reset routes, answered in the page. `claim` picks the claim's answer; every request is recorded. */
 function resetServer({ claim = 'claimed' } = {}) {
 	const server = fakeServer();
-	const r = { spent: false, pending: null, claim };
+	const r = { spent: false, pending: null, claim, revision: 1, until: null, latest: null };
+	const accountKey = KEY('e');
+	const confirmationKey = KEY('2');
+	const evidence = () => ({
+		canonicalAccountKey: accountKey, revision: String(r.revision), latestAttempt: r.latest,
+		claimTokens: { tokenKeys: r.until ? [confirmationKey] : [], untilMs: r.until },
+		pendingAttempts: r.pending ? [{ attemptKey: r.pending, attemptOrder: '1' }] : [],
+	});
+	const receipt = (outcome, windows) => {
+		r.revision += 1;
+		r.latest = { attemptKey: KEY('9'), attemptOrder: '1', pending: !!r.pending, outcome,
+			verification: r.pending ? 'unconfirmed' : 'confirmed', providerSuccess: true, windows };
+		return { ...r.latest, evidence: evidence() };
+	};
 	const json = (status, payload) => ({ status, contentType: 'application/json', body: JSON.stringify(payload) });
 	server.routes.unshift(
 		['GET', /^\/api\/accounts\/dashboard$/, () => json(200, DASHBOARD)],
@@ -64,25 +77,38 @@ function resetServer({ claim = 'claimed' } = {}) {
 			providers: [], jobs: [], trash: [],
 			accounts: DASHBOARD.accounts.map((a) => ({ id: a.id, provider: a.provider, actions: { remove: true, signInAgain: true, replaceKey: true, recheck: true }, removeRefusal: null })),
 		})],
-		['GET', /^\/api\/accounts\/claude%3Aone\/reset-claims$/, () => json(200, inventory(r.spent, r.pending))],
-		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/prepare$/, (body) => json(200, {
-			account: { label: 'Claude: fresh.label@example.invalid (Max)' }, confirmationToken: KEY('1'), expiresAtMs: Date.now() + 120_000,
-			grant: inventory().grants.find((g) => g.grantKey === body.grantKey), costText: 'Spends one selected reset. This cannot be undone.',
+		['GET', /^\/api\/accounts\/preferences$/, () => json(200, {})],
+		['GET', /^\/api\/(?:(?:antigravity|codex)\/profiles|claude\/desktop-profiles)$/, () => json(200, { profiles: [] })],
+		['GET', /^\/api\/accounts\/claude%3Aone\/reset-claims$/, () => json(200, {
+			...inventory(r.spent, r.pending), canonicalAccountKey: accountKey, bindingRevision: '1', evidence: evidence(),
 		})],
+		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/prepare$/, (body) => {
+			r.until = Date.now() + 120_000;
+			r.revision += 1;
+			return json(200, {
+				account: { label: 'Claude: fresh.label@example.invalid (Max)' }, confirmationToken: KEY('1'),
+				confirmationKey, expiresAtMs: r.until, evidence: evidence(),
+				grant: inventory().grants.find((g) => g.grantKey === body.grantKey),
+				costText: 'Spends one selected reset. This cannot be undone.',
+			});
+		}],
 		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims$/, (body) => {
-			if (body.confirmationToken !== KEY('1')) return json(409, { code: 'reset-state-unavailable', action: 'check-again', reason: 'confirmation-invalid', sent: false });
-			if (r.claim === 'expired') return json(409, { code: 'reset-state-unavailable', action: 'check-again', reason: 'confirmation-invalid', sent: false });
+			r.until = null;
+			if (body.confirmationToken !== KEY('1') || r.claim === 'expired') {
+				r.revision += 1;
+				return json(409, { code: 'reset-state-unavailable', action: 'check-again', reason: 'confirmation-invalid', sent: false, evidence: evidence() });
+			}
 			if (r.claim === 'unconfirmed') {
 				r.pending = KEY('9');
-				return json(200, { attemptKey: KEY('9'), outcome: 'claimed-unconfirmed', verification: 'unconfirmed', providerSuccess: true, windows: [] });
+				return json(200, receipt('claimed-unconfirmed', []));
 			}
 			r.spent = true;
-			return json(200, { attemptKey: KEY('9'), outcome: 'claimed', verification: 'confirmed', providerSuccess: true, windows: [{ id: 'seven_day', usedPercent: 0 }] });
+			return json(200, receipt('claimed', [{ id: 'seven_day', usedPercent: 0 }]));
 		}],
 		['POST', /^\/api\/accounts\/claude%3Aone\/reset-claims\/check$/, () => {
 			r.pending = null;
 			r.spent = true;
-			return json(200, { attemptKey: KEY('9'), outcome: 'claimed', verification: 'confirmed', providerSuccess: true, windows: [{ id: 'seven_day', usedPercent: 3 }] });
+			return json(200, receipt('claimed', [{ id: 'seven_day', usedPercent: 3 }]));
 		}],
 	);
 	return { server, r };
@@ -157,11 +183,16 @@ export const tests = {
 		await t.shot('resets-dialog', 'the confirm dialog: the fresh account label, Weekly reset, what it refills, the expiry, the cost sentence, the countdown, Cancel / Use this reset');
 		await t.page.keyboard.press('Escape');
 		await t.until('Escape closes the dialog only', () => !document.querySelector('[data-probe="reset-dialog"]') && !!document.querySelector('.details'), null, { timeout: 3000 });
+		await t.check('Escape sent no claim', claims(server).length === 0);
+		// Escape closes the dialog while the ledger still holds its unspent confirmation.
+		const { server: next } = resetServer();
+		await open(t, next);
+		await openDetails(t, 'claude:one');
 		await t.page.click('.details [data-probe="reset-use"]');
 		await t.until('the dialog shows again', () => !!document.querySelector('[data-probe="reset-dialog"]'), null, { timeout: 5000 });
 		await t.page.click('[data-probe="reset-dialog-cancel"]');
 		await t.until('Cancel closes it', () => !document.querySelector('[data-probe="reset-dialog"]') && !!document.querySelector('.details'), null, { timeout: 3000 });
-		await t.check('no claim was sent', claims(server).length === 0, JSON.stringify(changes(server)));
+		await t.check('no claim was sent', claims(next).length === 0, JSON.stringify(changes(next)));
 	},
 
 	async 'resets: Use this reset sends one claim and the panel shows the verification read'(t) {
@@ -172,12 +203,12 @@ export const tests = {
 		await t.page.click('.details [data-probe="reset-use"]');
 		await t.until('the dialog shows', () => !!document.querySelector('[data-probe="reset-dialog-use"]'), null, { timeout: 5000 });
 		await t.page.click('[data-probe="reset-dialog-use"]');
-		await t.until('the result shows in place', () => /^Reset applied: Weekly is back to 0% used\./.test(document.querySelector('.details [data-probe="reset-result"]')?.innerText || ''), null, { timeout: 5000 });
+		await t.until('the result shows in place', () => /^Reset applied and confirmed\./.test(document.querySelector('.details [data-probe="reset-result"]')?.innerText || ''), null, { timeout: 5000 });
 		const sent = claims(server);
 		await t.check('exactly one claim, naming the chosen grant and its confirmation', sent.length === 1 && sent[0].body.grantKey === KEY('a') && sent[0].body.confirmationToken === KEY('1'), JSON.stringify(sent));
 		await t.until('the fresh read shows the grant used', () => document.querySelector('.details [data-probe="resets"] .fg-sum b')?.textContent === '1 rate-limit reset ready.', null, { timeout: 5000 });
 		await t.visible('.details [data-probe="reset-history"]', 'the claim is in the Reset claims history');
-		await t.shot('resets-applied', 'after the claim: "Reset applied: Weekly is back to 0% used." under the table, 1 ready, the used grant grey at the bottom, Reset claims history with one row');
+		await t.shot('resets-applied', 'after the claim: "Reset applied and confirmed." under the table, 1 ready, the used grant grey at the bottom, Reset claims history with one row');
 	},
 
 	async 'resets: an expired confirmation says so; an unconfirmed claim blocks another until Check again'(t) {
@@ -188,7 +219,10 @@ export const tests = {
 		await t.page.click('.details [data-probe="reset-use"]');
 		await t.until('the dialog shows', () => !!document.querySelector('[data-probe="reset-dialog-use"]'), null, { timeout: 5000 });
 		await t.page.click('[data-probe="reset-dialog-use"]');
-		await t.until('the expiry is named', () => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').includes('This confirmation expired, open it again.'), null, { timeout: 5000 });
+		await t.until('the expiry is named', () => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').includes('this confirmation expired or was already used'), null, { timeout: 5000 });
+		await t.noConsoleErrors('the expired confirmation is the only expected HTTP error', {
+			allow: [/status of 409 \(Conflict\) .*\/api\/accounts\/claude%3Aone\/reset-claims$/],
+		});
 		r.claim = 'unconfirmed';
 		await t.page.click('.details [data-probe="reset-use"]');
 		await t.until('the dialog shows', () => !!document.querySelector('[data-probe="reset-dialog-use"]'), null, { timeout: 5000 });
@@ -198,7 +232,7 @@ export const tests = {
 		await t.shot('resets-unconfirmed', 'the unconfirmed claim: the sentence and Check again under the table, every Use reset disabled');
 		const before = claims(server).length;
 		await t.page.click('.details [data-probe="resets-check"]');
-		await t.until('Check again settles it', () => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').startsWith('Reset applied: Weekly is back to 3% used.'), null, { timeout: 5000 });
+		await t.until('Check again settles it', () => (document.querySelector('.details [data-probe="reset-result"]')?.innerText || '').startsWith('Reset applied and confirmed.'), null, { timeout: 5000 });
 		await t.check('Check again sent only a check, never a claim', claims(server).length === before
 			&& resetRequests(server).some((q) => q.path.endsWith('/check') && q.body.attemptKey === KEY('9')));
 	},
