@@ -110,8 +110,8 @@ impl Producer {
         refresh: u64,
         now: i64,
     ) -> Vec<Option<Value>> {
-        stream::iter(profiles)
-            .map(|profile| self.claude_row(profile, refresh, now))
+        stream::iter(profiles.iter().cloned())
+            .map(|profile| async move { self.claude_row(&profile, refresh, now).await })
             .buffered(3)
             .collect()
             .await
@@ -215,7 +215,7 @@ impl Producer {
         let held = failover::persisted(&self.root, &key, now as f64)
             .ok()?
             .unwrap_or_default();
-        let mut failure = Value::Null;
+        let mut failure;
         if held.until > now as f64 {
             failure = json!("rate_limited");
             saved.next = held.until;

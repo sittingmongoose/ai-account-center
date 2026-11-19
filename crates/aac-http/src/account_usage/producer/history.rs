@@ -22,8 +22,8 @@ impl Producer {
         profiles: &[Value],
         now: i64,
     ) -> Vec<Option<Value>> {
-        stream::iter(profiles)
-            .map(|profile| self.mac_history(profile, now))
+        stream::iter(profiles.iter().cloned())
+            .map(|profile| async move { self.mac_history(&profile, now).await })
             .buffered(3)
             .collect()
             .await
