@@ -779,18 +779,11 @@ impl ScoreboardOwned {
                 "native": true,
             },
         });
-        let debug_dump = serde_json::to_string(&json!({"data": &data, "factsText": facts.facts.get()})).unwrap_or_default();
-        let view = match aac_status::read_scoreboard::compose(Envelope {
+        let view = aac_status::read_scoreboard::compose(Envelope {
             data,
             presentation,
-        }) {
-            Some(view) => view,
-            None => {
-                let _ = std::fs::write("/tmp/aac-compose-fail.json", debug_dump);
-                eprintln!("COMPOSE-FAIL dumped /tmp/aac-compose-fail.json");
-                return Err(Decline::Unsupported);
-            }
-        };
+        })
+        .ok_or(Decline::Unsupported)?;
         let mut writer = Writer::with_capacity(64 * 1024);
         writer.value(&view);
         let (bytes, identity_bytes) = writer.finish();
