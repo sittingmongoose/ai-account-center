@@ -226,6 +226,10 @@ impl NativeOwners {
             })
             .collect();
         let owners = Owners::from_boot(rows, &files).map_err(io::Error::other)?;
+        let collection_lease = groups
+            .collection
+            .then(|| aac_files::OwnedStore::claim_collection(&root).map_err(std::io::Error::other))
+            .transpose()?;
         let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
         let lifecycle_jobs = groups
             .lifecycle
@@ -286,9 +290,11 @@ impl NativeOwners {
                 #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
             };
-            jobs.sampling = Some(tokio::spawn(
-                usage.clone().sample(cancel, Arc::new(sampling)),
-            ));
+            let sampler = usage.clone();
+            jobs.sampling = Some(tokio::spawn(async move {
+                let _lease = collection_lease;
+                sampler.sample(cancel, Arc::new(sampling)).await;
+            }));
             Some(usage)
         } else {
             None

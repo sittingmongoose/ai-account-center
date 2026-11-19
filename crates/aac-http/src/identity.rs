@@ -12,6 +12,7 @@ pub const PROTOCOL: u32 = 3;
 
 /// The header carrying the identity.
 pub(crate) const HEADER: &str = "x-aac-service-build";
+pub(crate) const LIFECYCLE_HEADER: &str = "x-aac-lifecycle-owner";
 
 /// `{commit, sha256, protocol, storeSchema}`, already encoded as the header value.
 #[derive(Clone)]
@@ -48,7 +49,11 @@ fn sha256_hex(path: &PathBuf) -> io::Result<String> {
 impl Identity {
     /// Hash this process's own executable once, at start.
     pub(crate) fn current() -> io::Result<Self> {
-        let sha256 = sha256_hex(&executable()?)?;
+        Self::for_binary(&executable()?)
+    }
+
+    pub(crate) fn for_binary(binary: &PathBuf) -> io::Result<Self> {
+        let sha256 = sha256_hex(binary)?;
         let value = serde_json::json!({
             "commit": env!("AAC_BUILD_COMMIT"),
             "sha256": sha256,

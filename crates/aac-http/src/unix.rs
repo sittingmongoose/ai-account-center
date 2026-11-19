@@ -791,6 +791,11 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             response
                 .headers_mut()
                 .insert(identity::HEADER, shared.identity.header());
+            if shared.lifecycle.is_some() {
+                response
+                    .headers_mut()
+                    .insert(identity::LIFECYCLE_HEADER, HeaderValue::from_static("1"));
+            }
             response
         }
         Handler::Diag => Json(aac_diag::diagnostics()).into_response(),
@@ -1664,6 +1669,10 @@ async fn serve_inner(
         ));
     }
     let rows = crate::table::rows(crate::table::ROUTES)?;
+    let _collection_lease = native
+        .as_ref()
+        .map(|_| aac_files::OwnedStore::claim_collection(&boot.ccs_dir).map_err(io::Error::other))
+        .transpose()?;
     let identity = Identity::current()?;
     let listener = StdListener::bind(&boot.socket_path)?;
     let mut folders = Vec::new();

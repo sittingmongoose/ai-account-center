@@ -11,6 +11,7 @@
 //! or moved endpoint is no answer (the caller decides the route's own 503).
 
 use super::storage;
+use crate::identity;
 use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request};
@@ -18,6 +19,7 @@ use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use std::{
+    io,
     os::unix::fs::{FileTypeExt, MetadataExt},
     path::{Path, PathBuf},
     time::Duration,
@@ -94,8 +96,46 @@ impl ServiceLink {
             })
     }
 
-    pub(super) fn owns_lifecycle(&self) -> bool {
-        self.native_lifecycle
+    /// Select a ready, compatible boot once. A live incompatible listener may still own
+    /// collection, including a pre-lease build. Its supervisor must stop it before startup.
+    pub(super) async fn acquire_lifecycle(root: &Path) -> io::Result<Option<Self>> {
+        let Some(link) = Self::load(root).filter(|link| link.native_lifecycle) else {
+            return Ok(None);
+        };
+        let principal = r#"{"kind":"session","id":"public-health","role":"public"}"#;
+        if let Some(health) = link
+            .request("GET", "/api/health", principal, &[], None)
+            .await
+        {
+            let binary = std::env::current_exe()?.with_file_name("aac-http");
+            let expected =
+                tokio::task::spawn_blocking(move || identity::Identity::for_binary(&binary))
+                    .await
+                    .map_err(io::Error::other)??;
+            if health.status == 200
+                && health.headers.get(identity::HEADER) == Some(&expected.header())
+                && health
+                    .headers
+                    .get(identity::LIFECYCLE_HEADER)
+                    .is_some_and(|value| value == "1")
+            {
+                return Ok(Some(link));
+            }
+        }
+        match tokio::time::timeout(DEADLINE, UnixStream::connect(&link.socket)).await {
+            Ok(Err(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Ok(None)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "an incompatible private lifecycle service must stop before collection can start",
+            )),
+        }
     }
 
     /// One request the front door has already admitted. `principal` is the verified identity
