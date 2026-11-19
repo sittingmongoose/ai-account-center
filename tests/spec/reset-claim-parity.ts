@@ -154,7 +154,8 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
     steps.wrongToken = await send('', { grantKey: key, confirmationToken: 'c'.repeat(64) });
     steps.afterWrong = await send('');
     steps.prepareAgain = await send('/prepare', { grantKey: key });
-    const token = (steps.prepareAgain.body as any).confirmationToken as string;
+    // A wrong token leaves the outstanding one in place: a second prepare is refused.
+    const token = (steps.prepare.body as any).confirmationToken as string;
     steps.claim = await send('', { grantKey: key, confirmationToken: token });
     steps.after = await send('');
     steps.check = await send('/check', { attemptKey: (steps.claim.body as any).attemptKey });
@@ -196,6 +197,8 @@ try {
   const ts = await scenario(tsRoot, null);
   assert.equal((ts.claim.body as any).outcome, 'claimed', JSON.stringify(ts.claim));
   assert.equal(ts.wrongToken.status, 409);
+  assert.equal((ts.prepareAgain.body as any).reason, 'claim-token-outstanding');
+  assert.equal(ts.check.status, 200, JSON.stringify(ts.check));
   assert.equal(ts.reused.status, 409);
   if (!tsOnly) {
     const rustRoot = path.join(scratch, 'rust');
