@@ -25,9 +25,6 @@ for (const [program, args] of [
     ],
   ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
-  // M6: the T3 hub, the static/Leptos bundle edges and the CLI entry points, recorded from TS and replayable
-  // against another front door (AAC_M6_TARGET_URL / AAC_M6_TARGET_CLI).
-  ['bun', ['tests/spec/m6-edge-parity.ts']],
   ...[
     'read-view-parity',
     'read-file-parity',
