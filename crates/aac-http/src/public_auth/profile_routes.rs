@@ -500,15 +500,7 @@ impl Profiles {
         }
         let root = self.root.clone();
         let now = super::now();
-        let fresh = (self.quota_rows)(now).await;
-        let rows = if fresh.is_empty() {
-            let rows = Arc::clone(&self.rows);
-            tokio::task::spawn_blocking(move || rows())
-                .await
-                .unwrap_or_default()
-        } else {
-            fresh
-        };
+        let rows = quota_rows_for(&self.quota_rows, Arc::clone(&self.rows), now).await;
         let value = tokio::task::spawn_blocking(move || codex_quota_answer(&root, rows, now))
             .await
             .ok()
@@ -860,6 +852,18 @@ fn path_text(path: &Path) -> String {
 /// The quota answer from the native owners: the registry's profiles, the collector rows the
 /// Accounts dashboard already holds, and the renewal status file — composed by the existing
 /// Codex quota view, with the ISO facts that view reads.
+/// The Codex quota rows for one request: the fresh producer pass first, the boot's cached
+/// Accounts rows only when that pass has no owner or no saved profile.
+async fn quota_rows_for(quota: &QuotaRows, cached: RowsSource, now: i64) -> Vec<Value> {
+    let fresh = quota(now).await;
+    if !fresh.is_empty() {
+        return fresh;
+    }
+    tokio::task::spawn_blocking(move || cached())
+        .await
+        .unwrap_or_default()
+}
+
 fn codex_quota_answer(root: &Path, dashboard_rows: Vec<Value>, now: i64) -> Option<Value> {
     let (_, records) = read_codex_profile_registry(root).ok()?;
     let profiles: Vec<Value> = records
@@ -1031,6 +1035,38 @@ mod tests {
         assert_eq!(refresh_query(Some("")), Some(false));
         assert_eq!(refresh_query(Some("refresh=yes")), None);
         assert_eq!(refresh_query(Some("refresh=true&x=1")), None);
+    }
+
+    #[tokio::test]
+    async fn the_fresh_quota_collector_wins_over_the_cached_dashboard_rows() {
+        let quota: QuotaRows = Arc::new(|_now| {
+            Box::pin(async {
+                vec![json!({
+                    "capabilities": {"codexProfile": "work"},
+                    "status": "available",
+                    "windows": [{"key": "five_hour", "label": "5-hour limit", "usedPercent": 12.0}],
+                })]
+            })
+        });
+        let cached: RowsSource = Arc::new(Vec::new);
+        let rows = quota_rows_for(&quota, cached, 1_700_000_000_000).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["capabilities"]["codexProfile"], "work");
+    }
+
+    #[tokio::test]
+    async fn an_ownerless_quota_pass_falls_back_to_the_cached_rows() {
+        let quota: QuotaRows = Arc::new(|_now| Box::pin(async { Vec::new() }));
+        let cached: RowsSource = Arc::new(|| {
+            vec![json!({
+                "capabilities": {"codexProfile": "cached"},
+                "status": "unavailable",
+                "windows": [],
+            })]
+        });
+        let rows = quota_rows_for(&quota, cached, 1_700_000_000_000).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["capabilities"]["codexProfile"], "cached");
     }
 
     #[test]
