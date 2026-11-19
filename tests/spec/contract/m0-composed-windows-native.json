@@ -1,0 +1,835 @@
+{
+  "contract/062-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/files/fixture/missing.txt",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required",
+        "code": "auth_required"
+      }
+    }
+  },
+  "contract/062-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/files/fixture/missing.txt",
+      "role": "device"
+    },
+    "response": {
+      "status": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "This action needs a signed-in dashboard session.",
+        "code": "device_scope"
+      }
+    }
+  },
+  "contract/062-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/files/fixture/missing.txt",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  },
+  "contract/063-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/answers",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required",
+        "code": "auth_required"
+      }
+    }
+  },
+  "contract/063-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/answers",
+      "role": "session"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "answers": []
+      }
+    }
+  },
+  "contract/063-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/answers",
+      "role": "device"
+    },
+    "response": {
+      "status": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "This action needs a signed-in dashboard session.",
+        "code": "device_scope"
+      }
+    }
+  },
+  "contract/063-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/answers",
+      "role": "bar"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "answers": []
+      }
+    }
+  },
+  "contract/063-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/answers",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  },
+  "contract/065-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/deliverable",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required",
+        "code": "auth_required"
+      }
+    }
+  },
+  "contract/065-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/deliverable",
+      "role": "session"
+    },
+    "response": {
+      "status": 400,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+        "content-security-policy": "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "cross-origin-resource-policy": "same-origin"
+      },
+      "body": {
+        "error": "Use a share-relative file path.",
+        "code": "invalid_path"
+      }
+    }
+  },
+  "contract/065-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/deliverable",
+      "role": "device"
+    },
+    "response": {
+      "status": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "This action needs a signed-in dashboard session.",
+        "code": "device_scope"
+      }
+    }
+  },
+  "contract/065-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/deliverable",
+      "role": "bar"
+    },
+    "response": {
+      "status": 400,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+        "content-security-policy": "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "cross-origin-resource-policy": "same-origin"
+      },
+      "body": {
+        "error": "Use a share-relative file path.",
+        "code": "invalid_path"
+      }
+    }
+  },
+  "contract/065-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/deliverable",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  },
+  "contract/066-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required",
+        "code": "auth_required"
+      }
+    }
+  },
+  "contract/066-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status",
+      "role": "device"
+    },
+    "response": {
+      "status": 403,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "This action needs a signed-in dashboard session.",
+        "code": "device_scope"
+      }
+    }
+  },
+  "contract/066-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  },
+  "contract/067-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/store/status",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required"
+      }
+    }
+  },
+  "contract/067-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/store/status",
+      "role": "session"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "state": "ready",
+        "storeSchemaVersion": 2,
+        "instanceId": null,
+        "openedAt": null,
+        "cacheBytes": 33554432,
+        "retentionDays": 0,
+        "redbBytes": null,
+        "redbStats": null,
+        "integrity": null,
+        "logs": null,
+        "checkpoints": {
+          "activity/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          },
+          "capture/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          },
+          "runs/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 3
+          },
+          "usage/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          }
+        },
+        "meta": null,
+        "findings": [],
+        "capture": null,
+        "storageHealth": null
+      }
+    }
+  },
+  "contract/067-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/store/status",
+      "role": "device"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "state": "ready",
+        "storeSchemaVersion": 2,
+        "instanceId": null,
+        "openedAt": null,
+        "cacheBytes": 33554432,
+        "retentionDays": 0,
+        "redbBytes": null,
+        "redbStats": null,
+        "integrity": null,
+        "logs": null,
+        "checkpoints": {
+          "activity/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          },
+          "capture/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          },
+          "runs/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 3
+          },
+          "usage/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          }
+        },
+        "meta": null,
+        "findings": [],
+        "capture": null,
+        "storageHealth": null
+      }
+    }
+  },
+  "contract/067-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/store/status",
+      "role": "bar"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "state": "ready",
+        "storeSchemaVersion": 2,
+        "instanceId": null,
+        "openedAt": null,
+        "cacheBytes": 33554432,
+        "retentionDays": 0,
+        "redbBytes": null,
+        "redbStats": null,
+        "integrity": null,
+        "logs": null,
+        "checkpoints": {
+          "activity/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          },
+          "capture/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          },
+          "runs/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 3
+          },
+          "usage/ledger": {
+            "lastSequence": 2,
+            "projectorVersion": 1
+          }
+        },
+        "meta": null,
+        "findings": [],
+        "capture": null,
+        "storageHealth": null
+      }
+    }
+  },
+  "contract/067-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/store/status",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  },
+  "contract/068-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/at",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required"
+      }
+    }
+  },
+  "contract/068-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/at",
+      "role": "session"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "at": "<at-ms>",
+        "series": []
+      }
+    }
+  },
+  "contract/068-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/at",
+      "role": "device"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "at": "<at-ms>",
+        "series": []
+      }
+    }
+  },
+  "contract/068-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/at",
+      "role": "bar"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "at": "<at-ms>",
+        "series": []
+      }
+    }
+  },
+  "contract/068-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/at",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  },
+  "contract/069-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/burn",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required"
+      }
+    }
+  },
+  "contract/069-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/burn",
+      "role": "session"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "at": "<timestamp>",
+        "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
+        "series": []
+      }
+    }
+  },
+  "contract/069-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/burn",
+      "role": "device"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "at": "<timestamp>",
+        "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
+        "series": []
+      }
+    }
+  },
+  "contract/069-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/burn",
+      "role": "bar"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "at": "<timestamp>",
+        "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
+        "series": []
+      }
+    }
+  },
+  "contract/069-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/burn",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  },
+  "contract/070-signed-out.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/history",
+      "role": "signed-out"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "Authentication required"
+      }
+    }
+  },
+  "contract/070-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/history",
+      "role": "session"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "from": "<timestamp>",
+        "to": "<timestamp>",
+        "resolution": "hour",
+        "columns": [
+          "start",
+          "consumed",
+          "lastUsed",
+          "maxUsed",
+          "coveredMinutes",
+          "readings",
+          "resets",
+          "creditsSpent",
+          "creditsAdded"
+        ],
+        "series": [],
+        "truncated": false
+      }
+    }
+  },
+  "contract/070-device.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/history",
+      "role": "device"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "from": "<timestamp>",
+        "to": "<timestamp>",
+        "resolution": "hour",
+        "columns": [
+          "start",
+          "consumed",
+          "lastUsed",
+          "maxUsed",
+          "coveredMinutes",
+          "readings",
+          "resets",
+          "creditsSpent",
+          "creditsAdded"
+        ],
+        "series": [],
+        "truncated": false
+      }
+    }
+  },
+  "contract/070-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/history",
+      "role": "bar"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "from": "<timestamp>",
+        "to": "<timestamp>",
+        "resolution": "hour",
+        "columns": [
+          "start",
+          "consumed",
+          "lastUsed",
+          "maxUsed",
+          "coveredMinutes",
+          "readings",
+          "resets",
+          "creditsSpent",
+          "creditsAdded"
+        ],
+        "series": [],
+        "truncated": false
+      }
+    }
+  },
+  "contract/070-hub.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/usage/history",
+      "role": "hub"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "etag": "<etag>"
+      },
+      "body": {
+        "error": "The device token is not valid.",
+        "code": "invalid_token"
+      }
+    }
+  }
+}
