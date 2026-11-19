@@ -126,6 +126,11 @@ impl Root {
             serde_json::to_vec(&json!({"version": 1, "profiles": profiles})).expect("json"),
         )
         .expect("write");
+        std::fs::set_permissions(
+            self.0.join("claude-desktop-profiles.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .expect("chmod");
     }
 }
 impl Drop for Root {

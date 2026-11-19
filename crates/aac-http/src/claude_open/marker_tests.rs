@@ -397,8 +397,6 @@ fn rearm_needs_no_new_slot_at_full_capacity() {
     let mut marker = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
     marker.finish(&receipt(json!({}))).expect("finish");
     for index in 1..256u32 {
-        write_finished(&root, "gmail", "mac", char::from_digit(index % 10, 10).expect("digit"));
-        // Distinct nonces: rewrite the last file with a unique index nonce.
         let nonce = format!("{index:032x}");
         let record = json!({
             "version": 1, "profileId": "gmail", "targetPlatform": "mac", "nonce": nonce,

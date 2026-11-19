@@ -849,10 +849,10 @@ async function main(): Promise<void> {
     })),
   };
   for (const test of sequences) {
-    table.sequences.push({ name: test.name, expected: await runSequence(test) });
+    table.sequences.push({ ...test, expected: await runSequence(test) });
   }
   for (const test of operationsCases) {
-    table.operations.push({ name: test.name, expected: await runOperations(test) });
+    table.operations.push({ ...test, expected: await runOperations(test) });
   }
   const file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'claude-open-table.json');
   // Operation ids are random on both sides; the table pins one token (the Rust test
