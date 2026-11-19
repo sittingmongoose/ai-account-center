@@ -7,6 +7,10 @@ mod account_reads;
 pub mod account_usage;
 mod agent_transport;
 #[cfg(unix)]
+mod analytics_live;
+#[cfg(unix)]
+mod analytics_route;
+#[cfg(unix)]
 mod analytics_writers;
 #[cfg(unix)]
 mod answers_owned;

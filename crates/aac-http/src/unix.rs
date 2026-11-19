@@ -155,6 +155,8 @@ struct Shared {
     answers_owned: Option<Arc<crate::answers_owned::AnswersOwned>>,
     /// G16c: the Status feed's producers, with the owned Status readers.
     status_produce: Option<Arc<crate::status_produce::Produce>>,
+    /// R5/A2: whether the Analytics activity pass is in flight (the read's `refreshing`).
+    analytics_live: Arc<crate::analytics_live::Live>,
 }
 
 #[derive(Clone)]
@@ -1304,6 +1306,70 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             )
                 .into_response()
         }
+        // R5/A2: the owned Analytics read, composed from the service's own store, feed and
+        // writer state. The front door admitted the session and the query; the object arrives
+        // with no body.
+        Handler::Analytics => {
+            let query = req.uri().query().map(str::to_owned);
+            let Ok(body) = to_bytes(req.into_body(), INPUT_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            // A composed envelope (the retained worker's bridge, and the parity table) keeps the
+            // proven part-3 / owned composition; an empty body is the native read's own inputs.
+            if !body.is_empty() {
+                let path = "/api/accounts/analytics".to_owned();
+                let root = shared.boot.ccs_dir.clone();
+                let store = shared.store.clone();
+                return match shared
+                    .limits
+                    .blocking(row.pool, move || {
+                        if let Some(answer) =
+                            crate::account_reads::owned_analytics(store.as_ref(), &body)
+                        {
+                            return answer;
+                        }
+                        crate::read_routes::answer(
+                            Handler::Accounts,
+                            &path,
+                            query.is_some(),
+                            &root,
+                            &body,
+                        )
+                    })
+                    .await
+                {
+                    Ok(value) => Json(value).into_response(),
+                    Err(reason) => decline(row.handler, reason),
+                };
+            }
+            let Some(engine) = shared
+                .store
+                .as_ref()
+                .and_then(|host| host.analytics_engine())
+            else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            let feeds = shared.feeds.clone();
+            let live = Arc::clone(&shared.analytics_live);
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::analytics_route::compose(
+                        engine,
+                        &root,
+                        &feeds,
+                        &live,
+                        query.as_deref(),
+                        aac_store::engine::now_ms() as i64,
+                    )
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         read => {
             let path = req.uri().path().to_owned();
             let query = req.uri().query().is_some();
@@ -1311,19 +1377,11 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(read, Decline::Shape);
             };
             let root = shared.boot.ccs_dir.clone();
-            let store = shared.store.clone();
             let profiles_path = path.clone();
             let profiles_root = root.clone();
             match shared
                 .limits
                 .blocking(row.pool, move || {
-                    // R5/A2: the owned Analytics envelope reads the hosted store itself.
-                    if path == "/api/accounts/analytics"
-                        && let Some(answer) =
-                            crate::account_reads::owned_analytics(store.as_ref(), &bytes)
-                    {
-                        return answer;
-                    }
                     crate::read_routes::answer(read, &path, query, &root, &bytes)
                 })
                 .await
@@ -1660,6 +1718,7 @@ async fn serve_inner(
     let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(
         boot.ccs_dir.clone(),
         package_root.clone().unwrap_or_else(|| boot.ccs_dir.clone()),
+        store.clone(),
     ));
     let claude_open = claude_open_package.map(|package| {
         let remote = Arc::new(crate::claude_open::remote::AgentRemote::new(
@@ -1697,6 +1756,7 @@ async fn serve_inner(
         claude_open,
         answers_owned: answers_owned.clone(),
         status_produce: status_produce.clone(),
+        analytics_live: Arc::new(crate::analytics_live::Live::default()),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -1729,6 +1789,7 @@ async fn serve_inner(
     // G14: the Analytics writers read the fed inputs and the boot's root beside the service.
     let writers_feeds = state.0.feeds.clone();
     let writers_ccs = state.0.boot.ccs_dir.clone();
+    let writers_live = Arc::clone(&state.0.analytics_live);
     let router = router
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state.clone());
@@ -1794,6 +1855,7 @@ async fn serve_inner(
                 writers_feeds,
                 writers_agents,
                 writers_ccs,
+                writers_live,
                 writers_stop,
             )
             .await

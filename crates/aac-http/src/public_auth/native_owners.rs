@@ -42,6 +42,8 @@ pub(super) struct Groups {
     app_updates: bool,
     home: bool,
     analytics_writers: bool,
+    /// G18: the service owns the aac-usage share writer this boot.
+    usage_snapshot: bool,
     store: bool,
 }
 
@@ -70,6 +72,7 @@ impl Groups {
             app_updates: on("app-updates", "AAC_RUST_GROUP_APP_UPDATES"),
             home: on("home", "AAC_RUST_GROUP_HOME")
                 || std::env::var("AAC_RUST_HOME_VIEW").as_deref() == Ok("on"),
+            usage_snapshot: on("usageSnapshot", "AAC_RUST_GROUP_USAGESNAPSHOT"),
         }
     }
 }
@@ -116,8 +119,11 @@ struct Usage {
     worker_directory: Option<PathBuf>,
     store: bool,
     analytics_writers: bool,
+    usage_snapshot: bool,
     owners: Owners,
     agents: Arc<Agents>,
+    /// The sign-in expiry rows and when they were read (the TS health cache's five minutes).
+    signin_cache: Mutex<Option<(i64, Value)>>,
 }
 
 impl NativeOwners {
@@ -214,8 +220,10 @@ impl NativeOwners {
                 store: groups.store && worker_directory.is_some(),
                 worker_directory,
                 analytics_writers: groups.analytics_writers,
+                usage_snapshot: groups.usage_snapshot,
                 owners,
                 agents,
+                signin_cache: Mutex::new(None),
                 root,
             });
             // Subscribe before the HTTP listener can admit a sign-in.
@@ -437,10 +445,103 @@ impl Usage {
                         }
                         #[cfg(not(unix))]
                         let _ = &cache;
+                        // G18: the native sample triggers the share writer itself: the store's
+                        // history, long burn and rollups are added by the service, and the
+                        // sign-in facts are collected here (only while a folder is set).
+                        if owner.usage_snapshot && owner.analytics_writers {
+                            owner.push_usage_sample(&cache).await;
+                        }
                     }
                 },
             )
             .await;
+    }
+
+    /// G18: push this sample to the service's share writer. Every sample's readings count, even
+    /// one whose write the service skips, so the reading ring sees the same cadence; the sign-in
+    /// probes and the store facts run only while a folder is set and there are accounts.
+    async fn push_usage_sample(self: &Arc<Self>, cache: &AccountUsageCache) {
+        let timestamp = super::storage::iso(super::now());
+        let Some(timestamp) = timestamp else {
+            return;
+        };
+        let now = super::now();
+        let Ok(accounts) = cache.merged_accounts(&timestamp, now) else {
+            return;
+        };
+        let active = crate::usage_snapshot::sample_active(&self.root, accounts.len());
+        let sign_in = if active {
+            self.sign_in_facts().await
+        } else {
+            json!({ "rows": [], "failed": false, "since": now })
+        };
+        let renewal = if active {
+            self.signins.read().map(|report| {
+                let full = report.to_json();
+                json!({
+                    "runner": full["runner"],
+                    "generatedAt": full["generatedAt"],
+                    "stale": full["stale"],
+                    "needsYou": full["needsYou"],
+                })
+            })
+        } else {
+            None
+        };
+        let payload = json!({
+            "event": { "accounts": accounts, "history": null, "sampledAt": now },
+            "signIn": sign_in,
+            "signInRenewal": renewal,
+            "rollups": null,
+        });
+        super::native_reads::usage_sample(self.root.clone(), payload).await;
+    }
+
+    /// The sign-in expiry rows of every configured computer, under the publisher's 60 s limit; a
+    /// failed or timed-out pass is named (`failed`), never sent as an empty success.
+    async fn sign_in_facts(self: &Arc<Self>) -> Value {
+        let since = super::now();
+        // Five minutes, like the TypeScript health cache, so one page cannot make every
+        // computer run the expiry collector on every sample.
+        let cached = {
+            let guard = self.signin_cache.lock().unwrap_or_else(|p| p.into_inner());
+            guard
+                .as_ref()
+                .filter(|entry| since - entry.0 < 300_000)
+                .map(|entry| entry.1.clone())
+        };
+        if let Some(mut fresh) = cached {
+            if let Some(map) = fresh.as_object_mut() {
+                map.insert("since".into(), json!(since));
+            }
+            return fresh;
+        }
+        let hosts = configured_signin_hosts();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            crate::signins::poll::read(&self.agents, &self.root, hosts),
+        )
+        .await;
+        let Ok(Ok(batch)) = read else {
+            return json!({ "rows": [], "failed": true, "since": since });
+        };
+        let rows = match self.signins.read() {
+            Some(renewal) => {
+                let merged =
+                    crate::signins::merge_renewal(batch.machines, &renewal.to_json(), super::now());
+                merged.unwrap_or_default()
+            }
+            None => batch.machines,
+        };
+        let rows: Vec<Value> = rows
+            .values()
+            .filter_map(Value::as_array)
+            .flatten()
+            .cloned()
+            .collect();
+        let facts = json!({ "rows": rows, "failed": false, "since": since });
+        *self.signin_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((since, facts.clone()));
+        facts
     }
 
     async fn watch_signins(
@@ -487,6 +588,86 @@ impl Usage {
                 }
             }
         }
+    }
+}
+
+/// The computers a sign-in poll reads, in the account collectors' order: this one, then every
+/// remote whose packaged alias is set (`configuredUsageHosts`). The same packaged registry
+/// (`web-dashboard/public/computers.json`) the collectors and the coordinator read.
+fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
+    static COMPUTERS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!(
+            "../../../../web-dashboard/public/computers.json"
+        ))
+        .unwrap_or(Value::Null)
+    });
+    let entries = COMPUTERS.as_object().cloned().unwrap_or_default();
+    let hostname = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| {
+            aac_files::read_bounded(std::path::Path::new("/proc/sys/kernel/hostname"), 256)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|text| text.trim().to_owned())
+        })
+        .unwrap_or_default()
+        .to_lowercase();
+    let platform = |id: &str| -> String {
+        match entries
+            .get(id)
+            .and_then(|row| row.get("os"))
+            .and_then(Value::as_str)
+        {
+            Some("linux") => "ubuntu".to_owned(),
+            Some(other) => other.to_owned(),
+            None => "ubuntu".to_owned(),
+        }
+    };
+    // `localComputer`: a known name of this platform, else its generic platform host.
+    let local = entries
+        .iter()
+        .find(|(id, row)| {
+            let names = row.get("names").and_then(Value::as_array);
+            let alias = row.get("sshAlias").and_then(Value::as_str);
+            [Some(id.as_str()), alias]
+                .into_iter()
+                .flatten()
+                .chain(names.into_iter().flatten().filter_map(Value::as_str))
+                .any(|name| name.to_lowercase() == hostname)
+        })
+        .map(|(id, _)| id.clone())
+        .filter(|id| platform(id) == instance_platform())
+        .unwrap_or_else(instance_platform);
+    let mut hosts = vec![crate::signins::poll::Host {
+        host: local.clone(),
+        platform: platform(&local),
+        ssh_host: None,
+    }];
+    for (id, row) in &entries {
+        if *id == local || *id == "ubuntu" {
+            continue;
+        }
+        let Some(alias) = row.get("sshAlias").and_then(Value::as_str) else {
+            continue;
+        };
+        if alias.is_empty() {
+            continue;
+        }
+        hosts.push(crate::signins::poll::Host {
+            host: id.clone(),
+            platform: platform(id),
+            ssh_host: Some(alias.to_owned()),
+        });
+    }
+    hosts
+}
+
+/// This service's own helper platform (`helperPlatform(localComputer())`).
+fn instance_platform() -> String {
+    if cfg!(target_os = "macos") {
+        "mac".to_owned()
+    } else {
+        "ubuntu".to_owned()
     }
 }
 

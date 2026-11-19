@@ -2,6 +2,7 @@
 // Reply errors are complete Axum responses with headers. Keep them inline like successes
 // so the guard can return a response without a second allocation.
 #![allow(clippy::result_large_err)]
+mod analytics_routes;
 mod compose;
 mod dashboard_events;
 mod devices;
@@ -89,6 +90,23 @@ pub struct DashboardAccess {
     direct_loopback: bool,
     lan_proxy: bool,
     client_address: Option<String>,
+}
+
+impl DashboardAccess {
+    /// The admitted session's identifier for the private service's principal (never a cookie).
+    pub(super) fn session_key(&self) -> String {
+        self.session_id
+            .as_deref()
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 128
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            })
+            .unwrap_or("session")
+            .to_owned()
+    }
 }
 
 /// Browser or tray identity admitted from a real session cookie or bearer token.
@@ -199,7 +217,7 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream, cache, ui_root, None, false, None, None, None, None,
+            downstream, cache, ui_root, None, false, None, None, None, None, None,
         )
     }
 
@@ -218,6 +236,7 @@ impl DashboardAuth {
         cut_root: Option<PathBuf>,
         native_owners: Option<native_owners::NativeOwners>,
         native_settings: Option<native_settings::Settings>,
+        analytics_hop: Option<analytics_routes::Hop>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
@@ -239,6 +258,35 @@ impl DashboardAuth {
                 )
             {
                 return native.handle(request).await;
+            }
+            if let Some(root) = cut_root.as_deref()
+                && analytics_routes::owns(request.method(), request.uri().path())
+            {
+                if analytics_routes::is_capture(request.uri().path()) {
+                    return analytics_routes::capture(request, root.to_owned()).await;
+                }
+                // The request itself stays here: a declined composed read still reaches the
+                // worker with its headers and body untouched.
+                let access = request.extensions().get::<DashboardAccess>().cloned();
+                let query = request.uri().query().map(str::to_owned);
+                let cross_site = request
+                    .headers()
+                    .get("sec-fetch-site")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("cross-site");
+                let head = request.method() == Method::HEAD;
+                if let Some(reply) = analytics_routes::analytics(
+                    access,
+                    query,
+                    head,
+                    cross_site,
+                    root.to_owned(),
+                    analytics_hop.clone(),
+                )
+                .await
+                {
+                    return reply;
+                }
             }
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
@@ -417,6 +465,25 @@ pub(crate) async fn run_public_at(
     #[cfg(unix)]
     let owner_host =
         owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    // The group's one hop to the owner host: the running service's descriptor, or the
+    // in-process service a worker-less boot starts. No second link.
+    #[cfg(unix)]
+    let analytics_hop: Option<analytics_routes::Hop> = owner_host.as_ref().map(|host| {
+        let host = std::sync::Arc::clone(host);
+        let hop: analytics_routes::Hop =
+            std::sync::Arc::new(move |uri: String, principal: String| {
+                let host = std::sync::Arc::clone(&host);
+                let future: analytics_routes::HopFuture = Box::pin(async move {
+                    host.request("GET", &uri, &principal, &[], None)
+                        .await
+                        .map(|reply| (reply.status, reply.body))
+                });
+                future
+            });
+        hop
+    });
+    #[cfg(not(unix))]
+    let analytics_hop: Option<analytics_routes::Hop> = None;
     let mut api = Router::new();
     if cut || !composed {
         api = api.route(
@@ -437,6 +504,7 @@ pub(crate) async fn run_public_at(
         cut.then(|| root.clone()),
         native,
         native_settings,
+        analytics_hop,
     );
     let router = auth
         .protect(reset_routes::mount(
@@ -1647,6 +1715,7 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
+            None,
         ));
         let handle = tokio::spawn(async move {
             axum::serve(

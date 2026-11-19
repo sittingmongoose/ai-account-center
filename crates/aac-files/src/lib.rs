@@ -31,6 +31,7 @@ pub mod profile_writes;
 pub mod read;
 pub mod registry;
 pub mod share;
+pub mod zoneinfo;
 
 use read::{Read, ReadPolicy};
 
