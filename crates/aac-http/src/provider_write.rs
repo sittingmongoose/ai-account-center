@@ -73,3 +73,35 @@ pub(crate) fn commit() -> i32 {
     };
     if result.is_ok() { 0 } else { 75 }
 }
+
+pub(crate) fn staging() -> i32 {
+    let args: Vec<_> = std::env::args_os().skip(2).take(5).collect();
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return 74;
+    };
+    let outcome = match args.as_slice() {
+        ["prepare", root, name, shared] => {
+            aac_files::profile_staging::prepare(Path::new(root), name, Path::new(shared))
+                .map(|()| 0)
+        }
+        ["cleanup", root, name] => {
+            aac_files::profile_staging::cleanup(Path::new(root), name).map(|()| 0)
+        }
+        ["sweep", root, now] => match now.parse() {
+            Ok(now) => aac_files::profile_staging::sweep(Path::new(root), now),
+            Err(_) => return 74,
+        },
+        _ => return 74,
+    };
+    match outcome {
+        Ok(value) => {
+            println!("{value}");
+            0
+        }
+        Err(_) => 75,
+    }
+}

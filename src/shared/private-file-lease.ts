@@ -94,6 +94,32 @@ export function writeProviderFile(
   }
 }
 
+export function codexStaging(
+  root: string,
+  operation:
+    | ['prepare', staging: string, shared: string]
+    | ['cleanup', staging: string]
+    | ['sweep', now: string]
+): number | undefined {
+  const canonical = canonicalLeaseRoot(root);
+  const writer = writers.get(canonical);
+  if (!writer) return undefined;
+  const [action, ...args] = operation;
+  const result = spawnSync(writer.binary, ['--codex-staging', action, canonical, ...args], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 5000,
+    maxBuffer: 64,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  const count = Number(result.stdout?.trim());
+  if (result.status !== 0 || !Number.isSafeInteger(count) || count < 0)
+    throw new ConfigError('The sign-in staging write could not be confirmed.');
+  writer.committed();
+  return count;
+}
+
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
 export function rememberFileLeaseBinary(root: string, binary: string, writesOn = false): void {

@@ -14,6 +14,7 @@ fn main() {
         Some("--file-lease") => std::process::exit(file_lease()),
         Some("--registered-write") => std::process::exit(registered_write::commit()),
         Some("--provider-write") => std::process::exit(provider_write::commit()),
+        Some("--codex-staging") => std::process::exit(provider_write::staging()),
         _ => {}
     }
     // Two async workers; at most 20 blocking threads: the 8 read, 4 store and 4 fed-Status

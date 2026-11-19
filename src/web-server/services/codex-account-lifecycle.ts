@@ -1,7 +1,11 @@
 import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import { getCcsDir } from '../../utils/config-manager';
-import { canonicalLeaseRoot, writeProviderFile } from '../../shared/private-file-lease';
+import {
+  canonicalLeaseRoot,
+  codexStaging,
+  writeProviderFile,
+} from '../../shared/private-file-lease';
 import path from 'path';
 import * as lockfile from 'proper-lockfile';
 import { CodexProfileRegistry } from '../../codex-auth/codex-profile-registry';
@@ -248,15 +252,18 @@ export class CodexAccountLifecycle {
     const cli = this.codexCli();
     if (!cli) throw new SignInJobError('tool_missing');
     const staging = this.stagingDir(jobId);
-    await fs.mkdir(this.instancesDir(), { recursive: true, mode: 0o700 });
-    await fs.mkdir(staging, { mode: 0o700 });
-    await fs.chmod(staging, 0o700);
     const shared = path.resolve(this.deps.sharedConfigPath ?? getSharedCodexConfigPath());
-    try {
-      if ((await fs.stat(shared)).isFile())
-        await fs.symlink(shared, path.join(staging, 'config.toml'));
-    } catch {
-      // No shared config yet: Codex signs in without one, and nothing is created in ~/.codex.
+    const root = this.nativeStagingRoot();
+    if (!root || codexStaging(root, ['prepare', path.basename(staging), shared]) === undefined) {
+      await fs.mkdir(this.instancesDir(), { recursive: true, mode: 0o700 });
+      await fs.mkdir(staging, { mode: 0o700 });
+      await fs.chmod(staging, 0o700);
+      try {
+        if ((await fs.stat(shared)).isFile())
+          await fs.symlink(shared, path.join(staging, 'config.toml'));
+      } catch {
+        // No shared config yet: Codex signs in without one.
+      }
     }
     return {
       file: cli,
@@ -264,6 +271,19 @@ export class CodexAccountLifecycle {
       env: this.env(staging),
       pty: true,
     };
+  }
+
+  private nativeStagingRoot(): string | null {
+    const root = canonicalLeaseRoot(getCcsDir());
+    const instances = path.resolve(this.instancesDir());
+    return instances === path.join(path.resolve(getCcsDir()), 'codex-instances') ? root : null;
+  }
+
+  private async cleanupStaging(jobId: string): Promise<void> {
+    const target = this.stagingDir(jobId);
+    const root = this.nativeStagingRoot();
+    if (root && codexStaging(root, ['cleanup', path.basename(target)]) !== undefined) return;
+    await fs.rm(target, { recursive: true, force: true });
   }
 
   private flow(
@@ -286,7 +306,7 @@ export class CodexAccountLifecycle {
         invalidateCodexAuthProfilesCache();
         return { accountId: `codex:${name}`, email: login.email, plan: login.plan };
       },
-      cleanup: (jobId) => fs.rm(this.stagingDir(jobId), { recursive: true, force: true }),
+      cleanup: (jobId) => this.cleanupStaging(jobId),
     };
   }
 
@@ -589,6 +609,11 @@ export class CodexAccountLifecycle {
 
   /** Startup: staging folders older than one hour are removed (jobs never resume). */
   async sweepStaging(): Promise<number> {
+    const root = this.nativeStagingRoot();
+    if (root) {
+      const removed = codexStaging(root, ['sweep', String(this.now())]);
+      if (removed !== undefined) return removed;
+    }
     let names: string[];
     try {
       names = await fs.readdir(this.instancesDir());

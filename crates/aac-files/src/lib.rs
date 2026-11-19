@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 pub mod history_snapshots;
 pub mod path;
 #[cfg(unix)]
+pub mod profile_staging;
+#[cfg(unix)]
 pub mod profile_writes;
 pub mod read;
 pub mod registry;

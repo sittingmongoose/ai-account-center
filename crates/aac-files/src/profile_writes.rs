@@ -13,7 +13,7 @@ fn refused() -> io::Error {
     io::Error::other("provider file write refused")
 }
 
-fn directory(dir: &Path) -> io::Result<()> {
+pub(crate) fn owned_directory(dir: &Path) -> io::Result<()> {
     require_absolute(dir).map_err(|_| refused())?;
     let meta = fs::symlink_metadata(dir)?;
     if !meta.is_dir()
@@ -38,7 +38,7 @@ impl LegacyLease {
     }
 
     fn check(&self, marker: &Path) -> io::Result<()> {
-        directory(marker)?;
+        owned_directory(marker)?;
         let held = self.0.metadata()?;
         let named = fs::symlink_metadata(marker)?;
         if !held.is_dir() || held.dev() != named.dev() || held.ino() != named.ino() {
@@ -49,7 +49,7 @@ impl LegacyLease {
 
     /// Publish a validated YAML registry while its proper-lockfile directory is held.
     pub fn codex_metadata(&self, root: &Path, bytes: &[u8]) -> io::Result<()> {
-        directory(root)?;
+        owned_directory(root)?;
         let mut marker = root.as_os_str().to_os_string();
         marker.push(".lock");
         self.check(Path::new(&marker))?;
@@ -63,10 +63,10 @@ impl LegacyLease {
             return Err(refused());
         }
         let parent = root.join("codex-instances");
-        directory(&parent)?;
+        owned_directory(&parent)?;
         let previous = parent.join(old);
         let next = parent.join(new);
-        directory(&previous)?;
+        owned_directory(&previous)?;
         match fs::symlink_metadata(&next) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Ok(_) => return Err(refused()),
@@ -178,7 +178,7 @@ fn stage(parent: &Path, bytes: &[u8]) -> io::Result<NamedTempFile> {
     if bytes.is_empty() || bytes.len() > MAX_PROFILE_BYTES {
         return Err(refused());
     }
-    directory(parent)?;
+    owned_directory(parent)?;
     let mut file = tempfile::Builder::new()
         .prefix(".aac-profile-")
         .tempfile_in(parent)?;
@@ -228,8 +228,8 @@ fn install_login(
         return rename(stage(auth_folder, bytes)?, profile).map_err(Into::into);
     };
     let live_folder = live.parent().ok_or_else(refused)?;
-    directory(auth_folder)?;
-    directory(live_folder)?;
+    owned_directory(auth_folder)?;
+    owned_directory(live_folder)?;
     let previous = match fs::symlink_metadata(profile) {
         Ok(meta) if meta.is_file() => {
             Some(read_bounded(profile, MAX_PROFILE_BYTES).map_err(|_| refused())?)
