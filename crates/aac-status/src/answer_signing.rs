@@ -13,6 +13,7 @@ use pem_rfc7468::LineEnding;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write as _;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -185,30 +186,49 @@ fn create_private(path: &Path) -> std::io::Result<fs::File> {
     Ok(file)
 }
 
+/// The PKCS#8 DER prefix of an Ed25519 private key, version 1 (RFC 8410 section 7): the
+/// seed only, no public key. Node writes exactly this; ed25519-dalek's own encoder writes
+/// version 2 (`MFECAQEw...`, the public key appended), which Bun's BoringSSL refuses with
+/// SEQUENCE_LENGTH_MISMATCH, and TS then treats the key file as broken and replaces it.
+const PKCS8_V1_ED25519_PREFIX: [u8; 16] = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+
+/// The private key file's text: PKCS#8 v1 PEM, byte for byte what Node's
+/// `privateKey.export({ type: 'pkcs8', format: 'pem' })` writes (`MC4CAQAw...`). Reading
+/// still accepts v2, so a key an earlier build wrote keeps loading.
+pub fn private_key_pem(signing: &SigningKey) -> Result<String, String> {
+    let mut der = Vec::with_capacity(48);
+    der.extend_from_slice(&PKCS8_V1_ED25519_PREFIX);
+    der.extend_from_slice(signing.as_bytes());
+    pem_rfc7468::encode_string("PRIVATE KEY", LineEnding::LF, &der).map_err(|e| e.to_string())
+}
+
 /// Creates the key file without ever showing another process half a key: whole to a private
 /// temp file, synced, then linked into place; where hard links fail, created in place exclusively.
 fn create_key_file(dir: &Path, file: &Path) -> Result<(), String> {
     let signing = SigningKey::generate(&mut rand_core::OsRng);
-    let created = signing
-        .to_pkcs8_pem(LineEnding::LF)
-        .map_err(|e| e.to_string())?;
+    let created = private_key_pem(&signing)?;
     let temp = dir.join(format!(
         ".answer-key.{}.{}.tmp",
         std::process::id(),
         random_hex()
     ));
     let result = (|| -> Result<(), String> {
-        create_private(&temp).map_err(|e| e.to_string())?;
-        fs::write(&temp, created.as_bytes()).map_err(|e| e.to_string())?;
-        let handle = fs::File::open(&temp).map_err(|e| e.to_string())?;
+        // Written and synced through the handle that created it: a read-only handle cannot
+        // be synced on Windows (FlushFileBuffers needs write access).
+        let mut handle = create_private(&temp).map_err(|e| e.to_string())?;
+        handle.write_all(created.as_bytes()).map_err(|e| e.to_string())?;
         handle.sync_all().map_err(|e| e.to_string())?;
+        drop(handle);
         match fs::hard_link(&temp, file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(_) => {
                 match create_private(file) {
-                    Ok(_) => {
-                        fs::write(file, created.as_bytes()).map_err(|e| e.to_string())?;
+                    Ok(mut handle) => {
+                        handle.write_all(created.as_bytes()).map_err(|e| e.to_string())?;
+                        handle.sync_all().map_err(|e| e.to_string())?;
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(error) => return Err(error.to_string()),
