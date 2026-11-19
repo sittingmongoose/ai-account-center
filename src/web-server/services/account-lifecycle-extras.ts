@@ -182,12 +182,14 @@ export async function openApp(
 }
 
 /** GET /api/accounts/signin-jobs/:jobId */
-export function readJob(
+export async function readJob(
   env: LifecycleEnv,
   jobId: string,
   context: LifecycleContext
-): LifecycleResult {
-  const job = env.runner().get(jobId);
+): Promise<LifecycleResult> {
+  const current = env.runner().get(jobId);
+  const recovered = current?.provider === null ? await env.readSignInJournal?.(jobId) : undefined;
+  const job = recovered === undefined ? current : recovered;
   if (!job) throw new LifecycleHttpError(404, 'unknown_job');
   return { status: 200, body: job.provider === null ? job : jobBody(job, context) };
 }

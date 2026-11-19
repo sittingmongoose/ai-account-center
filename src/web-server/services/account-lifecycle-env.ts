@@ -39,7 +39,8 @@ import { runClaudeHostOverSsh } from './claude-host-transport';
 import type { CodexAccountLifecycle } from './codex-account-lifecycle';
 import type { MuseAccountLifecycle } from './muse-account-lifecycle';
 import { providerSignInState, type ProviderRegistryFacts } from './dashboard-provider-registry';
-import type { SignInFlowSpec, SignInJobRunner } from './signin-jobs';
+import type { SignInFlowSpec, SignInJob, SignInJobRunner } from './signin-jobs';
+import { readSignInJournal } from './signin-journal-read';
 
 /**
  * Everything the lifecycle actions touch, injectable for tests: stores, the
@@ -49,6 +50,7 @@ import type { SignInFlowSpec, SignInJobRunner } from './signin-jobs';
 export interface LifecycleEnv {
   ccsDir: () => string;
   runner: () => SignInJobRunner;
+  readSignInJournal?: (id: string) => Promise<SignInJob | null | undefined>;
   codex: () => CodexAccountLifecycle;
   claude: () => ClaudeAccountLifecycle;
   /** Antigravity saved profiles; without it Antigravity actions answer not_implemented. */
@@ -109,6 +111,7 @@ export function defaultLifecycleEnv(): LifecycleEnv {
   return {
     ccsDir: getCcsDir,
     runner: getSignInJobRunner,
+    readSignInJournal: (id) => readSignInJournal(getCcsDir(), id),
     codex: getCodexLifecycle,
     claude: getClaudeLifecycle,
     antigravity: getAntigravityLifecycle,

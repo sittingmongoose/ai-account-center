@@ -30,10 +30,7 @@ import type { ClaudeHostTransport } from '../../../src/web-server/services/claud
 import { CodexAccountLifecycle } from '../../../src/web-server/services/codex-account-lifecycle';
 import { MuseAccountLifecycle } from '../../../src/web-server/services/muse-account-lifecycle';
 import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
-import {
-  SignInJobRunner,
-  type SignInJob,
-} from '../../../src/web-server/services/signin-jobs';
+import { SignInJobRunner, type SignInJob } from '../../../src/web-server/services/signin-jobs';
 import { setLocalNetworkTrustResolver } from '../../../src/web-server/middleware/secure-transport';
 import { parseTrustedNetworks } from '../../../src/web-server/middleware/trusted-networks';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
