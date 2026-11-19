@@ -472,6 +472,13 @@ describe('status routes', () => {
       400
     );
     expect((await post('/api/status/answers/batch', body)).status).toBe(404);
+    const sendId = '22222222-2222-4222-8222-222222222222';
+    const repeated = { answers: [{ ...one, note: 'I changed my answer' }], sendId };
+    const first = await post('/api/status/answers', repeated);
+    expect(first.status).toBe(200);
+    const replay = await post('/api/status/answers', repeated);
+    expect(replay.status).toBe(200);
+    expect(await replay.text()).toBe(await first.text());
   });
 
   it('serves option images from the writer folder only, by content, at most 2 MB', async () => {
