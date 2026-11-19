@@ -125,7 +125,7 @@ fn provider(
     })
 }
 
-fn decorate(
+pub(super) fn decorate(
     mut account: Value,
     visibility: &Value,
     lifecycle: &Lifecycle,

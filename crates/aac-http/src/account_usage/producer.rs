@@ -145,7 +145,7 @@ impl Producer {
             now,
             force,
         );
-        let entries = self.renewal_entries(now);
+        let entries = self.renewal_entries(now).await;
         let codex = self.codex_rows(disk.codex, &entries, now);
         let claude = self.claude_rows(&disk.claude_private, disk.refresh, now);
         let history = self.mac_history_rows(&disk.claude_private, now);
@@ -264,31 +264,32 @@ impl Producer {
         }
         let root = self.root.clone();
         let home = self.home.clone();
-        let entries = tokio::task::spawn_blocking(move || {
-            let mut env = aac_renewal::planner::CodexRenewalEnvironment {
-                ccs_dir: root,
-                ..Default::default()
-            };
-            if let Some(home) = &home {
-                env.codex_home = Some(home.join(".codex"));
-                env.home_dir = Some(home.clone());
-            }
-            let options = aac_renewal::renewal::CodexProfileRenewalOptions {
-                env,
-                ..Default::default()
-            };
-            aac_renewal::renewal::get_codex_profile_renewal_status(&options)
-                .map(|status| {
-                    status
-                        .profiles
-                        .into_iter()
-                        .map(|entry| (entry.name.clone(), entry))
-                        .collect()
-                })
-                .unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default();
+        let entries: HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus> =
+            tokio::task::spawn_blocking(move || {
+                let mut env = aac_renewal::planner::CodexRenewalEnvironment {
+                    ccs_dir: root,
+                    ..Default::default()
+                };
+                if let Some(home) = &home {
+                    env.codex_home = Some(home.join(".codex"));
+                    env.home_dir = Some(home.clone());
+                }
+                let options = aac_renewal::renewal::CodexProfileRenewalOptions {
+                    env,
+                    ..Default::default()
+                };
+                aac_renewal::renewal::get_codex_profile_renewal_status(&options)
+                    .map(|status| {
+                        status
+                            .profiles
+                            .into_iter()
+                            .map(|entry| (entry.name.clone(), entry))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
         let mut held = self
             .renewal_status
             .lock()

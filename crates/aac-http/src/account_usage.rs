@@ -84,7 +84,7 @@ impl AccountUsageCache {
     /// Ask the native sampler to start a fresh generation, with the dashboard's
     /// five-second debounce. Provider cooldowns still apply.
     pub fn request_refresh(&self) -> bool {
-        use std::sync::atomic\Ordering;
+        use std::sync::atomic::Ordering;
         let Ok(now) = aac_core::UtcMs::now() else {
             return false;
         };
@@ -125,14 +125,13 @@ impl AccountUsageCache {
         };
         let mut dashboard: Value =
             serde_json::from_str(held.data.get()).map_err(|_| Decline::Shape)?;
-        let accounts = dashboard["accounts"]
-            .as_array_mut()
-            .ok_or(Decline::Shape)?;
+        let settings = dashboard["settings"].clone();
+        let accounts = dashboard["accounts"].as_array_mut().ok_or(Decline::Shape)?;
         let replaced = accounts.iter_mut().find(|row| row["id"] == id);
         let Some(target) = replaced else {
             return Ok(false);
         };
-        *target = dashboard::decorate(row, &dashboard["settings"], lifecycle)?;
+        *target = dashboard::decorate(row, &settings, lifecycle)?;
         let accounts = dashboard["accounts"].as_array().ok_or(Decline::Shape)?;
         let signins = dashboard.get("claudeSignIns");
         let facts = dashboard::facts(accounts, signins)?;
@@ -148,7 +147,6 @@ impl AccountUsageCache {
             .max(now.get());
         self.publish(desktop, secure, generation, dashboard, facts)
     }
-
 
     /// Generation to send to the private Home renderer. Both listeners share
     /// the same cache, so this needs no intermediate TypeScript feed.

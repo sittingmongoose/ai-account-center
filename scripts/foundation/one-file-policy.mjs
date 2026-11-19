@@ -76,6 +76,17 @@ export const ALLOWLIST = [
       "The service hashes its own executable image at start (L1 build check). That is not a " +
       'private file, and the open must follow the path the kernel ran.',
   },
+  {
+    path: 'crates/aac-renewal/src/',
+    reason:
+      "G10 saved-login renewal ports the TS Codex renewal mechanics: bounded reads of the " +
+      "Codex CLI's own auth files and Linux /proc (another tool's data and kernel data, not " +
+      'AAC private registry files), and the atomic 0600 temp+rename write of auth.json and ' +
+      'the advisory codex-renewal-status.json under the Codex activation lock (the TS ' +
+      'codex-atomic-file.ts writer; neither path is a private-files registry row). The ' +
+      'parity bin and fixtures write fake-credential sandboxes in temp roots. Follow-up ' +
+      'l2-renewal-readers: move the bounded reads onto aac_files::read.',
+  },
 ];
 
 const OWNER = 'crates/aac-files/src/';
