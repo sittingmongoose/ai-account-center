@@ -69,7 +69,11 @@ if (registryOutput !== undefined) {
 }
 const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   if (group === undefined) return true;
-  assert.equal(mode, 'cut-rust-only', 'A worker-removal group requires --cut-rust-only.');
+  assert.equal(
+    mode,
+    process.argv.some((arg) => arg.startsWith('--record-native=')) ? 'cut' : 'cut-rust-only',
+    'A worker-removal group replays worker-less, or records through the shipped cut.'
+  );
   assert(Object.hasOwn(groups, group), `Unknown worker-removal group ${group}.`);
   return groups[group as keyof typeof groups].test(route.method + ' ' + route.path);
 });
@@ -100,6 +104,10 @@ const nativeGroupRow = (method: string, route: string) =>
     route === '/api/store/status' ||
     route.startsWith('/api/usage/') ||
     route === '/api/scoreboard');
+const recordNative = process.argv
+  .find((arg) => arg.startsWith('--record-native='))
+  ?.slice('--record-native='.length);
+const recordedNative: Record<string, Contract> = {};
 const groupOverrides: Record<string, Contract> = {};
 if (group !== undefined && mode === 'cut-rust-only') {
   try {
@@ -324,6 +332,18 @@ try {
     }),
     { mode: 0o600 }
   );
+  if (recordNative) {
+    Object.assign(environment, {
+      AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+      AAC_RUST_STORE: 'on',
+      AAC_RUST_GROUP_STATUS: 'on',
+      AAC_RUST_GROUP_SCOREBOARD: 'on',
+      AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+      AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+    });
+    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
   if (group === 'status-home' || group === 'status') {
     for (const key of Object.keys(environment))
       if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
@@ -392,6 +412,7 @@ try {
         let status: number;
         let body: unknown;
         let selected: Record<string, string> | undefined;
+        let served = request.path;
         if (request.method === 'UPGRADE') {
           status = await upgrade(rust.url, headers);
         } else {
@@ -399,6 +420,7 @@ try {
             .replace('/{*splat}', '/')
             .replace(/:[A-Za-z]+/g, 'fixture-missing');
           if (endpoint.includes('/@regex')) endpoint = '/api/status/files/fixture/missing.txt';
+          served = endpoint;
           // The route inventory stores the pattern; capture supplies this query explicitly.
           if (/accounts\/(dashboard|analytics)$/.test(endpoint)) endpoint += '?fixture=invalid';
           const response = await send(rust.url, endpoint, {
@@ -426,6 +448,19 @@ try {
               return value === null ? [] : [[key, value]];
             })
           );
+          if (recordNative && mine) {
+            recordedNative['contract/' + fixture] = {
+              request: {
+                method: request.method === 'ALL' ? 'POST' : request.method,
+                path: served,
+                role,
+                ...(request.body === undefined ? {} : { body: request.body }),
+              },
+              response: normalize({ status, headers: selected, body }),
+            } as Contract;
+            counts.match++;
+            continue;
+          }
           const proof = selected['x-ccs-bar-token'];
           if (proof) {
             const token = (await fs.readFile(path.join(root, 'bar', '.auth-token'), 'utf8')).trim();
@@ -486,6 +521,10 @@ try {
 } finally {
   await fs.rm(root, { recursive: true, force: true });
 }
+if (recordNative) {
+  await fs.writeFile(path.join(spec, recordNative), JSON.stringify(recordedNative, null, 2) + '\n');
+  console.log(`Recorded ${Object.keys(recordedNative).length} native rows into ${recordNative}`);
+}
 console.log(
   `Rust public M0: ${counts.match} matching replies, ${counts.decline} explicit declines across ${declined.size} routes, ${counts.different} differences.`
 );
@@ -498,7 +537,7 @@ console.log('M0 declines: ' + [...declined].join(', '));
 if (different.length) console.log('M0 differences:\n' + different.join('\n'));
 assert.equal(owned.failed, 0, 'M6-owned M0 contract');
 assert.equal(resets.failed, 0, 'Rust reset M0 contract');
-if (group !== undefined || process.argv.includes('--require-complete'))
+if (!recordNative && (group !== undefined || process.argv.includes('--require-complete')))
   assert.equal(counts.decline + counts.different, 0, 'Rust M0 cutover gate');
 if (registryOutput !== undefined) {
   assert.equal(Object.keys(registryRecords).length, 2, 'record both registry roles');
