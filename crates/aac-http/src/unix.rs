@@ -1,5 +1,5 @@
 use crate::{
-    app_update_routes::{AppUpdateJobs, Operation as AppUpdateOperation},
+    app_update_routes::{AppUpdateJobs, BoundJobs, Operation as AppUpdateOperation},
     feed::Feeds,
     identity::{self, Identity},
     limits::Limits,
@@ -74,7 +74,7 @@ struct Shared {
     identity: Identity,
     feeds: Feeds,
     approvals: crate::account_approvals::Approvals,
-    app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
+    app_update_jobs: Option<BoundJobs>,
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
@@ -331,7 +331,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                         .into_response();
                 }
             }
-            let Some(jobs) = shared.app_update_jobs.clone() else {
+            let Some(jobs) = shared.app_update_jobs.as_ref() else {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     [("x-aac-decline", "unsupported")],
@@ -339,9 +339,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 )
                     .into_response();
             };
-            match operation.invoke(jobs.as_ref()).await {
-                Some(response) => response,
-                None => decline(row.handler, Decline::Internal),
+            match jobs.dispatch(operation).await {
+                Ok(response) => response,
+                Err(reason) => decline(row.handler, reason),
             }
         }
         Handler::Approvals => {
@@ -786,7 +786,7 @@ async fn serve_inner(
         identity,
         feeds: Feeds::new(),
         approvals: crate::account_approvals::Approvals::default(),
-        app_update_jobs,
+        app_update_jobs: app_update_jobs.map(BoundJobs::new),
         agents,
         store: store.clone(),
     }));

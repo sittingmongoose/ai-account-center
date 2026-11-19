@@ -516,7 +516,7 @@ export class RustService extends RustSupervisor {
     if (
       reply.status === 503 &&
       reply.decline === 'unsupported' &&
-      reply.bytes.toString('utf8') === '{"error":"App update jobs are unbound"}'
+      reply.bytes?.toString('utf8') === '{"error":"App update jobs are unbound"}'
     ) {
       this.declined(route, reply);
       return null;

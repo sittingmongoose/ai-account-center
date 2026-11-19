@@ -1,11 +1,13 @@
 //! HTTP adapter for the dashboard's app-update job owner.
+use aac_views::decline::Decline;
 use axum::{
     Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde_json::Value;
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Arc};
+use tokio::sync::Semaphore;
 
 /// The dashboard HTTP status and JSON body returned by a job operation.
 pub struct AppUpdateReply {
@@ -29,6 +31,38 @@ pub trait AppUpdateJobs: Send + Sync {
     fn start(&self) -> AppUpdateCall<'_>;
     /// Acknowledge cancellation or report why the owner could not cancel.
     fn cancel(&self) -> AppUpdateCall<'_>;
+}
+
+pub(crate) struct BoundJobs {
+    owner: Arc<dyn AppUpdateJobs>,
+    slots: Arc<Semaphore>,
+}
+
+impl BoundJobs {
+    pub(crate) fn new(owner: Arc<dyn AppUpdateJobs>) -> Self {
+        Self {
+            owner,
+            slots: Arc::new(Semaphore::new(4)),
+        }
+    }
+
+    pub(crate) async fn dispatch(&self, operation: Operation) -> Result<Response, Decline> {
+        let slot = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Decline::Busy)?;
+        let owner = self.owner.clone();
+        // Once admitted, a socket timeout can hide the outcome but cannot interrupt
+        // the job owner's acknowledgment or release this request's permit early.
+        tokio::spawn(async move {
+            let _slot = slot;
+            operation.invoke(owner.as_ref()).await
+        })
+        .await
+        .map_err(|_| Decline::Internal)?
+        .ok_or(Decline::Internal)
+    }
 }
 
 #[derive(Clone, Copy)]

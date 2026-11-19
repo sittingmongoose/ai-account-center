@@ -211,6 +211,12 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/account_approvals.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/account_reads.rs",
       "kind": "internal",
       "evidence": [],
@@ -218,6 +224,12 @@
     },
     {
       "file": "crates/aac-http/src/agent_transport.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/app_update_routes.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
