@@ -69,7 +69,10 @@ export interface LifecycleEnv {
   providerFacts: (context: { secureTransport?: boolean }) => ProviderRegistryFacts;
   getDashboard: (context: { secureTransport?: boolean }) => Promise<AccountDashboard>;
   probe: (source: AdditionalUsageSource) => Promise<DashboardAccount>;
-  refreshAdditional: (id: string) => Promise<DashboardAccount | null>;
+  refreshAdditional: (
+    id: string,
+    source: AdditionalUsageSource
+  ) => Promise<DashboardAccount | null>;
   replaceRow: (account: DashboardAccount) => void;
   keyStore: (location: KeyStoreLocation) => KeyStoreBackend | null;
   /** Open Cursor in the Mac console session over the account's ssh alias. */

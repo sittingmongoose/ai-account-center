@@ -10,7 +10,7 @@ import {
   type LifecycleEnv,
   type LifecycleResult,
 } from './account-lifecycle-env';
-import { updateAccountRegistry } from './account-registry-v2';
+import { registrySource, updateAccountRegistry } from './account-registry-v2';
 import { editRegistry } from './account-lifecycle-transitions';
 import { SIGNIN_CODE_PATTERN } from './signin-jobs';
 import {
@@ -105,6 +105,8 @@ export async function recheck(
   keys(body, []);
   checkRecheckLimit(env, id);
   const { entry } = account;
+  const reviewed = registrySource(entry);
+  if (account.mode === 'v1') delete reviewed.account;
   const binding = JSON.stringify([entry.provider, entry.platform, entry.sshHost, entry.credential]);
   const reading: { row: DashboardAccount | null } = { row: null };
   const completed = await runLifecycleEffects(
@@ -113,7 +115,7 @@ export async function recheck(
     ['collect', 'publish-if-current'] as const,
     async (effect) => {
       if (effect === 'collect') {
-        const row = await env.refreshAdditional(id);
+        const row = await env.refreshAdditional(id, reviewed);
         reading.row = row;
         return row?.id === id && row.provider === entry.provider && row.platform === entry.platform;
       }
