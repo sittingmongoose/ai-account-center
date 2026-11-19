@@ -36,20 +36,6 @@ const ACCOUNT_LITERALS: &[&str] = &[
 const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/analytics", &["GET"]),
     ("/api/accounts/analytics/capture", &["GET", "PUT"]),
-    ("/api/accounts/registry", &["GET"]),
-    ("/api/accounts/add", &["POST"]),
-    ("/api/accounts/signin-jobs/:id", &["GET"]),
-    ("/api/accounts/signin-jobs/:id/cancel", &["POST"]),
-    ("/api/accounts/signin-jobs/:id/code", &["POST"]),
-    ("/api/accounts/trash/:id/purge", &["POST"]),
-    ("/api/accounts/trash/:id/restore", &["POST"]),
-    #[cfg(not(unix))]
-    ("/api/accounts/:id", &["PATCH"]),
-    ("/api/accounts/:id/key", &["PUT"]),
-    #[cfg(not(unix))]
-    ("/api/accounts/:id/open", &["POST"]),
-    ("/api/accounts/:id/remove", &["POST"]),
-    ("/api/accounts/:id/signin-again", &["POST"]),
     ("/api/antigravity/profiles", &["GET"]),
     ("/api/antigravity/profiles/quotas", &["GET"]),
     #[cfg(not(unix))]
@@ -154,6 +140,10 @@ mod tests {
         assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));
         assert!(!cut_route(&Method::GET, "/api/accounts/signin-command"));
         assert!(!cut_route(&Method::GET, "/api/accounts/trash"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/registry"));
+        assert!(!cut_route(&Method::POST, "/api/accounts/add"));
+        assert!(!cut_route(&Method::PUT, "/api/accounts/zai:usage/key"));
+        assert!(!cut_route(&Method::PATCH, "/api/accounts/zai:usage"));
         assert!(!cut_route(&Method::GET, "/api/auth/session"));
         assert!(!cut_route(&Method::GET, "/internal/collection/recheck"));
     }

@@ -240,11 +240,6 @@ impl DashboardAuth {
             {
                 return routes.handle(request).await;
             }
-            if let Some(root) = cut_root.as_deref()
-                && let Some(route) = lifecycle::Route::of(request.method(), request.uri().path())
-            {
-                return lifecycle::handle(root, route, request).await;
-            }
             if let Some(native) = &native_owners
                 && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
@@ -384,13 +379,10 @@ pub(crate) async fn run_public_at(
     };
     let enabled = owner_host::enabled();
     #[cfg(unix)]
-    let has_external = cut
-        && enabled
-        && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
+    let has_external =
+        cut && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
     #[cfg(not(unix))]
     let has_external = false;
-    let lifecycle_available = groups.is_some_and(native_owners::Groups::lifecycle_available);
-    let native_lifecycle = cut && enabled && (has_external || lifecycle_available);
     let groups = groups.map(|mut groups| {
         if has_external {
             groups.collection = false;
@@ -402,7 +394,6 @@ pub(crate) async fn run_public_at(
             &root,
             address,
             groups.is_some_and(|groups| groups.collection),
-            native_lifecycle,
             has_external,
         )
         .await?
@@ -422,41 +413,26 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    let native_lifecycle = native_lifecycle || (cut && !composed && lifecycle_available);
-    let owner_host = (enabled || native_lifecycle)
+    let owner_host = (enabled || cut)
         .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
-    let (native, native_jobs) = if let Some(mut groups) = groups {
-        groups.lifecycle = native_lifecycle && !has_external;
+    let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
+        groups.lifecycle = !has_external;
         let worker_directory = snapshot
             .as_deref()
             .and_then(std::path::Path::parent)
             .map(std::path::Path::to_owned);
-        if let Some(host) = &owner_host {
-            host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
-            (host.public_owners(), None)
-        } else {
-            let (native, jobs) = native_owners::NativeOwners::start(
-                root.clone(),
-                groups,
-                hub.clone(),
-                auth.events(),
-                worker_directory,
-            )?;
-            (Some(native), Some(jobs))
-        }
+        host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
+        host.public_owners()
     } else {
-        (None, None)
+        None
     };
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
-    let lifecycle_routes = owner_host
-        .as_ref()
-        .filter(|_| native_lifecycle)
-        .map(|host| {
-            let routes = lifecycle_host::Routes::new(host, has_external);
-            host.register("lifecycle", routes.router());
-            routes
-        });
+    let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
+        let routes = lifecycle_host::Routes::new(host, has_external);
+        host.register("lifecycle", routes.router());
+        routes
+    });
     let mut api = Router::new();
     if let Some(host) = &owner_host {
         api = host.mount(api);
@@ -576,9 +552,6 @@ pub(crate) async fn run_public_at(
     }
     if let Some(host) = &owner_host {
         host.stop_public().await;
-    }
-    if let Some(jobs) = native_jobs {
-        jobs.stop().await;
     }
     if let Some(host) = &owner_host {
         host.stop().await;

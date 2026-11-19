@@ -1885,6 +1885,7 @@ async fn serve_inner(
         tokio::spawn(async move { crate::scoreboard_owned::catalog_jobs(jobs, stop).await });
     }
     let cancel = aac_transport::CancellationToken::new();
+    let lifecycle_owner = state.0.lifecycle.clone();
     let task = producer.zip(native).map(|(producer, native)| {
         let stop = cancel.clone();
         let store = store.clone();
@@ -1893,7 +1894,16 @@ async fn serve_inner(
                 .run(
                     cache,
                     stop,
-                    |_| std::future::ready((native.companions)()),
+                    |refresh| {
+                        let facts = (native.companions)();
+                        let owner = lifecycle_owner.clone();
+                        async move {
+                            match owner {
+                                Some(owner) => owner.private_companions(facts, refresh).await,
+                                None => facts,
+                            }
+                        }
+                    },
                     |cache| {
                         (native.published)(&cache);
                         let store = store.clone();
