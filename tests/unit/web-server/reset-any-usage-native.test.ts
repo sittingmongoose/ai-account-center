@@ -237,7 +237,8 @@ nativeTest(
       expect(locked.pendingAttempt).toBe(claim.body.attemptKey);
       expect(locked.grants[0].resetsLeft).toBe(1);
       expect(locked.grants[0].claimable).toBe(false);
-      expect(locked.grants[0].claimBlockedReason).toBe('grant-unavailable');
+      // The credit is not saved for later: OpenAI is redeeming it now, and the reason says so.
+      expect(locked.grants[0].claimBlockedReason).toBe('redeeming');
       const again = await h.post('/prepare', { grantKey: locked.grants[0].grantKey });
       expect(again.status).toBe(409);
       expect(again.body.sent).toBe(false);

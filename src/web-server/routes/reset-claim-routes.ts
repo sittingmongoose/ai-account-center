@@ -43,6 +43,7 @@ const SAFE_REASONS = new Set([
   'unsupported-grant-id',
   'credential-host-unavailable',
   'grant-unavailable',
+  'redeeming',
   'refill-windows-unconfirmed',
   'signed-out',
 ]);
