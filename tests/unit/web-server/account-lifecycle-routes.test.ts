@@ -365,10 +365,8 @@ async function fixture(
   };
   const app = express();
   app.use(express.json());
-  const rustService =
-    options.writeParityMode || options.approvalBinary
-      ? new RustService(options.writeParityMode ?? 'on')
-      : undefined;
+  const mode = options.writeParityMode ?? writeParityMode;
+  const rustService = mode || options.approvalBinary ? new RustService(mode ?? 'on') : undefined;
   if (rustService) {
     const service = rustService;
     closers.push(async () => service.stop());
@@ -377,10 +375,14 @@ async function fixture(
       expect(service.stats.fallbacks).toBe(0);
       expect(service.accountConfirmations()).toBeDefined();
     }
-    app.use((_req, res, next) => {
-      res.locals.rustService = service;
-      next();
-    });
+    // The ordinary unit fixtures use a fake approval clock. The parity and
+    // guarded issuer fixtures explicitly opt into the real issuer.
+    if (options.writeParityMode || options.approvalBinary) {
+      app.use((_req, res, next) => {
+        res.locals.rustService = service;
+        next();
+      });
+    }
   }
   app.use((req, _res, next) => {
     // The peer the route sees: `x-test-peer`, or the real loopback peer. Set on every
