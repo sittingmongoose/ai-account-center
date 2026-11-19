@@ -69,8 +69,9 @@ pub(crate) fn save(owners: &Owners, root: &Path, key: &str, bytes: &[u8]) -> Res
         claude429_streak: Option<u8>,
     }
     let refused = || Failure::new(Cause::Refused, "invalid collection cooldown");
-    let hold: Hold = crate::json_object::from_slice(bytes, &["now", "until", "claude429Streak"])
-        .map_err(|_| refused())?;
+    let hold: Hold =
+        crate::json_object::from_slice_with_optional(bytes, &["now", "until"], &["claude429Streak"])
+            .map_err(|_| refused())?;
     if !digest(key)
         || !hold.now.is_finite()
         || !hold.until.is_finite()

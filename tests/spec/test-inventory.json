@@ -677,6 +677,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/tests/g4_parity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/tests/lifecycle.rs",
       "kind": "table",
       "evidence": [

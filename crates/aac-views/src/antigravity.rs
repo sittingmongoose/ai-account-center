@@ -715,7 +715,11 @@ pub fn plan_at(
 ) -> (Value, Option<Value>) {
     let reported = reported.and_then(Value::as_object);
     let tier = reported
-        .and_then(|row| row.get("paidTier").or_else(|| row.get("currentTier")))
+        .and_then(|row| {
+            row.get("paidTier")
+                .filter(|tier| !tier.is_null())
+                .or_else(|| row.get("currentTier"))
+        })
         .and_then(Value::as_object);
     let tier_class = tier
         .and_then(|row| row.get("id"))
@@ -1213,5 +1217,48 @@ mod fact_tests {
             answered["profiles"][0]["verifiedAt"],
             json!("2026-11-15T08:00:00.000Z")
         );
+    }
+
+    #[test]
+    fn reported_plan_refines_the_class_like_the_ts_display() {
+        let sampled = Some(json!(1_792_065_600_000_i64));
+        let class = |plan: Option<&str>, reported: Value| {
+            plan_at(plan, sampled.as_ref(), Some(&reported), 0.0)
+                .1
+                .map(|d| d["class"].as_str().unwrap_or("").to_owned())
+        };
+        assert_eq!(
+            class(Some("Google AI Pro"), json!({"planType":"ultra"})).as_deref(),
+            Some("ultra")
+        );
+        assert_eq!(
+            class(
+                Some("Google AI Ultra"),
+                json!({"paidTier":{"id":"ultra-5x"}})
+            )
+            .as_deref(),
+            Some("ultra-5x")
+        );
+        assert_eq!(
+            class(
+                Some("Google AI Pro"),
+                json!({"currentTier":{"name":"pro-trial"}})
+            )
+            .as_deref(),
+            Some("pro-trial")
+        );
+        assert_eq!(
+            class(
+                Some("Google AI Pro"),
+                json!({"paidTier":{"id":"ultra-20x"},"planType":"pro"})
+            )
+            .as_deref(),
+            Some("pro")
+        );
+        // `known` matches labels/aliases, not class keys: an unmatched planType leaves no class.
+        assert_eq!(class(None, json!({"planType":"enterprise-plus"})), None);
+        let (plan, detail) = plan_at(Some("Free"), sampled.as_ref(), None, 0.0);
+        assert_eq!(plan, json!("Free"));
+        assert_eq!(detail.expect("free")["class"], json!("free"));
     }
 }
