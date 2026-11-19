@@ -15,19 +15,36 @@ import express from 'express';
 
 const tsOnly = process.argv.includes('--ts-only');
 const repo = path.resolve(import.meta.dir, '../..');
+const fixtureCodex = path.join(repo, 'tests/fixtures/reset-source/refusal-codex');
+// The native source and the service find `codex` on the process environment's PATH, which a
+// `process.env` assignment under Bun does not reach. The parent makes the fake CLI's folder and
+// starts this script again with that folder first on PATH from process start; the child refuses
+// to run unless the first PATH entry holds exactly the fixture, so a real CLI is never reached.
+if (!process.env.AAC_RESET_PARITY_BIN) {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aac-reset-parity-bin-')));
+  fs.chmodSync(parent, 0o700);
+  fs.copyFileSync(fixtureCodex, path.join(parent, 'codex'));
+  fs.chmodSync(path.join(parent, 'codex'), 0o755);
+  const { spawnSync } = await import('node:child_process');
+  const child = spawnSync(process.execPath, [import.meta.path, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      PATH: `${parent}${path.delimiter}${process.env.PATH}`,
+      AAC_RESET_PARITY_BIN: parent,
+    },
+  });
+  fs.rmSync(parent, { recursive: true, force: true });
+  process.exit(child.status ?? 1);
+}
+const bin = process.env.AAC_RESET_PARITY_BIN;
+assert.equal(process.env.PATH?.split(path.delimiter)[0], bin, 'the fake CLI comes first on PATH');
+assert.deepEqual(fs.readFileSync(path.join(bin, 'codex')), fs.readFileSync(fixtureCodex));
 const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aac-reset-parity-')));
 fs.chmodSync(scratch, 0o700);
-const bin = path.join(scratch, 'bin');
-fs.mkdirSync(bin, { mode: 0o700 });
-fs.copyFileSync(
-  path.join(repo, 'tests/fixtures/reset-source/refusal-codex'),
-  path.join(bin, 'codex')
-);
-fs.chmodSync(path.join(bin, 'codex'), 0o755);
 for (const key of Object.keys(process.env)) if (key.startsWith('CCS_')) delete process.env[key];
 Object.assign(process.env, {
   CCS_HOME: scratch,
-  PATH: `${bin}${path.delimiter}${process.env.PATH}`,
   AAC_RUST_GROUP_WRITES: 'on',
   AAC_STORE: 'off',
   AAC_AGENT_TRANSPORT: 'off',
