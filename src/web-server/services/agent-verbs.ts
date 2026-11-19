@@ -4,6 +4,7 @@ import { ConfigError } from '../../errors/error-types';
 import path from 'path';
 import { createHash, createHmac, randomBytes } from 'crypto';
 import { requestRustAgent } from '../rust-service-transport';
+import type { UnifiedConfig } from '../../config/schemas/unified-config';
 import transportPolicy from '../../../config/tables/agent-transport-policy.json';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
@@ -27,7 +28,7 @@ export function agentTransport(): 'off' | 'on' {
   }
 }
 
-export type AgentVerbs = 'off' | 'on';
+export type AgentVerbs = 'off' | 'shadow' | 'on';
 export type AgentVerb =
   | 'inventory'
   | 'signin-expiry'
@@ -38,7 +39,8 @@ export type AgentVerb =
   | 'claude-history'
   | 'failover-inventory'
   | 'launch'
-  | 'claude-host';
+  | 'claude-host'
+  | 'signin-session';
 export interface AgentArtifact {
   target: string;
   version: string;
@@ -50,7 +52,165 @@ export interface AgentArtifact {
 /** Invalid and absent settings stay off. The environment override supports isolated gates. */
 export function agentVerbs(): AgentVerbs {
   const value = process.env.AAC_AGENT_VERBS ?? loadUnifiedConfig()?.agentVerbs;
-  return value === 'on' ? 'on' : 'off';
+  return value === 'on' || value === 'shadow' ? value : 'off';
+}
+
+/** Every verb the adapter can gate; the family map admits no other key. */
+const AGENT_VERBS: readonly AgentVerb[] = [
+  'inventory',
+  'signin-expiry',
+  'quota-read',
+  'scan-usage',
+  't3-pins',
+  'key-store',
+  'claude-history',
+  'failover-inventory',
+  'launch',
+  'claude-host',
+  'signin-session',
+];
+/** key-store and claude-history write on the computer: shadow would duplicate the write, so
+ * those two families treat shadow as off. The read-only families shadow safely. */
+const WRITE_VERBS: Partial<Record<AgentVerb, true>> = {
+  'key-store': true, 'claude-history': true, launch: true, 'claude-host': true, 'signin-session': true,
+};
+const MODE_RANK: Record<AgentVerbs, number> = { off: 0, shadow: 1, on: 2 };
+
+/** Per-family modes under the scalar ceiling; an absent map keeps the ceiling for every verb.
+ * A present but invalid map stays empty (every family off), never the ceiling. An absent or
+ * unreadable config leaves the legacy scalar behavior intact.
+ * `AAC_AGENT_VERB_FAMILIES` (JSON) supports isolated gates. */
+export function agentVerbFamilies(): Partial<Record<AgentVerb, AgentVerbs>> | null {
+  const env = process.env.AAC_AGENT_VERB_FAMILIES;
+  let raw: unknown;
+  if (env !== undefined) {
+    try {
+      raw = JSON.parse(env);
+    } catch {
+      return {};
+    }
+  } else {
+    let config: UnifiedConfig | null;
+    try {
+      config = loadUnifiedConfig();
+    } catch {
+      return null;
+    }
+    raw = config?.agentVerbFamilies;
+  }
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const families: Partial<Record<AgentVerb, AgentVerbs>> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!AGENT_VERBS.includes(key as AgentVerb)) return {};
+    if (value !== 'off' && value !== 'shadow' && value !== 'on') return {};
+    families[key as AgentVerb] = value;
+  }
+  return families;
+}
+
+/** One verb's effective mode: the scalar ceiling caps its family setting; an unlisted family
+ * stays off while a map is present, so families turn on one at a time (DESIGN 4.5). */
+export function agentVerbMode(verb: AgentVerb): AgentVerbs {
+  const ceiling = agentVerbs();
+  if (ceiling === 'off') return 'off';
+  const families = agentVerbFamilies();
+  const requested = families ? (families[verb] ?? 'off') : ceiling;
+  const mode = MODE_RANK[requested] <= MODE_RANK[ceiling] ? requested : ceiling;
+  return mode === 'shadow' && WRITE_VERBS[verb] ? 'off' : mode;
+}
+
+export type AgentShadowOutcome =
+  'equal' | 'different' | 'fallback' | 'error' | 'reference-failed' | 'reference-fallback';
+export interface AgentShadowReport {
+  verb: AgentVerb;
+  outcome: AgentShadowOutcome;
+  agentMs: number;
+  referenceMs: number;
+}
+
+/** The parity spec's only normalization: JSON object key order. Arrays keep their order. */
+function canonicalJson(value: unknown): string {
+  const sort = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(sort);
+    if (node && typeof node === 'object') {
+      const row = node as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(row).sort()) out[key] = sort(row[key]);
+      return out;
+    }
+    return node;
+  };
+  return JSON.stringify(sort(value));
+}
+
+function shadowEqual(agent: unknown, reference: unknown): boolean {
+  if (Buffer.isBuffer(agent) && Buffer.isBuffer(reference)) return agent.equals(reference);
+  if (typeof agent === 'string' && typeof reference === 'string') {
+    try {
+      return canonicalJson(JSON.parse(agent)) === canonicalJson(JSON.parse(reference));
+    } catch {
+      return agent === reference;
+    }
+  }
+  return canonicalJson(agent) === canonicalJson(reference);
+}
+
+/**
+ * Shadow (DESIGN 4.5): the reference answer is served as soon as it settles; the agent runs
+ * alongside and the comparison is logged in the background. Bodies never enter the log. A
+ * fallback or failed agent attempt is not a difference; a reference the agent cannot match
+ * (a python-fallback scan) is `reference-fallback`, also not a difference.
+ */
+export async function runAgentShadow<T>(
+  verb: AgentVerb,
+  agent: () => Promise<T | null>,
+  reference: () => Promise<T>,
+  onCompared?: (report: AgentShadowReport) => void,
+  comparable: (reference: T) => boolean = () => true
+): Promise<T> {
+  const agentStarted = Date.now();
+  const referenceStarted = Date.now();
+  const pending = Promise.resolve()
+    .then(() => agent())
+    .then(
+      (value) => ({ value, failed: false }),
+      () => ({ value: null as T | null, failed: true })
+    );
+  const settled = await Promise.resolve()
+    .then(() => reference())
+    .then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
+  const referenceMs = Date.now() - referenceStarted;
+  void pending
+    .then(({ value, failed }) => {
+      const agentMs = Date.now() - agentStarted;
+      const outcome: AgentShadowOutcome = !settled.ok
+        ? 'reference-failed'
+        : failed
+          ? 'error'
+          : value === null
+            ? 'fallback'
+            : !comparable(settled.value)
+              ? 'reference-fallback'
+              : shadowEqual(value, settled.value)
+                ? 'equal'
+                : 'different';
+      logger.info('agent.verbs.shadow', 'shadow comparison', {
+        verb,
+        outcome,
+        agentMs,
+        referenceMs,
+      });
+      onCompared?.({ verb, outcome, agentMs, referenceMs });
+    })
+    .catch(() => {
+      /* A failing comparison hook never changes the served answer. */
+    });
+  if (!settled.ok) throw settled.error;
+  return settled.value;
 }
 
 /** Keep the one-release fallback visible without publishing host names or private paths. */
@@ -61,8 +221,11 @@ export function pythonSignInFallback(): void {
 /** The service's single fallback boundary, shared by local and SSH collectors. */
 export async function collectSignInWithFallback(
   agent: () => Promise<string | null>,
-  python: () => Promise<string>
+  python: () => Promise<string>,
+  mode: AgentVerbs = agentVerbMode('signin-expiry'),
+  onCompared?: (report: AgentShadowReport) => void
 ): Promise<string> {
+  if (mode === 'shadow') return runAgentShadow('signin-expiry', agent, python, onCompared);
   try {
     const result = await agent();
     if (result !== null) return result;
@@ -73,12 +236,25 @@ export async function collectSignInWithFallback(
   return python();
 }
 
-function target(platform: UsageHost['platform']): string {
+/** The targets one platform admits, in preference order; mirrors the service's
+ * compatible_target (musl first on Linux, Apple Silicon first on the Mac). */
+function agentTargets(platform: UsageHost['platform']): readonly string[] {
   return platform === 'mac'
-    ? 'aarch64-apple-darwin'
+    ? ['aarch64-apple-darwin', 'x86_64-apple-darwin']
     : platform === 'windows'
-      ? 'x86_64-pc-windows-msvc'
-      : 'x86_64-unknown-linux-musl';
+      ? ['x86_64-pc-windows-msvc']
+      : ['x86_64-unknown-linux-musl', 'x86_64-unknown-linux-gnu'];
+}
+
+function findArtifact(
+  artifacts: readonly AgentArtifact[],
+  platform: UsageHost['platform']
+): AgentArtifact | undefined {
+  for (const target of agentTargets(platform)) {
+    const artifact = artifacts.find((a) => a.target === target);
+    if (artifact) return artifact;
+  }
+  return undefined;
 }
 
 export function agentLauncher(artifact: AgentArtifact, platform: UsageHost['platform']): string {
@@ -119,11 +295,12 @@ export interface AgentCallOptions {
 export function localAgentReady(
   platform: UsageHost['platform'],
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
-  mode: AgentVerbs = agentVerbs()
+  mode: AgentVerbs = agentVerbMode('scan-usage')
 ): boolean {
-  if (mode !== 'on') return false;
-  if (agentTransport() === 'on') return artifacts.some((a) => a.target === target(platform));
-  const artifact = artifacts.find((a) => a.target === target(platform));
+  if (mode === 'off') return false;
+  if (agentTransport() === 'on')
+    return artifacts.some((a) => agentTargets(platform).includes(a.target));
+  const artifact = findArtifact(artifacts, platform);
   if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return false;
   try {
     const file = path.resolve(__dirname, '../../..', artifact.file);
@@ -146,7 +323,7 @@ export async function runAgentVerb(
   options: AgentCallOptions
 ): Promise<string | null> {
   try {
-    const mode = options.mode ?? agentVerbs();
+    const mode = options.mode ?? agentVerbMode(verb);
     if (mode === 'off') return null;
     if ((options.transport ?? agentTransport()) === 'on') {
       const started = Date.now();
@@ -190,7 +367,7 @@ async function runAgentVerbTsFallback(
 ): Promise<string | null> {
   let dispatched = false;
   try {
-    const mode = options.mode ?? agentVerbs();
+    const mode = options.mode ?? agentVerbMode(verb);
     const artifacts = options.artifacts ?? manifest.artifacts;
     // The default runner launches only the probed ssh, checked just before the spawn.
     const run =
@@ -198,7 +375,7 @@ async function runAgentVerbTsFallback(
       (async (file: string, args: string[], opts: Parameters<typeof runManagedCommand>[2]) =>
         runManagedCommand(await sshLaunch(file, args), args, opts));
     if (mode === 'off') return null;
-    const artifact = artifacts.find((a) => a.target === target(host.platform));
+    const artifact = findArtifact(artifacts, host.platform);
     if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return null;
     const id = verb;
     let executable = 'ssh';
@@ -271,7 +448,7 @@ export async function runSignInAgent(
   host: UsageHost,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
   run: typeof runManagedCommand | undefined = undefined,
-  mode: AgentVerbs = agentVerbs()
+  mode: AgentVerbs = agentVerbMode('signin-expiry')
 ): Promise<string | null> {
   const result = await runAgentVerb(
     host,
@@ -310,7 +487,7 @@ export async function runQuotaAgent(
   args: Record<string, unknown>,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
   run: typeof runManagedCommand | undefined = undefined,
-  mode: AgentVerbs = agentVerbs()
+  mode: AgentVerbs = agentVerbMode('quota-read')
 ): Promise<string | null> {
   const value = await runAgentVerb(host, 'quota-read', args, {
     artifacts,
@@ -334,8 +511,11 @@ export async function runQuotaAgent(
 
 export async function collectQuotaWithFallback(
   agent: () => Promise<string | null>,
-  python: () => Promise<string>
+  python: () => Promise<string>,
+  mode: AgentVerbs = agentVerbMode('quota-read'),
+  onCompared?: (report: AgentShadowReport) => void
 ): Promise<string> {
+  if (mode === 'shadow') return runAgentShadow('quota-read', agent, python, onCompared);
   try {
     const result = await agent();
     if (result !== null) return result;
@@ -358,8 +538,11 @@ export async function collectAgentWithFallback<T>(
     | 'claude-host',
   agent: () => Promise<T | null>,
   helper: () => Promise<T>,
+  mode: AgentVerbs = agentVerbMode(verb),
+  onCompared?: (report: AgentShadowReport) => void,
   singleShot = false
 ): Promise<T> {
+  if (mode === 'shadow' && !singleShot) return runAgentShadow(verb, agent, helper, onCompared);
   try {
     const value = await agent();
     if (value !== null) return value;

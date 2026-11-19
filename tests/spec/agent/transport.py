@@ -66,7 +66,7 @@ class Service:
             'agentTransportSsh': {'knownHostsFile': str(self.root / 'no-known-hosts')}}
         (self.root / 'config.yaml').write_text(json.dumps(config))
         recorder = self.root / 'ssh'
-        recorder.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,' + repr(str(Path(__file__).parent)) + ')\nfrom transport import record\nrecord(' + repr(str(self.root)) + ',' + repr(self.agent) + ')\n')
+        recorder.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,' + repr(str(Path(__file__).parent)) + ')\nfrom transport import record\nrecord(' + repr(str(self.root)) + ',' + repr(self.agent) + ',' + repr(json.dumps(dict(os.environ))) + ')\n')
         recorder.chmod(0o700)
         scp = self.root / 'scp'
         scp.write_text('#!/bin/sh\nexit 99\n')
@@ -118,7 +118,7 @@ class Service:
     def __enter__(self): return self
     def __exit__(self, *unused): self.close()
 
-def record(root, agent):
+def record(root, agent, harness_env=None):
     if '-G' in sys.argv[1:]:
         sys.exit(0)  # No-connect capability probes are not agent launcher calls.
     root = Path(root)
@@ -172,7 +172,14 @@ def record(root, agent):
                 time.sleep(.1)
                 sys.exit(1)
         sys.exit(1)
-    os.execv(agent, [agent])
+    # The SSH policy strips the caller's environment on the way out. The fixture recorder is the
+    # far computer: it restores the harness's own env (the proxy process inherited exactly what
+    # the in-place run gives the agent), so ambient-selector and LD_PRELOAD witnesses compare
+    # equal in place and through the service. The product's SSH env policy is unchanged.
+    if harness_env is not None:
+        os.execve(agent, [agent], json.loads(harness_env))
+    else:
+        os.execv(agent, [agent])
 
 def proxy(agent, service):
     wire = sys.stdin.read()

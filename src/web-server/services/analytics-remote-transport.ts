@@ -14,7 +14,7 @@ import {
   helperPlatform,
 } from './dashboard-hosts';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
-import { runAgentVerb, localAgentReady } from './agent-verbs';
+import { runAgentVerb, localAgentReady, agentVerbMode, runAgentShadow } from './agent-verbs';
 import { createLogger } from '../../services/logging';
 import {
   UsageScanInstallError,
@@ -24,6 +24,7 @@ import {
   readUsageScanManifest,
   scanCommand,
   type UsageScanManifest,
+  type LocalUsageScan,
 } from './usage-scan-binary';
 
 /**
@@ -1474,15 +1475,36 @@ export async function runAnalyticsRemoteScan(
 ): Promise<AnalyticsRemoteResponse> {
   if (!isSafeUsageSshAlias(sshHost))
     throw new ValidationError('Analytics remote SSH alias is not configured safely.');
-  const agentAnswer = await scanWithAgent(
-    helperPlatform(platform),
-    sshHost,
-    request,
-    20_000,
-    deps.timeoutMs ?? SSH_TIMEOUT_MS,
-    deps.agent
-  );
+  const agentSide = () =>
+    scanWithAgent(
+      helperPlatform(platform),
+      sshHost,
+      request,
+      20_000,
+      deps.timeoutMs ?? SSH_TIMEOUT_MS,
+      deps.agent
+    );
+  const reference = () => remoteScanReference(sshHost, platform, request, deps);
+  if (agentVerbMode('scan-usage') === 'shadow')
+    return runAgentShadow(
+      'scan-usage',
+      agentSide,
+      reference,
+      undefined,
+      (answer) => answer.reader?.name === 'aac-usage-scan'
+    );
+  const agentAnswer = await agentSide();
   if (agentAnswer) return agentAnswer;
+  return reference();
+}
+
+/** The scanner/Python reference path: served when the agent is off, declines or fails. */
+async function remoteScanReference(
+  sshHost: string,
+  platform: AnalyticsRemoteHost,
+  request: AnalyticsRemoteRequest,
+  deps: AnalyticsRemoteScanDeps
+): Promise<AnalyticsRemoteResponse> {
   const now = deps.now ?? Date.now;
   const manifest = deps.manifest === undefined ? readUsageScanManifest() : deps.manifest;
   const python = deps.python ?? runAnalyticsRemoteHelper;
@@ -1615,21 +1637,44 @@ export function localUsageScanReady(
  */
 export async function runLocalUsageScan(
   request: AnalyticsRemoteRequest,
-  deps: {
-    scanner?: ReturnType<typeof localUsageScan>;
-    timeoutMs?: number;
-    agent?: typeof runAgentVerb;
-  } = {}
+  deps: LocalUsageScanDeps = {}
 ): Promise<AnalyticsRemoteResponse> {
-  const agentAnswer = await scanWithAgent(
-    process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'ubuntu',
-    null,
-    request,
-    LOCAL_SCAN_DEADLINE_MS,
-    deps.timeoutMs ?? LOCAL_SCAN_DEADLINE_MS + 20_000,
-    deps.agent
-  );
+  const platform =
+    process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'ubuntu';
+  const agentSide = () =>
+    scanWithAgent(
+      platform,
+      null,
+      request,
+      LOCAL_SCAN_DEADLINE_MS,
+      deps.timeoutMs ?? LOCAL_SCAN_DEADLINE_MS + 20_000,
+      deps.agent
+    );
+  const reference = () => localScanReference(request, deps);
+  if (agentVerbMode('scan-usage') === 'shadow')
+    return runAgentShadow(
+      'scan-usage',
+      agentSide,
+      reference,
+      undefined,
+      (answer) => answer.reader?.name === 'aac-usage-scan'
+    );
+  const agentAnswer = await agentSide();
   if (agentAnswer) return agentAnswer;
+  return reference();
+}
+
+interface LocalUsageScanDeps {
+  scanner?: LocalUsageScan;
+  timeoutMs?: number;
+  agent?: typeof runAgentVerb;
+}
+
+/** The in-place scanner reference: no ssh and no Python fallback on this computer. */
+async function localScanReference(
+  request: AnalyticsRemoteRequest,
+  deps: LocalUsageScanDeps
+): Promise<AnalyticsRemoteResponse> {
   const scanner = deps.scanner ?? localUsageScan();
   if (!scanner.ok || localDigest(scanner.file) !== scanner.sha256)
     throw new AnalyticsRemoteTransportError(false, 'helper_failed');

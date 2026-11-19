@@ -415,6 +415,8 @@ export async function runClaudeHistoryHelper(
       }
       return runDesktopSsh(checkHost(launcher.sshHost), command, input);
     },
+    undefined,
+    undefined,
     cleanup
   );
 }
