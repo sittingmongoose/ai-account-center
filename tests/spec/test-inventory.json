@@ -2761,12 +2761,6 @@
       ]
     },
     {
-      "file": "tests/unit/cursor/cursor-shortcut-routing.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/docker/docker-hygiene.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -3028,12 +3022,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/shared/extended-context-utils.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/shared/test-environment-cleanup.test.ts",
       "kind": "helper",
       "evidence": [
@@ -3248,12 +3236,6 @@
         "helper",
         "table"
       ]
-    },
-    {
-      "file": "tests/unit/utils/profile-compat.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/utils/prompt.test.js",
@@ -3808,13 +3790,6 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/cgroup-foreign-check.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
     },
     {
       "file": "tests/unit/web-server/claude-account-lifecycle.test.ts",

@@ -48,8 +48,9 @@ async function pushOnce(service: RustService): Promise<void> {
     (['mac', 'windows'] as const).map((platform) => getAccountDashboard(platform, false))
   );
   const dashboards = settled
-    .filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof getAccountDashboard>>> =>
-      r.status === 'fulfilled'
+    .filter(
+      (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof getAccountDashboard>>> =>
+        r.status === 'fulfilled'
     )
     .map((r) => r.value);
   await ensure(service, feeds, 'analytics-dashboard', contentKey(dashboards), () => ({

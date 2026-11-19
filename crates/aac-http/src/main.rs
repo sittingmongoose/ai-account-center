@@ -182,13 +182,15 @@ async fn run() {
     let native =
         std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--native-collection"));
     let result = if native {
-        aac_http::serve_with_native_account_usage(
-            boot,
-            shutdown,
-            Default::default(),
-            Default::default(),
-        )
-        .await
+        let mut inputs = aac_http::NativeAccountUsage::default();
+        if std::env::var("AAC_RUST_CUT_WORKER").as_deref() == Ok("1") {
+            inputs.companions = std::sync::Arc::new(|| {
+                let mut facts = aac_http::account_usage::producer::CompanionInputs::default();
+                facts.lifecycle.mounted = true;
+                facts
+            });
+        }
+        aac_http::serve_with_native_account_usage(boot, shutdown, Default::default(), inputs).await
     } else if std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1") {
         aac_http::serve_composed(boot, shutdown).await
     } else {

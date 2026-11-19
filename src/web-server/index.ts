@@ -65,7 +65,6 @@ import {
   startAccountLifecycleMaintenance,
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
-import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
 import { startRustUsageSnapshotFeed } from './agent-usage/agent-usage-rust-feed';
 import { rustGroupOn } from './rust-service-groups';
@@ -93,6 +92,8 @@ export interface ServerOptions {
   rustServiceBinary?: string;
   /** Per-boot proof for a single loopback-only Rust composition companion. */
   compositionProof?: string;
+  /** Start the private cut worker without public-only TS listeners or deployment bookkeeping. */
+  sidecar?: boolean;
   /** Publishes an admitted Rust-held account snapshot to the usage hub. */
   onRustDashboard?: (platform: ClaudeDashboardPlatform, dashboard: AccountDashboard) => void;
   /** Optional inherited stdin of the Rust public dashboard event receiver. */
@@ -153,12 +154,13 @@ function logRequestFailure(status: number, error: unknown, headersSent: boolean)
  */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
   if (
-    options.compositionProof &&
-    (options.host !== '127.0.0.1' ||
-      options.port !== 0 ||
-      !/^[0-9a-f]{64}$/.test(options.compositionProof))
+    (options.sidecar && !options.compositionProof) ||
+    (options.compositionProof &&
+      (options.host !== '127.0.0.1' ||
+        options.port !== 0 ||
+        !/^[0-9a-f]{64}$/.test(options.compositionProof)))
   )
-    throw new Error('The composition backend requires an ephemeral loopback listener.');
+    throw new ConfigError('The composition backend requires an ephemeral loopback listener.');
   const app = express();
   // Routes answer only to their canonical spelling; set before the first app.use.
   app.set('case sensitive routing', true);
@@ -267,18 +269,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // The T3 usage hub: read-only CLIProxyAPI-shaped usage from the dashboard's
   // cache, off until a key is set (ai-account-center dashboard usage-hub).
-  app.use(USAGE_HUB_MOUNT, createUsageHubRouter());
-
-  app.use(precompressedStatic(staticUi));
-  app.use(
-    express.static(staticDir, {
-      // '/' is a page route below, with the page headers.
-      index: false,
-      setHeaders: uiStaticHeaders(staticUi),
-    })
-  );
-  // The Leptos app frame owns the account dashboard and its sign-in; no React portal is served.
-  app.get('/{*splat}', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
+  if (!options.sidecar) {
+    app.use(USAGE_HUB_MOUNT, createUsageHubRouter());
+    app.use(precompressedStatic(staticUi));
+    app.use(express.static(staticDir, { index: false, setHeaders: uiStaticHeaders(staticUi) }));
+    app.get('/{*splat}', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
+  }
   // Last: whatever failed above answers in JSON, never with a stack trace.
   app.use(
     (
@@ -346,7 +342,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   };
   server.on('upgrade', onUpgrade);
   let httpsServer: https.Server | null = null;
-  let stopCgroupForeignCheck: (() => void) | null = null;
   let stopAgentUsageSnapshot: (() => void) | null = null;
   let stopStoreMaintenance: (() => void) | null = null;
   let stopStoreHostJobsWatch: (() => void) | null = null;
@@ -398,8 +393,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     // R3: producers stop above. Drain admitted calls, close the sole writer, then stop
     // the service. The socket handle refuses new work once closing starts.
     void closeAacStore().finally(() => rustService.stop());
-    stopCgroupForeignCheck?.();
-    stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
     void stopProcessBroker();
     // Saves the sign-ins and stops the session store's timers (the shutdown handlers await it).
@@ -441,7 +434,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         dev: Boolean(options.dev),
       });
       // Only a build that is actually serving becomes the one installers must keep.
-      if (recordRunningBuild(getCcsDir(), packagedBuild) > 0)
+      if (!options.sidecar && recordRunningBuild(getCcsDir(), packagedBuild) > 0)
         logger.warn('web.deployed_build.unrecorded', 'Running build could not be recorded');
       const antigravityFactory =
         options.antigravityRuntimeFactory ?? getInstalledAntigravityRuntimeFactory();
@@ -519,8 +512,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // Scoreboard catalog seeds (runs are read on demand).
       startScoreboardService();
       startAccountAnalyticsSampling(rustService);
-      // Warn when launched apps leaked into the dashboard cgroup (read-only).
-      stopCgroupForeignCheck = startCgroupForeignCheck();
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
       startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
       // Usage cache loads on-demand when Analytics page is visited

@@ -305,7 +305,7 @@ export async function readCursorAccount(
     if (owned === null) {
       const previous = loadRead(cacheDir);
       if (previous) return previous;
-      throw new Error('reader_failed');
+      throw new ProviderError('reader_failed', 'cursor');
     }
     if (owned !== undefined) return owned as CursorAccountRead;
   }

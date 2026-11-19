@@ -1,6 +1,7 @@
 [
   { "method": "GET", "path": "/api/health", "owner": "rust", "group": "core", "roles": ["public", "admin", "device", "hub"], "budgetMs": 400, "handler": "health" },
   { "method": "GET", "path": "/api/accounts/dashboard", "owner": "rust", "group": "collection", "roles": ["admin", "device"], "budgetMs": 400, "handler": "dashboard" },
+  { "method": "POST", "path": "/internal/collection/recheck", "owner": "rust", "group": "collection", "roles": ["service"], "budgetMs": 0, "handler": "collection-recheck" },
   { "method": "GET", "path": "/api/accounts/settings", "owner": "rust", "group": "core", "roles": ["admin"], "budgetMs": 400, "handler": "settings" },
   { "method": "PUT", "path": "/api/accounts/settings", "owner": "rust", "group": "writes", "roles": ["admin"], "budgetMs": 400, "handler": "write-settings" },
   { "method": "PUT", "path": "/api/accounts/analytics/capture", "owner": "rust", "group": "writes", "roles": ["admin"], "budgetMs": 400, "handler": "write-settings" },

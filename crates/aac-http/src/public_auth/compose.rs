@@ -39,14 +39,22 @@ impl Backend {
             .ok_or_else(invalid)?;
         let proof = secret
             .and_then(|value| value.into_string().ok())
-            .filter(|value| super::storage::is_hex(value, 64))
-            .and_then(|value| HeaderValue::from_str(&value).ok())
             .ok_or_else(invalid)?;
-        Ok(Some(Self {
+        Self::new(address, &proof).map(Some)
+    }
+
+    pub(super) fn new(address: SocketAddr, proof: &str) -> io::Result<Self> {
+        if !address.ip().is_loopback() || address.port() == 0 || !super::storage::is_hex(proof, 64)
+        {
+            return Err(io::Error::other("invalid composition backend"));
+        }
+        let proof = HeaderValue::from_str(proof)
+            .map_err(|_| io::Error::other("invalid composition backend"))?;
+        Ok(Self {
             address,
             proof,
             slots: Arc::new(Semaphore::new(32)),
-        }))
+        })
     }
 
     pub(super) async fn forward(self, mut request: Request) -> Reply {

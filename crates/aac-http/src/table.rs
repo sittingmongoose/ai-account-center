@@ -37,6 +37,7 @@ pub(crate) enum Handler {
     Agent,
     Collect,
     CollectionTick,
+    CollectionRecheck,
     CollectionSources,
     ProviderCache,
     CursorAccount,
@@ -85,6 +86,7 @@ impl Handler {
             "collection-cursor" => Handler::CursorAccount,
             "collection-sources" => Handler::CollectionSources,
             "collection-tick" => Handler::CollectionTick,
+            "collection-recheck" => Handler::CollectionRecheck,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "account-approvals" => Handler::Approvals,
@@ -251,6 +253,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::Agent
                         | Handler::Collect
                         | Handler::CollectionTick
+                        | Handler::CollectionRecheck
                         | Handler::ResetClaims
                         | Handler::CursorAccount
                         | Handler::Store
@@ -267,6 +270,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     handler,
                     Handler::Dashboard
                         | Handler::CollectionCache
+                        | Handler::CollectionRecheck
                         | Handler::CollectionTick
                         | Handler::CollectionSources
                         | Handler::ProviderCache
@@ -281,6 +285,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     handler,
                     Handler::Agent
                         | Handler::AgentControl
+                        | Handler::CollectionRecheck
                         | Handler::Collect
                         | Handler::AppUpdates
                         | Handler::Approvals
@@ -338,6 +343,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (handler == Handler::UsageSample
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/usage-snapshot/sample"
+                    || row.budget_ms != 0))
+            || (handler == Handler::CollectionRecheck
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/collection/recheck"
                     || row.budget_ms != 0))
             || (method == axum::http::Method::PATCH
                 && !matches!(

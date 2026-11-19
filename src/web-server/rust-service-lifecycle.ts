@@ -636,13 +636,15 @@ async function acquireWithinBudget(
         }
       }
     });
-    child = spawn(binary, [], {
+    const nativeCollection = process.env.AAC_RUST_CUT_WORKER === '1' && rustGroupOn('collection');
+    child = spawn(binary, nativeCollection ? ['--native-collection'] : [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
         // Windows already returned above; the default re-detects the platform in its own scope.
         ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
         AAC_RUST_NATIVE_APP_UPDATES:
           rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
+        AAC_RUST_CUT_WORKER: process.env.AAC_RUST_CUT_WORKER,
         AAC_RUST_GROUP_CLAUDE_OPEN: rustGroupOn('claude-open') ? 'on' : 'off',
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, '../../config/agent-artifacts.json'),

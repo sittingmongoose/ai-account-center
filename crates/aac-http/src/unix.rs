@@ -137,6 +137,7 @@ struct Shared {
     producer: Arc<crate::home_producer::HomeProducer>,
     account_usage: crate::account_usage::AccountUsageCache,
     native_usage: bool,
+    native_recheck: Option<NativeRecheck>,
     agents: Arc<crate::agent_transport::Agents>,
     collection: Arc<crate::collection::Collection>,
     cursor: Arc<crate::account_usage::cursor::Reader>,
@@ -158,6 +159,17 @@ struct Shared {
 
 #[derive(Clone)]
 struct AppState(Arc<Shared>);
+
+struct NativeRecheck {
+    producer: Arc<crate::account_usage::producer::Producer>,
+    companions: Arc<dyn Fn() -> crate::account_usage::producer::CompanionInputs + Send + Sync>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecheckInput {
+    id: String,
+}
 
 fn failure() -> io::Error {
     io::Error::new(
@@ -952,6 +964,28 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        Handler::CollectionRecheck => {
+            let Some(native) = &shared.native_recheck else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 1024).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(input) = crate::json_object::from_slice::<RecheckInput>(&bytes, &["id"]) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if input.id.is_empty() || input.id.len() > 512 {
+                return decline(row.handler, Decline::Shape);
+            }
+            match native.producer.recheck(&shared.account_usage, &(native.companions)(), &input.id).await {
+                Ok(Some(value)) => Json(value).into_response(),
+                Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"code": "unknown_account"}))).into_response(),
+                Err(_) => store_error("recheck_failed: the account could not be checked safely"),
+            }
+        }
         // G17: the Home feed producer — the raw Home inputs in, the held generations named. The transitional
         // socket form of the producer; lane I's collection feeds it in process once it owns the dashboard read.
         Handler::HomeInputs => {
@@ -1595,13 +1629,17 @@ async fn serve_inner(
     let ccs_dir = boot.ccs_dir.clone();
     let cursor = Arc::<crate::account_usage::cursor::Reader>::default();
     let producer = native.as_ref().map(|_| {
-        crate::account_usage::producer::Producer::shared(
+        Arc::new(crate::account_usage::producer::Producer::shared(
             boot.ccs_dir.clone(),
             owners.clone(),
             agents.clone(),
             collection.clone(),
             cursor.clone(),
-        )
+        ))
+    });
+    let native_recheck = producer.as_ref().zip(native.as_ref()).map(|(producer, native)| NativeRecheck {
+        producer: Arc::clone(producer),
+        companions: Arc::clone(&native.companions),
     });
     let package_root = crate::agent_transport::package_root();
     let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(
@@ -1633,6 +1671,7 @@ async fn serve_inner(
         producer: Arc::new(crate::home_producer::HomeProducer::default()),
         account_usage: cache.clone(),
         native_usage: native.is_some(),
+        native_recheck,
         agents: agents.clone(),
         collection: collection.clone(),
         cursor,

@@ -240,7 +240,17 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
   router.post(
     '/:id/recheck',
     guard,
-    write((req, body) => recheck(env(), pathParam(req.params.id), body))
+    write((req, body) => {
+      const service: unknown = req.res?.locals.rustService;
+      return recheck(
+        env(),
+        pathParam(req.params.id),
+        body,
+        !deps.env && process.env.AAC_RUST_CUT_WORKER === '1' && service instanceof RustService
+          ? (id) => service.nativeRecheck(id)
+          : undefined
+      );
+    })
   );
   router.patch(
     '/:id',

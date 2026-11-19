@@ -1,4 +1,4 @@
-//! Native public entry points. The shipped TS command remains the fallback until cutover.
+//! Native public entry points.
 use std::{
     env,
     net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs},
@@ -150,12 +150,8 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
                 print!("{DASHBOARD_HELP}");
             } else if let Some(name @ ("channels" | "image-analysis" | "thinking")) = subcommand {
                 return Ok(retired(&format!("config {name}")));
-            } else if env::var("AAC_RUST_DASHBOARD").as_deref() == Ok("1")
-                && env::var("AAC_RUST_COMPOSE").as_deref() != Ok("1")
-            {
-                launch(args, root(config_dir))?;
             } else {
-                return typescript(raw);
+                launch(args, root(config_dir))?;
             }
         }
         ("codex-auth", args) => {
@@ -170,9 +166,7 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
             let ccs = root(config_dir).unwrap_or_else(|| PathBuf::from(".ccs"));
             return Ok(antigravity::run(args, &ccs));
         }
-        ("help" | "-h" | "--help", _) => {
-            return typescript(raw);
-        }
+        ("help" | "-h" | "--help", _) => print!("{ROOT_HELP}"),
         (command, _) => return Ok(retired(command)),
     }
     Ok(0)
@@ -334,7 +328,9 @@ fn launch(args: &[String], root: Option<PathBuf>) -> Result<(), String> {
         .build()
         .map_err(|error| error.to_string())?;
     println!("AI Account Center\n\n[i] Starting dashboard server...");
-    let result = runtime.block_on(crate::public_auth::run_public_at(&addresses, root, browser));
+    let result = runtime.block_on(crate::public_auth::run_public_at(
+        &addresses, root, browser, true,
+    ));
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
     result.map_err(|error| format!("Dashboard could not start: {error}"))
 }

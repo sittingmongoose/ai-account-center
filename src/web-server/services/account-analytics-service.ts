@@ -13,10 +13,7 @@ import { getAccountDashboard } from './account-dashboard-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import { readDashboardPreferences } from './dashboard-preferences';
 import { rustAnalyticsWritersOn } from '../rust-service-groups';
-import {
-  startAnalyticsWriterFeeds,
-  stopAnalyticsWriterFeeds,
-} from './analytics-writer-feeds';
+import { startAnalyticsWriterFeeds, stopAnalyticsWriterFeeds } from './analytics-writer-feeds';
 import type { RustService } from '../rust-service';
 import {
   fixedAnalyticsSourceEntries,

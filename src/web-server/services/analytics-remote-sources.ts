@@ -439,9 +439,7 @@ export function analyticsWriterPlan(): {
       host === 'ubuntu'
         ? REMOTE_TARGETS.ubuntu.filter((kind) => !extra.overflow.includes(kind))
         : [...REMOTE_TARGETS[host]],
-    ...(host === 'ubuntu'
-      ? { extraRoots: extra.extra, experimentRoots: extra.experiments }
-      : {}),
+    ...(host === 'ubuntu' ? { extraRoots: extra.extra, experimentRoots: extra.experiments } : {}),
   }));
   return { computers, windowDays: 31 };
 }

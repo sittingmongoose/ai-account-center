@@ -9,6 +9,7 @@ mod hub;
 mod policy;
 mod request_log;
 mod routes;
+mod sidecar;
 mod static_ui;
 mod storage;
 mod tls;
@@ -267,13 +268,14 @@ pub async fn run_public() -> std::io::Result<()> {
         .and_then(|value| value.parse().ok())
         .ok_or_else(refused)?;
     let root = storage::root_from_env().ok_or_else(refused)?;
-    run_public_at(&[address], root, false).await
+    run_public_at(&[address], root, false, false).await
 }
 
 pub(crate) async fn run_public_at(
     addresses: &[SocketAddr],
     root: PathBuf,
     browser: bool,
+    cut: bool,
 ) -> std::io::Result<()> {
     let mut listener = None;
     let mut last_error = None;
@@ -293,14 +295,31 @@ pub(crate) async fn run_public_at(
     let address = listener.local_addr()?;
     let log = Arc::new(aac_log::Log::new(root.clone()));
     let ui_root = std::env::var_os("AAC_RUST_UI_DIR").map(PathBuf::from);
-    let snapshot = std::env::var_os("AAC_RUST_HUB_CACHE").map(PathBuf::from);
-    let backend = compose::Backend::from_env(address)?;
-    let composed = backend.is_some();
     let interactive = std::io::stdout().is_terminal()
-        || (composed && std::env::var("AAC_RUST_COMPOSE_STDOUT_TTY").as_deref() == Ok("1"));
-    let auth = DashboardAuth::open_public(root, interactive)?;
+        || (!cut && std::env::var("AAC_RUST_COMPOSE_STDOUT_TTY").as_deref() == Ok("1"));
+    let auth = DashboardAuth::open_public(root.clone(), interactive)?;
+    let mut worker = if cut {
+        sidecar::Sidecar::start(&root, address).await?
+    } else {
+        None
+    };
+    let (snapshot, backend) = if cut {
+        (
+            worker.as_ref().map(|child| child.cache.clone()),
+            worker.as_ref().map(|child| child.backend.clone()),
+        )
+    } else {
+        (
+            std::env::var_os("AAC_RUST_HUB_CACHE").map(PathBuf::from),
+            compose::Backend::from_env(address)?,
+        )
+    };
+    let composed = backend.is_some();
+    let worker_feed = worker
+        .as_mut()
+        .and_then(|child| child.attach(auth.events()));
     let mut api = Router::new();
-    if !composed {
+    if cut || !composed {
         api = api.route(
             "/api/health",
             axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
@@ -327,6 +346,9 @@ pub(crate) async fn run_public_at(
         println!("aac-http public TLS listening on {address}");
     }
     println!("aac-http public listening on {address}");
+    if cut {
+        record_public_build(&root);
+    }
     if browser {
         crate::cli::open_browser(address);
     }
@@ -370,11 +392,44 @@ pub(crate) async fn run_public_at(
     if let Some(feed) = feed_task {
         feed.abort();
     }
+    if let Some(worker) = worker {
+        worker.stop().await;
+    }
+    if let Some(feed) = worker_feed {
+        feed.abort();
+    }
     auth.flush();
     result
 }
 
+fn record_public_build(root: &std::path::Path) {
+    use aac_files::deployed_build::{read_packaged_build, record_running_build};
+    let build = sidecar::package_root()
+        .as_deref()
+        .and_then(read_packaged_build);
+    let home = std::env::home_dir().unwrap_or_default();
+    if record_running_build(
+        root,
+        build.as_ref(),
+        std::env::var("CCS_DIR").ok().as_deref(),
+        std::env::var("CCS_HOME").ok().as_deref(),
+        &home,
+        now(),
+    ) > 0
+    {
+        tracing::warn!("web.deployed_build.unrecorded");
+    }
+}
+
 async fn shutdown_signal() {
+    #[cfg(windows)]
+    if let Ok(mut terminate) = tokio::signal::windows::ctrl_break() {
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+        return;
+    }
     #[cfg(unix)]
     {
         if let Ok(mut terminate) =
@@ -913,10 +968,17 @@ async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: 
         .next()
         .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
     let (parsed, bytes, length) = if json_content && !upgrade {
-        if content_type.filter_map(|parameter| parameter.split_once('=')).any(|(name, value)| {
-            name.trim().eq_ignore_ascii_case("charset")
-                && !value.trim().trim_matches('"').to_ascii_lowercase().starts_with("utf-")
-        }) {
+        if content_type
+            .filter_map(|parameter| parameter.split_once('='))
+            .any(|(name, value)| {
+                name.trim().eq_ignore_ascii_case("charset")
+                    && !value
+                        .trim()
+                        .trim_matches('"')
+                        .to_ascii_lowercase()
+                        .starts_with("utf-")
+            })
+        {
             return plain(415, "The request could not be processed.");
         }
         match parse_body(original_body, auth_path).await {

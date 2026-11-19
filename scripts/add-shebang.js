@@ -5,16 +5,11 @@ const fs = require('fs');
 const path = require('path');
 
 function getExecutablePaths() {
-  const packageJsonPath = path.join(__dirname, '../package.json');
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
-  const binEntries = packageJson.bin || {};
-  const uniqueRelativePaths = [...new Set(Object.values(binEntries))];
-
-  return uniqueRelativePaths.map((relativePath) => path.join(__dirname, '..', relativePath));
+  return ['ccs.js', 'bin/compat-cli.js'].map((file) => path.join(__dirname, '../dist', file));
 }
 
 /**
- * Add shebangs to all published bin entrypoints and make them executable.
+ * Add shebangs to the retained reference CLI scripts. Published bins are native.
  * Run after: tsc
  */
 function addShebang() {

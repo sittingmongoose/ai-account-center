@@ -8,6 +8,7 @@ import { lookup } from 'node:dns';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import { NetworkError } from '../errors/error-types';
 import { getCcsDir } from '../utils/config-manager';
 import { attachDashboardEventFeed } from './dashboard-events';
 import { startServer, type ServerInstance, type ServerOptions } from './index';
@@ -36,8 +37,9 @@ function launched(child: ChildProcess, interactive: boolean): Promise<PublicList
     };
     let httpsAddress: AddressInfo | null = null;
     lines.on('line', (line) => {
-      const match =
-        /^aac-http public (TLS )?listening on (\[[0-9a-f:]+\]|[0-9.]+):([0-9]+)$/i.exec(line);
+      const match = /^aac-http public (TLS )?listening on (\[[0-9a-f:]+\]|[0-9.]+):([0-9]+)$/i.exec(
+        line
+      );
       if (!match) {
         if (
           line === 'Valid for 60 minutes. Saved in auth/setup-code in the CCS folder (0600).' ||
@@ -49,7 +51,11 @@ function launched(child: ChildProcess, interactive: boolean): Promise<PublicList
         return;
       }
       const address = match[2].replace(/^\[|\]$/g, '');
-      const bound = { address, port: Number(match[3]), family: isIP(address) === 6 ? 'IPv6' : 'IPv4' };
+      const bound = {
+        address,
+        port: Number(match[3]),
+        family: isIP(address) === 6 ? 'IPv6' : 'IPv4',
+      };
       if (match[1]) {
         httpsAddress = bound;
         return;
@@ -62,7 +68,7 @@ function launched(child: ChildProcess, interactive: boolean): Promise<PublicList
 }
 
 /** The H2 handoff while TS owns collection. Only the public usage-hub fields enter the file. */
-function hubRows(dashboard: AccountDashboard) {
+export function hubRows(dashboard: AccountDashboard) {
   return {
     accounts: dashboard.accounts
       .filter(({ provider }) => provider === 'codex' || provider === 'claude')
@@ -104,12 +110,12 @@ function hubRows(dashboard: AccountDashboard) {
   };
 }
 
-type Rendered = { at: number; updatedAt: string; rows: ReturnType<typeof hubRows> };
+export type RenderedHubRows = { at: number; updatedAt: string; rows: ReturnType<typeof hubRows> };
 const PLATFORMS = ['mac', 'windows'] as const;
 
-async function publishHubCache(
+export async function publishHubCache(
   target: string,
-  native: ReadonlyMap<ClaudeDashboardPlatform, Rendered>
+  native: ReadonlyMap<ClaudeDashboardPlatform, RenderedHubRows>
 ): Promise<void> {
   const dashboards = await Promise.allSettled(
     PLATFORMS.map((platform) => peekAccountDashboard(platform))
@@ -157,7 +163,7 @@ export async function startComposedServer(
   let detach: (() => void) | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let writing: Promise<void> | undefined;
-  const native = new Map<ClaudeDashboardPlatform, Rendered>();
+  const native = new Map<ClaudeDashboardPlatform, RenderedHubRows>();
   let closing = false;
   const close = () => {
     if (closing) return;
@@ -230,7 +236,7 @@ export async function startComposedServer(
     const restartPublic = async () => {
       const listener = child;
       if (!listener || closing || listener.exitCode !== null)
-        throw new Error('Rust dashboard is stopped');
+        throw new NetworkError('Rust dashboard is stopped');
       detach?.();
       listener.off('exit', close);
       const stopped = once(listener, 'exit');

@@ -50,6 +50,22 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
       const context = { secureTransport };
       const service = dashboardCollectionService(res);
       if (service && (!deps.getDashboard || deps.readDashboard)) {
+        if (process.env.AAC_RUST_CUT_WORKER === '1' && process.platform !== 'win32') {
+          const result = await service.fedView(
+            req,
+            '/api/accounts/dashboard',
+            { 'x-aac-dashboard-secure': secureTransport ? '1' : '0' },
+            'accounts-dashboard@1',
+            `?platform=${platform}&refresh=${refresh}`
+          );
+          if (result && typeof result !== 'string') {
+            const dashboard = withOfferedViews(JSON.parse(result.bytes.toString('utf8')), res);
+            if (typeof res.locals.onRustDashboard === 'function')
+              res.locals.onRustDashboard(platform, dashboard);
+            res.json(dashboard);
+            return;
+          }
+        }
         const read = await (deps.readDashboard ?? readAccountDashboardForHome)(
           platform,
           refresh === 'true',

@@ -240,6 +240,7 @@ describe('route table (L1)', () => {
         events: 0,
         'collection-cursor': 0,
         'collection-tick': 0,
+        'collection-recheck': 0,
         collect: 0,
         agent: 0,
         'reset-claims': 0,

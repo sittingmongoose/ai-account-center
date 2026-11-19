@@ -161,8 +161,7 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
     // stopped them for the service) and answers from a fresh local read.
     const fed = statusFedService(res);
     if (fed) {
-      const owned =
-        typeof current.producingOwned !== 'function' || current.producingOwned();
+      const owned = typeof current.producingOwned !== 'function' || current.producingOwned();
       if (owned && (await answerStatusOwned(req, res, fed, input))) return;
       if (owned) {
         if (typeof current.handBackProducers === 'function') current.handBackProducers();

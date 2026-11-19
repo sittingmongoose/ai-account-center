@@ -51,7 +51,7 @@ export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.e
       value = undefined;
     }
   }
-  return value === undefined ? DEFAULT[group] : value === 'on';
+  return value === undefined ? env.AAC_RUST_CUT_WORKER === '1' || DEFAULT[group] : value === 'on';
 }
 
 /**
@@ -68,7 +68,7 @@ export function rustStoreSwitchOn(env: NodeJS.ProcessEnv = process.env): boolean
       value = undefined;
     }
   }
-  return value === 'on';
+  return value === 'on' || (value === undefined && env.AAC_RUST_CUT_WORKER === '1');
 }
 
 /** Select the public Rust composition without changing the installed TS default. */

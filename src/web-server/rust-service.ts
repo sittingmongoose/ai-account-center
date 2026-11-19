@@ -816,14 +816,15 @@ export class RustService extends RustSupervisor {
     req: Request,
     route: string,
     headers: Record<string, string>,
-    view: string
+    view: string,
+    query = ''
   ): Promise<RustViewBytes | string | null> {
     if (this.mode !== 'on') return null;
     const verified = this.forwardable(req, route);
     if (!verified) return null;
     const started = now();
     try {
-      const result = await this.forward(route, verified, undefined, '', headers);
+      const result = await this.forward(route, verified, undefined, query, headers);
       const bytes = rustViewBytes(result, view);
       if (bytes) {
         this.stats.served++;
@@ -841,6 +842,31 @@ export class RustService extends RustSupervisor {
       this.failed(route, error);
     }
     return null;
+  }
+
+  /** The guarded public Re-check route calls this only after its admission check. */
+  async nativeRecheck(id: string): Promise<{ status: 200 | 404; body: unknown } | null> {
+    const lease = this.lease;
+    if (!lease || this.stopped || this.mode !== 'on') return null;
+    const route = '/internal/collection/recheck';
+    try {
+      const result = await requestRust(
+        lease.connection,
+        route,
+        FRONT_DOOR_PRINCIPAL,
+        this.active,
+        { id },
+        'POST',
+        { deadlineMs: 30_000 }
+      );
+      this.replied(lease);
+      if (result.status === 200 || result.status === 404)
+        return { status: result.status, body: result.body };
+      if (result.decline === 'unsupported') return null;
+    } catch (error) {
+      this.transportFailed(lease, rustFailureKind(error));
+    }
+    throw new NetworkError('The native Re-check did not finish.');
   }
 
   /** R1: a fed request the front door itself declined before asking Rust (its reason is counted). */

@@ -9,7 +9,7 @@
 See every quota at a glance · claim resets before you hit a limit · let your agents check their own burn rate
 
 <p>
-<img alt="TypeScript backend" src="https://img.shields.io/badge/backend-TypeScript-3178C6?logo=typescript&logoColor=white">
+<img alt="Rust backend" src="https://img.shields.io/badge/backend-Rust-000000?logo=rust&logoColor=white">
 <img alt="Leptos UI compiled to WebAssembly" src="https://img.shields.io/badge/UI-Leptos%20%E2%86%92%20WebAssembly-2379F4?logo=webassembly&logoColor=white">
 <img alt="Installable PWA" src="https://img.shields.io/badge/phone-PWA-5A0FC8?logo=pwa&logoColor=white">
 <img alt="Mac menu bar app in SwiftUI" src="https://img.shields.io/badge/Mac-SwiftUI-F05138?logo=swift&logoColor=white">
@@ -216,7 +216,7 @@ flowchart LR
     mac["Mac menu bar<br/>SwiftUI"]
     win["Windows tray<br/>WPF .NET 10"]
   end
-  subgraph server["Dashboard server · TypeScript on Node.js 22 or 26"]
+  subgraph server["Dashboard · Rust public listener"]
     api["Authenticated API + WebSocket"]
     usage["Account usage"]
     analytics["Analytics"]
@@ -233,7 +233,7 @@ flowchart LR
 
 | Layer | Built with |
 | --- | --- |
-| Backend | TypeScript on Node.js 22 or 26: Express, WebSocket, structured logging |
+| Backend | Rust public HTTP and WebSocket listener, with a private Node compatibility worker for remaining routes and jobs |
 | Web UI | [Leptos](https://leptos.dev) 0.9 (client-side rendered), compiled from Rust to WebAssembly; installable PWA |
 | Mac app | Swift and SwiftUI menu-bar app |
 | Windows app | C# and WPF on .NET 10 |
@@ -273,11 +273,11 @@ bun run build:all
 
 ```bash
 ./scripts/dev-install.sh --npm                 # build, validate and install the `ai-account-center` command
-ai-account-center dashboard auth setup         # the dashboard's own username and password
 ai-account-center dashboard --host localhost --port 3000 --no-open
 ```
 
-Open `http://localhost:3000`. Prefer not to install? `node dist/ccs.js dashboard` runs straight from the checkout.
+Open `http://localhost:3000` and use the first-run setup code to set the dashboard username and password.
+To run from the checkout, use `node scripts/run-dashboard-native.js --no-open`.
 
 ### 3️⃣ Add accounts
 
