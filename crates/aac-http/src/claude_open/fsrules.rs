@@ -65,20 +65,6 @@ pub(super) fn private_mode(meta: &fs::Metadata) -> bool {
     }
 }
 
-/// The folder rule: a directory others cannot write. Group-writable and symlinked folders are
-/// accepted by the reference. Windows reports synthetic bits, so its folder check is kind only.
-pub(super) fn folder_other_writable(meta: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        meta.permissions().mode() & 0o002 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = meta;
-        false
-    }
-}
-
 /// The core's `ownedPrivate`: real, private, owned, exact mode (0600 file, 0700 directory),
 /// one link for a file. Non-POSIX hosts answer false, which is the core's own behaviour there.
 pub(super) fn owned_private(meta: &fs::Metadata, directory: bool) -> bool {
