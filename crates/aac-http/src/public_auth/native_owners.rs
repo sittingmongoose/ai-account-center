@@ -8,8 +8,6 @@ use crate::{
         producer::{CompanionInputs, Producer},
     },
     agent_transport::Agents,
-    app_update_routes::{BoundJobs, LaneHJobs, Operation},
-    app_updates::AppUpdates,
     collection::Collection,
     limits::Limits,
     table::Pool,
@@ -22,7 +20,7 @@ use axum::{
     extract::Request,
     http::{Method, Uri},
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::{
     io,
     path::PathBuf,
@@ -36,7 +34,6 @@ mod recheck;
 pub(super) struct Groups {
     pub(super) collection: bool,
     writes: bool,
-    app_updates: bool,
     home: bool,
     analytics_writers: bool,
     store: bool,
@@ -64,7 +61,6 @@ impl Groups {
                 && on("analytics", "AAC_RUST_GROUP_ANALYTICS"),
             collection: on("collection", "AAC_RUST_GROUP_COLLECTION"),
             writes: on("writes", "AAC_RUST_GROUP_WRITES"),
-            app_updates: on("app-updates", "AAC_RUST_GROUP_APP_UPDATES"),
             home: on("home", "AAC_RUST_GROUP_HOME")
                 || std::env::var("AAC_RUST_HOME_VIEW").as_deref() == Ok("on"),
         }
@@ -74,7 +70,6 @@ impl Groups {
 #[derive(Clone)]
 pub(super) struct NativeOwners {
     usage: Option<Arc<Usage>>,
-    apps: Option<Arc<BoundJobs>>,
     writes: bool,
     limits: Limits,
 }
@@ -123,24 +118,10 @@ impl NativeOwners {
         hub: HubCache,
         events: DashboardEvents,
         worker_directory: Option<PathBuf>,
+        cache: AccountUsageCache,
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
         let agents = Arc::new(Agents::with_default(root.clone(), true));
-        let apps = groups.app_updates.then(|| {
-            #[cfg(feature = "parity-fixtures")]
-            if std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
-                return Arc::new(BoundJobs::new(Arc::new(crate::app_update_routes::M0Jobs)));
-            }
-            let events = events.clone();
-            let owner = AppUpdates::with_events(
-                root.clone(),
-                agents.clone(),
-                Some(Box::new(move |event| {
-                    events.publish(event);
-                })),
-            );
-            Arc::new(BoundJobs::new(Arc::new(LaneHJobs(owner))))
-        });
         let cancel = CancellationToken::new();
         let mut jobs = Jobs {
             cancel: cancel.clone(),
@@ -198,7 +179,7 @@ impl NativeOwners {
                     collection,
                     Arc::default(),
                 ),
-                cache: AccountUsageCache::default(),
+                cache,
                 hub,
                 events: events.clone(),
                 lifecycle: Mutex::new(lifecycle),
@@ -224,7 +205,6 @@ impl NativeOwners {
         Ok((
             Self {
                 usage,
-                apps,
                 writes: groups.writes,
                 limits: Limits::new(),
             },
@@ -233,22 +213,11 @@ impl NativeOwners {
     }
 
     pub(super) fn owns(method: &Method, path: &str) -> bool {
-        Self::dashboard_route(method, path)
-            || recheck::route(method, path).is_some()
-            || Self::app_operation(method, path).is_some()
+        Self::dashboard_route(method, path) || recheck::route(method, path).is_some()
     }
 
     fn dashboard_route(method: &Method, path: &str) -> bool {
         matches!(*method, Method::GET | Method::HEAD) && path == "/api/accounts/dashboard"
-    }
-
-    fn app_operation(method: &Method, path: &str) -> Option<Operation> {
-        let method = if method == Method::HEAD {
-            &Method::GET
-        } else {
-            method
-        };
-        Operation::from_route(method, path)
     }
 
     pub(super) async fn handle(&self, request: Request) -> Reply {
@@ -266,9 +235,6 @@ impl NativeOwners {
                 None => unavailable(),
             };
             return no_store(reply);
-        }
-        if let Some(operation) = Self::app_operation(request.method(), path) {
-            return no_store(self.app_update(&access, operation, request).await);
         }
         super::plain(404, "API endpoint was not found.")
     }
@@ -293,42 +259,6 @@ impl NativeOwners {
             })
             .await
             .unwrap_or_else(|_| unavailable())
-    }
-
-    async fn app_update(&self, access: &DashboardAccess, op: Operation, request: Request) -> Reply {
-        if !matches!(access.principal, DashboardPrincipal::Browser { .. }) {
-            return super::plain(401, "Authentication required");
-        }
-        if !matches!(op, Operation::Status) {
-            if !access.origin_present || !access.same_origin {
-                return super::plain(403, "App updates require the dashboard origin.");
-            }
-            if !json_content(&request) {
-                return super::plain(415, "App updates require application/json.");
-            }
-            if request.uri().query().is_some_and(|q| !q.is_empty())
-                || !object_body(request, 100 * 1024)
-                    .await
-                    .is_some_and(|body| body.is_empty())
-            {
-                return super::plain(400, "Provide an empty JSON object.");
-            }
-        }
-        let Some(apps) = &self.apps else {
-            return unavailable();
-        };
-        match apps.call(op).await {
-            Ok(reply) => super::response(reply.status, reply.body),
-            Err(_) => match op {
-                Operation::Status => {
-                    super::plain(503, "App update status could not be read safely.")
-                }
-                Operation::Start => super::plain(500, "App updates could not start safely."),
-                Operation::Cancel => {
-                    super::plain(503, "App update cancellation could not be confirmed.")
-                }
-            },
-        }
     }
 }
 
@@ -447,34 +377,6 @@ impl Usage {
             }
         }
     }
-}
-
-fn json_content(request: &Request) -> bool {
-    super::header(request.headers(), "content-type")
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
-}
-
-async fn object_body(request: Request, limit: usize) -> Option<Map<String, Value>> {
-    use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
-    let declared = request
-        .headers()
-        .get(CONTENT_LENGTH)
-        .and_then(|size| size.to_str().ok());
-    if declared
-        .and_then(|size| size.parse::<usize>().ok())
-        .is_some_and(|size| size > limit)
-    {
-        return None;
-    }
-    let has_body = declared.is_some() || request.headers().contains_key(TRANSFER_ENCODING);
-    let bytes = axum::body::to_bytes(request.into_body(), limit)
-        .await
-        .ok()?;
-    if bytes.is_empty() {
-        return has_body.then(Map::new);
-    }
-    serde_json::from_slice(&bytes).ok()
 }
 
 pub(super) fn no_store(mut reply: Reply) -> Reply {

@@ -13,7 +13,6 @@ import {
   broadcastResetClaimChange,
   type DashboardEvent,
 } from '../../src/web-server/dashboard-events';
-import { AppUpdateService } from '../../src/web-server/services/app-update-service';
 import { fixtureEnvironment, startRustFixture } from './m6-rust-fixture';
 
 const binary = path.resolve(process.argv[2] ?? '');
@@ -88,7 +87,6 @@ try {
   assert(rust.pipe);
   const detach = attachDashboardEventFeed(rust.pipe);
   const sockets: WebSocket[] = [];
-  let releaseHosts: (() => void) | undefined;
   try {
     const localHost = new URL(rust.url).host;
     const plainHost = 'dashboard.example.test';
@@ -108,21 +106,17 @@ try {
       result: { accountId: 'fixture', plan: 'pro', email: 'user@example.test' },
     } as const;
     broadcastDashboardEvent({ type: 'signin-job', job: done });
-    const heldHosts = new Promise<void>((resolve) => {
-      releaseHosts = resolve;
-    });
-    const fake = new AppUpdateService({
-      ccsDir: root,
-      persist: false,
-      onProgress: broadcastAppUpdateProgress,
-      runHost: async (host, controls) => {
-        if (host === 'ubuntu')
-          controls.onEvent({ event: 'app', appId: 'codex-cli', phase: 'downloading' });
-        await heldHosts;
-        return '{"results":[]}';
+    // H/J run in the native owner now; the event contract is the same progress frame.
+    const update = broadcastAppUpdateProgress({
+      id: 'fixture-update',
+      state: 'running',
+      cancelRequested: false,
+      expectedResults: 1,
+      results: [],
+      hosts: {
+        ubuntu: { state: 'running', currentApp: 'codex-cli', phase: 'downloading' },
       },
     });
-    const update = fake.start().job;
     await until(
       () =>
         [secure, plain].every(({ events }) =>
@@ -150,7 +144,7 @@ try {
       assert(reset.type === 'reset-claims-changed' && /^[0-9a-f]{32}$/.test(reset.id));
       const progress = peer.events[6];
       assert(progress.type === 'app-update-job');
-      assert.equal(progress.job.id, update.id);
+      assert.equal(progress.job.id, 'fixture-update');
       assert.equal(progress.job.state, 'running');
       assert.deepEqual(Object.keys(progress.job), [
         'id',
@@ -170,7 +164,6 @@ try {
     });
     assert.deepEqual(secure.events[3], plain.events[3]);
     assert(fake.cancel().cancelling);
-    releaseHosts?.();
     await until(
       () =>
         secure.events.some(
@@ -191,7 +184,6 @@ try {
     assert.equal(noEndpoint.status, 404);
     await noEndpoint.arrayBuffer();
   } finally {
-    releaseHosts?.();
     detach();
     for (const socket of sockets) socket.terminate();
     await rust.stop();

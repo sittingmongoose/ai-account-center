@@ -7,18 +7,19 @@
 // The helper boundary's errors are opaque by design: no error detail may cross it, exactly
 // as the TS adapters throw untyped errors the core reduces to fixed reason tokens.
 #![allow(clippy::result_unit_err)]
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod fixture_tests;
+mod fsrules;
 pub mod js;
 pub mod manifest;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod marker_tests;
 pub mod markers;
 pub mod open;
 pub mod operations;
 pub mod policy;
 pub mod remote;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod socket_tests;
 pub mod sync;
 pub mod sync_service;

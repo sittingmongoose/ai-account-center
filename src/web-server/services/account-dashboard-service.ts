@@ -5,12 +5,6 @@ import {
 } from '../../codex-auth/codex-auth-dashboard-service';
 import { readClaudeSignInRenewal, type ClaudeSignInRenewal } from './claude-signin-renewal';
 import { getCcsDir } from '../../utils/config-manager';
-import {
-  getAntigravityAccounts,
-  getCachedAntigravityAccounts,
-  hasAntigravityProfiles,
-  readSelectedAntigravityProfileId,
-} from '../../antigravity/runtime-service';
 import { publicDashboardAccount } from '../../antigravity/usage-normalization';
 import type { AntigravityDashboardAccount } from '../../antigravity/usage-contract';
 import {
@@ -570,9 +564,7 @@ export class AccountDashboardService {
     refresh: boolean
   ): Promise<DashboardAccount[]> {
     const generation = ++state.generation;
-    const registeredAntigravity = (
-      this.deps.hasAntigravityProfiles ?? (() => hasAntigravityProfiles(scope))
-    )();
+    const registeredAntigravity = (this.deps.hasAntigravityProfiles ?? (() => false))();
     if (refresh) (this.deps.invalidateClaudeCache ?? invalidateClaudeDesktopUsageCache)();
     // Sources that already published a successful reading in this cycle. A slow optional
     // part (the OpenCode wallet) must not relabel those current rows as cached on timeout.
@@ -618,12 +610,7 @@ export class AccountDashboardService {
         'antigravity',
         registeredAntigravity
           ? Promise.resolve()
-              .then(() =>
-                (
-                  this.deps.getAntigravityAccounts ??
-                  ((force) => getAntigravityAccounts(force, scope))
-                )(refresh)
-              )
+              .then(() => (this.deps.getAntigravityAccounts ?? (async () => []))(refresh))
               .then((accounts) => {
                 const rows = accounts.map(publicDashboardAccount);
                 return this.deps.getAntigravityAccounts || this.deps.failover === null
@@ -635,10 +622,7 @@ export class AccountDashboardService {
           : Promise.resolve([]),
         () =>
           registeredAntigravity
-            ? (
-                this.deps.getCachedAntigravityAccounts ??
-                (() => getCachedAntigravityAccounts(scope))
-              )().map(publicDashboardAccount)
+            ? (this.deps.getCachedAntigravityAccounts ?? (() => []))().map(publicDashboardAccount)
             : [],
       ],
     ] as const;
@@ -778,9 +762,7 @@ export class AccountDashboardService {
     else if (state.pending) void state.pending.catch(() => {});
     // Account switches invalidate the native summary by live auth file signature.
     // Refresh this inexpensive identity even when quota samples are still cached.
-    const registeredAntigravity = (
-      this.deps.hasAntigravityProfiles ?? (() => hasAntigravityProfiles(scope))
-    )();
+    const registeredAntigravity = (this.deps.hasAntigravityProfiles ?? (() => false))();
     const remainingBudget = Math.max(
       0,
       (this.deps.responseBudgetMs ?? 2500) - (Date.now() - startedAt)
@@ -794,10 +776,7 @@ export class AccountDashboardService {
       registeredAntigravity
         ? this.bounded(
             Promise.resolve().then(() =>
-              (
-                this.deps.readSelectedAntigravityProfileId ??
-                (() => readSelectedAntigravityProfileId(scope))
-              )()
+              (this.deps.readSelectedAntigravityProfileId ?? (async () => null))()
             ),
             () => null,
             remainingBudget
@@ -831,24 +810,24 @@ export class AccountDashboardService {
     // cache hits. This synchronous cache projection never starts a provider call.
     if (registeredAntigravity) {
       const previousAntigravity = state.antigravity;
-      state.antigravity = (
-        this.deps.getCachedAntigravityAccounts ?? (() => getCachedAntigravityAccounts(scope))
-      )().map((account) => {
-        const publicAccount = publicDashboardAccount(account);
-        const retained = previousAntigravity.find((row) => row.id === publicAccount.id);
-        if (
-          retained?.status === 'cached' &&
-          publicAccount.status === 'ok' &&
-          retained.sampledAt === publicAccount.sampledAt &&
-          retained.fetchedAt === publicAccount.fetchedAt
-        )
-          return retained;
-        return this.deps.getCachedAntigravityAccounts || this.deps.failover === null
-          ? publicAccount
-          : peekAntigravityUsage(publicAccount, scope, {
-              failover: this.deps.failover ?? undefined,
-            });
-      });
+      state.antigravity = (this.deps.getCachedAntigravityAccounts ?? (() => []))().map(
+        (account) => {
+          const publicAccount = publicDashboardAccount(account);
+          const retained = previousAntigravity.find((row) => row.id === publicAccount.id);
+          if (
+            retained?.status === 'cached' &&
+            publicAccount.status === 'ok' &&
+            retained.sampledAt === publicAccount.sampledAt &&
+            retained.fetchedAt === publicAccount.fetchedAt
+          )
+            return retained;
+          return this.deps.getCachedAntigravityAccounts || this.deps.failover === null
+            ? publicAccount
+            : peekAntigravityUsage(publicAccount, scope, {
+                failover: this.deps.failover ?? undefined,
+              });
+        }
+      );
     }
     const claudeIds = new Set(state.claude.map((account) => account.id));
     const accounts = [

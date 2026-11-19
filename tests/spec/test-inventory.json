@@ -601,6 +601,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/app_updates_owner.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/compose.rs",
       "kind": "safety",
       "evidence": [
@@ -623,6 +630,13 @@
     },
     {
       "file": "crates/aac-http/src/public_auth/policy.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/profile_routes.rs",
       "kind": "safety",
       "evidence": [
         "safety"
@@ -1818,21 +1832,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/integration/web-server/claude-desktop-profiles-endpoint.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/integration/web-server/codex-profiles-endpoint.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
       "file": "tests/integration/web-server/m0-spec.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -2274,13 +2273,6 @@
       ]
     },
     {
-      "file": "tests/unit/antigravity/routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
       "file": "tests/unit/antigravity/runtime-bundle-parity.test.ts",
       "kind": "table",
       "evidence": [
@@ -2297,12 +2289,6 @@
     },
     {
       "file": "tests/unit/antigravity/runtime-refresh.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/antigravity/runtime-service.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2487,19 +2473,7 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/claude-history/held-without-core.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/claude-history/history-policy.test.cjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/claude-history/microbatch-progress.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2519,18 +2493,6 @@
     },
     {
       "file": "tests/unit/claude-history/pending-marker.test.cjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/claude-history/pending-open.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/claude-history/private-open-policy.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3660,15 +3622,6 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/api-auth-hardening.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "HTTP",
-        "table"
-      ]
-    },
-    {
       "file": "tests/unit/web-server/api-compression.test.ts",
       "kind": "HTTP",
       "evidence": [
@@ -3708,94 +3661,11 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/app-update-cancel.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-contract.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/app-update-cursor-acp.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/app-update-diagnostics.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/web-server/app-update-helper-sync.test.ts",
       "kind": "helper",
       "evidence": [
         "helper"
       ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-nas1.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-parallel.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-registration.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-review-r2.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-round2.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-service.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/app-update-t3-contract.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/auth-check-remote-access.test.ts",
@@ -3872,21 +3742,6 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/claude-open-bridge.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/claude-open-progress.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "table"
-      ]
-    },
-    {
       "file": "tests/unit/web-server/claude-signin-renewal.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -3925,12 +3780,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/web-server/codex-profile-quota-service.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/web-server/codex-profile-renewal-service.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -3940,14 +3789,6 @@
       "file": "tests/unit/web-server/codex-quota/quota-fetcher-codex.test.ts",
       "kind": "table",
       "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/codex-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
         "table"
       ]
     },
@@ -3967,12 +3808,6 @@
     },
     {
       "file": "tests/unit/web-server/compatible-cli-config-paths.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/computer-registry-rollback.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -4007,13 +3842,6 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/dashboard-auth-devices.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
       ]
     },
     {
@@ -4062,12 +3890,6 @@
     },
     {
       "file": "tests/unit/web-server/dashboard-credential-stamp.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/dashboard-dto-fields.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -4300,13 +4122,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/web-server/rust-shadow-private-input.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
       "file": "tests/unit/web-server/rust-slow-filesystem.test.ts",
       "kind": "helper",
       "evidence": [
@@ -4406,13 +4221,6 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/settings-review-r2.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
     },
     {
       "file": "tests/unit/web-server/shutdown.test.ts",

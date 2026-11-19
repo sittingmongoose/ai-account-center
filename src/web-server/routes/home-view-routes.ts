@@ -24,11 +24,62 @@ import {
   type HomeDashboardRead,
 } from '../services/account-dashboard-service';
 import { getCcsDir } from '../../utils/config-manager';
-import { readClaudeDesktopProfiles } from './claude-desktop-routes';
-import { readAntigravityInventory, runtimeInventory } from './antigravity-routes';
+import { ProfileError } from '../../errors/error-types';
+import { listClaudeDesktopProfileMetadata } from '../services/claude-desktop-profile-service';
+import { composeWithRust, readOwnedValueWithRust } from '../rust-service';
+import {
+  acceptRustDesktopProfiles,
+  isRustAntigravityInventory,
+  rustAntigravityInventoryInput,
+} from '../rust-profile-input';
+import { publicInventory } from '../../antigravity/public-reads';
+import type { AntigravityInventory } from '../../antigravity/usage-contract';
 import { homeFedService, homeViewService, withOfferedViews } from '../views/offered-views';
 import { homeReadInput, isHomeView, parseHomeContext } from '../views/home-context';
 import { answerHomeFed } from '../views/home-feed';
+
+/** The empty Ubuntu inventory when no runtime is installed (the retired runtime service). */
+function emptyInventory(): AntigravityInventory {
+  return { schemaVersion: 1, hostId: 'ubuntu', profiles: [] };
+}
+
+/** The runtime's inventory, or the empty Ubuntu one: the native owner reads the runtime now. */
+export async function runtimeInventory(): Promise<unknown> {
+  return emptyInventory();
+}
+
+/** GET /profiles' answer composed from the read (fed or the empty fallback), through Rust. */
+export async function readAntigravityInventory(
+  req: Request,
+  res: Response,
+  read?: { value: unknown }
+): Promise<unknown> {
+  const inventory = (read ? read.value : emptyInventory()) as AntigravityInventory;
+  return composeWithRust(
+    req,
+    res,
+    '/api/antigravity/profiles',
+    () => rustAntigravityInventoryInput(inventory),
+    () => publicInventory(inventory),
+    isRustAntigravityInventory
+  );
+}
+
+/** GET /desktop-profiles' list through the native manifest read; the TS reader is the fallback. */
+export async function readClaudeDesktopProfiles(req: Request, res: Response): Promise<unknown[]> {
+  const scope = getCcsDir();
+  const body = await readOwnedValueWithRust(
+    req,
+    res,
+    '/api/claude/desktop-profiles',
+    scope,
+    acceptRustDesktopProfiles((profiles) => profiles),
+    async () => ({ profiles: await listClaudeDesktopProfileMetadata() })
+  );
+  const profiles = (body as { profiles?: unknown } | undefined)?.profiles;
+  if (!Array.isArray(profiles)) throw new ProfileError('Claude desktop profiles were not read.');
+  return profiles;
+}
 
 export interface HomeViewRouterDeps {
   getDashboard?: typeof getAccountDashboard;

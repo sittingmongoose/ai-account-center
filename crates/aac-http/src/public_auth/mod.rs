@@ -2,6 +2,7 @@
 // Reply errors are complete Axum responses with headers. Keep them inline like successes
 // so the guard can return a response without a second allocation.
 #![allow(clippy::result_large_err)]
+mod app_updates_owner;
 mod compose;
 mod dashboard_events;
 mod devices;
@@ -11,6 +12,7 @@ mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod policy;
+mod profile_routes;
 mod request_log;
 mod reset_routes;
 mod routes;
@@ -59,6 +61,29 @@ pub fn publish_native_hub(
         return;
     };
     hub::publish_native_snapshot(directory, cache.hub_dashboards(&timestamp, now));
+}
+
+/// The latest native Accounts rows that carry a saved Codex profile, one per name. The public
+/// Codex quota route reads these same collector rows the Accounts dashboard shows.
+#[cfg(unix)]
+fn codex_dashboard_rows(cache: &crate::account_usage::AccountUsageCache) -> Vec<Value> {
+    let at = now();
+    let Some(timestamp) = storage::iso(at) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    for dashboard in cache.hub_dashboards(&timestamp, at) {
+        for row in dashboard["accounts"].as_array().into_iter().flatten() {
+            let Some(name) = row["capabilities"]["codexProfile"].as_str() else {
+                continue;
+            };
+            if seen.insert(name.to_owned()) {
+                rows.push(row.clone());
+            }
+        }
+    }
+    rows
 }
 
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
@@ -198,6 +223,8 @@ impl DashboardAuth {
             false,
             None,
             None,
+            None,
+            None,
             #[cfg(unix)]
             None,
         )
@@ -216,6 +243,8 @@ impl DashboardAuth {
         partial_api: bool,
         backend: Option<compose::Backend>,
         cut_root: Option<PathBuf>,
+        profiles: Option<profile_routes::Profiles>,
+        app_updates: Option<app_updates_owner::Owner>,
         #[cfg(unix)] native_owners: Option<native_owners::NativeOwners>,
     ) -> Router {
         let cut = cut_root.is_some();
@@ -248,6 +277,16 @@ impl DashboardAuth {
                 )
             {
                 return native.handle(request).await;
+            }
+            if let Some(profiles) = &profiles
+                && profile_routes::Profiles::owns(request.method(), request.uri().path())
+            {
+                return profiles.handle(request).await;
+            }
+            if let Some(app_updates) = &app_updates
+                && app_updates_owner::Owner::owns(request.method(), request.uri().path())
+            {
+                return app_updates.handle(request).await;
             }
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
@@ -341,7 +380,7 @@ pub(crate) async fn run_public_at(
     browser: bool,
     cut: bool,
 ) -> std::io::Result<()> {
-    #[cfg(all(unix, not(feature = "parity-fixtures")))]
+    #[cfg(not(feature = "parity-fixtures"))]
     if cut && std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
         return Err(std::io::Error::other(
             "the M0 app-update fixture requires a parity-fixtures build",
@@ -407,6 +446,10 @@ pub(crate) async fn run_public_at(
         )
     };
     let hub = HubCache::default();
+    // One collection cache for the boot: the native owners publish the dashboard generations
+    // the profile routes read their Codex quota rows from.
+    #[cfg(unix)]
+    let account_usage = crate::account_usage::AccountUsageCache::default();
     #[cfg(unix)]
     let (native, native_jobs) = if let Some(groups) = groups {
         let (native, jobs) = native_owners::NativeOwners::start(
@@ -418,8 +461,26 @@ pub(crate) async fn run_public_at(
                 .as_deref()
                 .and_then(std::path::Path::parent)
                 .map(std::path::Path::to_owned),
+            account_usage.clone(),
         )?;
         (Some(native), Some(jobs))
+    } else {
+        (None, None)
+    };
+    // The profile routes and the app-update jobs run on both platforms; the worker's copies of
+    // both leave the allowlist in the same cut.
+    let (profiles, app_updates) = if cut {
+        #[cfg(unix)]
+        let rows: profile_routes::RowsSource = {
+            let cache = account_usage.clone();
+            Arc::new(move || codex_dashboard_rows(&cache))
+        };
+        #[cfg(not(unix))]
+        let rows: profile_routes::RowsSource = Arc::new(Vec::new);
+        (
+            Some(profile_routes::Profiles::start(root.clone(), rows)),
+            Some(app_updates_owner::Owner::start(root.clone(), auth.events())),
+        )
     } else {
         (None, None)
     };
@@ -444,6 +505,8 @@ pub(crate) async fn run_public_at(
         !composed,
         backend,
         cut.then(|| root.clone()),
+        profiles,
+        app_updates,
         #[cfg(unix)]
         native,
     );
@@ -487,6 +550,38 @@ pub(crate) async fn run_public_at(
     }
     if browser {
         crate::cli::open_browser(address);
+    }
+    // G10: Windows has no private service, so the public process runs the saved-login timer.
+    // Unix keeps the one timer the private service starts (two would renew the same logins).
+    #[cfg(not(unix))]
+    if cut {
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let service = aac_renewal::service::CodexProfileRenewalService::new(
+            aac_renewal::service::CodexProfileRenewalServiceDeps {
+                ccs_dir: root.clone(),
+                renewal: aac_renewal::renewal::CodexProfileRenewalOptions {
+                    env: aac_renewal::planner::CodexRenewalEnvironment {
+                        ccs_dir: root.clone(),
+                        codex_home: Some(home.join(".codex")),
+                        home_dir: Some(home),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let (keep, stop) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            let _keep = keep;
+            std::future::pending::<()>().await;
+        });
+        tokio::spawn(async move {
+            service.run_until(stop).await;
+        });
     }
     let shutdown = axum_server::Handle::new();
     let signal = shutdown.clone();

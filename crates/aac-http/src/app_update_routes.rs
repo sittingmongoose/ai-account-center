@@ -91,7 +91,7 @@ impl BoundJobs {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Operation {
     Status,
     Start,

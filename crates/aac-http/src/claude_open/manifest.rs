@@ -2,11 +2,11 @@
 //! parse and the can-open rules), `claude-account-stores.ts` (the pending registry) and
 //! `claude-account-records.ts` (the default-folder rule). The orchestrator resolves membership
 //! and launchers from these exactly as `resolveOpenTarget` does; client paths never enter.
+use super::fsrules::{folder_other_writable, open_read_no_follow, private_mode};
 use super::js::utf16_len;
 use serde_json::{Map, Value};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Read;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 /// `CLAUDE_PROFILE_ID_PATTERN`: the safe-ID shape every Claude desktop path checks first.
@@ -382,7 +382,7 @@ fn store_folder_ok(directory: &Path) -> bool {
     } else {
         meta
     };
-    meta.is_dir() && meta.permissions().mode() & 0o002 == 0
+    meta.is_dir() && !folder_other_writable(&meta)
 }
 
 /// `readPrivateJsonFile` with the store's caps and privacy rules.
@@ -403,11 +403,7 @@ fn read_private_json(file: &Path, max_bytes: u64) -> PrivateRead {
     if link.file_type().is_symlink() || !link.is_file() {
         return PrivateRead::Invalid;
     }
-    let mut handle = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(file)
-    {
+    let mut handle = match open_read_no_follow(file) {
         Ok(handle) => handle,
         Err(error) => {
             return if error.kind() == std::io::ErrorKind::NotFound {
@@ -421,7 +417,7 @@ fn read_private_json(file: &Path, max_bytes: u64) -> PrivateRead {
         Ok(stat) => stat,
         Err(_) => return PrivateRead::Invalid,
     };
-    if !stat.is_file() || stat.len() > max_bytes || stat.permissions().mode() & 0o077 != 0 {
+    if !stat.is_file() || stat.len() > max_bytes || !private_mode(&stat) {
         return PrivateRead::Invalid;
     }
     let mut buffer = vec![0u8; max_bytes as usize + 1];

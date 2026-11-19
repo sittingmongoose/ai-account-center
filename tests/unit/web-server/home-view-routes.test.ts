@@ -16,8 +16,11 @@ import type { Request, Response } from 'express';
 import { createHomeViewRouter } from '../../../src/web-server/routes/home-view-routes';
 import { createAccountDashboardRouter } from '../../../src/web-server/routes/account-dashboard-routes';
 import { RustService } from '../../../src/web-server/rust-service';
-import { readClaudeDesktopProfiles } from '../../../src/web-server/routes/claude-desktop-routes';
-import { readAntigravityInventory } from '../../../src/web-server/routes/antigravity-routes';
+import {
+  readAntigravityInventory,
+  readClaudeDesktopProfiles,
+} from '../../../src/web-server/routes/home-view-routes';
+
 import { getCcsDir } from '../../../src/utils/config-manager';
 import {
   homeReadInput,
@@ -28,13 +31,45 @@ import {
 import type { AccountDashboard } from '../../../src/web-server/services/account-dashboard-types';
 
 const NOW = Date.parse('2026-11-14T12:00:00.000Z');
-const PROBE = ['-1,234.57', '1.23M', '-$1,234.50', 'Jan 5, 12:07 AM', '1:07 PM', 'Mon, Jan 5, 1:07 PM', 'Jan 5', '_abB'];
+const PROBE = [
+  '-1,234.57',
+  '1.23M',
+  '-$1,234.50',
+  'Jan 5, 12:07 AM',
+  '1:07 PM',
+  'Mon, Jan 5, 1:07 PM',
+  'Jan 5',
+  '_abB',
+];
 const DAY = 86_400_000;
 const FROM = Math.floor(NOW / DAY) * DAY - 120 * DAY;
 // The page's New York offsets (view-model.mjs homeZoneFacts): EST from Nov 1, 2026, EDT from Mar 14, 2027 ...
-const ZONE = { from: FROM, to: FROM + 520 * DAY, offsets: [[FROM, -240], [1793512800000, -300], [1805007600000, -240]] };
-const CONTEXT = { now: NOW, timeZone: 'America/New_York', platform: 'mac', intervalSeconds: 60, username: 'owner', host: '192.0.2.10:3000', formatProbe: PROBE, zone: ZONE };
-const VIEW = { version: 3, sections: [], cards: [], registry: [], chrome: { statusLead: 'Updated' } };
+const ZONE = {
+  from: FROM,
+  to: FROM + 520 * DAY,
+  offsets: [
+    [FROM, -240],
+    [1793512800000, -300],
+    [1805007600000, -240],
+  ],
+};
+const CONTEXT = {
+  now: NOW,
+  timeZone: 'America/New_York',
+  platform: 'mac',
+  intervalSeconds: 60,
+  username: 'owner',
+  host: '192.0.2.10:3000',
+  formatProbe: PROBE,
+  zone: ZONE,
+};
+const VIEW = {
+  version: 3,
+  sections: [],
+  cards: [],
+  registry: [],
+  chrome: { statusLead: 'Updated' },
+};
 const header = (value: unknown) => encodeURIComponent(JSON.stringify(value));
 
 const dashboard: AccountDashboard = {
@@ -46,7 +81,11 @@ const dashboard: AccountDashboard = {
 
 type Envelope = {
   data: Record<string, unknown>;
-  presentation: { dates: Record<string, Record<string, string>>; epochs: Record<string, number>; order: Record<string, number> };
+  presentation: {
+    dates: Record<string, Record<string, string>>;
+    epochs: Record<string, number>;
+    order: Record<string, number>;
+  };
 };
 
 let server: Server;
@@ -107,7 +146,8 @@ beforeEach(async () => {
   offered = true;
   const app = express();
   app.use((req, res, next) => {
-    if (req.headers['x-test-session'] === 'true') Object.assign(req, { session: { authenticated: true }, sessionID: 'fixture-session' });
+    if (req.headers['x-test-session'] === 'true')
+      Object.assign(req, { session: { authenticated: true }, sessionID: 'fixture-session' });
     if (offered) res.locals.rustService = offeringService();
     next();
   });
@@ -125,7 +165,10 @@ beforeEach(async () => {
       readInventory: async () => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
     })
   );
-  app.use('/api/accounts', createAccountDashboardRouter({ getDashboard: async () => structuredClone(dashboard) }));
+  app.use(
+    '/api/accounts',
+    createAccountDashboardRouter({ getDashboard: async () => structuredClone(dashboard) })
+  );
   server = await new Promise<Server>((resolve) => {
     const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
   });
@@ -149,7 +192,9 @@ describe('GET /api/views/home', () => {
   it('is not offered with the switch off: the request goes on to the next handler (404 here)', async () => {
     offered = false;
     expect((await home()).status).toBe(404);
-    const plain = await (await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })).json();
+    const plain = await (
+      await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })
+    ).json();
     expect(plain.server).toEqual({ version: '0.0.0-test', commit: null });
   });
 
@@ -178,13 +223,23 @@ describe('GET /api/views/home', () => {
   });
 
   it('offered: the dashboard answer names it, and the one read carries the data and the Rust view', async () => {
-    const plain = await (await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })).json();
+    const plain = await (
+      await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })
+    ).json();
     expect(plain.server.views).toEqual(['home']);
-    const response = await home('?platform=windows&refresh=true', { context: header({ ...CONTEXT, platform: 'windows' }) });
+    const response = await home('?platform=windows&refresh=true', {
+      context: header({ ...CONTEXT, platform: 'windows' }),
+    });
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     const body = await response.json();
-    expect(Object.keys(body)).toEqual(['schemaVersion', 'dashboard', 'profiles', 'antigravity', 'view']);
+    expect(Object.keys(body)).toEqual([
+      'schemaVersion',
+      'dashboard',
+      'profiles',
+      'antigravity',
+      'view',
+    ]);
     expect(body.dashboard.server.views).toEqual(['home']);
     expect(body.profiles).toEqual([{ id: 'a', name: 'A', openOperation: null }]);
     expect(body.view).toEqual(VIEW);
@@ -194,8 +249,14 @@ describe('GET /api/views/home', () => {
     expect(Object.keys(sent)).toEqual(['data', 'presentation']);
     expect(Object.keys(sent.data)).toEqual(['ctx', 'dashboard', 'profiles', 'antigravity']);
     expect(sent.data.ctx).toEqual({ ...CONTEXT, platform: 'windows' } as never);
-    expect(sent.presentation.dates[String(NOW)]).toEqual({ iso: '2026-11-14T12:00:00.000Z', clock: '7:00 AM', day: 'Nov 14' });
-    expect(sent.presentation.epochs['2026-11-14T11:59:00.000Z']).toBe(Date.parse('2026-11-14T11:59:00.000Z'));
+    expect(sent.presentation.dates[String(NOW)]).toEqual({
+      iso: '2026-11-14T12:00:00.000Z',
+      clock: '7:00 AM',
+      day: 'Nov 14',
+    });
+    expect(sent.presentation.epochs['2026-11-14T11:59:00.000Z']).toBe(
+      Date.parse('2026-11-14T11:59:00.000Z')
+    );
   });
 
   it('a context the server cannot read: the data comes back and the page builds its own view', async () => {
@@ -274,30 +335,59 @@ describe('home context and envelope', () => {
     };
     const envelope = homeReadInput(CONTEXT as HomeContext, data, [], null) as Envelope;
     // 2026-03-08T07:30Z is 3:30 AM EDT, just after the change
-    const change = homeReadInput(CONTEXT as HomeContext, { at: '2026-03-08T07:30:00.000Z' }, [], null) as Envelope;
+    const change = homeReadInput(
+      CONTEXT as HomeContext,
+      { at: '2026-03-08T07:30:00.000Z' },
+      [],
+      null
+    ) as Envelope;
     expect(change.presentation.dates[String(Date.parse('2026-03-08T07:30:00.000Z'))]).toEqual({
       iso: '2026-03-08T07:30:00.000Z',
       clock: '3:30 AM',
       day: 'Mar 8',
     });
-    expect(Object.keys(envelope.presentation.order).sort()).toEqual(['', '2', 'cursor:A', 'cursor:b', 'undefined', 'work'].sort());
-    expect(envelope.presentation.order['cursor:A']).toBeLessThan(envelope.presentation.order['cursor:b']);
+    expect(Object.keys(envelope.presentation.order).sort()).toEqual(
+      ['', '2', 'cursor:A', 'cursor:b', 'undefined', 'work'].sort()
+    );
+    expect(envelope.presentation.order['cursor:A']).toBeLessThan(
+      envelope.presentation.order['cursor:b']
+    );
     expect(envelope.presentation.order['not ranked']).toBeUndefined();
   });
 
   it('isHomeView admits only a version 3 view', () => {
     expect(isHomeView(VIEW)).toBe(true);
-    for (const value of [null, [], { ...VIEW, version: 2 }, { ...VIEW, cards: {} }, { ...VIEW, chrome: [] }])
+    for (const value of [
+      null,
+      [],
+      { ...VIEW, version: 2 },
+      { ...VIEW, cards: {} },
+      { ...VIEW, chrome: [] },
+    ])
       expect(isHomeView(value)).toBe(false);
   });
 
   it('the stored spec envelopes are what this front door computes (tests/spec/views/home/cases.json)', () => {
-    const table = JSON.parse(fs.readFileSync(path.join(import.meta.dir, '../../spec/views/home/cases.json'), 'utf8')) as {
-      cases: Array<{ name: string; ctx: HomeContext; dashboard: unknown; profiles: unknown; antigravity: unknown; presentation: unknown }>;
+    const table = JSON.parse(
+      fs.readFileSync(path.join(import.meta.dir, '../../spec/views/home/cases.json'), 'utf8')
+    ) as {
+      cases: Array<{
+        name: string;
+        ctx: HomeContext;
+        dashboard: unknown;
+        profiles: unknown;
+        antigravity: unknown;
+        presentation: unknown;
+      }>;
     };
     expect(table.cases.length).toBeGreaterThan(150);
     for (const c of table.cases) {
-      const { presentation } = homeReadInput(c.ctx, c.dashboard, c.profiles, c.antigravity) as Envelope;
+      const { presentation } = homeReadInput(
+        c.ctx,
+        c.dashboard,
+        c.profiles,
+        c.antigravity
+      ) as Envelope;
       const want = c.name === 'decline/facts' ? { ...presentation, dates: {} } : presentation;
       expect(JSON.stringify(c.presentation)).toBe(JSON.stringify(want));
     }
@@ -310,7 +400,13 @@ describe('compose() for /api/views/home over a private socket', () => {
   const secret = 'e'.repeat(64);
   const bootId = 'd'.repeat(24);
   let reply: { status: number; body: string } = { status: 200, body: JSON.stringify(VIEW) };
-  let seen: { method?: string; url?: string; principal?: unknown; cookie?: unknown; body: string }[] = [];
+  let seen: {
+    method?: string;
+    url?: string;
+    principal?: unknown;
+    cookie?: unknown;
+    body: string;
+  }[] = [];
   const fake = http.createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
@@ -323,7 +419,12 @@ describe('compose() for /api/views/home over a private socket', () => {
       res.end(principal.kind === 'session' ? reply.body : '{"error":"Authentication required"}');
     });
   });
-  const req = { method: 'GET', sessionID: 'fixture-session', session: { authenticated: true }, headers: { cookie: 'must-not-forward' } } as unknown as Request;
+  const req = {
+    method: 'GET',
+    sessionID: 'fixture-session',
+    session: { authenticated: true },
+    headers: { cookie: 'must-not-forward' },
+  } as unknown as Request;
   const envelope = homeReadInput(CONTEXT as HomeContext, dashboard, [], null);
   const compose = (s: RustService, request = req, input: unknown = () => envelope) =>
     s.compose(request, '/api/views/home', input, () => null, isHomeView);
@@ -382,12 +483,18 @@ describe('compose() for /api/views/home over a private socket', () => {
   it('a device gets no view; the socket is never called off or for an input over the 4 MiB cap', async () => {
     expect(await compose(service('off'))).toBeNull();
     expect(seen).toEqual([]);
-    const device = { method: 'GET', headers: {}, auth: { kind: 'device', deviceId: 'dev_fixture' } } as unknown as Request;
+    const device = {
+      method: 'GET',
+      headers: {},
+      auth: { kind: 'device', deviceId: 'dev_fixture' },
+    } as unknown as Request;
     expect(await compose(service(), device)).toBeNull();
     // L1: TS gates from the route table's roles too, so a device never reaches the socket here.
     expect(seen).toEqual([]);
     const big = service();
-    expect(await compose(big, req, { data: { pad: 'x'.repeat(4 * 1024 * 1024) }, presentation: {} })).toBeNull();
+    expect(
+      await compose(big, req, { data: { pad: 'x'.repeat(4 * 1024 * 1024) }, presentation: {} })
+    ).toBeNull();
     expect(big.stats.fallbacks).toBe(1);
     expect(seen).toEqual([]);
   });
@@ -397,10 +504,17 @@ describe('compose() for /api/views/home over a private socket', () => {
     // the service reads its own boot root only: another root is the TS reader (no manifest in this test home)
     expect(await readClaudeDesktopProfiles(req, res)).toEqual([]);
     expect(seen).toEqual([]);
-    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, { ccsDir: getCcsDir() });
-    reply = { status: 200, body: JSON.stringify({ profiles: [{ id: 'a', email: 'a@example.test' }, { email: 'b@example.test' }] }) };
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
+    });
+    reply = {
+      status: 200,
+      body: JSON.stringify({
+        profiles: [{ id: 'a', email: 'a@example.test' }, { email: 'b@example.test' }],
+      }),
+    };
     expect(await readClaudeDesktopProfiles(req, res)).toEqual([
-      { id: 'a', email: 'a@example.test', openOperation: null },
+      { id: 'a', email: 'a@example.test' },
       { email: 'b@example.test' },
     ]);
     expect(seen.map((r) => [r.url, r.body])).toEqual([['/api/claude/desktop-profiles', '']]);
@@ -415,7 +529,11 @@ describe('compose() for /api/views/home over a private socket', () => {
     const s = service();
     const res = { locals: { rustService: s } } as unknown as Response;
     reply = { status: 503, body: JSON.stringify({ error: 'TypeScript read fallback required' }) };
-    expect(await readAntigravityInventory(req, res)).toEqual({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] });
+    expect(await readAntigravityInventory(req, res)).toEqual({
+      schemaVersion: 1,
+      hostId: 'ubuntu',
+      profiles: [],
+    });
     expect(seen.map((r) => r.url)).toEqual(['/api/antigravity/profiles']);
     expect(s.stats.fallbacks).toBe(1);
   });

@@ -2,13 +2,15 @@
 //! `claude-history-sync-service.ts`: the private managed policy is read only from a revalidated
 //! manifest entry, so a changed manifest can never redirect a copy. Unknown or absent policy
 //! never enrolls the current native identity as a new trusted identity.
+use super::fsrules::{
+    ctime_ms, file_identity, mtime_ms, open_read_no_follow, owner_ok, private_mode, same_file,
+};
 use super::js;
 use super::manifest::{launcher_field_matches, profile_id_pattern};
 use super::sync::validate_policy;
 use serde_json::Value;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
@@ -92,27 +94,22 @@ pub fn load_policy(
     if !before.is_file()
         || before.file_type().is_symlink()
         || before.len() > MAX_MANIFEST_BYTES
-        || before.uid() != super::markers::process_uid()
-        || before.permissions().mode() & 0o077 != 0
+        || !owner_ok(&before)
+        || !private_mode(&before)
     {
         return None;
     }
-    let mut handle = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&filename)
-        .ok()?;
+    let mut handle = open_read_no_follow(&filename).ok()?;
     let opened = handle.metadata().ok()?;
-    if opened.dev() != before.dev() || opened.ino() != before.ino() || opened.len() != before.len()
-    {
+    if file_identity(&opened) != file_identity(&before) || opened.len() != before.len() {
         return None;
     }
     let mut bytes = Vec::new();
     handle.read_to_end(&mut bytes).ok()?;
     let after = fs::symlink_metadata(&filename).ok()?;
     if bytes.len() as u64 > MAX_MANIFEST_BYTES
-        || after.dev() != opened.dev()
-        || after.ino() != opened.ino()
+        || file_identity(&after) != file_identity(&opened)
+        || !same_file(&after, &opened)
         || after.len() != opened.len()
         || mtime_ms(&after) != mtime_ms(&opened)
         || ctime_ms(&after) != ctime_ms(&opened)
@@ -145,14 +142,4 @@ pub fn load_policy(
         }
     }
     parse_policy(&entry["historySync"])
-}
-
-/// Node's `stat.mtimeMs` float milliseconds.
-fn mtime_ms(meta: &fs::Metadata) -> f64 {
-    meta.mtime() as f64 * 1000.0 + meta.mtime_nsec() as f64 / 1_000_000.0
-}
-
-/// Node's `stat.ctimeMs`.
-fn ctime_ms(meta: &fs::Metadata) -> f64 {
-    meta.ctime() as f64 * 1000.0 + meta.ctime_nsec() as f64 / 1_000_000.0
 }

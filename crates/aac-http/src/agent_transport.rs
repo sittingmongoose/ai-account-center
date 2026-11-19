@@ -549,6 +549,7 @@ impl Agents {
         let Some(mut call) = Call::parse(bytes) else {
             return unavailable("", "shape");
         };
+        #[cfg(unix)]
         let verb = if verb == "lifecycle-signin" {
             let Some((deadline, args)) =
                 crate::lifecycle_signin::agent_start(&self.root, call.args.get())
@@ -571,6 +572,8 @@ impl Agents {
         } else {
             verb
         };
+        #[cfg(not(unix))]
+        let verb = verb;
         if !call.valid(verb) {
             return unavailable(&call.call_id, "shape");
         }

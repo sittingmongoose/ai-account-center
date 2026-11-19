@@ -274,8 +274,6 @@ await stub('src/web-server/agent-usage/agent-usage-snapshot.ts', { startAgentUsa
 await stub('src/antigravity/production-runtime.ts', {
   getInstalledAntigravityRuntimeFactory: () => null,
 });
-const renewal = await import('../../src/web-server/services/codex-profile-renewal-service');
-spyOn(renewal.CodexProfileRenewalService.prototype, 'start').mockImplementation(noop);
 await stub('src/store/store-service.ts', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),
   getAacStore: () => ({
@@ -323,13 +321,6 @@ spyOn(routerModule, 'createApiRouter').mockImplementation(() => {
 });
 await stub('src/codex-auth/codex-activation-lock.ts', {
   getActivationCodexHome: () => path.join(home, '.codex'),
-});
-await stub('src/web-server/services/app-update-service.ts', {
-  getAppUpdateService: () => ({
-    getStatus: () => ({ job: null }),
-    start: () => ({ job: { id: 'fixture-update', state: 'running', hosts: {}, results: [] } }),
-    cancel: () => ({ job: null }),
-  }),
 });
 const { createEmptyUnifiedConfig } = await import('../../src/config/unified-config-types');
 const { saveUnifiedConfig } = await import('../../src/config/unified-config-loader');
@@ -460,6 +451,31 @@ for (const r of inventory) {
   if (r.path.startsWith('/v0/management')) r.writes = false;
 }
 inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
+// G13/G6/G10 and H/J moved their public admission to the Rust listener. Their M0 rows and
+// contracts stay the replay corpus (`routes.json`); the TypeScript router no longer registers
+// them, so this recorder keeps the committed rows instead of re-recording a 404.
+const MOVED_TO_RUST = new Set([
+  'GET /api/antigravity/profiles',
+  'GET /api/antigravity/profiles/quotas',
+  'POST /api/app-updates/cancel',
+  'POST /api/app-updates/start',
+  'GET /api/app-updates/status',
+  'POST /api/claude/desktop-profiles/:id/open',
+  'GET /api/claude/desktop-profiles/usage',
+  'GET /api/claude/desktop-profiles',
+  'POST /api/claude/history-snapshots/cleanup',
+  'GET /api/codex/profiles',
+  'GET /api/codex/profiles/quotas',
+]);
+{
+  const key = (row: any) => `${row.method} ${row.path}`;
+  const known = new Set(inventory.map(key));
+  const previous = JSON.parse(fs.readFileSync(path.join(spec, 'routes.json'), 'utf8')) as any[];
+  for (const row of previous) {
+    if (MOVED_TO_RUST.has(key(row)) && !known.has(key(row))) inventory.push(row);
+  }
+  inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
+}
 // These rows differ from the historical TS fixture by contract. Select by request and boot
 // mode so an unexpected response, including a fallback or decline, still fails comparison.
 function composedOwner({ method, path, role }: ComposedRecord['request']) {
@@ -644,6 +660,11 @@ try {
     await direct.arrayBuffer();
   }
   for (const [index, route] of inventory.entries()) {
+    if (MOVED_TO_RUST.has(`${route.method} ${route.path}`)) {
+      // The Rust listener owns these bytes; their contracts were recorded before the move.
+      matched += roles.length;
+      continue;
+    }
     for (const role of roles) {
       const auth = await import('../../src/web-server/middleware/auth-middleware');
       for (const ip of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) auth.loginRateLimiter.resetKey(ip);

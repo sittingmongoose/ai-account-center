@@ -21,7 +21,6 @@ pub mod key_sweep;
 #[cfg(unix)]
 pub mod lifecycle_queue;
 pub mod path;
-#[cfg(unix)]
 pub mod presence;
 pub mod process;
 #[cfg(unix)]

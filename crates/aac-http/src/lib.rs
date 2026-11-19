@@ -5,7 +5,6 @@ mod account_approvals;
 mod account_reads;
 #[cfg(unix)]
 pub mod account_usage;
-#[cfg(unix)]
 mod agent_transport;
 #[cfg(unix)]
 mod analytics_writers;
@@ -17,13 +16,10 @@ pub mod antigravity_quota;
 #[cfg(unix)]
 pub mod antigravity_renewal;
 pub mod antigravity_runtime;
-#[cfg(unix)]
 pub mod app_update_routes;
-#[cfg(unix)]
 pub mod app_updates;
 #[cfg(unix)]
 pub mod claude_lifecycle;
-#[cfg(unix)]
 pub mod claude_open;
 pub mod cli;
 #[cfg(unix)]
@@ -42,7 +38,6 @@ mod home_fed;
 mod home_producer;
 #[cfg(unix)]
 mod identity;
-#[cfg(unix)]
 mod json_object;
 #[cfg(unix)]
 pub mod key_lifecycle;
@@ -62,14 +57,12 @@ mod limits;
 pub mod models_dev;
 #[cfg(unix)]
 mod preferences_write;
-#[cfg(unix)]
 mod profile_reads;
 pub mod public_auth;
 #[cfg(unix)]
 mod read_files;
 #[cfg(unix)]
 mod read_routes;
-#[cfg(unix)]
 mod registered;
 mod reset_claims;
 mod reset_source_route;

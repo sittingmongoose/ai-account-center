@@ -48,20 +48,9 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/:id/recheck", &["POST"]),
     ("/api/accounts/:id/remove", &["POST"]),
     ("/api/accounts/:id/signin-again", &["POST"]),
-    ("/api/antigravity/profiles", &["GET"]),
-    ("/api/antigravity/profiles/quotas", &["GET"]),
-    #[cfg(not(unix))]
-    ("/api/app-updates/status", &["GET"]),
-    #[cfg(not(unix))]
-    ("/api/app-updates/start", &["POST"]),
-    #[cfg(not(unix))]
-    ("/api/app-updates/cancel", &["POST"]),
-    ("/api/claude/desktop-profiles", &["GET"]),
-    ("/api/claude/desktop-profiles/usage", &["GET"]),
-    ("/api/claude/desktop-profiles/:id/open", &["POST"]),
-    ("/api/claude/history-snapshots/cleanup", &["POST"]),
-    ("/api/codex/profiles", &["GET"]),
-    ("/api/codex/profiles/quotas", &["GET"]),
+    ("/api/accounts/:id/reset-claims", &["GET", "POST"]),
+    ("/api/accounts/:id/reset-claims/check", &["POST"]),
+    ("/api/accounts/:id/reset-claims/prepare", &["POST"]),
     ("/api/scoreboard", &["GET"]),
     ("/api/status", &["GET"]),
     ("/api/status/answers", &["GET", "POST"]),
@@ -120,18 +109,22 @@ mod tests {
             cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"),
             cfg!(not(unix))
         );
-        assert_eq!(
-            cut_route(&Method::GET, "/api/app-updates/status"),
-            cfg!(not(unix))
-        );
-        assert_eq!(
-            cut_route(&Method::POST, "/api/app-updates/start"),
-            cfg!(not(unix))
-        );
-        assert_eq!(
-            cut_route(&Method::POST, "/api/app-updates/cancel"),
-            cfg!(not(unix))
-        );
+        // G13/G6/G10 and H/J moved to the native public listener: no worker hop remains.
+        for (method, path) in [
+            (Method::GET, "/api/app-updates/status"),
+            (Method::POST, "/api/app-updates/start"),
+            (Method::POST, "/api/app-updates/cancel"),
+            (Method::GET, "/api/claude/desktop-profiles"),
+            (Method::GET, "/api/claude/desktop-profiles/usage"),
+            (Method::POST, "/api/claude/desktop-profiles/example/open"),
+            (Method::POST, "/api/claude/history-snapshots/cleanup"),
+            (Method::GET, "/api/codex/profiles"),
+            (Method::GET, "/api/codex/profiles/quotas"),
+            (Method::GET, "/api/antigravity/profiles"),
+            (Method::GET, "/api/antigravity/profiles/quotas"),
+        ] {
+            assert!(!cut_route(&method, path), "{method} {path}");
+        }
         assert!(cut_route(&Method::PATCH, "/api/accounts/preferences"));
         assert!(!cut_route(
             &Method::POST,

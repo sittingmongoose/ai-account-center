@@ -86,10 +86,6 @@ if (mode === 'cut') {
     NODE_OPTIONS: [environment.NODE_OPTIONS, '--require=' + JSON.stringify(preload)]
       .filter(Boolean)
       .join(' '),
-    CODEX_HOME: path.join(root, '.codex'),
-    CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
-    AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
-    AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
     AAC_RUST_STORE: 'off',
     AAC_RUST_GROUP_HOME: 'off',
     AAC_RUST_HOME_VIEW: 'off',
@@ -101,7 +97,21 @@ if (mode === 'cut') {
     AAC_STORE_SHARE_BACKUP_DIR: 'off',
   });
 }
-if (mode !== 'fixture' && process.platform !== 'win32') {
+if (mode !== 'fixture') {
+  // Capture recorded the profile reads with these homes, and the strict Rust-only front door
+  // reads the same Codex and Claude locations.
+  Object.assign(environment, {
+    // The capture mocked os.homedir() to the same fixture. The native process reads the
+    // account home directly, so point it there rather than at the developer's own logins.
+    HOME: root,
+    USERPROFILE: root,
+    CODEX_HOME: path.join(root, '.codex'),
+    CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
+    AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+    AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+  });
+}
+if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')) {
   Object.assign(environment, {
     AAC_RUST_CUT_APP_UPDATES_FIXTURE: '1',
     AAC_RUST_GROUP_APP_UPDATES: 'on',

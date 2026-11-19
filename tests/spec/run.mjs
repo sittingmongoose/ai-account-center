@@ -88,21 +88,7 @@ for (const [program, args] of [
   [
     'bun',
     [
-      'tests/spec/app-update-http-parity.ts',
-      ...(process.env.AAC_SPEC_APP_UPDATES_UNBOUND === '1' ? ['--rust-unbound'] : []),
-    ],
-  ],
-  [
-    'bun',
-    [
       'tests/spec/preferences-write-parity.ts',
-      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
-    ],
-  ],
-  [
-    'bun',
-    [
-      'tests/spec/history-cleanup-parity.ts',
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
@@ -160,7 +146,6 @@ for (const [program, args] of [
     'read-file-parity',
     'read-http-parity',
     'account-read-parity',
-    'profile-read-parity',
     'home-number-admission',
   ].map((name) => [
     'bun',

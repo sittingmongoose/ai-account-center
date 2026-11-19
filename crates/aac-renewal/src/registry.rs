@@ -163,6 +163,55 @@ pub fn list_registered_codex_profiles(ccs_dir: &Path) -> Result<Vec<String>, ()>
     validate_codex_profile_registry_data(&yaml_to_json(parsed))
 }
 
+/// One saved profile's registry row, in the file's order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodexRegistryProfile {
+    /// The profile name (the folder under `codex-instances`).
+    pub name: String,
+    /// The stored last-used timestamp, when one is set.
+    pub last_used: Option<String>,
+}
+
+/// The dashboard summary's registry read: the default name and every profile in file order.
+/// The same strict shape validation as [`list_registered_codex_profiles`]; a missing file is an
+/// empty registry, any other read or shape failure is the fixed failure the caller declines on.
+pub fn read_codex_profile_registry(
+    ccs_dir: &Path,
+) -> Result<(Option<String>, Vec<CodexRegistryProfile>), ()> {
+    let raw = match std::fs::read_to_string(codex_auth_registry_path(ccs_dir)) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((None, Vec::new()));
+        }
+        Err(_) => return Err(()),
+    };
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&raw).map_err(|_| ())?;
+    validate_codex_profile_registry_data(&yaml_to_json(parsed.clone()))?;
+    let root = parsed.as_mapping().ok_or(())?;
+    let default = match root.get(serde_yaml::Value::String("default".into())) {
+        Some(serde_yaml::Value::String(name)) => Some(name.clone()),
+        _ => None,
+    };
+    let profiles = root
+        .get(serde_yaml::Value::String("profiles".into()))
+        .and_then(serde_yaml::Value::as_mapping)
+        .ok_or(())?;
+    let mut out = Vec::with_capacity(profiles.len());
+    for (name, meta) in profiles {
+        let name = name.as_str().ok_or(())?.to_owned();
+        let last_used = match meta
+            .as_mapping()
+            .and_then(|meta| meta.get(serde_yaml::Value::String("last_used".into())))
+        {
+            Some(serde_yaml::Value::String(value)) => Some(value.clone()),
+            Some(serde_yaml::Value::Null) | None => None,
+            Some(_) => return Err(()),
+        };
+        out.push(CodexRegistryProfile { name, last_used });
+    }
+    Ok((default, out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +268,31 @@ mod tests {
             list_registered_codex_profiles(Path::new("/nonexistent-ccs-root"))
                 .expect("missing")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_dashboard_read_keeps_file_order_and_last_used() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("codex-profiles.yaml"),
+            "version: '1.0'\ndefault: zeta\nprofiles:\n  zeta:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: '2026-11-01T00:00:00Z'\n  alpha:\n    type: codex\n    created: '2026-10-02T00:00:00Z'\n    last_used: null\n",
+        )
+        .expect("write");
+        let (default, profiles) = read_codex_profile_registry(dir.path()).expect("read");
+        assert_eq!(default.as_deref(), Some("zeta"));
+        assert_eq!(
+            profiles,
+            vec![
+                CodexRegistryProfile {
+                    name: "zeta".into(),
+                    last_used: Some("2026-11-01T00:00:00Z".into())
+                },
+                CodexRegistryProfile {
+                    name: "alpha".into(),
+                    last_used: None
+                }
+            ]
         );
     }
 }
