@@ -73,6 +73,14 @@ fn declined(reply: &ServiceReply) -> bool {
         && reply.headers.contains_key("x-aac-decline")
 }
 
+/// The named reason of a decline (`stale`, `unsupported`, ...).
+fn decline_reason(reply: &ServiceReply) -> Option<&str> {
+    reply
+        .headers
+        .get("x-aac-decline")
+        .and_then(|value| value.to_str().ok())
+}
+
 /// `MAX_STATUS_BODY_BYTES`, the answer set's own limit.
 const ANSWER_BODY_CAP: usize = 64 * 1024;
 /// The file envelope's largest base64 body (`rust-file-response.ts`).
@@ -732,7 +740,8 @@ async fn scoreboard(
     };
     // The service may ingest or rescan between the facts fetch and the answer; its `stale`
     // decline means fresh facts, exactly as today's handler refetches on the next request.
-    for _ in 0..2 {
+    // A cold boot's first seed can take a moment: retry briefly, then answer honestly.
+    for attempt in 0..6 {
         let Some((generation, catalog_hash, held)) =
             scoreboard_facts(routes, &time_zone, now).await
         else {
