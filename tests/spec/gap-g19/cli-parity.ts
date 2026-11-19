@@ -571,5 +571,243 @@ for (const mutation of MUTATIONS) {
   fs.rmSync(homeB, { recursive: true, force: true });
 }
 
+// ---------------------------------------------------------------------------
+// 4. codex-auth: help/version/retired words, the dropped families, import-default.
+// ---------------------------------------------------------------------------
+const CODEX_PARITY: string[][] = [
+  ['codex-auth'],
+  ['codex-auth', '--help'],
+  ['codex-auth', '--version'],
+  ['codex-auth', 'use'],
+  ['codex-auth', 'switch'],
+  ['codex-auth', 'activate'],
+  ['codex-auth', 'bogus'],
+];
+for (const args of CODEX_PARITY) {
+  const homeA = freshHome();
+  const homeB = freshHome();
+  equalRuns(`codex ${args.slice(1).join(' ') || '(no args)'}`, runCli('ts', homeA, args), runCli('rust', homeB, args), [homeA, homeB]);
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+for (const sub of ['create', 'login', 'show', 'list', 'status', 'remove']) {
+  const home = freshHome();
+  const rust = runCli('rust', home, ['codex-auth', sub]);
+  check(
+    `drop codex-auth ${sub}`,
+    rust.status === 1 &&
+      rust.stdout === '' &&
+      rust.stderr.includes(`"codex-auth ${sub}" is managed in the dashboard's Accounts page`) &&
+      rust.stderr.includes('Accounts'),
+    JSON.stringify(rust)
+  );
+  fs.rmSync(home, { recursive: true, force: true });
+}
+
+function b64url(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function makeJwt(payload: object): string {
+  return `${b64url(Buffer.from(JSON.stringify({ alg: 'none' })))}.${b64url(Buffer.from(JSON.stringify(payload)))}.sig`;
+}
+
+interface ImportCase {
+  name: string;
+  flags?: string[];
+  auth?: unknown;
+  existing?: boolean;
+  history?: boolean;
+  missing?: boolean;
+}
+const IMPORT_CASES: ImportCase[] = [
+  { name: 'valid import', flags: ['work'] },
+  { name: 'with history', flags: ['work', '--with-history'], history: true },
+  { name: 'existing without force', flags: ['work'], existing: true },
+  { name: 'existing with force', flags: ['work', '--force'], existing: true },
+  { name: 'cliproxy format', flags: ['work'], auth: { type: 'codex' } },
+  { name: 'missing legacy auth', flags: ['work'], missing: true },
+  { name: 'no profile name', flags: [] },
+  { name: 'invalid profile name', flags: ['Work'] },
+  { name: 'unknown flag', flags: ['work', '--wat'] },
+  { name: 'extra positional', flags: ['work', 'extra'] },
+];
+for (const testCase of IMPORT_CASES) {
+  const homeA = freshHome();
+  const homeB = freshHome();
+  const setup = (home: string) => {
+    const ccs = path.join(home, 'ccs');
+    const legacy = path.join(home, 'legacy');
+    fs.mkdirSync(ccs, { recursive: true });
+    fs.mkdirSync(legacy, { recursive: true });
+    if (!testCase.missing) {
+      const auth = testCase.auth ?? { tokens: { id_token: makeJwt({ email: 'work@example.test' }) } };
+      fs.writeFileSync(path.join(legacy, 'auth.json'), JSON.stringify(auth, null, 2));
+    }
+    if (testCase.history) {
+      fs.writeFileSync(path.join(legacy, 'history.jsonl'), '{"q":1}\n');
+      fs.mkdirSync(path.join(legacy, 'sessions/sub'), { recursive: true });
+      fs.writeFileSync(path.join(legacy, 'sessions/a.json'), '{}');
+      fs.writeFileSync(path.join(legacy, 'sessions/sub/b.json'), '{}');
+    }
+    if (testCase.existing) {
+      fs.writeFileSync(
+        path.join(ccs, 'codex-profiles.yaml'),
+        "version: '1.0'\ndefault: null\nprofiles:\n  work:\n    type: codex\n    created: '2026-01-01T00:00:00.000Z'\n    last_used: null\n"
+      );
+      fs.mkdirSync(path.join(ccs, 'codex-instances/work'), { recursive: true });
+      fs.writeFileSync(path.join(ccs, 'codex-instances/work/auth.json'), '{"old":true}');
+    }
+    return { ccs, legacy };
+  };
+  const a = setup(homeA);
+  const b = setup(homeB);
+  const args = ['codex-auth', 'import-default', ...(testCase.flags ?? ['work'])];
+  const ts = runCli('ts', homeA, args, { LEGACY_CODEX_HOME: a.legacy, CCS_DIR: a.ccs });
+  const rust = runCli('rust', homeB, args, { LEGACY_CODEX_HOME: b.legacy, CCS_DIR: b.ccs });
+  const norm = (text: string) =>
+    text
+      .split(homeA).join('<home>')
+      .split(homeB).join('<home>')
+      .replace(/auth\.json\.bak-\d+/g, 'auth.json.bak-<ts>');
+  check(
+    `import-default ${testCase.name} output`,
+    ts.status === rust.status && norm(ts.stdout) === norm(rust.stdout) && norm(ts.stderr) === norm(rust.stderr),
+    `ts=${JSON.stringify(ts)}\nrust=${JSON.stringify(rust)}`
+  );
+  if (ts.status === 0 && rust.status === 0) {
+    const profileName = (testCase.flags ?? ['work']).find((arg) => !arg.startsWith('--')) ?? 'work';
+    interface RegistryProfile {
+      type?: string;
+      created?: string;
+      last_used?: string | null;
+      email?: string;
+      plan_type?: string | null;
+      account_id?: string;
+    }
+    interface Registry {
+      version?: string;
+      default?: string | null;
+      profiles?: Record<string, RegistryProfile>;
+    }
+    const strip = (registry: Registry): Registry => {
+      for (const profile of Object.values(registry.profiles ?? {})) {
+        delete profile.created;
+        delete profile.last_used;
+      }
+      return registry;
+    };
+    // Fixture-owned YAML written by the two CLIs; the shape is the registry contract.
+    const regA = strip(yaml.load(fs.readFileSync(path.join(a.ccs, 'codex-profiles.yaml'), 'utf8')) as Registry);
+    const regB = strip(yaml.load(fs.readFileSync(path.join(b.ccs, 'codex-profiles.yaml'), 'utf8')) as Registry);
+    check(`import-default ${testCase.name} registry`, JSON.stringify(regA) === JSON.stringify(regB), `ts=${JSON.stringify(regA)}\nrust=${JSON.stringify(regB)}`);
+    const authA = fs.readFileSync(path.join(a.ccs, `codex-instances/${profileName}/auth.json`));
+    const authB = fs.readFileSync(path.join(b.ccs, `codex-instances/${profileName}/auth.json`));
+    check(`import-default ${testCase.name} auth bytes`, authA.equals(authB));
+    const linkA = fs.readlinkSync(path.join(a.ccs, `codex-instances/${profileName}/config.toml`));
+    const linkB = fs.readlinkSync(path.join(b.ccs, `codex-instances/${profileName}/config.toml`));
+    check(`import-default ${testCase.name} config link`, linkA === path.join(homeA, '.codex/config.toml') && linkB === path.join(homeB, '.codex/config.toml'));
+    if (testCase.history) {
+      check(
+        `import-default ${testCase.name} history files`,
+        fs.existsSync(path.join(a.ccs, `codex-instances/${profileName}/sessions/sub/b.json`)) &&
+          fs.existsSync(path.join(b.ccs, `codex-instances/${profileName}/sessions/sub/b.json`))
+      );
+    }
+  }
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// 5. antigravity: help, status, the dropped recover, runtime refresh refusals.
+// ---------------------------------------------------------------------------
+const ANTIGRAVITY_PARITY: string[][] = [
+  ['antigravity'],
+  ['antigravity', 'help'],
+  ['antigravity', 'status', 'extra'],
+  ['antigravity', 'activate'],
+  ['antigravity', 'runtime'],
+  ['antigravity', 'runtime', 'help'],
+  ['antigravity', 'runtime', 'bogus'],
+  ['antigravity', 'signin'],
+  ['antigravity', 'signin', '-x'],
+  ['antigravity', 'bogus'],
+];
+for (const args of ANTIGRAVITY_PARITY) {
+  const homeA = freshHome();
+  const homeB = freshHome();
+  equalRuns(`antigravity ${args.slice(1).join(' ') || '(no args)'}`, runCli('ts', homeA, args), runCli('rust', homeB, args), [homeA, homeB]);
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+{
+  // status on an empty fixture: both read the packaged release and the same empty state.
+  const homeA = freshHome();
+  const homeB = freshHome();
+  equalRuns('antigravity status empty', runCli('ts', homeA, ['antigravity', 'status']), runCli('rust', homeB, ['antigravity', 'status']), [homeA, homeB]);
+  // runtime refresh with no installation: the same refusal.
+  equalRuns('antigravity runtime refresh empty', runCli('ts', homeA, ['antigravity', 'runtime', 'refresh']), runCli('rust', homeB, ['antigravity', 'runtime', 'refresh']), [homeA, homeB]);
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+{
+  const home = freshHome();
+  const rust = runCli('rust', home, ['antigravity', 'recover']);
+  check(
+    'drop antigravity recover',
+    rust.status === 1 && rust.stdout === '' && rust.stderr.includes('"antigravity recover" is managed in the dashboard'),
+    JSON.stringify(rust)
+  );
+  fs.rmSync(home, { recursive: true, force: true });
+}
+{
+  // signin delegates to the labelled TS CLI while prepare/complete stay in TS (M5).
+  const home = freshHome();
+  const fake = path.join(home, 'fake-cli.cjs');
+  fs.writeFileSync(fake, "console.log(process.argv.slice(2).join(' '));\n");
+  const rust = runCli('rust', home, ['antigravity', 'signin', 'work'], { AAC_TS_CLI: fake });
+  check('antigravity signin delegates', rust.status === 0 && rust.stdout === 'antigravity signin work\n', JSON.stringify(rust));
+  fs.rmSync(home, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// 6. bar: help, version, the non-macOS refusals and flag validation.
+// ---------------------------------------------------------------------------
+const BAR_PARITY: string[][] = [
+  ['bar'],
+  ['bar', '--help'],
+  ['bar', 'help'],
+  ['bar', '--version'],
+  ['bar', 'launch'],
+  ['bar', 'serve'],
+  ['bar', 'stop'],
+  ['bar', 'status'],
+  ['bar', 'bogus'],
+  ['bar', 'install', '--wat'],
+  ['bar', 'install', '--launch', '--launch'],
+  ['bar', 'install', '--launch', '--no-launch'],
+  ['bar', 'install'],
+  ['bar', 'uninstall'],
+];
+for (const args of BAR_PARITY) {
+  const homeA = freshHome();
+  const homeB = freshHome();
+  equalRuns(`bar ${args.slice(1).join(' ') || '(no args)'}`, runCli('ts', homeA, args), runCli('rust', homeB, args), [homeA, homeB]);
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+{
+  // version with a recorded pin and no installed app.
+  const homeA = freshHome();
+  const homeB = freshHome();
+  for (const home of [homeA, homeB]) {
+    fs.mkdirSync(path.join(home, 'bar'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'bar/.version'), '1.2.3\n');
+  }
+  equalRuns('bar version recorded', runCli('ts', homeA, ['bar', 'version']), runCli('rust', homeB, ['bar', 'version']), [homeA, homeB]);
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+
 console.log(`\n${cases - failures}/${cases} G19 CLI parity cases passed.`);
 process.exit(failures ? 1 : 0);
