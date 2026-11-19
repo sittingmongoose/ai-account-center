@@ -13,6 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { requirePython3 } from './python3.mjs';
 
 const root = path.resolve(import.meta.dir, '../..');
 const read = (relative: string) => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -161,11 +162,13 @@ describe('fingerprinted TS hand lists equal the table', () => {
 });
 
 describe('the Python fallback helpers equal the table', () => {
+  const python3 = requirePython3();
   const python = (code: string) =>
     JSON.parse(
       execFileSync(
-        'python3',
+        python3.file,
         [
+          ...python3.args,
           // -I ignores PYTHON* variables, so -B keeps bytecode out of scripts/.
           '-I',
           '-B',

@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { requirePython3 } from './python3.mjs';
 const cwd = fileURLToPath(new URL('../..', import.meta.url));
+const python3 = requirePython3();
 for (const [program, args] of [
   ['node', ['scripts/foundation/generate-id-vectors.mjs', '--check']],
-  ['python3', ['tests/spec/parsers.py']],
+  [python3.file, [...python3.args, 'tests/spec/parsers.py']],
   ['node', ['tests/spec/parser-ts.mjs']],
   ['node', ['tests/spec/inventory.mjs']],
   ['bun', ['test', 'tests/spec/tables.test.ts']],
