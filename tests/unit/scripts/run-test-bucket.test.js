@@ -216,6 +216,48 @@ describe('run-test-bucket', () => {
       '(fail) three',
     ]);
   });
+
+  test('splits a shared group whose quoted command line would overflow cmd.exe', () => {
+    const paths = Array.from(
+      { length: 100 },
+      (_, i) => `./tests/unit/web-server/some-quite-long-suite-name-${i}.test.ts`
+    );
+
+    const chunks = bucket.chunkByCommandLineLength(paths, 400);
+
+    // Every test still runs exactly once, in the selected order.
+    expect(chunks.flat()).toEqual(paths);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeGreaterThan(0);
+      // Each chunk's quoted, space-joined form stays under the cap (a single path that
+      // alone exceeds it still runs, as its own chunk).
+      if (chunk.length > 1) {
+        expect(chunk.map((p) => `"${p}"`).join(' ').length).toBeLessThanOrEqual(400);
+      }
+    }
+  });
+
+  test('keeps a shared group that fits in one chunk unsplit', () => {
+    const paths = ['./tests/unit/a.test.ts', './tests/unit/b.test.ts', './tests/unit/c.test.ts'];
+
+    expect(bucket.chunkByCommandLineLength(paths, 400)).toEqual([paths]);
+  });
+
+  test('still runs a single path that alone exceeds the cap, as its own chunk', () => {
+    const long = `./tests/unit/${'x'.repeat(120)}.test.ts`;
+
+    expect(bucket.chunkByCommandLineLength(['./tests/unit/a.test.ts', long], 40)).toEqual([
+      ['./tests/unit/a.test.ts'],
+      [long],
+    ]);
+  });
+
+  test('never chunks off Windows because only cmd.exe caps the command line', () => {
+    expect(bucket.commandLineLimitChars('win32')).toBeLessThanOrEqual(8191);
+    expect(bucket.commandLineLimitChars('linux')).toBe(Number.POSITIVE_INFINITY);
+    expect(bucket.commandLineLimitChars('darwin')).toBe(Number.POSITIVE_INFINITY);
+  });
 });
 
 describe('slow bucket build on machines without local Rust builds', () => {

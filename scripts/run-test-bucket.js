@@ -149,6 +149,36 @@ function toBunTestPath(relativePath) {
   return `./${relativePath}`;
 }
 
+// On Windows `bun` is spawned through cmd.exe (`shell: true`), which caps a command line
+// at 8191 characters; a large shared group overflows that cap and cmd refuses to run any
+// of it (tool-issue 56). Split the test paths into chunks whose quoted command line stays
+// well under the cap. Other platforms never spawn through a shell, so the group never
+// splits there and keeps its single-run output.
+const WINDOWS_COMMAND_LINE_CAP = 7500;
+
+function commandLineLimitChars(platform = process.platform) {
+  return platform === 'win32' ? WINDOWS_COMMAND_LINE_CAP : Number.POSITIVE_INFINITY;
+}
+
+function chunkByCommandLineLength(paths, maxChars = commandLineLimitChars()) {
+  const chunks = [];
+  let current = [];
+  let length = 0;
+  for (const testPath of paths) {
+    // './' prefix (toBunTestPath), one separator space and two quotes shell:true may add.
+    const cost = testPath.length + 5;
+    if (current.length > 0 && length + cost > maxChars) {
+      chunks.push(current);
+      current = [];
+      length = 0;
+    }
+    current.push(testPath);
+    length += cost;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
 function getBunArgs(name, selected = selectBucket(name)) {
   const testPaths = selected.map(toBunTestPath);
 
@@ -167,14 +197,17 @@ function getBunRuns(name, selected = selectBucket(name)) {
   const isolated = selected.filter(shouldRunIsolated);
   const runs = [];
 
-  if (shared.length > 0) {
+  // Chunked labels (`shared 2/7`) only appear where a shell command-line cap forced a
+  // split; an unsplit group keeps the plain `shared` run and its exact previous output.
+  const sharedChunks = chunkByCommandLineLength(shared);
+  sharedChunks.forEach((chunk, index) => {
     runs.push({
-      label: 'shared',
-      selected: shared,
-      bunArgs: getBunArgs(name, shared),
+      label: sharedChunks.length === 1 ? 'shared' : `shared ${index + 1}/${sharedChunks.length}`,
+      selected: chunk,
+      bunArgs: getBunArgs(name, chunk),
       quietOnPass: false,
     });
-  }
+  });
 
   for (const file of isolated) {
     runs.push({
@@ -447,6 +480,8 @@ module.exports = {
   getSlowSet,
   selectBucket,
   toBunTestPath,
+  commandLineLimitChars,
+  chunkByCommandLineLength,
   getBunArgs,
   usesBunTestRunner,
   shouldRunIsolated,
