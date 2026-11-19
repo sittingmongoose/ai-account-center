@@ -30,9 +30,7 @@ import { getCcsDir } from '../../utils/config-manager';
  *   writer is refused before anything is written.
  */
 export type PrivateJsonRead =
-  | { state: 'absent' }
-  | { state: 'invalid' }
-  | { state: 'ok'; value: unknown; contents: string };
+  { state: 'absent' } | { state: 'invalid' } | { state: 'ok'; value: unknown; contents: string };
 
 const logger = createLogger('private-json-store');
 const locks = new Map<string, Promise<void>>();

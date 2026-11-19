@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ConfigError } from '../errors/error-types';
 
 const binaries = new Map<string, string>();
 const writers = new Map<string, { binary: string; committed: () => void }>();
@@ -22,7 +23,7 @@ export interface FileLease {
   descriptor?: number;
 }
 
-export class RegisteredWriteUnclearError extends Error {}
+export class RegisteredWriteUnclearError extends ConfigError {}
 
 /** Return false only when no native writer was selected or the executable could not launch. */
 export function commitWithFileLease(
@@ -46,7 +47,7 @@ export function commitWithFileLease(
   if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return false;
   if (result.status !== 74 && result.status !== 75)
     throw new RegisteredWriteUnclearError('The private file write could not be confirmed.');
-  throw new Error('The private file could not be saved safely.');
+  throw new ConfigError('The private file could not be saved safely.');
 }
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
@@ -95,7 +96,7 @@ export function claimFileLease(root: string, file: string): FileLease {
       (process.getuid && metadata.uid !== process.getuid()) ||
       (metadata.mode & 0o077) !== 0
     )
-      throw new Error('Private file lease could not be acquired.');
+      throw new ConfigError('Private file lease could not be acquired.');
     const options = { stdio: [fd, 'ignore', 'ignore'] as const, timeout: 500, windowsHide: true };
     const open = helper
       ? spawnSync(helper, ['--file-lease'], { ...options, stdio: [...options.stdio] })
@@ -105,7 +106,7 @@ export function claimFileLease(root: string, file: string): FileLease {
       (!!flock &&
         open?.status !== 73 &&
         spawnSync(flock, ['-n', '0'], { ...options, stdio: [...options.stdio] }).status === 0);
-    if (!locked) throw new Error('Private file lease could not be acquired.');
+    if (!locked) throw new ConfigError('Private file lease could not be acquired.');
     const lease: FileLease = {
       descriptor: fd,
       close: () => {

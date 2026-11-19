@@ -214,7 +214,7 @@ function readPendingPreferences(ccsDir: string): PreferencesDocuments | null {
   try {
     const file = path.join(ccsDir, PREFERENCES_TRANSACTION);
     const value = JSON.parse(readPreferencesBytes(file, MAX_TRANSACTION_BYTES).toString('utf8'));
-    if (!readDocuments(value)) throw new Error('Invalid preferences transaction.');
+    if (!readDocuments(value)) throw new ConfigError('Invalid preferences transaction.');
     return value;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -535,7 +535,7 @@ function persistPreferences(documents: PreferencesDocuments, ccsDir: string): Da
   // symlink leaves can be atomically replaced, while directory leaves cannot.
   for (const name of [PREFERENCES_FILE, EXTRA_SOURCES_FILE]) {
     if (fs.lstatSync(path.join(ccsDir, name), { throwIfNoEntry: false })?.isDirectory())
-      throw new Error('Invalid preferences file.');
+      throw new ConfigError('Invalid preferences file.');
   }
   const bounded = readDocuments(documents) !== null;
   if (bounded)

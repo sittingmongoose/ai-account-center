@@ -2,6 +2,7 @@
 import type { Request, Response } from 'express';
 import { performance } from 'perf_hooks';
 import { randomBytes } from 'node:crypto';
+import { AuthError, NetworkError } from '../errors/error-types';
 import {
   confirmationDigest,
   CONFIRMATION_TOKEN_PATTERN,
@@ -37,8 +38,7 @@ export const SHADOW_IN_FLIGHT = 2;
 /** The roles the table admits on a route (TS gates from the same table Rust dispatches from). */
 function routeRoles(route: string): readonly string[] {
   const row = routes.find((r) => r.path === route && r.owner === 'rust') as
-    | { roles?: string[] }
-    | undefined;
+    { roles?: string[] } | undefined;
   return row?.roles ?? [];
 }
 
@@ -458,7 +458,7 @@ export class RustService extends RustSupervisor {
       !verified ||
       !row.roles?.includes(verified.role)
     )
-      throw new Error('Rust write admission refused');
+      throw new AuthError('Rust write admission refused');
     if (
       this.stopped ||
       this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
@@ -485,9 +485,9 @@ export class RustService extends RustSupervisor {
       // after a rename, so they never authorize replay.
       if (result.status === 503 && ['unsupported', 'stale', 'busy'].includes(result.decline ?? ''))
         return null;
-      throw new Error('Rust write declined');
+      throw new NetworkError('Rust write declined');
     }
-    if (!accepts(result.body)) throw new Error('Rust write reply refused');
+    if (!accepts(result.body)) throw new NetworkError('Rust write reply refused');
     this.stats.served++;
     this.record(route, { kind: 'served' });
     this.pair(route, null, now() - started);
@@ -514,7 +514,7 @@ export class RustService extends RustSupervisor {
       this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
       this.inFlight >= IN_FLIGHT
     )
-      throw new Error('Rust app update jobs unavailable');
+      throw new NetworkError('Rust app update jobs unavailable');
     let reply: RustReply;
     try {
       reply = await this.forward(
@@ -545,7 +545,7 @@ export class RustService extends RustSupervisor {
       typeof reply.body !== 'object' ||
       Array.isArray(reply.body)
     )
-      throw new Error('Rust app update reply refused');
+      throw new NetworkError('Rust app update reply refused');
     this.stats.served++;
     this.record(route, { kind: 'served' });
     return { status: reply.status, body: reply.body };
@@ -561,7 +561,7 @@ export class RustService extends RustSupervisor {
         this.inFlight >= IN_FLIGHT ||
         this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir())
       )
-        throw new Error('Rust approval store unavailable');
+        throw new NetworkError('Rust approval store unavailable');
       let result: RustReply;
       try {
         result = await this.forward(
@@ -578,7 +578,7 @@ export class RustService extends RustSupervisor {
       }
       if (result.status !== 200 || !result.body || typeof result.body !== 'object') {
         this.declined(route, result);
-        throw new Error('Rust approval store declined');
+        throw new NetworkError('Rust approval store declined');
       }
       this.stats.served++;
       this.record(route, { kind: 'served' });
@@ -589,13 +589,13 @@ export class RustService extends RustSupervisor {
         const token = randomBytes(32).toString('base64url');
         const { expiresAtMs } = await call('issue', token, binding);
         if (typeof expiresAtMs !== 'number' || !Number.isSafeInteger(expiresAtMs))
-          throw new Error('Rust approval expiry refused');
+          throw new NetworkError('Rust approval expiry refused');
         return { token, expiresAt: new Date(expiresAtMs).toISOString() };
       },
       consume: async (token, binding) => {
         if (!CONFIRMATION_TOKEN_PATTERN.test(token)) return false;
         const { consumed } = await call('consume', token, binding);
-        if (typeof consumed !== 'boolean') throw new Error('Rust approval reply refused');
+        if (typeof consumed !== 'boolean') throw new NetworkError('Rust approval reply refused');
         return consumed;
       },
     };

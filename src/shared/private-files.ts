@@ -17,13 +17,7 @@ import { ConfigError } from '../errors/error-types';
 
 export type PrivateFileRole = 'ts' | 'rust-service' | 'agent';
 export type PrivateFileClass =
-  | 'credential'
-  | 'setting'
-  | 'state'
-  | 'cache'
-  | 'history'
-  | 'log'
-  | 'backup';
+  'credential' | 'setting' | 'state' | 'cache' | 'history' | 'log' | 'backup';
 
 export interface PrivateFileRow {
   readonly id: string;
@@ -283,12 +277,12 @@ export function withTsPrivateFileLeases<T>(
     for (const id of requested) {
       const row = PRIVATE_FILE_ROWS.find((entry) => entry.id === id);
       if (!row?.movesWith || row.root !== 'ccs' || row.lease !== 'file' || row.path.includes('*'))
-        throw new Error('Private file lease is unavailable for this store.');
+        throw new ConfigError('Private file lease is unavailable for this store.');
       const file = path.resolve(canonical, row.path);
       const parent = path.dirname(file);
       fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
       if (fs.realpathSync(parent) !== parent)
-        throw new Error('Private file lease directory changed.');
+        throw new ConfigError('Private file lease directory changed.');
       const lease = claimFileLease(root, file + '.lock');
       grant.rows.set(id, lease);
       releases.push(lease);
