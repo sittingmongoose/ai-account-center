@@ -323,6 +323,9 @@ impl ScoreboardOwned {
                 _ => Json::Null,
             }
         };
+        let read_count = files.len();
+        drop(remember);
+        drop(safe_paths);
         let record = self
             .store
             .call(
@@ -344,8 +347,6 @@ impl ScoreboardOwned {
             Ok(text) => serde_json::from_str(&text).unwrap_or(Json::Null),
             Err(_) => return,
         };
-        let read_count = files.len();
-        drop(safe_paths);
         let mut problems: Vec<Json> = scan["problems"]
             .as_array()
             .cloned()

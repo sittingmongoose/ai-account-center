@@ -297,64 +297,66 @@ impl StatusOwned {
                 sha.to_string(),
             ));
         }
-        let mut accepted = self.accepted.lock().unwrap_or_else(|p| p.into_inner());
-        let mut captures: Vec<Json> = Vec::new();
-        let mut keys: Vec<String> = Vec::new();
-        for (kind, writer, doc, written_at_ms, first_seen_at, sha) in input {
-            let object_id = if kind == "card" {
-                doc["id"].as_str().unwrap_or_default().to_string()
-            } else {
-                writer.clone()
-            };
-            let key = json!([kind, writer, object_id]).to_string();
-            if accepted.get(&key).map(String::as_str) == Some(sha.as_str()) {
-                continue;
-            }
-            let agent = doc.get("agent").filter(|a| a.is_object()).cloned().unwrap_or(json!({}));
-            let machine = writer.split('.').next().unwrap_or_default();
-            let t3_thread = doc
-                .get("t3Thread")
-                .filter(|v| !v.is_null())
-                .or_else(|| agent.get("t3Thread").filter(|v| !v.is_null()))
-                .cloned()
-                .unwrap_or(Json::Null);
-            let project = doc.get("project").filter(|v| v.is_string()).map(|v| {
-                json!({"source": "agent-report", "id": v})
-            });
-            let stream = doc.get("stream").filter(|v| v.is_string()).map(|v| {
-                json!({"source": "agent-report", "id": v})
-            });
-            let mut doc = doc.clone();
-            if let Some(object) = doc.as_object_mut() {
-                object.insert("schema".to_string(), json!(format!("agent-reports/{kind}@1")));
-            }
-            captures.push(json!({
-                "kind": kind,
-                "writer": writer,
-                "objectId": object_id,
-                "seq": doc["seq"],
-                "writtenAtMs": written_at_ms,
-                "observedAtMs": first_seen_at,
-                "sourceSha256": sha,
-                "ids": {
-                    "computer": if machine == "vm" { "ubuntu" } else { machine },
+        let (captures, keys) = {
+            let mut accepted = self.accepted.lock().unwrap_or_else(|p| p.into_inner());
+            let mut captures: Vec<Json> = Vec::new();
+            let mut keys: Vec<String> = Vec::new();
+            for (kind, writer, doc, written_at_ms, first_seen_at, sha) in input {
+                let object_id = if kind == "card" {
+                    doc["id"].as_str().unwrap_or_default().to_string()
+                } else {
+                    writer.clone()
+                };
+                let key = json!([kind, writer, object_id]).to_string();
+                if accepted.get(&key).map(String::as_str) == Some(sha.as_str()) {
+                    continue;
+                }
+                let agent = doc.get("agent").filter(|a| a.is_object()).cloned().unwrap_or(json!({}));
+                let machine = writer.split('.').next().unwrap_or_default();
+                let t3_thread = doc
+                    .get("t3Thread")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| agent.get("t3Thread").filter(|v| !v.is_null()))
+                    .cloned()
+                    .unwrap_or(Json::Null);
+                let project = doc.get("project").filter(|v| v.is_string()).map(|v| {
+                    json!({"source": "agent-report", "id": v})
+                });
+                let stream = doc.get("stream").filter(|v| v.is_string()).map(|v| {
+                    json!({"source": "agent-report", "id": v})
+                });
+                let mut doc = doc.clone();
+                if let Some(object) = doc.as_object_mut() {
+                    object.insert("schema".to_string(), json!(format!("agent-reports/{kind}@1")));
+                }
+                captures.push(json!({
+                    "kind": kind,
                     "writer": writer,
-                    "t3ThreadId": t3_thread,
-                    "t3EnvironmentId": null,
-                    "t3TaskId": null,
-                    "runId": null,
-                    "cardId": if kind == "card" { doc["id"].clone() } else { Json::Null },
-                    "projectId": project.unwrap_or(Json::Null),
-                    "streamId": stream.unwrap_or(Json::Null),
-                    "modelRaw": agent.get("model").filter(|v| !v.is_null()).cloned().unwrap_or(Json::Null),
-                    "effort": agent.get("effort").filter(|v| !v.is_null()).cloned().unwrap_or(Json::Null),
-                    "identitySource": "reported",
-                },
-                "doc": doc,
-            }));
-            keys.push(key);
-        }
-        drop(accepted);
+                    "objectId": object_id,
+                    "seq": doc["seq"],
+                    "writtenAtMs": written_at_ms,
+                    "observedAtMs": first_seen_at,
+                    "sourceSha256": sha,
+                    "ids": {
+                        "computer": if machine == "vm" { "ubuntu" } else { machine },
+                        "writer": writer,
+                        "t3ThreadId": t3_thread,
+                        "t3EnvironmentId": null,
+                        "t3TaskId": null,
+                        "runId": null,
+                        "cardId": if kind == "card" { doc["id"].clone() } else { Json::Null },
+                        "projectId": project.unwrap_or(Json::Null),
+                        "streamId": stream.unwrap_or(Json::Null),
+                        "modelRaw": agent.get("model").filter(|v| !v.is_null()).cloned().unwrap_or(Json::Null),
+                        "effort": agent.get("effort").filter(|v| !v.is_null()).cloned().unwrap_or(Json::Null),
+                        "identitySource": "reported",
+                    },
+                    "doc": doc,
+                }));
+                keys.push(key);
+            }
+            (captures, keys)
+        };
         let mut index = 0;
         while index < captures.len() {
             let batch: Vec<Json> = captures[index..captures.len().min(index + 4)].to_vec();
