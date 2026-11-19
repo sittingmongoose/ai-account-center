@@ -406,10 +406,24 @@ export async function signInAgain(
       throw error;
     }
   }
-  return { status: 200, body: { guide: guideFor(account) } };
+  return { status: 200, body: { guide: guideFor(env.ccsDir(), account) } };
 }
 
-function guideFor(account: ResolvedAccount): Record<string, unknown> {
+function guideFor(root: string, account: ResolvedAccount): Record<string, unknown> {
+  const raw = lifecyclePlan(root, {
+    operation: 'guide',
+    kind: account.kind,
+    provider: account.provider,
+    platform: account.kind === 'additional' ? account.entry.platform : null,
+    keyProvider: isKeyProvider(account.provider),
+  });
+  if (raw && typeof raw === 'object') {
+    const reply = raw as Record<string, unknown>;
+    if (reply.refusal === 'use_replace_key' || reply.refusal === 'not_implemented')
+      throw new LifecycleHttpError(409, reply.refusal);
+    if (reply.guide && typeof reply.guide === 'object' && !Array.isArray(reply.guide))
+      return reply.guide as Record<string, unknown>;
+  }
   if (account.kind === 'claude') return { kind: 'open-app', platforms: ['mac', 'windows'] };
   if (account.kind === 'wallet') return { kind: 'browser-extension', platform: 'mac' };
   if (account.kind === 'additional') {

@@ -32,6 +32,17 @@ enum Request {
         account_platform: Option<String>,
         host_configured: bool,
     },
+    Recheck {
+        now: i64,
+        last: Option<i64>,
+        interval: i64,
+    },
+    Guide {
+        kind: String,
+        provider: String,
+        platform: Option<String>,
+        key_provider: bool,
+    },
     DueTrash {
         now: i64,
         entries: Vec<Deadline>,
@@ -133,6 +144,43 @@ fn evaluate(request: Request) -> Option<Value> {
                     && host_configured
             )
         }
+        Request::Recheck {
+            now,
+            last,
+            interval,
+        } => {
+            let retry = last.and_then(|last| {
+                let remaining = interval.saturating_sub(now.saturating_sub(last));
+                (remaining > 0).then(|| 1 + (remaining - 1) / 1000)
+            });
+            json!(retry)
+        }
+        Request::Guide {
+            kind,
+            provider,
+            platform,
+            key_provider,
+        } => match (kind.as_str(), provider.as_str()) {
+            ("claude", _) => json!({"guide":{"kind":"open-app","platforms":["mac","windows"]}}),
+            ("wallet", _) => json!({"guide":{"kind":"browser-extension","platform":"mac"}}),
+            ("additional", "cursor") => {
+                let platforms: Vec<_> = platform
+                    .filter(|platform| platform != "ubuntu")
+                    .into_iter()
+                    .collect();
+                json!({"guide":{"kind":"open-app","platforms":platforms}})
+            }
+            ("additional", "qwen") => {
+                let platform = if platform.as_deref() == Some("mac") {
+                    "mac"
+                } else {
+                    "windows"
+                };
+                json!({"guide":{"kind":"browser-extension","platform":platform}})
+            }
+            ("additional", _) if key_provider => json!({"refusal":"use_replace_key"}),
+            _ => json!({"refusal":"not_implemented"}),
+        },
         Request::DueTrash { now, entries } => {
             json!(
                 entries
@@ -213,4 +261,55 @@ fn edit_registry(mut registry: Value, edit: Edit) -> Option<Value> {
         }
     };
     Some(json!({"registry":registry, "position":position}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_and_rollback_keep_registry_order() {
+        let row = json!({"id":"zai:acct:00000002","provider":"zai"});
+        let original = json!({"version":2,"accounts":[
+            {"id":"zai:acct:00000001","provider":"zai"},
+            row,
+            {"id":"cursor:usage","provider":"cursor"}
+        ]});
+        let removed = edit_registry(
+            original.clone(),
+            Edit::Remove {
+                id: "zai:acct:00000002".into(),
+            },
+        );
+        let Some(removed) = removed else {
+            panic!("missing registry decision")
+        };
+        let index = removed["position"].as_u64();
+        assert_eq!(index, Some(1));
+        let restored = edit_registry(
+            removed["registry"].clone(),
+            Edit::Restore {
+                entry: row,
+                index: 1,
+            },
+        );
+        assert_eq!(
+            restored.map(|value| value["registry"].clone()),
+            Some(original)
+        );
+    }
+
+    #[test]
+    fn recheck_allows_exactly_at_the_boundary() {
+        for (now, expected) in [(9_999, json!(1)), (10_000, Value::Null)] {
+            assert_eq!(
+                evaluate(Request::Recheck {
+                    now,
+                    last: Some(0),
+                    interval: 10_000
+                }),
+                Some(expected)
+            );
+        }
+    }
 }

@@ -24,11 +24,7 @@ import type { CodexProfileMetadata } from './types';
 
 /** Why a removal stopped; the message is for the CLI and may name local paths. */
 export type CodexProfileRemovalReason =
-  | 'not_found'
-  | 'account_default'
-  | 'account_active'
-  | 'unverified'
-  | 'failed';
+  'not_found' | 'account_default' | 'account_active' | 'unverified' | 'failed';
 
 export class CodexProfileRemovalError extends Error {
   constructor(

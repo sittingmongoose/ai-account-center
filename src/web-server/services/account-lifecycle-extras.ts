@@ -66,12 +66,23 @@ export async function relabel(
 function checkRecheckLimit(env: LifecycleEnv, id: string): void {
   const now = env.now();
   // One limiter per CCS scope and account.
-  const key = `${env.ccsDir()}\0${id}`;
+  const root = env.ccsDir();
+  const key = `${root}\0${id}`;
   const last = lastRecheck.get(key);
-  if (last !== undefined && now - last < RECHECK_INTERVAL_MS) {
-    const retry = Math.max(1, Math.ceil((RECHECK_INTERVAL_MS - (now - last)) / 1000));
+  const decision = lifecyclePlan(root, {
+    operation: 'recheck',
+    now,
+    last: last ?? null,
+    interval: RECHECK_INTERVAL_MS,
+  });
+  const retry =
+    decision === undefined
+      ? last !== undefined && now - last < RECHECK_INTERVAL_MS
+        ? Math.max(1, Math.ceil((RECHECK_INTERVAL_MS - (now - last)) / 1000))
+        : null
+      : decision;
+  if (typeof retry === 'number' && Number.isSafeInteger(retry) && retry > 0)
     throw new LifecycleHttpError(429, 'rate_limited', { retryAfterSeconds: retry });
-  }
   lastRecheck.set(key, now);
   while (lastRecheck.size > 256) {
     const oldest = lastRecheck.keys().next().value;

@@ -98,7 +98,8 @@ export function signInStaging(
   root: string,
   provider: 'codex' | 'antigravity',
   operation:
-    | ['prepare', staging: string, shared?: string]
+    | ['prepare', staging: string]
+    | ['prepare', staging: string, shared: string]
     | ['cleanup', staging: string]
     | ['sweep', now: string],
   input?: string
