@@ -81,6 +81,8 @@ mod scoreboard_owned;
 #[cfg(all(unix, test))]
 mod runs_ingest_gate;
 #[cfg(unix)]
+mod signins;
+#[cfg(unix)]
 mod status_cache;
 #[cfg(unix)]
 mod status_fed;

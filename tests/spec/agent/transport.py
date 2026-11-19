@@ -295,6 +295,12 @@ def record(root, agent, harness_env=None):
         print(json.dumps({'type': 'result', 'protocol': 1, 'id': request['id'],
                           'value': {'schemaVersion': 1, 'profiles': []}}), flush=True)
         sys.exit(0)
+    if scenario == 'signin-rows':
+        request = json.loads(sys.stdin.buffer.readline())
+        assert request['verb'] == 'signin-expiry', request
+        value = json.loads((root / 'signin-fixture.json').read_text())
+        print(json.dumps({'type': 'result', 'protocol': 1, 'id': request['id'], 'value': value}), flush=True)
+        sys.exit(0)
     if scenario == 'burst':
         request = json.loads(sys.stdin.buffer.readline())
         for n in range(16):
@@ -629,8 +635,23 @@ def collection_projection(agent, service):
                 server.shutdown()
 
 
+def signin_gates(agent, service):
+    """G5: the private sign-in poll and the settle/merge projection against the TS adapters."""
+    with Service(agent, service, scenario='signin-rows') as fixture:
+        payload = {'root': str(fixture.root), 'socketPath': str(fixture.socket),
+                   'secret': SECRET, 'bootId': BOOT}
+        script = ROOT / 'tests/spec/agent/signin-projection.ts'
+        run = subprocess.run(['bun', str(script)], input=json.dumps(payload), text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=ROOT)
+        print(run.stdout, end='', flush=True)
+        assert run.returncode == 0, 'sign-in projection parity failed'
+    print('PASS G5 sign-in poll, crossed expiry and Claude renewal merge')
+
 def main():
     agent, service = map(lambda p: str(Path(p).resolve()), sys.argv[1:3])
+    if '--signin' in sys.argv:
+        signin_gates(agent, service)
+        return
     collection = '--collection' in sys.argv
     if collection:
         collection_gates(agent, service)

@@ -567,6 +567,50 @@ export class CollectionReadIndeterminate extends Error {
   }
 }
 
+/** Aggregate the published sign-in rows and renewal facts through the same private service. */
+export async function projectRustSignIns(
+  root: string,
+  input: unknown
+): Promise<{ machines?: unknown; ttlMs?: unknown } | null> {
+  const held = rustAgentConnection(root);
+  if (!held) return null;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-signins',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      input,
+      'PUT'
+    );
+    return reply.status === 200
+      ? (reply.body as { machines?: unknown; ttlMs?: unknown } | null)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Run one bounded sign-in poll over the service's configured computers. */
+export async function pollRustSignIns(root: string, hosts: unknown): Promise<unknown> {
+  const held = rustAgentConnection(root);
+  if (!held) return null;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-signin-poll',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      { hosts },
+      'PUT',
+      { cap: 5 * 1024 * 1024, deadlineMs: 21_000 }
+    );
+    return reply.status === 200 ? reply.body : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * POST is never retried: key-store may write. Undefined means an absent/old service, so the
  * labelled TS transport can run. Null means a handled refusal/failure and goes to the helper.

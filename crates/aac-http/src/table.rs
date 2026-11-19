@@ -45,6 +45,8 @@ pub(crate) enum Handler {
     AppUpdates,
     /// M5 lane K: the reset claims file (ledger and ticketed source reads).
     ResetClaims,
+    SignInHealth,
+    SignInPoll,
     Store,
     UsageSample,
     ClaudeOpen,
@@ -86,6 +88,8 @@ impl Handler {
             "account-approvals" => Handler::Approvals,
             "app-updates" => Handler::AppUpdates,
             "reset-claims" => Handler::ResetClaims,
+            "collection-signins" => Handler::SignInHealth,
+            "collection-signin-poll" => Handler::SignInPoll,
             "store" => Handler::Store,
             "usage-sample" => Handler::UsageSample,
             "claude-open" => Handler::ClaudeOpen,
@@ -252,6 +256,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ClaudeOpen
                         | Handler::ClaudeHistoryCleanup
                         | Handler::StatusAnswers
+                        | Handler::SignInPoll
                 ))
             || (row.group == "internal" && !internal)
             || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
@@ -296,6 +301,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ProviderCache
                         | Handler::CursorAccount
                         | Handler::StatusAnswers
+                        | Handler::SignInHealth
+                        | Handler::SignInPoll
                 ))
             || (handler == Handler::StatusAnswers
                 && (method != axum::http::Method::PUT
@@ -405,6 +412,7 @@ mod tests {
                     | Handler::ClaudeOpen
                     | Handler::ClaudeHistoryCleanup
                     | Handler::StatusAnswers
+                    | Handler::SignInPoll
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.

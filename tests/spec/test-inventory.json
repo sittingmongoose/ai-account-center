@@ -265,6 +265,19 @@
       ]
     },
     {
+      "file": "crates/aac-files/src/codex_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-files/src/codex_registry.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/src/deployed_build.rs",
       "kind": "internal",
       "evidence": [],
@@ -380,6 +393,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/antigravity_host.rs",
       "kind": "helper",
       "evidence": [
@@ -452,6 +471,12 @@
     },
     {
       "file": "crates/aac-http/src/claude_open/socket_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_open/sync_service.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -576,6 +601,26 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "crates/aac-http/src/runs_ingest_gate.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/signin_callbacks.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/signins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/status_cache.rs",
@@ -914,6 +959,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/answer_delivery.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/answers_engine.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/src/computers.rs",
       "kind": "internal",
       "evidence": [],
@@ -962,6 +1019,26 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/writer_lock.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/answer_delivery.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-status/tests/answer_journal.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-status/tests/answer_signing.rs",
       "kind": "internal",
       "evidence": [],
@@ -991,6 +1068,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/readers_check_gate.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "crates/aac-status/tests/remote_pins.rs",
@@ -1107,6 +1191,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/tests/writer_lock_cross.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-store/src/activity.rs",
       "kind": "internal",
       "evidence": [],
@@ -1163,16 +1253,44 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-store/tests/collect.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-store/tests/log_recovery.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-store/tests/observe.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-store/tests/replay_memory.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-store/tests/report.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-store/tests/sampler.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "crates/aac-store/tests/store_capture.rs",

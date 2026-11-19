@@ -690,7 +690,10 @@
     "cause": null,
     "sources": [
       "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError",
-      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']",
+      "src/codex-auth/codex-profile-registry.ts:native?.status",
+      "src/shared/private-file-lease.ts:answer.status",
+      "src/shared/private-file-lease.ts:status"
     ]
   },
   {
@@ -1417,6 +1420,7 @@
       "src/web-server/compose-server.ts:result.status",
       "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-service.ts:result.status",
+      "src/web-server/services/analytics-writer-feeds.ts:r.status",
       "src/web-server/services/signin-health-service.ts:result.status",
       "src/web-server/usage-hub/usage-hub-accounts.ts:result.status"
     ]
@@ -2843,10 +2847,13 @@
       "src/antigravity/usage-service.ts:result.status",
       "src/antigravity/usage-service.ts:sample.status",
       "src/codex-auth/codex-login-family.ts:state",
+      "src/codex-auth/codex-profile-removal.ts:native?.status",
       "src/codex-auth/codex-renewal-dry-run.ts:state",
       "src/codex-auth/codex-renewal-planner.ts:snapshot.live?.state",
       "src/codex-auth/codex-renewal-planner.ts:state",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/shared/private-file-lease.ts:answer.status",
+      "src/shared/private-file-lease.ts:status",
       "src/store/activity-answer.ts:status",
       "src/store/activity-coverage.ts:s.state",
       "src/store/activity-coverage.ts:state",
@@ -2895,6 +2902,7 @@
       "src/web-server/services/account-dashboard-service.ts:publicAccount.status",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
       "src/web-server/services/account-dashboard-types.ts:quotaStatus",
+      "src/web-server/services/account-lifecycle-antigravity.ts:native?.status",
       "src/web-server/services/account-lifecycle-extras.ts:status",
       "src/web-server/services/account-lifecycle-transitions.ts:status",
       "src/web-server/services/account-registry-mode.ts:read.state",
@@ -2920,11 +2928,15 @@
       "src/web-server/services/claude-account-stores.ts:read.state",
       "src/web-server/services/claude-desktop-live-service.ts:result.status",
       "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
+      "src/web-server/services/codex-account-lifecycle.ts:answer?.status",
+      "src/web-server/services/codex-login-file.ts:native?.status",
       "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
       "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/dashboard-auth-files.ts:state",
       "src/web-server/services/dashboard-auth-state.ts:read.state",
       "src/web-server/services/dashboard-device-store.ts:read.state",
+      "src/web-server/services/muse-account-lifecycle.ts:answer?.status",
+      "src/web-server/services/muse-account-lifecycle.ts:commands?.status",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:result?.status",
       "src/web-server/services/opencode-console-wallet-service.ts:status",
@@ -3696,12 +3708,16 @@
     "sources": [
       "scripts/claude-history/history_index_remote_v2.py:receipt['status']",
       "scripts/claude-history/history_index_remote_v2.py:status",
+      "src/shared/private-file-lease.ts:answer.status",
+      "src/shared/private-file-lease.ts:status",
       "src/web-server/rust-service.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:row.reason",
       "src/web-server/services/claude-history-sync-service.ts:result.status",
       "src/web-server/services/claude-history-sync-service.ts:status",
-      "src/web-server/services/claude-open-operations.ts:status"
+      "src/web-server/services/claude-open-operations.ts:status",
+      "src/web-server/services/codex-account-lifecycle.ts:answer?.status",
+      "src/web-server/services/muse-account-lifecycle.ts:answer?.status"
     ]
   },
   {
