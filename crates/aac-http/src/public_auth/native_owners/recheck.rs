@@ -2,7 +2,6 @@
 use super::{DashboardAccess, DashboardPrincipal, Reply, Usage, json_content, object_body};
 use crate::{
     account_usage::{producer::has_codex_profile, sources},
-    agent_transport::Selector,
     claude_open::manifest::{self, PendingProfile},
 };
 use aac_files::registry::{self, Owners};
@@ -249,27 +248,24 @@ impl Usage {
         } else {
             &profile.windows
         };
-        let reply = self
-            .agents
-            .call_value(
-                "claude-host",
-                Selector::usage(platform, launcher.ssh_host.as_deref()),
-                json!({
-                    "host":platform,
-                    "op":"session",
-                    "launcher":{
-                        "launcherName":launcher.launcher_name,
-                        "launcherPath":launcher.launcher_path,
-                        "profilePath":launcher.profile_path,
-                        "startMenuPath":launcher.start_menu_path,
-                        "sshHost":launcher.ssh_host,
-                    },
-                }),
-                25_000,
-                30_000,
-                65_536,
-            )
-            .await;
+        let reply = crate::claude_host::call(
+            &self.agents,
+            platform,
+            launcher.ssh_host.as_deref().ok_or_else(internal)?,
+            json!({
+                "host":platform,
+                "op":"session",
+                "launcher":{
+                    "launcherName":launcher.launcher_name,
+                    "launcherPath":launcher.launcher_path,
+                    "profilePath":launcher.profile_path,
+                    "startMenuPath":launcher.start_menu_path,
+                    "sshHost":launcher.ssh_host,
+                },
+            }),
+            25_000,
+        )
+        .await;
         let Some(signed_in) = reply.and_then(|reply| reply["signedIn"].as_bool()) else {
             return Err(super::super::response(
                 502,

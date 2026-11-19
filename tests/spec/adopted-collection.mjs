@@ -91,11 +91,106 @@ async function reservePort() {
 const exec = promisify(execFile);
 const h2 = process.argv.includes('--http2');
 const dead = process.argv.includes('--dead-owner');
+const claudeHosts = process.argv.includes('--claude-hosts');
 const wallet = process.argv.includes('--wallet-binding');
 const lease = process.argv.includes('--collection-lease');
 const incompatible = process.argv.includes('--incompatible-owner');
 
+async function prepareClaudeHosts() {
+  const bin = path.join(root, 'fixture-bin');
+  await mkdir(bin, { mode: 0o700 });
+  env.PATH = bin + ':' + env.PATH;
+  env.CCS_CLAUDE_HOST_LIFECYCLE = 'on';
+  const receipts = path.join(root, 'host-receipts');
+  const failWindows = path.join(root, 'fail-windows');
+  await writeFile(
+    path.join(bin, 'ssh'),
+    `#!/usr/bin/python3
+import base64, json, os, sys
+if sys.argv[1] == '-G':
+    sys.exit(0)
+host, command = sys.argv[-2:]
+data = sys.stdin.read()
+if host == 'fixture-mac':
+    assert command.startswith('/usr/bin/python3 -c ')
+    request = json.loads(data)['request']
+else:
+    assert host == 'fixture-windows'
+    assert command.startswith('powershell.exe -NoProfile -NonInteractive -EncodedCommand ')
+    request = json.loads(base64.b64decode(data.splitlines()[0]))
+op = request['op']
+assert request['profileId'] == 'work'
+with open(${JSON.stringify(receipts)}, 'a') as log:
+    log.write(host + ':' + op + '\\n')
+if host == 'fixture-windows' and os.path.exists(${JSON.stringify(failWindows)}):
+    sys.exit(1)
+print(json.dumps({'result': 'moved'} if op == 'trash' else {'ok': True}))
+`,
+    { mode: 0o700 }
+  );
+  return { receipts, failWindows };
+}
+
+async function exerciseClaudeHosts(post, cookie, origin, { receipts, failWindows }) {
+  const dir = path.join(root, 'accounts');
+  await mkdir(dir, { mode: 0o700, recursive: true });
+  const trash = path.join(dir, 'trash.json');
+  const id = 'tr_0123456789abcdef';
+  const timestamp = 'work-20261119T000000Z';
+  const mac = {
+    launcherName: 'Claude (work)',
+    launcherPath: '/fixture/Applications/Claude (work).app',
+    profilePath: '/fixture/Library/Application Support/Claude-work',
+    sshHost: 'fixture-mac',
+  };
+  const windows = {
+    launcherName: 'Claude (work)',
+    launcherPath: 'C:\\fixture\\Claude (work).lnk',
+    profilePath: 'C:\\fixture\\Claude-work',
+    sshHost: 'fixture-windows',
+  };
+  const entry = {
+    trashId: id,
+    provider: 'claude',
+    accountId: 'claude:work',
+    label: 'Work',
+    source: 'inventory',
+    hosts: {
+      mac: { trashName: timestamp, launcher: mac },
+      windows: { trashName: timestamp, launcher: windows },
+    },
+    entry: { id: 'work', email: 'person@example.test' },
+    trashedAt: '2026-11-19T00:00:00Z',
+    purgeAfter: '2026-12-19T00:00:00Z',
+    state: 'trashed',
+  };
+  await writeFile(trash, JSON.stringify({ version: 1, entries: [entry] }), { mode: 0o600 });
+  const restore = (body) =>
+    post('/api/accounts/trash/' + id + '/restore', body, { cookie, origin });
+  async function confirm() {
+    const review = await restore({});
+    assert.equal(review.status, 200);
+    return restore({ confirmationToken: (await review.json()).confirmation.token });
+  }
+  await writeFile(failWindows, '');
+  const rolledBack = await confirm();
+  assert.equal(rolledBack.status, 500);
+  assert.equal(
+    await readFile(receipts, 'utf8').catch(() => ''),
+    'fixture-mac:restore\nfixture-windows:restore\nfixture-mac:trash\n',
+    'the first restore is undone after the second host refuses'
+  );
+  assert.equal(JSON.parse(await readFile(trash, 'utf8')).entries[0].trashId, id);
+  await rm(failWindows);
+  await writeFile(receipts, '');
+  assert.equal((await confirm()).status, 200);
+  assert.equal(await readFile(receipts, 'utf8'), 'fixture-mac:restore\nfixture-windows:restore\n');
+  assert.equal(JSON.parse(await readFile(trash, 'utf8')).entries.length, 0);
+  console.log('Claude fixed SSH restore and rollback regression: 2 scenarios passed.');
+}
+
 try {
+  const hostFixtures = claudeHosts ? await prepareClaudeHosts() : null;
   const port = await reservePort();
   const tlsPort = h2 ? await reservePort() : undefined;
   const certificate = path.join(root, 'cert.pem');
@@ -269,7 +364,9 @@ try {
     assert.equal(login.status, 200);
     const cookie = login.headers.get('set-cookie').split(';')[0];
 
-    if (wallet) {
+    if (hostFixtures) {
+      await exerciseClaudeHosts(post, cookie, origin, hostFixtures);
+    } else if (wallet) {
       const source = '{"version":1,"platform":"mac","sshHost":"fixture-mac"}';
       const hash = new Bun.CryptoHasher('sha256').update(source).digest('hex');
       const sourcePath = path.join(root, 'opencode-console-wallet-source.json');
