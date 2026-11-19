@@ -1,5 +1,5 @@
 {
-  "clock": 1795058783598,
+  "clock": 1795071242837,
   "cases": [
     {
       "name": "fresh-windows",
@@ -59,14 +59,14 @@
               "antigravityPlan": {
                 "class": "pro",
                 "quotaPolicy": "five-hour-weekly",
-                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                 "models": [
-                  "Gemini 3.8 Flash",
-                  "Gemini 3.7 Flash",
-                  "Gemini 3.6 Flash",
-                  "Gemini 3.1 Pro",
+                  "Gemini 4 Neon",
                   "Gemini 4 Argon",
                   "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
                   "Claude Sonnet 5.5",
                   "Claude Opus 5.5",
                   "Claude Sonnet 4.6",
@@ -130,14 +130,14 @@
                 "antigravityPlan": {
                   "class": "pro",
                   "quotaPolicy": "five-hour-weekly",
-                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                   "models": [
-                    "Gemini 3.8 Flash",
-                    "Gemini 3.7 Flash",
-                    "Gemini 3.6 Flash",
-                    "Gemini 3.1 Pro",
+                    "Gemini 4 Neon",
                     "Gemini 4 Argon",
                     "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
                     "Claude Sonnet 5.5",
                     "Claude Opus 5.5",
                     "Claude Sonnet 4.6",
@@ -279,14 +279,14 @@
               "antigravityPlan": {
                 "class": "pro",
                 "quotaPolicy": "five-hour-weekly",
-                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                 "models": [
-                  "Gemini 3.8 Flash",
-                  "Gemini 3.7 Flash",
-                  "Gemini 3.6 Flash",
-                  "Gemini 3.1 Pro",
+                  "Gemini 4 Neon",
                   "Gemini 4 Argon",
                   "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
                   "Claude Sonnet 5.5",
                   "Claude Opus 5.5",
                   "Claude Sonnet 4.6",
@@ -350,14 +350,14 @@
                 "antigravityPlan": {
                   "class": "pro",
                   "quotaPolicy": "five-hour-weekly",
-                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                   "models": [
-                    "Gemini 3.8 Flash",
-                    "Gemini 3.7 Flash",
-                    "Gemini 3.6 Flash",
-                    "Gemini 3.1 Pro",
+                    "Gemini 4 Neon",
                     "Gemini 4 Argon",
                     "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
                     "Claude Sonnet 5.5",
                     "Claude Opus 5.5",
                     "Claude Sonnet 4.6",
@@ -482,14 +482,14 @@
               "antigravityPlan": {
                 "class": "pro",
                 "quotaPolicy": "five-hour-weekly",
-                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                 "models": [
-                  "Gemini 3.8 Flash",
-                  "Gemini 3.7 Flash",
-                  "Gemini 3.6 Flash",
-                  "Gemini 3.1 Pro",
+                  "Gemini 4 Neon",
                   "Gemini 4 Argon",
                   "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
                   "Claude Sonnet 5.5",
                   "Claude Opus 5.5",
                   "Claude Sonnet 4.6",
@@ -555,14 +555,14 @@
                 "antigravityPlan": {
                   "class": "pro",
                   "quotaPolicy": "five-hour-weekly",
-                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                   "models": [
-                    "Gemini 3.8 Flash",
-                    "Gemini 3.7 Flash",
-                    "Gemini 3.6 Flash",
-                    "Gemini 3.1 Pro",
+                    "Gemini 4 Neon",
                     "Gemini 4 Argon",
                     "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
                     "Claude Sonnet 5.5",
                     "Claude Opus 5.5",
                     "Claude Sonnet 4.6",
@@ -694,14 +694,14 @@
               "antigravityPlan": {
                 "class": "pro",
                 "quotaPolicy": "five-hour-weekly",
-                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                 "models": [
-                  "Gemini 3.8 Flash",
-                  "Gemini 3.7 Flash",
-                  "Gemini 3.6 Flash",
-                  "Gemini 3.1 Pro",
+                  "Gemini 4 Neon",
                   "Gemini 4 Argon",
                   "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
                   "Claude Sonnet 5.5",
                   "Claude Opus 5.5",
                   "Claude Sonnet 4.6",
@@ -765,14 +765,14 @@
                 "antigravityPlan": {
                   "class": "pro",
                   "quotaPolicy": "five-hour-weekly",
-                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                   "models": [
-                    "Gemini 3.8 Flash",
-                    "Gemini 3.7 Flash",
-                    "Gemini 3.6 Flash",
-                    "Gemini 3.1 Pro",
+                    "Gemini 4 Neon",
                     "Gemini 4 Argon",
                     "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
                     "Claude Sonnet 5.5",
                     "Claude Opus 5.5",
                     "Claude Sonnet 4.6",
@@ -897,14 +897,14 @@
               "antigravityPlan": {
                 "class": "pro",
                 "quotaPolicy": "five-hour-weekly",
-                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                 "models": [
-                  "Gemini 3.8 Flash",
-                  "Gemini 3.7 Flash",
-                  "Gemini 3.6 Flash",
-                  "Gemini 3.1 Pro",
+                  "Gemini 4 Neon",
                   "Gemini 4 Argon",
                   "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
                   "Claude Sonnet 5.5",
                   "Claude Opus 5.5",
                   "Claude Sonnet 4.6",
@@ -969,14 +969,14 @@
                 "antigravityPlan": {
                   "class": "pro",
                   "quotaPolicy": "five-hour-weekly",
-                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                   "models": [
-                    "Gemini 3.8 Flash",
-                    "Gemini 3.7 Flash",
-                    "Gemini 3.6 Flash",
-                    "Gemini 3.1 Pro",
+                    "Gemini 4 Neon",
                     "Gemini 4 Argon",
                     "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
                     "Claude Sonnet 5.5",
                     "Claude Opus 5.5",
                     "Claude Sonnet 4.6",
@@ -1094,14 +1094,14 @@
               "antigravityPlan": {
                 "class": "pro",
                 "quotaPolicy": "five-hour-weekly",
-                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                 "models": [
-                  "Gemini 3.8 Flash",
-                  "Gemini 3.7 Flash",
-                  "Gemini 3.6 Flash",
-                  "Gemini 3.1 Pro",
+                  "Gemini 4 Neon",
                   "Gemini 4 Argon",
                   "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
                   "Claude Sonnet 5.5",
                   "Claude Opus 5.5",
                   "Claude Sonnet 4.6",
@@ -1152,16 +1152,19 @@
                 "antigravityPlan": {
                   "class": "pro",
                   "quotaPolicy": "five-hour-weekly",
-                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                   "models": [
-                    "Gemini 3.8 Flash",
-                    "Gemini 3.7 Flash",
-                    "Gemini 3.6 Flash",
-                    "Gemini 3.1 Pro",
+                    "Gemini 4 Neon",
                     "Gemini 4 Argon",
                     "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
                     "Claude Sonnet 5.5",
-                    "Claude Opus 5.5"
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
                   ],
                   "thirdPartyModels": true,
                   "creditsOverage": true
@@ -1247,14 +1250,14 @@
               "antigravityPlan": {
                 "class": "pro",
                 "quotaPolicy": "five-hour-weekly",
-                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                 "models": [
-                  "Gemini 3.8 Flash",
-                  "Gemini 3.7 Flash",
-                  "Gemini 3.6 Flash",
-                  "Gemini 3.1 Pro",
+                  "Gemini 4 Neon",
                   "Gemini 4 Argon",
                   "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
                   "Claude Sonnet 5.5",
                   "Claude Opus 5.5",
                   "Claude Sonnet 4.6",
@@ -1318,16 +1321,19 @@
                 "antigravityPlan": {
                   "class": "pro",
                   "quotaPolicy": "five-hour-weekly",
-                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
                   "models": [
-                    "Gemini 3.8 Flash",
-                    "Gemini 3.7 Flash",
-                    "Gemini 3.6 Flash",
-                    "Gemini 3.1 Pro",
+                    "Gemini 4 Neon",
                     "Gemini 4 Argon",
                     "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
                     "Claude Sonnet 5.5",
-                    "Claude Opus 5.5"
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
                   ],
                   "thirdPartyModels": true,
                   "creditsOverage": true
@@ -1378,6 +1384,465 @@
                     "kind": "rate_limit"
                   }
                 ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "an-empty-tier-is-unknown",
+      "steps": [
+        {
+          "at": "2026-10-01T17:00:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "remainingPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "error",
+              "message": "Antigravity usage is temporarily unavailable.",
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": true,
+              "windows": [],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 40,
+                    "remainingPercent": 60,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "error",
+                "message": "Antigravity usage is temporarily unavailable.",
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": true,
+                "windows": [],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": "2026-10-01T17:01:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "cached",
+              "message": "The latest read returned an older sample; showing the last successful Antigravity usage reading.",
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "remainingPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "cacheReason": "read_failed"
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "unavailable",
+              "message": "Antigravity usage is temporarily unavailable.",
+              "fetchedAt": null,
+              "sampledAt": null,
+              "isActive": true,
+              "windows": [],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "cached",
+                "cacheReason": "read_failed",
+                "message": "The Antigravity usage read failed; showing the last successful reading.",
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 40,
+                    "remainingPercent": 60,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "unavailable",
+                "message": "Antigravity usage is temporarily unavailable.",
+                "fetchedAt": null,
+                "sampledAt": null,
+                "isActive": true,
+                "windows": [],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": "2026-10-01T17:02:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "cached",
+              "message": "Showing the last successful Antigravity usage reading.",
+              "fetchedAt": "2026-10-01T17:02:00.000Z",
+              "sampledAt": "2026-10-01T17:02:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 41,
+                  "remainingPercent": 59,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
+                "models": [
+                  "Gemini 4 Neon",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Orchestrator (Neon)",
+                  "Orchestrator (Argon)",
+                  "Gemini 3.8 Flash",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              }
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "unavailable",
+              "message": "Antigravity usage is temporarily unavailable.",
+              "fetchedAt": null,
+              "sampledAt": null,
+              "isActive": true,
+              "windows": [],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
+                  "models": [
+                    "Gemini 4 Neon",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "cached",
+                "cacheReason": "outcome_unknown",
+                "message": "The previous Antigravity read outcome was not recorded; showing the saved reading.",
+                "fetchedAt": "2026-10-01T17:02:00.000Z",
+                "sampledAt": "2026-10-01T17:02:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 41,
+                    "remainingPercent": 59,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "unavailable",
+                "message": "Antigravity usage is temporarily unavailable.",
+                "fetchedAt": null,
+                "sampledAt": null,
+                "isActive": true,
+                "windows": [],
                 "capabilities": {
                   "codexProfile": null,
                   "claudeProfileId": null,
