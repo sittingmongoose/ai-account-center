@@ -68,7 +68,8 @@ dropped silently; a FIFO or a link in a run folder, or anything but a folder dir
 Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
 `wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too. A task type
 the catalog does not list, and a model that resolves to no catalog id (after the alias table), are not scored either: they
-form no row and take no part in any verdict, and the catalog Source names them ("not scored"). So every row is a catalog
+form no row and take no part in any verdict, and a review such a run writes counts toward no run's
+measures (the runs Source counts it under reviews ignored). The catalog Source names them ("not scored"). So every row is a catalog
 model (`inCatalog` is always true). The view's `unscored` counts every run not scored, by one reason each: `unreadable`
 (run files the reader refused with no earlier good copy, the same files the runs Source names and the readers check
 refuses), then, for runs it read, `no-model`, `no-task-type`, `unknown-model`, `unknown-task-type`, in that precedence;

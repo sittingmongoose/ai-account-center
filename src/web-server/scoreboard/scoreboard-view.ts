@@ -372,7 +372,21 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
       .sort((a, b) => Date.parse(b.endedAt) - Date.parse(a.endedAt) || a.id.localeCompare(b.id))
       .slice(0, 10),
   };
-  const index = buildReviewIndex(docs, inputs.joinReviews ?? []);
+  // A review counts toward the runs it reviews only when its own run is scored — the same
+  // catalog model and task type a row needs. A reviewer with no model or task type, or one the
+  // catalog does not list, is not evidence: its verdict moves no blind-review measure (sb-R3).
+  // Voided and superseded runs never reach the index at all (both paths resolve corrections first).
+  const scoredReviewer = (run: RunDoc): boolean => {
+    if (!run.model.id) return false;
+    const type = run.task.type;
+    if (!type || !knownTypes.has(type)) return false;
+    const { id } = normalizeModel(run.model.id, run.model.effort, catalog.models, {
+      aliases: catalog.aliases,
+      effortSuffixes: catalog.effortSuffixes,
+    });
+    return labels.has(id);
+  };
+  const index = buildReviewIndex(docs, inputs.joinReviews ?? [], scoredReviewer);
   const shared: Shared = {
     index,
     defs: new Map(catalog.measures.map((measure) => [measure.id, measure])),

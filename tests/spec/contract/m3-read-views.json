@@ -16,7 +16,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run."
+          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored."
         },
         {
           "id": "scoreboard-catalog",
@@ -11879,7 +11879,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 11:30 AM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 11:30 AM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run."
+          "detail": "1 file unreadable since 11:30 AM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 11:30 AM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored."
         },
         {
           "id": "scoreboard-catalog",
@@ -23742,7 +23742,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run."
+          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored."
         },
         {
           "id": "scoreboard-catalog",
@@ -48847,7 +48847,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run."
+          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored."
         },
         {
           "id": "scoreboard-catalog",
@@ -60710,7 +60710,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 11:30 AM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 11:30 AM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run."
+          "detail": "1 file unreadable since 11:30 AM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 11:30 AM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored."
         },
         {
           "id": "scoreboard-catalog",
@@ -72573,7 +72573,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run."
+          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored."
         },
         {
           "id": "scoreboard-catalog",
@@ -122623,7 +122623,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run. 37 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: done (18 runs), partial (19 runs)."
+          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored. 37 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: done (18 runs), partial (19 runs)."
         },
         {
           "id": "scoreboard-catalog",
@@ -134486,7 +134486,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 11:30 AM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 11:30 AM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run. 37 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: done (18 runs), partial (19 runs)."
+          "detail": "1 file unreadable since 11:30 AM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 11:30 AM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored. 37 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: done (18 runs), partial (19 runs)."
         },
         {
           "id": "scoreboard-catalog",
@@ -146349,7 +146349,7 @@
           "ageSeconds": 0,
           "staleAfterSeconds": 180,
           "state": "unreadable",
-          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, or no earlier known run. 37 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: done (18 runs), partial (19 runs)."
+          "detail": "1 file unreadable since 4:30 PM: vm.scoreboard-lead/runs/2026-11-06/vm.scoreboard-lead--damaged.json (contains NUL bytes from a damaged write). 92 runs from 3 writers read 4:30 PM (68 observed, 24 benchmark). 1 run with no model or task type not scored. 1 review ignored: not a review run, no earlier known run, or its own run not scored. 37 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: done (18 runs), partial (19 runs)."
         },
         {
           "id": "scoreboard-catalog",

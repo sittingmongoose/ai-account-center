@@ -76,7 +76,7 @@ export function runsSource(
   if (unscored > 0) parts.push(`${plural(unscored, 'run')} with no model or task type not scored.`);
   if (ignoredReviews > 0)
     parts.push(
-      `${plural(ignoredReviews, 'review')} ignored: not a review run, or no earlier known run.`
+      `${plural(ignoredReviews, 'review')} ignored: not a review run, no earlier known run, or its own run not scored.`
     );
   if (unknownOutcomes.size > 0) {
     const total = [...unknownOutcomes.values()].reduce((sum, value) => sum + value, 0);
