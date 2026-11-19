@@ -51,4 +51,4 @@ mod visibility_write;
 #[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, serve_with_app_update_jobs, short_name};
+pub use unix::{Boot, serve, serve_composed, serve_with_app_update_jobs, short_name};

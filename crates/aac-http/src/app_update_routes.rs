@@ -33,6 +33,26 @@ pub trait AppUpdateJobs: Send + Sync {
     fn cancel(&self) -> AppUpdateCall<'_>;
 }
 
+pub(crate) struct LaneHJobs(pub(crate) Arc<crate::app_updates::AppUpdates>);
+
+impl AppUpdateJobs for LaneHJobs {
+    fn status(&self) -> AppUpdateCall<'_> {
+        Box::pin(async { to_route_reply(self.0.status().await) })
+    }
+
+    fn start(&self) -> AppUpdateCall<'_> {
+        Box::pin(async { to_route_reply(self.0.start().await) })
+    }
+
+    fn cancel(&self) -> AppUpdateCall<'_> {
+        Box::pin(async { to_route_reply(self.0.cancel().await) })
+    }
+}
+
+fn to_route_reply(reply: crate::app_updates::AppUpdateReply) -> AppUpdateReply {
+    AppUpdateReply { status: reply.status, body: reply.body }
+}
+
 pub(crate) struct BoundJobs {
     owner: Arc<dyn AppUpdateJobs>,
     slots: Arc<Semaphore>,

@@ -96,7 +96,12 @@ async fn run() {
         };
         tokio::select! { _ = input.read(&mut byte) => {}, _ = signal => {}, _ = tokio::signal::ctrl_c() => {} }
     };
-    if aac_http::serve(boot, shutdown).await.is_err() {
+    let result = if std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1") {
+        aac_http::serve_composed(boot, shutdown).await
+    } else {
+        aac_http::serve(boot, shutdown).await
+    };
+    if result.is_err() {
         eprintln!("aac-http: private service failed");
         std::process::exit(1);
     }

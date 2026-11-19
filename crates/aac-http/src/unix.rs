@@ -804,7 +804,7 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None).await
+    serve_inner(boot, shutdown, None, false).await
 }
 
 /// Serve the private routes with an app-update job owner supplied by the service binary.
@@ -813,13 +813,22 @@ pub async fn serve_with_app_update_jobs(
     shutdown: impl Future<Output = ()> + Send + 'static,
     jobs: Arc<dyn AppUpdateJobs>,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, Some(jobs)).await
+    serve_inner(boot, shutdown, Some(jobs), false).await
+}
+
+/// Same private protocol, with the native app-update owner using this boot's agent pool.
+pub async fn serve_composed(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    serve_inner(boot, shutdown, None, true).await
 }
 
 async fn serve_inner(
     boot: Boot,
     shutdown: impl Future<Output = ()> + Send + 'static,
     app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
+    native_app_updates: bool,
 ) -> io::Result<()> {
     boot.validate()?;
     let rows = crate::table::rows(crate::table::ROUTES)?;
@@ -841,6 +850,10 @@ async fn serve_inner(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
+    let app_update_jobs = app_update_jobs.or_else(|| native_app_updates.then(|| {
+        let jobs = crate::app_updates::AppUpdates::with_pool(boot.ccs_dir.clone(), agents.clone());
+        Arc::new(crate::app_update_routes::LaneHJobs(jobs)) as Arc<dyn AppUpdateJobs>
+    }));
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
     let state = AppState(Arc::new(Shared {
         boot,
