@@ -188,8 +188,18 @@ async fn native_boot_builds_all_selectors_from_private_settings_without_a_feed()
     let observations = cache
         .store_observations(&sampled_at, now, i64::MIN)
         .unwrap();
-    assert_eq!(observations.len(), 1);
-    assert_eq!(observations[0].sampled_at_ms, now - 2000);
+    assert_eq!(observations.len(), 2);
+    let stored = observations
+        .iter()
+        .find(|row| row.account.account_id == "zai:usage")
+        .unwrap();
+    assert_eq!(stored.sampled_at_ms, now - 2000);
+    let unavailable = observations
+        .iter()
+        .find(|row| row.account.account_id == "cursor:usage")
+        .unwrap();
+    assert_eq!(unavailable.account.status, "unavailable");
+    assert!(unavailable.windows.is_empty());
     assert_eq!(dashboard["providers"][3]["accountCount"], 1);
     assert_eq!(dashboard["providers"][3]["visible"], false);
     assert_eq!(
