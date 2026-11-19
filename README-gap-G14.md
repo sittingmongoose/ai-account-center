@@ -96,8 +96,12 @@ all three hold, so nothing is left unwritten and nothing writes twice.
 - Windows-native: the four port suites (12 tests) green; `tsc --noEmit` clean.
 - Linux service build: `cargo check -p aac-http` on Nas1 under
   `flock /home/sittingmongoose/aac-nas1-heavy.lock` + `nice -n 19 -j 2` (aac-http is Unix-only).
-- aac-files has 5 pre-existing Windows unit-test failures (Unix-centric, identical on the lane E
-  base) — not regressions.
+- Pre-existing Windows failures (not G14 regressions; these files are untouched by this gap):
+  aac-files has 5 Unix-centric unit-test failures (identical on the lane E base), and aac-store's
+  `store_runs` secret-policy tests `a_refusal_reason_never_quotes_the_writer_folder` /
+  `a_catalog_text_the_policy_refuses_is_never_stored` fail because their `store_holds` helper reads
+  store files the Engine holds locked (Windows error 33; Unix reads locked files fine). The rest of
+  the aac-store suite passes on Windows (including all four G14 port suites).
 
 ## Build / bundle
 
