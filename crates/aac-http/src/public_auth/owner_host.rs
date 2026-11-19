@@ -92,6 +92,7 @@ impl OwnerHost {
     /// router before the dashboard guard, so its handlers see `Extension<DashboardAccess>`
     /// (the verified principal and the origin/transport facts) exactly as `edges` does; the
     /// group keeps its own admission sentences and encoding.
+    #[allow(dead_code)] // registered by the groups that land after the host
     pub(super) fn register(&self, name: &'static str, routes: axum::Router) {
         let mut held = self.routes.lock().unwrap_or_else(|p| p.into_inner());
         if !held.iter().any(|(held, _)| *held == name) {
