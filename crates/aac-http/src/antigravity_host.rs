@@ -577,6 +577,13 @@ else:
             CREDENTIAL,
             0o600,
         );
+        // `write` fixes the file's own folder; the identity also reads `.gemini`, so make it private.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(home.join(".gemini"), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
         let native = script(
             temp.path(),
             "native.py",
