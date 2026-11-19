@@ -2005,6 +2005,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/foundation/to-posix.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/jsonl-parser.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -2229,6 +2235,13 @@
     },
     {
       "file": "tests/unit/shared/test-environment-cleanup.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/spec/python3-resolver.test.ts",
       "kind": "helper",
       "evidence": [
         "helper"
