@@ -1950,8 +1950,7 @@
     "word": "key",
     "cause": null,
     "sources": [
-      "scripts/account-usage/muse_native.py:state",
-      "src/web-server/services/cursor-account-reader.ts:status"
+      "scripts/account-usage/muse_native.py:state"
     ]
   },
   {
@@ -1962,6 +1961,13 @@
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
       "src/web-server/services/cursor-account-reader.ts:STATES",
       "src/web-server/services/cursor-account-reader.ts:answer?.state",
+      "src/web-server/services/cursor-account-reader.ts:status"
+    ]
+  },
+  {
+    "word": "key-status",
+    "cause": null,
+    "sources": [
       "src/web-server/services/cursor-account-reader.ts:status"
     ]
   },
@@ -4787,7 +4793,6 @@
       "scripts/antigravity/quota_adapter.py:status",
       "scripts/app-updates/app_update_common.py:(status, code)",
       "src/antigravity/managed-update-command.ts:status",
-      "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/usage-failover-contract.ts:status"
     ]
   },

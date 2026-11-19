@@ -344,6 +344,7 @@ mod tests {
             [
                 ("opencode-wallet-account", "collection"),
                 ("cursor-account-observation", "collection"),
+                ("cursor-quota-observation", "collection"),
                 ("account-usage-cooldown", "collection"),
                 ("account-usage-observations", "collection"),
                 ("claude-live-snapshots", "collection"),

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::{os::unix::fs::MetadataExt, path::Path};
 
 pub(crate) const WALLET_ACCOUNT: &str = "opencode-wallet-account";
+pub(crate) const CURSOR_QUOTA: &str = "cursor-quota-observation";
 
 fn hex(s: &str, length: usize) -> bool {
     s.len() == length
@@ -245,6 +246,35 @@ pub fn cursor_account(root: &Path) -> Result<Option<Value>, Decline> {
     Ok(Some(answer))
 }
 
+pub(crate) fn cursor_fingerprint(fingerprint: &str) -> bool {
+    fingerprint
+        .strip_prefix("sha256:")
+        .is_some_and(|hex_id| hex(hex_id, 16))
+}
+
+pub(crate) fn cursor_quota_matches(value: &Value, fingerprint: &str) -> bool {
+    cursor_fingerprint(fingerprint)
+        && value.as_object().is_some_and(|o| o.len() == 4)
+        && value["version"] == 1
+        && value["fingerprint"] == fingerprint
+        && value["checkedAt"]
+            .as_str()
+            .is_some_and(|stamp| aac_views::js::parse_date(stamp).is_ok_and(|date| date.is_some()))
+        && value["account"]["provider"] == "cursor"
+        && value["account"]["source"] == "Cursor API key"
+        && value["account"]["windows"]
+            .as_array()
+            .is_some_and(|rows| rows.len() <= 2)
+}
+
+fn cursor_quota(root: &Path, fingerprint: &str) -> Result<Option<Value>, Decline> {
+    if !cursor_fingerprint(fingerprint) {
+        return Err(Decline::Shape);
+    }
+    Ok(load(root, CURSOR_QUOTA, None, true)?
+        .filter(|value| cursor_quota_matches(value, fingerprint)))
+}
+
 pub(crate) fn answer(root: &Path, bytes: &[u8]) -> Result<Value, Decline> {
     use serde::Deserialize;
     #[derive(Deserialize)]
@@ -263,6 +293,15 @@ pub(crate) fn answer(root: &Path, bytes: &[u8]) -> Result<Value, Decline> {
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Source {
         wallet_source: bool,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Cursor {
+        cursor_fingerprint: String,
+    }
+    if let Ok(request) = crate::json_object::from_slice::<Cursor>(bytes, &["cursorFingerprint"]) {
+        return Ok(json!({"value": cursor_quota(root, &request.cursor_fingerprint)?}));
     }
 
     let result =

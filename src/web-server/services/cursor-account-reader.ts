@@ -17,7 +17,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ProviderError } from '../../errors/error-types';
 import { privateFileOwners } from '../../shared/private-files';
-import { readRustCursorAccount } from '../rust-service-transport';
+import {
+  readRustCursorAccount,
+  readRustProviderCache,
+  writeRustCollectionCache,
+} from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import type { DashboardAccount } from './account-dashboard-types';
 import type { AnalyticsRemoteRow } from './analytics-remote-transport';
@@ -422,7 +426,19 @@ export class CursorQuotaReader {
       this.deps.cacheDir ?? path.join(ccsDir, 'cache'),
       'cursor-quota-v1.json'
     );
-    const run = this.deps.run ?? runCursorAccount;
+    const nativeCache =
+      !this.deps.run &&
+      path.dirname(path.resolve(file)) === path.resolve(ccsDir, 'cache') &&
+      privateFileOwners()['cursor-quota-observation'] === 'rust-service';
+    const read = async (command: 'key-status' | 'quota') => {
+      if (!this.deps.run && privateFileOwners()['cursor-account-observation'] === 'rust-service') {
+        const owned = await readRustCursorAccount(ccsDir, { command });
+        if (owned === null) throw new ProviderError('Cursor read failed.', 'cursor');
+        if (owned !== undefined) return owned;
+      }
+      const args = command === 'key-status' ? ['key', 'status'] : ['quota'];
+      return (this.deps.run ?? runCursorAccount)([...args, '--ccs-dir', ccsDir], '');
+    };
     const now = (this.deps.now ?? Date.now)();
     const at = new Date(now).toISOString();
     let fingerprint: string | null = null;
@@ -435,16 +451,22 @@ export class CursorQuotaReader {
     let answer: Record<string, unknown> = {};
     try {
       // Only the reader opens the store. A missing/unsafe reader is not proof of no key.
-      const status = (await run(['key', 'status', '--ccs-dir', ccsDir], '')) as Record<
-        string,
-        unknown
-      >;
+      const status = (await read('key-status')) as Record<string, unknown>;
       if (status.present === false && !status.error) {
         this.current = null;
-        try {
-          fs.unlinkSync(file);
-        } catch {
-          /* No saved quota. */
+        if (nativeCache) {
+          await writeRustCollectionCache(
+            ccsDir,
+            'cursor-quota-observation',
+            'no-key',
+            '{"clear":true}'
+          );
+        } else {
+          try {
+            fs.unlinkSync(file);
+          } catch {
+            /* No saved quota. */
+          }
         }
         return null;
       }
@@ -452,7 +474,11 @@ export class CursorQuotaReader {
         throw new ProviderError('Cursor key status is unavailable.', 'cursor');
       fingerprint = status.fingerprint;
       try {
-        if (fs.statSync(file).size <= 64 * 1024)
+        const owned = nativeCache
+          ? await readRustProviderCache(ccsDir, { cursorFingerprint: fingerprint })
+          : undefined;
+        if (owned !== undefined) previous = owned as typeof previous;
+        else if (fs.statSync(file).size <= 64 * 1024)
           previous = JSON.parse(fs.readFileSync(file, 'utf8'));
       } catch {
         /* No saved quota. */
@@ -487,7 +513,7 @@ export class CursorQuotaReader {
         this.current = previous.account;
         return this.peek(base);
       }
-      answer = (await run(['quota', '--ccs-dir', ccsDir], '')) as Record<string, unknown>;
+      answer = (await read('quota')) as Record<string, unknown>;
     } catch {
       answer = { state: 'unavailable' };
     }
@@ -559,7 +585,14 @@ export class CursorQuotaReader {
             : 'Cursor quota could not be read.',
       windows: valid ? windows : (keep?.windows ?? []),
     };
-    if (fingerprint) {
+    if (fingerprint && nativeCache) {
+      await writeRustCollectionCache(
+        ccsDir,
+        'cursor-quota-observation',
+        fingerprint.slice('sha256:'.length),
+        JSON.stringify({ version: 1, fingerprint, checkedAt: at, account: this.current })
+      );
+    } else if (fingerprint) {
       try {
         fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
         const temporary = `${file}.${process.pid}.tmp`;

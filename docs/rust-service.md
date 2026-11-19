@@ -664,6 +664,9 @@ computer. The service uses the same L5 registry and pool.
   locally, with a 120-second process bound and one pending read. It saves the
   previous observation's layout, uses the ten-minute TTL, and keeps dated
   last-good rows on an unavailable result. A manual refresh bypasses the TTL.
+  Its fixed key-status and quota subcommands also serve the Cursor quota-card
+  transport. The quota-card cache is a separate fingerprint-bound file. The
+  lease owner clears it when the reader confirms absence of a key.
   The existing TS reader serves when the Rust collection group is off.
 - `POST /internal/collect/failover-collect` can run a selected
   provider helper over the same L5 pool, with at most three active helpers.

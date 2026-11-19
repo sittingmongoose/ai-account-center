@@ -311,7 +311,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
         Handler::CursorAccount => {
-            use crate::account_usage::cursor::{ROW, Request};
+            use crate::account_usage::cursor::{Command, ROW, Request};
             if shared.owners.owner(ROW) != Some(registry::Role::RustService) {
                 return decline(row.handler, Decline::Unsupported);
             }
@@ -320,11 +320,23 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             else {
                 return decline(row.handler, Decline::Shape);
             };
+            let root = shared.boot.ccs_dir.clone();
+            if let Ok(command) = Command::parse(&bytes) {
+                return match tokio::time::timeout(
+                    Duration::from_secs(123),
+                    shared.cursor.command(command, root),
+                )
+                .await
+                {
+                    Ok(Ok(value)) => Json(value).into_response(),
+                    Ok(Err(reason)) => decline(row.handler, reason),
+                    Err(_) => decline(row.handler, Decline::Internal),
+                };
+            }
             let request = match Request::parse(&bytes) {
                 Ok(request) => request,
                 Err(reason) => return decline(row.handler, reason),
             };
-            let root = shared.boot.ccs_dir.clone();
             let owners = shared.owners.clone();
             let reader = shared.cursor.clone();
             let task = tokio::spawn(async move { reader.read(root, owners, request).await });
