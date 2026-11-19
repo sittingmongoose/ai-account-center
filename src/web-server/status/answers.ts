@@ -17,6 +17,8 @@ import { createHash, randomBytes, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
+import { RegisteredWriteUnclearError } from '../../shared/private-file-lease';
+import { commitRegisteredFile, withTsPrivateFileLeases } from '../../shared/private-files';
 import { DeadlineExceededError, withDeadline } from '../../utils/settle-deadline';
 import { agentReportsRoot } from './agent-reports-reader';
 import {
@@ -158,8 +160,8 @@ class AppendUnclearError extends ConfigError {
 
 /** Appends one `void` line cancelling `line` and syncs it. Throws if the disk refuses either. */
 function appendVoid(fd: number, line: string, file: string): void {
-  const cancel = Buffer.from(`\n${JSON.stringify({ type: 'void', line })}\n`);
-  for (let done = 0; done < cancel.length;) {
+  const cancel = Buffer.from(answerRecord({ type: 'void' }, line));
+  for (let done = 0; done < cancel.length; ) {
     const taken = fs.writeSync(fd, cancel, done, cancel.length - done);
     if (taken <= 0) throw new ConfigError('The answer store took no part of a void line.', file);
     done += taken;
@@ -169,6 +171,13 @@ function appendVoid(fd: number, line: string, file: string): void {
 
 /** Opens the store, appends one void line for `line` and closes it; throws if it did not land. */
 function appendVoidLine(file: string, line: string): void {
+  withAnswerLease(file, (root) => {
+    const cancel = answerRecord({ type: 'void' }, line);
+    if (!commitRegisteredFile(file, root, cancel)) appendLegacyVoid(file, line);
+  });
+}
+
+function appendLegacyVoid(file: string, line: string): void {
   const fd = fs.openSync(file, 'a+', 0o600);
   try {
     appendVoid(fd, line, file);
@@ -345,13 +354,33 @@ async function keepPublishedSummary(
  * holds it as voided and writes the void again later (StatusAnswers.unvoided).
  */
 function appendLine(file: string, record: Record<string, unknown>): void {
+  const line = randomBytes(8).toString('hex');
+  const data = answerRecord(record, line);
+  withAnswerLease(file, (root) => {
+    try {
+      if (commitRegisteredFile(file, root, data)) return;
+    } catch (error) {
+      if (error instanceof RegisteredWriteUnclearError) throw new AppendUnclearError(line, file);
+      throw error;
+    }
+    appendLegacyLine(file, line, Buffer.from(data));
+  });
+}
+
+function answerRecord(record: Record<string, unknown>, line: string): string {
+  return `\n${JSON.stringify({ ...record, line })}\n`;
+}
+
+function withAnswerLease(file: string, append: (root: string) => void): void {
+  const root = path.dirname(path.dirname(file));
+  if (path.basename(path.dirname(file)) !== 'status') return append(root);
+  withTsPrivateFileLeases(root, ['status-answer-log'], () => append(root), true);
+}
+
+function appendLegacyLine(file: string, line: string, data: Buffer): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const fd = fs.openSync(file, 'a+', 0o600);
   try {
-    // Every record starts on a line of its own: a torn line (a crash, or another writer's failed part) can never
-    // swallow it. Blank lines are skipped on load.
-    const line = randomBytes(8).toString('hex');
-    const data = Buffer.from(`\n${JSON.stringify({ ...record, line })}\n`);
     let written = 0;
     try {
       // One write, taken whole or refused: a second part could land after another writer's line and split this one,

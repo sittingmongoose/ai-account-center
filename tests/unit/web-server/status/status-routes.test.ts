@@ -10,10 +10,14 @@ import { StatusService } from '../../../../src/web-server/status/status-service'
 import { PmMailRegistryReader } from '../../../../src/web-server/status/status-collectors';
 import { openCardFile, parseByteRange } from '../../../../src/web-server/status/status-files';
 import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
+import { RustService } from '../../../../src/web-server/rust-service';
 import { cardDoc, NOW, tempDirs, writeCard } from './status-test-helpers';
 
 const dirs = tempDirs();
 let server: Server | undefined;
+let rust: RustService | undefined;
+const ccsEnv = process.env.CCS_HOME;
+const writesMode = process.env.AAC_SPEC_STATUS_ANSWER_WRITE_MODE;
 // The 401 path exists only with dashboard sign-in on; the sign-in-off answer has its own test.
 const authEnv = process.env.CCS_DASHBOARD_AUTH_ENABLED;
 beforeEach(() => {
@@ -22,7 +26,11 @@ beforeEach(() => {
 afterEach(async () => {
   if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
   server = undefined;
+  rust?.stop();
+  rust = undefined;
   dirs.cleanup();
+  if (ccsEnv === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = ccsEnv;
   if (authEnv === undefined) delete process.env.CCS_DASHBOARD_AUTH_ENABLED;
   else process.env.CCS_DASHBOARD_AUTH_ENABLED = authEnv;
 });
@@ -30,6 +38,12 @@ afterEach(async () => {
 async function start(options: { ringOk?: boolean } = {}) {
   const root = dirs.make('ccs-status-reports-');
   const store = path.join(dirs.make('ccs-status-store-'), 'status');
+  if (writesMode === 'on') {
+    process.env.CCS_HOME = path.dirname(store);
+    rust = new RustService('on');
+    await rust.start();
+    expect(rust.writerRoutesEnabled).toBe(true);
+  }
   const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
   const rings: string[] = [];
   const answers = new StatusAnswers({
@@ -479,6 +493,7 @@ describe('status routes', () => {
     const replay = await post('/api/status/answers', repeated);
     expect(replay.status).toBe(200);
     expect(await replay.text()).toBe(await first.text());
+    if (writesMode === 'on') expect(rust?.registeredWrites).toBeGreaterThan(0);
   });
 
   it('serves option images from the writer folder only, by content, at most 2 MB', async () => {

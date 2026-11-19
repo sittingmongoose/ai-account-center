@@ -174,6 +174,16 @@ pub struct OwnedStore {
     _lock: File,
 }
 
+/// Outcome of a failed Status journal append.
+#[cfg(unix)]
+#[derive(Debug)]
+pub enum AnswerAppendError {
+    /// No record was written or its compensating void is durable.
+    Refused,
+    /// A record may have reached disk without a durable void.
+    Unclear,
+}
+
 impl OwnedStore {
     /// Make the row's folders under `root` by its rule, then take its lease.
     fn open(
@@ -284,6 +294,43 @@ impl OwnedStore {
     /// As with the legacy settings writers, syncing the directory after rename is best effort.
     pub fn replace_settings(&self, bytes: &[u8]) -> Result<(), Failure> {
         self.write_staged(|out| out.write_all(bytes), &mut |_| Ok(()), true)
+    }
+
+    /// Append a Status journal record under the registry writer lease. The cap applies to
+    /// an individual record, since existing history stays in the append-only file.
+    #[cfg(unix)]
+    pub fn append_answer(&self, bytes: &[u8], cancel: &[u8]) -> Result<(), AnswerAppendError> {
+        use std::os::unix::fs::OpenOptionsExt;
+        if bytes.len() > self.max_size
+            || cancel.len() > self.max_size
+            || require_absolute(&self.path).is_err()
+            || reject_special(&self.path, true).is_err()
+        {
+            return Err(AnswerAppendError::Refused);
+        }
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&self.path)
+            .map_err(|_| AnswerAppendError::Refused)?;
+        if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+            return Err(AnswerAppendError::Refused);
+        }
+        // Each record starts with a newline, so a torn earlier write cannot swallow it.
+        match file.write(bytes) {
+            Ok(len) if len == bytes.len() && file.sync_all().is_ok() => Ok(()),
+            Ok(0) | Err(_) => Err(AnswerAppendError::Refused),
+            Ok(_)
+                if !cancel.is_empty()
+                    && file.write_all(cancel).is_ok()
+                    && file.sync_all().is_ok() =>
+            {
+                Err(AnswerAppendError::Refused)
+            }
+            Ok(_) => Err(AnswerAppendError::Unclear),
+        }
     }
 
     /// Confirm that a settings leaf is absent or can be replaced without following it.

@@ -22,6 +22,8 @@ export interface FileLease {
   descriptor?: number;
 }
 
+export class RegisteredWriteUnclearError extends Error {}
+
 /** Return false only when no native writer was selected or the executable could not launch. */
 export function commitWithFileLease(
   root: string,
@@ -42,6 +44,8 @@ export function commitWithFileLease(
     return true;
   }
   if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+  if (result.status !== 74 && result.status !== 75)
+    throw new RegisteredWriteUnclearError('The private file write could not be confirmed.');
   throw new Error('The private file could not be saved safely.');
 }
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
