@@ -752,6 +752,16 @@ mod tests {
         );
         assert!(!replaced.to_string().contains(new));
         assert_eq!(registry_entries(&root).unwrap().len(), baseline.len() + 1);
+        let store = KeyStore {
+            native: &native,
+            source,
+        };
+        let lease = store.local_writer(key_id(source).unwrap()).unwrap();
+        assert!(matches!(
+            store.local_writer("deadbeef"),
+            Err(Failure::KeyStore)
+        ));
+        drop(lease);
         let files = std::fs::read_dir(root.join("account-usage/keys"))
             .unwrap()
             .filter_map(Result::ok)

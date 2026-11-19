@@ -975,9 +975,23 @@ fn open_lock(path: &Path) -> Result<File, Failure> {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
+    let meta = file.metadata()?;
+    if !meta.is_file() {
         return Err(Failure::new(Cause::Refused, "not a regular file"));
+    }
+    #[cfg(windows)]
+    if windows_reparse_point(&meta) {
+        return Err(Failure::new(
+            Cause::Refused,
+            "writer lock is a reparse point",
+        ));
     }
     set_private(&file)?;
     Ok(file)
@@ -1083,26 +1097,40 @@ fn reference_folder(folder: &Path) -> Result<(), Failure> {
     let refused = || Failure::new(Cause::Refused, "store folder refused");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         fs::create_dir_all(folder.parent().ok_or_else(refused)?)?;
         match private_builder().create(folder) {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             result => result?,
         }
-        let meta = fs::symlink_metadata(folder)?;
-        if !meta.is_dir() || meta.file_type().is_symlink() || meta.uid() != path::uid() {
+    }
+    #[cfg(windows)]
+    ensure_directory(folder)?;
+    let meta = fs::symlink_metadata(folder)?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(refused());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if meta.uid() != path::uid() {
             return Err(refused());
         }
         if meta.mode() & 0o077 != 0 {
             fs::set_permissions(folder, fs::Permissions::from_mode(0o700))?;
         }
-        Ok(())
     }
-    #[cfg(not(unix))]
-    {
-        let _ = folder;
-        Err(refused())
+    #[cfg(windows)]
+    if windows_reparse_point(&meta) {
+        return Err(refused());
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_reparse_point(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn sync_directory(path: &Path) -> Result<(), Failure> {

@@ -5,6 +5,7 @@
  * --require-complete fails for any changed answer or explicit unmounted route.
  * --route-group=<name> selects one worker-removal lane and implies --require-complete.
  * --composed-golden applies the platform's existing recorder overrides.
+ * --record-windows-registry=<path> writes the two native Windows registry replies after parity checks.
  */
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
@@ -51,6 +52,21 @@ const groups = {
 const group =
   process.argv.find((arg) => arg.startsWith('--route-group='))?.split('=', 2)[1] ??
   (process.argv.includes('--group=reset-claims') ? 'resets' : undefined);
+const registryOutput = process.argv
+  .find((argument) => argument.startsWith('--record-windows-registry='))
+  ?.slice('--record-windows-registry='.length);
+const registryRecords: Record<string, Contract> = {};
+if (registryOutput !== undefined) {
+  assert.equal(process.platform, 'win32', 'record the registry on native Windows');
+  assert.equal(mode, 'cut-rust-only', 'record the native registry without the worker');
+  assert.equal(group, 'lifecycle', 'run the complete lifecycle group when recording');
+  assert(path.isAbsolute(registryOutput), 'record to an absolute scratch path');
+  const inCheckout = path.relative(path.resolve(spec, '../..'), registryOutput);
+  assert(
+    path.isAbsolute(inCheckout) || inCheckout.startsWith('..' + path.sep),
+    'record outside the checkout'
+  );
+}
 const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   if (group === undefined) return true;
   assert.equal(mode, 'cut-rust-only', 'A worker-removal group requires --cut-rust-only.');
@@ -105,6 +121,12 @@ if (group !== undefined && mode === 'cut-rust-only') {
   }
 }
 
+const lifecycleOverrides: Record<string, Contract> =
+  mode !== 'fixture' && process.platform === 'win32' && registryOutput === undefined
+    ? JSON.parse(
+        await fs.readFile(path.join(spec, 'contract', 'm0-lifecycle-windows.json'), 'utf8')
+      )
+    : {};
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-m6-contract-'));
 const username = 'fixture-admin';
 const password = 'fixture-password-only';
@@ -112,7 +134,7 @@ const credentials = { username, password };
 const nonce = 'f'.repeat(32);
 const hub = 'aacu_' + 'f'.repeat(43);
 const environment = fixtureEnvironment();
-if (mode === 'cut-rust-only') {
+if (mode !== 'fixture') {
   // The recorded registry fixture has no Codex CLI. Mask command discovery as well as homes.
   environment.CCS_CODEX_PATH = path.join(root, 'fixture-missing-codex');
 }
@@ -149,18 +171,19 @@ if (mode !== 'fixture' && process.platform !== 'win32') {
   });
 }
 
-function normalize(value: unknown, key = ''): unknown {
+function normalize(value: unknown, key = '', nativeStatus = false): unknown {
   if (value === undefined) return value;
   if (key === 'etag') return '<etag>';
   if (key === 'x-ccs-bar-token') return '<bar-proof>';
-  // A store boot's own identity (capture.ts nulls the same members when it records the row),
-  // the workers' live host readings (capture.ts does the same), and clock numbers.
-  if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
-  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
-  if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
-    return '<elapsed-seconds>';
-  if (key === 'cpu' || key === 'memory' || key === 'gpuPct') return null;
-  if (key === 'disk' || key === 'warnings') return [];
+  // Apply live-field normalization only when the native Status fixture is selected.
+  if (nativeStatus) {
+    if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
+    if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
+    if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
+      return '<elapsed-seconds>';
+    if (key === 'cpu' || key === 'memory' || key === 'gpuPct') return null;
+    if (key === 'disk' || key === 'warnings') return [];
+  }
   if (key === 'retry-after' || key === 'retryAfterSeconds') {
     const seconds = Number(value);
     assert(Number.isInteger(seconds) && seconds >= 1 && seconds <= 900);
@@ -176,16 +199,18 @@ function normalize(value: unknown, key = ''): unknown {
       .replaceAll(root, '<fixture-home>')
       .replace(/dev_[0-9a-f]{16}/g, '<device-id>')
       .replace(/aacd_[A-Za-z0-9_-]{43}/g, '<device-token>')
-      .replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g, '<timestamp>')
-      .replace(/\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g, '<clock>')
-      .replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g, '<day>');
+      .replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g, '<timestamp>');
+    if (nativeStatus)
+      text = text
+        .replace(/\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g, '<clock>')
+        .replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g, '<day>');
     if (path.sep === '\\' && text.startsWith('<fixture-home>')) text = text.replaceAll('\\', '/');
     return text;
   }
-  if (Array.isArray(value)) return value.map((entry) => normalize(entry));
+  if (Array.isArray(value)) return value.map((entry) => normalize(entry, '', nativeStatus));
   if (value && typeof value === 'object')
     return Object.fromEntries(
-      Object.entries(value).map(([field, child]) => [field, normalize(child, field)])
+      Object.entries(value).map(([field, child]) => [field, normalize(child, field, nativeStatus)])
     );
   return value;
 }
@@ -326,20 +351,43 @@ try {
   }
   let rust = await startRustFixture(binary, root, environment, false, mode);
   try {
+    let windowsPreflightReason: string | undefined;
+    if (registryOutput !== undefined) {
+      const { antigravitySignInPreflight } = await import('../../src/antigravity/signin-sandbox');
+      const result = antigravitySignInPreflight(root);
+      assert(!result.ok, 'the TypeScript preflight refuses the Windows fixture');
+      windowsPreflightReason = result.reason;
+    }
     for (const [index, route] of selectedRoutes) {
       const name = route.method + ' ' + route.path;
       const ownsReset = nativeReset(route.method, route.path);
+      const ownsLifecycle = mode !== 'fixture' && groups.lifecycle.test(name);
       for (const role of route.roles) {
         const fixture = String(index).padStart(3, '0') + '-' + role + '.json';
-        const mine = nativeGroupRow(route.method, route.path);
+        const recordRegistryRow =
+          windowsPreflightReason !== undefined &&
+          name === 'GET /api/accounts/registry' &&
+          (role === 'session' || role === 'bar');
+        const statusContract = nativeGroupRow(route.method, route.path)
+          ? groupOverrides['contract/' + fixture]
+          : undefined;
+        const nativeStatus = statusContract !== undefined;
         const contract: Contract =
-          (mine
-            ? groupOverrides['contract/' + fixture]
-            : composedGolden || ownsReset
-              ? overrides['contract/' + fixture]
-              : undefined) ??
+          (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
+          statusContract ??
+          (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
-        const { request, response: expected } = contract;
+        const { request } = contract;
+        const expected = recordRegistryRow ? structuredClone(contract.response) : contract.response;
+        if (recordRegistryRow) {
+          const registry = expected.body as {
+            providers: { id: string; signIn: { unavailableReason: string } }[];
+          };
+          const antigravity = registry.providers.find((provider) => provider.id === 'antigravity');
+          assert(antigravity, 'the registry fixture has an Antigravity row');
+          assert.equal(antigravity.signIn.unavailableReason, 'tool_missing');
+          antigravity.signIn.unavailableReason = windowsPreflightReason!;
+        }
         const headers = await roleHeaders(rust.url, role);
         let status: number;
         let body: unknown;
@@ -387,16 +435,21 @@ try {
         const actual =
           request.method === 'UPGRADE'
             ? { status }
-            : normalize({ status, headers: selected, body });
+            : { status, headers: normalize(selected), body: normalize(body, '', nativeStatus) };
         try {
           assert.deepEqual(actual, expected);
+          if (recordRegistryRow)
+            registryRecords['contract/' + fixture] = {
+              request,
+              response: actual as Contract['response'],
+            };
           counts.match++;
           if (owns(route.path)) owned.match++;
           if (ownsReset) resets.match++;
         } catch {
           const fields = [
             status !== expected.status ? `status ${status}/${expected.status}` : '',
-            isDeepStrictEqual(normalize(body), expected.body) ? '' : 'body',
+            isDeepStrictEqual(normalize(body, '', nativeStatus), expected.body) ? '' : 'body',
             ...expectedHeaders.filter(
               (key) =>
                 normalize(selected?.[key], key) !== expected.headers?.[key] &&
@@ -410,7 +463,7 @@ try {
                 fixture +
                 ' ' +
                 JSON.stringify({
-                  actual: normalize(body),
+                  actual: normalize(body, '', nativeStatus),
                   expected: expected.body,
                 })
             );
@@ -447,3 +500,9 @@ assert.equal(owned.failed, 0, 'M6-owned M0 contract');
 assert.equal(resets.failed, 0, 'Rust reset M0 contract');
 if (group !== undefined || process.argv.includes('--require-complete'))
   assert.equal(counts.decline + counts.different, 0, 'Rust M0 cutover gate');
+if (registryOutput !== undefined) {
+  assert.equal(Object.keys(registryRecords).length, 2, 'record both registry roles');
+  await fs.writeFile(registryOutput, JSON.stringify(registryRecords, null, 2) + '\n', {
+    flag: 'wx',
+  });
+}
