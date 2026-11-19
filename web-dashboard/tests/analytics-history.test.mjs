@@ -237,6 +237,132 @@ test('a skipped calendar date cannot drop a widened bucket (Pacific/Apia)', () =
   }
 });
 
+test('a Monday clock change cannot drop a widened bucket (Atlantic/Madeira 1920)', () => {
+  setDisplayTimeZone('Atlantic/Madeira');
+  try {
+    // Madeira's Monday 1920-03-01 began at 01:00 local (01:00 UTC) after a Sunday jump from UTC−01.
+    // Resolving the next UTC midnight used to answer Tuesday Mar 2, the read's exclusive end, so the bucket
+    // was never enumerated: both charts lost its 125 tokens while the headline totals kept them
+    const at = Date.parse('2026-11-18T00:00:00Z');
+    const from = Date.parse('1903-12-28T04:00:00Z');
+    const rows = [row('1920-02-29T22:00:00Z', 'codex', 7, 7), row('1920-03-01T01:00:00Z', 'codex', 25, 25), row('1920-03-01T23:00:00Z', 'codex', 100, 100)];
+    const p = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from, now: at, fetchedAt: Date.parse('1920-03-02T00:00:00Z') });
+    const view = usageView(p, state({ range: 'all' }), { now: at });
+    assert.equal(view.range.step, 14 * D);
+    assert.match(view.trend.sub, /^2-week buckets/);
+    const A = U.activityData(p, at), R = U.pageRange(state({ range: 'all' }), A, at);
+    const B = U.buckets(A, R, state({ range: 'all' }));
+    assert.equal(B.length, 423);
+    // every bucket starts on its Monday, in order, and the next one begins where the last one ends
+    for (const b of B) assert.equal(zonedWeekday(b.t), 0, `${new Date(b.t).toISOString()} starts on a Monday`);
+    for (let i = 1; i < B.length; i++) assert.equal(B[i].t, B[i - 1].t1, 'buckets are contiguous');
+    // the Monday after the jump resolves to the earliest instant of Mar 1, never to Tuesday Mar 2
+    const feb16 = B.find(b => b.t === Date.parse('1920-02-16T01:00:00Z'));
+    const mar1 = B.find(b => b.t === Date.parse('1920-03-01T01:00:00Z'));
+    assert.ok(feb16 && mar1, 'the fortnights around the jump are enumerated');
+    assert.equal(feb16.t1, mar1.t);
+    // every row lands in exactly one bucket, by its interval and by its civil week, and the totals match
+    for (const r of rows) {
+      const t = Date.parse(r.hour);
+      assert.equal(B.filter(b => b.lo <= t && t < b.hi).length, 1, r.hour);
+      assert.equal(B.filter(b => b.t === U.bucketStart(t, R.step)).length, 1, r.hour);
+    }
+    assert.equal(mar1.in, 125);
+    assert.equal(mar1.cost, 125);
+    // the fortnight ends at the read's exclusive end: nothing after Mar 2 00:00 belongs to it
+    assert.equal(mar1.hi, Date.parse('1920-03-02T00:00:00Z'));
+    assert.equal(B.filter(b => b.lo <= mar1.hi && mar1.hi < b.hi).length, 0);
+    assert.equal(B.reduce((s, b) => s + b.in, 0), 132);
+    assert.equal(B.reduce((s, b) => s + b.cost, 0), 132);
+    assert.ok(view.daily.bars.some(b => b.total === '$125.00'));
+    assert.ok(view.daily.bars.some(b => b.total === '$7.00'));
+    assert.equal(view.trend.buckets.length, B.length);
+    assert.equal(view.daily.bars.length, B.length);
+  } finally {
+    setDisplayTimeZone('UTC');
+  }
+});
+
+test('a skipped calendar date keeps a weekly bucket whole (Pacific/Apia 2011)', () => {
+  setDisplayTimeZone('Pacific/Apia');
+  try {
+    // Apia skipped local Friday Dec 30 2011. A weekly grid that steps local dates lands the week of
+    // Monday Dec 26 on a Tuesday; keying by civil week number keeps the week whole, so rows on both
+    // sides of the gap stay in exactly one bucket whatever the transition did to its instants
+    const at = Date.parse('2012-02-01T12:00:00Z');
+    const from = Date.parse('2011-08-01T12:00:00Z');
+    const rows = [row('2011-12-28T10:00:00Z', 'codex', 10, 10), row('2011-12-30T10:00:00Z', 'codex', 20, 20), row('2012-01-01T10:00:00Z', 'codex', 30, 30)];
+    const p = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from, now: at, fetchedAt: at });
+    const view = usageView(p, state({ range: 'all' }), { now: at });
+    assert.equal(view.range.step, 7 * D);
+    assert.match(view.trend.sub, /^Weekly buckets/);
+    const A = U.activityData(p, at), R = U.pageRange(state({ range: 'all' }), A, at);
+    const B = U.buckets(A, R, state({ range: 'all' }));
+    assert.equal(B.length, 27);
+    for (const b of B) assert.equal(zonedWeekday(b.t), 0, `${new Date(b.t).toISOString()} starts on a Monday`);
+    for (let i = 1; i < B.length; i++) assert.equal(B[i].t, B[i - 1].t1, 'buckets are contiguous');
+    // the skipped Friday stays inside the week of Monday Dec 26; Monday Jan 2 starts the next week
+    const dec26 = B.find(b => b.t === U.bucketStart(Date.parse('2011-12-28T10:00:00Z'), R.step));
+    const jan2 = B.find(b => b.t === U.bucketStart(Date.parse('2012-01-01T10:00:00Z'), R.step));
+    assert.ok(dec26 && jan2, 'the weeks on both sides of the skipped date are enumerated');
+    assert.equal(dec26.t1, jan2.t);
+    assert.equal(dec26.in, 30);
+    assert.equal(jan2.in, 30);
+    for (const r of rows) {
+      const t = Date.parse(r.hour);
+      assert.equal(B.filter(b => b.lo <= t && t < b.hi).length, 1, r.hour);
+      assert.equal(B.filter(b => b.t === U.bucketStart(t, R.step)).length, 1, r.hour);
+    }
+    assert.equal(B.reduce((s, b) => s + b.in, 0), 60);
+    assert.equal(B.reduce((s, b) => s + b.cost, 0), 60);
+    assert.ok(view.daily.bars.some(b => b.total === '$30.00'));
+    assert.equal(view.trend.buckets.length, B.length);
+    assert.equal(view.daily.bars.length, B.length);
+  } finally {
+    setDisplayTimeZone('UTC');
+  }
+});
+
+test('a Monday clock change cannot drop a weekly bucket (America/Danmarkshavn 1996)', () => {
+  setDisplayTimeZone('America/Danmarkshavn');
+  try {
+    // Danmarkshavn moved from UTC−03 to UTC+00 on Monday 1996-01-01, whose first instant is 03:00 UTC.
+    // A weekly range ending at Jan 2 00:00 lost the whole Monday bucket to the same next-day fallback
+    const at = Date.parse('2026-11-18T00:00:00Z');
+    const from = Date.parse('1995-08-01T00:00:00Z');
+    const to = Date.parse('1996-01-02T00:00:00Z');
+    const rows = [row('1995-12-31T22:00:00Z', 'codex', 7, 7), row('1996-01-01T04:00:00Z', 'codex', 25, 25), row('1996-01-01T20:00:00Z', 'codex', 100, 100)];
+    const p = payload({ preset: 'custom', from, rows, resolution: 'day', days: { from: '1995-08-01', to: '1996-01-01' } });
+    p.range.to = new Date(to).toISOString();
+    const view = usageView(p, state({ range: 'custom', from, to }), { now: at });
+    assert.equal(view.range.step, 7 * D);
+    assert.match(view.trend.sub, /^Weekly buckets/);
+    const A = U.activityData(p, at), R = U.pageRange(state({ range: 'custom', from, to }), A, at);
+    assert.equal(R.end, to);
+    const B = U.buckets(A, R, state({ range: 'custom', from, to }));
+    assert.equal(B.length, 23);
+    for (let i = 1; i < B.length; i++) assert.equal(B[i].t, B[i - 1].t1, 'buckets are contiguous');
+    // Monday Jan 1 begins at its first instant, 03:00 UTC, and ends at the read's exclusive end
+    const jan1 = B.at(-1);
+    assert.equal(jan1.t, Date.parse('1996-01-01T03:00:00Z'));
+    assert.equal(zonedWeekday(jan1.t), 0);
+    assert.equal(jan1.hi, to);
+    assert.equal(jan1.in, 125);
+    assert.equal(jan1.cost, 125);
+    for (const r of rows) {
+      const t = Date.parse(r.hour);
+      assert.equal(B.filter(b => b.lo <= t && t < b.hi).length, 1, r.hour);
+      assert.equal(B.filter(b => b.t === U.bucketStart(t, R.step)).length, 1, r.hour);
+    }
+    assert.equal(B.reduce((s, b) => s + b.in, 0), 132);
+    assert.equal(B.reduce((s, b) => s + b.cost, 0), 132);
+    assert.ok(view.daily.bars.some(b => b.total === '$125.00'));
+    assert.equal(view.daily.bars.length, B.length);
+  } finally {
+    setDisplayTimeZone('UTC');
+  }
+});
+
 test('a clipped multi-week cost bar says the dates it covers, not just clocks', () => {
   // All over [2011-01-05, 2026-05-07): the first fortnight is clipped to Jan 5-17 and the last to May 4-7;
   // both readouts must carry the covered dates, while a same-day slice keeps the clock-only label

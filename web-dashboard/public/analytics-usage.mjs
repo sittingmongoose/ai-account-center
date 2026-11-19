@@ -13,7 +13,7 @@ import { HOST_PAIRS } from './computers.mjs';
 // to one or added to quota numbers; a missing reading is unavailable, never zero; at most two decimals; local
 // time throughout.
 import { reconcile, modelRates } from './model-rates.mjs';
-import { displayFormat, lazyFormat, zonedParts, zonedAddDays, zonedDayStart, zonedHour, zonedMonthStart, zonedWeekday } from './time-format.mjs';
+import { displayFormat, getDisplayTimeZone, lazyFormat, zonedParts, zonedAddDays, zonedDayStart, zonedHour, zonedMonthStart, zonedWeekday } from './time-format.mjs';
 
 export const H = 3_600_000;
 export const D = 24 * H;
@@ -100,15 +100,49 @@ const WEEK_EPOCH = Date.UTC(2001, 0, 1);
 const weekIndex = t => { const p = zonedParts(t); return Math.floor((Date.UTC(p.year, p.month - 1, p.day) - WEEK_EPOCH) / WEEK); };
 /** The first week index of the w-week bucket holding t: whole weeks on the civil calendar from WEEK_EPOCH. */
 const bucketWeek = (t, w) => { const wk = weekIndex(t); return wk - (((wk % w) + w) % w); };
-/** The display-zone midnight of the Monday `wk` weeks after WEEK_EPOCH, resolved on the civil calendar:
- *  stepping local dates (zonedAddDays) drifts across a skipped date like Apia's 2011-12-30, so counting,
- *  enumeration and row lookup all resolve their Mondays through this one index. */
+/** The display-zone date of an instant, as the epoch of its UTC midnight. */
+const civilDateOf = t => { const p = zonedParts(t); return Date.UTC(p.year, p.month - 1, p.day); };
+/** Earliest instants by civil date, reused across the charts of one view; the display zone keys them. */
+const civilStarts = new Map();
+let civilStartsZone = '';
+/**
+ * The earliest instant whose display-zone date is y-m-d. Not every local day starts at midnight: Madeira's
+ * Monday 1920-03-01 began at 01:00 local (01:00 UTC) after a Sunday jump. (`zonedDayStart` answers midnight
+ * arithmetic, which lands on the previous or the next day there.) A skipped date like Apia's 2011-12-30 has
+ * no instant at all; it falls back to the UTC midnight's own day start.
+ */
+function civilDayStart(y, m, d) {
+  const zone = getDisplayTimeZone();
+  if (zone !== civilStartsZone) { civilStarts.clear(); civilStartsZone = zone; }
+  const key = y * 10_000 + m * 100 + d;
+  const hit = civilStarts.get(key);
+  if (hit !== undefined) return hit;
+  const start = resolveCivilDayStart(y, m, d);
+  if (civilStarts.size > 4096) civilStarts.clear();
+  civilStarts.set(key, start);
+  return start;
+}
+function resolveCivilDayStart(y, m, d) {
+  const day = Date.UTC(y, m - 1, d);
+  // the common case: noon UTC is inside the local day and its midnight is the date's first instant
+  const quick = zonedDayStart(day + 12 * H);
+  if (civilDateOf(quick) === day && civilDateOf(quick - 1) !== day) return quick;
+  // a probe inside the local day: the offset range (−12..+14 h) puts UTC noon on the date for nearly every zone
+  let inside = NaN;
+  for (const k of [12, 0, 6, 18, 24, -6]) if (civilDateOf(day + k * H) === day) { inside = day + k * H; break; }
+  if (!Number.isFinite(inside)) return zonedDayStart(day);
+  // step back an hour at a time to the last hour before the date begins, then bisect that hour to the millisecond
+  let after = inside, before = inside - H;
+  while (civilDateOf(before) >= day) { after = before; before -= H; }
+  while (after - before > 1) { const mid = Math.floor((before + after) / 2); if (civilDateOf(mid) >= day) after = mid; else before = mid; }
+  return after;
+}
+/** The Monday `wk` weeks after WEEK_EPOCH, as the earliest instant of that display-zone date. Counting,
+ *  enumeration and row lookup all resolve their Mondays through this one civil index, so a clock change at
+ *  a Monday's midnight cannot move a bucket off its week. */
 const weekMonday = wk => {
-  const civil = WEEK_EPOCH + wk * WEEK;
-  const start = zonedDayStart(civil);
-  const p = zonedParts(start);
-  // west of Greenwich the UTC-midnight guess sits in the previous local day: take the next day's midnight
-  return Date.UTC(p.year, p.month - 1, p.day) < civil ? zonedDayStart(civil + D) : start;
+  const civil = new Date(WEEK_EPOCH + wk * WEEK);
+  return civilDayStart(civil.getUTCFullYear(), civil.getUTCMonth() + 1, civil.getUTCDate());
 };
 export function bucketStart(t, step) {
   if (step >= WEEK) {
@@ -564,14 +598,28 @@ export function typeCosts(A, rows) {
 export function buckets(A, R, state) {
   const list = [], map = new Map();
   if (R.end <= R.a2) return list;
-  for (let t = bucketStart(R.a2, R.step), guard = 0; t < R.end && guard < 800; t = nextBucket(t, R.step), guard++) {
-    const t1 = nextBucket(t, R.step);
-    const lo = Math.max(t, R.a2), hi = Math.min(t1, R.end);
-    const b = { t, t1, lo, hi, mid: (lo + hi) / 2, in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: {}, ptok: {}, punk: {}, unk: false, others: false, partial: t < R.a2 || t1 > R.end, ...missingIn(A, lo, hi) };
-    list.push(b); map.set(t, b);
+  // multi-week buckets are enumerated and keyed by civil week number: a row's week cannot change when a
+  // clock change at a Monday's midnight moves the resolved instant (Madeira 1920-03-01), while an instant
+  // boundary can land on the exclusive range end and lose the bucket the rows belong to
+  const w = R.step >= WEEK ? Math.max(1, Math.round(R.step / WEEK)) : 0;
+  if (w) {
+    const first = bucketWeek(R.a2, w), count = Math.min(800, weekBucketCount(R.a2, R.end, w));
+    for (let i = 0, wk = first; i < count; i++, wk += w) {
+      const t = weekMonday(wk), t1 = weekMonday(wk + w);
+      const lo = Math.max(t, R.a2), hi = Math.min(t1, R.end);
+      const b = { t, t1, lo, hi, mid: (lo + hi) / 2, in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: {}, ptok: {}, punk: {}, unk: false, others: false, partial: t < R.a2 || t1 > R.end, ...missingIn(A, lo, hi) };
+      list.push(b); map.set(wk, b);
+    }
+  } else {
+    for (let t = bucketStart(R.a2, R.step), guard = 0; t < R.end && guard < 800; t = nextBucket(t, R.step), guard++) {
+      const t1 = nextBucket(t, R.step);
+      const lo = Math.max(t, R.a2), hi = Math.min(t1, R.end);
+      const b = { t, t1, lo, hi, mid: (lo + hi) / 2, in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: {}, ptok: {}, punk: {}, unk: false, others: false, partial: t < R.a2 || t1 > R.end, ...missingIn(A, lo, hi) };
+      list.push(b); map.set(t, b);
+    }
   }
   for (const r of rowsIn(A, R, state)) {
-    const b = map.get(bucketStart(r.t, R.step));
+    const b = map.get(w ? bucketWeek(r.t, w) : bucketStart(r.t, R.step));
     if (!b) continue;
     for (const t of TYPES) b[t.k] += r[t.k];
     b.cost += r.cost; bump(b.pc, r.p, r.cost); bump(b.ptok, r.p, r.in + r.out + r.cw + r.cr);
