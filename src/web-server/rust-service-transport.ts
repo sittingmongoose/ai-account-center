@@ -367,54 +367,11 @@ export async function readRustCursorAccount(
   }
 }
 
-/** Run one bounded sign-in poll over the service's configured computers. */
-export async function pollRustSignIns(root: string, hosts: unknown): Promise<unknown> {
-  const held = rustAgentConnection(root);
-  if (!held) return null;
-  try {
-    const reply = await requestRust(
-      held.connection,
-      '/internal/collection-signin-poll',
-      FRONT_DOOR_PRINCIPAL,
-      held.active,
-      { hosts },
-      'PUT',
-      { cap: 5 * 1024 * 1024, deadlineMs: 21_000 }
-    );
-    return reply.status === 200 ? reply.body : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Aggregate the published sign-in rows and renewal facts through the same private service. */
-export async function projectRustSignIns(
-  root: string,
-  input: unknown
-): Promise<{ machines?: unknown; ttlMs?: unknown } | null> {
-  const held = rustAgentConnection(root);
-  if (!held) return null;
-  try {
-    const reply = await requestRust(
-      held.connection,
-      '/internal/collection-signins',
-      FRONT_DOOR_PRINCIPAL,
-      held.active,
-      input,
-      'PUT'
-    );
-    return reply.status === 200
-      ? (reply.body as { machines?: unknown; ttlMs?: unknown } | null)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Read a provider cache by a private binding. Undefined leaves the reference reader in charge. */
 export async function readRustProviderCache(
   root: string,
-  input: { profileId: string; manifestHash: string } | { bindingHash: string }
+  input:
+    { profileId: string; manifestHash: string } | { bindingHash: string } | { walletSource: true }
 ): Promise<unknown> {
   const held = rustAgentConnection(root);
   if (!held) return undefined;
@@ -501,7 +458,11 @@ export function scheduleRustCollection(
 /** Save only through the owner selected at boot. A lost service leaves the in-memory quota usable. */
 export async function writeRustCollectionCache(
   root: string,
-  kind: 'account-usage-observations' | 'claude-live-snapshots',
+  kind:
+    | 'account-usage-observations'
+    | 'claude-live-snapshots'
+    | 'opencode-wallet-account'
+    | 'account-usage-cooldown',
   key: string,
   bytes: string
 ): Promise<boolean> {

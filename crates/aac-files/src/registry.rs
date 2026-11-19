@@ -342,7 +342,9 @@ mod tests {
         assert_eq!(
             moved,
             [
+                ("opencode-wallet-account", "collection"),
                 ("cursor-account-observation", "collection"),
+                ("account-usage-cooldown", "collection"),
                 ("account-usage-observations", "collection"),
                 ("claude-live-snapshots", "collection"),
             ]

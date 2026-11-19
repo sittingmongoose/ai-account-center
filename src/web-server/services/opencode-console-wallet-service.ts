@@ -1,5 +1,5 @@
 import { privateFileOwners } from '../../shared/private-files';
-import { readRustProviderCache } from '../rust-service-transport';
+import { readRustProviderCache, writeRustCollectionCache } from '../rust-service-transport';
 import { execFile, type ChildProcess } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
@@ -94,17 +94,20 @@ async function rememberBoundAccount(
   binding: string,
   accountId: string
 ): Promise<void> {
+  if (!WALLET_ID.test(accountId)) return;
+  const bindingHash = sourceHash(binding);
+  const contents = JSON.stringify({ version: 1, binding: bindingHash, accountId });
+  if (privateFileOwners()['opencode-wallet-account'] === 'rust-service') {
+    await writeRustCollectionCache(ccsDir, 'opencode-wallet-account', bindingHash, contents);
+    return;
+  }
   const temporary = path.join(ccsDir, `.opencode-console-wallet-account.${randomUUID()}.tmp`);
   try {
-    if (!WALLET_ID.test(accountId) || !(await privateCacheDirectory(ccsDir))) return;
+    if (!(await privateCacheDirectory(ccsDir))) return;
     const file = path.join(ccsDir, ACCOUNT_CACHE);
     const before = await fs.lstat(file).catch(() => null);
     if (before && (!before.isFile() || before.isSymbolicLink())) return;
-    await fs.writeFile(
-      temporary,
-      JSON.stringify({ version: 1, binding: sourceHash(binding), accountId }),
-      { encoding: 'utf8', mode: 0o600, flag: 'wx' }
-    );
+    await fs.writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     await fs.rename(temporary, file);
   } catch {
     // Persistence is best-effort; it cannot turn a valid current reading into an error.
@@ -274,6 +277,14 @@ async function readSourceFile(ccsDir: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function collectWalletBinding(ccsDir: string): Promise<string | null> {
+  if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+    const source = await readRustProviderCache(ccsDir, { walletSource: true });
+    if (source === null || typeof source === 'string') return source;
+  }
+  return readSourceFile(ccsDir);
 }
 
 /**
@@ -490,7 +501,7 @@ export class OpenCodeConsoleWalletService {
     let binding: string;
     try {
       const contents = await (
-        this.deps.readSource ?? (() => readSourceFile(this.deps.ccsDir ?? getCcsDir()))
+        this.deps.readSource ?? (() => collectWalletBinding(this.deps.ccsDir ?? getCcsDir()))
       )();
       if (!contents || Buffer.byteLength(contents) > 4096) {
         this.clear();

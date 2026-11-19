@@ -40,7 +40,7 @@ class UnixHttp(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 class Service:
-    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False, remote_env=None, cursor_fixture=False):
+    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False, remote_env=None, cursor_fixture=False, local_helper=False):
         self.temp = tempfile.TemporaryDirectory(prefix='a5-')
         self.root = Path(self.temp.name)
         self.agent = str(Path(agent).resolve())
@@ -66,6 +66,10 @@ class Service:
             'label': 'Fixture', 'os': 'linux', 'sshAlias': 'fixture',
             'transport': {'kind': 'ssh', 'host': 'fixture.invalid', 'key': str(self.root / 'no-key'), 'user': None, 'port': None}}},
             'agentTransportSsh': {'knownHostsFile': str(self.root / 'no-known-hosts')}}
+        if local_helper:
+            config['computers']['fixture-local'] = {
+                'label':'Fixture local', 'os':'linux', 'transport':{'kind':'local'},
+            }
         (self.root / 'config.yaml').write_text(json.dumps(config))
         recorder = self.root / 'ssh'
         recorder.write_text('#!/usr/bin/python3\nimport sys\nsys.path.insert(0,' + repr(str(Path(__file__).parent)) + ')\nfrom transport import record\nrecord(' + repr(str(self.root)) + ',' + repr(self.agent) + ')\n')
@@ -79,6 +83,10 @@ class Service:
             package = self.root / 'cursor-package'
             install_cursor_fixture(package, self.root)
             env['AAC_AGENT_PACKAGE_ROOT'] = str(package)
+        if local_helper:
+            home = self.root / 'local-home'
+            home.mkdir()
+            env['HOME'] = str(home)
         env.pop('AAC_AGENT_TRANSPORT', None)
         self.child = subprocess.Popen([str(Path(service).resolve())], stdin=subprocess.PIPE,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
@@ -222,7 +230,7 @@ def record(root, agent):
         sys.exit(0)  # No-connect capability probes are not agent launcher calls.
     root = Path(root)
     argv = shlex.split(sys.argv[-1])
-    if len(argv) == 5 and argv[:2] == ['/bin/sh', '-c'] and argv[3] == 'aac-failover':
+    if len(argv) == 6 and argv[:2] == ['/bin/sh', '-c'] and argv[3] == 'aac-failover':
         with (root / 'trace.jsonl').open('a') as f:
             f.write(json.dumps({'stage': 'helper', 'pid': os.getpid()}) + '\n')
         home = root / 'fixture-home'
@@ -245,12 +253,6 @@ def record(root, agent):
             identity['version'] = '0.0.0'
             print(json.dumps(identity)); sys.exit(0)
         os.execv(agent, [agent, '--version'])
-    if scenario == 'signin-rows':
-        request = json.loads(sys.stdin.buffer.readline())
-        assert request['verb'] == 'signin-expiry'
-        value = json.loads((root / 'signin-fixture.json').read_text())
-        print(json.dumps({'type':'result','protocol':1,'id':request['id'],'value':value}))
-        sys.exit(0)
     if scenario == 'collect-slow':
         request = json.loads(sys.stdin.buffer.readline())
         while not (root / 'barrier').exists():
@@ -445,6 +447,12 @@ def collection_gates(agent, service):
         assert status == 200 and event['type'] == 'result', event
         assert event['value']['failureCode'] == 'invalid_response', event
         assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'helper']
+        wallet_inv = {'version':1, 'provider':'opencode-wallet', 'action':'inventory'}
+        status, raw = s.ask('/internal/collect/failover-inventory', s.payload(wallet_inv))
+        event = json.loads(raw)
+        assert status == 200 and event['type'] == 'result'
+        assert event['value'] == {'version':1,'action':'inventory','candidates':[]}, event
+        assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'helper', 'helper']
 
         source_route = '/internal/collection-sources'
         assert s.ask(source_route, method='GET') == (200, '{"state":"absent"}')
@@ -465,6 +473,17 @@ def collection_gates(agent, service):
         assert s.ask(route, sample, method='PUT', principal=public)[0] == 401
         assert s.ask(route, {**sample, 'nextAttempt': 'bad'}, method='PUT') == (200, '{"saved":false}')
         assert s.ask(route, sample, method='PUT') == (200, '{"saved":true}')
+        gate_key = '9' * 64
+        gate_route = '/internal/collection-cache/account-usage-cooldown/' + gate_key
+        gate_file = s.root / 'account-usage-failover' / ('cooldown-' + gate_key + '.json')
+        moment = 1_767_225_600_000
+        assert s.ask(gate_route, {'now':moment,'until':moment+150000,'claude429Streak':2}, method='PUT') == (200, '{"saved":true}')
+        assert s.ask(gate_route, {'now':moment+50,'until':moment+100,'claude429Streak':0}, method='PUT') == (200, '{"saved":true}')
+        assert json.loads(gate_file.read_text()) == {
+            'version':1,'key':gate_key,'until':moment+150000,'claude429Streak':2,
+        }
+        assert gate_file.stat().st_mode & 0o777 == 0o600
+        assert s.ask(gate_route, {'now':moment,'until':moment+100,'claude429Streak':6}, method='PUT') == (200, '{"saved":false}')
         disk = s.root / 'account-usage-failover' / (key + '.json')
         assert disk.read_text() == json.dumps(sample)
         assert disk.stat().st_mode & 0o777 == 0o600
@@ -498,14 +517,34 @@ def collection_gates(agent, service):
         status, raw = s.ask(cache_route, request, method='PUT')
         assert status == 200 and json.loads(raw) == {'value': remote['sample']}
         assert s.ask(cache_route, dict(request, manifestHash='a'*64), method='PUT') == (200, '{"value":null}')
-        binding = 'd' * 64
+        source = s.root / 'opencode-console-wallet-source.json'
+        configuration = {'version':1,'platform':'mac','sshHost':'fixture'}
+        source.write_text(json.dumps(configuration))
+        source.chmod(0o600)
+        binding = hashlib.sha256(json.dumps(configuration, separators=(',', ':')).encode()).hexdigest()
         wallet = s.root / 'opencode-console-wallet-account.json'
         account = 'plan-opencode-go-console-mac-123456abcdef'
-        wallet.write_text(json.dumps({'version':1,'binding':binding,'accountId':account}))
-        wallet.chmod(0o600)
+        write_wallet = '/internal/collection-cache/opencode-wallet-account/' + binding
+        pointer = {'version':1,'binding':binding,'accountId':account}
+        assert s.ask(write_wallet, dict(pointer, binding='e'*64), method='PUT') == (200, '{"saved":false}')
+        assert s.ask(write_wallet, pointer, method='PUT') == (200, '{"saved":true}')
+        assert json.loads(wallet.read_text()) == pointer and wallet.stat().st_mode & 0o777 == 0o600
+        status, raw = s.ask(cache_route, {'walletSource':True}, method='PUT')
+        assert status == 200 and json.loads(json.loads(raw)['value']) == json.loads(source.read_text())
         status, raw = s.ask(cache_route, {'bindingHash':binding}, method='PUT')
         assert status == 200 and json.loads(raw) == {'value':account}
 
+    with Service(agent, service, collection=True, local_helper=True) as s:
+        request = s.payload({'version':1,'provider':'claude','action':'collect','candidate':{},
+                             'ccsDir':str(s.root)})
+        request['computer']['sshHost'] = None
+        status, raw = s.ask('/internal/collect/failover-collect', request)
+        event = json.loads(raw)
+        assert status == 200 and event['type'] == 'result', event
+        assert event['value']['failureCode'] == 'invalid_response'
+        request['args']['ccsDir'] = str(s.root / 'other')
+        assert json.loads(s.ask('/internal/collect/failover-collect', request)[1])['reason'] == 'unsupported'
+        assert not s.traces()
     print('PASS H2 collection: switch, principal, read-only verbs, coalescing, row bytes and private cache writes')
 
 
@@ -543,7 +582,7 @@ def collection_projection(agent, service):
                 env = {**os.environ, 'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config')}
                 subprocess.run(command, input=json.dumps(payload), env=env, text=True, check=True)
                 assert len(Handler.calls) == 2 and not Handler.queue
-                assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'run', 'run']
+                assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'run']
             finally:
                 server.shutdown()
 

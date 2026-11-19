@@ -1,7 +1,5 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
-import { privateFileOwners } from '../../shared/private-files';
-import { pollRustSignIns, projectRustSignIns } from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-markdown';
 import {
@@ -12,12 +10,7 @@ import {
   usageHelperCommand,
 } from './usage-failover-transport';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
-import {
-  agentTransport,
-  agentVerbs,
-  runSignInAgent,
-  collectSignInWithFallback,
-} from './agent-verbs';
+import { runSignInAgent, collectSignInWithFallback } from './agent-verbs';
 import {
   readClaudeSignInRenewal,
   type ClaudeSignInRenewal,
@@ -136,26 +129,7 @@ export async function withRenewal(
 ): Promise<SignInHealth> {
   const renewal = await readRenewal().catch(() => null);
   if (!renewal) return health;
-  const now = Date.now();
-  if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
-    const projection = await projectRustSignIns(getCcsDir(), {
-      machines: health.machines,
-      renewal,
-      now,
-    });
-    if (validMachineRows(projection?.machines))
-      return { ...health, machines: projection.machines, renewal };
-  }
-  return { ...health, machines: mergeRenewal(health.machines, renewal, now), renewal };
-}
-
-function validMachineRows(value: unknown): value is Record<string, SignInProfile[]> {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    Object.values(value).every(Array.isArray)
-  );
+  return { ...health, machines: mergeRenewal(health.machines, renewal, Date.now()), renewal };
 }
 
 const CACHE_MIN_MS = 30_000;
@@ -413,9 +387,9 @@ function unavailableHost(machine: string, error: string): SignInProfile[] {
   ];
 }
 
-async function collectLocal(referenceOnly: boolean): Promise<string> {
+async function collectLocal(): Promise<string> {
   return collectSignInWithFallback(
-    () => (referenceOnly ? Promise.resolve(null) : runSignInAgent(localUsageHost())),
+    () => runSignInAgent(localUsageHost()),
     async () => {
       // The packaged helper, resolved from this module like the sibling usage
       // transports, run by this host's own installed python when it has one,
@@ -430,9 +404,9 @@ async function collectLocal(referenceOnly: boolean): Promise<string> {
 
 type UsageHostEntry = Awaited<ReturnType<typeof configuredUsageHosts>>[number];
 
-async function collectRemote(host: UsageHostEntry, referenceOnly: boolean): Promise<string> {
+async function collectRemote(host: UsageHostEntry): Promise<string> {
   return collectSignInWithFallback(
-    () => (referenceOnly ? Promise.resolve(null) : runSignInAgent(host)),
+    () => runSignInAgent(host),
     async () => {
       // The collector runs from an in-memory stdin bundle: helper source never
       // lands on the remote disk, and a clean host reports instead of failing.
@@ -600,48 +574,17 @@ function collectedSignInHealth(): Promise<SignInHealth> {
   return refresh();
 }
 
-async function pollNativeHosts(
-  hosts: UsageHostEntry[]
-): Promise<{ machines: SignInHealth['machines']; referenceHosts: string[] } | null> {
-  if (
-    agentVerbs() !== 'on' ||
-    agentTransport() !== 'on' ||
-    privateFileOwners()['account-usage-observations'] !== 'rust-service'
-  )
-    return null;
-  const value = (await pollRustSignIns(getCcsDir(), hosts)) as {
-    machines?: unknown;
-    referenceHosts?: unknown;
-  } | null;
-  if (
-    !validMachineRows(value?.machines) ||
-    !Array.isArray(value?.referenceHosts) ||
-    !value.referenceHosts.every((host) => hosts.some((entry) => entry.host === host))
-  )
-    return null;
-  return { machines: value.machines, referenceHosts: value.referenceHosts };
-}
-
 /** One collection pass. Hosts race their own settlement deadline, so a
  * single wedged machine cannot hold allSettled past the publisher's slot
  * and wipe successful machines' rows with it. */
 async function collectOnce(): Promise<SignInHealth> {
   const machines: Record<string, SignInProfile[]> = {};
   const hosts = await configuredUsageHosts();
-  const deadline = Date.now() + HOST_LIMIT_MS;
-  const native = await pollNativeHosts(hosts);
   const results = await Promise.allSettled(
     hosts.map((host) => {
-      if (native?.machines[host.host]?.length) return Promise.resolve(native.machines[host.host]);
-      const referenceOnly = native?.referenceHosts.includes(host.host) ?? false;
-      const runner = host.sshHost
-        ? collectRemote(host, referenceOnly)
-        : collectLocal(referenceOnly);
+      const runner = host.sshHost ? collectRemote(host) : collectLocal();
       return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error('collection timed out')),
-          Math.max(0, deadline - Date.now())
-        );
+        const timer = setTimeout(() => reject(new Error('collection timed out')), HOST_LIMIT_MS);
         timer.unref?.();
         runner.then(
           (value) => {
@@ -659,8 +602,7 @@ async function collectOnce(): Promise<SignInHealth> {
   hosts.forEach((host, index) => {
     const result = results[index];
     if (result.status === 'fulfilled') {
-      const rows =
-        typeof result.value === 'string' ? parseRows(result.value, host.host) : result.value;
+      const rows = parseRows(result.value, host.host);
       if (rows.length > 0) {
         machines[host.host] = rows;
         return;
@@ -677,6 +619,11 @@ async function collectOnce(): Promise<SignInHealth> {
         : 'no profiles reported';
     machines[host.host] = unavailableHost(host.host, reason);
   });
+  if (!machines.ubuntu) {
+    // A dashboard hosted on the Mac or Windows collects no Ubuntu route:
+    // the machine names itself rather than silently disappearing.
+    machines.ubuntu = unavailableHost('ubuntu', 'no collection route from this host');
+  }
   return { generatedAt: new Date().toISOString(), machines };
 }
 
@@ -728,24 +675,6 @@ function refresh(): Promise<SignInHealth> {
       throw error;
     }
     const settledAt = Date.now();
-    if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
-      const projected = await projectRustSignIns(getCcsDir(), {
-        machines: value.machines,
-        collectedAt: entry.collectedAt,
-        now: settledAt,
-      });
-      if (
-        validMachineRows(projected?.machines) &&
-        typeof projected?.ttlMs === 'number' &&
-        Number.isSafeInteger(projected.ttlMs) &&
-        projected.ttlMs >= CACHE_MIN_MS &&
-        projected.ttlMs <= CACHE_MAX_MS
-      ) {
-        entry.until = settledAt + projected.ttlMs;
-        return { ...value, machines: projected.machines };
-      }
-    }
-    value.machines.ubuntu ??= unavailableHost('ubuntu', 'no collection route from this host');
     const downgraded = downgradeCrossedRows(value, entry.collectedAt, settledAt);
     entry.until = settledAt + (downgraded ? CACHE_MIN_MS : cacheTtlFor(value, settledAt));
     return value;

@@ -4,7 +4,6 @@ pub mod failover;
 pub(crate) mod helper;
 pub mod provider_caches;
 pub mod sampler;
-pub mod signins;
 pub mod sources;
 
 use crate::feed::{Feeds, Generation, HOME_DASHBOARD, Prepared};

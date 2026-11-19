@@ -13,6 +13,7 @@ import {
   identityUsageCooldownKey,
   readUsageCooldown,
   readUsageCooldownState,
+  settleUsageCooldown,
 } from './usage-failover-cooldown';
 import {
   projectClaudeFailoverExtras,
@@ -297,7 +298,7 @@ export class UsageFailoverService {
     host: UsageHost,
     request: UsageHelperRequest,
     beforeStart?: () => boolean,
-    observe?: (response: UsageHelperResponse) => void
+    observe?: (response: UsageHelperResponse) => void | Promise<void>
   ): Promise<UsageHelperResponse | null> {
     if (this.active >= 3) await new Promise<void>((resolve) => this.waiting.push(resolve));
     else this.active++;
@@ -320,7 +321,7 @@ export class UsageFailoverService {
         'Usage helper request'
       );
       // Publish identity cooldowns before a queued request receives this slot.
-      observe?.(response);
+      if (observe) await observe(response);
       return response;
     } finally {
       const next = this.waiting.shift();
@@ -837,6 +838,7 @@ export class UsageFailoverService {
         this.now()
       );
       this.cooldowns.set(cooldownKey, state.nextAttempt);
+      await settleUsageCooldown(target.ccsDir, cooldownKey);
       return;
     }
     const tried = new Set<string>();
@@ -881,7 +883,7 @@ export class UsageFailoverService {
           },
           // Recheck both holds when a queued request finally starts.
           () => !applyCooldown() && !peerHeld(),
-          (value) => {
+          async (value) => {
             if (value.action !== 'collect' || !responseIsRateLimited(value)) return;
             const now = this.now();
             const providerUntil =
@@ -902,6 +904,10 @@ export class UsageFailoverService {
                 peerKey,
                 holdUsageCooldown(target.ccsDir, peerKey, until, this.now())
               );
+            await Promise.all([
+              settleUsageCooldown(target.ccsDir, cooldownKey),
+              peerKey ? settleUsageCooldown(target.ccsDir, peerKey) : undefined,
+            ]);
           }
         );
       } catch {
@@ -1044,8 +1050,10 @@ export class UsageFailoverService {
       if (target.claudeDesktopCadence && reading.status === 'ok' && response.failureCode === null) {
         const now = this.now();
         const cooldown = readUsageCooldownState(target.ccsDir, cooldownKey, now);
-        if (!cooldown.until && cooldown.claude429Streak)
+        if (!cooldown.until && cooldown.claude429Streak) {
           holdUsageCooldown(target.ccsDir, cooldownKey, now, now, 0);
+          await settleUsageCooldown(target.ccsDir, cooldownKey);
+        }
         const floor = Math.max(
           readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds,
           response.refreshAfterSeconds ?? 0

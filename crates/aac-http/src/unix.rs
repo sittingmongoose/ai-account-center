@@ -310,51 +310,6 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
-        Handler::SignInPoll => {
-            use crate::account_usage::signins::poll;
-            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
-                != Some(registry::Role::RustService)
-            {
-                return decline(row.handler, Decline::Unsupported);
-            }
-            let Ok(Ok(bytes)) =
-                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
-            else {
-                return decline(row.handler, Decline::Shape);
-            };
-            let hosts = match poll::parse(&bytes) {
-                Ok(hosts) => hosts,
-                Err(reason) => return decline(row.handler, reason),
-            };
-            let reader = poll::Reader::shared(shared.boot.ccs_dir.clone(), shared.agents.clone());
-            match reader.read(hosts).await {
-                Ok(batch) => Json(json!({
-                    "machines": batch.machines, "referenceHosts": batch.reference_hosts,
-                }))
-                .into_response(),
-                Err(reason) => decline(row.handler, reason),
-            }
-        }
-        Handler::SignInHealth => {
-            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
-                != Some(registry::Role::RustService)
-            {
-                return decline(row.handler, Decline::Unsupported);
-            }
-            let Ok(bytes) = to_bytes(req.into_body(), 2 * 1024 * 1024).await else {
-                return decline(row.handler, Decline::Shape);
-            };
-            match shared
-                .limits
-                .blocking(row.pool, move || {
-                    crate::account_usage::signins::answer(&bytes)
-                })
-                .await
-            {
-                Ok(value) => Json(value).into_response(),
-                Err(reason) => decline(row.handler, reason),
-            }
-        }
         Handler::CursorAccount => {
             use crate::account_usage::cursor::{ROW, Request};
             if shared.owners.owner(ROW) != Some(registry::Role::RustService) {

@@ -1,7 +1,7 @@
 /** H2 snapshot projection on the actual TS adapters and private Rust socket. */
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import type {
   UsageHelperResponse,
   UsageFailoverTarget,
@@ -26,7 +26,7 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
 });
 const { settlePrivateFileOwners } = await import('../../../src/shared/private-files');
-const { pollRustSignIns, projectRustSignIns, registerRustAgentConnection } =
+const { registerRustAgentConnection } =
   await import('../../../src/web-server/rust-service-transport');
 const { collectQuotaWithFallback, runQuotaAgent } =
   await import('../../../src/web-server/services/agent-verbs');
@@ -37,13 +37,10 @@ const { AccountDashboardService, withPassedResetsAt } =
 
 const { UsageFailoverService } =
   await import('../../../src/web-server/services/usage-failover-service');
+const { holdUsageCooldown, readUsageCooldownState, settleUsageCooldown } =
+  await import('../../../src/web-server/services/usage-failover-cooldown');
 const { runFailoverInventoryAgent } =
   await import('../../../src/web-server/services/usage-failover-transport');
-
-const { cacheTtlFor, downgradeCrossedRows, mergeRenewal, parseRows } =
-  await import('../../../src/web-server/services/signin-health-service');
-type Health = import('../../../src/web-server/services/signin-health-service').SignInHealth;
-type Renewal = import('../../../src/web-server/services/claude-signin-renewal').ClaudeSignInRenewal;
 
 const close = registerRustAgentConnection(fixture.root, fixture, new Set());
 const source = { provider: 'kimi-code', platform: 'ubuntu', sshHost: 'fixture' } as const;
@@ -165,123 +162,43 @@ try {
   assert.deepEqual(restored, owned);
   assert.equal(inventories, 1, 'the cold coordinator reused the Rust-written observation');
 
-  const raw = {
-    schemaVersion: 1,
-    profiles: [
-      {
-        name: 'Alice',
-        configDir: 'x'.repeat(199) + 'ðŸ˜€',
-        provider: 'codex',
-        state: 'unsupported',
-        fieldsAvailable: ['tokens', 'fixture-field'],
-        fixCommand: 'line\nbreak',
-        accessExpiresAt: '2026-02-30T00:00:00.000Z',
-      },
-      {
-        name: 'Alice',
-        state: 'unavailable',
-        error: 'fixture private message',
-        fixCommand: 'fixture command',
-        refreshExpiresAt: '2026-01-01T05:30:00.000+05:30',
-      },
-      { name: 'Alice-2', state: 'ok' },
-      { name: 'Alice ', state: 'ok' },
-      { name: 'ðŸ˜€', state: 'ok' },
-    ],
-  };
-  writeFileSync(path.join(fixture.root, 'signin-fixture.json'), JSON.stringify(raw));
-  writeFileSync(path.join(fixture.root, 'scenario'), 'signin-rows');
-  const scheduled = await pollRustSignIns(fixture.root, [
-    { host: 'ubuntu', platform: 'ubuntu', sshHost: 'fixture' },
-    { host: 'mac', platform: 'mac', sshHost: 'unconfigured' },
-  ]);
-  assert.deepEqual(scheduled, {
-    machines: { ubuntu: JSON.parse(JSON.stringify(parseRows(JSON.stringify(raw), 'ubuntu'))) },
-    referenceHosts: ['mac'],
+  const cooldownKey = 'ca'.repeat(32);
+  assert.equal(holdUsageCooldown(fixture.root, cooldownKey, at + 120_000, at, 1), at + 120_000);
+  await settleUsageCooldown(fixture.root, cooldownKey);
+  assert.deepEqual(readUsageCooldownState(fixture.root, cooldownKey, at), {
+    until: at + 120_000,
+    claude429Streak: 1,
+  });
+  assert.equal(
+    holdUsageCooldown(fixture.root, cooldownKey, at + 360_000, at + 130_000, 2),
+    at + 360_000
+  );
+  await settleUsageCooldown(fixture.root, cooldownKey);
+  assert.deepEqual(readUsageCooldownState(fixture.root, cooldownKey, at + 361_000), {
+    until: 0,
+    claude429Streak: 2,
+  });
+  holdUsageCooldown(fixture.root, cooldownKey, at + 361_000, at + 361_000, 0);
+  await settleUsageCooldown(fixture.root, cooldownKey);
+  assert.deepEqual(readUsageCooldownState(fixture.root, cooldownKey, at + 362_000), {
+    until: 0,
+    claude429Streak: 0,
   });
 
-  const settledAt = at + 5000;
-  const machines: Health['machines'] = {
-    mac: [
-      {
-        name: 'fixture',
-        machine: 'mac',
-        platform: 'mac',
-        provider: 'claude',
-        state: 'ok',
-        fixCommand: '',
-        accessExpiresAt: new Date(at + 1000).toISOString(),
-      },
-    ],
-  };
-  const expectedHealth: Health = {
-    generatedAt: new Date(settledAt).toISOString(),
-    machines: {
-      ...structuredClone(machines),
-      ubuntu: [
-        {
-          name: 'ubuntu',
-          provider: 'claude',
-          platform: 'ubuntu',
-          machine: 'ubuntu',
-          state: 'unavailable',
-          fixCommand: '',
-          error: 'no collection route from this host',
-        },
-      ],
-    },
-  };
-  const downgraded = downgradeCrossedRows(expectedHealth, at, settledAt);
-  assert.equal(downgraded, true);
-  const health = await projectRustSignIns(fixture.root, {
-    machines,
-    collectedAt: at,
-    now: settledAt,
+  const cooldownFile = path.join(
+    fixture.root,
+    'account-usage-failover',
+    'cooldown-' + cooldownKey + '.json'
+  );
+  assert.deepEqual(JSON.parse(readFileSync(cooldownFile, 'utf8')), {
+    version: 1,
+    key: cooldownKey,
+    until: at + 361_000,
+    claude429Streak: 0,
   });
-  assert.deepEqual(health, {
-    machines: expectedHealth.machines,
-    ttlMs: downgraded ? 30_000 : cacheTtlFor(expectedHealth, settledAt),
-  });
-
-  const renewal = {
-    stale: false,
-    hosts: [
-      { host: 'mac', error: null },
-      { host: 'windows', error: 'unavailable' },
-    ],
-    signIns: [
-      {
-        profile: 'fixture',
-        host: 'mac',
-        state: 'ok',
-        logoutAt: null,
-        signInEndsAt: null,
-        email: 'fixture@example.test',
-        autoRenew: true,
-      },
-      {
-        profile: 'fixture',
-        host: 'windows',
-        state: 'logged_out',
-        logoutAt: null,
-        signInEndsAt: null,
-        autoRenew: false,
-      },
-    ],
-  } as Renewal;
-  const both = {
-    ...machines,
-    windows: [{ ...machines.mac[0], platform: 'windows', machine: 'windows' }],
-  };
-  const merged = await projectRustSignIns(fixture.root, {
-    machines: both,
-    renewal,
-    now: settledAt,
-  });
-  assert.deepEqual(merged, {
-    machines: JSON.parse(JSON.stringify(mergeRenewal(both, renewal, settledAt))),
-  });
-  console.log('PASS H2 sign-in host settlement, crossed expiry and Claude renewal merge');
+  console.log(
+    'PASS H2 identity cooldown: native persistence keeps the expired streak and verified reset'
+  );
 
   console.log(
     'PASS H2 dashboard and Home input bytes, inventory identity and cold cache restoration on the Kimi fixture'

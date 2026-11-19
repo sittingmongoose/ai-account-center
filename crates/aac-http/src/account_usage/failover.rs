@@ -1,12 +1,15 @@
 //! Identity cooldown and the wave 67 Claude Desktop cadence for the native coordinator.
+use aac_core::{Cause, Failure};
 use aac_files::{
     read::{Ancestors, Mode, Owner, Read, ReadPolicy},
-    registry,
+    registry::{self, Owners},
 };
 use aac_views::decline::Decline;
 use serde::Deserialize;
+use serde_json::{Value, json};
 use std::path::Path;
 
+pub(crate) const ROW: &str = "account-usage-cooldown";
 const DAY_MS: f64 = 86_400_000.0;
 const MAX_STREAK: u8 = 5;
 
@@ -40,7 +43,7 @@ pub fn persisted(root: &Path, key: &str, now: f64) -> Result<Option<Cooldown>, D
     if !digest(key) || !now.is_finite() {
         return Err(Decline::Shape);
     }
-    let row = registry::row("account-usage-cooldown").map_err(|_| Decline::Internal)?;
+    let row = registry::row(ROW).map_err(|_| Decline::Internal)?;
     let file = root.join(
         row.file(Some(&format!("cooldown-{key}.json")))
             .map_err(|_| Decline::Shape)?,
@@ -54,6 +57,42 @@ pub fn persisted(root: &Path, key: &str, now: f64) -> Result<Option<Cooldown>, D
         Read::Bytes(bytes, _) => Ok(decode(&bytes, key, now)),
         _ => Err(Decline::Unsupported),
     }
+}
+
+/// Save a hold under the native owner's lease, preserving a longer existing hold.
+pub(crate) fn save(owners: &Owners, root: &Path, key: &str, bytes: &[u8]) -> Result<(), Failure> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Hold {
+        now: f64,
+        until: f64,
+        claude429_streak: Option<u8>,
+    }
+    let refused = || Failure::new(Cause::Refused, "invalid collection cooldown");
+    let hold: Hold = crate::json_object::from_slice(bytes, &["now", "until", "claude429Streak"])
+        .map_err(|_| refused())?;
+    if !digest(key)
+        || !hold.now.is_finite()
+        || !hold.until.is_finite()
+        || !(0.0..=8.64e15).contains(&hold.now)
+        || hold.claude429_streak.is_some_and(|n| n > MAX_STREAK)
+    {
+        return Err(refused());
+    }
+    let file = format!("cooldown-{key}.json");
+    let store = owners.claim(registry::rows()?, ROW, root, Some(&file))?;
+    let saved = persisted(root, key, hold.now)
+        .map_err(|_| refused())?
+        .unwrap_or_default();
+    let streak = hold
+        .claude429_streak
+        .filter(|n| *n != 0 || saved.until <= hold.now);
+    let merged = saved.hold(hold.now, hold.until, streak);
+    let mut value = json!({"version":1,"key":key,"until":merged.until});
+    if let Some(streak) = merged.claude_429_streak {
+        value["claude429Streak"] = Value::from(streak);
+    }
+    store.write_private_cache(&aac_views::js_json::write(&value))
 }
 
 fn decode(bytes: &[u8], key: &str, now: f64) -> Option<Cooldown> {

@@ -4,7 +4,7 @@ use aac_config::{OperatingSystem, TransportConfig};
 use aac_transport::{CallOptions, Computer};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
-use std::{ffi::OsString, sync::OnceLock};
+use std::{ffi::OsString, path::Path, sync::OnceLock, time::Duration};
 use tokio::time::Instant;
 
 const CAP: usize = 2 * 1024 * 1024;
@@ -65,14 +65,16 @@ print(json.dumps(failover_usage.run(json.load(sys.stdin)),allow_nan=False))"#
     })
 }
 
-fn argv(computer: &Computer, args: &Value) -> Result<Vec<OsString>, &'static str> {
-    // The existing local launcher inherits credentials and a selected CCS root.
-    if matches!(computer.config().transport, TransportConfig::Local)
-        || !args["ccsDir"].is_null()
-        || !args["homeDir"].is_null()
+fn argv(computer: &Computer, root: &Path, args: &Value) -> Result<Vec<OsString>, &'static str> {
+    let local = matches!(computer.config().transport, TransportConfig::Local);
+    let ccs_dir = &args["ccsDir"];
+    if !args["homeDir"].is_null()
+        || (!ccs_dir.is_null()
+            && (!local || ccs_dir.as_str().is_none_or(|path| Path::new(path) != root)))
     {
         return Err("unsupported");
     }
+    let scoped = ccs_dir.as_str().unwrap_or("");
     if computer.config().os == OperatingSystem::Windows {
         let source = format!(
             r#"$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'; $venv = [IO.Path]::Combine($HOME, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe'); $python = if (Test-Path -LiteralPath $venv -PathType Leaf) {{ $venv }} else {{ (Get-Command python3.exe,python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source }}; if (-not $python) {{ exit 1 }}; & $python -c '{}'; exit $LASTEXITCODE"#,
@@ -89,10 +91,12 @@ fn argv(computer: &Computer, args: &Value) -> Result<Vec<OsString>, &'static str
         .into());
     }
     let script = r#"export PYTHONIOENCODING=utf-8 PYTHONUTF8=1
-venv="$HOME/.ccs/claude-session-migration/venv/bin/python3"
-if [ -x "$venv" ]; then exec "$venv" -c "$1"; fi
-exec /usr/bin/python3 -c "$1""#;
-    Ok(["/bin/sh", "-c", script, "aac-failover", BOOTSTRAP]
+ccs="$1"
+if [ -z "$ccs" ]; then ccs="$HOME/.ccs"; fi
+venv="$ccs/claude-session-migration/venv/bin/python3"
+if [ -x "$venv" ]; then exec "$venv" -c "$2"; fi
+exec /usr/bin/python3 -c "$2""#;
+    Ok(["/bin/sh", "-c", script, "aac-failover", scoped, BOOTSTRAP]
         .into_iter()
         .map(Into::into)
         .collect())
@@ -100,17 +104,23 @@ exec /usr/bin/python3 -c "$1""#;
 
 pub(crate) async fn collect(
     computer: &Computer,
+    root: &Path,
     args: &Value,
     deadline: Instant,
     cap: usize,
 ) -> Result<Value, &'static str> {
-    let argv = argv(computer, args)?;
+    let argv = argv(computer, root, args)?;
     let input = serde_json::to_vec(&json!({"helperSource": source(), "request": args}))
         .map_err(|_| "shape")?;
     if input.len() > CAP {
         return Err("shape");
     }
-    let mut options = CallOptions::new(std::time::Duration::from_secs(35), cap);
+    let seconds = if args["action"] == "inventory" {
+        12
+    } else {
+        35
+    };
+    let mut options = CallOptions::new(Duration::from_secs(seconds), cap);
     options.deadline = options.deadline.min(deadline);
     let result = computer
         .execute(&argv, &input, &options)
@@ -120,7 +130,7 @@ pub(crate) async fn collect(
         return Err("transport");
     }
     let value: Value = serde_json::from_slice(&result.stdout).map_err(|_| "reply")?;
-    if value["version"] != 1 || value["action"] != "collect" {
+    if value["version"] != 1 || value["action"] != args["action"] {
         return Err("reply");
     }
     Ok(value)

@@ -42,11 +42,6 @@ pub(crate) struct Selector {
     platform: String,
     ssh_host: Option<String>,
 }
-impl Selector {
-    pub(crate) fn new(platform: String, ssh_host: Option<String>) -> Self {
-        Self { platform, ssh_host }
-    }
-}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Call {
@@ -299,6 +294,10 @@ impl Call {
 }
 
 impl Agents {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(crate) fn permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         self.slots.clone().try_acquire_owned().ok()
     }

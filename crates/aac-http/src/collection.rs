@@ -26,11 +26,11 @@ const VERBS: [&str; 4] = [
 ];
 const MAX_PENDING: usize = 16;
 type Key = [u8; 32];
-pub(crate) enum Collected {
+enum Collected {
     Value(Value),
     Failure(Failure),
 }
-pub(crate) type Reply = Result<Arc<Collected>, &'static str>;
+type Reply = Result<Arc<Collected>, &'static str>;
 type Pending = watch::Sender<Option<Reply>>;
 
 pub(crate) struct Collection {
@@ -91,8 +91,14 @@ impl Collection {
             .await
             .map_err(|_| "busy")?
             .map_err(|_| "busy")?;
-        let result =
-            crate::account_usage::helper::collect(client.computer(), args, deadline, cap).await?;
+        let result = crate::account_usage::helper::collect(
+            client.computer(),
+            agents.root(),
+            args,
+            deadline,
+            cap,
+        )
+        .await?;
         Ok(Arc::new(Collected::Value(result)))
     }
 
@@ -167,7 +173,10 @@ impl Collection {
                 tokio::spawn(async move {
                     // A lost dashboard connection does not spawn a second provider read.
                     // The original pass still owns its slot and absolute deadline.
-                    let result = if request.verb == "failover-collect" {
+                    // Wallet inventory uses the existing capsule parser, which is not an M2 agent reader.
+                    let wallet = request.verb == "failover-inventory"
+                        && request.args["provider"] == "opencode-wallet";
+                    let result = if request.verb == "failover-collect" || wallet {
                         collection
                             .read_helper(&agents, &computer, &request.args, deadline, cap)
                             .await
@@ -222,7 +231,7 @@ impl Call {
     }
 }
 
-pub(crate) async fn read_agent(
+async fn read_agent(
     agents: &Agents,
     computer: crate::agent_transport::Selector,
     request: Request,

@@ -644,6 +644,8 @@ computer. The service uses the same L5 registry and pool.
   avoid a duplicate provider read.
 - `PUT /internal/collection-cache/{kind}/{key}` saves a validated observation
   or Windows Claude snapshot to the original path through the registry lease.
+  The same lease-backed path owns OpenCode's workspace pointer and identity
+  cooldown holds. A wallet pointer is saved only for the current configured source.
   The selected owner is fixed for the service boot. Turning the group off
   returns writes to TypeScript using the same cache files.
 
@@ -657,24 +659,19 @@ computer. The service uses the same L5 registry and pool.
   With the Rust store hosted, the TS boot job also uses that conversion.
 - `GET /internal/collection-sources` reads the private account registry v2.
   `PUT /internal/collection-provider-cache` takes a Claude profile ID and
-  manifest hash or an OpenCode wallet binding hash.
+  manifest hash, an OpenCode wallet binding hash, or a wallet-source read.
 - `PUT /internal/collection-cursor` runs the digest-checked Cursor reader
   locally, with a 120-second process bound and one pending read. It saves the
   previous observation's layout, uses the ten-minute TTL, and keeps dated
   last-good rows on an unavailable result. A manual refresh bypasses the TTL.
   The existing TS reader serves when the Rust collection group is off.
-- `PUT /internal/collection-signin-poll` runs the bounded cross-host L5
-  sign-in read, sanitizes rows and names the hosts that need the reference.
-  The standalone listener can use `account_usage::signins::poll::Reader`.
-- `PUT /internal/collection-signins` settles host results and computes their
-  expiry TTL or merges the current Claude renewal report into those results.
-- `POST /internal/collect/failover-collect` can run a selected **remote**
+- `POST /internal/collect/failover-collect` can run a selected
   provider helper over the same L5 pool, with at most three active helpers.
-  The release bundles the existing Python source. A refusal before launch
+  The release bundles the existing Python source, including OpenCode wallet inventory. A refusal before launch
   allows the TypeScript fallback. An indeterminate reply ends the attempt.
 
 The TypeScript collector still selects sources, applies identity-bound failover
 and publishes complete dashboard inputs. The standalone Rust sampler takes a
-source producer and publication callback. The full native source producer and
-sign-in host scheduler are separate steps. The existing Claude Desktop
-coordinator retains its wave 67 cooldown persistence and retry behavior.
+source producer and publication callback. The full native source producer is a separate step. The TS peer and identity
+coordinator applies the original wave 67 retry rules and Rust persists its holds
+when the collection group owns the cache.

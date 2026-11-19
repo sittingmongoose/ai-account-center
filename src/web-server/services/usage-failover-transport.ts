@@ -435,7 +435,6 @@ async function dispatchRustHelper(
   deadlineAt: number
 ): Promise<string | null | undefined> {
   if (
-    !host.sshHost ||
     privateFileOwners()['account-usage-observations'] !== 'rust-service' ||
     agentTransport() !== 'on'
   )
