@@ -44,9 +44,10 @@ def sandbox(tmp, command, binaries, dependencies):
         "bwrap", "--unshare-net", "--unshare-pid", "--die-with-parent",
         "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
         "--tmpfs", "/home", "--tmpfs", "/mnt", "--tmpfs", "/run", "--tmpfs", "/tmp",
+        "--tmpfs", "/usr/local/bin",
         "--ro-bind", str(ROOT), str(ROOT),
         "--ro-bind", str(dependencies), str(dependencies),
-        "--bind", tmp, "/fixture", "--chdir", str(ROOT), "--clearenv",
+        "--bind", tmp, "/tmp/aac-fixture", "--chdir", str(ROOT), "--clearenv",
     ]
     for name, binary in binaries.items():
         cmd += ["--ro-bind", str(binary), "/usr/local/bin/" + name]
@@ -54,7 +55,7 @@ def sandbox(tmp, command, binaries, dependencies):
         "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
         "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CCS_HOME",
-    ), "/fixture")
+    ), "/tmp/aac-fixture")
     env.update({
         "PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8",
         "AAC_RUST_PUBLIC_BINARY": str(ROOT / "dist/native/aac-http"),
@@ -63,7 +64,7 @@ def sandbox(tmp, command, binaries, dependencies):
         "AAC_STORE_MODULE": str(ROOT / "dist/native/aac-store.linux-x64.node"),
         "AAC_RUST_COMPOSE": "1", "AAC_RUST_SERVICE": "on", "AAC_M6_FIXTURE_REPORT": "1", "AAC_NO_LOCAL_RUST_BUILD": "1",
         "AAC_AGENT_VERBS": "off", "AAC_AGENT_TRANSPORT": "off", "AAC_STATUS_DOORBELL": "off",
-        "AAC_AGENT_REPORTS_DIR": "/fixture/reports", "AAC_PM_MAIL_REGISTRY_DIR": "/fixture/registry",
+        "AAC_AGENT_REPORTS_DIR": "/tmp/aac-fixture/reports", "AAC_PM_MAIL_REGISTRY_DIR": "/tmp/aac-fixture/registry",
         "AAC_STORE_SHARE_BACKUP_DIR": "off",
     })
     for key, value in env.items():
