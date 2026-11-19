@@ -287,6 +287,7 @@ async function addApiKey(
           return;
         case 'discard':
           await store.delete(provider, keyId);
+          return;
       }
     });
     if (!accepted) throw new LifecycleHttpError(422, 'key_rejected');
