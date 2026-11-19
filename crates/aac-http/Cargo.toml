@@ -33,6 +33,8 @@ serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
 tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 futures-util = { version = "0.3", default-features = false }
+# The models.dev registry fetch (G15): same client shape as aac-agent's quota reads.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 sha2.workspace = true
 subtle = "2.6"
 tracing = "0.1"
