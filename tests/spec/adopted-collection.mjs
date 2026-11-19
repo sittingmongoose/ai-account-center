@@ -91,6 +91,7 @@ async function reservePort() {
 const exec = promisify(execFile);
 const h2 = process.argv.includes('--http2');
 const dead = process.argv.includes('--dead-owner');
+const wallet = process.argv.includes('--wallet-binding');
 const lease = process.argv.includes('--collection-lease');
 const incompatible = process.argv.includes('--incompatible-owner');
 
@@ -268,85 +269,129 @@ try {
     assert.equal(login.status, 200);
     const cookie = login.headers.get('set-cookie').split(';')[0];
 
-    const initial = await send(dashboardPath, { headers: { cookie } });
-    const noOrigin = await post(accountPath + '/recheck', {}, { cookie });
-    assert.deepEqual(
-      [initial.status, noOrigin.status],
-      [200, 403],
-      'the adopted service supplies the public dashboard and existing Re-check admission'
-    );
-    assert.equal(label(await initial.json()), 'Before');
-    assert.equal((await noOrigin.json()).code, 'origin_required');
-    if (dead) {
-      console.log('Abandoned lifecycle socket regression: 1 scenario passed.');
-    } else {
-      await ready(service, async () => {
-        const text = await readFile(path.join(share, 'usage.json'), 'utf8').catch(() => '');
-        return text !== '' && label(JSON.parse(text)) === 'Before';
-      });
-      const tag = initial.headers.get('etag');
-      assert(tag);
-      const head = await send(dashboardPath, { method: 'HEAD', headers: { cookie } });
-      assert.equal(head.status, 200);
-      assert.equal(await head.text(), '');
-      const conditional = await send(dashboardPath, { headers: { cookie, 'if-none-match': '*' } });
-      assert.equal(conditional.status, 304);
-      const bypass = await send(dashboardPath, {
-        headers: { cookie, 'if-none-match': '*', 'cache-control': 'no-cache' },
-      });
-      assert.equal(bypass.status, 200);
-
-      await writeSource('After');
-      const held = await send(dashboardPath, { headers: { cookie } });
-      assert.equal(label(await held.json()), 'Before', 'the first generation is still held');
-      const checked = await post(accountPath + '/recheck', {}, { cookie, origin });
-      assert.equal(checked.status, 200);
-      assert.equal((await checked.json()).account.label, 'After');
-      const next = await send(dashboardPath, { headers: { cookie, 'if-none-match': tag } });
-      assert.equal(next.status, 200);
-      assert.notEqual(next.headers.get('etag'), tag);
+    if (wallet) {
+      const source = '{"version":1,"platform":"mac","sshHost":"fixture-mac"}';
+      const hash = new Bun.CryptoHasher('sha256').update(source).digest('hex');
+      const sourcePath = path.join(root, 'opencode-console-wallet-source.json');
+      const pointer = path.join(root, 'opencode-console-wallet-account.json');
+      const a = 'plan-opencode-go-console-mac-aaaaaaaaaaaa';
+      const b = 'plan-opencode-go-console-mac-bbbbbbbbbbbb';
+      const point = (id) =>
+        writeFile(
+          pointer,
+          JSON.stringify({
+            version: 1,
+            binding: hash,
+            accountId: id,
+          }),
+          { mode: 0o600 }
+        );
+      const remove = (id, body = {}) =>
+        post('/api/accounts/' + id + '/remove', body, {
+          origin,
+          cookie,
+        });
+      await writeFile(sourcePath, source, { mode: 0o600 });
+      await point(a);
+      const review = await remove(a);
+      assert.equal(review.status, 200);
+      const { token } = (await review.json()).confirmation;
+      await point(b);
+      const stale = await remove(a, { confirmationToken: token });
+      assert.equal(stale.status, 409, 'a reviewed wallet cannot remove its successor');
+      assert.equal(await readFile(sourcePath, 'utf8'), source);
+      assert.equal((await remove(a)).status, 404, 'a stale wallet is unavailable for review');
+      const current = await remove(b);
+      assert.equal(current.status, 200);
       assert.equal(
-        label(await next.json()),
-        'After',
-        'Re-check updates the dashboard generation before it returns'
+        (await remove(b, { confirmationToken: (await current.json()).confirmation.token })).status,
+        200
       );
-      const repeated = await post(accountPath + '/recheck', {}, { cookie, origin });
-      assert.equal(repeated.status, 429);
-      assert.equal((await repeated.json()).code, 'rate_limited');
-      assert(Number(repeated.headers.get('retry-after')) > 0);
-
-      const pairing = await post(
-        '/api/auth/devices/pair',
-        {
-          ...credentials,
-          deviceName: 'Fixture device',
-          platform: 'mac',
-          installId: '00000000-0000-4000-8000-000000000001',
-          appVersion: '0.0.0',
-        },
-        { origin }
+      assert.equal(await stat(sourcePath).catch(() => null), null);
+      console.log('OpenCode wallet removal regression: 1 scenario passed.');
+    } else {
+      const initial = await send(dashboardPath, { headers: { cookie } });
+      const noOrigin = await post(accountPath + '/recheck', {}, { cookie });
+      assert.deepEqual(
+        [initial.status, noOrigin.status],
+        [200, 403],
+        'the adopted service supplies the public dashboard and existing Re-check admission'
       );
-      assert.equal(pairing.status, 201);
-      const { token } = await pairing.json();
-      const authorization = 'Bearer ' + token;
-      const device = await send(dashboardPath, { headers: { authorization } });
-      assert.equal(device.status, 200);
-      assert.equal(label(await device.json()), 'After');
-      const deviceRecheck = await post(accountPath + '/recheck', {}, { authorization, origin });
-      assert.equal(deviceRecheck.status, 403);
-      assert.equal((await deviceRecheck.json()).code, 'device_scope');
+      assert.equal(label(await initial.json()), 'Before');
+      assert.equal((await noOrigin.json()).code, 'origin_required');
+      if (dead) {
+        console.log('Abandoned lifecycle socket regression: 1 scenario passed.');
+      } else {
+        await ready(service, async () => {
+          const text = await readFile(path.join(share, 'usage.json'), 'utf8').catch(() => '');
+          return text !== '' && label(JSON.parse(text)) === 'Before';
+        });
+        const tag = initial.headers.get('etag');
+        assert(tag);
+        const head = await send(dashboardPath, { method: 'HEAD', headers: { cookie } });
+        assert.equal(head.status, 200);
+        assert.equal(await head.text(), '');
+        const conditional = await send(dashboardPath, {
+          headers: { cookie, 'if-none-match': '*' },
+        });
+        assert.equal(conditional.status, 304);
+        const bypass = await send(dashboardPath, {
+          headers: { cookie, 'if-none-match': '*', 'cache-control': 'no-cache' },
+        });
+        assert.equal(bypass.status, 200);
 
-      await stop(service);
-      for (const response of await Promise.all([
-        send(dashboardPath, { headers: { cookie } }),
-        post(accountPath + '/recheck', {}, { cookie, origin }),
-      ])) {
-        assert.equal(response.status, 503);
-        assert.equal((await response.json()).code, 'route_unavailable');
+        await writeSource('After');
+        const held = await send(dashboardPath, { headers: { cookie } });
+        assert.equal(label(await held.json()), 'Before', 'the first generation is still held');
+        const checked = await post(accountPath + '/recheck', {}, { cookie, origin });
+        assert.equal(checked.status, 200);
+        assert.equal((await checked.json()).account.label, 'After');
+        const next = await send(dashboardPath, { headers: { cookie, 'if-none-match': tag } });
+        assert.equal(next.status, 200);
+        assert.notEqual(next.headers.get('etag'), tag);
+        assert.equal(
+          label(await next.json()),
+          'After',
+          'Re-check updates the dashboard generation before it returns'
+        );
+        const repeated = await post(accountPath + '/recheck', {}, { cookie, origin });
+        assert.equal(repeated.status, 429);
+        assert.equal((await repeated.json()).code, 'rate_limited');
+        assert(Number(repeated.headers.get('retry-after')) > 0);
+
+        const pairing = await post(
+          '/api/auth/devices/pair',
+          {
+            ...credentials,
+            deviceName: 'Fixture device',
+            platform: 'mac',
+            installId: '00000000-0000-4000-8000-000000000001',
+            appVersion: '0.0.0',
+          },
+          { origin }
+        );
+        assert.equal(pairing.status, 201);
+        const { token } = await pairing.json();
+        const authorization = 'Bearer ' + token;
+        const device = await send(dashboardPath, { headers: { authorization } });
+        assert.equal(device.status, 200);
+        assert.equal(label(await device.json()), 'After');
+        const deviceRecheck = await post(accountPath + '/recheck', {}, { authorization, origin });
+        assert.equal(deviceRecheck.status, 403);
+        assert.equal((await deviceRecheck.json()).code, 'device_scope');
+
+        await stop(service);
+        for (const response of await Promise.all([
+          send(dashboardPath, { headers: { cookie } }),
+          post(accountPath + '/recheck', {}, { cookie, origin }),
+        ])) {
+          assert.equal(response.status, 503);
+          assert.equal((await response.json()).code, 'route_unavailable');
+        }
+        console.log(
+          'Adopted collection regression: 1 scenario passed (dashboard, Re-check, usage snapshot, device scope and owner loss).'
+        );
       }
-      console.log(
-        'Adopted collection regression: 1 scenario passed (dashboard, Re-check, usage snapshot, device scope and owner loss).'
-      );
     }
   }
 } finally {
