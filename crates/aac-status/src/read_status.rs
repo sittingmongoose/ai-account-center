@@ -144,7 +144,7 @@ impl Inputs<'_> {
                 .get_or_init(|| {
                     let mut found = OwnerCards::default();
                     for c in rows(&self.data["reports"]["cards"]) {
-                        if c["doc"]["state"] == "open"
+                        if cards::is_open(c, rows(&self.data["answers"]))
                             && ["question", "judgement", "action"].contains(&s(&c["doc"]["kind"]))
                         {
                             match c["writer"].as_str() {
@@ -654,6 +654,9 @@ fn view(i: &Inputs) -> Option<V> {
         quota,
     ];
     let mut view = json!({"version":1,"generatedAt":i.generated_at(),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(i)?});
+    if let Some(problems) = i.data["reports"].get("problems").filter(|p| !array(p).is_empty()) {
+        view["reportProblems"] = problems.clone();
+    }
     if let Some(p) = i.data.get("pinned") {
         view["pinned"] = p.clone();
     }

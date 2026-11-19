@@ -102,6 +102,28 @@ const WRONG_PREFIX = row('t3-acp-adapters', {
   },
 });
 
+// Lane D RECHECK-1 L4: a registry_mismatch row as the helper sends it, and RECHECK-2 R2-3's
+// registry_unreadable ZCode row: both must reach an older package in words it knows.
+const REGISTRY_MISMATCH = row('t3-acp-adapters', {
+  status: 'failed',
+  messageCode: 'registry_mismatch',
+  updateAttempted: true,
+  previousVersion: null,
+  version: null,
+  manager: 'npm',
+  parts: [
+    { name: 'muse-acp', previousVersion: '0.21.0', version: '0.21.0' },
+    { name: 'zcode-acp-server', previousVersion: '0.84.2', version: '0.84.2' },
+  ],
+  diagnostics: { cause: 'installer_failed', reason: 'registry_other', tool: 'npm', exitCode: 0 },
+});
+const REGISTRY_UNREADABLE = row('zcode', {
+  status: 'failed',
+  messageCode: 'registry_unreadable',
+  updateAttempted: false,
+  diagnostics: { cause: 'unknown', reason: 'registry_unreadable' },
+});
+
 describe('Update apps diagnostics', () => {
   it('keeps the cause, tool, exit code, phases and owner, never a command or output tail', () => {
     const result = normalizeAppUpdateRow(CURSOR_SIGNIN, 'cursor-cli', 'windows');
@@ -241,6 +263,7 @@ describe('Update apps diagnostics', () => {
       ['policy_blocked', 'cursor-cli', 'action_required', 'alexis'],
       ['cursor_shadowed', 'cursor-cli', 'action_required', 'mac'],
       ['registry_mismatch', 't3-acp-adapters', 'failed', 'ubuntu'],
+      ['registry_unreadable', 'zcode', 'failed', 'ubuntu'],
       ['wrong_prefix', 't3-acp-adapters', 'failed', 'mac'],
       ['prefix_not_writable', 't3-acp-adapters', 'action_required', 'mac'],
       ['t3_session_reply_lost', 'antigravity-acp', 'failed', 'windows'],
@@ -305,16 +328,20 @@ describe('Update apps diagnostics', () => {
         results: (Object.keys(UPDATE_APP_LABELS) as UpdateAppId[]).map((appId) =>
           appId === 't3-acp-adapters' && platform === 'mac'
             ? WRONG_PREFIX
-            : appId === 'cursor-cli' && platform === 'windows'
-              ? CURSOR_SIGNIN
-              : row(appId, {
-                  diagnostics: {
-                    cause: 'none',
-                    command: 'fixture ' + appId,
-                    phases: { check: 5, update: 7 },
-                    tail: longTail,
-                  },
-                })
+            : appId === 't3-acp-adapters' && platform === 'ubuntu'
+              ? REGISTRY_MISMATCH
+              : appId === 'zcode' && platform === 'ubuntu'
+                ? REGISTRY_UNREADABLE
+                : appId === 'cursor-cli' && platform === 'windows'
+                  ? CURSOR_SIGNIN
+                  : row(appId, {
+                      diagnostics: {
+                        cause: 'none',
+                        command: 'fixture ' + appId,
+                        phases: { check: 5, update: 7 },
+                        tail: longTail,
+                      },
+                    })
         ),
       });
     const service = new AppUpdateService({
@@ -329,6 +356,9 @@ describe('Update apps diagnostics', () => {
     const expanded = fs.readFileSync(path.join(folder, 'dashboard-job-expanded.json'), 'utf8');
     expect(legacy).not.toContain('"diagnostics"');
     expect(legacy).not.toContain(MESSAGES.wrong_prefix);
+    // Lane D RECHECK-1 L4 and RECHECK-2 R2-3: an older package gets words it knows.
+    expect(legacy).not.toContain(MESSAGES.registry_mismatch);
+    expect(legacy).not.toContain(MESSAGES.registry_unreadable);
     expect(legacy).toContain(MESSAGES.update_failed);
     expect(expanded).toContain('"diagnostics"');
     expect(legacy.length).toBeLessThan(64 * 1024);
@@ -338,6 +368,14 @@ describe('Update apps diagnostics', () => {
     )!;
     expect(adapters.message).toBe(MESSAGES.wrong_prefix);
     expect(adapters.diagnostics?.cause).toBe('wrong_prefix');
+    const mismatch = restored.results.find(
+      (result) => result.appId === 't3-acp-adapters' && result.platform === 'ubuntu'
+    )!;
+    expect(mismatch.message).toBe(MESSAGES.registry_mismatch);
+    const down = restored.results.find(
+      (result) => result.appId === 'zcode' && result.platform === 'ubuntu'
+    )!;
+    expect(down.message).toBe(MESSAGES.registry_unreadable);
     const cursor = restored.results.find(
       (result) => result.appId === 'cursor-cli' && result.platform === 'windows'
     )!;

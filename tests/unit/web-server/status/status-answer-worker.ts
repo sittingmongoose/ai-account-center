@@ -145,6 +145,8 @@ const answers = new StatusAnswers({
     return { ok: true, detail: 'Local stub rang.' };
   },
 });
+// The worker starts with reports already read. Keep journal faults armed until a command reads the store.
+await reader.scan();
 const service = new StatusService({
   reader,
   answers,
@@ -171,7 +173,6 @@ app.use(
 );
 const server = app.listen(0, '127.0.0.1');
 await new Promise<void>((resolve) => server.once('listening', resolve));
-await reader.scan();
 createInterface({ input: process.stdin }).on('line', async (line) => {
   const cmd = JSON.parse(line);
   try {

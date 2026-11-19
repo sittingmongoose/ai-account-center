@@ -39,7 +39,7 @@ pub fn section_selector(section: Option<&str>) -> Option<&'static str> {
 const WORST: &str = "worst";
 
 /// The sentence opened under the strip for `key`, from the strip the server sent last. None when that count or the
-/// worst thread is gone, so a refresh that drops it closes the line.
+/// worst thread is gone, so only details from the current report appear.
 pub fn open_sentence(strip: &Strip, key: &str) -> Option<String> {
     if key == WORST {
         return strip.worst.as_ref().map(|w| w.detail.clone());
@@ -148,20 +148,7 @@ fn worst_view(w: StripWorst, open: RwSignal<Option<String>>) -> impl IntoView {
 
 /// The strip under the page title. `strip` is a memo, so a poll that changes nothing redraws nothing.
 #[component]
-pub fn SummaryStrip(strip: Memo<Option<Strip>>) -> impl IntoView {
-    // The count or the worst thread whose sentence is open under the strip.
-    let open = RwSignal::new(None::<String>);
-    Effect::new(move |_| {
-        let gone = strip.with(|s| {
-            open.with(|o| match (s, o) {
-                (Some(s), Some(k)) => open_sentence(s, k).is_none(),
-                _ => false,
-            })
-        });
-        if gone {
-            open.set(None);
-        }
-    });
+pub fn SummaryStrip(strip: Memo<Option<Strip>>, open: RwSignal<Option<String>>) -> impl IntoView {
     let sentence = move || {
         let key = open.get()?;
         let text = strip.with(|s| s.as_ref().and_then(|s| open_sentence(s, &key)))?;

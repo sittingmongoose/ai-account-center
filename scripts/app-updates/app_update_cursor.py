@@ -207,17 +207,31 @@ def classify(error, started, ended=None):
     text = error.output or ""
     if error.code not in ("update_failed", "policy_blocked"):
         return error
+    # The updater's own "Update failed:" line decides first: a TLS warning elsewhere in
+    # the output (NODE_TLS_REJECT_UNAUTHORIZED=0 prints one) must not hide the refusal
+    # it names, and a refusal there must not hide a named errno either.
+    failed = "\n".join(line for line in text.split("\n") if "update failed" in line.lower())
+    if failed:
+        if AUTH.search(failed):
+            return _signin_failure(error, failed, text)
+        if NAMED_CAUSE.search(failed):
+            diagnostics().note("signin_undetermined")
+            return error
     if NAMED_CAUSE.search(text):
         diagnostics().note("signin_undetermined")
         return error
     if AUTH.search(text):
-        return UpdateFailure("cursor_signin_needed", text, error.exit_code, cause="auth_required",
-                             reason="http_401" if re.search(r"401|unauthenticated", text, re.I) else "not_logged_in")
+        return _signin_failure(error, text, text)
     if POLICY.search(text):
         return UpdateFailure("policy_blocked", text, error.exit_code, cause="policy_blocked", reason="execution_policy")
     if error.code == "update_failed":
         diagnostics().note("signin_undetermined")
     return error
+
+
+def _signin_failure(error, words, text):
+    return UpdateFailure("cursor_signin_needed", text, error.exit_code, cause="auth_required",
+                         reason="http_401" if re.search(r"401|unauthenticated", words, re.I) else "not_logged_in")
 
 
 def run_update(install, remaining):
@@ -287,8 +301,9 @@ def update_cursor(install, deadline=None, progress=None):
                 record.note("first_on_path_" + ("older" if shadow["version"] < after else "same" if shadow["version"] == after else "newer"))
             return result("cursor-cli", install.platform, "action_required", before, after, install.manager,
                           "cursor_shadowed", True)
-        return result("cursor-cli", install.platform, "updated" if after > before else "current",
-                      before, after, install.manager, "cursor_updated" if after > before else "current", True)
+        rose = version_tuple(after) > version_tuple(before)
+        return result("cursor-cli", install.platform, "updated" if rose else "current",
+                      before, after, install.manager, "cursor_updated" if rose else "current", True)
     except (UpdateFailure, OSError) as error:
         # A native Windows updater may safely stage its files while handles are
         # open and exit nonzero. Never stop those agents or delete their trees.

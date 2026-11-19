@@ -1313,10 +1313,12 @@ class WebExtraTests(unittest.TestCase):
                 requests.get.return_value = response
                 with mock.patch.dict(sys.modules, {"curl_cffi": mock.Mock(requests=requests)}):
                     client = usage.WebClient([{"name": "sessionKey", "value": "fixture-private-session"}], ORG)
+                client.observe_http = mock.Mock()
                 with self.assertRaises(usage.UsageUnavailable) as caught:
                     client.get("/api/account")
                 self.assertEqual(caught.exception.status, "rate_limited")
                 self.assertEqual(caught.exception.retry_after, delay)
+                client.observe_http.assert_called_once_with("optional_web", 429, delay)
                 response.iter_content.assert_not_called()
                 response.close.assert_called_once()
         with mock.patch.object(usage.time, "time", return_value=0):

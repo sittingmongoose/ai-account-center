@@ -198,3 +198,16 @@ describe('merging renewal into sign-in health', () => {
     expect(mergeRenewal(machines, stale, NOW)).toBe(machines);
   });
 });
+
+it('exposes only the fixed Node launch diagnostic from the runner', () => {
+  const parse = (browserError: unknown) =>
+    parseClaudeSignInRenewal(JSON.stringify(file({ browserError })), NOW);
+  expect(parse('no_node')).toMatchObject({
+    stale: false,
+    browserError: 'Node.js executable not found on the renewal runner.',
+  });
+  expect(parse('node_launch_failed')?.browserError).toBe(
+    'Node.js could not be launched on the renewal runner.'
+  );
+  expect(parse('sk-ant-fixture-not-for-the-dashboard')?.browserError).toBeUndefined();
+});

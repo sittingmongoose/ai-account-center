@@ -1201,6 +1201,24 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(caught.exception.retry_after, 180)
         self.assertNotIn("private", str(caught.exception))
 
+    def test_oauth_http_observations_include_only_stage_status_and_retry(self):
+        headers = Message()
+        headers["Retry-After"] = "90"
+        error = urllib.error.HTTPError(core.CLAUDE_USAGE_URL, 429, TOKEN, headers, io.BytesIO(b"private"))
+        response = mock.MagicMock(status=200, headers={"Retry-After": TOKEN})
+        response.__enter__.return_value = response
+        response.read1.side_effect = [b"{}", b""]
+        opener = mock.Mock()
+        opener.open.side_effect = [response, error]
+        with mock.patch.object(core.urllib.request, "build_opener", return_value=opener):
+            client = core.Client()
+            client.observe_http = mock.Mock()
+            self.assertEqual(client.get(core.CLAUDE_PROFILE_URL, TOKEN), {})
+            with self.assertRaises(core.Failure):
+                client.get(core.CLAUDE_USAGE_URL, TOKEN)
+        self.assertEqual(client.observe_http.call_args_list,
+                         [mock.call("oauth_profile", 200, None), mock.call("oauth_usage", 429, 90)])
+
     def test_retry_after_date_and_bounds(self):
         with mock.patch.object(core.time, "time", return_value=0):
             self.assertEqual(core._retry_after("Thu, 01 Jan 1970 00:01:30 GMT"), 90)

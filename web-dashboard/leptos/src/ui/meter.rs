@@ -7,6 +7,7 @@
 //! moves from the one before, at once. Every move uses the non-overshooting ease-out `cubic-bezier(0.2, 0.8, 0.2, 1)`:
 //! the fill never shows more than the reading, not even for a frame. Nothing runs once a move has settled.
 
+use super::charts::{page_bounds, page_safe, tip_centre};
 use leptos::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -178,6 +179,159 @@ pub enum MeterMode {
     Inline,
 }
 
+#[derive(Clone, Copy)]
+enum RevealMotion {
+    Scrolled,
+    Settling,
+    Done,
+}
+
+struct FocusReveal {
+    anchor: web_sys::HtmlElement,
+    motion: Rc<Cell<RevealMotion>>,
+}
+
+impl FocusReveal {
+    fn new(anchor: web_sys::HtmlElement) -> Self {
+        let motion = Rc::new(Cell::new(RevealMotion::Scrolled));
+        // Focus can queue scroll events on multiple ancestors. Leave a rendering update
+        // for those events and wait until a frame without scroll ends the reveal.
+        Self::finish_when_still(motion.clone());
+        Self { anchor, motion }
+    }
+
+    fn finish_when_still(motion: Rc<Cell<RevealMotion>>) {
+        let _ = request_animation_frame(move || match motion.get() {
+            RevealMotion::Scrolled => {
+                motion.set(RevealMotion::Settling);
+                Self::finish_when_still(motion);
+            }
+            RevealMotion::Settling => motion.set(RevealMotion::Done),
+            RevealMotion::Done => {}
+        });
+    }
+}
+
+struct OpenMeterTip {
+    card: web_sys::HtmlElement,
+    reveal: Option<FocusReveal>,
+}
+
+/// Track the active native popover so page motion can reposition or dismiss it.
+#[derive(Clone, Copy)]
+struct MeterTips {
+    open: StoredValue<Option<OpenMeterTip>, LocalStorage>,
+    next_id: StoredValue<u32>,
+}
+
+impl MeterTips {
+    fn dismiss(self) {
+        if let Some(Some(tip)) = self.open.try_update_value(Option::take) {
+            let _ = tip.card.hide_popover();
+        }
+    }
+
+    fn on_input(self) {
+        self.open.with_value(|tip| {
+            if let Some(reveal) = tip.as_ref().and_then(|tip| tip.reveal.as_ref()) {
+                reveal.motion.set(RevealMotion::Done);
+            }
+        });
+    }
+
+    fn on_scroll(self) {
+        let reanchored = self.open.with_value(|open| {
+            let Some(tip) = open else { return false };
+            let Some(reveal) = &tip.reveal else {
+                return false;
+            };
+            if matches!(reveal.motion.get(), RevealMotion::Done)
+                || !reveal.anchor.matches(":focus-visible").unwrap_or(false)
+                || !tip.card.matches(":popover-open").unwrap_or(false)
+            {
+                return false;
+            }
+            reveal.motion.set(RevealMotion::Scrolled);
+            position_tip(&reveal.anchor, &tip.card);
+            true
+        });
+        if !reanchored {
+            self.dismiss();
+        }
+    }
+}
+
+pub(crate) fn provide_meter_tips() {
+    let tips = MeterTips {
+        open: StoredValue::new_local(None),
+        next_id: StoredValue::new(0),
+    };
+    let win = window();
+    for event in ["resize", super::device::LAYOUT_EVENT, crate::PAGE_EVENT] {
+        crate::owned::listen(&win, event, move || tips.dismiss());
+    }
+    // A new gesture ends the focus reveal even if it arrives before the next paint.
+    for event in ["wheel", "touchmove", "pointerdown", "keydown"] {
+        crate::owned::listen(&win, event, move || tips.on_input());
+    }
+    // The dashboard content itself can scroll. Capture its event as well as document scroll.
+    let scroll = Closure::<dyn Fn(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let within_card = ev
+            .target()
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+            .is_some_and(|target| target.matches(".um-card").unwrap_or(false));
+        if !within_card {
+            tips.on_scroll();
+        }
+    });
+    let _ = win.add_event_listener_with_callback_and_bool(
+        "scroll",
+        scroll.as_ref().unchecked_ref(),
+        true,
+    );
+    crate::owned::on_owner_cleanup(move || {
+        let _ = win.remove_event_listener_with_callback_and_bool(
+            "scroll",
+            scroll.as_ref().unchecked_ref(),
+            true,
+        );
+    });
+    provide_context(tips);
+}
+
+/// Give the card the same horizontal bounds as Analytics tips and use whichever side has room.
+fn position_tip(anchor: &web_sys::HtmlElement, card: &web_sys::HtmlElement) {
+    let Some(root) = document().document_element() else {
+        return;
+    };
+    let (vw, vh) = (
+        f64::from(root.client_width()),
+        f64::from(root.client_height()),
+    );
+    let (lo, hi) = page_bounds(vw);
+    let top = page_safe("--safe-top") + 8.0;
+    let bottom = vh - page_safe("--safe-bottom") - 8.0;
+    let rect = anchor.get_bounding_client_rect();
+    let below = rect.bottom().clamp(top, bottom.max(top));
+    let above = rect.top().clamp(top, bottom.max(top));
+    let width = (hi - lo - 8.0).clamp(1.0, 270.0);
+    let x = tip_centre(rect.left() + rect.width() / 2.0, width, lo, hi) - width / 2.0;
+    let base = format!("width:{width}px;left:{x}px;");
+    let _ = card.set_attribute("style", &base);
+    let height = f64::from(card.offset_height());
+    let room_below = bottom - below;
+    let room_above = above - top;
+    let (edge, room) = if height <= room_below || room_below >= room_above {
+        (format!("top:{below}px"), room_below)
+    } else {
+        (format!("bottom:{}px", vh - above), room_above)
+    };
+    let _ = card.set_attribute(
+        "style",
+        &format!("{base}{edge};max-height:{}px", room.max(1.0)),
+    );
+}
+
 /// One meter bound to a reading that may change; `owner` names whose reading it is in the hover card ("Claude ·
 /// a@example.com").
 #[component]
@@ -187,6 +341,39 @@ pub fn UsageMeter(
     #[prop(optional)] delay: u32,
     #[prop(optional, into)] owner: String,
 ) -> impl IntoView {
+    let tips = expect_context::<MeterTips>();
+    let n = tips.next_id.get_value();
+    tips.next_id.set_value(n + 1);
+    let id = format!("meter-tip-{n}");
+    let description = id.clone();
+    let anchor = NodeRef::<leptos::html::Div>::new();
+    let tip = NodeRef::<leptos::html::Div>::new();
+    let show = move |from_focus: bool| {
+        if let (Some(anchor), Some(card)) = (anchor.get_untracked(), tip.get_untracked()) {
+            // A pointer entering during the browser's reveal scroll can hit this same meter.
+            if !from_focus && card.matches(":popover-open").unwrap_or(false) {
+                return;
+            }
+            if card.show_popover().is_ok() {
+                position_tip(&anchor, &card);
+                tips.open.set_value(Some(OpenMeterTip {
+                    card: card.into(),
+                    reveal: from_focus.then(|| FocusReveal::new(anchor.into())),
+                }));
+            }
+        }
+    };
+    let hide = move || {
+        if let Some(card) = tip.get_untracked() {
+            let _ = card.hide_popover();
+        }
+    };
+    let keyboard_focus = move || {
+        anchor
+            .get_untracked()
+            .is_some_and(|el| el.matches(":focus-visible").unwrap_or(false))
+    };
+    let touch = StoredValue::new(false);
     let target = Memo::new(move |_| {
         view.with(|v| {
             if v.has_value {
@@ -263,45 +450,40 @@ pub fn UsageMeter(
             }
         })
     };
-    let card = {
-        let owner = owner.clone();
-        move || {
-            let v = view.get();
-            let used = if v.has_value {
-                let amount = if v.amount.is_empty() {
-                    String::new()
-                } else {
-                    format!(" · {}", v.amount)
-                };
-                format!("{}%{amount}", v.value_text)
+    let card_content = move || {
+        let v = view.get();
+        let used = if v.has_value {
+            let amount = if v.amount.is_empty() {
+                String::new()
             } else {
-                "Unavailable".to_string()
+                format!(" · {}", v.amount)
             };
-            let used_note = if v.has_value {
-                (!v.over_text.is_empty()).then(|| format!("{}% over the limit", v.over_text))
-            } else {
-                Some("No reading, not zero".to_string())
-            };
-            let reset = if v.reset_exact.is_empty() {
-                "No reset reported".to_string()
-            } else {
-                v.reset_exact.clone()
-            };
-            let reset_note =
-                (!v.reset_exact.is_empty() && !v.reset.is_empty()).then(|| v.reset.clone());
-            view! {
-                <div class="um-card" role="tooltip">
-                    <b>{if v.full_label.is_empty() { v.label.clone() } else { v.full_label.clone() }}</b>
-                    {(!owner.is_empty()).then(|| view! { <span class="um-card-sub">{owner.clone()}</span> })}
-                    <dl>
-                        <dt>"Used"</dt><dd>{used}{used_note.map(|n| view! { <small>{n}</small> })}</dd>
-                        {(!v.left.is_empty()).then(|| view! { <dt>"Left"</dt><dd>{v.left.clone()}</dd> })}
-                        <dt>"Reset"</dt><dd>{reset}{reset_note.map(|n| view! { <small>{n}</small> })}</dd>
-                        <dt>"Sampled"</dt><dd>{if v.sampled.is_empty() { "Never".to_string() } else { v.sampled.clone() }}</dd>
-                        <dt>"Source"</dt><dd>{if v.source.is_empty() { "Unknown".to_string() } else { v.source.clone() }}</dd>
-                    </dl>
-                </div>
-            }
+            format!("{}%{amount}", v.value_text)
+        } else {
+            "Unavailable".to_string()
+        };
+        let used_note = if v.has_value {
+            (!v.over_text.is_empty()).then(|| format!("{}% over the limit", v.over_text))
+        } else {
+            Some("No reading, not zero".to_string())
+        };
+        let reset = if v.reset_exact.is_empty() {
+            "No reset reported".to_string()
+        } else {
+            v.reset_exact.clone()
+        };
+        let reset_note =
+            (!v.reset_exact.is_empty() && !v.reset.is_empty()).then(|| v.reset.clone());
+        view! {
+            <b>{if v.full_label.is_empty() { v.label.clone() } else { v.full_label.clone() }}</b>
+            {(!owner.is_empty()).then(|| view! { <span class="um-card-sub">{owner.clone()}</span> })}
+            <dl>
+                <dt>"Used"</dt><dd>{used}{used_note.map(|n| view! { <small>{n}</small> })}</dd>
+                {(!v.left.is_empty()).then(|| view! { <dt>"Left"</dt><dd>{v.left.clone()}</dd> })}
+                <dt>"Reset"</dt><dd>{reset}{reset_note.map(|n| view! { <small>{n}</small> })}</dd>
+                <dt>"Sampled"</dt><dd>{if v.sampled.is_empty() { "Never".to_string() } else { v.sampled.clone() }}</dd>
+                <dt>"Source"</dt><dd>{if v.source.is_empty() { "Unknown".to_string() } else { v.source.clone() }}</dd>
+            </dl>
         }
     };
     let caption = move || {
@@ -342,11 +524,32 @@ pub fn UsageMeter(
         }
     };
     view! {
-        <div class="um" class:inline=mode == MeterMode::Inline data-sev=move || sev.get() tabindex="-1">
+        <div class="um" class:inline=mode == MeterMode::Inline data-sev=move || sev.get()
+            tabindex="0" aria-describedby=description node_ref=anchor
+            on:pointerenter=move |ev| if ev.pointer_type() == "mouse" { show(false); }
+            on:pointerleave=move |ev| if ev.pointer_type() == "mouse" && !keyboard_focus() { hide(); }
+            on:focus=move |_| if keyboard_focus() { show(true); }
+            on:focusout=move |ev| {
+                let inside = ev.related_target().and_then(|target| target.dyn_into::<web_sys::Node>().ok())
+                    .is_some_and(|target| anchor.get_untracked().is_some_and(|el| el.contains(Some(&target))));
+                if !inside { hide(); }
+            }
+            on:pointerdown=move |ev| touch.set_value(ev.pointer_type() != "mouse")
+            on:pointercancel=move |_| touch.set_value(false)
+            on:click=move |ev| {
+                if touch.get_value() {
+                    touch.set_value(false);
+                    ev.stop_propagation();
+                    show(false);
+                }
+            }>
             {top}
             {bar}
             {sub}
-            {card}
+            <div class="um-card" role="tooltip" id=id node_ref=tip popover="auto" tabindex="-1"
+                on:click=|ev| ev.stop_propagation()>
+                {card_content}
+            </div>
         </div>
     }
 }

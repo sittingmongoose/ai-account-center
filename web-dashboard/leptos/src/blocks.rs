@@ -161,9 +161,27 @@ fn link_view(label: String, url: String) -> AnyView {
     }
 }
 
+/// Open sections for the current card, identified by the option (if any), type, title and occurrence.
+type BlockKey = (Option<String>, String, Option<String>, usize);
+
+#[derive(Clone, Copy)]
+pub struct BlockFolds(RwSignal<std::collections::BTreeSet<BlockKey>>);
+
+impl BlockFolds {
+    pub fn new() -> Self {
+        Self(RwSignal::new(Default::default()))
+    }
+}
+
 /// `fold_all`: every section starts folded under its title (phones, where the decision comes first).
 #[component]
-pub fn Blocks(blocks: Vec<Block>, #[prop(optional)] fold_all: bool) -> impl IntoView {
+pub fn Blocks(
+    blocks: Vec<Block>,
+    #[prop(optional)] fold_all: bool,
+    #[prop(optional)] option: Option<String>,
+) -> impl IntoView {
+    let BlockFolds(open) = expect_context::<BlockFolds>();
+    let mut occurrences = std::collections::BTreeMap::new();
     blocks
         .into_iter()
         .map(|block| {
@@ -174,8 +192,22 @@ pub fn Blocks(blocks: Vec<Block>, #[prop(optional)] fold_all: bool) -> impl Into
                 .or_else(|| default_title(&kind).map(str::to_string));
             let body = body_of(&block);
             if block.fold || fold_all {
+                let n = occurrences.entry((kind.clone(), title.clone())).or_insert(0);
+                let key = StoredValue::new((option.clone(), kind.clone(), title.clone(), *n));
+                *n += 1;
                 view! {
-                    <details class="block" data-type=kind>
+                    <details class="block" data-type=kind
+                        open=move || open.with(|keys| key.with_value(|key| keys.contains(key)))
+                        on:toggle=move |event| {
+                            let expanded = event_target::<web_sys::HtmlElement>(&event).has_attribute("open");
+                            open.update(|keys| {
+                                if expanded {
+                                    keys.insert(key.get_value());
+                                } else {
+                                    key.with_value(|key| keys.remove(key));
+                                }
+                            });
+                        }>
                         <summary>{title.unwrap_or_else(|| "More".into())}</summary>
                         {body}
                     </details>

@@ -423,6 +423,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/read_status_cards.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/src/read_status_trace.rs",
       "kind": "internal",
       "evidence": [],
@@ -1545,6 +1551,13 @@
     },
     {
       "file": "tests/unit/app-updates/app_update_fix_round2_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_lane_d_test.py",
       "kind": "helper",
       "evidence": [
         "helper"
@@ -3668,6 +3681,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/status/answered-cards.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/status/answers.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -4362,6 +4381,13 @@
       "evidence": [
         "HTTP",
         "table"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/status-question-lock.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
       ]
     },
     {

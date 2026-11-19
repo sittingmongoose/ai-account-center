@@ -421,3 +421,35 @@ describe('the sign-in helper bundle', () => {
     expect(Buffer.byteLength(bundle)).toBeLessThan(2 * 1024 * 1024);
   });
 });
+
+it('emits only credential-free Claude HTTP fields from the helper response', () => {
+  const sensitive = {
+    token: 'fixture-token',
+    cookie: 'fixture-cookie',
+    email: 'fixture@example.test',
+  };
+  const lines: unknown[] = [];
+  const response = parseUsageHelperResponse(
+    JSON.stringify({
+      version: 1,
+      action: 'collect',
+      candidate: null,
+      sample: null,
+      failureCode: 'rate_limited',
+      claudeHttp: [
+        { stage: 'oauth_profile', status: 200, ...sensitive },
+        { stage: 'oauth_usage', status: 429, retryAfterSeconds: 90, ...sensitive },
+        { stage: 'optional_web', status: 503, retryAfterSeconds: sensitive.token, ...sensitive },
+        { stage: 'optional_web', status: sensitive.cookie },
+        { stage: sensitive.email, status: 200 },
+      ],
+    }),
+    (fields) => lines.push(fields)
+  );
+  expect(lines).toEqual([
+    { stage: 'oauth_profile', status: 200, retryAfterSeconds: null },
+    { stage: 'oauth_usage', status: 429, retryAfterSeconds: 90 },
+    { stage: 'optional_web', status: 503, retryAfterSeconds: null },
+  ]);
+  expect(response).not.toHaveProperty('claudeHttp');
+});

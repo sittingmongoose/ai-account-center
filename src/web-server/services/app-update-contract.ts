@@ -435,7 +435,7 @@ export function normalizeAppUpdateRow(
           : row.status !== 'failed' && row.status !== 'restart_failed'))) ||
     (code === 'older_copy_first' &&
       (!STRAY_APPS.includes(appId) || row.status !== 'action_required')) ||
-    (code === 'zcode_release_unavailable' &&
+    ((code === 'zcode_release_unavailable' || code === 'registry_unreadable') &&
       (appId !== 'zcode' || row.status !== 'failed' || row.updateAttempted === true))
   )
     return failure(platform, appId, 'helper_invalid');

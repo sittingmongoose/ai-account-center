@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { claudeDesktopDelayMs } from '../../../src/web-server/services/usage-failover-claude-cadence';
+import { readIdentityUsageCooldown } from '../../../src/web-server/services/usage-failover-cooldown';
 import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
 import { localUsageHost } from '../../../src/web-server/services/usage-failover-transport';
 import { stopProcessBroker } from '../../../src/utils/managed-process';
@@ -2188,4 +2190,144 @@ it('does not extend the last seconds of a successful helper budget to a new inte
     sampledAt: first.sampledAt,
   });
   expect(h.collected()).toHaveLength(1);
+});
+
+async function claudeSourceChangeFixture() {
+  const h = await harness();
+  const observed = candidate({ identity: { kind: 'claude-account-org-v1', key: 'a'.repeat(64) } });
+  h.inventories.set('windows', [observed]);
+  const target: UsageFailoverTarget = {
+    ...h.target,
+    provider: 'claude',
+    accountId: 'claude:source-change',
+    primarySources: [{ ...WINDOWS, selector: 'discover' }],
+    claudeDesktopCadence: true,
+  };
+  const row = { ...template(), provider: 'claude' as const, id: target.accountId };
+  const deps = {
+    ...h.deps,
+    transport: async (host: UsageHost, request: UsageHelperRequest) => {
+      const response = await h.deps.transport(host, request);
+      return response.action === 'collect' && response.failureCode === 'source_changed'
+        ? { ...response, candidate: null }
+        : response;
+    },
+  };
+  const hold = (identity: UsageCandidate['identity']) =>
+    readIdentityUsageCooldown(target.ccsDir, 'claude', identity, h.now());
+  const fail = () =>
+    h.collections.set('windows', {
+      sample: null,
+      failureCode: 'source_changed',
+      rateLimited: true,
+    });
+  return { h, observed, target, row, deps, hold, fail };
+}
+
+describe('Windows Claude quota cadence', () => {
+  it('spreads five profiles across minute polls, grows to a cap, and respects Retry-After', () => {
+    const profiles = ['00000000', '0000ea60', '0001d4c0', '0002bf20', '0003a980'];
+    const poll = (ms: number) => Math.ceil(ms / 60_000);
+    expect(profiles.map((id) => poll(claudeDesktopDelayMs(id, 60, 1)))).toEqual([2, 3, 4, 5, 6]);
+    expect(profiles.map((id) => poll(claudeDesktopDelayMs(id, 600, 1)))).toEqual([
+      10, 11, 12, 13, 14,
+    ]);
+    expect(
+      [0, 1, 2, 3, 4, 5, 6].map((streak) => claudeDesktopDelayMs(profiles[1], 60, streak))
+    ).toEqual([180_000, 180_000, 300_000, 540_000, 1_020_000, 1_860_000, 1_860_000]);
+    expect(claudeDesktopDelayMs(profiles[1], 86_400, 2)).toBe(86_400_000);
+  });
+
+  it('preserves the sample and growing hold through restart, then resets after success', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'claude',
+      accountId: 'claude:fixture',
+      primarySources: [{ ...WINDOWS, selector: 'discover' }],
+      claudeDesktopCadence: true,
+    };
+    const row = { ...template(), provider: 'claude' as const, id: target.accountId };
+    const success = await h.service.collect(target, row);
+    expect(success.status).toBe('ok');
+    h.advance(61_000);
+    expect((await h.service.collect(target, row)).status).toBe('ok');
+    expect(h.collected()).toHaveLength(1);
+    h.advance(420_000);
+
+    h.collections.set('windows', { sample: null, failureCode: 'rate_limited' });
+    expect(await h.service.collect(target, row)).toMatchObject({
+      status: 'cached',
+      cacheReason: 'rate_limited',
+      sampledAt: success.sampledAt,
+      fetchedAt: success.fetchedAt,
+      windows: success.windows,
+    });
+    const firstHold = h.service.cooldownUntil(target);
+    const firstDelay = firstHold - h.now();
+    const restarted = new UsageFailoverService(h.deps);
+    h.advance(firstDelay - 1);
+    await restarted.collect(target, row);
+    expect(h.collected()).toHaveLength(2);
+
+    h.advance(1);
+    await restarted.collect(target, row);
+    expect(restarted.cooldownUntil(target) - h.now()).toBe(firstDelay + 120_000);
+
+    h.advance(firstDelay + 120_000);
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+    expect((await restarted.collect(target, row)).status).toBe('ok');
+    h.advance(firstDelay);
+    h.collections.set('windows', { sample: null, failureCode: 'rate_limited' });
+    await restarted.collect(target, row);
+    expect(restarted.cooldownUntil(target) - h.now()).toBe(firstDelay);
+    h.advance(firstDelay);
+    h.collections.set('windows', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 600,
+    });
+    await restarted.collect(target, row);
+    expect(restarted.cooldownUntil(target) - h.now()).toBe(firstDelay + 480_000);
+  });
+
+  it('resumes a source-change 429 streak from disk after a same-account revision and restart', async () => {
+    const { h, observed, target, row, deps, hold, fail } = await claudeSourceChangeFixture();
+    const service = new UsageFailoverService(deps);
+    expect((await service.collect(target, row)).status).toBe('ok');
+
+    h.advance(420_000);
+    fail();
+    expect((await service.collect(target, row)).windows).toEqual([]);
+    const firstDelay = hold(observed.identity) - h.now();
+    expect(firstDelay).toBeGreaterThanOrEqual(120_000);
+
+    const rotated = { ...observed, revision: '5'.repeat(64) };
+    h.inventories.set('windows', [rotated]);
+    const restarted = new UsageFailoverService(deps);
+    h.advance(firstDelay - 1);
+    expect((await restarted.collect(target, row)).windows).toEqual([]);
+    expect(h.collected()).toHaveLength(2);
+
+    h.advance(1);
+    expect((await restarted.collect(target, row)).windows).toEqual([]);
+    expect(h.collected()[2].request).toMatchObject({ candidate: { revision: rotated.revision } });
+    expect(hold(observed.identity) - h.now()).toBe(firstDelay + 120_000);
+  });
+
+  it('starts at the first 429 delay when inventory finds a different account identity', async () => {
+    const { h, observed, target, row, deps, hold, fail } = await claudeSourceChangeFixture();
+    fail();
+    await new UsageFailoverService(deps).collect(target, row);
+    const firstDelay = hold(observed.identity) - h.now();
+    expect(firstDelay).toBeGreaterThanOrEqual(120_000);
+
+    const replaced = { ...observed, identity: { ...observed.identity, key: 'b'.repeat(64) } };
+    h.inventories.set('windows', [replaced]);
+    h.advance(firstDelay);
+    const restarted = new UsageFailoverService(deps);
+    expect((await restarted.collect(target, row)).windows).toEqual([]);
+    expect(h.collected()[1].request).toMatchObject({ candidate: { identity: replaced.identity } });
+    expect(hold(replaced.identity) - h.now()).toBe(firstDelay);
+  });
 });
