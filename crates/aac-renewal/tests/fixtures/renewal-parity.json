@@ -1070,8 +1070,8 @@
         "processHomes": [],
         "sources": [
           {
-            "path": "<root>/shared-codex/auth.json",
-            "kind": "live",
+            "path": "<root>/.ccs/codex-instances/alpha-two/auth.json",
+            "kind": "profile",
             "state": "ok"
           },
           {
@@ -1080,13 +1080,13 @@
             "state": "ok"
           },
           {
-            "path": "<root>/.ccs/codex-instances/alpha-two/auth.json",
-            "kind": "profile",
+            "path": "<root>/home/.codex-t3/gmail/auth.json",
+            "kind": "codex_home",
             "state": "ok"
           },
           {
-            "path": "<root>/home/.codex-t3/gmail/auth.json",
-            "kind": "codex_home",
+            "path": "<root>/shared-codex/auth.json",
+            "kind": "live",
             "state": "ok"
           }
         ],

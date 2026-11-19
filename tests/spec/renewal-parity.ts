@@ -210,6 +210,43 @@ function fetchFor(
   });
 }
 
+/** Sort the collections whose order the filesystem decides (readdir order differs across platforms). */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      let next = canonicalize(item);
+      if (key === 'files' && next && typeof next === 'object' && !Array.isArray(next)) {
+        next = Object.fromEntries(
+          Object.entries(next).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        );
+      } else if (
+        (key === 'sources' || key === 'sharedWith' || key === 'uncheckable') &&
+        Array.isArray(next)
+      ) {
+        const path = (entry: unknown) => {
+          if (
+            entry &&
+            typeof entry === 'object' &&
+            'path' in entry &&
+            typeof entry.path === 'string'
+          ) {
+            return entry.path;
+          }
+          return '';
+        };
+        next = [...next].sort((a, b) => (path(a) < path(b) ? -1 : path(a) > path(b) ? 1 : 0));
+      } else if (key === 'processHomes' && Array.isArray(next)) {
+        next = [...next].sort();
+      }
+      out[key] = next;
+    }
+    return out;
+  }
+  return value;
+}
+
 function normalize(value: unknown, root: string): unknown {
   if (typeof value === 'string') {
     return value.split(root).join('<root>').replace(/\\/g, '/');
@@ -514,7 +551,7 @@ async function main(): Promise<void> {
     try {
       buildSandbox(box, testCase.sandbox ?? {});
       const answer = await runKind(testCase, box);
-      const normalized = normalize(answer, box.root);
+      const normalized = canonicalize(normalize(answer, box.root));
       leakScan(normalized);
       tsAnswers.set(testCase.name, JSON.stringify(normalized, null, 2));
       goldens.push({ ...testCase, expected: normalized });
@@ -574,7 +611,7 @@ async function main(): Promise<void> {
   const rustAnswers = JSON.parse(fs.readFileSync(answersPath, 'utf8')) as Record<string, unknown>;
   for (const testCase of cases) {
     const ts = tsAnswers.get(testCase.name);
-    const rust = JSON.stringify(rustAnswers[testCase.name] ?? null, null, 2);
+    const rust = JSON.stringify(canonicalize(rustAnswers[testCase.name] ?? null), null, 2);
     if (rust !== ts) {
       fail(testCase.name, `Rust differs from TS:\nTS:\n${ts}\nRust:\n${rust}`);
     }
