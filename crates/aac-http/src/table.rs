@@ -360,9 +360,12 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     || row.path != "/internal/account-confirmations"))
             || (handler == Handler::Lifecycle
                 && (method != axum::http::Method::POST
-                    || row.path != crate::public_auth::lifecycle_host::ENDPOINT
                     || row.budget_ms != 0
-                    || roles != [Role::Admin]))
+                    || !matches!(
+                        (row.path.as_str(), roles.as_slice()),
+                        (crate::public_auth::lifecycle_host::ENDPOINT, [Role::Admin])
+                            | (crate::public_auth::lifecycle_host::COLLECTION_ENDPOINT, [Role::Admin, Role::Device])
+                    )))
             // The TS route owns the deadline (a Claude source read takes seconds); the work is
             // one blocking transaction that cannot stop halfway, so the row's budget is 0.
             || (handler == Handler::ResetClaims
@@ -451,7 +454,17 @@ mod tests {
                     | Handler::ClaudeHistoryCleanup
                     | Handler::StatusAnswers
                     | Handler::SignInPoll
-            )));
+            )
+            || (r.handler == Handler::Lifecycle
+                && r.method == axum::http::Method::POST
+                && matches!(
+                    (r.path.as_str(), r.roles.as_slice()),
+                    (crate::public_auth::lifecycle_host::ENDPOINT, [Role::Admin])
+                        | (
+                            crate::public_auth::lifecycle_host::COLLECTION_ENDPOINT,
+                            [Role::Admin, Role::Device]
+                        )
+                ))));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.
         let reset: Vec<&Row> = rows
@@ -467,6 +480,14 @@ mod tests {
             ("/internal/collection/recheck", Handler::CollectionRecheck),
             ("/internal/collection-signin-poll", Handler::SignInPoll),
             ("/internal/status/answers", Handler::StatusAnswers),
+            (
+                crate::public_auth::lifecycle_host::ENDPOINT,
+                Handler::Lifecycle,
+            ),
+            (
+                crate::public_auth::lifecycle_host::COLLECTION_ENDPOINT,
+                Handler::Lifecycle,
+            ),
         ] {
             assert!(
                 rows.iter()

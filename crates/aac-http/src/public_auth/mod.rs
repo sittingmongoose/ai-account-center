@@ -280,7 +280,7 @@ impl DashboardAuth {
             // The account-id PATCH route shares this path depth with the settings literals.
             // Let those routes keep precedence and accept trailing slashes as the TS router did.
             if let Some(routes) = &lifecycle_routes
-                && lifecycle_host::Routes::owns(&request)
+                && routes.owns(&request)
             {
                 return routes.handle(request).await;
             }
