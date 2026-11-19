@@ -25,6 +25,10 @@ impl Drop for Service {
 }
 impl Service {
     fn start() -> Result<Self> {
+        Self::start_with_settings_owner(false)
+    }
+
+    fn start_with_settings_owner(owns_settings: bool) -> Result<Self> {
         let root = tempfile::tempdir()?;
         let run = root.path().join("run");
         let directory = run.join(format!("aac-http-{}", "a".repeat(24)));
@@ -38,7 +42,10 @@ impl Service {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
-        let boot = json!({"ccsDir":fs::canonicalize(root.path())?,"socketPath":socket,"secret":"b".repeat(64),"bootId":"a".repeat(24)});
+        let mut boot = json!({"ccsDir":fs::canonicalize(root.path())?,"socketPath":socket,"secret":"b".repeat(64),"bootId":"a".repeat(24)});
+        if owns_settings {
+            boot["files"] = json!(settings_owners()?);
+        }
         writeln!(child.stdin.as_mut().ok_or("stdin missing")?, "{boot}")?;
         let deadline = Instant::now() + Duration::from_secs(5);
         while !socket.exists() {
@@ -124,6 +131,75 @@ impl Service {
 }
 fn principal(kind: &str, role: &str) -> String {
     json!({"kind":kind,"id":if role == "public" {"public-health"} else {"fixture-admin"},"role":role}).to_string()
+}
+
+fn settings_owners() -> Result<std::collections::BTreeMap<String, String>> {
+    Ok(aac_files::registry::rows()?
+        .iter()
+        .map(|row| {
+            let owner = if row.id == "account-refresh-settings" {
+                "rust-service"
+            } else {
+                row.owner.word()
+            };
+            (row.id.clone(), owner.to_owned())
+        })
+        .collect())
+}
+
+#[test]
+fn settings_writes_require_the_session_and_the_registry_lease() -> Result<()> {
+    let path = "/api/accounts/settings";
+    let secret = "b".repeat(64);
+    let session = principal("session", "admin");
+    let device = principal("device", "device");
+    let value = json!({ "refreshIntervalSeconds": 120 });
+    let legacy = Service::start()?;
+    assert!(
+        legacy
+            .request_input(path, Some(&secret), Some(&session), "PUT", Some(&value))?
+            .starts_with("HTTP/1.1 503")
+    );
+    assert!(
+        !legacy
+            .root
+            .path()
+            .join("account-refresh-settings.json")
+            .exists()
+    );
+
+    let service = Service::start_with_settings_owner(true)?;
+    let request = |secret: Option<&str>, principal: &str| {
+        service.request_input(path, secret, Some(principal), "PUT", Some(&value))
+    };
+    assert!(request(None, &session)?.starts_with("HTTP/1.1 401"));
+    assert!(request(Some(&secret), &device)?.starts_with("HTTP/1.1 401"));
+
+    let root = fs::canonicalize(service.root.path())?;
+    let rows = aac_files::registry::rows()?;
+    let owners = aac_files::registry::Owners::from_boot(rows, &settings_owners()?)?;
+    let held = owners.claim(rows, "account-refresh-settings", &root, None)?;
+    assert!(request(Some(&secret), &session)?.starts_with("HTTP/1.1 503"));
+    drop(held);
+
+    let target = root.join("unrelated.json");
+    let settings = root.join("account-refresh-settings.json");
+    let temporary = root.join("account-refresh-settings.json.old.tmp");
+    fs::write(&target, b"leave this file alone")?;
+    fs::write(&temporary, b"old staging file")?;
+    std::os::unix::fs::symlink(&target, &settings)?;
+    assert!(request(Some(&secret), &session)?.ends_with(r#"{"refreshIntervalSeconds":120}"#));
+    assert_eq!(fs::read(&target)?, b"leave this file alone");
+    assert_eq!(
+        fs::read_to_string(&settings)?,
+        "{\"refreshIntervalSeconds\":120}\n"
+    );
+    assert_eq!(
+        fs::symlink_metadata(&settings)?.permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!temporary.exists());
+    Ok(())
 }
 
 #[test]

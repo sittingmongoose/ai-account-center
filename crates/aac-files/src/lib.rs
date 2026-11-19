@@ -10,6 +10,8 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+pub mod history_snapshots;
 pub mod path;
 #[cfg(unix)]
 pub mod presence;
@@ -222,6 +224,16 @@ impl Drop for ConfigLock {
     }
 }
 
+/// Outcome of a failed Status journal append.
+#[cfg(unix)]
+#[derive(Debug)]
+pub enum AnswerAppendError {
+    /// No record was written or its compensating void is durable.
+    Refused,
+    /// A record may have reached disk without a durable void.
+    Unclear,
+}
+
 impl OwnedStore {
     /// Acquire the existing cross-language config writer lock for one read-modify-write.
     /// A pre-existing claim is left for the TypeScript lock's existing recovery path.
@@ -302,6 +314,40 @@ impl OwnedStore {
         })
     }
 
+    /// Accept a lease descriptor from the front door for a registered private file.
+    #[cfg(unix)]
+    fn inherit(root: &Path, row: &registry::Row, lock: File) -> Result<Self, Failure> {
+        use std::os::unix::fs::MetadataExt;
+
+        require_absolute(root)?;
+        let file = path::node::resolve(root, Path::new(&row.file(None)?))?;
+        let mut lock_path = file.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        let lock_path = PathBuf::from(lock_path);
+        require_absolute(&lock_path)?;
+        let current = fs::symlink_metadata(lock_path)?;
+        let held = lock.metadata()?;
+        if !current.is_file()
+            || !held.is_file()
+            || held.uid() != path::uid()
+            || held.mode() & 0o077 != 0
+            || held.dev() != current.dev()
+            || held.ino() != current.ino()
+        {
+            return Err(Failure::new(Cause::Refused, "wrong store writer lease"));
+        }
+        FileExt::try_lock_exclusive(&lock)
+            .map_err(|_| Failure::new(Cause::Busy, "store writer already active"))?;
+        let max_size = usize::try_from(row.max_bytes)
+            .map_err(|_| Failure::new(Cause::Refused, "invalid byte cap"))?;
+        Ok(Self {
+            path: file,
+            max_size,
+            parents: row.parents,
+            _lock: lock,
+        })
+    }
+
     /// Read only a regular file and enforce the declared cap during streaming.
     pub fn read(&self) -> Result<Vec<u8>, Failure> {
         if self.parents == Parents::Private {
@@ -323,7 +369,100 @@ impl OwnedStore {
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     ) -> Result<(), Failure> {
-        self.write_staged(write, &mut |_| Ok(()))
+        self.write_staged(write, &mut |_| Ok(()), false)
+    }
+
+    /// Replace a settings leaf without opening it. Renaming over a symlink replaces the
+    /// link itself. Parent and lease checks still apply, and a directory cannot be replaced.
+    /// As with the legacy settings writers, syncing the directory after rename is best effort.
+    pub fn replace_settings(&self, bytes: &[u8]) -> Result<(), Failure> {
+        self.write_staged(|out| out.write_all(bytes), &mut |_| Ok(()), true)
+    }
+
+    /// Append a Status journal record under the registry writer lease. The cap applies to
+    /// an individual record, since existing history stays in the append-only file.
+    #[cfg(unix)]
+    pub fn append_answer(&self, bytes: &[u8], cancel: &[u8]) -> Result<(), AnswerAppendError> {
+        use std::os::unix::fs::OpenOptionsExt;
+        if bytes.len() > self.max_size
+            || cancel.len() > self.max_size
+            || require_absolute(&self.path).is_err()
+            || reject_special(&self.path, true).is_err()
+        {
+            return Err(AnswerAppendError::Refused);
+        }
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&self.path)
+            .map_err(|_| AnswerAppendError::Refused)?;
+        if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+            return Err(AnswerAppendError::Refused);
+        }
+        // Each record starts with a newline, so a torn earlier write cannot swallow it.
+        match file.write(bytes) {
+            Ok(len) if len == bytes.len() && file.sync_all().is_ok() => Ok(()),
+            Ok(0) | Err(_) => Err(AnswerAppendError::Refused),
+            Ok(_)
+                if !cancel.is_empty()
+                    && file.write_all(cancel).is_ok()
+                    && file.sync_all().is_ok() =>
+            {
+                Err(AnswerAppendError::Refused)
+            }
+            Ok(_) => Err(AnswerAppendError::Unclear),
+        }
+    }
+
+    /// Confirm that a settings leaf is absent or can be replaced without following it.
+    pub fn can_replace_settings(&self) -> Result<(), Failure> {
+        if self.parents == Parents::Private {
+            require_absolute(&self.path)?;
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+            Ok(_) => Err(Failure::new(
+                Cause::Refused,
+                "settings leaf cannot be replaced",
+            )),
+        }
+    }
+
+    /// Remove this settings leaf without following it. An absent leaf is equivalent.
+    pub fn remove_settings(&self) -> Result<(), Failure> {
+        self.can_replace_settings()?;
+        match fs::remove_file(&self.path) {
+            Ok(()) => {
+                if let Some(parent) = self.path.parent() {
+                    let _ = sync_directory(parent);
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Remove legacy settings staging files beside this store after a successful replacement.
+    /// The writer lease is still held. Unlink never follows a symlink.
+    pub fn clean_settings_temporaries(&self) {
+        let Some((parent, name)) = self.path.parent().zip(self.path.file_name()) else {
+            return;
+        };
+        let prefix = format!("{}.", name.to_string_lossy());
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let entry_name = entry.file_name();
+                let text = entry_name.to_string_lossy();
+                if text.starts_with(&prefix) && text.ends_with(".tmp") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 
     /// [`OwnedStore::write_with`] with a hook after each step (the test seam for a write
@@ -332,10 +471,13 @@ impl OwnedStore {
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
         step: &mut dyn FnMut(Step) -> io::Result<()>,
+        replace_settings_leaf: bool,
     ) -> Result<(), Failure> {
         if self.parents == Parents::Private {
             require_absolute(&self.path)?;
-            reject_special(&self.path, true)?;
+            if !replace_settings_leaf {
+                reject_special(&self.path, true)?;
+            }
         }
         let parent = self
             .path
@@ -375,7 +517,10 @@ impl OwnedStore {
             .persist(&self.path)
             .map_err(|_| Failure::new(Cause::NotWritable, "atomic replacement failed"))?;
         step(Step::Renamed)?;
-        sync_directory(parent)?;
+        let synced = sync_directory(parent);
+        if !replace_settings_leaf {
+            synced?;
+        }
         Ok(())
     }
 
@@ -630,13 +775,17 @@ mod tests {
             let store = store(&root, parents, lease);
             store.write(b"committed").unwrap();
             for at in [Step::Staged, Step::Written, Step::Synced] {
-                let result = store.write_staged(|out| out.write_all(b"replacement"), &mut |now| {
-                    if now == at {
-                        Err(io::Error::other("interrupted"))
-                    } else {
-                        Ok(())
-                    }
-                });
+                let result = store.write_staged(
+                    |out| out.write_all(b"replacement"),
+                    &mut |now| {
+                        if now == at {
+                            Err(io::Error::other("interrupted"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    false,
+                );
                 assert!(result.is_err(), "{at:?}");
                 assert_eq!(store.read().unwrap(), b"committed", "{at:?}");
                 let mut expected = vec!["state.json".to_owned()];
@@ -646,13 +795,17 @@ mod tests {
                 assert_eq!(names(&root.join("d")), expected, "{at:?}");
             }
             // After the rename the new file is whole, and the error says the sync did not run.
-            let result = store.write_staged(|out| out.write_all(b"renamed"), &mut |now| {
-                if now == Step::Renamed {
-                    Err(io::Error::other("interrupted"))
-                } else {
-                    Ok(())
-                }
-            });
+            let result = store.write_staged(
+                |out| out.write_all(b"renamed"),
+                &mut |now| {
+                    if now == Step::Renamed {
+                        Err(io::Error::other("interrupted"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                false,
+            );
             assert!(result.is_err());
             assert_eq!(store.read().unwrap(), b"renamed");
         }

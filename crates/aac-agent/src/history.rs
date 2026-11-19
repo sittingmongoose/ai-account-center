@@ -608,13 +608,24 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     // In particular, an append fallback is emitted BEFORE any filesystem mutation.
     if !matches!(
         args["mode"].as_str(),
-        Some("collect" | "closed-check" | "protected-check")
+        Some("collect" | "closed-check" | "protected-check" | "snapshot-cleanup")
     ) || args.get("transactionSource").is_some()
     {
         return Ok(proof::fallback());
     }
     let result = (|| {
         let bound = Bound::new(args)?;
+        if args["mode"] == "snapshot-cleanup" {
+            #[cfg(unix)]
+            {
+                bound.bind()?;
+                let receipt = aac_files::history_snapshots::prune_history_snapshots(&bound.root)
+                    .map_err(|_| ())?;
+                return Ok(json!(receipt));
+            }
+            #[cfg(not(unix))]
+            return Err(());
+        }
         if args["mode"] == "closed-check" {
             bound.bind()?;
             return Ok(json!({"closed":bound.closed()?}));

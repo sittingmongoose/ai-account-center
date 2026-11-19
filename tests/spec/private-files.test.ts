@@ -42,6 +42,14 @@ describe('the registry rules', () => {
     ])
       expect(ids).toContain(id);
     expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts')).toBe(true);
+    expect(files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => false)).toEqual(
+      Object.fromEntries(ids.map((id) => [id, 'ts']))
+    );
+    expect(
+      files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, (group) => group === 'writes')[
+        'account-refresh-settings'
+      ]
+    ).toBe('rust-service');
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {
@@ -202,6 +210,11 @@ describe('one writer per file', () => {
     expect(tcp['auth-devices']).toBe('rust-service');
     expect(tcp['auth-setup-code']).toBe('rust-service');
     expect(files.resolvePrivateFileOwners(rows, () => false)['auth-state']).toBe('ts');
+    // A row that moves with no group never leaves TS.
+    expect(files.resolvePrivateFileOwners(rows, () => true)['usage-hub-key']).toBe('ts');
+    const shipped = files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => true);
+    for (const row of files.PRIVATE_FILE_ROWS)
+      expect(shipped[row.id]).toBe(row.movesWith !== null ? 'rust-service' : 'ts');
   });
 
   it('refuses every TS writer of a row the service owns, and writes nothing', async () => {
@@ -265,8 +278,10 @@ describe('one writer per file', () => {
       path.join(root, 'src/web-server/rust-service-supervisor.ts'),
       'utf8'
     );
-    expect(supervisor).toMatch(
-      /settlePrivateFileOwners\(\(group\) => group !== 'public-auth' && this\.mode === 'on'\)/
+    expect(supervisor).toContain("this.mode === 'on'");
+    expect(supervisor).toContain("rustGroupOn('writes')");
+    expect(supervisor).toContain(
+      "settlePrivateFileOwners((group) => group === 'writes' && this.writesOn)"
     );
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());

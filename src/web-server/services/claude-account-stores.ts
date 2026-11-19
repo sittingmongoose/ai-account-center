@@ -3,7 +3,7 @@ import path from 'path';
 import { ConfigError } from '../../errors/error-types';
 import {
   readPrivateJsonFile,
-  withPrivateFileLock,
+  withRegisteredJsonLock,
   writePrivateJsonFile,
 } from './private-json-store';
 
@@ -203,12 +203,12 @@ export function updatePendingProfiles<T>(
   mutate: (profiles: PendingClaudeProfile[]) => Promise<{ next: PendingClaudeProfile[]; result: T }>
 ): Promise<T> {
   const file = pendingFile(ccsDir);
-  return withPrivateFileLock(file, async () => {
+  return withRegisteredJsonLock(ccsDir, 'claude-pending', file, async () => {
     const { next, result } = await mutate(await readPendingProfiles(ccsDir));
     if (!parsePending({ version: 1, profiles: next })) {
       throw new ConfigError('Pending Claude profiles could not be saved safely.');
     }
-    await writePrivateJsonFile(file, { version: 1, profiles: next });
+    await writePrivateJsonFile(file, { version: 1, profiles: next }, ccsDir);
     return result;
   });
 }
@@ -218,12 +218,12 @@ export function updateTrash<T>(
   mutate: (entries: ClaudeTrashEntry[]) => Promise<{ next: ClaudeTrashEntry[]; result: T }>
 ): Promise<T> {
   const file = trashFile(ccsDir);
-  return withPrivateFileLock(file, async () => {
+  return withRegisteredJsonLock(ccsDir, 'claude-trash', file, async () => {
     const { next, result } = await mutate(await readTrash(ccsDir));
     if (!parseTrash({ version: 1, entries: next })) {
       throw new ConfigError('The account trash could not be saved safely.');
     }
-    await writePrivateJsonFile(file, { version: 1, entries: next });
+    await writePrivateJsonFile(file, { version: 1, entries: next }, ccsDir);
     return result;
   });
 }
@@ -260,14 +260,14 @@ export function updateInventory<T>(
   mutate: (profiles: Record<string, unknown>[]) => { next: Record<string, unknown>[]; result: T }
 ): Promise<T> {
   const file = inventoryFile(ccsDir);
-  return withPrivateFileLock(file, async () => {
+  return withRegisteredJsonLock(ccsDir, 'claude-desktop-profiles', file, async () => {
     const document = await readInventoryDocument(ccsDir);
     const profiles = (document.profiles as unknown[]).filter(record);
     if (profiles.length !== (document.profiles as unknown[]).length) {
       throw new ConfigError('The Claude profile list could not be read safely.');
     }
     const { next, result } = mutate(profiles.map((profile) => ({ ...profile })));
-    await writePrivateJsonFile(file, { ...document, profiles: next });
+    await writePrivateJsonFile(file, { ...document, profiles: next }, ccsDir);
     return result;
   });
 }

@@ -37,12 +37,22 @@ export const MAX_PENDING_CONFIRMATIONS = 32;
 export const MAX_PENDING_PER_SESSION = 8;
 export const CONFIRMATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
+export interface AccountApprovals {
+  issue(binding: ConfirmationBinding): IssuedConfirmation | Promise<IssuedConfirmation>;
+  consume(token: string, binding: ConfirmationBinding): boolean | Promise<boolean>;
+}
+
 interface PendingConfirmation extends ConfirmationBinding {
   expiresAt: number;
 }
 
 function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+/** Only the digest of the one-use offer crosses the private service socket. */
+export function confirmationDigest(token: string): string {
+  return digest(token);
 }
 
 /** The session part of a binding: never the raw session id. */

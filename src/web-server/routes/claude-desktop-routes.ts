@@ -29,7 +29,12 @@ import {
   type ClaudeDesktopUsage,
 } from '../services/claude-desktop-usage-service';
 import { getCcsDir } from '../../utils/config-manager';
-import { composeWithRust, readOwnedValueWithRust, readOwnedWithRust } from '../rust-service';
+import {
+  composeWithRust,
+  readOwnedValueWithRust,
+  readOwnedWithRust,
+  rustWritesEnabled,
+} from '../rust-service';
 import {
   acceptRustDesktopProfiles,
   isRustDesktopUsage,
@@ -257,7 +262,7 @@ router.post('/history-snapshots/cleanup', async (req, res): Promise<void> => {
     return;
   }
   try {
-    res.json(await cleanupAllHistorySnapshots());
+    res.json(await cleanupAllHistorySnapshots(undefined, rustWritesEnabled(res)));
   } catch {
     res.status(500).json({ error: 'History snapshots could not be cleaned safely.' });
   }

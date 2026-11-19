@@ -3,7 +3,7 @@
 //! Rust answers only a read it can prove equal to the TS reader, side effects included: every
 //! case where TS logs (corrupt or migrated preferences), answers an error (an unsafe or invalid
 //! visibility file), or could parse what strict JSON refuses returns `None`, and the bridge
-//! serves the TS reader. TS remains both files' only writer.
+//! serves the TS reader.
 use serde_json::{Map, Value, json};
 
 type Object = Map<String, Value>;
@@ -80,7 +80,7 @@ pub(crate) const ADMITTED_TIME_ZONES: &[&str] = &[
 /// Whether the private-store folder logs its group-writable line, or refuses (`None`).
 /// The boot root is canonical, so it is never the symlinked-folder case (the bridge sends a
 /// symlinked or other folder to TS before forwarding).
-fn store_folder(root: &Path) -> Option<Vec<Value>> {
+pub(crate) fn store_folder(root: &Path) -> Option<Vec<Value>> {
     let meta = fs::symlink_metadata(root).ok()?;
     if !meta.is_dir() || meta.file_type().is_symlink() || meta.mode() & 0o002 != 0 {
         return None;
@@ -149,12 +149,12 @@ fn provider_list(values: Vec<Value>) -> Option<Vec<Value>> {
 }
 
 /// `parseIdList`.
-fn id_list(value: &Value) -> Option<Vec<Value>> {
+pub(crate) fn id_list(value: &Value) -> Option<Vec<Value>> {
     let values = value.as_array()?;
     (values.len() <= 128 && values.iter().all(public_account_id)).then(|| unique(values.clone()))
 }
 
-fn known_providers(value: &Value) -> Option<Vec<Value>> {
+pub(crate) fn known_providers(value: &Value) -> Option<Vec<Value>> {
     let values = value.as_array()?;
     if !values.iter().all(|v| v.as_str().is_some()) {
         return None;
@@ -461,8 +461,50 @@ fn primary(root: &Path, hosts: &[(String, String)]) -> Option<Object> {
     )
 }
 
+/// Recompose the persisted reply for a write already validated by the TS route.
+pub(crate) fn prepared_preferences(primary: Value, companion: &mut Vec<Value>) -> Option<Value> {
+    let hosts = hosts()?;
+    let mut proof = primary.as_object()?.clone();
+    let zone = proof.get("timeZone")?.as_str()?;
+    if zone.is_empty() || zone.len() > 128 {
+        return None;
+    }
+    // TS validates the time zone against its Intl tables before preparing the
+    // documents. Check all remaining fields against the shared Rust schema.
+    proof.insert("timeZone".into(), json!("UTC"));
+    if !preferences_valid(&proof, &hosts)? {
+        return None;
+    }
+    let primary_sources = proof.get("usageLogSources")?.as_array()?;
+    let legacy = |source: &Value| {
+        source
+            .get("host")
+            .and_then(Value::as_str)
+            .is_some_and(|host| LEGACY_STORAGE_HOSTS.contains(&host))
+    };
+    if primary_sources.iter().any(|source| !legacy(source)) || companion.iter().any(legacy) {
+        return None;
+    }
+    let mut sources = primary_sources.clone();
+    sources.append(companion);
+    proof.insert("usageLogSources".into(), json!(sources));
+    if !preferences_valid(&proof, &hosts)? {
+        return None;
+    }
+    Some(json!({
+        "timeZone": primary["timeZone"],
+        "snapshotCleanup": primary["snapshotCleanup"],
+        "usageLogSources": proof["usageLogSources"],
+    }))
+}
+
 /// The preferences reply, or `None` for the TS reader.
 pub(crate) fn preferences(root: &Path) -> Option<Value> {
+    let (transaction, policy) =
+        crate::registered::file(root, crate::preferences_write::TRANSACTION)?;
+    if !matches!(aac_files::read::read(&transaction, &policy), Read::Absent) {
+        return None;
+    }
     let hosts = hosts()?;
     let primary = primary(root, &hosts)?;
     // TS keeps the primary for an absent, symlinked or oversized companion; a non-file or an

@@ -25,7 +25,8 @@ import {
   type RustStoreBootInput,
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
-import { rustStoreSwitchOn } from './rust-service-groups';
+import { registerFileWriter, rememberFileLeaseBinary } from '../shared/private-file-lease';
+import { rustGroupOn, rustStoreSwitchOn } from './rust-service-groups';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
@@ -56,6 +57,7 @@ export const HUNG_TIMEOUTS = 3;
 
 export class RustSupervisor {
   readonly mode: RustServiceMode;
+  protected readonly writesOn: boolean;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */
@@ -100,6 +102,8 @@ export class RustSupervisor {
   protected inFlight = 0;
   protected readonly shadowInFlight = new Map<string, number>();
   protected stopped = false;
+  private removeFileWriter: (() => void) | null = null;
+  registeredWrites = 0;
   private readonly acquisition = new AbortController();
   protected binary: string | null = null;
   protected restartTimer: NodeJS.Timeout | null = null;
@@ -116,9 +120,10 @@ export class RustSupervisor {
     options: { now?: () => number; restartDelaysMs?: readonly number[] } = {}
   ) {
     this.mode = rustServiceMode(mode);
-    // L2: each registered private file's writer, resolved once at start and sent in the boot
-    // JSON. The private Unix service never takes the public front door's auth files.
-    settlePrivateFileOwners((group) => group !== 'public-auth' && this.mode === 'on');
+    // L2: the writer assignment sent in the private boot. Writes have their own switch and
+    // need the Unix service. Shadow keeps the TS writer.
+    this.writesOn = this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('writes');
+    settlePrivateFileOwners((group) => group === 'writes' && this.writesOn);
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }
@@ -127,6 +132,7 @@ export class RustSupervisor {
     binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
   ): Promise<void> {
     if (this.stopped) return;
+    rememberFileLeaseBinary(getCcsDir(), binary);
     if (this.mode === 'off') {
       let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
       if (transport === undefined) {
@@ -212,6 +218,8 @@ export class RustSupervisor {
 
   stop(): void {
     this.stopped = true;
+    this.removeFileWriter?.();
+    this.removeFileWriter = null;
     this.acquisition.abort();
     if (this.restartTimer) clearTimeout(this.restartTimer);
     if (this.minuteTimer) clearInterval(this.minuteTimer);
@@ -262,6 +270,11 @@ export class RustSupervisor {
           lease.owned
         )
       : null;
+    this.removeFileWriter?.();
+    this.removeFileWriter =
+      this.writesOn && this.binary
+        ? registerFileWriter(lease.connection.ccsDir, this.binary, () => this.registeredWrites++)
+        : null;
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
   }
@@ -269,6 +282,8 @@ export class RustSupervisor {
   /** The service died or stopped answering: TS answers until a restart succeeds (L1). */
   protected lost(lease: RustLease, cause: string, context: Record<string, unknown> = {}): void {
     if (this.stopped || this.lease !== lease) return;
+    this.removeFileWriter?.();
+    this.removeFileWriter = null;
     this.removeAgentConnection?.();
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();

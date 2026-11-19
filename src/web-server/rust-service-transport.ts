@@ -97,7 +97,7 @@ function once(
   principal: VerifiedRustPrincipal,
   active: Set<http.ClientRequest>,
   payload: string | undefined,
-  method: 'GET' | 'PUT',
+  method: 'GET' | 'PUT' | 'PATCH' | 'POST',
   cap: number,
   deadline: number,
   options: RustRequestOptions = {}
@@ -176,7 +176,7 @@ export function requestRust(
   principal: VerifiedRustPrincipal,
   active: Set<http.ClientRequest>,
   input?: unknown,
-  method: 'GET' | 'PUT' = 'GET',
+  method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET',
   options: RustRequestOptions = {}
 ): Promise<RustReply> {
   const payload = options.text ?? (input === undefined ? undefined : JSON.stringify(input));
@@ -351,14 +351,19 @@ export async function requestRustAgent(
     maxBytes: number;
     callId: string;
   },
-  onProgress?: (data: unknown) => void
+  onProgress?: (data: unknown) => void,
+  singleShot = false
 ): Promise<string | null | undefined> {
   const scope = canonicalRoot(root);
   const held = [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
   if (!held) return undefined;
   const bytes = JSON.stringify(payload);
   if (Buffer.byteLength(bytes) > 8 * 1024 * 1024 + 8192) return null;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const uncertain = () => {
+      if (singleShot) reject(new RustTransportError('reply', 'Agent write outcome unconfirmed'));
+      else resolve(null);
+    };
     const request = http.request({
       socketPath: held.connection.socketPath,
       path: `/internal/agent/${encodeURIComponent(verb)}`,
@@ -382,13 +387,14 @@ export async function requestRustAgent(
     });
     request.once('error', (error: NodeJS.ErrnoException) => {
       held.health.failed?.(rustFailureKind(error));
-      resolve(['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '') ? undefined : null);
+      if (['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '')) resolve(undefined);
+      else uncertain();
     });
     request.once('response', (response) => {
       if (response.headers['x-aac-service-boot'] !== held.connection.bootId) {
         response.resume();
         held.health.failed?.('boot');
-        resolve(null);
+        uncertain();
         return;
       }
       // Headers can precede a stalled NDJSON body. Only a completed response resets L1's
@@ -404,19 +410,20 @@ export async function requestRustAgent(
         !String(response.headers['content-type']).startsWith('application/x-ndjson')
       ) {
         response.resume();
-        resolve(null);
+        uncertain();
         return;
       }
       let size = 0;
       let buffer = '';
       let terminal = false;
       let result: string | null = null;
+      let fallbackProven = false;
       response.setEncoding('utf8');
       response.on('data', (chunk: string) => {
         size += Buffer.byteLength(chunk);
         if (size > payload.maxBytes) {
           request.destroy();
-          resolve(null);
+          uncertain();
           return;
         }
         buffer += chunk;
@@ -434,23 +441,25 @@ export async function requestRustAgent(
             }
             terminal = true;
             if (event.type === 'result' && event.value && typeof event.value === 'object') {
-              result =
-                JSON.stringify(event.value) === '{"fallback":"python"}'
-                  ? null
-                  : JSON.stringify(event.value);
+              const value = JSON.stringify(event.value);
+              fallbackProven = value === '{"fallback":"python"}';
+              result = fallbackProven ? null : value;
             } else if (!['fallback', 'failure'].includes(event.type))
               throw new RustTransportError('reply', 'Invalid agent stream');
           } catch {
             result = null;
             request.destroy();
-            resolve(null);
+            uncertain();
             return;
           }
         }
       });
-      response.once('end', () => resolve(terminal && buffer === '' ? result : null));
-      response.once('error', () => resolve(null));
-      response.once('aborted', () => resolve(null));
+      response.once('end', () => {
+        if (terminal && buffer === '' && (result !== null || fallbackProven)) resolve(result);
+        else uncertain();
+      });
+      response.once('error', uncertain);
+      response.once('aborted', uncertain);
     });
     request.end(bytes);
   });

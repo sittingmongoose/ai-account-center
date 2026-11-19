@@ -34,7 +34,12 @@ export interface UnifiedConfig {
    */
   rustService?: {
     mode?: 'off' | 'shadow' | 'on';
-    groups?: { home?: 'off' | 'on'; status?: 'off' | 'on'; analytics?: 'off' | 'on' };
+    groups?: {
+      home?: 'off' | 'on';
+      status?: 'off' | 'on';
+      writes?: 'off' | 'on';
+      'app-updates'?: 'off' | 'on';
+    };
     store?: 'off' | 'on';
   };
   /** Config version */

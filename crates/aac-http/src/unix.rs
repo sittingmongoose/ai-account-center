@@ -1,4 +1,5 @@
 use crate::{
+    app_update_routes::{AppUpdateJobs, BoundJobs, Operation as AppUpdateOperation},
     feed::Feeds,
     identity::{self, Identity},
     limits::Limits,
@@ -72,6 +73,8 @@ struct Shared {
     limits: Limits,
     identity: Identity,
     feeds: Feeds,
+    approvals: crate::account_approvals::Approvals,
+    app_update_jobs: Option<BoundJobs>,
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
@@ -254,10 +257,12 @@ async fn boundary(State(state): State<AppState>, mut req: Request, next: Next) -
 
 /// The private 503 with its named reason. The bodies are the M3 ones.
 fn decline(handler: Handler, reason: Decline) -> Response {
-    let error = if handler == Handler::Settings {
-        "TypeScript settings fallback required"
-    } else {
-        "TypeScript read fallback required"
+    let error = match handler {
+        Handler::Settings => "TypeScript settings fallback required",
+        Handler::WriteSettings => "Usage refresh settings could not be saved.",
+        Handler::WriteVisibility => "Account visibility could not be saved.",
+        Handler::WritePreferences => "Dashboard preferences could not be saved.",
+        _ => "TypeScript read fallback required",
     };
     let mut response = (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -306,6 +311,52 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
+        Handler::AppUpdates => {
+            let Some(operation) = AppUpdateOperation::from_route(&row.method, &row.path) else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            if !matches!(operation, AppUpdateOperation::Status) {
+                let query = req.uri().query().is_some_and(|query| !query.is_empty());
+                let body = to_bytes(req.into_body(), 1024).await;
+                if query || !body.is_ok_and(|body| {
+                    crate::json_object::from_slice::<serde_json::Map<String, serde_json::Value>>(
+                        &body,
+                        &[],
+                    )
+                    .is_ok()
+                }) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "Provide an empty JSON object."})),
+                    )
+                        .into_response();
+                }
+            }
+            let Some(jobs) = shared.app_update_jobs.as_ref() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-aac-decline", "unsupported")],
+                    Json(json!({"error": "App update jobs are unbound"})),
+                )
+                    .into_response();
+            };
+            match jobs.dispatch(operation).await {
+                Ok(response) => response,
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::Approvals => {
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared.approvals.apply(&bytes) {
+                Some(value) => Json(value).into_response(),
+                None => decline(row.handler, Decline::Shape),
+            }
+        }
         Handler::Agent | Handler::AgentControl => {
             let path = req.uri().path().to_owned();
             let cap = if row.handler == Handler::AgentControl {
@@ -425,6 +476,119 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             match shared
                 .limits
                 .blocking(row.pool, move || read_settings(&root))
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::WriteSettings => {
+            let capture = row.path == "/api/accounts/analytics/capture";
+            if req.uri().query().is_some_and(|q| !q.is_empty()) {
+                let body = if capture {
+                    json!({"error":"Unexpected capture settings query.", "code":"invalid_query"})
+                } else {
+                    json!({"error":"Unexpected settings query."})
+                };
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+            let owners = match shared.boot.owners() {
+                Ok(owners) => owners,
+                Err(_) => return decline(row.handler, Decline::Unsupported),
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return invalid_settings(capture);
+            };
+            let value = if capture {
+                crate::json_object::from_slice::<serde_json::Value>(&bytes, &["cwd"])
+                    .ok()
+                    .filter(|capture| capture["cwd"].is_boolean())
+            } else {
+                parse_settings(&bytes).ok().map(|settings| json!(settings))
+            };
+            let Some(value) = value else {
+                return invalid_settings(capture);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    let rows = registry::rows().map_err(|_| Decline::Internal)?;
+                    let store = if capture {
+                        "analytics-capture"
+                    } else {
+                        "account-refresh-settings"
+                    };
+                    let file = owners
+                        .claim(rows, store, &root, None)
+                        .map_err(|_| Decline::Unsupported)?;
+                    let mut bytes = serde_json::to_vec(&value).map_err(|_| Decline::Internal)?;
+                    bytes.push(b'\n');
+                    file.replace_settings(&bytes)
+                        .map_err(|_| Decline::Internal)?;
+                    if !capture {
+                        file.clean_settings_temporaries();
+                    }
+                    Ok(value)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::WritePreferences => {
+            if req.uri().query().is_some_and(|query| !query.is_empty()) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Unexpected preferences query."})),
+                )
+                    .into_response();
+            }
+            let patch = req.method() == axum::http::Method::PATCH;
+            let Ok(bytes) = to_bytes(req.into_body(), crate::preferences_write::INPUT_CAP).await
+            else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(owners) = shared.boot.owners() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::preferences_write::save(&root, &owners, patch, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::WriteVisibility => {
+            let patch = req.method() == axum::http::Method::PATCH;
+            if req.uri().query().is_some() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "This request does not take a query string.",
+                        "code": "unexpected_query",
+                    })),
+                )
+                    .into_response();
+            }
+            let Ok(owners) = shared.boot.owners() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), 9 * 1024).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::visibility_write::save(&root, &owners, patch, &bytes)
+                })
                 .await
             {
                 Ok(value) => Json(value).into_response(),
@@ -563,11 +727,24 @@ fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
     let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
         return Err(Decline::Unsupported);
     };
+    parse_settings(&bytes)
+}
+
+fn invalid_settings(capture: bool) -> Response {
+    let body = if capture {
+        json!({"error": r#"Send {"cwd": true} or {"cwd": false}."#, "code": "invalid_body"})
+    } else {
+        json!({"error":"Choose a whole number of seconds from 30 to 3600."})
+    };
+    (StatusCode::BAD_REQUEST, Json(body)).into_response()
+}
+
+fn parse_settings(bytes: &[u8]) -> Result<AccountRefreshSettings, Decline> {
     // Require the raw object and exact unique keys before the strict integer DTO parse.
     // Original bytes are retained: no Value normalization or positional struct decoding.
     // These small integers are exact in JS; every other input delegates to the TS owner.
     let value: AccountRefreshSettings =
-        crate::json_object::from_slice(&bytes, &["refreshIntervalSeconds"])
+        crate::json_object::from_slice(bytes, &["refreshIntervalSeconds"])
             .map_err(|_| Decline::Shape)?;
     if (30..=3600).contains(&value.refresh_interval_seconds) {
         Ok(value)
@@ -602,6 +779,23 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
+    serve_inner(boot, shutdown, None).await
+}
+
+/// Serve the private routes with an app-update job owner supplied by the service binary.
+pub async fn serve_with_app_update_jobs(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    jobs: Arc<dyn AppUpdateJobs>,
+) -> io::Result<()> {
+    serve_inner(boot, shutdown, Some(jobs)).await
+}
+
+async fn serve_inner(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
+) -> io::Result<()> {
     boot.validate()?;
     let rows = crate::table::rows(crate::table::ROUTES)?;
     let identity = Identity::current()?;
@@ -628,6 +822,8 @@ pub async fn serve(
         limits: Limits::new(),
         identity,
         feeds: Feeds::new(),
+        approvals: crate::account_approvals::Approvals::default(),
+        app_update_jobs: app_update_jobs.map(BoundJobs::new),
         agents,
         store: store.clone(),
     }));
@@ -639,6 +835,8 @@ pub async fn serve(
             MethodFilter::POST
         } else if row.method == axum::http::Method::PUT {
             MethodFilter::PUT
+        } else if row.method == axum::http::Method::PATCH {
+            MethodFilter::PATCH
         } else {
             MethodFilter::GET
         };
@@ -681,7 +879,7 @@ pub async fn serve(
     served
 }
 
-/// R3: the store jobs loop — the first pass minutes after start, then every 15 minutes,
+/// R3: the store jobs loop â€” the first pass minutes after start, then every 15 minutes,
 /// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
 /// when the service ends.
 async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBool>) {

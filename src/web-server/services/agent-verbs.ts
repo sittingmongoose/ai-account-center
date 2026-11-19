@@ -112,6 +112,7 @@ export interface AgentCallOptions {
   deadlineMs: number;
   timeoutMs?: number;
   maxBytes: number;
+  singleShot?: boolean;
 }
 
 /** Presence and pinned digest only; execution additionally verifies the version handshake. */
@@ -160,7 +161,8 @@ export async function runAgentVerb(
           maxBytes: options.maxBytes,
           callId: randomBytes(16).toString('hex'),
         },
-        options.onProgress
+        options.onProgress,
+        options.singleShot
       );
       if (result !== undefined) return result;
       logger.info('agent.transport.fallback', 'fallback: typescript transport', { verb });
@@ -173,7 +175,8 @@ export async function runAgentVerb(
       });
     }
     return runAgentVerbTsFallback(host, verb, verbArgs, options);
-  } catch {
+  } catch (error) {
+    if (options.singleShot) throw error;
     return null;
   }
 }
@@ -185,6 +188,7 @@ async function runAgentVerbTsFallback(
   verbArgs: Record<string, unknown>,
   options: AgentCallOptions
 ): Promise<string | null> {
+  let dispatched = false;
   try {
     const mode = options.mode ?? agentVerbs();
     const artifacts = options.artifacts ?? manifest.artifacts;
@@ -240,17 +244,24 @@ async function runAgentVerbTsFallback(
         args: verbArgs,
       }) + '\n';
     if (Buffer.byteLength(input) > options.maxBytes) return null;
+    dispatched = true;
     const result = await run(executable, args, {
       timeoutMs: options.timeoutMs ?? options.deadlineMs + 5000,
       maxBytes: options.maxBytes,
       input,
       env: host.sshHost ? sshEnvironment() : { ...process.env },
     });
-    if (host.sshHost && result.code === 87) return null;
-    if (result.failed || result.code !== 0 || result.timedOut || result.missing) return null;
-    if (Buffer.byteLength(result.stdout) > options.maxBytes) return null;
+    if (result.missing || (host.sshHost && result.code === 87 && !result.timedOut)) return null;
+    if (
+      result.failed ||
+      result.code !== 0 ||
+      result.timedOut ||
+      Buffer.byteLength(result.stdout) > options.maxBytes
+    )
+      throw new ConfigError('Agent reply unavailable.');
     return reply(result.stdout, id);
-  } catch {
+  } catch (error) {
+    if (dispatched && options.singleShot) throw error;
     return null;
   }
 }
@@ -346,12 +357,14 @@ export async function collectAgentWithFallback<T>(
     | 'launch'
     | 'claude-host',
   agent: () => Promise<T | null>,
-  helper: () => Promise<T>
+  helper: () => Promise<T>,
+  singleShot = false
 ): Promise<T> {
   try {
     const value = await agent();
     if (value !== null) return value;
-  } catch {
+  } catch (error) {
+    if (singleShot) throw error;
     /* The reference helper owns unqualified inputs and failed executions. */
   }
   logger.info(
@@ -508,14 +521,48 @@ export async function runHistoryAgent(
   args: Record<string, unknown>,
   options: Partial<AgentCallOptions> = {}
 ): Promise<Buffer | null> {
-  if (!['collect', 'closed-check', 'protected-check'].includes(String(args.mode))) return null;
+  const cleanup = args.mode === 'snapshot-cleanup';
+  if (cleanup) {
+    // Windows keeps the existing helper until the native target can prove its
+    // directory and file identities. Every other operand comes from the route's
+    // bound profile resolution.
+    if (
+      host.platform !== 'mac' ||
+      args.platform !== 'mac' ||
+      typeof args.profileId !== 'string' ||
+      !args.policy ||
+      typeof args.policy !== 'object'
+    )
+      return null;
+    const artifacts = options.artifacts ?? manifest.artifacts;
+    if (!artifacts.some((artifact) => artifact.target === target(host.platform))) return null;
+  } else if (!['collect', 'closed-check', 'protected-check'].includes(String(args.mode))) {
+    return null;
+  }
   const result = await runAgentVerb(host, 'claude-history', args, {
     deadlineMs: 25000,
     maxBytes: 1024 * 1024,
     ...options,
+    singleShot: cleanup,
   });
   if (result === null) return null;
   const row = JSON.parse(result);
+  if (cleanup) {
+    if (
+      Object.keys(row).join(',') !== 'kept,deleted,skipped' ||
+      ![row.kept, row.deleted, row.skipped].every(
+        (items) =>
+          Array.isArray(items) &&
+          items.length <= 1024 &&
+          items.every(
+            (name) =>
+              typeof name === 'string' && /^\.history-index-snapshot-[a-f0-9]{32}$/.test(name)
+          )
+      )
+    )
+      throw new ConfigError('Snapshot cleanup reply unavailable.');
+    return Buffer.from(result);
+  }
   if (Array.isArray(row)) return null;
   if (args.mode === 'closed-check') {
     if (Object.keys(row).join(',') !== 'closed' || typeof row.closed !== 'boolean') return null;

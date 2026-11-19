@@ -39,6 +39,55 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  [
+    'bun',
+    [
+      'tests/spec/settings-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/approval-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/app-update-http-parity.ts',
+      ...(process.env.AAC_SPEC_APP_UPDATES_UNBOUND === '1' ? ['--rust-unbound'] : []),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/preferences-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/history-cleanup-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'node',
+    [
+      'tests/spec/lifecycle-writes.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'node',
+    [
+      'tests/spec/status-answer-writes.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   // M6: the T3 hub, the static/Leptos bundle edges and the CLI entry points, recorded from TS and replayable
   // against another front door (AAC_M6_TARGET_URL / AAC_M6_TARGET_CLI).

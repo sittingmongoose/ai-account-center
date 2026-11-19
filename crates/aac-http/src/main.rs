@@ -1,5 +1,18 @@
 //! Private Unix service and the explicitly enabled public TCP front door.
+#[cfg(unix)]
+mod registered_write;
+
 fn main() {
+    #[cfg(unix)]
+    match std::env::args_os()
+        .nth(1)
+        .as_deref()
+        .and_then(std::ffi::OsStr::to_str)
+    {
+        Some("--file-lease") => std::process::exit(file_lease()),
+        Some("--registered-write") => std::process::exit(registered_write::commit()),
+        _ => {}
+    }
     // Two async workers; at most 20 blocking threads: the 8 read, 4 store and 4 fed-Status
     // permits, plus spare. The permits, not this cap, are the bound the routes rely on.
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -30,6 +43,25 @@ fn main() {
         eprintln!("aac-http: Unix sockets required for the private service");
         std::process::exit(1);
     }
+}
+
+#[cfg(unix)]
+fn file_lease() -> i32 {
+    use std::fs::{File, TryLockError};
+    use std::os::fd::AsFd;
+    let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() else {
+        return 74;
+    };
+    let file = File::from(fd);
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return 74;
+    }
+    match file.try_lock() {
+        Ok(()) => 0,
+        Err(TryLockError::WouldBlock) => 73,
+        Err(TryLockError::Error(_)) => 74,
+    }
+    // The parent keeps its copy of the open file description.
 }
 
 #[cfg(unix)]

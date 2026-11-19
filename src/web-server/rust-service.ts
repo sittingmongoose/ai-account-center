@@ -1,7 +1,18 @@
 /** M3 strangler: existing endpoint guards run before any verified principal is constructed. */
 import type { Request, Response } from 'express';
 import { performance } from 'perf_hooks';
+import { randomBytes } from 'node:crypto';
+import { AuthError, NetworkError } from '../errors/error-types';
+import {
+  confirmationDigest,
+  CONFIRMATION_TOKEN_PATTERN,
+  type AccountApprovals,
+  type ConfirmationBinding,
+} from './services/account-confirmations';
 import routes from './rust-service-routes.json';
+import { rustGroupOn } from './rust-service-groups';
+import { tsWritesRow, withTsPrivateFileLeases } from '../shared/private-files';
+import { getCcsDir } from '../utils/config-manager';
 import type { RustLease } from './rust-service-lifecycle';
 import {
   canonicalRoot,
@@ -34,6 +45,13 @@ function routeRoles(route: string): readonly string[] {
 const now = () => performance.now();
 
 export class RustService extends RustSupervisor {
+  get writerRoutesEnabled(): boolean {
+    return this.writesOn;
+  }
+
+  private readonly appUpdatesOn =
+    this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('app-updates');
+
   /**
    * The shared forwarding gate of every read method: an owned GET/HEAD route, a running service,
    * a verified principal the table admits, a closed breaker and a free in-flight slot. Anything
@@ -97,7 +115,8 @@ export class RustService extends RustSupervisor {
     verified: VerifiedRustPrincipal,
     input?: unknown,
     query = '',
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET'
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -115,7 +134,7 @@ export class RustService extends RustSupervisor {
         verified,
         this.active,
         input,
-        'GET',
+        method,
         // R1: a fed view carries its ids in headers and comes back as bytes, never parsed here.
         headers ? { headers, raw: true, cap: RUST_VIEW_CAP } : {}
       );
@@ -420,6 +439,173 @@ export class RustService extends RustSupervisor {
    * upgrade) starts with none and the front door pushes again. Null without a lease, or when the service
    * reads another root than `scope` (the TS readers answer for another root).
    */
+  /** Null is a handoff before dispatch or an explicit refusal before any write. */
+  async mutate<T>(
+    req: Request,
+    route: string,
+    input: () => unknown,
+    accepts: (body: unknown) => body is T
+  ): Promise<T | null> {
+    if (!this.writesOn) return null;
+    const row = routes.find(
+      (r) =>
+        r.path === route && r.method === req.method && r.group === 'writes' && r.owner === 'rust'
+    );
+    const verified = principal(req, route);
+    if (
+      (req.method !== 'PUT' && req.method !== 'PATCH' && req.method !== 'POST') ||
+      !row ||
+      !verified ||
+      !row.roles?.includes(verified.role)
+    )
+      throw new AuthError('Rust write admission refused');
+    if (
+      this.stopped ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
+      this.inFlight >= IN_FLIGHT ||
+      this.breakers.blocked(route)
+    ) {
+      this.fallback(route, { kind: 'unavailable', reason: 'writer' });
+      return null;
+    }
+    const body = input();
+    if (body === undefined) return null;
+    const started = now();
+    let result: RustReply;
+    try {
+      result = await this.forward(route, verified, body, '', undefined, req.method);
+    } catch (error) {
+      this.failed(route, error);
+      if (rustFailureKind(error) === 'connect') return null;
+      throw error;
+    }
+    if (result.status !== 200) {
+      this.declined(route, result);
+      // These outcomes occur before a write begins. Other failures may arrive
+      // after a rename, so they never authorize replay.
+      if (result.status === 503 && ['unsupported', 'stale', 'busy'].includes(result.decline ?? ''))
+        return null;
+      throw new NetworkError('Rust write declined');
+    }
+    if (!accepts(result.body)) throw new NetworkError('Rust write reply refused');
+    this.stats.served++;
+    this.record(route, { kind: 'served' });
+    this.pair(route, null, now() - started);
+    return result.body;
+  }
+
+  /** Called after the dashboard guards. The unbound reply proves no job operation ran.
+   * A lost or malformed reply might follow a started or cancelled job. */
+  async appUpdate(
+    req: Request,
+    operation: 'status' | 'start' | 'cancel'
+  ): Promise<{ status: number; body: unknown } | null> {
+    if (!this.appUpdatesOn) return null;
+    const route = '/api/app-updates/' + operation;
+    const method = operation === 'status' ? 'GET' : 'POST';
+    const registered = routes.some(
+      (row) => row.path === route && row.method === method && row.handler === 'app-updates'
+    );
+    const verified = principal(req, route);
+    if (
+      !registered ||
+      !verified ||
+      verified.role !== 'admin' ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
+      this.inFlight >= IN_FLIGHT
+    )
+      throw new NetworkError('Rust app update jobs unavailable');
+    let reply: RustReply;
+    try {
+      reply = await this.forward(
+        route,
+        verified,
+        method === 'POST' ? {} : undefined,
+        '',
+        undefined,
+        method
+      );
+    } catch (error) {
+      this.failed(route, error);
+      throw error;
+    }
+    if (
+      reply.status === 503 &&
+      reply.decline === 'unsupported' &&
+      reply.bytes?.toString('utf8') === '{"error":"App update jobs are unbound"}'
+    ) {
+      this.declined(route, reply);
+      return null;
+    }
+    const statusCodes =
+      operation === 'status' ? [200] : operation === 'start' ? [202, 409, 500] : [200, 202, 409];
+    if (
+      !statusCodes.includes(reply.status) ||
+      !reply.body ||
+      typeof reply.body !== 'object' ||
+      Array.isArray(reply.body)
+    )
+      throw new NetworkError('Rust app update reply refused');
+    this.stats.served++;
+    this.record(route, { kind: 'served' });
+    return { status: reply.status, body: reply.body };
+  }
+
+  /** The lifecycle router calls this after its session, origin and body guards. */
+  accountConfirmations(): AccountApprovals | undefined {
+    if (
+      !this.writesOn ||
+      this.stopped ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir())
+    )
+      return undefined;
+    const route = '/internal/account-confirmations';
+    const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
+    const call = async (operation: string, token: string, binding: ConfirmationBinding) => {
+      if (
+        this.inFlight >= IN_FLIGHT ||
+        this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir())
+      )
+        throw new NetworkError('Rust approval store unavailable');
+      let result: RustReply;
+      try {
+        result = await this.forward(
+          route,
+          verified,
+          { operation, ...binding, tokenDigest: confirmationDigest(token) },
+          '',
+          undefined,
+          'POST'
+        );
+      } catch (error) {
+        this.failed(route, error);
+        throw error;
+      }
+      if (result.status !== 200 || !result.body || typeof result.body !== 'object') {
+        this.declined(route, result);
+        throw new NetworkError('Rust approval store declined');
+      }
+      this.stats.served++;
+      this.record(route, { kind: 'served' });
+      return result.body as Record<string, unknown>;
+    };
+    return {
+      issue: async (binding) => {
+        const token = randomBytes(32).toString('base64url');
+        const { expiresAtMs } = await call('issue', token, binding);
+        if (typeof expiresAtMs !== 'number' || !Number.isSafeInteger(expiresAtMs))
+          throw new NetworkError('Rust approval expiry refused');
+        return { token, expiresAt: new Date(expiresAtMs).toISOString() };
+      },
+      consume: async (token, binding) => {
+        if (!CONFIRMATION_TOKEN_PATTERN.test(token)) return false;
+        const { consumed } = await call('consume', token, binding);
+        if (typeof consumed !== 'boolean') throw new NetworkError('Rust approval reply refused');
+        return consumed;
+      },
+    };
+  }
+
   feedBoot(scope: string): string | null {
     const lease = this.lease;
     return lease && !this.stopped && lease.connection.ccsDir === canonicalRoot(scope)
@@ -654,4 +840,30 @@ export async function readOwnedValueWithRust(
   return service instanceof RustService
     ? service.ownedValue(req, route, root, accept, legacy)
     : legacy();
+}
+
+/** Whether this guarded route can select its native write adapter. */
+export function rustWritesEnabled(res: Response): boolean {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService && service.writerRoutesEnabled;
+}
+
+/** The front door may resume the existing writer only after claiming its registry leases. */
+export async function writeWithRust<T>(
+  req: Request,
+  res: Response,
+  route: string,
+  store: string | readonly string[],
+  input: () => unknown,
+  accepts: (body: unknown) => body is T,
+  legacy: () => T | Promise<T>
+): Promise<T> {
+  const stores = typeof store === 'string' ? [store] : store;
+  const service: unknown = res.locals.rustService;
+  const preferredRust = stores.some((id) => !tsWritesRow(id));
+  if (preferredRust && service instanceof RustService) {
+    const result = await service.mutate(req, route, input, accepts);
+    if (result !== null) return result;
+  }
+  return withTsPrivateFileLeases(getCcsDir(), stores, legacy, preferredRust);
 }
