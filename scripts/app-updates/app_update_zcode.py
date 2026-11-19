@@ -285,7 +285,7 @@ def t3_consumers(host=None):
         if command_path and "/" not in command_path and "\\" not in command_path:
             for name, bins in BINS.items():
                 if bare in bins:
-                    root = on_path.get(name)
+                    root = on_path.get(name) or default_consumer(name, host)
                     found.setdefault(name, []).append((root or adapter_root(host), node,
                                                        None if root else "mixed_ownership"))
         for candidate in ([command_path] if command_path else []) + args:
@@ -325,6 +325,26 @@ def path_consumers(host):
                 if name in found:
                     break
     return found
+
+
+def default_consumer(name, host):
+    """The copy a bare command names in the usual adapter prefix's bin folder.
+
+    T3 resolves a bare name on its own PATH; the dashboard or its ssh session may not carry that
+    folder (RECHECK-2 L4). The prefix this OS normally installs adapters into is checked before
+    the row reports mixed_ownership: <prefix>/bin on the Mac and Linux, <prefix> itself on
+    Windows (npm's .cmd shims live beside node_modules)."""
+    root = adapter_root(host)
+    folder = root.parent if host == "windows" else root.parent.parent / "bin"
+    suffixes = (".cmd", ".ps1", "") if host == "windows" else ("",)
+    for binary in BINS[name]:
+        for suffix in suffixes:
+            candidate = folder / (binary + suffix)
+            if candidate.is_file():
+                hit = package_in(candidate) or _shim_package(candidate)
+                if hit and hit[1] == name:
+                    return hit[0]
+    return None
 
 
 def npmrc_prefix():
@@ -983,6 +1003,35 @@ def npm_pair(owner, host):
     return resolve_npm(owner.prefix)
 
 
+def corepack_pnpm():
+    """The pnpm entry corepack itself would run, from its cache.
+
+    A corepack shim (pnpm.cmd beside nodejs) has no node_modules/pnpm next to it; corepack extracts
+    pnpm into <corepack home>/v1/pnpm/<version>/bin/pnpm.cjs. Corepack's own home rules are copied
+    here (COREPACK_HOME, else XDG_CACHE_HOME or LOCALAPPDATA or the per-user cache folder), and the
+    version it last ran from lastKnownGood.json wins over the newest cached one."""
+    home = os.environ.get("COREPACK_HOME")
+    if not home:
+        base = (os.environ.get("XDG_CACHE_HOME") or os.environ.get("LOCALAPPDATA")
+                or str(pathlib.Path.home() / ("AppData/Local" if os.name == "nt" else ".cache")))
+        home = str(pathlib.Path(base) / "node/corepack")
+    root = pathlib.Path(home)
+    target = root / "v1/pnpm"
+    try:
+        known = json.loads((root / "lastKnownGood.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+    if isinstance(known, dict) and isinstance(known.get("pnpm"), str):
+        entry = target / known["pnpm"] / "bin/pnpm.cjs"
+        if entry.is_file():
+            return entry
+    try:
+        versions = [entry for entry in target.iterdir() if entry.is_dir() and (entry / "bin/pnpm.cjs").is_file()]
+    except OSError:
+        return None
+    return max(versions, key=lambda entry: version_tuple(entry.name)) / "bin/pnpm.cjs" if versions else None
+
+
 def pnpm_argv(host):
     """pnpm itself, never through cmd.exe: on Windows a pnpm.cmd shim is replaced by node and
     pnpm's own pnpm.cjs, as npm runs (a & or % in a path would otherwise be interpreted)."""
@@ -995,7 +1044,8 @@ def pnpm_argv(host):
         for cli in (path.parent / "node_modules/pnpm/bin/pnpm.cjs", path.parent / "node_modules/pnpm/bin/pnpm.js"):
             if node and cli.is_file():
                 return [node, str(cli)]
-        return None
+        bundled = corepack_pnpm() if node else None
+        return [node, str(bundled)] if bundled else None
     return [str(path)]
 
 

@@ -308,6 +308,33 @@ class Adapters(Home):
             planned = zcode.install_command(owner, "zcode-acp-server", "windows", None, *(["0.84.3"] if "version" in zcode.install_command.__code__.co_varnames else []))
         self.assertEqual(planned[0][:2], [str(node), str(entry)])
 
+    def test_r1_l8_a_corepack_pnpm_cmd_uses_the_cached_entry_it_last_ran(self):
+        shim = self.root / "AppData/Roaming/npm/pnpm.cmd"
+        shim.parent.mkdir(parents=True); shim.write_text("@echo off")
+        node = self.root / "nodejs/node.exe"
+        node.parent.mkdir(parents=True); node.write_text("x")
+        cache = self.root / "AppData/Local/node/corepack"
+        for version in ("10.12.1", "11.0.0"):
+            entry = cache / ("v1/pnpm/" + version + "/bin/pnpm.cjs")
+            entry.parent.mkdir(parents=True); entry.write_text("x")
+        (cache / "lastKnownGood.json").write_text(json.dumps({"pnpm": "10.12.1"}))
+        with mock.patch.dict(os.environ, {"COREPACK_HOME": str(cache)}), \
+                mock.patch.object(zcode.shutil, "which", side_effect=lambda name: str(shim) if name == "pnpm" else str(node) if name.startswith("node") else None):
+            self.assertEqual(zcode.pnpm_argv("windows"), [str(node), str(cache / "v1/pnpm/10.12.1/bin/pnpm.cjs")])
+
+    def test_r1_l8_without_a_last_known_good_the_newest_cached_pnpm_is_used(self):
+        shim = self.root / "AppData/Roaming/npm/pnpm.cmd"
+        shim.parent.mkdir(parents=True); shim.write_text("@echo off")
+        node = self.root / "nodejs/node.exe"
+        node.parent.mkdir(parents=True); node.write_text("x")
+        cache = self.root / "AppData/Local/node/corepack"
+        for version in ("9.15.4", "10.12.1", "11.0.0"):
+            entry = cache / ("v1/pnpm/" + version + "/bin/pnpm.cjs")
+            entry.parent.mkdir(parents=True); entry.write_text("x")
+        with mock.patch.dict(os.environ, {"COREPACK_HOME": str(cache)}), \
+                mock.patch.object(zcode.shutil, "which", side_effect=lambda name: str(shim) if name == "pnpm" else str(node) if name.startswith("node") else None):
+            self.assertEqual(zcode.pnpm_argv("windows"), [str(node), str(cache / "v1/pnpm/11.0.0/bin/pnpm.cjs")])
+
     @unittest.skipIf(not POSIX or ROOT, "a read-only folder needs POSIX permissions and a non-root user")
     def test_b11_an_owner_folder_this_account_cannot_write_runs_nothing(self):
         homebrew = self.npm_prefix("opt/homebrew", "0.84.2")

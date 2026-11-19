@@ -329,6 +329,22 @@ class Round2(Home):
         self.assertEqual((row['status'], row['messageCode']), ('skipped', 'mixed_ownership'))
         self.assertEqual(runs, [])
 
+    def test_r2_4_a_bare_command_missing_from_the_helper_path_uses_the_default_prefix(self):
+        modules = self.npm_prefix('.local', '0.84.2')
+        binary = self.root / '.local/bin/zcode-acp-server'
+        binary.parent.mkdir(parents=True)
+        binary.symlink_to(modules / 'zcode-acp-server/dist/cli.js')
+        settings = self.root / '.t3/userdata/settings.json'
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({'providerInstances': {'bare': {'enabled': True, 'config': {
+            'commandPath': 'zcode-acp-server'}}}}))
+        runs = []
+        install, row = self.update('ubuntu', self.npm_writes(runs=runs))
+        self.assertEqual(zcode.package_version(modules, 'zcode-acp-server'), '0.84.3')
+        self.assertEqual(row['status'], 'updated')
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(pathlib.Path(runs[0][runs[0].index('--prefix') + 1]), self.root / '.local')
+
     def test_c6_configured_pnpm_store_copy_skips_without_install_or_verification(self):
         modules = self.root / '.local/share/pnpm/global/5/node_modules'
         entry = modules / '.pnpm/zcode-acp-server@0.84.2/node_modules'
