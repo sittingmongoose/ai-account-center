@@ -1358,7 +1358,7 @@ mod tests {
         ));
         assert!(!owns_route(&Method::GET, "/api/status/files/vm.lead"));
         assert!(!owns_route(&Method::POST, "/api/status/files/vm.lead/a.png"));
-        assert!(!owns_route(&Method::GET, "/api/scoreboard"));
+        assert!(owns_route(&Method::GET, "/api/scoreboard"));
         assert!(!owns_route(&Method::GET, "/api/views/home"));
     }
 
