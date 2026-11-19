@@ -1,9 +1,11 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
+mod claude_host;
 mod failover;
 mod files;
 mod history;
 mod inventory;
 mod key_store;
+mod launch;
 mod pins;
 mod proof;
 mod quota;
@@ -196,12 +198,20 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
     if matches!(
         request.verb.as_str(),
-        "key-store" | "t3-pins" | "claude-history" | "failover-inventory" | "signin-expiry"
+        "key-store"
+            | "t3-pins"
+            | "claude-history"
+            | "failover-inventory"
+            | "signin-expiry"
+            | "launch"
+            | "claude-host"
     ) {
         let args = request.args.clone();
         let verb = request.verb.clone();
         return blocking(move || match verb.as_str() {
             "key-store" => key_store::run(&args),
+            "launch" => launch::run(&args),
+            "claude-host" => claude_host::run(&args),
             "t3-pins" => pins::run(&args),
             "failover-inventory" => failover::run(&args),
             "signin-expiry" => signin::run(&args),
