@@ -16,7 +16,7 @@ import {
   SOCKET_PATH_LIMIT,
   socketLayout,
 } from '../../../src/web-server/rust-service-lifecycle';
-import routes from '../../../src/web-server/rust-service-routes.json';
+import routes from '../../../config/rust-service-routes.json';
 
 function clock(start = 1_000_000) {
   let now = start;

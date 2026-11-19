@@ -8,14 +8,14 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Stable packaged resource, shared by every TS and Rust consumer.
-pub const SECRET_POLICY_PATH: &str = "src/shared/secret-policy.json";
+pub const SECRET_POLICY_PATH: &str = "config/secret-policy.json";
 
 /// Immutable process-wide policy data. This module can be included by any native crate
 /// through `#[path = "../../shared/secret_policy.rs"]`; it has no store/Status dependencies.
 pub fn load_secret_policy() -> &'static Json {
     static POLICY: OnceLock<Json> = OnceLock::new();
     POLICY.get_or_init(|| {
-        serde_json::from_str(include_str!("../../src/shared/secret-policy.json"))
+        serde_json::from_str(include_str!("../../config/secret-policy.json"))
             .expect("checked packaged secret policy")
     })
 }

@@ -1,7 +1,7 @@
 //! The store's credential detector as it was before the shared policy (frozen, test-only).
 //! `store_capture.rs` checks that the shared policy refuses every shape this one did, so the
 //! deletion of these thresholds from `src/secret.rs` cannot lose a protection. Never used by
-//! the library: AAC's one detector is `src/shared/secret-policy.json`.
+//! the library: AAC's one detector is `config/secret-policy.json`.
 #![allow(dead_code, clippy::type_complexity)]
 
 fn word(b: u8) -> bool {

@@ -3,7 +3,7 @@
  * the TypeScript side only moves text between the native calls. Scanning the share, the run@1
  * projection, normalization, dedupe, storage and queries are Rust (crates/aac-store/src/runs.rs).
  * Between scan and record every text passes `jsonFromBytes` and every path and writer folder
- * `findSecret`: both are the shared secret policy (src/shared/secret-policy.json), the one
+ * `findSecret`: both are the shared secret policy (config/secret-policy.json), the one
  * detector Rust applies again before anything is stored. A pass that stops at its read budget continues on the next one: nothing
  * is capped away.
  */

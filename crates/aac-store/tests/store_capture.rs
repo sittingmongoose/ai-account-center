@@ -243,7 +243,7 @@ fn shared_loader_exposes_the_packaged_policy_without_a_status_dependency() {
     let policy = aac_store::secret_policy::load_secret_policy();
     assert_eq!(
         aac_store::secret_policy::SECRET_POLICY_PATH,
-        "src/shared/secret-policy.json"
+        "config/secret-policy.json"
     );
     assert_eq!(policy["version"], 3);
     assert!(policy["patterns"].as_array().unwrap().len() > 10);

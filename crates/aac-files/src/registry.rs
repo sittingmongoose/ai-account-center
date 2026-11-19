@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn every_moves_with_group_is_a_route_group() {
         let routes: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../src/web-server/rust-service-routes.json"
+            "../../../config/rust-service-routes.json"
         ))
         .unwrap();
         let groups: BTreeSet<_> = routes

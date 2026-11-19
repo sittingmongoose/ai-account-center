@@ -80,7 +80,7 @@ real private homes or contacts a provider.
 
 `agentVerbs: on` in config.yaml (or `AAC_AGENT_VERBS=on` for isolated checks)
 enables the TS adapter. Absent/invalid values stay off. The trusted package
-catalog `src/web-server/services/agent-artifacts.json` deliberately has no
+catalog `config/agent-artifacts.json` deliberately has no
 artifacts until an authorized packaging release supplies reviewed per-target
 hashes and binaries; this task neither ships nor installs them. A missing or
 hash-mismatched binary keeps the labelled `fallback: python`; an executing

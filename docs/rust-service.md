@@ -13,7 +13,7 @@ Starting the dashboard never builds, downloads or installs this binary.
 | `shadow` | TypeScript answers first. A bounded background request compares status and canonical JSON; differences are logged without response bodies. |
 | `on` | The owned read routes below use Rust after their existing TS guards. Missing/unhealthy service, deadline, response cap or invalid DTO uses the TS handler and logs `rust.service.fallback`. |
 
-The one ownership table is [`rust-service-routes.json`](../src/web-server/rust-service-routes.json),
+The one ownership table is [`rust-service-routes.json`](../config/rust-service-routes.json),
 imported by TS and embedded by Rust. GET `/api/health`, `/api/accounts/settings`
 and `/api/diag` are `rust`. The table also names `/api/store/status`, `/api/status`,
 `/api/scoreboard`, `/api/status/files/*` and `/api/status/deliverable` as conservative

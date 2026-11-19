@@ -86,6 +86,9 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/config/tables ./config/tables
 COPY --from=build /app/config/private-files.json ./config/private-files.json
+COPY --from=build /app/config/agent-artifacts.json ./config/agent-artifacts.json
+COPY --from=build /app/config/rust-service-routes.json ./config/rust-service-routes.json
+COPY --from=build /app/config/secret-policy.json ./config/secret-policy.json
 # Package files the server resolves next to dist/ at runtime (tests/unit/docker/docker-hygiene.test.ts
 # derives this list from src/): the computer table and the agent-report schemas and catalog.
 COPY --from=build /app/web-dashboard/public/computers.json ./web-dashboard/public/computers.json

@@ -581,7 +581,7 @@ async function acquireWithinBudget(
         // Windows already returned above; the default re-detects the platform in its own scope.
         ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
-        AAC_AGENT_CATALOG: path.resolve(__dirname, 'services/agent-artifacts.json'),
+        AAC_AGENT_CATALOG: path.resolve(__dirname, '../../config/agent-artifacts.json'),
         AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,
         AAC_AGENT_IDENTITY_FILE: process.env.AAC_AGENT_IDENTITY_FILE,
         AAC_AGENT_KNOWN_HOSTS_FILE: process.env.AAC_AGENT_KNOWN_HOSTS_FILE,

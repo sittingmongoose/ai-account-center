@@ -54,7 +54,7 @@ if (!process.env.AAC_L5_FIXTURE_CHILD) {
   const identity = JSON.parse(execFileSync(agent, ['--version'], { env: { PATH: process.env.PATH }, encoding: 'utf8' }));
   const artifact = { file: agent, sha256: createHash('sha256').update(fs.readFileSync(agent)).digest('hex'),
     target: identity.target, version: identity.version };
-  fs.writeFileSync(path.join(pkg, 'dist/web-server/services/agent-artifacts.json'), JSON.stringify({ artifacts: [artifact] }));
+  fs.writeFileSync(path.join(pkg, 'config/agent-artifacts.json'), JSON.stringify({ artifacts: [artifact] }));
   fs.writeFileSync(path.join(ccs, 'config.yaml'), JSON.stringify({ agentTransport: 'on', agentVerbs: 'on',
     computers: { local: { label: 'Local fixture', os: 'linux', transport: { kind: 'local' } },
       remote: { label: 'Remote fixture', os: 'linux', sshAlias: 'fixture',

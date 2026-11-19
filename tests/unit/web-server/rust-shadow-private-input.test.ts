@@ -9,7 +9,7 @@ import { RustService } from '../../../src/web-server/rust-service';
 import codexRouter from '../../../src/web-server/routes/codex-routes';
 import { invalidateCodexAuthProfilesCache } from '../../../src/codex-auth/codex-auth-dashboard-service';
 import { codexProfileForms, emptyState } from '../../spec/profile-read-fixtures';
-import routes from '../../../src/web-server/rust-service-routes.json';
+import routes from '../../../config/rust-service-routes.json';
 
 it('keeps all standalone profile comparisons in TS and sends no private profile body', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-shadow-private-'));

@@ -45,7 +45,7 @@ function sourceHash() {
     '../../Cargo.lock',
     'build.rs',
     'rust-toolchain.toml',
-    '../../src/shared/secret-policy.json',
+    '../../config/secret-policy.json',
     '../../native/shared/secret_policy.rs',
     '../../native/shared/run_corrections.rs',
     // runs.rs embeds the package's computer table.

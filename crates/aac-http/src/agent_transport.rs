@@ -143,7 +143,7 @@ impl Registry {
         }
         let catalog_path = std::env::var_os("AAC_AGENT_CATALOG")
             .map(PathBuf::from)
-            .unwrap_or_else(|| package.join("dist/web-server/services/agent-artifacts.json"));
+            .unwrap_or_else(|| package.join("config/agent-artifacts.json"));
         let catalog: Catalog =
             serde_json::from_slice(&aac_files::read_bounded(&catalog_path, 65536)?)
                 .map_err(|_| refused())?;

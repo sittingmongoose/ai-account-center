@@ -76,7 +76,7 @@ describe('the registry rules', () => {
   it('names only route groups in movesWith', () => {
     const groups = new Set(
       JSON.parse(
-        fs.readFileSync(path.join(root, 'src/web-server/rust-service-routes.json'), 'utf8')
+        fs.readFileSync(path.join(root, 'config/rust-service-routes.json'), 'utf8')
       ).map((r: { group: string }) => r.group)
     );
     for (const row of files.PRIVATE_FILE_ROWS)

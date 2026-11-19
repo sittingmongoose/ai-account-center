@@ -1,4 +1,4 @@
-//! L1: the one route table (`src/web-server/rust-service-routes.json`). TS gates from it and Rust
+//! L1: the one route table (`config/rust-service-routes.json`). TS gates from it and Rust
 //! builds its dispatch from it: each `rust` row names its group, the principal roles it admits,
 //! its budget and its handler. Startup refuses a row without a known handler.
 use aac_api::{PrincipalRole, VerifiedPrincipal};
@@ -7,7 +7,7 @@ use serde_json::value::RawValue;
 use std::io;
 
 /// The table, embedded at build time so Rust and TS cannot disagree about it.
-pub(crate) const ROUTES: &str = include_str!("../../../src/web-server/rust-service-routes.json");
+pub(crate) const ROUTES: &str = include_str!("../../../config/rust-service-routes.json");
 
 /// The handlers the service implements. A row names one of these words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

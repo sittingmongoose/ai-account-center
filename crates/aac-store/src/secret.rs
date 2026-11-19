@@ -1,5 +1,5 @@
 //! Credential refusal for usage and capture text (docs/store.md 2.2). There is one detector in
-//! AAC: the shared secret policy (`src/shared/secret-policy.json`, `crate::secret_policy`), read
+//! AAC: the shared secret policy (`config/secret-policy.json`, `crate::secret_policy`), read
 //! by TypeScript and Rust alike. This module keeps no patterns or thresholds of its own.
 //!
 //! Usage text is held to the whole policy except its email scan: an address is personal data
