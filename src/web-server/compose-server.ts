@@ -122,6 +122,8 @@ export async function startComposedServer(
   options: ServerOptions,
   binary: string
 ): Promise<ServerInstance & { restartPublic: () => Promise<void> }> {
+  const root = getCcsDir();
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const host = options.host ?? 'localhost';
   const ip =
     host === 'localhost'
@@ -189,7 +191,7 @@ export async function startComposedServer(
         stdio: ['pipe', 'pipe', 'inherit'],
         env: {
           ...process.env,
-          CCS_DIR: getCcsDir(),
+          CCS_DIR: root,
           AAC_RUST_PUBLIC_LISTEN: (isIP(ip) === 6 ? '[' + ip + ']' : ip) + ':' + port,
           AAC_RUST_PUBLIC_EVENT_STDIN: '1',
           AAC_RUST_UI_DIR: options.staticDir ?? path.join(__dirname, '../ui'),
