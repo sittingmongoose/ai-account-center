@@ -60,7 +60,9 @@ pub fn decode_snapshot(value: Value) -> Result<Snapshot, ()> {
         let base64_text = row["base64"].as_str().ok_or(())?;
         let digest = row["sha256"].as_str().ok_or(())?;
         if digest.len() != 64
-            || !digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || !digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             || base64_text.len() > 2_666_668
             || !base64_shape(base64_text)
         {
@@ -149,7 +151,12 @@ struct HelperAdapters<'a> {
 
 impl HelperAdapters<'_> {
     /// One helper call with the service's envelope, size cap and canonical-receipt checks.
-    async fn call(&self, target: &str, mode: &str, fields: Map<String, Value>) -> Result<Value, ()> {
+    async fn call(
+        &self,
+        target: &str,
+        mode: &str,
+        fields: Map<String, Value>,
+    ) -> Result<Value, ()> {
         let launcher = match target {
             "mac" => self.profile.mac.as_ref(),
             _ => self.profile.windows.as_ref(),
@@ -245,7 +252,10 @@ impl HelperAdapters<'_> {
         }
         let mut fields = Map::new();
         fields.insert("expectedTarget".into(), payload.target.wire());
-        fields.insert("records".into(), wire_records(payload.records)["records"].clone());
+        fields.insert(
+            "records".into(),
+            wire_records(payload.records)["records"].clone(),
+        );
         let result = self.call(self.platform, "append", fields).await?;
         // Only the fixed helper's successful terminal response proves its sole Node mutator
         // finished. Lost/malformed responses retain the durable hold; no automatic retry.
@@ -377,7 +387,11 @@ pub async fn cleanup_history_snapshots(
     if !response.is_object() {
         return Err(());
     }
-    Ok((counts("kept").ok_or(())?, counts("deleted").ok_or(())?, counts("skipped").ok_or(())?))
+    Ok((
+        counts("kept").ok_or(())?,
+        counts("deleted").ok_or(())?,
+        counts("skipped").ok_or(())?,
+    ))
 }
 
 /// `cleanupAllHistorySnapshots`: retention for every known profile on each of its platforms.
@@ -386,7 +400,9 @@ pub async fn cleanup_all_history_snapshots(
     helper: &dyn HelperCall,
 ) -> Result<Value, ()> {
     let mut total = Map::new();
-    for key in ["profiles", "targets", "kept", "deleted", "skipped", "failed"] {
+    for key in [
+        "profiles", "targets", "kept", "deleted", "skipped", "failed",
+    ] {
         total.insert(key.into(), json!(0));
     }
     let profiles = list_profiles(ccs_dir)?;
@@ -408,8 +424,10 @@ pub async fn cleanup_all_history_snapshots(
             match cleanup_history_snapshots(ccs_dir, profile, platform, helper).await {
                 Ok((kept, deleted, skipped)) => {
                     total["kept"] = json!(total["kept"].as_u64().unwrap_or(0) + kept as u64);
-                    total["deleted"] = json!(total["deleted"].as_u64().unwrap_or(0) + deleted as u64);
-                    total["skipped"] = json!(total["skipped"].as_u64().unwrap_or(0) + skipped as u64);
+                    total["deleted"] =
+                        json!(total["deleted"].as_u64().unwrap_or(0) + deleted as u64);
+                    total["skipped"] =
+                        json!(total["skipped"].as_u64().unwrap_or(0) + skipped as u64);
                 }
                 Err(()) => {
                     total["failed"] = json!(total["failed"].as_u64().unwrap_or(0) + 1);
@@ -431,7 +449,15 @@ pub async fn synchronize_before_open(
     observer: &dyn SyncObserver,
     snapshot_cleanup_auto: bool,
 ) -> Value {
-    let outcome = run_sync(ccs_dir, profile, platform, helper, observer, snapshot_cleanup_auto).await;
+    let outcome = run_sync(
+        ccs_dir,
+        profile,
+        platform,
+        helper,
+        observer,
+        snapshot_cleanup_auto,
+    )
+    .await;
     outcome.unwrap_or_else(|| skipped("unavailable"))
 }
 

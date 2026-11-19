@@ -2,12 +2,8 @@
 //! `<reports>/v1/quota/report.json` (`quota-report@1`), read with the agent-reports rules and
 //! projected to the sections the Status tab shows. One writer rewrites it whole.
 
-use super::{
-    ShareFs, TransientMisses, is_transient, stat_key, MISSING_GRACE_MS, PERSISTENT_SHARE_ERROR,
-};
-use crate::validate::{
-    self, Invalid, Valid, count, fail, iso, list, obj, one_of, opt_iso, opt_text, text,
-};
+use super::{MISSING_GRACE_MS, PERSISTENT_SHARE_ERROR, ShareFs, TransientMisses, is_transient, stat_key};
+use crate::validate::{self, Invalid, Valid, count, fail, iso, list, obj, one_of, opt_iso, opt_text, text};
 use serde_json::{Map, Value as Json, json};
 
 pub const QUOTA_REPORT_SCHEMA: &str = "quota-report@1";
@@ -344,10 +340,7 @@ impl QuotaReportReader {
         }
         if self.good.as_ref().map(|good| good.sha256.as_str()) != Some(sha256.as_str()) {
             self.good = Some(QuotaGood {
-                written_at_ms: aac_num::ecma::parse_instant(
-                    doc["writtenAt"].as_str().unwrap_or_default(),
-                )
-                .unwrap_or(0),
+                written_at_ms: aac_num::ecma::parse_instant(doc["writtenAt"].as_str().unwrap_or_default()).unwrap_or(0),
                 doc,
                 sha256,
                 first_seen_at: now,
@@ -357,10 +350,7 @@ impl QuotaReportReader {
         self.changed_since(before)
     }
 
-    fn changed_since(
-        &self,
-        before: (&'static str, Option<String>, Option<String>),
-    ) -> bool {
+    fn changed_since(&self, before: (&'static str, Option<String>, Option<String>)) -> bool {
         (
             self.state,
             self.good.as_ref().map(|good| good.sha256.clone()),

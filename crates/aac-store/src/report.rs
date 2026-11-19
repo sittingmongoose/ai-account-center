@@ -9,7 +9,7 @@
 //! Cells and sessions arrive already priced by the collector (the pricing facts the front door
 //! supplies); this module never prices, it only shapes, bounds and trims.
 use aac_num::ecma::{parse_instant, to_iso_string};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
 
@@ -38,22 +38,12 @@ fn as_f64(value: &Value) -> f64 {
 /// `Math.max(0, Math.floor(v))` as the contract's unsigned token count.
 fn count(value: &Value) -> u64 {
     let n = as_f64(value);
-    if n.is_finite() && n > 0.0 {
-        n.floor() as u64
-    } else {
-        0
-    }
+    if n.is_finite() && n > 0.0 { n.floor() as u64 } else { 0 }
 }
 
 /// A lower-cased, bounded route label (ASCII provider ids).
 fn route(value: &Value) -> String {
-    value
-        .as_str()
-        .unwrap_or("")
-        .to_lowercase()
-        .chars()
-        .take(64)
-        .collect()
+    value.as_str().unwrap_or("").to_lowercase().chars().take(64).collect()
 }
 
 /// A bounded model label, never empty.
@@ -79,12 +69,7 @@ fn is_fixed_cause(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= 64
         && text.bytes().all(|b| {
-            b.is_ascii_digit()
-                || (b'a'..=b'z').contains(&b)
-                || b == b'_'
-                || b == b':'
-                || b == b'.'
-                || b == b'-'
+            b.is_ascii_digit() || (b'a'..=b'z').contains(&b) || b == b'_' || b == b':' || b == b'.' || b == b'-'
         })
 }
 
@@ -299,9 +284,7 @@ pub struct ReportArgs<'a> {
 }
 
 fn host_of(entry: &Value) -> Option<&str> {
-    entry["host"]
-        .as_str()
-        .or_else(|| entry["data"]["host"].as_str())
+    entry["host"].as_str().or_else(|| entry["data"]["host"].as_str())
 }
 
 /// One report per computer and tool of a published pass.
@@ -315,15 +298,11 @@ pub fn build_activity_reports(args: &ReportArgs<'_>) -> Vec<Value> {
         let scanner_rows: Vec<Value> = args
             .remote
             .iter()
-            .filter(|entry| {
-                entry["tool"].as_str() == Some(tool) && host_of(entry) == Some(host)
-            })
+            .filter(|entry| entry["tool"].as_str() == Some(tool) && host_of(entry) == Some(host))
             .map(|entry| entry["data"].clone())
             .collect();
         let scanner_here = host == "ubuntu"
-            && (SCANNER_ONLY_TOOLS.contains(&tool)
-                || !scanner_rows.is_empty()
-                || args.scanner_owned.contains(tool));
+            && (SCANNER_ONLY_TOOLS.contains(&tool) || !scanner_rows.is_empty() || args.scanner_owned.contains(tool));
         let empty = Vec::new();
         let data: Vec<Value> = if host != "ubuntu" || scanner_here {
             scanner_rows
@@ -356,9 +335,7 @@ pub fn build_activity_reports(args: &ReportArgs<'_>) -> Vec<Value> {
             .filter_map(|c| c["hour"].as_str().and_then(parse_instant))
             .fold(0i64, i64::max);
         let scanned = source["lastScanAt"].as_str().and_then(parse_instant);
-        let read_at = args
-            .now
-            .min(scanned.unwrap_or(args.now).max(newest_cell));
+        let read_at = args.now.min(scanned.unwrap_or(args.now).max(newest_cell));
         let complete = (state == "ok" || state == "no_usage")
             && !derived
             && (host != "ubuntu" || scanner_here || args.local_complete.contains(tool));
@@ -452,11 +429,7 @@ pub fn rows_report(args: &RowsReportArgs<'_>) -> Value {
         .fold(read_at, i64::min);
     let complete = args.complete && args.kind == "backfill";
     let state = if !cells.is_empty() {
-        if complete {
-            "ok"
-        } else {
-            "partial"
-        }
+        if complete { "ok" } else { "partial" }
     } else if complete {
         "no_usage"
     } else {
@@ -557,11 +530,7 @@ impl Ingestor {
                 .as_array()
                 .unwrap_or(&empty)
                 .iter()
-                .filter_map(|s| {
-                    s["sessionKey"]
-                        .as_str()
-                        .map(|k| (k.to_string(), digest(s)))
-                })
+                .filter_map(|s| s["sessionKey"].as_str().map(|k| (k.to_string(), digest(s))))
                 .collect();
             let before_sessions = self.sessions.get(&key);
             let mut out = report.as_object().cloned().unwrap_or_default();
@@ -600,10 +569,7 @@ impl Ingestor {
                 ),
             );
             if !same.is_empty() {
-                out.insert(
-                    "sameDays".into(),
-                    Value::Array(same.iter().map(|d| json!(d)).collect()),
-                );
+                out.insert("sameDays".into(), Value::Array(same.iter().map(|d| json!(d)).collect()));
             }
             trimmed.push(Value::Object(out));
             remember.push(Remember {
@@ -646,8 +612,5 @@ pub struct Remember {
 
 /// Deserialize shaped reports into the typed contract reports the store ingests.
 pub fn contract_reports(reports: &[Value]) -> Result<Vec<crate::contract::Report>, serde_json::Error> {
-    reports
-        .iter()
-        .map(|r| serde_json::from_value(r.clone()))
-        .collect()
+    reports.iter().map(|r| serde_json::from_value(r.clone())).collect()
 }

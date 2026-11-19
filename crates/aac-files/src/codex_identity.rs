@@ -253,7 +253,9 @@ pub fn same_codex_identity(
         }
     }
     let known_accounts = [
-        saved.and_then(|s| s.binding.as_ref()).map(|b| b.account_id.as_str()),
+        saved
+            .and_then(|s| s.binding.as_ref())
+            .map(|b| b.account_id.as_str()),
         saved.and_then(|s| s.account_id.as_deref()),
         meta_account,
     ];
@@ -468,10 +470,18 @@ mod tests {
                 &Value::Null,
             ),
         };
-        assert!(same_codex_identity(None, Some("A@B.C"), Some("acct-1"), &fresh));
+        assert!(same_codex_identity(
+            None,
+            Some("A@B.C"),
+            Some("acct-1"),
+            &fresh
+        ));
         assert!(!same_codex_identity(None, Some("other@b.c"), None, &fresh));
         assert!(!same_codex_identity(None, None, Some("acct-2"), &fresh));
-        let no_binding = Identity { binding: None, ..fresh.clone() };
+        let no_binding = Identity {
+            binding: None,
+            ..fresh.clone()
+        };
         assert!(!same_codex_identity(None, None, None, &no_binding));
     }
 }

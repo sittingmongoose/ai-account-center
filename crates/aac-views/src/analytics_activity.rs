@@ -25,7 +25,15 @@ const DAY_MS: f64 = 86_400_000.0;
 pub(crate) const HOURLY_RANGE_MS: f64 = 92.0 * DAY_MS;
 
 /// The tools `rangeToSources` publishes, in its order (seven; the projection's grid has nine).
-const RANGE_TOOLS: [&str; 7] = ["claude", "codex", "omp", "muse", "zcode", "jsonl", "antigravity"];
+const RANGE_TOOLS: [&str; 7] = [
+    "claude",
+    "codex",
+    "omp",
+    "muse",
+    "zcode",
+    "jsonl",
+    "antigravity",
+];
 /// Every tool the activity collector reads; published as `tools` on provider and model rows.
 const TOOLS: [&str; 9] = [
     "claude",
@@ -105,7 +113,11 @@ const TOOL_PROVIDERS: [(&str, &str); 5] = [
 /// `USAGE_PROVIDER_ORDER`: the shared providers table's analytics order, then "other".
 fn usage_provider_order() -> Vec<&'static str> {
     let mut rows: Vec<(u32, &'static str)> = aac_providers::dashboard_providers()
-        .filter_map(|row| row.analytics.as_ref().map(|analytics| (analytics.order, row.id.as_str())))
+        .filter_map(|row| {
+            row.analytics
+                .as_ref()
+                .map(|analytics| (analytics.order, row.id.as_str()))
+        })
         .collect();
     rows.sort_by_key(|(order, _)| *order);
     let mut out: Vec<&'static str> = rows.into_iter().map(|(_, id)| id).collect();
@@ -291,7 +303,10 @@ fn usage_provider_for(tool: &str, route: Option<&str>, model: Option<&str>) -> &
 }
 
 fn tokens_of(row: &Object) -> f64 {
-    TOKEN_FIELDS.iter().map(|field| finite(row.get(*field))).sum()
+    TOKEN_FIELDS
+        .iter()
+        .map(|field| finite(row.get(*field)))
+        .sum()
 }
 
 /// `splitRow`: divide one hourly or session row by the providers its breakdowns count under.
@@ -360,7 +375,11 @@ fn split_row(row: &Object, tool: &str) -> R<Vec<(&'static str, Object)>> {
         part.insert("modelsUsed".into(), Value::Array(used));
         part.insert(
             "modelBreakdowns".into(),
-            Value::Array(list.iter().map(|item| Value::Object(item.clone())).collect()),
+            Value::Array(
+                list.iter()
+                    .map(|item| Value::Object(item.clone()))
+                    .collect(),
+            ),
         );
         if fallback_cost > 0.0 {
             part.insert("fallbackCost".into(), js_num(fallback_cost));
@@ -369,7 +388,10 @@ fn split_row(row: &Object, tool: &str) -> R<Vec<(&'static str, Object)>> {
         }
         if part.contains_key("hour") {
             if counted {
-                let requests: f64 = list.iter().map(|item| finite(item.get("requestCount"))).sum();
+                let requests: f64 = list
+                    .iter()
+                    .map(|item| finite(item.get("requestCount")))
+                    .sum();
                 part.insert("requestCount".into(), js_num(requests));
             } else {
                 part.remove("requestCount");
@@ -385,7 +407,8 @@ fn split_row(row: &Object, tool: &str) -> R<Vec<(&'static str, Object)>> {
         .map(|(index, field)| (finite(row.get(*field)) - covered[index]).max(0.0))
         .collect();
     if residual.iter().sum::<f64>() > 0.0 {
-        let cost = (finite(row.get("totalCost").or_else(|| row.get("cost"))) - covered_cost).max(0.0);
+        let cost =
+            (finite(row.get("totalCost").or_else(|| row.get("cost"))) - covered_cost).max(0.0);
         let mut part = row.clone();
         for (index, field) in TOKEN_FIELDS.iter().enumerate() {
             part.insert((*field).to_owned(), js_num(residual[index]));
@@ -520,14 +543,9 @@ fn attribute_activity_sources(sources: &[SourceData]) -> R<Vec<AttributedSource>
             }
             // Append this data item's results to their providers, in first-appearance order.
             for (provider, index) in seen.entries() {
-                let result = results
-                    .get(*index)
-                    .ok_or(Decline::Shape)?;
+                let result = results.get(*index).ok_or(Decline::Shape)?;
                 let source_entry = by_provider.get_mut(provider).ok_or(Decline::Shape)?;
-                let slot = source_entry
-                    .data
-                    .last_mut()
-                    .ok_or(Decline::Shape)?;
+                let slot = source_entry.data.last_mut().ok_or(Decline::Shape)?;
                 *slot = AttributedResult {
                     tool: result.tool.clone(),
                     hourly: result.hourly.clone(),
@@ -601,7 +619,11 @@ impl Pricing {
             let row = obj(value)?;
             let rate = |field: &str| -> R<f64> {
                 let n = num(row.get(field))?;
-                if n >= 0.0 { Ok(n) } else { Err(Decline::Number) }
+                if n >= 0.0 {
+                    Ok(n)
+                } else {
+                    Err(Decline::Number)
+                }
             };
             rates.insert(
                 key.clone(),
@@ -654,7 +676,14 @@ fn listed(pricing: &Pricing, route: &str, model: &str, tokens: [f64; 4]) -> R<(f
         + (tokens[1] / 1e6) * resolved.output
         + (tokens[2] / 1e6) * resolved.cache_creation
         + (tokens[3] / 1e6) * resolved.cache_read;
-    Ok((cost, if resolved.source == "fallback" { cost } else { 0.0 }))
+    Ok((
+        cost,
+        if resolved.source == "fallback" {
+            cost
+        } else {
+            0.0
+        },
+    ))
 }
 
 /// `rangeToSources`: the store's bucketed rows as the per-tool sources the projection reads.
@@ -708,11 +737,7 @@ fn range_to_sources(
             None => {
                 let priced = listed(pricing, &route, &model, tokens)?;
                 let logged = logged_nano.unwrap_or(0.0) / 1e9;
-                if logged > 0.0 {
-                    (logged, 0.0)
-                } else {
-                    priced
-                }
+                if logged > 0.0 { (logged, 0.0) } else { priced }
             }
             Some(cost) => (cost / 1e9, fallback_nano.unwrap_or(0.0) / 1e9),
         };
@@ -767,8 +792,16 @@ fn range_to_sources(
             .ok_or(Decline::Shape)?;
         let prior = breakdowns.iter_mut().find(|candidate| {
             candidate.get("modelName").and_then(Value::as_str) == Some(model.as_str())
-                && candidate.get("provider").and_then(Value::as_str).unwrap_or("") == route
-                && candidate.get("quality").and_then(Value::as_f64).unwrap_or(0.0) == quality
+                && candidate
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    == route
+                && candidate
+                    .get("quality")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0)
+                    == quality
         });
         match prior {
             Some(prior) => {
@@ -806,7 +839,10 @@ fn range_to_sources(
             .get_mut("modelsUsed")
             .and_then(Value::as_array_mut)
             .ok_or(Decline::Shape)?;
-        if !models_used.iter().any(|used| used.as_str() == Some(model.as_str())) {
+        if !models_used
+            .iter()
+            .any(|used| used.as_str() == Some(model.as_str()))
+        {
             models_used.push(json!(model));
         }
         for (index, field) in TOKEN_FIELDS.iter().enumerate() {
@@ -881,7 +917,10 @@ fn range_to_sources(
                 sums[index] += value;
             }
             sums[4] += cost;
-            if !used.iter().any(|name| name.as_str() == Some(model.as_str())) {
+            if !used
+                .iter()
+                .any(|name| name.as_str() == Some(model.as_str()))
+            {
                 used.push(json!(model));
             }
             breakdowns.push(Value::Object(breakdown));
@@ -896,12 +935,21 @@ fn range_to_sources(
         row.insert("cacheReadTokens".into(), js_num(sums[3]));
         row.insert("cost".into(), js_num(sums[4]));
         row.insert("totalCost".into(), js_num(sums[4]));
-        row.insert("firstActivity".into(), json!(iso(num(session.get("firstMs"))?)?));
-        row.insert("lastActivity".into(), json!(iso(num(session.get("lastMs"))?)?));
+        row.insert(
+            "firstActivity".into(),
+            json!(iso(num(session.get("firstMs"))?)?),
+        );
+        row.insert(
+            "lastActivity".into(),
+            json!(iso(num(session.get("lastMs"))?)?),
+        );
         row.insert("versions".into(), json!([]));
         row.insert("modelsUsed".into(), Value::Array(used));
         row.insert("modelBreakdowns".into(), Value::Array(breakdowns));
-        if let Some(target) = session.get("target").filter(|v| crate::spread::truthy(Some(v))) {
+        if let Some(target) = session
+            .get("target")
+            .filter(|v| crate::spread::truthy(Some(v)))
+        {
             row.insert("target".into(), target.clone());
         }
         if sessions_by_tool.get(&tool).is_none() {
@@ -918,7 +966,13 @@ fn range_to_sources(
             continue;
         }
         let mut hourly: Vec<Object> = hours
-            .map(|hours| hours.entries().into_iter().map(|(_, hour)| hour.clone()).collect())
+            .map(|hours| {
+                hours
+                    .entries()
+                    .into_iter()
+                    .map(|(_, hour)| hour.clone())
+                    .collect()
+            })
             .unwrap_or_default();
         for hour in &mut hourly {
             let label = text(hour.get("hour"))?;
@@ -927,7 +981,10 @@ fn range_to_sources(
                 hour.remove("requestCount");
             }
         }
-        let event_count: f64 = hourly.iter().map(|hour| finite(hour.get("requestCount"))).sum();
+        let event_count: f64 = hourly
+            .iter()
+            .map(|hour| finite(hour.get("requestCount")))
+            .sum();
         let mut result = Object::new();
         result.insert("daily".into(), json!([]));
         result.insert("monthly".into(), json!([]));
@@ -1047,7 +1104,10 @@ pub(crate) fn grid_from_store(history: &Value) -> R<Value> {
         let last_scan = match source.get("lastFullReadAt").filter(|v| !v.is_null()) {
             Some(value) => value.clone(),
             None => {
-                if matches!(state, "ok" | "no_usage" | "not_installed" | "installed_no_logs") {
+                if matches!(
+                    state,
+                    "ok" | "no_usage" | "not_installed" | "installed_no_logs"
+                ) {
                     source.get("lastReadAt").cloned().unwrap_or(Value::Null)
                 } else {
                     Value::Null
@@ -1289,10 +1349,9 @@ fn price_breakdowns(row: &Object, pricing: &Pricing) -> R<PricedBreakdowns> {
         let name = valid_model_name(breakdown.get("modelName")).map(str::to_owned);
         let rates = match &name {
             None => None,
-            Some(name) => pricing.lookup(
-                name,
-                breakdown.get("provider").and_then(Value::as_str),
-            )?,
+            Some(name) => {
+                pricing.lookup(name, breakdown.get("provider").and_then(Value::as_str))?
+            }
         };
         let list_rate = rates.as_ref().filter(|rates| rates.source != "fallback");
         let parts = list_rate.map(|rate| {
@@ -1303,7 +1362,10 @@ fn price_breakdowns(row: &Object, pricing: &Pricing) -> R<PricedBreakdowns> {
                 (values[3] / 1_000_000.0) * rate.cache_read,
             ]
         });
-        let quality = breakdown.get("quality").and_then(Value::as_f64).unwrap_or(0.0);
+        let quality = breakdown
+            .get("quality")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
         models.push(PricedModel {
             name,
             values,
@@ -1439,11 +1501,13 @@ pub(crate) fn day_number(date: &str) -> R<i64> {
         return Err(Decline::Date);
     }
     let part = |range: std::ops::Range<usize>| -> R<i64> {
-        date[range]
-            .parse::<i64>()
-            .map_err(|_| Decline::Date)
+        date[range].parse::<i64>().map_err(|_| Decline::Date)
     };
-    Ok(civil::days_from_civil(part(0..4)?, part(5..7)?, part(8..10)?))
+    Ok(civil::days_from_civil(
+        part(0..4)?,
+        part(5..7)?,
+        part(8..10)?,
+    ))
 }
 
 /// `localMidnight`: the first instant of a local calendar day, DST skips included.
@@ -1491,7 +1555,12 @@ fn has_partial_hour_offset(tz: &str, from: f64, to: f64, zone: Option<&intl::Zon
 }
 
 /// `localDayStarts`: the local midnights from the day of `from` through the one after `to`.
-pub(crate) fn local_day_starts(from: f64, to: f64, tz: &str, zone: Option<&intl::Zone>) -> R<Vec<f64>> {
+pub(crate) fn local_day_starts(
+    from: f64,
+    to: f64,
+    tz: &str,
+    zone: Option<&intl::Zone>,
+) -> R<Vec<f64>> {
     let mut starts: Vec<f64> = Vec::new();
     let mut date = local_date_text(from, tz, zone)?;
     let last = local_date_text(to, tz, zone)?;
@@ -1529,7 +1598,11 @@ fn detect_anomalies(days: &[(String, f64)], models: &[DayModelRow]) -> R<Value> 
     };
     let mut items: Vec<Value> = Vec::new();
     let total_cost: f64 = days.iter().map(|(_, cost)| cost).sum();
-    let average = if days.is_empty() { 0.0 } else { total_cost / days.len() as f64 };
+    let average = if days.is_empty() {
+        0.0
+    } else {
+        total_cost / days.len() as f64
+    };
     let spike_threshold = average * 2.0;
     let mut models_by_date: OrderedMap<Vec<&DayModelRow>> = OrderedMap::new();
     for row in models {
@@ -1544,7 +1617,10 @@ fn detect_anomalies(days: &[(String, f64)], models: &[DayModelRow]) -> R<Value> 
         }
     }
     dates.sort();
-    let costs: HashMap<&str, f64> = days.iter().map(|(date, cost)| (date.as_str(), *cost)).collect();
+    let costs: HashMap<&str, f64> = days
+        .iter()
+        .map(|(date, cost)| (date.as_str(), *cost))
+        .collect();
     for date in &dates {
         if let Some(cost) = costs.get(date.as_str()) {
             if average > 0.0 && *cost > spike_threshold {
@@ -1723,7 +1799,9 @@ fn project(
         set_base(
             &mut base,
             "message",
-            json!("Local CLI logs do not reliably identify a subscription account. Select all accounts to view local activity; account quota history remains available."),
+            json!(
+                "Local CLI logs do not reliably identify a subscription account. Select all accounts to view local activity; account quota history remains available."
+            ),
         )?;
         return Ok(base);
     }
@@ -1736,7 +1814,11 @@ fn project(
         set_base(
             &mut base,
             "status",
-            json!(if status == "loading" { "loading" } else { "unavailable" }),
+            json!(if status == "loading" {
+                "loading"
+            } else {
+                "unavailable"
+            }),
         )?;
         set_base(
             &mut base,
@@ -1749,8 +1831,10 @@ fn project(
         )?;
         return Ok(base);
     }
-    let mut selected_stamps: Vec<String> =
-        selected.iter().map(|source| source.fetched_at.clone()).collect();
+    let mut selected_stamps: Vec<String> = selected
+        .iter()
+        .map(|source| source.fetched_at.clone())
+        .collect();
     selected_stamps.sort();
     set_base(
         &mut base,
@@ -1762,7 +1846,9 @@ fn project(
     )?;
     let mut message = message.to_owned();
     if has_partial_hour_offset(tz, from, to, options.zone)? {
-        message = format!("{message} Days are built from UTC hours, so a day boundary in this time zone can be off by up to 45 minutes.");
+        message = format!(
+            "{message} Days are built from UTC hours, so a day boundary in this time zone can be off by up to 45 minutes."
+        );
     }
     let mut dates: HashMap<String, String> = HashMap::new();
     let date_of = |epoch: f64, dates: &mut HashMap<String, String>| -> R<String> {
@@ -1796,12 +1882,12 @@ fn project(
     let mut distinct_sessions: HashSet<String> = HashSet::new();
     let mut combined = Accumulator::new();
     let add_day_model = |day_models: &mut OrderedMap<DayModelRow>,
-                             date: &str,
-                             provider: &str,
-                             model: Option<&str>,
-                             values: &[f64; 6],
-                             parts: Option<&[f64; 4]>,
-                             quality: f64| {
+                         date: &str,
+                         provider: &str,
+                         model: Option<&str>,
+                         values: &[f64; 6],
+                         parts: Option<&[f64; 4]>,
+                         quality: f64| {
         let key = format!(
             "{date}\0{provider}\0{}\0{}\0{quality}",
             model.unwrap_or(""),
@@ -1845,14 +1931,18 @@ fn project(
                 let day_key = format!("{}:{date}", source.provider);
                 let mut day = day_buckets
                     .get(&day_key)
-                    .map(|(date, provider, bucket)| (date.clone(), provider.clone(), clone_bucket(bucket)))
+                    .map(|(date, provider, bucket)| {
+                        (date.clone(), provider.clone(), clone_bucket(bucket))
+                    })
                     .unwrap_or((date.clone(), source.provider.clone(), Bucket::new()));
                 day.2.add(&values, hour.get("requestCount"));
                 day_buckets.set(day_key, day);
                 let hour_key = format!("{}:{label}", source.provider);
                 let mut bucket = hour_buckets
                     .get(&hour_key)
-                    .map(|(hour, provider, bucket)| (hour.clone(), provider.clone(), clone_bucket(bucket)))
+                    .map(|(hour, provider, bucket)| {
+                        (hour.clone(), provider.clone(), clone_bucket(bucket))
+                    })
                     .unwrap_or((
                         format!("{}:00Z", label.replace(' ', "T")),
                         source.provider.clone(),
@@ -1902,7 +1992,8 @@ fn project(
                     if !bucket.rates_seen {
                         bucket.rates = model.rates.clone();
                     } else if bucket.rates.is_some()
-                        && (model.rates.is_none() || !same_rates(bucket.rates.as_ref(), model.rates.as_ref()))
+                        && (model.rates.is_none()
+                            || !same_rates(bucket.rates.as_ref(), model.rates.as_ref()))
                     {
                         bucket.rates = None;
                     }
@@ -2032,8 +2123,8 @@ fn project(
         }
     }
     let mut cost_entries: Vec<(String, f64)> = model_cost.into_iter().collect();
-    cost_entries.sort_by(|a, b| {
-        match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
+    cost_entries.sort_by(
+        |a, b| match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
             Ordering::Equal => match cmp_str(&a.0, &b.0) {
                 Ok(order) => order,
                 Err(err) => {
@@ -2042,8 +2133,8 @@ fn project(
                 }
             },
             order => order,
-        }
-    });
+        },
+    );
     sort_err?;
     let named: HashSet<String> = cost_entries
         .iter()
@@ -2067,8 +2158,11 @@ fn project(
         target.totals.merge(&row.totals);
         folded.set(key, target);
     }
-    let mut folded_rows: Vec<DayModelRow> =
-        folded.into_entries().into_iter().map(|(_, row)| row).collect();
+    let mut folded_rows: Vec<DayModelRow> = folded
+        .into_entries()
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect();
     folded_rows.sort_by(|a, b| {
         let order = cmp_str(&a.date, &b.date)
             .and_then(|order| match order {
@@ -2105,7 +2199,9 @@ fn project(
                 "provider": row.provider,
                 "model": row.model,
             });
-            if let (Some(target), Some(extra)) = (out.as_object_mut(), row.totals.publish().as_object()) {
+            if let (Some(target), Some(extra)) =
+                (out.as_object_mut(), row.totals.publish().as_object())
+            {
                 for (key, value) in extra {
                     target.insert(key.clone(), value.clone());
                 }
@@ -2121,7 +2217,12 @@ fn project(
     let usable = status == "ok" || status == "cached";
     let mut candidates: Vec<(String, SessionCandidate)> = session_candidates.into_entries();
     candidates.sort_by(|a, b| {
-        match b.1.last_activity.partial_cmp(&a.1.last_activity).unwrap_or(Ordering::Equal) {
+        match b
+            .1
+            .last_activity
+            .partial_cmp(&a.1.last_activity)
+            .unwrap_or(Ordering::Equal)
+        {
             Ordering::Equal => match cmp_str(&a.0, &b.0) {
                 Ok(order) => order,
                 Err(err) => {
@@ -2154,8 +2255,8 @@ fn project(
                 Some((name.clone(), model.values[..4].iter().sum()))
             })
             .collect();
-        from_breakdowns.sort_by(|a, b| {
-            match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
+        from_breakdowns.sort_by(
+            |a, b| match b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal) {
                 Ordering::Equal => match cmp_str(&a.0, &b.0) {
                     Ok(order) => order,
                     Err(err) => {
@@ -2164,8 +2265,8 @@ fn project(
                     }
                 },
                 order => order,
-            }
-        });
+            },
+        );
         sort_err?;
         let mut models: Vec<String> = Vec::new();
         if from_breakdowns.is_empty() {
@@ -2176,7 +2277,10 @@ fn project(
                 .unwrap_or(&[])
             {
                 if let Some(name) = valid_model_name(Some(name)) {
-                    if !name.is_empty() && name != SYNTHETIC_MODEL_NAME && !models.iter().any(|m| m == name) {
+                    if !name.is_empty()
+                        && name != SYNTHETIC_MODEL_NAME
+                        && !models.iter().any(|m| m == name)
+                    {
                         models.push(name.to_owned());
                     }
                 }
@@ -2209,7 +2313,9 @@ fn project(
     }
     let session_total = distinct_sessions.len();
     if usable && !sample.is_empty() {
-        message = format!("{message} Session rows show each session's whole retained totals, which can include activity outside this range.");
+        message = format!(
+            "{message} Session rows show each session's whole retained totals, which can include activity outside this range."
+        );
     }
     // The day-level cost spike leaves out days holding flawed counts.
     let flawed_days: HashSet<String> = day_models
@@ -2310,7 +2416,9 @@ fn project(
                 "model": row.model,
                 "provider": row.provider,
             });
-            if let (Some(target), Some(extra)) = (out.as_object_mut(), row.totals.publish().as_object()) {
+            if let (Some(target), Some(extra)) =
+                (out.as_object_mut(), row.totals.publish().as_object())
+            {
                 for (key, value) in extra {
                     target.insert(key.clone(), value.clone());
                 }
@@ -2318,11 +2426,19 @@ fn project(
             if let Some(target) = out.as_object_mut() {
                 target.insert(
                     "rates".into(),
-                    row.rates.as_ref().map(Pricing::value).unwrap_or(Value::Null),
+                    row.rates
+                        .as_ref()
+                        .map(Pricing::value)
+                        .unwrap_or(Value::Null),
                 );
                 target.insert(
                     "tools".into(),
-                    json!(TOOLS.iter().filter(|tool| row.tools.iter().any(|t| t.as_str() == **tool)).collect::<Vec<_>>()),
+                    json!(
+                        TOOLS
+                            .iter()
+                            .filter(|tool| row.tools.iter().any(|t| t.as_str() == **tool))
+                            .collect::<Vec<_>>()
+                    ),
                 );
             }
             out
@@ -2434,7 +2550,9 @@ pub(crate) fn store_activity_answer(
         Vec::new()
     };
     let coverage = coverage_of(sources_state)?;
-    let computers = arr(Some(obj(sources_state)?.get("computers").ok_or(Decline::Shape)?))?;
+    let computers = arr(Some(
+        obj(sources_state)?.get("computers").ok_or(Decline::Shape)?,
+    ))?;
     let mut last_read = 0.0f64;
     let mut oldest: Option<f64> = None;
     let mut stored = false;
@@ -2482,7 +2600,8 @@ pub(crate) fn store_activity_answer(
         to
     };
     let message = if status == "loading" {
-        "Usage history is being read for the first time. Quota history is available immediately.".to_owned()
+        "Usage history is being read for the first time. Quota history is available immediately."
+            .to_owned()
     } else {
         format!(
             "CLI activity kept in AAC's history ({}). Cost is an API-equivalent estimate, not a subscription charge.",
@@ -2501,7 +2620,15 @@ pub(crate) fn store_activity_answer(
         refreshing: live.refreshing,
         refreshing_remote: live.refreshing_remote.clone(),
     };
-    let mut projected = project(&sources, query, project_from, project_to, status, &message, &options)?;
+    let mut projected = project(
+        &sources,
+        query,
+        project_from,
+        project_to,
+        status,
+        &message,
+        &options,
+    )?;
     // Session counts cover every session in the range, not only the sample the projection saw.
     let counts = session_counts(range)?;
     if let Some(providers) = projected.get_mut("providers").and_then(Value::as_array_mut) {
@@ -2532,7 +2659,10 @@ pub(crate) fn store_activity_answer(
             .ok_or(Decline::Shape)?;
         if let Some(map) = sessions.as_object_mut() {
             map.insert("total".into(), js_num(total));
-            map.insert("truncated".into(), json!(range_truncated || projected_truncated));
+            map.insert(
+                "truncated".into(),
+                json!(range_truncated || projected_truncated),
+            );
         }
     }
     // The quality notes of the range, and the store coverage as the block's history.
@@ -2563,7 +2693,10 @@ pub(crate) fn store_activity_answer(
         .collect();
     if let Some(map) = projected.as_object_mut() {
         map.insert("history".into(), history);
-        map.insert("resolution".into(), json!(if daily { "day" } else { "hour" }));
+        map.insert(
+            "resolution".into(),
+            json!(if daily { "day" } else { "hour" }),
+        );
     }
     Ok(StoreAnswer {
         activity: projected,
@@ -2604,7 +2737,10 @@ pub(crate) fn guarded_activity(
 pub(crate) fn activity_selection(query: &Object) -> R<bool> {
     let account = text(query.get("account"))?;
     let provider = text(query.get("provider"))?;
-    let refresh = query.get("refresh").and_then(Value::as_bool).unwrap_or(false);
+    let refresh = query
+        .get("refresh")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let order = usage_provider_order();
     Ok(refresh || (account == "all" && (provider == "all" || order.contains(&provider))))
 }

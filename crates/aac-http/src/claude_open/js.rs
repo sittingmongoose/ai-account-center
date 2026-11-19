@@ -109,8 +109,14 @@ mod tests {
     fn numbers_take_the_javascript_form() {
         assert_eq!(canonical(b"1e2").as_deref(), Some("100"));
         assert_eq!(canonical(b"1.5").as_deref(), Some("1.5"));
-        assert_eq!(canonical(b"9007199254740993").as_deref(), Some("9007199254740992"));
-        assert_eq!(canonical(b"{\"a\":1,\"b\":2,\"a\":3}").as_deref(), Some("{\"a\":3,\"b\":2}"));
+        assert_eq!(
+            canonical(b"9007199254740993").as_deref(),
+            Some("9007199254740992")
+        );
+        assert_eq!(
+            canonical(b"{\"a\":1,\"b\":2,\"a\":3}").as_deref(),
+            Some("{\"a\":3,\"b\":2}")
+        );
         assert_eq!(stringify(&json!({"b": 1, "a": 2})), "{\"b\":1,\"a\":2}");
     }
 

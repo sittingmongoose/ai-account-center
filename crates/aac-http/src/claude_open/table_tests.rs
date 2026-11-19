@@ -5,7 +5,7 @@
 use super::js::{self, sha, stringify};
 use super::manifest::{pending_from_value, profile_from_value, windows_launcher_account_list};
 use super::open::{mac_open_command, windows_account_list_script, windows_open_command};
-use super::operations::{OpenErrorKind, Operations, Observer};
+use super::operations::{Observer, OpenErrorKind, Operations};
 use super::policy::parse_policy;
 use super::sync::{
     self, Adapters, AppendPayload, CopyLimits, Record, Snapshot, synchronize_before_profile_open,
@@ -250,10 +250,7 @@ impl TableAdapters {
         rows.extend(state.appended.clone());
         let mut fields = baseline.as_object().expect("baseline").clone();
         fields.insert("records".into(), wire_rows(&rows));
-        fields.insert(
-            "revision".into(),
-            json!(sync::snapshot_revision(&rows)),
-        );
+        fields.insert("revision".into(), json!(sync::snapshot_revision(&rows)));
         Snapshot {
             fields,
             records: rows,
@@ -286,7 +283,10 @@ impl Adapters for TableAdapters {
             let mut state = self.state.lock().map_err(|_| ())?;
             let index = state.target;
             state.target += 1;
-            if let Some(scripted) = self.case["target"].as_array().and_then(|items| items.get(index)) {
+            if let Some(scripted) = self.case["target"]
+                .as_array()
+                .and_then(|items| items.get(index))
+            {
                 return Ok(snapshot_from_json(scripted));
             }
             Ok(self.grown_target(&state))
@@ -587,7 +587,10 @@ fn open_commands_match_lane_f_goldens() {
             );
         }
     }
-    for case in table["accountList"].as_array().expect("accountList vectors") {
+    for case in table["accountList"]
+        .as_array()
+        .expect("accountList vectors")
+    {
         let name = case["name"].as_str().expect("name");
         let ids: Vec<String> = case["ids"]
             .as_array()
@@ -597,7 +600,10 @@ fn open_commands_match_lane_f_goldens() {
             .collect();
         let got = windows_account_list_script(&ids);
         if case["expected"].is_object() {
-            assert!(got.is_err(), "accountList script case {name}: expected refusal");
+            assert!(
+                got.is_err(),
+                "accountList script case {name}: expected refusal"
+            );
         } else {
             let expected: Vec<String> = case["expected"]
                 .as_array()
@@ -605,7 +611,11 @@ fn open_commands_match_lane_f_goldens() {
                 .iter()
                 .map(|line| line.as_str().expect("line").to_string())
                 .collect();
-            assert_eq!(got.expect("script"), expected, "accountList script case {name}");
+            assert_eq!(
+                got.expect("script"),
+                expected,
+                "accountList script case {name}"
+            );
         }
     }
 }

@@ -232,7 +232,8 @@ mod tests {
         let owner = AnswersOwned::new(ccs.clone(), root.clone());
         let entry =
             json!({"cardId": id, "cardSeq": 1, "cardSha256": sha, "choice": ["B"], "via": "deck"});
-        let body = json!({"entries": [entry, {"cardId": "x"}], "device": "Mac", "clientSendId": null});
+        let body =
+            json!({"entries": [entry, {"cardId": "x"}], "device": "Mac", "clientSendId": null});
         let reply = owner.submit(body.to_string().as_bytes()).await.unwrap();
         let results = reply["results"].as_array().unwrap();
         assert_eq!(results[0]["outcome"], "recorded");

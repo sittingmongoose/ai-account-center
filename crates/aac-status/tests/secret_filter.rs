@@ -63,9 +63,17 @@ fn typed_secret_verdicts_equal_the_typescript_filter() {
         let text = case.filler.repeat(case.times) + &case.suffix;
         let started = std::time::Instant::now();
         let got = (find_typed_secret(&text), find_secret(&text));
-        assert!(started.elapsed().as_secs() < 2, "{:?} x{}: not linear", case.filler, case.times);
+        assert!(
+            started.elapsed().as_secs() < 2,
+            "{:?} x{}: not linear",
+            case.filler,
+            case.times
+        );
         if got != (case.typed.as_deref(), case.secret.as_deref()) {
-            wrong.push(format!("{:?} x{}{}: rust {got:?}", case.filler, case.times, case.suffix));
+            wrong.push(format!(
+                "{:?} x{}{}: rust {got:?}",
+                case.filler, case.times, case.suffix
+            ));
         }
     }
     assert!(wrong.is_empty(), "{} differ:\n{}", wrong.len(), wrong.join("\n"));
@@ -79,7 +87,11 @@ fn document_verdicts_equal_the_typescript_filter() {
     for case in &corpus.documents {
         // JSON.stringify of the parsed fixture: serde writes the same text for these documents.
         let source = serde_json::to_string(&case.doc).expect("stringify");
-        let got = (find_secret_in("", &case.doc), find_secret_in(&source, &case.doc), find_secret(&source));
+        let got = (
+            find_secret_in("", &case.doc),
+            find_secret_in(&source, &case.doc),
+            find_secret(&source),
+        );
         let want = (case.empty.as_deref(), case.stringified.as_deref(), case.text.as_deref());
         if got != want {
             wrong.push(format!("{}: rust {got:?} ts {want:?}", case.name));

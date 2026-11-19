@@ -981,12 +981,20 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             if input.id.is_empty() || input.id.len() > 512 {
                 return decline(row.handler, Decline::Shape);
             }
-            match native.producer.recheck(&shared.account_usage, &(native.companions)(), &input.id).await {
+            match native
+                .producer
+                .recheck(&shared.account_usage, &(native.companions)(), &input.id)
+                .await
+            {
                 Ok(Some(value)) => {
                     (native.published)(&shared.account_usage);
                     Json(value).into_response()
                 }
-                Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"code": "unknown_account"}))).into_response(),
+                Ok(None) => (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"code": "unknown_account"})),
+                )
+                    .into_response(),
                 Err(_) => store_error("recheck_failed: the account could not be checked safely"),
             }
         }
@@ -1054,7 +1062,8 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let Some(produce) = shared.status_produce.clone() else {
                 return decline(row.handler, Decline::Unsupported);
             };
-            let now = one_header(req.headers(), "x-aac-now").and_then(|text| text.parse::<u64>().ok());
+            let now =
+                one_header(req.headers(), "x-aac-now").and_then(|text| text.parse::<u64>().ok());
             let zone = one_header(req.headers(), "x-aac-zone")
                 .and_then(|text| serde_json::from_str::<ZoneHeader>(text).ok());
             let query = req.uri().query().is_some();
@@ -1641,11 +1650,14 @@ async fn serve_inner(
             cursor.clone(),
         ))
     });
-    let native_recheck = producer.as_ref().zip(native.as_ref()).map(|(producer, native)| NativeRecheck {
-        producer: Arc::clone(producer),
-        companions: Arc::clone(&native.companions),
-        published: Arc::clone(&native.published),
-    });
+    let native_recheck = producer
+        .as_ref()
+        .zip(native.as_ref())
+        .map(|(producer, native)| NativeRecheck {
+            producer: Arc::clone(producer),
+            companions: Arc::clone(&native.companions),
+            published: Arc::clone(&native.published),
+        });
     let package_root = crate::agent_transport::package_root();
     let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(
         boot.ccs_dir.clone(),

@@ -2534,23 +2534,11 @@ impl AnswersEngine {
 
     /// `submitSet`: each entry validated and recorded on its own, then the signed send summary.
     /// The caller rings the records next with [`Self::ring_groups`].
-    pub fn submit_set(
-        &mut self,
-        entries: &[Json],
-        device: &str,
-        client_send_id: Option<&str>,
-    ) -> R<Submitted> {
+    pub fn submit_set(&mut self, entries: &[Json], device: &str, client_send_id: Option<&str>) -> R<Submitted> {
         let send_id = self.host.uuid();
         let mut recorded: Vec<String> = Vec::new();
         let entries_hash = client_send_id.map(|_| content_hash(&Json::Array(entries.to_vec())));
-        let outcome = self.submit_inner(
-            entries,
-            device,
-            client_send_id,
-            &send_id,
-            &entries_hash,
-            &mut recorded,
-        );
+        let outcome = self.submit_inner(entries, device, client_send_id, &send_id, &entries_hash, &mut recorded);
         self.send_epoch = None;
         for id in &recorded {
             self.ringing.remove(id);
@@ -2663,12 +2651,7 @@ impl AnswersEngine {
     }
 
     /// `submitSet` and its ring, for a host that does both in one turn.
-    pub fn submit_and_ring(
-        &mut self,
-        entries: &[Json],
-        device: &str,
-        client_send_id: Option<&str>,
-    ) -> R<Vec<Json>> {
+    pub fn submit_and_ring(&mut self, entries: &[Json], device: &str, client_send_id: Option<&str>) -> R<Vec<Json>> {
         let submitted = self.submit_set(entries, device, client_send_id)?;
         if !submitted.recorded.is_empty() {
             self.ring_groups(&submitted.recorded, None);

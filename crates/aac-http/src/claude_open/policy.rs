@@ -36,7 +36,14 @@ pub fn parse_policy(value: &Value) -> Option<Value> {
     if !object(value)
         || !keys_are(
             value,
-            &["version", "enabled", "sourcePlatform", "identity", "project", "ssh"],
+            &[
+                "version",
+                "enabled",
+                "sourcePlatform",
+                "identity",
+                "project",
+                "ssh",
+            ],
         )
         || !object(&value["identity"])
         || !keys_are(&value["identity"], &["accountUuid", "organizationUuid"])

@@ -9,8 +9,8 @@ use super::sync_service::HelperCall;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -99,10 +99,10 @@ impl Remote for FakeRemote {
         Box::pin(async move {
             let mut state = self.state();
             state.ssh_calls.push((argv, stdin));
-            state
-                .ssh_results
-                .pop_front()
-                .unwrap_or(Ok(SshOutput { code: Some(0), stdout: Vec::new() }))
+            state.ssh_results.pop_front().unwrap_or(Ok(SshOutput {
+                code: Some(0),
+                stdout: Vec::new(),
+            }))
         })
     }
 }
@@ -182,7 +182,11 @@ fn uuid(n: u64) -> String {
 fn record_value(ordinal: u64, platform: &str) -> Value {
     let desktop = uuid(ordinal * 2 - 1);
     let cli = uuid(ordinal * 2);
-    let alias = if platform == "mac" { MAC_ALIAS } else { WIN_ALIAS };
+    let alias = if platform == "mac" {
+        MAC_ALIAS
+    } else {
+        WIN_ALIAS
+    };
     json!({
         "sessionId": format!("local_{desktop}"), "cliSessionId": cli,
         "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
@@ -211,7 +215,10 @@ fn snapshot_json(platform: &str, rows: &[Value]) -> Vec<u8> {
         .collect();
     pairs.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
     let revision = sha(stringify(&Value::Array(pairs)).as_bytes());
-    let native = NATIVE.iter().find(|(name, _, _)| *name == platform).expect("native");
+    let native = NATIVE
+        .iter()
+        .find(|(name, _, _)| *name == platform)
+        .expect("native");
     let snapshot = json!({
         "profileId": "gmail", "platform": platform,
         "identity": {"accountSha256": sha(ACCOUNT.as_bytes()), "orgSha256": sha(ORG.as_bytes())},
@@ -240,7 +247,6 @@ fn owner(root: &Root, remote: Arc<FakeRemote>) -> Arc<ClaudeOpen> {
         Box::new(|| true),
     ))
 }
-
 
 // --- the fixtures ------------------------------------------------------------------------------
 #[tokio::test]
@@ -289,11 +295,17 @@ async fn ordinary_open_uses_the_launcher_verb() {
     let open = owner(&root, Arc::clone(&remote));
     let result = open.open("gmail", "mac", false).await;
     assert_eq!(result.status, 200);
-    assert_eq!(result.body, json!({"opened": true, "id": "gmail", "platform": "mac"}));
+    assert_eq!(
+        result.body,
+        json!({"opened": true, "id": "gmail", "platform": "mac"})
+    );
     let state = remote.state();
     assert_eq!(state.host_open_calls.len(), 1);
     assert_eq!(state.host_open_calls[0]["op"], json!("open"));
-    assert_eq!(state.host_open_calls[0]["launcher"]["launcherPath"], json!("/Applications/Claude (gmail).app"));
+    assert_eq!(
+        state.host_open_calls[0]["launcher"]["launcherPath"],
+        json!("/Applications/Claude (gmail).app")
+    );
     assert!(state.helper_calls.is_empty());
     assert!(state.ssh_calls.is_empty());
 }
@@ -356,7 +368,13 @@ async fn managed_open_copies_then_launches_with_progress() {
     let source = record_value(1, "windows");
     // The core's call order: closed, collect(target), collect(source), verify, collect(source),
     // then per batch: closed, protected, append, collect(target). Retention runs after a copy.
-    remote.queue_helper("closed-check", vec![ok_bytes(json!({"closed": true})), ok_bytes(json!({"closed": true}))]);
+    remote.queue_helper(
+        "closed-check",
+        vec![
+            ok_bytes(json!({"closed": true})),
+            ok_bytes(json!({"closed": true})),
+        ],
+    );
     remote.queue_helper(
         "collect",
         vec![
@@ -366,24 +384,38 @@ async fn managed_open_copies_then_launches_with_progress() {
             Ok(snapshot_json("mac", std::slice::from_ref(&source))),
         ],
     );
-    remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
-    remote.queue_helper("protected-check", vec![ok_bytes(json!({"unchanged": true}))]);
+    remote.queue_helper(
+        "verify-transcripts",
+        vec![ok_bytes(json!({"verified": true}))],
+    );
+    remote.queue_helper(
+        "protected-check",
+        vec![ok_bytes(json!({"unchanged": true}))],
+    );
     remote.queue_helper(
         "append",
         vec![ok_bytes(json!({"status": "created_metadata", "createdCount": 1, "protectedBytesUnchanged": true, "writerQuiescent": true}))],
     );
     remote.queue_helper(
         "snapshot-cleanup",
-        vec![ok_bytes(json!({"kept": ["a"], "deleted": [], "skipped": []}))],
+        vec![ok_bytes(
+            json!({"kept": ["a"], "deleted": [], "skipped": []}),
+        )],
     );
     let open = owner(&root, Arc::clone(&remote));
     let accepted = open.open("gmail", "mac", true).await;
     assert_eq!(accepted.status, 202);
     assert_eq!(accepted.body["id"], json!("gmail"));
     assert_eq!(accepted.body["state"], json!("checking"));
-    let operation_id = accepted.body["operationId"].as_str().expect("id").to_string();
+    let operation_id = accepted.body["operationId"]
+        .as_str()
+        .expect("id")
+        .to_string();
     let scope = root.path().to_string_lossy().to_string();
-    let settled = open.operations().settled(&scope, "gmail", "mac").expect("settled");
+    let settled = open
+        .operations()
+        .settled(&scope, "gmail", "mac")
+        .expect("settled");
     assert_eq!(settled.await, Ok(()));
     let operation = open.operation_for(&scope, "gmail").expect("operation");
     assert_eq!(operation.id, operation_id);
@@ -393,8 +425,18 @@ async fn managed_open_copies_then_launches_with_progress() {
     assert!(operation.message.is_none());
     let state = remote.state();
     assert_eq!(state.host_open_calls.len(), 1);
-    assert!(state.helper_calls.iter().any(|call| call["mode"] == json!("append")));
-    assert!(state.helper_calls.iter().any(|call| call["mode"] == json!("snapshot-cleanup")));
+    assert!(
+        state
+            .helper_calls
+            .iter()
+            .any(|call| call["mode"] == json!("append"))
+    );
+    assert!(
+        state
+            .helper_calls
+            .iter()
+            .any(|call| call["mode"] == json!("snapshot-cleanup"))
+    );
     // One finished marker, no hold.
     assert!(!super::markers::open_held(root.path(), "gmail", "mac"));
     let marker_root = root.path().join("claude-history-pending");
@@ -407,7 +449,13 @@ async fn managed_copy_alone_synchronizes_one_record() {
     root.write_manifest(json!([gmail_entry(Some(policy()))]));
     let remote = Arc::new(FakeRemote::new());
     let source = record_value(1, "windows");
-    remote.queue_helper("closed-check", vec![ok_bytes(json!({"closed": true})), ok_bytes(json!({"closed": true}))]);
+    remote.queue_helper(
+        "closed-check",
+        vec![
+            ok_bytes(json!({"closed": true})),
+            ok_bytes(json!({"closed": true})),
+        ],
+    );
     remote.queue_helper(
         "collect",
         vec![
@@ -417,15 +465,23 @@ async fn managed_copy_alone_synchronizes_one_record() {
             Ok(snapshot_json("mac", std::slice::from_ref(&source))),
         ],
     );
-    remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
-    remote.queue_helper("protected-check", vec![ok_bytes(json!({"unchanged": true}))]);
+    remote.queue_helper(
+        "verify-transcripts",
+        vec![ok_bytes(json!({"verified": true}))],
+    );
+    remote.queue_helper(
+        "protected-check",
+        vec![ok_bytes(json!({"unchanged": true}))],
+    );
     remote.queue_helper(
         "append",
         vec![ok_bytes(json!({"status": "created_metadata", "createdCount": 1, "protectedBytesUnchanged": true, "writerQuiescent": true}))],
     );
     remote.queue_helper(
         "snapshot-cleanup",
-        vec![ok_bytes(json!({"kept": ["a"], "deleted": [], "skipped": []}))],
+        vec![ok_bytes(
+            json!({"kept": ["a"], "deleted": [], "skipped": []}),
+        )],
     );
     let profile = super::manifest::list_profiles(root.path())
         .expect("manifest")
@@ -462,7 +518,13 @@ async fn lost_append_receipt_holds_open_as_blocked_uncertain() {
     root.write_manifest(json!([gmail_entry(Some(policy()))]));
     let remote = Arc::new(FakeRemote::new());
     let source = record_value(1, "windows");
-    remote.queue_helper("closed-check", vec![ok_bytes(json!({"closed": true})), ok_bytes(json!({"closed": true}))]);
+    remote.queue_helper(
+        "closed-check",
+        vec![
+            ok_bytes(json!({"closed": true})),
+            ok_bytes(json!({"closed": true})),
+        ],
+    );
     remote.queue_helper(
         "collect",
         vec![
@@ -471,8 +533,14 @@ async fn lost_append_receipt_holds_open_as_blocked_uncertain() {
             Ok(snapshot_json("windows", std::slice::from_ref(&source))),
         ],
     );
-    remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
-    remote.queue_helper("protected-check", vec![ok_bytes(json!({"unchanged": true}))]);
+    remote.queue_helper(
+        "verify-transcripts",
+        vec![ok_bytes(json!({"verified": true}))],
+    );
+    remote.queue_helper(
+        "protected-check",
+        vec![ok_bytes(json!({"unchanged": true}))],
+    );
     remote.queue_helper("append", vec![Err(())]);
     let open = owner(&root, Arc::clone(&remote));
     let result = open.open("gmail", "mac", false).await;
@@ -495,7 +563,10 @@ async fn concurrent_clicks_join_one_open() {
     let remote = Arc::new(FakeRemote::new());
     remote.state().host_open_delay_ms = 50;
     let open = owner(&root, Arc::clone(&remote));
-    let (first, second) = tokio::join!(open.open("gmail", "mac", false), open.open("gmail", "mac", false));
+    let (first, second) = tokio::join!(
+        open.open("gmail", "mac", false),
+        open.open("gmail", "mac", false)
+    );
     assert_eq!(first.status, 200);
     assert_eq!(second.status, 200);
     assert_eq!(remote.state().host_open_calls.len(), 1);
@@ -526,7 +597,10 @@ async fn windows_open_rebuilds_the_account_list() {
     let state = remote.state();
     assert_eq!(state.host_open_calls.len(), 1);
     assert_eq!(state.host_open_calls[0]["profileId"], json!("store"));
-    assert_eq!(state.host_open_calls[0]["accountList"], json!(["store", "gmail"]));
+    assert_eq!(
+        state.host_open_calls[0]["accountList"],
+        json!(["store", "gmail"])
+    );
 }
 
 #[tokio::test]
@@ -563,7 +637,13 @@ async fn policy_change_stops_the_copy_but_open_proceeds() {
     root.write_manifest(json!([gmail_entry(Some(policy()))]));
     let remote = Arc::new(FakeRemote::new());
     let source = record_value(1, "windows");
-    remote.queue_helper("closed-check", vec![ok_bytes(json!({"closed": true})), ok_bytes(json!({"closed": true}))]);
+    remote.queue_helper(
+        "closed-check",
+        vec![
+            ok_bytes(json!({"closed": true})),
+            ok_bytes(json!({"closed": true})),
+        ],
+    );
     remote.queue_helper(
         "collect",
         vec![
@@ -572,8 +652,14 @@ async fn policy_change_stops_the_copy_but_open_proceeds() {
             Ok(snapshot_json("windows", std::slice::from_ref(&source))),
         ],
     );
-    remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
-    remote.queue_helper("protected-check", vec![ok_bytes(json!({"unchanged": true}))]);
+    remote.queue_helper(
+        "verify-transcripts",
+        vec![ok_bytes(json!({"verified": true}))],
+    );
+    remote.queue_helper(
+        "protected-check",
+        vec![ok_bytes(json!({"unchanged": true}))],
+    );
     // The policy disappears before the first append: the copy stops cleanly, Open proceeds.
     let open = owner(&root, Arc::clone(&remote));
     let root_path = root.path().to_path_buf();
@@ -589,6 +675,11 @@ async fn policy_change_stops_the_copy_but_open_proceeds() {
     assert_eq!(result.status, 200);
     let state = remote.state();
     assert_eq!(state.host_open_calls.len(), 1);
-    assert!(!state.helper_calls.iter().any(|call| call["mode"] == json!("append")));
+    assert!(
+        !state
+            .helper_calls
+            .iter()
+            .any(|call| call["mode"] == json!("append"))
+    );
     assert!(!super::markers::open_held(root.path(), "gmail", "mac"));
 }

@@ -102,15 +102,14 @@ impl HelperCall for AgentRemote {
             let mut private_request = request.clone();
             let mut bridge: Option<String> = None;
             if mode == "append" {
-                let writer =
-                    self.packaged_source("scripts/claude-history/history_index_transaction_v1.cjs")?;
+                let writer = self
+                    .packaged_source("scripts/claude-history/history_index_transaction_v1.cjs")?;
                 if super::js::sha(&writer) != WRITER_SHA256 {
                     return Err(());
                 }
-                private_request["transactionSource"] =
-                    json!(String::from_utf8_lossy(&writer));
-                let bridge_bytes =
-                    self.packaged_source("scripts/claude-history/history_index_node_bridge_v2.cjs")?;
+                private_request["transactionSource"] = json!(String::from_utf8_lossy(&writer));
+                let bridge_bytes = self
+                    .packaged_source("scripts/claude-history/history_index_node_bridge_v2.cjs")?;
                 if bridge_bytes.len() > MAX_HELPER_SOURCE_BYTES {
                     return Err(());
                 }

@@ -147,8 +147,9 @@ fn parse_status(args: &str) -> Result<Json> {
 
 /// The answer keys this process loaded, by directory (the key file's writer lock is held by
 /// the caller; the cache only avoids re-reading the PEM on every signature).
-static ANSWER_KEYS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, crate::answer_signing::AnswerKey>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static ANSWER_KEYS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, crate::answer_signing::AnswerKey>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 fn answer_key(dir: &str) -> Result<crate::answer_signing::AnswerKey> {
     if let Some(key) = ANSWER_KEYS.lock().unwrap_or_else(|p| p.into_inner()).get(dir) {

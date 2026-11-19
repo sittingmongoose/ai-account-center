@@ -129,16 +129,14 @@ fn resolve_range(
                 return Err(Decline::Unsupported);
             }
             let next = activity::day_number(&last)? + 1;
-            let next_text = ecma::to_iso_string(next * 86_400_000).ok_or(Decline::Date)?[..10]
-                .to_owned();
+            let next_text =
+                ecma::to_iso_string(next * 86_400_000).ok_or(Decline::Date)?[..10].to_owned();
             to = analytics::js_min(
                 now,
                 activity::local_midnight(&next_text, tz, zone)? - 1000.0,
             );
-            let from = analytics::js_max(
-                activity::local_midnight(&first, tz, zone)?,
-                retained_from,
-            );
+            let from =
+                analytics::js_max(activity::local_midnight(&first, tz, zone)?, retained_from);
             if to < from {
                 return Err(Decline::Unsupported);
             }
@@ -192,11 +190,7 @@ fn is_calendar_date(value: &str) -> bool {
 
 /// The presentation facts of the owned read: the ISO words and epochs of the store's own strings,
 /// and the CLDR root ranks of the provider table's ids.
-fn presentation(
-    records: &[Value],
-    table: &[Value],
-    instants: &[f64],
-) -> R<Presentation> {
+fn presentation(records: &[Value], table: &[Value], instants: &[f64]) -> R<Presentation> {
     let mut epochs: Map<String, Value> = Map::new();
     let mut add_epoch = |text: &str| -> R<()> {
         if text.is_empty() {
@@ -249,7 +243,8 @@ fn presentation(
     let mut order: Map<String, Value> = Map::new();
     let mut rank = 0usize;
     for (index, word) in sorted.iter().enumerate() {
-        if index > 0 && intl::ascii_compare(sorted[index - 1], word) != Some(std::cmp::Ordering::Equal)
+        if index > 0
+            && intl::ascii_compare(sorted[index - 1], word) != Some(std::cmp::Ordering::Equal)
         {
             rank += 1;
         }
@@ -423,10 +418,11 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
         } else {
             let guard = obj(input.get("guardCoverage"))?;
             let coverage_oldest = opt_num(guard.get("oldestHourAt"))?;
-            let providers: Vec<String> = arr(guard.get("providersWithActivity").ok_or(Decline::Shape)?)?
-                .iter()
-                .map(|value| text(Some(value)).map(str::to_owned))
-                .collect::<R<_>>()?;
+            let providers: Vec<String> =
+                arr(guard.get("providersWithActivity").ok_or(Decline::Shape)?)?
+                    .iter()
+                    .map(|value| text(Some(value)).map(str::to_owned))
+                    .collect::<R<_>>()?;
             let block = activity::guarded_activity(
                 &query,
                 provisional.from,
@@ -454,7 +450,14 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
         analytics::js_max(retained_from, today_midnight.ok_or(Decline::Date)?)
     };
     let range = if query.get("range").and_then(Value::as_str) == Some("all") {
-        resolve_range(&query, now, available_from, Some(oldest), &tz, zone.as_ref())?
+        resolve_range(
+            &query,
+            now,
+            available_from,
+            Some(oldest),
+            &tz,
+            zone.as_ref(),
+        )?
     } else {
         provisional.clone()
     };
@@ -484,7 +487,11 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
     let facts = presentation(records, &table, &instants)?;
     let ctx = Context::new(facts);
     let finite_or_null = |value: f64| -> Value {
-        if value.is_finite() { json!(value) } else { Value::Null }
+        if value.is_finite() {
+            json!(value)
+        } else {
+            Value::Null
+        }
     };
     let data = json!({
         "query": query,

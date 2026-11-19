@@ -10,12 +10,11 @@
 use crate::engine::Engine;
 use crate::error::Result;
 use crate::observe::{
-    self, account_identity, decode_observation, observation_from_account, observation_from_record,
-    provider_for,
+    self, account_identity, decode_observation, observation_from_account, observation_from_record, provider_for,
 };
 use crate::usage::{self, Sampled};
 use aac_num::ecma::parse_instant;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 /// `MAX_ACCOUNTS_PER_SAMPLE`: one tick reads at most this many accounts.
@@ -62,9 +61,7 @@ pub fn merge_accounts(dashboards: &[Value]) -> Vec<Value> {
                 Some(_) => {
                     (now_available && !was_available)
                         || (now_available == was_available
-                            && sampled.is_some_and(|s| {
-                                old_sampled.is_none_or(|old| s >= old)
-                            }))
+                            && sampled.is_some_and(|s| old_sampled.is_none_or(|old| s >= old)))
                 }
             };
             if replace {
@@ -199,9 +196,7 @@ pub fn providers_of(accounts: &[Value]) -> HashMap<String, String> {
         let Some(row) = account.as_object() else {
             continue;
         };
-        if let (Some(identity), Some(provider)) =
-            (account_identity(row), account["provider"].as_str())
-        {
+        if let (Some(identity), Some(provider)) = (account_identity(row), account["provider"].as_str()) {
             providers.insert(identity, provider.to_owned());
         }
     }
@@ -210,11 +205,7 @@ pub fn providers_of(accounts: &[Value]) -> HashMap<String, String> {
 
 /// One full tick as the host runs it: import the history once (the caller guards the once flag),
 /// then record the live readings. Returns the store's tally for the live readings.
-pub fn tick(
-    engine: &Engine,
-    dashboards: &[Value],
-    now: i64,
-) -> Result<(Vec<Value>, usage::RecordResult)> {
+pub fn tick(engine: &Engine, dashboards: &[Value], now: i64) -> Result<(Vec<Value>, usage::RecordResult)> {
     let accounts = merge_accounts(dashboards);
     let result = record_sample(engine, &accounts, now)?;
     Ok((accounts, result))

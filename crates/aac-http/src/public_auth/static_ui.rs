@@ -182,7 +182,8 @@ impl StaticUi {
             return plain(503, "The dashboard is busy. Try again later.");
         };
         let Ok(Ok(permit)) =
-            tokio::time::timeout(Duration::from_secs(5), self.permits.clone().acquire_owned()).await
+            tokio::time::timeout(Duration::from_secs(5), self.permits.clone().acquire_owned())
+                .await
         else {
             return plain(503, "The dashboard is busy. Try again later.");
         };

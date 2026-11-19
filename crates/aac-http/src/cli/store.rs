@@ -159,45 +159,46 @@ pub fn run(args: &[String], root: &Path) -> i32 {
             }
             return Err(error);
         }
-        let answer = (|| -> Result<i32, aac_store::error::Error> {
-            if command == "status" {
-                let status = call(&slot, "status", json!({}))?;
-                line(&serde_json::to_string_pretty(&status).map_err(|error| {
-                    aac_store::error::Error::new("invalid", error.to_string())
-                })?);
-            }
-            if command == "check" {
-                let answer = call(&slot, "maintain", json!({ "verify": true }))?;
-                let findings = answer
-                    .get("verified")
-                    .and_then(|verified| verified.get("findings"))
-                    .and_then(Value::as_array)
-                    .map(Vec::len)
-                    .unwrap_or(0);
-                let message = if findings == 0 {
-                    "[OK] Every sealed segment matches its hash.".to_string()
-                } else {
-                    format!("[!] {findings} integrity finding(s); see status.")
-                };
-                line(&message);
-            }
-            if command == "backup" {
-                let answer = call(
-                    &slot,
-                    "backup",
-                    json!({ "roots": [directory.join("backups")], "withRedb": true }),
-                )?;
-                line(&format!(
-                    "[OK] Backup {} written and verified ({} files).",
-                    answer.get("id").and_then(Value::as_str).unwrap_or(""),
-                    answer
-                        .get("files")
-                        .map(Value::to_string)
-                        .unwrap_or_default()
-                ));
-            }
-            Ok(0)
-        })();
+        let answer =
+            (|| -> Result<i32, aac_store::error::Error> {
+                if command == "status" {
+                    let status = call(&slot, "status", json!({}))?;
+                    line(&serde_json::to_string_pretty(&status).map_err(|error| {
+                        aac_store::error::Error::new("invalid", error.to_string())
+                    })?);
+                }
+                if command == "check" {
+                    let answer = call(&slot, "maintain", json!({ "verify": true }))?;
+                    let findings = answer
+                        .get("verified")
+                        .and_then(|verified| verified.get("findings"))
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0);
+                    let message = if findings == 0 {
+                        "[OK] Every sealed segment matches its hash.".to_string()
+                    } else {
+                        format!("[!] {findings} integrity finding(s); see status.")
+                    };
+                    line(&message);
+                }
+                if command == "backup" {
+                    let answer = call(
+                        &slot,
+                        "backup",
+                        json!({ "roots": [directory.join("backups")], "withRedb": true }),
+                    )?;
+                    line(&format!(
+                        "[OK] Backup {} written and verified ({} files).",
+                        answer.get("id").and_then(Value::as_str).unwrap_or(""),
+                        answer
+                            .get("files")
+                            .map(Value::to_string)
+                            .unwrap_or_default()
+                    ));
+                }
+                Ok(0)
+            })();
         let _ = call(&slot, "close", json!({}));
         answer
     })();

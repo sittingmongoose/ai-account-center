@@ -14,16 +14,16 @@
 //! facts feed), and the main history file's strict-reader validation (the job reads its records).
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
+use aac_store::activity;
 use aac_store::collect::{self, Pricing, PricingResolution, Rates};
 use aac_store::report::{self, Ingestor, ReportArgs};
 use aac_store::sampler::{self, BackfillSource};
-use aac_store::activity;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The control feed: the front door says whether the writers own collection this boot.
@@ -101,7 +101,11 @@ fn fed_json(feeds: &Feeds, source: &str) -> Option<Value> {
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// `archiveFiles`: a bounded depth-first walk (depth ≤ 3, ≤ 2000 files), sorted by name.
@@ -295,7 +299,12 @@ async fn activity_pass(
         let window_days = plan["windowDays"].as_i64().unwrap_or(31);
         guard.generation += 1;
         guard.scanning_since = Some(now);
-        (guard.generation, computers, now - window_days * DAY, now - 31 * DAY)
+        (
+            guard.generation,
+            computers,
+            now - window_days * DAY,
+            now - 31 * DAY,
+        )
     };
     // Refresh the models.dev registry where the TS collection calls startModelsDevRegistryRefresh:
     // coalesced, fresh-cache short-circuit, stale fallback. The blocking fetch runs off-thread.
@@ -327,7 +336,10 @@ async fn activity_pass(
         let mut args = Map::new();
         args.insert("kinds".into(), json!(kinds));
         args.insert("minDateMs".into(), json!(cutoff));
-        args.insert("immutableSqlite".into(), json!(!kinds.iter().any(|k| k == "zcode")));
+        args.insert(
+            "immutableSqlite".into(),
+            json!(!kinds.iter().any(|k| k == "zcode")),
+        );
         if let Some(fingerprints) = computer.get("fingerprints") {
             args.insert("fingerprints".into(), fingerprints.clone());
         }
@@ -365,8 +377,14 @@ async fn activity_pass(
                         .filter(|r| r["k"].as_str() == Some(kind.as_str()))
                         .cloned()
                         .collect();
-                    let worker =
-                        collect::worker_from_scan(&kind_rows, &kind_srows, kind, host, now, &pricing);
+                    let worker = collect::worker_from_scan(
+                        &kind_rows,
+                        &kind_srows,
+                        kind,
+                        host,
+                        now,
+                        &pricing,
+                    );
                     remote.push(json!({ "tool": kind, "host": host, "data": worker }));
                     states.push(json!({
                         "tool": kind,
@@ -448,7 +466,8 @@ fn kinds_set(computers: &[Value]) -> HashSet<String> {
 fn refresh_seconds(ccs_dir: &Path) -> i64 {
     crate::registered::file(ccs_dir, "account-refresh-settings")
         .and_then(|(file, policy)| {
-            let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
+            let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy)
+            else {
                 return None;
             };
             serde_json::from_slice::<Value>(&bytes).ok()
@@ -489,8 +508,17 @@ pub(crate) async fn analytics_jobs(
                         quota_pass(&engine, &feeds, &ccs_dir, &mut guard, now);
                     }
                 }
-                activity_pass(&engine, &feeds, &agents, &state, &ccs_dir, &models_dev, now, interval)
-                    .await;
+                activity_pass(
+                    &engine,
+                    &feeds,
+                    &agents,
+                    &state,
+                    &ccs_dir,
+                    &models_dev,
+                    now,
+                    interval,
+                )
+                .await;
             }
         }
         tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
@@ -502,10 +530,7 @@ mod tests {
     use super::*;
     /// The activity source states the last pass produced (the owned read's live grid).
     fn source_states(state: &Mutex<WriterState>) -> Vec<Value> {
-        state
-            .lock()
-            .map(|s| s.states.clone())
-            .unwrap_or_default()
+        state.lock().map(|s| s.states.clone()).unwrap_or_default()
     }
 
     /// Ingest a pass's reports directly (the owned read / backfill path).

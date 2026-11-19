@@ -3,10 +3,11 @@
 //! fails keeps its last good copy; a catalog with no good copy shows as a Source problem and
 //! the kinds it holds stay empty. The scan is the shared `ShareFiles` rule set.
 
-use super::{Problem, ShareFs, TransientMisses, compare, is_missing, is_transient, stat_key, MISSING_GRACE_MS, PERSISTENT_SHARE_ERROR};
-use crate::validate::{
-    self, Invalid, Valid, bool_value, count, fail, list, obj, one_of, opt_iso, opt_text, text,
+use super::{
+    MISSING_GRACE_MS, PERSISTENT_SHARE_ERROR, Problem, ShareFs, TransientMisses, compare, is_missing, is_transient,
+    stat_key,
 };
+use crate::validate::{self, Invalid, Valid, bool_value, count, fail, list, obj, one_of, opt_iso, opt_text, text};
 use indexmap::IndexMap;
 use serde_json::{Map, Value as Json, json};
 use std::collections::HashSet;
@@ -37,9 +38,7 @@ fn id(value: Option<&Json>, field: &str) -> Valid<String> {
         Some(first) if first.is_ascii_alphanumeric() => {}
         _ => return Err(fail(field)),
     }
-    if value.chars().count() > 120
-        || !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
-    {
+    if value.chars().count() > 120 || !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-')) {
         return Err(fail(field));
     }
     Ok(value.clone())
@@ -580,9 +579,7 @@ impl CatalogReader {
         let measures_file = read("measures.json", "measures");
         let aliases_file = read("model-aliases.json", "aliases");
         let array = |doc: Option<&Json>, key: &str| -> Vec<Json> {
-            doc.and_then(|doc| doc[key].as_array())
-                .cloned()
-                .unwrap_or_default()
+            doc.and_then(|doc| doc[key].as_array()).cloned().unwrap_or_default()
         };
         CatalogState {
             state: self.state,
@@ -606,13 +603,7 @@ impl CatalogReader {
                 .unwrap_or_default(),
             effort_suffixes: aliases_file
                 .and_then(|doc| doc["effortSuffixes"].as_array())
-                .map(|suffixes| {
-                    suffixes
-                        .iter()
-                        .filter_map(Json::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
+                .map(|suffixes| suffixes.iter().filter_map(Json::as_str).map(str::to_string).collect())
                 .unwrap_or_default(),
             task_types: array(read("task-types.json", "taskTypes"), "taskTypes"),
             measures: array(measures_file, "measures"),

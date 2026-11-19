@@ -4,8 +4,8 @@
 //! remote boundary answers as it does on a host without an agent: the orchestrator's
 //! refusal mapping is what these cases prove. Disposable 0700 roots only.
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct BootFixture {
@@ -68,7 +68,10 @@ const ADMIN_PRINCIPAL: &str = r#"{"kind":"session","id":"fixture-admin","role":"
 async fn start(
     fixture: &BootFixture,
     bound: bool,
-) -> (tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
     let (stop, shutdown) = tokio::sync::oneshot::channel::<()>();
     let boot = fixture.boot();
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -105,7 +108,9 @@ async fn http(
     secret: &str,
     body: Option<&str>,
 ) -> (u16, String, Value) {
-    let mut stream = tokio::net::UnixStream::connect(socket).await.expect("connect");
+    let mut stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .expect("connect");
     let body = body.unwrap_or("");
     let request = format!(
         "{method} {path} HTTP/1.1\r\nhost: localhost\r\nx-aac-boot-secret: {secret}\r\nx-aac-principal: {principal}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -190,7 +195,10 @@ async fn bound_open_admits_shape_and_answers_refusals() {
     )
     .await;
     assert_eq!(status, 404);
-    assert_eq!(body, json!({"error": "Claude desktop profile was not found."}));
+    assert_eq!(
+        body,
+        json!({"error": "Claude desktop profile was not found."})
+    );
     // A query or an unknown body key never reaches the owner.
     let (status, decline, _) = http(
         &fixture.socket,

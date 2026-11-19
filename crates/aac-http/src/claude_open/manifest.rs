@@ -33,11 +33,14 @@ fn pending_id(id: &str) -> bool {
 fn is_js_space(c: char) -> bool {
     matches!(
         c,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' '
-            | '\u{a0}' | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
-            | '\u{feff}'
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
     )
 }
 
@@ -309,8 +312,7 @@ fn timestamp_shape(value: &str) -> bool {
         && digits(14..16)
         && bytes[16] == b':'
         && digits(17..19)
-        && (bytes.len() == 20
-            || (bytes[19] == b'.' && digits(20..23)))
+        && (bytes.len() == 20 || (bytes[19] == b'.' && digits(20..23)))
         && bytes[bytes.len() - 1] == b'Z'
 }
 

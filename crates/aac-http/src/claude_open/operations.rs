@@ -26,7 +26,9 @@ pub const STATES: [&str; 6] = [
 pub fn failure_message(kind: OpenErrorKind) -> &'static str {
     match kind {
         OpenErrorKind::NotFound => "Claude desktop profile was not found.",
-        OpenErrorKind::NotConfigured => "Claude desktop launcher is not configured for this platform.",
+        OpenErrorKind::NotConfigured => {
+            "Claude desktop launcher is not configured for this platform."
+        }
         OpenErrorKind::TransportTimeout => "Claude desktop request timed out.",
         OpenErrorKind::Transport => "Claude desktop request failed.",
         OpenErrorKind::Other => "Claude account could not be opened safely.",
@@ -159,7 +161,10 @@ fn operation_id() -> String {
         // fall back to the clock and a counter-free unique suffix is impossible: refuse.
         return String::new();
     }
-    format!("op_{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+    format!(
+        "op_{}",
+        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    )
 }
 
 impl Operations {
@@ -171,7 +176,9 @@ impl Operations {
     /// A store with an injected clock (the parity fixtures fix it).
     pub fn with_options(options: Options) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner { entries: Vec::new() })),
+            inner: Arc::new(Mutex::new(Inner {
+                entries: Vec::new(),
+            })),
             options,
         }
     }
@@ -183,9 +190,11 @@ impl Operations {
     fn prune(&self, inner: &mut Inner) {
         let now = self.now();
         let retain_ms = self.options.retain_ms;
-        inner
-            .entries
-            .retain(|(_, entry)| entry.finished_at.is_none_or(|at| now.saturating_sub(at) < retain_ms));
+        inner.entries.retain(|(_, entry)| {
+            entry
+                .finished_at
+                .is_none_or(|at| now.saturating_sub(at) < retain_ms)
+        });
         // Bounded even if many profiles finish at once: drop the oldest finished first.
         while inner.entries.len() > MAX_OPERATIONS {
             let oldest = inner

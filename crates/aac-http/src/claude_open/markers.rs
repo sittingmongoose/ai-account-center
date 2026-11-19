@@ -49,8 +49,11 @@ fn marker_name(name: &str) -> Option<(&str, &str, &str)> {
         return None;
     }
     let nonce = rest.strip_suffix(".json")?;
-    (nonce.len() == 32 && nonce.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
-        .then_some((profile, platform, nonce))
+    (nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    .then_some((profile, platform, nonce))
 }
 
 /// The core's `ownedPrivate` for files and directories: real, private, owned, exact mode.
@@ -193,9 +196,11 @@ fn read_marker(filename: &Path) -> Checked<ReadMarker> {
         || !record["createdAt"].as_str().is_some_and(iso_date)
         || (finished
             && (!record["finishedAt"].as_str().is_some_and(iso_date)
-                || !record["terminalReceiptSha256"]
-                    .as_str()
-                    .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))))
+                || !record["terminalReceiptSha256"].as_str().is_some_and(|s| {
+                    s.len() == 64
+                        && s.bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })))
     {
         return Err(pending());
     }
@@ -243,7 +248,11 @@ fn iso_date(value: &str) -> bool {
     if bytes[10] != b'T' || bytes.len() < 19 {
         return false;
     }
-    if !digits(11..13) || bytes[13] != b':' || !digits(14..16) || bytes[16] != b':' || !digits(17..19)
+    if !digits(11..13)
+        || bytes[13] != b':'
+        || !digits(14..16)
+        || bytes[16] != b':'
+        || !digits(17..19)
     {
         return false;
     }
@@ -287,9 +296,16 @@ pub struct MarkerState {
 }
 
 /// The core's `pendingMarkerState`: every unreadable or foreign entry holds safely.
-pub fn pending_marker_state(directory: &Path, profile_id: &str, target_platform: &str) -> MarkerState {
+pub fn pending_marker_state(
+    directory: &Path,
+    profile_id: &str,
+    target_platform: &str,
+) -> MarkerState {
     if !PROFILES.contains(&profile_id) || !matches!(target_platform, "mac" | "windows") {
-        return MarkerState { held: true, count: 0 };
+        return MarkerState {
+            held: true,
+            count: 0,
+        };
     }
     let root = marker_directory(directory);
     let result = (|| -> Checked<usize> {
@@ -327,8 +343,14 @@ pub fn pending_marker_state(directory: &Path, profile_id: &str, target_platform:
     })();
     match result {
         Ok(count) => MarkerState { held: false, count },
-        Err(MarkerRefused::AbsentFolder) => MarkerState { held: false, count: 0 },
-        Err(_) => MarkerState { held: true, count: 0 },
+        Err(MarkerRefused::AbsentFolder) => MarkerState {
+            held: false,
+            count: 0,
+        },
+        Err(_) => MarkerState {
+            held: true,
+            count: 0,
+        },
     }
 }
 
@@ -373,7 +395,9 @@ pub fn open_held_without_core(directory: &Path, profile_id: &str, platform: &str
         if let Some(tail) = name.strip_prefix(&prefix)
             && tail.len() == 37
             && tail.ends_with(".json")
-            && tail[..32].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            && tail[..32]
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
             return true;
         }
@@ -492,7 +516,8 @@ impl PendingMarker {
         // closes the descriptor (Drop) and leaves any created file to hold Open.
         let result = (|| -> Checked<()> {
             let mut file = marker.file()?;
-            file.write_all(&bytes).map_err(|_| MarkerRefused::AppendPending)?;
+            file.write_all(&bytes)
+                .map_err(|_| MarkerRefused::AppendPending)?;
             file.sync_all().map_err(|_| MarkerRefused::AppendPending)?;
             sync_directory(&root).map_err(|_| MarkerRefused::AppendPending)?;
             marker.assert_bound()
@@ -510,7 +535,10 @@ impl PendingMarker {
     /// The core's `bound()`: this inode still holds exactly this operation's bytes.
     pub fn assert_bound(&self) -> Checked<()> {
         let current = read_marker(&self.filename)?;
-        let original = self.file()?.metadata().map_err(|_| MarkerRefused::AppendPending)?;
+        let original = self
+            .file()?
+            .metadata()
+            .map_err(|_| MarkerRefused::AppendPending)?;
         let root = marker_directory(&self.directory);
         let root_meta = fs::symlink_metadata(&root).map_err(|_| MarkerRefused::AppendPending)?;
         if !root_is_private(&self.directory)
@@ -550,12 +578,19 @@ impl PendingMarker {
         let file = self.file()?;
         file.set_len(0).map_err(|_| MarkerRefused::AppendPending)?;
         let mut file = file;
-        file.seek(SeekFrom::Start(0)).map_err(|_| MarkerRefused::AppendPending)?;
-        file.write_all(&finished).map_err(|_| MarkerRefused::AppendPending)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| MarkerRefused::AppendPending)?;
+        file.write_all(&finished)
+            .map_err(|_| MarkerRefused::AppendPending)?;
         file.sync_all().map_err(|_| MarkerRefused::AppendPending)?;
         let current = read_marker(&self.filename)?;
-        let original = self.file()?.metadata().map_err(|_| MarkerRefused::AppendPending)?;
-        if current.dev != original.dev() || current.ino != original.ino() || current.bytes != finished
+        let original = self
+            .file()?
+            .metadata()
+            .map_err(|_| MarkerRefused::AppendPending)?;
+        if current.dev != original.dev()
+            || current.ino != original.ino()
+            || current.bytes != finished
         {
             return Err(MarkerRefused::AppendPending);
         }
@@ -573,7 +608,10 @@ impl PendingMarker {
             return Err(MarkerRefused::AppendPending);
         }
         let current = read_marker(&self.filename)?;
-        let original = self.file()?.metadata().map_err(|_| MarkerRefused::AppendPending)?;
+        let original = self
+            .file()?
+            .metadata()
+            .map_err(|_| MarkerRefused::AppendPending)?;
         let root = marker_directory(&self.directory);
         let root_meta = fs::symlink_metadata(&root).map_err(|_| MarkerRefused::AppendPending)?;
         if !root_is_private(&self.directory)
@@ -592,8 +630,10 @@ impl PendingMarker {
         let file = self.file()?;
         file.set_len(0).map_err(|_| MarkerRefused::AppendPending)?;
         let mut file = file;
-        file.seek(SeekFrom::Start(0)).map_err(|_| MarkerRefused::AppendPending)?;
-        file.write_all(&self.bytes).map_err(|_| MarkerRefused::AppendPending)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| MarkerRefused::AppendPending)?;
+        file.write_all(&self.bytes)
+            .map_err(|_| MarkerRefused::AppendPending)?;
         file.sync_all().map_err(|_| MarkerRefused::AppendPending)?;
         self.finished_bytes = None;
         self.assert_bound()
@@ -640,8 +680,14 @@ mod tests {
             marker_name("platyr-windows-0123456789abcdef0123456789abcdef.json"),
             Some(("platyr", "windows", "0123456789abcdef0123456789abcdef"))
         );
-        assert_eq!(marker_name("unknown-mac-0123456789abcdef0123456789abcdef.json"), None);
-        assert_eq!(marker_name("platyr-linux-0123456789abcdef0123456789abcdef.json"), None);
+        assert_eq!(
+            marker_name("unknown-mac-0123456789abcdef0123456789abcdef.json"),
+            None
+        );
+        assert_eq!(
+            marker_name("platyr-linux-0123456789abcdef0123456789abcdef.json"),
+            None
+        );
         assert_eq!(marker_name("platyr-mac-short.json"), None);
     }
 }

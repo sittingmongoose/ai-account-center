@@ -2,7 +2,7 @@
 //! file per registered thread in the inbox registry folder, read-only, every 30 s. A file
 //! that is JSON but no thread entry is not a problem: pm-mail keeps other files here.
 
-use super::{ShareFs, TransientMisses, compare, js_text, stat_key, PERSISTENT_SHARE_ERROR};
+use super::{PERSISTENT_SHARE_ERROR, ShareFs, TransientMisses, compare, js_text, stat_key};
 use crate::computers;
 use crate::secret_policy::find_secret;
 use crate::validate::real_timestamp;
@@ -28,12 +28,7 @@ impl RegistryProblem {
 }
 
 /// The next problem for an item, keeping `since` while the reason stays the same.
-fn next_problem(
-    before: Option<&RegistryProblem>,
-    item: &str,
-    reason: &str,
-    now: u64,
-) -> RegistryProblem {
+fn next_problem(before: Option<&RegistryProblem>, item: &str, reason: &str, now: u64) -> RegistryProblem {
     RegistryProblem {
         item: item.to_string(),
         reason: reason.to_string(),
@@ -47,10 +42,11 @@ fn next_problem(
 /// JavaScript's `trim` whitespace set (the one `shortText` trims).
 fn trim_js(text: &str) -> &str {
     text.trim_matches(|c: char| {
-        matches!(c,
-            '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' '
-            | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}'
-            | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+        matches!(
+            c,
+            '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+                ..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'
+        )
     })
 }
 
@@ -107,7 +103,10 @@ pub fn registry_machine(host: Option<&Json>, cwd: Option<&Json>) -> Option<&'sta
         return Some("mac");
     }
     let bytes = dir.as_bytes();
-    if (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+    if (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/'))
         || dir.starts_with("\\\\")
     {
         return Some("windows");
@@ -164,8 +163,7 @@ fn thread_name(value: &str) -> bool {
         Some(first) if first.is_ascii_alphanumeric() => {}
         _ => return false,
     }
-    value.chars().count() <= 64
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    value.chars().count() <= 64 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// One registry file -> a thread row, or null when it is not one (`parseRegistryEntry`).

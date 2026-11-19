@@ -42,7 +42,8 @@ impl Drop for Root {
 }
 
 fn receipt(changes: Value) -> Value {
-    let mut base = json!({"status": "created_metadata", "createdCount": 1, "writerQuiescent": true});
+    let mut base =
+        json!({"status": "created_metadata", "createdCount": 1, "writerQuiescent": true});
     if let Some(map) = changes.as_object() {
         for (key, value) in map {
             base[key] = value.clone();
@@ -83,11 +84,19 @@ fn pending_marker_is_private_and_survives_restart() {
     let mut marker = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
     marker.release();
     assert_eq!(
-        fs::metadata(root.marker_root()).expect("dir").permissions().mode() & 0o777,
+        fs::metadata(root.marker_root())
+            .expect("dir")
+            .permissions()
+            .mode()
+            & 0o777,
         0o700
     );
     assert_eq!(
-        fs::metadata(root.marker_file()).expect("file").permissions().mode() & 0o777,
+        fs::metadata(root.marker_file())
+            .expect("file")
+            .permissions()
+            .mode()
+            & 0o777,
         0o600
     );
     assert!(held(&root));
@@ -135,7 +144,9 @@ fn terminal_refusal_finishes_without_zero_write_claims() {
     let root = Root::new();
     let mut marker = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
     marker
-        .finish(&receipt(json!({"status": "refused", "createdCount": 0, "recoveryRequired": true})))
+        .finish(&receipt(
+            json!({"status": "refused", "createdCount": 0, "recoveryRequired": true}),
+        ))
         .expect("finish");
     marker.release();
     assert!(!held(&root));
@@ -298,14 +309,20 @@ fn batch_sequence_rearms_one_marker_slot() {
 fn rearm_refuses_before_finish_after_release_and_after_second_finish() {
     let root = Root::new();
     let mut pending = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
-    assert_eq!(pending.rearm().expect_err("rearm must refuse"), MarkerRefused::AppendPending);
+    assert_eq!(
+        pending.rearm().expect_err("rearm must refuse"),
+        MarkerRefused::AppendPending
+    );
     assert!(held(&root));
     pending.release();
     fs::remove_dir_all(root.marker_root()).expect("rm");
     let mut released = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
     released.finish(&receipt(json!({}))).expect("finish");
     released.release();
-    assert_eq!(released.rearm().expect_err("rearm must refuse"), MarkerRefused::AppendPending);
+    assert_eq!(
+        released.rearm().expect_err("rearm must refuse"),
+        MarkerRefused::AppendPending
+    );
     assert!(!held(&root));
     fs::remove_dir_all(root.marker_root()).expect("rm");
     let mut twice = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
@@ -322,7 +339,10 @@ fn rearm_refuses_while_another_operation_holds() {
     marker.finish(&receipt(json!({}))).expect("finish");
     let finished = fs::read(root.marker_file()).expect("read");
     let foreign = write_pending(&root, PROFILE, "windows", 'f');
-    assert_eq!(marker.rearm().expect_err("rearm must refuse"), MarkerRefused::AppendPending);
+    assert_eq!(
+        marker.rearm().expect_err("rearm must refuse"),
+        MarkerRefused::AppendPending
+    );
     marker.release();
     let own = fs::read_dir(root.marker_root())
         .expect("dir")
@@ -371,8 +391,7 @@ fn replaced_or_edited_finished_marker_is_never_rearmed() {
     fs::write(&edited_file, serde_json::to_vec(&row).expect("json")).expect("write");
     assert!(edited.rearm().is_err());
     edited.release();
-    let row: Value =
-        serde_json::from_slice(&fs::read(&edited_file).expect("read")).expect("json");
+    let row: Value = serde_json::from_slice(&fs::read(&edited_file).expect("read")).expect("json");
     assert_eq!(row["state"], json!("finished"));
 }
 
@@ -408,7 +427,10 @@ fn interrupted_rearm_leaves_an_empty_marker_that_holds() {
     assert!(!held(&root));
     // The rewrite is lost after truncation: the held inode is now empty.
     let file = root.marker_file();
-    let handle = fs::OpenOptions::new().write(true).open(&file).expect("open");
+    let handle = fs::OpenOptions::new()
+        .write(true)
+        .open(&file)
+        .expect("open");
     handle.set_len(0).expect("truncate");
     drop(handle);
     assert!(marker.rearm().is_err());

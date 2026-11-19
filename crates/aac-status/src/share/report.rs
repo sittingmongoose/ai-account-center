@@ -5,9 +5,8 @@
 //! raw members `reportV2` passes through. Lengths count UTF-16 code units, as JavaScript's.
 
 use crate::validate::{
-    self, Invalid, Valid, bool_value, count, fail, head, id_problem, is_card_id,
-    is_pm_mail_name, is_writer_file_path, iso, link, list, obj, one_of, opt_iso, opt_obj,
-    opt_slug, opt_text, option_key, slug, text,
+    self, Invalid, Valid, bool_value, count, fail, head, id_problem, is_card_id, is_pm_mail_name, is_writer_file_path,
+    iso, link, list, obj, one_of, opt_iso, opt_obj, opt_slug, opt_text, option_key, slug, text,
 };
 use serde_json::{Map, Value as Json, json};
 
@@ -65,7 +64,10 @@ fn opt_day(value: &Json, field: &str) -> Valid<Json> {
     if value.is_null() {
         return Ok(Json::Null);
     }
-    let day = value.as_str().filter(|day| day.len() == 10).ok_or_else(|| fail(field))?;
+    let day = value
+        .as_str()
+        .filter(|day| day.len() == 10)
+        .ok_or_else(|| fail(field))?;
     if !validate::real_timestamp(&format!("{day}T00:00:00Z")) {
         return Err(fail(field));
     }
@@ -159,10 +161,7 @@ pub fn report_v2(doc: &Map<String, Json>) -> Valid<Map<String, Json>> {
             );
             Ok(Json::Object(stage))
         })?;
-        let nows = stages
-            .iter()
-            .filter(|stage| stage["state"] == json!("now"))
-            .count();
+        let nows = stages.iter().filter(|stage| stage["state"] == json!("now")).count();
         if stages.len() < 2 || nows > 1 {
             return Err(fail("stages"));
         }
@@ -204,19 +203,14 @@ pub fn report_v2(doc: &Map<String, Json>) -> Valid<Map<String, Json>> {
                 row.insert("media".to_string(), report_media(Some(media))?);
             }
             if let Some(versions) = present(&row, "versions") {
-                let versions = list(
-                    Some(versions),
-                    &format!("{field}.versions"),
-                    8,
-                    |value, at| {
-                        let version = obj(Some(value), at)?;
-                        text(version.get("version"), &format!("{at}.version"), 12)?;
-                        opt_iso(version.get("updatedAt"), &format!("{at}.updatedAt"))?;
-                        let mut out = Map::new();
-                        passthrough(version, &["version", "updatedAt", "path", "url"], &mut out);
-                        Ok(Json::Object(out))
-                    },
-                )?;
+                let versions = list(Some(versions), &format!("{field}.versions"), 8, |value, at| {
+                    let version = obj(Some(value), at)?;
+                    text(version.get("version"), &format!("{at}.version"), 12)?;
+                    opt_iso(version.get("updatedAt"), &format!("{at}.updatedAt"))?;
+                    let mut out = Map::new();
+                    passthrough(version, &["version", "updatedAt", "path", "url"], &mut out);
+                    Ok(Json::Object(out))
+                })?;
                 row.insert("versions".to_string(), Json::Array(versions));
             }
             let mut out = Map::new();
@@ -433,10 +427,22 @@ fn task_item(value: &Json, field: &str) -> Valid<Json> {
             out.insert(key.to_owned(), accepted);
         }
     }
-    out.insert("blockedOn".into(), blocked_on(row.get("blockedOn"), &format!("{field}.blockedOn"))?);
-    out.insert("note".into(), json!(opt_text(row.get("note"), &format!("{field}.note"), 110)?));
-    out.insert("why".into(), json!(opt_text(row.get("why"), &format!("{field}.why"), 500)?));
-    out.insert("updatedAt".into(), json!(opt_iso(row.get("updatedAt"), &format!("{field}.updatedAt"))?));
+    out.insert(
+        "blockedOn".into(),
+        blocked_on(row.get("blockedOn"), &format!("{field}.blockedOn"))?,
+    );
+    out.insert(
+        "note".into(),
+        json!(opt_text(row.get("note"), &format!("{field}.note"), 110)?),
+    );
+    out.insert(
+        "why".into(),
+        json!(opt_text(row.get("why"), &format!("{field}.why"), 500)?),
+    );
+    out.insert(
+        "updatedAt".into(),
+        json!(opt_iso(row.get("updatedAt"), &format!("{field}.updatedAt"))?),
+    );
     Ok(item)
 }
 
@@ -515,10 +521,11 @@ fn card_media(value: &Json, field: &str) -> Valid<Json> {
 
 /// JavaScript's `\s`: the whitespace `new URL` tolerates and the link rule refuses.
 fn js_whitespace(c: char) -> bool {
-    matches!(c,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' '
-        | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}'
-        | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+    matches!(
+        c,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'
+    )
 }
 
 /// A web link (http or https) or a share path the page offers to copy; nothing else.
@@ -528,10 +535,7 @@ fn link_url(value: Option<&Json>, field: &str) -> Valid<String> {
     if lower.starts_with("http://") || lower.starts_with("https://") {
         // `new URL` needs a non-empty authority; any whitespace refuses the link outright.
         let rest = &url[url.find("://").map(|at| at + 3).unwrap_or(0)..];
-        let authority: String = rest
-            .chars()
-            .take_while(|c| !matches!(c, '/' | '?' | '#'))
-            .collect();
+        let authority: String = rest.chars().take_while(|c| !matches!(c, '/' | '?' | '#')).collect();
         if !authority.is_empty() && !url.chars().any(js_whitespace) {
             return Ok(url);
         }
@@ -582,9 +586,7 @@ pub fn section(value: &Json, field: &str) -> Valid<Json> {
     };
     let mut out = section_base(raw, field)?;
     out.insert("type".to_string(), json!(kind));
-    let items = |max: usize,
-                 each: &dyn Fn(&Json, &str) -> Valid<Json>|
-     -> Valid<Vec<Json>> {
+    let items = |max: usize, each: &dyn Fn(&Json, &str) -> Valid<Json>| -> Valid<Vec<Json>> {
         list(raw.get("items"), &format!("{field}.items"), max, |item, at| {
             each(item, at)
         })
@@ -685,7 +687,11 @@ pub fn section(value: &Json, field: &str) -> Valid<Json> {
         "callout" => {
             out.insert(
                 "tone".to_string(),
-                json!(one_of(raw.get("tone"), &format!("{field}.tone"), &["info", "warn", "crit"])?),
+                json!(one_of(
+                    raw.get("tone"),
+                    &format!("{field}.tone"),
+                    &["info", "warn", "crit"]
+                )?),
             );
             out.insert(
                 "body".to_string(),
@@ -757,9 +763,7 @@ pub fn section(value: &Json, field: &str) -> Valid<Json> {
 pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json> {
     let base = head(doc, CARD_SCHEMA, writer)?;
     if doc.get("id").and_then(Json::as_str) != Some(file_id) {
-        return Err(Invalid(
-            "id does not match its file name and writer".to_string(),
-        ));
+        return Err(Invalid("id does not match its file name and writer".to_string()));
     }
     let id_refusal = id_problem(doc.get("id"), writer, 64);
     if id_refusal.is_some() || !is_card_id(doc.get("id")) {
@@ -802,13 +806,11 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
         return Err(Invalid("a card needs 2 to 4 options".to_string()));
     }
     if (kind == "objection" || kind == "sample") && options.len() == 1 {
-        return Err(Invalid(
-            if kind == "sample" {
-                "a sample has no options or 2 to 4".to_string()
-            } else {
-                "an objection has no options or 2 to 4".to_string()
-            },
-        ));
+        return Err(Invalid(if kind == "sample" {
+            "a sample has no options or 2 to 4".to_string()
+        } else {
+            "an objection has no options or 2 to 4".to_string()
+        }));
     }
     if kind == "action" && !options.is_empty() {
         return Err(Invalid("an action card has no options".to_string()));
@@ -862,7 +864,10 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
     );
     out.insert("project".to_string(), json!(opt_slug(doc.get("project"), "project")?));
     out.insert("stream".to_string(), json!(opt_slug(doc.get("stream"), "stream")?));
-    out.insert("askedBy".to_string(), json!(opt_text(doc.get("askedBy"), "askedBy", 64)?));
+    out.insert(
+        "askedBy".to_string(),
+        json!(opt_text(doc.get("askedBy"), "askedBy", 64)?),
+    );
     out.insert(
         "replyTo".to_string(),
         json!({
@@ -890,7 +895,11 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
     out.insert("title".to_string(), json!(text(doc.get("title"), "title", 300)?));
     out.insert(
         "now".to_string(),
-        json!(opt_text(Some(or(doc, "now", doc.get("context").unwrap_or(&Json::Null))), "now", 4000)?),
+        json!(opt_text(
+            Some(or(doc, "now", doc.get("context").unwrap_or(&Json::Null))),
+            "now",
+            4000
+        )?),
     );
     out.insert("nowAsOf".to_string(), json!(opt_iso(doc.get("nowAsOf"), "nowAsOf")?));
     out.insert("oldAnswer".to_string(), old_answer);
@@ -906,7 +915,11 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
     );
     out.insert(
         "urgency".to_string(),
-        json!(one_of(Some(or(doc, "urgency", &json!("whenever"))), "urgency", &URGENCIES)?),
+        json!(one_of(
+            Some(or(doc, "urgency", &json!("whenever"))),
+            "urgency",
+            &URGENCIES
+        )?),
     );
     out.insert("blocks".to_string(), json!(opt_text(doc.get("blocks"), "blocks", 300)?));
     out.insert(
@@ -944,18 +957,19 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
     );
     out.insert(
         "reversible".to_string(),
-        opt_obj(doc.get("reversible"), "reversible", |value| {
-            match value.get("yes") {
-                Some(Json::Bool(yes)) => Ok(json!({
-                    "yes": yes,
-                    "how": opt_text(value.get("how"), "reversible.how", 500)?,
-                })),
-                _ => Err(fail("reversible.yes")),
-            }
+        opt_obj(doc.get("reversible"), "reversible", |value| match value.get("yes") {
+            Some(Json::Bool(yes)) => Ok(json!({
+                "yes": yes,
+                "how": opt_text(value.get("how"), "reversible.how", 500)?,
+            })),
+            _ => Err(fail("reversible.yes")),
         })?
         .unwrap_or(Json::Null),
     );
-    out.insert("verdict".to_string(), json!(opt_text(doc.get("verdict"), "verdict", 40)?));
+    out.insert(
+        "verdict".to_string(),
+        json!(opt_text(doc.get("verdict"), "verdict", 40)?),
+    );
     out.insert("group".to_string(), json!(opt_text(doc.get("group"), "group", 80)?));
     out.insert(
         "agreement".to_string(),
@@ -1027,12 +1041,7 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
 
 /// Bytes of one report file -> its projected document and the bytes' SHA-256, or the fixed
 /// refusal reason (`parseReportFile` for thread, tasks and card; runs are aac-store's).
-pub fn parse_report_file(
-    kind: &str,
-    bytes: &[u8],
-    writer: &str,
-    card_id: &str,
-) -> Result<(Json, String), String> {
+pub fn parse_report_file(kind: &str, bytes: &[u8], writer: &str, card_id: &str) -> Result<(Json, String), String> {
     let cap = match kind {
         "thread" => THREAD_CAP,
         "tasks" => TASKS_CAP,

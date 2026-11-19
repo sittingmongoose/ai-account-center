@@ -34,7 +34,11 @@ pub struct Registry {
 impl Registry {
     /// An empty registry (`emptyRegistry`).
     pub fn empty() -> Self {
-        Self { version: SCHEMA_VERSION.to_owned(), default: None, profiles: Vec::new() }
+        Self {
+            version: SCHEMA_VERSION.to_owned(),
+            default: None,
+            profiles: Vec::new(),
+        }
     }
 
     /// Whether a profile name is present (`hasProfile`), after the name rule.
@@ -49,11 +53,17 @@ impl Registry {
 
     /// A profile's metadata (`getProfile`), or `None` when absent.
     pub fn get(&self, name: &str) -> Option<&Meta> {
-        self.profiles.iter().find(|(n, _)| n == name).map(|(_, m)| m)
+        self.profiles
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, m)| m)
     }
 
     fn get_mut(&mut self, name: &str) -> Option<&mut Meta> {
-        self.profiles.iter_mut().find(|(n, _)| n == name).map(|(_, m)| m)
+        self.profiles
+            .iter_mut()
+            .find(|(n, _)| n == name)
+            .map(|(_, m)| m)
     }
 
     /// Insert a new profile (`createProfile`); `Err` when the name is invalid or already present.
@@ -99,7 +109,11 @@ impl Registry {
         if profile_name_error(name).is_err() {
             return Err(());
         }
-        let index = self.profiles.iter().position(|(n, _)| n == name).ok_or(())?;
+        let index = self
+            .profiles
+            .iter()
+            .position(|(n, _)| n == name)
+            .ok_or(())?;
         if self.default.as_deref() == Some(name) && self.profiles.len() > 1 && !force_default {
             return Err(());
         }
@@ -167,8 +181,25 @@ fn is_plain_safe_first(c: char) -> bool {
         && !is_whitespace(c)
         && !matches!(
             c,
-            '-' | '?' | ':' | ',' | '[' | ']' | '{' | '}' | '#' | '&' | '*' | '!' | '|' | '='
-                | '>' | '\'' | '"' | '%' | '@' | '`'
+            '-' | '?'
+                | ':'
+                | ','
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '#'
+                | '&'
+                | '*'
+                | '!'
+                | '|'
+                | '='
+                | '>'
+                | '\''
+                | '"'
+                | '%'
+                | '@'
+                | '`'
         )
 }
 
@@ -427,7 +458,12 @@ fn resolve_timestamp(s: &str) -> bool {
 
 /// Whether the core schema resolves a plain scalar as a non-string type (`testImplicitResolving`).
 pub fn ambiguous(s: &str) -> bool {
-    resolve_null(s) || resolve_bool(s) || resolve_int(s) || resolve_float(s) || resolve_timestamp(s) || resolve_merge(s)
+    resolve_null(s)
+        || resolve_bool(s)
+        || resolve_int(s)
+        || resolve_float(s)
+        || resolve_timestamp(s)
+        || resolve_merge(s)
 }
 
 const DEPRECATED_BOOLEANS: [&str; 16] = [
@@ -747,7 +783,11 @@ pub fn parse(bytes: &[u8]) -> Option<Registry> {
             return None;
         }
     }
-    let registry = Registry { version, default, profiles };
+    let registry = Registry {
+        version,
+        default,
+        profiles,
+    };
     // Only accept a registry whose canonical re-emission is the exact input bytes.
     if emit(&registry)?.as_bytes() != bytes {
         return None;
@@ -791,7 +831,10 @@ mod tests {
         assert_eq!(scalar("null").unwrap(), "'null'");
         assert_eq!(scalar("no").unwrap(), "'no'");
         assert_eq!(scalar("a: b@c.com").unwrap(), "'a: b@c.com'");
-        assert_eq!(scalar("2026-11-19T00:00:00.000Z").unwrap(), "'2026-11-19T00:00:00.000Z'");
+        assert_eq!(
+            scalar("2026-11-19T00:00:00.000Z").unwrap(),
+            "'2026-11-19T00:00:00.000Z'"
+        );
         assert_eq!(scalar("").unwrap(), "''");
     }
 
@@ -813,9 +856,19 @@ mod tests {
         assert!(text.contains("  work:\n    type: codex\n    created: '2026-11-19T02:00:00.000Z'\n    last_used: null\n    email: w@x.y\n    plan_type: pro\n    account_id: acct-2\n"));
         assert_eq!(parse(text.as_bytes()).unwrap(), registry);
         registry
-            .update("work", vec![("last_used".to_owned(), Field::Str("2026-11-19T03:00:00.000Z".to_owned()))])
+            .update(
+                "work",
+                vec![(
+                    "last_used".to_owned(),
+                    Field::Str("2026-11-19T03:00:00.000Z".to_owned()),
+                )],
+            )
             .unwrap();
-        assert!(emit(&registry).unwrap().contains("    last_used: '2026-11-19T03:00:00.000Z'\n"));
+        assert!(
+            emit(&registry)
+                .unwrap()
+                .contains("    last_used: '2026-11-19T03:00:00.000Z'\n")
+        );
     }
 
     #[test]

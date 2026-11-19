@@ -12,12 +12,30 @@ const INPUT_MAX: u64 = 256 * 1024;
 
 /// The Codex environment keys the CLI may see, in `codex-account-lifecycle.ts` PASSED_ENV order.
 const CODEX_PASSED_ENV: [&str; 15] = [
-    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "HTTPS_PROXY", "HTTP_PROXY",
-    "NO_PROXY", "https_proxy", "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
 ];
 
 #[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "action",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 enum Request {
     /// Build the Codex device-auth command after creating its private staging folder.
     CodexPrepare {
@@ -28,10 +46,7 @@ enum Request {
         env: Value,
     },
     /// Decode a local Codex login file's identity and digest its bytes.
-    CodexLogin {
-        path: String,
-        complete: bool,
-    },
+    CodexLogin { path: String, complete: bool },
     /// Whether a saved profile holds the live native login.
     CodexSavedLive { native: String, profile: String },
     /// Whether a fresh login is a saved profile's own account and person.
@@ -127,7 +142,10 @@ fn identity_json(identity: &aac_files::codex_identity::Identity) -> Value {
 /// Run one callback request from stdin and print its JSON answer.
 pub(crate) fn run() -> i32 {
     let mut bytes = Vec::new();
-    if io::stdin().take(INPUT_MAX + 1).read_to_end(&mut bytes).is_err()
+    if io::stdin()
+        .take(INPUT_MAX + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
         || bytes.len() as u64 > INPUT_MAX
     {
         return 74;
@@ -147,11 +165,16 @@ fn decline() -> Option<Value> {
 
 fn evaluate(request: Request) -> Option<Value> {
     match request {
-        Request::CodexPrepare { root, staging, shared, cli, env } => {
-            codex_prepare(Path::new(&root), &staging, Path::new(&shared), &cli, &env)
-        }
+        Request::CodexPrepare {
+            root,
+            staging,
+            shared,
+            cli,
+            env,
+        } => codex_prepare(Path::new(&root), &staging, Path::new(&shared), &cli, &env),
         Request::CodexLogin { path, complete } => {
-            let (identity, bytes) = aac_files::codex_identity::read_login(Path::new(&path), complete)?;
+            let (identity, bytes) =
+                aac_files::codex_identity::read_login(Path::new(&path), complete)?;
             use sha2::{Digest, Sha256};
             let digest = Sha256::digest(&bytes);
             let sha256: String = digest.iter().map(|b| format!("{b:02x}")).collect();
@@ -164,7 +187,12 @@ fn evaluate(request: Request) -> Option<Value> {
             )?;
             Some(json!({"status": "ok", "live": live}))
         }
-        Request::CodexSameIdentity { saved, meta_email, meta_account, fresh } => {
+        Request::CodexSameIdentity {
+            saved,
+            meta_email,
+            meta_account,
+            fresh,
+        } => {
             let saved: Option<aac_files::codex_identity::Identity> = saved.map(Into::into);
             let fresh: aac_files::codex_identity::Identity = fresh.into();
             let same = aac_files::codex_identity::same_codex_identity(
@@ -208,7 +236,13 @@ fn evaluate(request: Request) -> Option<Value> {
     }
 }
 
-fn codex_prepare(root: &Path, staging: &str, shared: &Path, cli: &str, env: &Value) -> Option<Value> {
+fn codex_prepare(
+    root: &Path,
+    staging: &str,
+    shared: &Path,
+    cli: &str,
+    env: &Value,
+) -> Option<Value> {
     if cli.is_empty() {
         return Some(json!({"status": "refused", "code": "tool_missing"}));
     }
@@ -245,7 +279,9 @@ fn muse_home_id(home_id: Option<&str>) -> Option<&str> {
         None => Some(""),
         Some(id) => {
             let valid = id.len() == 8
-                && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
             valid.then_some(id)
         }
     }
@@ -293,9 +329,25 @@ fn muse_email_valid(email: &str) -> bool {
 
 /// The Antigravity CLI environment allowlist (`signin-sandbox.ts` PASSED_ENV), in order.
 const AGY_PASSED_ENV: [&str; 19] = [
-    "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "COLORTERM", "COLUMNS", "LINES", "SSH_CLIENT",
-    "SSH_CONNECTION", "SSH_TTY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy",
-    "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "COLORTERM",
+    "COLUMNS",
+    "LINES",
+    "SSH_CLIENT",
+    "SSH_CONNECTION",
+    "SSH_TTY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
 ];
 const AGY_WORKDIR: &str = "AAC-signin";
 const AGY_DBUS_RUN_SESSION: &str = "/usr/bin/dbus-run-session";
@@ -349,7 +401,13 @@ fn antigravity_sandbox(
         args.push(leaf.to_owned());
     }
     args.push("--tmpfs".into());
-    args.push(real_gemini.join("antigravity-cli").join("log").to_str()?.to_owned());
+    args.push(
+        real_gemini
+            .join("antigravity-cli")
+            .join("log")
+            .to_str()?
+            .to_owned(),
+    );
     args.push("--proc".into());
     args.push("/proc".into());
     args.push("--dev".into());
@@ -376,14 +434,22 @@ fn antigravity_sandbox(
         .to_owned();
     command_env.insert("HOME".to_owned(), json!(home.to_str()?));
     command_env.insert("PATH".to_owned(), json!(format!("{stubs}:/usr/bin:/bin")));
-    command_env.insert("BROWSER".to_owned(), json!(Path::new(stubs).join("xdg-open").to_str()?));
+    command_env.insert(
+        "BROWSER".to_owned(),
+        json!(Path::new(stubs).join("xdg-open").to_str()?),
+    );
     command_env.insert("TERM".to_owned(), json!(term));
     Some(json!({"status": "ok", "sandboxArgs": args, "env": Value::Object(command_env)}))
 }
 
 /// One registry mutation under the caller-held directory lease.
 #[derive(Deserialize)]
-#[serde(tag = "edit", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "edit",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 enum RegistryEdit {
     /// Insert a profile (`createProfile`); `meta` is spread over the base in order.
     Create {
@@ -422,12 +488,22 @@ fn apply_edit(
     edit: RegistryEdit,
 ) -> Result<(), &'static str> {
     match edit {
-        RegistryEdit::Create { name, created, meta } => {
-            let meta = meta.into_iter().map(|(key, value)| (key, value.into())).collect();
+        RegistryEdit::Create {
+            name,
+            created,
+            meta,
+        } => {
+            let meta = meta
+                .into_iter()
+                .map(|(key, value)| (key, value.into()))
+                .collect();
             registry.create(&name, &created, meta).map_err(|_| "exists")
         }
         RegistryEdit::Update { name, partial } => {
-            let partial = partial.into_iter().map(|(key, value)| (key, value.into())).collect();
+            let partial = partial
+                .into_iter()
+                .map(|(key, value)| (key, value.into()))
+                .collect();
             registry.update(&name, partial).map_err(|_| "not_found")
         }
     }
@@ -437,7 +513,9 @@ fn apply_edit(
 /// stderr). Prints `committed` or `refused`; exit 74 declines so TypeScript answers.
 pub(crate) fn registry_edit() -> i32 {
     use std::os::fd::AsFd;
-    let Some(root) = std::env::args_os().nth(2).and_then(|arg| arg.to_str().map(str::to_owned))
+    let Some(root) = std::env::args_os()
+        .nth(2)
+        .and_then(|arg| arg.to_str().map(str::to_owned))
     else {
         return 74;
     };
@@ -452,7 +530,10 @@ pub(crate) fn registry_edit() -> i32 {
         return 74;
     };
     let mut bytes = Vec::new();
-    if io::stdin().take(INPUT_MAX + 1).read_to_end(&mut bytes).is_err()
+    if io::stdin()
+        .take(INPUT_MAX + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
         || bytes.len() as u64 > INPUT_MAX
     {
         return 74;
@@ -493,7 +574,14 @@ mod tests {
         let shared = root.join("config.toml");
         std::fs::write(&shared, "model = \"fixture\"\n").unwrap();
         let env = json!({"PATH": "/usr/bin", "HOME": "/home/x", "AAC_PRIVATE": "never"});
-        let answer = codex_prepare(root, ".staging-job_0123456789abcdef", &shared, "/fake/codex", &env).unwrap();
+        let answer = codex_prepare(
+            root,
+            ".staging-job_0123456789abcdef",
+            &shared,
+            "/fake/codex",
+            &env,
+        )
+        .unwrap();
         assert_eq!(answer["status"], "ok");
         let command = &answer["command"];
         assert_eq!(command["file"], "/fake/codex");
@@ -503,14 +591,29 @@ mod tests {
         assert_eq!(command["env"]["NO_COLOR"], "1");
         assert_eq!(command["env"]["PATH"], "/usr/bin");
         assert!(command["env"].get("AAC_PRIVATE").is_none());
-        assert!(command["env"]["CODEX_HOME"].as_str().unwrap().ends_with(".staging-job_0123456789abcdef"));
-        assert!(root.join("codex-instances/.staging-job_0123456789abcdef/config.toml").exists());
+        assert!(
+            command["env"]["CODEX_HOME"]
+                .as_str()
+                .unwrap()
+                .ends_with(".staging-job_0123456789abcdef")
+        );
+        assert!(
+            root.join("codex-instances/.staging-job_0123456789abcdef/config.toml")
+                .exists()
+        );
     }
 
     #[test]
     fn prepare_refuses_without_a_cli() {
         let dir = tempfile::tempdir().unwrap();
-        let answer = codex_prepare(dir.path(), ".staging-job_0123456789abcdef", Path::new("/none"), "", &json!({})).unwrap();
+        let answer = codex_prepare(
+            dir.path(),
+            ".staging-job_0123456789abcdef",
+            Path::new("/none"),
+            "",
+            &json!({}),
+        )
+        .unwrap();
         assert_eq!(answer["status"], "refused");
         assert_eq!(answer["code"], "tool_missing");
     }
@@ -518,7 +621,10 @@ mod tests {
     #[test]
     fn muse_commands_match_the_fixed_remote_strings() {
         let answer = muse_commands(None).unwrap();
-        assert_eq!(answer["remoteLogin"], "PATH=\"$HOME/.local/bin:$PATH\" muse login");
+        assert_eq!(
+            answer["remoteLogin"],
+            "PATH=\"$HOME/.local/bin:$PATH\" muse login"
+        );
         let email = answer["remoteEmail"].as_str().unwrap();
         assert!(email.starts_with("/usr/bin/python3 -c '"));
         assert!(email.contains("user_email"));
@@ -527,10 +633,12 @@ mod tests {
             home["remoteLogin"],
             "env XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/9f2c41d0\" PATH=\"$HOME/.local/bin:$PATH\" muse login"
         );
-        assert!(home["remoteEmail"]
-            .as_str()
-            .unwrap()
-            .starts_with("XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/9f2c41d0\" /usr/bin/python3"));
+        assert!(
+            home["remoteEmail"]
+                .as_str()
+                .unwrap()
+                .starts_with("XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/9f2c41d0\" /usr/bin/python3")
+        );
         assert!(muse_commands(Some("BAD")).is_none());
     }
 
@@ -547,7 +655,8 @@ mod tests {
 
     #[test]
     fn antigravity_sandbox_builds_bwrap_argv_and_env() {
-        let env = json!({"USER": "u", "TERM": "dumb", "LANG": "C", "SECRET": "x", "BAD": "a\u{1}b"});
+        let env =
+            json!({"USER": "u", "TERM": "dumb", "LANG": "C", "SECRET": "x", "BAD": "a\u{1}b"});
         let answer = antigravity_sandbox(
             "/ccs/s/bus.conf",
             "/ccs/s/home/.gemini",
@@ -568,12 +677,28 @@ mod tests {
             .collect();
         assert_eq!(
             &args[..10],
-            &["--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc",
-              "--unshare-uts", "--ro-bind", "/", "/", "--tmpfs", "/tmp"]
+            &[
+                "--die-with-parent",
+                "--unshare-user",
+                "--unshare-pid",
+                "--unshare-ipc",
+                "--unshare-uts",
+                "--ro-bind",
+                "/",
+                "/",
+                "--tmpfs",
+                "/tmp"
+            ]
         );
         assert!(args.windows(2).any(|w| w == ["--tmpfs", "/run/user/1000"]));
-        assert!(args.windows(3).any(|w| w == ["--bind", "/ccs/s/home/.gemini", "/home/u/.gemini"]));
-        assert!(args.windows(2).any(|w| w == ["--chdir", "/home/u/.gemini/AAC-signin"]));
+        assert!(
+            args.windows(3)
+                .any(|w| w == ["--bind", "/ccs/s/home/.gemini", "/home/u/.gemini"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--chdir", "/home/u/.gemini/AAC-signin"])
+        );
         assert_eq!(args.last(), Some(&"/home/u/.local/bin/agy"));
         let e = &answer["env"];
         assert_eq!(e["HOME"], "/home/u");

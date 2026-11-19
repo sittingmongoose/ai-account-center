@@ -5,10 +5,8 @@
 //! files are the authority; a reporter mirrors `verify_signed_answer` with the published key.
 
 use base64::Engine as _;
+use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
-use ed25519_dalek::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePublicKey,
-};
 use pem_rfc7468::LineEnding;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
@@ -174,10 +172,7 @@ fn random_hex() -> String {
 
 /// A new private file, exclusively created (0600 where the platform has modes).
 fn create_private(path: &Path) -> std::io::Result<fs::File> {
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    let file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -209,11 +204,7 @@ pub fn private_key_pem(signing: &SigningKey) -> Result<String, String> {
 fn create_key_file(dir: &Path, file: &Path) -> Result<(), String> {
     let signing = SigningKey::generate(&mut rand_core::OsRng);
     let created = private_key_pem(&signing)?;
-    let temp = dir.join(format!(
-        ".answer-key.{}.{}.tmp",
-        std::process::id(),
-        random_hex()
-    ));
+    let temp = dir.join(format!(".answer-key.{}.{}.tmp", std::process::id(), random_hex()));
     let result = (|| -> Result<(), String> {
         // Written and synced through the handle that created it: a read-only handle cannot
         // be synced on Windows (FlushFileBuffers needs write access).
@@ -224,16 +215,14 @@ fn create_key_file(dir: &Path, file: &Path) -> Result<(), String> {
         match fs::hard_link(&temp, file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(_) => {
-                match create_private(file) {
-                    Ok(mut handle) => {
-                        handle.write_all(created.as_bytes()).map_err(|e| e.to_string())?;
-                        handle.sync_all().map_err(|e| e.to_string())?;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(error) => return Err(error.to_string()),
+            Err(_) => match create_private(file) {
+                Ok(mut handle) => {
+                    handle.write_all(created.as_bytes()).map_err(|e| e.to_string())?;
+                    handle.sync_all().map_err(|e| e.to_string())?;
                 }
-            }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.to_string()),
+            },
         }
         // The new name is durable only once its folder is.
         if let Ok(folder) = fs::File::open(dir) {
@@ -343,12 +332,8 @@ pub fn load_or_create_answer_key(dir: &Path) -> Result<AnswerKey, String> {
         let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o600));
     }
     let verifying = signing.verifying_key();
-    let public_key_pem = verifying
-        .to_public_key_pem(LineEnding::LF)
-        .map_err(|e| e.to_string())?;
-    let spki = verifying
-        .to_public_key_der()
-        .map_err(|e| e.to_string())?;
+    let public_key_pem = verifying.to_public_key_pem(LineEnding::LF).map_err(|e| e.to_string())?;
+    let spki = verifying.to_public_key_der().map_err(|e| e.to_string())?;
     Ok(AnswerKey {
         key_id: answer_key_id(spki.as_bytes()),
         signing,
@@ -403,22 +388,20 @@ pub fn verify_signed_document(file_text: &[u8], public_key_pem: &str, schema: &s
         }
         _ => return Err("unsigned".to_string()),
     };
-    let der = pem_rfc7468::decode_vec(public_key_pem.as_bytes())
-        .map_err(|_| "the public key is not readable".to_string())?;
+    let der =
+        pem_rfc7468::decode_vec(public_key_pem.as_bytes()).map_err(|_| "the public key is not readable".to_string())?;
     if der.0 != "PUBLIC KEY" {
         return Err("the public key is not readable".to_string());
     }
-    let verifying = VerifyingKey::from_public_key_der(&der.1)
-        .map_err(|_| "the public key is not an Ed25519 key".to_string())?;
+    let verifying =
+        VerifyingKey::from_public_key_der(&der.1).map_err(|_| "the public key is not an Ed25519 key".to_string())?;
     if key_id != answer_key_id(&der.1) {
         return Err("signed by another key".to_string());
     }
     let raw = base64::engine::general_purpose::STANDARD
         .decode(value)
         .map_err(|_| "bad signature".to_string())?;
-    if raw.len() != 64
-        || base64::engine::general_purpose::STANDARD.encode(&raw) != value
-    {
+    if raw.len() != 64 || base64::engine::general_purpose::STANDARD.encode(&raw) != value {
         return Err("bad signature".to_string());
     }
     let mut unsigned = record.clone();

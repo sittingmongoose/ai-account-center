@@ -21,9 +21,7 @@ pub(super) fn model_id(run: &V) -> std::borrow::Cow<'_, str> {
     let p = s(&run["model"]["provider"]);
     if id.is_empty() {
         std::borrow::Cow::Borrowed("")
-    } else if p.is_empty()
-        || id.strip_prefix(p).is_some_and(|suffix| suffix.starts_with('/'))
-    {
+    } else if p.is_empty() || id.strip_prefix(p).is_some_and(|suffix| suffix.starts_with('/')) {
         std::borrow::Cow::Borrowed(id)
     } else {
         std::borrow::Cow::Owned(format!("{p}/{id}"))

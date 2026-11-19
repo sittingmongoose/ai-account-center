@@ -169,9 +169,7 @@ pub fn validate_policy(policy: &Value) -> Checked<()> {
             return Err(bad());
         }
         let port = endpoint["port"].as_f64();
-        if !port.is_some_and(|p| {
-            safe_integer(&endpoint["port"]) && (1.0..=65535.0).contains(&p)
-        }) {
+        if !port.is_some_and(|p| safe_integer(&endpoint["port"]) && (1.0..=65535.0).contains(&p)) {
             return Err(bad());
         }
     }
@@ -214,7 +212,9 @@ pub fn decode_records(records: &[Record]) -> Checked<Vec<Value>> {
         if !name_shape(name)
             || bytes.len() > 2_000_000
             || digest.len() != 64
-            || !digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || !digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             || sha(bytes) != digest
         {
             return Err(reject("record_binding_invalid"));
@@ -326,7 +326,12 @@ pub enum Neutral {
 }
 
 /// The core's `neutral`: project one source descriptor onto the target platform.
-pub fn neutral(source: &Value, source_platform: &str, target_platform: &str, policy: &Value) -> Neutral {
+pub fn neutral(
+    source: &Value,
+    source_platform: &str,
+    target_platform: &str,
+    policy: &Value,
+) -> Neutral {
     let not_verified = Neutral::Reason("project_or_backend_not_verified");
     if text(&source["cwd"]) != text(&policy["project"]["cwd"])
         || text(&source["originCwd"]) != text(&policy["project"]["originCwd"])
@@ -372,7 +377,10 @@ pub fn neutral(source: &Value, source_platform: &str, target_platform: &str, pol
     }
     descriptor.insert("cwd".into(), policy["project"]["cwd"].clone());
     descriptor.insert("originCwd".into(), policy["project"]["originCwd"].clone());
-    descriptor.insert("createdAt".into(), js::normalize(source["createdAt"].clone()));
+    descriptor.insert(
+        "createdAt".into(),
+        js::normalize(source["createdAt"].clone()),
+    );
     descriptor.insert(
         "lastActivityAt".into(),
         js::normalize(source["lastActivityAt"].clone()),
@@ -415,14 +423,12 @@ pub fn neutral(source: &Value, source_platform: &str, target_platform: &str, pol
 
 /// `/^claude-[a-zA-Z0-9._-]{1,100}$/`.
 fn model_shape(model: &str) -> bool {
-    model
-        .strip_prefix("claude-")
-        .is_some_and(|rest| {
-            (1..=100).contains(&rest.len())
-                && rest
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        })
+    model.strip_prefix("claude-").is_some_and(|rest| {
+        (1..=100).contains(&rest.len())
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    })
 }
 
 /// The core's plan: missing records, already-present count and skip-reason counts.
@@ -479,7 +485,10 @@ pub fn plan_missing(
         }
         let bytes = format!("{}\n", stringify(&candidate)).into_bytes();
         records.push(Record {
-            name: format!("{}.json", candidate["sessionId"].as_str().unwrap_or_default()),
+            name: format!(
+                "{}.json",
+                candidate["sessionId"].as_str().unwrap_or_default()
+            ),
             sha256: sha(&bytes),
             bytes,
         });
@@ -578,10 +587,7 @@ pub trait Adapters: Send + Sync {
         records: &[Record],
     ) -> AdapterFut<'a, bool>;
     /// Whether the target's protected state still matches the baseline.
-    fn target_protected_state_unchanged<'a>(
-        &'a self,
-        target: &Snapshot,
-    ) -> AdapterFut<'a, bool>;
+    fn target_protected_state_unchanged<'a>(&'a self, target: &Snapshot) -> AdapterFut<'a, bool>;
     /// One create-only append transaction; a lost receipt is an error, never a retry.
     fn append_create_only<'a>(&'a self, payload: AppendPayload<'a>) -> AdapterFut<'a, Value>;
 }
@@ -592,8 +598,14 @@ fn skipped(reason: &str) -> Value {
 
 fn public_counts(plan: &Plan) -> Map<String, Value> {
     let mut out = Map::new();
-    out.insert("alreadyPresentCount".into(), json!(plan.already_present_count));
-    out.insert("skippedReasonCounts".into(), Value::Object(plan.skipped.clone()));
+    out.insert(
+        "alreadyPresentCount".into(),
+        json!(plan.already_present_count),
+    );
+    out.insert(
+        "skippedReasonCounts".into(),
+        Value::Object(plan.skipped.clone()),
+    );
     out
 }
 
@@ -693,7 +705,13 @@ async fn run_sequence(
     if !native_guard_verified(&source, source_platform) {
         return Ok(skipped("native_guard_unverified"));
     }
-    let plan = plan_missing(&source_rows, &target_rows, source_platform, target_platform, policy)?;
+    let plan = plan_missing(
+        &source_rows,
+        &target_rows,
+        source_platform,
+        target_platform,
+        policy,
+    )?;
     if plan.records.is_empty() {
         let mut out = Map::new();
         out.insert("status".into(), json!("unchanged"));
@@ -801,7 +819,10 @@ async fn run_sequence(
             out.insert("status".into(), json!("partial"));
             out.insert("reason".into(), json!("open_copy_budget_reached"));
             out.insert("createdCount".into(), json!(*confirmed_count));
-            out.insert("remainingCount".into(), json!(total_count - *confirmed_count));
+            out.insert(
+                "remainingCount".into(),
+                json!(total_count - *confirmed_count),
+            );
             out.insert("recoveryRequired".into(), json!(false));
             out.extend(public_counts(&plan));
             out.insert("originalIdsPreserved".into(), json!(true));

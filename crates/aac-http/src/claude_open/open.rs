@@ -143,7 +143,10 @@ fn check_path<'a>(value: Option<&'a str>, platform: &str) -> Result<&'a str, Ope
     } else {
         // path.win32.isAbsolute: a drive letter plus separator, or a UNC double separator.
         let bytes = value.as_bytes();
-        (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+        (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/'))
             || value.starts_with("\\\\")
             || value.starts_with("//")
     };
@@ -172,7 +175,8 @@ pub fn mac_open_command(launcher_path: Option<&str>) -> Result<String, OpenError
     Ok([
         format!("test -d {app} || exit 1"),
         "console_user=$(/usr/bin/stat -f '%Su' /dev/console)".to_string(),
-        "test \"$console_user\" != root && test \"$console_user\" != loginwindow || exit 1".to_string(),
+        "test \"$console_user\" != root && test \"$console_user\" != loginwindow || exit 1"
+            .to_string(),
         "console_uid=$(/usr/bin/id -u \"$console_user\") || exit 1".to_string(),
         "current_uid=$(/usr/bin/id -u) || exit 1".to_string(),
         "test \"$console_uid\" = \"$current_uid\" || exit 1".to_string(),
@@ -191,10 +195,7 @@ pub fn windows_account_list_script(ids: &[String]) -> Result<Vec<String>, OpenEr
     {
         return Err(OpenErrorKind::Other);
     }
-    let want = ids
-        .iter()
-        .map(|id| format!("{id}`n"))
-        .collect::<String>();
+    let want = ids.iter().map(|id| format!("{id}`n")).collect::<String>();
     Ok(vec![format!(
         "$tmp = $null; try {{ $dir = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude'); if (Test-Path -LiteralPath $dir -PathType Container) {{ $list = Join-Path $dir 'ccs-claude-accounts.txt'; $want = \"{want}\"; $have = $null; if (Test-Path -LiteralPath $list -PathType Leaf) {{ if ((Get-Item -LiteralPath $list).Length -le 8192) {{ $have = [IO.File]::ReadAllText($list) -replace \"`r`n\", \"`n\" }} }}; if ($have -cne $want) {{ if ($null -ne $have) {{ Copy-Item -LiteralPath $list -Destination (Join-Path $dir 'ccs-claude-accounts.previous.txt') -Force }}; $tmp = Join-Path $dir 'ccs-claude-accounts.txt.tmp'; [IO.File]::WriteAllText($tmp, $want, (New-Object Text.UTF8Encoding($false))); if (Test-Path -LiteralPath $list -PathType Leaf) {{ [IO.File]::Replace($tmp, $list, [NullString]::Value) }} else {{ [IO.File]::Move($tmp, $list) }} }} }} }} catch {{ try {{ if ($tmp) {{ [IO.File]::Delete($tmp) }} }} catch {{ }} }}"
     )])
@@ -267,7 +268,10 @@ pub struct OpenReply {
 
 fn refusal(kind: OpenErrorKind) -> OpenReply {
     let (status, body) = match kind {
-        OpenErrorKind::NotFound => (404, json!({"error": "Claude desktop profile was not found."})),
+        OpenErrorKind::NotFound => (
+            404,
+            json!({"error": "Claude desktop profile was not found."}),
+        ),
         OpenErrorKind::HistoryHeld => (
             409,
             json!({"error": CLAUDE_HISTORY_UNCONFIRMED_MESSAGE, "code": "history_unconfirmed"}),
@@ -276,9 +280,14 @@ fn refusal(kind: OpenErrorKind) -> OpenReply {
             409,
             json!({"error": "Claude desktop launcher is not configured for this platform."}),
         ),
-        OpenErrorKind::TransportTimeout => (504, json!({"error": "Claude desktop request timed out."})),
+        OpenErrorKind::TransportTimeout => {
+            (504, json!({"error": "Claude desktop request timed out."}))
+        }
         OpenErrorKind::Transport => (502, json!({"error": "Claude desktop request failed."})),
-        OpenErrorKind::Other => (500, json!({"error": "Claude account could not be opened safely."})),
+        OpenErrorKind::Other => (
+            500,
+            json!({"error": "Claude account could not be opened safely."}),
+        ),
     };
     OpenReply { status, body }
 }
@@ -342,7 +351,9 @@ impl ClaudeOpen {
             return Err(OpenErrorKind::NotFound);
         }
         let manifest = list_profiles(&self.ccs_dir).map_err(|_| OpenErrorKind::Other)?;
-        let found = manifest.iter().find(|entry| entry.id.as_deref() == Some(id));
+        let found = manifest
+            .iter()
+            .find(|entry| entry.id.as_deref() == Some(id));
         let profile = match found {
             Some(profile) => profile.clone(),
             None => {
@@ -426,11 +437,9 @@ impl ClaudeOpen {
                 (None, Some(existing.subscribe()))
             } else {
                 let now = now_ms();
-                if coalesce
-                    .recent
-                    .iter()
-                    .any(|(recent_key, at)| *recent_key == key && now.saturating_sub(*at) < RECENT_OPEN_MS)
-                {
+                if coalesce.recent.iter().any(|(recent_key, at)| {
+                    *recent_key == key && now.saturating_sub(*at) < RECENT_OPEN_MS
+                }) {
                     return Ok(());
                 }
                 let (sender, receiver) = watch::channel(None);
@@ -599,7 +608,12 @@ impl ClaudeOpen {
     /// The route flow: a click while its Open still runs joins it; the copy's own hold must
     /// not refuse it. A held refusal joins a running Open when there is one; a durable hold
     /// keeps its 409.
-    pub async fn open(self: &Arc<Self>, id: &str, platform: &str, respond_async: bool) -> OpenReply {
+    pub async fn open(
+        self: &Arc<Self>,
+        id: &str,
+        platform: &str,
+        respond_async: bool,
+    ) -> OpenReply {
         let scope = self.ccs_dir.to_string_lossy().to_string();
         let running = || self.operations.running(&scope, id, platform);
         let start_or_join = || async {
@@ -683,7 +697,8 @@ impl ClaudeOpen {
 
     /// "Clean up now": retention for every known profile on each of its platforms.
     pub async fn cleanup(&self) -> OpenReply {
-        match sync_service::cleanup_all_history_snapshots(&self.ccs_dir, self.remote.as_ref()).await {
+        match sync_service::cleanup_all_history_snapshots(&self.ccs_dir, self.remote.as_ref()).await
+        {
             Ok(total) => OpenReply {
                 status: 200,
                 body: total,

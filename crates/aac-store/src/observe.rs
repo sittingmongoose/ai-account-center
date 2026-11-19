@@ -24,8 +24,7 @@ static CREDENTIAL_SHAPE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:bearer[\t\n\x{000b}\x{000c}\r \x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}]|dca:|sk[-_]|eyJ[A-Za-z0-9_-]{8}|https?://|[{}]|access_token|refresh_token|client_secret)")
         .expect("static credential regex")
 });
-static CLEAR_SLUG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-z0-9_]{1,40}$").expect("static slug regex"));
+static CLEAR_SLUG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z0-9_]{1,40}$").expect("static slug regex"));
 static POOL_ID_SHAPE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$").expect("static pool regex"));
 static MODEL_ID_SHAPE: LazyLock<Regex> =
@@ -33,8 +32,7 @@ static MODEL_ID_SHAPE: LazyLock<Regex> =
 static TIMESTAMP_SHAPE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T").expect("static timestamp regex"));
 static COMPUTERS: LazyLock<Map<String, Value>> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../../web-dashboard/public/computers.json"))
-        .unwrap_or_default()
+    serde_json::from_str(include_str!("../../../web-dashboard/public/computers.json")).unwrap_or_default()
 });
 static DASHBOARD_IDS: LazyLock<Vec<String>> = LazyLock::new(|| {
     serde_json::from_str::<Value>(include_str!("../../../config/tables/providers.json"))
@@ -148,25 +146,34 @@ pub fn analytics_window(value: &Value) -> Option<Map<String, Value>> {
             }
         }
     }
-    let kind = window
-        .get("kind")
-        .and_then(Value::as_str)
-        .filter(|k| KINDS.contains(k));
+    let kind = window.get("kind").and_then(Value::as_str).filter(|k| KINDS.contains(k));
     let mut out = Map::new();
     out.insert("key".into(), Value::String(key));
     out.insert("label".into(), Value::String(label));
-    out.insert("usedPercent".into(), opt_number(numeric(window.get("usedPercent"), true)));
-    out.insert("remainingPercent".into(), opt_number(numeric(window.get("remainingPercent"), true)));
+    out.insert(
+        "usedPercent".into(),
+        opt_number(numeric(window.get("usedPercent"), true)),
+    );
+    out.insert(
+        "remainingPercent".into(),
+        opt_number(numeric(window.get("remainingPercent"), true)),
+    );
     out.insert(
         "resetAt".into(),
         analytics_timestamp(window.get("resetAt").unwrap_or(&Value::Null))
             .map(Value::String)
             .unwrap_or(Value::Null),
     );
-    out.insert("windowMinutes".into(), opt_number(numeric(window.get("windowMinutes"), false)));
+    out.insert(
+        "windowMinutes".into(),
+        opt_number(numeric(window.get("windowMinutes"), false)),
+    );
     out.insert("used".into(), opt_number(numeric(window.get("used"), false)));
     out.insert("limit".into(), opt_number(numeric(window.get("limit"), false)));
-    out.insert("unit".into(), text(window.get("unit"), 40).map(Value::String).unwrap_or(Value::Null));
+    out.insert(
+        "unit".into(),
+        text(window.get("unit"), 40).map(Value::String).unwrap_or(Value::Null),
+    );
     if let Some(kind) = kind {
         out.insert("kind".into(), Value::String(kind.to_owned()));
     }
@@ -241,7 +248,9 @@ pub fn account_identity(account: &Map<String, Value>) -> Option<String> {
         Some(Value::String(email)) => Some(email.as_str()),
         Some(_) => return None,
     };
-    AccountKey::derive(&provider, id, email).ok().map(|key| key.as_str().to_owned())
+    AccountKey::derive(&provider, id, email)
+        .ok()
+        .map(|key| key.as_str().to_owned())
 }
 
 /// The computer table's OS, as `helperPlatform` maps it (linux hosts answer as ubuntu).
@@ -310,12 +319,10 @@ fn stored_window(safe: &Map<String, Value>) -> Option<WindowObs> {
         pool_id: safe.get("poolId").and_then(Value::as_str).map(str::to_owned),
         pool_id_source: safe.get("poolIdSource").and_then(Value::as_str).map(str::to_owned),
         pool_label: safe.get("poolLabel").and_then(Value::as_str).map(str::to_owned),
-        model_ids: safe.get("modelIds").and_then(Value::as_array).map(|models| {
-            models
-                .iter()
-                .filter_map(|m| m.as_str().map(str::to_owned))
-                .collect()
-        }),
+        model_ids: safe
+            .get("modelIds")
+            .and_then(Value::as_array)
+            .map(|models| models.iter().filter_map(|m| m.as_str().map(str::to_owned)).collect()),
     })
 }
 
@@ -401,7 +408,9 @@ pub fn decode_observation(value: &Value) -> Option<DecodedObservation> {
     let observed_at = analytics_timestamp(record.get("observedAt").unwrap_or(&Value::Null))?;
     let identity = record.get("identity")?.as_str()?;
     if identity.len() != 64
-        || !identity.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        || !identity
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     {
         return None;
     }
@@ -433,11 +442,7 @@ pub fn decode_observation(value: &Value) -> Option<DecodedObservation> {
 }
 
 /// `storeObservationFromRecord`: one backfill observation of the JSON history.
-pub fn observation_from_record(
-    record: &DecodedObservation,
-    provider: &str,
-    import_ref: &str,
-) -> Option<Sampled> {
+pub fn observation_from_record(record: &DecodedObservation, provider: &str, import_ref: &str) -> Option<Sampled> {
     let sampled = ms(Some(&record.sampled_at))?;
     let observed = ms(Some(&record.observed_at))?;
     let windows: Vec<WindowObs> = record.windows.iter().filter_map(stored_window).collect();

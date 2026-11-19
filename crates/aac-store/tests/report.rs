@@ -30,11 +30,7 @@ fn numbers(value: &Value) -> Value {
 fn string_set(value: &Value) -> HashSet<String> {
     value
         .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
         .unwrap_or_default()
 }
 
@@ -72,8 +68,7 @@ fn passes_match_the_ts_builder() {
         let expected = numbers(&case["expected"]);
         assert_eq!(got, expected, "pass {}", case["name"].as_str().unwrap_or("?"));
         // The shaped reports deserialize into the typed contract the store ingests.
-        let typed = report::contract_reports(&report::build_activity_reports(&args))
-            .expect("contract reports");
+        let typed = report::contract_reports(&report::build_activity_reports(&args)).expect("contract reports");
         assert_eq!(typed.len(), states.len(), "pass {} report count", case["name"]);
     }
 }

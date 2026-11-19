@@ -4,15 +4,15 @@
 //! `bun tests/spec/share-read-parity.ts --regenerate`; the status-documents expectations are
 //! filled on the build host, where the aac-status native module the TS wrapper calls exists.
 
+use aac_files::read::Stat;
 use aac_status::share::catalog::{self, CatalogReader};
 use aac_status::share::quota::{self, QuotaReportReader};
 use aac_status::share::registry::PmMailRegistryReader;
 use aac_status::share::reports::{self, AgentReportsReader, Limits};
 use aac_status::share::status_docs::{self, StatusDocsReader};
-use aac_status::share::{js_text, Dirent, ReadError, ShareFs};
-use aac_files::read::Stat;
+use aac_status::share::{Dirent, ReadError, ShareFs, js_text};
 use serde::Deserialize;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -165,7 +165,9 @@ impl ShareFs for MemFs {
         if let Some(error) = injected(&self.errors, &file, "read") {
             return Err(ReadError::Io(error));
         }
-        let node = self.node(&file).ok_or_else(|| ReadError::Io(io::Error::from_raw_os_error(2)))?;
+        let node = self
+            .node(&file)
+            .ok_or_else(|| ReadError::Io(io::Error::from_raw_os_error(2)))?;
         match node.kind.as_str() {
             "file" => {
                 let bytes = node.content.as_deref().unwrap_or_default().as_bytes();
@@ -261,15 +263,47 @@ fn the_owned_readers_match_the_typescript_readers_step_for_step() {
         catalog.scan(&fs, step.now);
 
         let name = &step.name;
-        same(name, "reports", &step.expect.reports, js_text(&reports::state_json(&reports_reader.snapshot())));
-        same(name, "quota", &step.expect.quota, js_text(&quota::state_json(&quota.snapshot())));
-        assert_eq!(reports_changed, step.expect.reports_changed, "{name}: reports changed flag");
+        same(
+            name,
+            "reports",
+            &step.expect.reports,
+            js_text(&reports::state_json(&reports_reader.snapshot())),
+        );
+        same(
+            name,
+            "quota",
+            &step.expect.quota,
+            js_text(&quota::state_json(&quota.snapshot())),
+        );
+        assert_eq!(
+            reports_changed, step.expect.reports_changed,
+            "{name}: reports changed flag"
+        );
         assert_eq!(quota_changed, step.expect.quota_changed, "{name}: quota changed flag");
-        same(name, "registry", &js_text(&step.expect.registry), js_text(&registry_answer));
-        same(name, "catalog", &step.expect.catalog, js_text(&catalog::state_json(&catalog.snapshot())));
+        same(
+            name,
+            "registry",
+            &js_text(&step.expect.registry),
+            js_text(&registry_answer),
+        );
+        same(
+            name,
+            "catalog",
+            &step.expect.catalog,
+            js_text(&catalog::state_json(&catalog.snapshot())),
+        );
         if let Some(want) = &step.expect.docs {
-            assert_eq!(Some(docs_changed), step.expect.docs_changed, "{name}: docs changed flag");
-            same(name, "docs", want, js_text(&status_docs::state_json(&docs_reader.snapshot())));
+            assert_eq!(
+                Some(docs_changed),
+                step.expect.docs_changed,
+                "{name}: docs changed flag"
+            );
+            same(
+                name,
+                "docs",
+                want,
+                js_text(&status_docs::state_json(&docs_reader.snapshot())),
+            );
         }
     }
 }

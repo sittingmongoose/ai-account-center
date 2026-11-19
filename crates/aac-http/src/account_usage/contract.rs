@@ -638,12 +638,8 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
         reading.plan = plan.as_str().map(str::to_owned);
         reading.antigravity_plan = detail;
     } else if obj.get("antigravityPlan").is_some_and(Value::is_object) {
-        let (_plan, detail) = aac_views::antigravity::plan_at(
-            reading.plan.as_deref(),
-            sampled.as_ref(),
-            None,
-            now,
-        );
+        let (_plan, detail) =
+            aac_views::antigravity::plan_at(reading.plan.as_deref(), sampled.as_ref(), None, now);
         reading.antigravity_plan = detail;
     }
     Some(reading)

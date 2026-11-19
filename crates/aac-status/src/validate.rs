@@ -354,8 +354,7 @@ pub fn option_key(value: &str) -> bool {
         Some(first) if first.is_ascii_alphanumeric() => {}
         _ => return false,
     }
-    value.chars().count() <= 32
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    value.chars().count() <= 32 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Which rule a `<writer>--<local id>` id breaks, in fixed words, or None when it keeps them
@@ -433,8 +432,7 @@ pub fn is_pm_mail_name(value: Option<&Json>) -> bool {
         Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit() => {}
         _ => return false,
     }
-    value.chars().count() <= 64
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-'))
+    value.chars().count() <= 64 && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-'))
 }
 
 /// A relative path inside a writer's folder: plain segments, no `..`, no absolute or Windows

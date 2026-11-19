@@ -6,9 +6,11 @@ mod account_reads;
 #[cfg(unix)]
 pub mod account_usage;
 #[cfg(unix)]
-mod answers_owned;
-#[cfg(unix)]
 mod agent_transport;
+#[cfg(unix)]
+mod analytics_writers;
+#[cfg(unix)]
+mod answers_owned;
 pub mod antigravity_host;
 pub mod antigravity_probes;
 pub mod antigravity_quota;
@@ -32,8 +34,6 @@ mod collection_cache;
 mod dashboard_fed;
 #[cfg(unix)]
 pub mod dashboard_observations;
-#[cfg(unix)]
-mod analytics_writers;
 #[cfg(unix)]
 mod feed;
 #[cfg(unix)]
@@ -76,10 +76,10 @@ mod registered;
 mod reset_claims;
 #[cfg(unix)]
 mod reset_source_route;
-#[cfg(unix)]
-mod scoreboard_owned;
 #[cfg(all(unix, test))]
 mod runs_ingest_gate;
+#[cfg(unix)]
+mod scoreboard_owned;
 #[cfg(unix)]
 mod signins;
 #[cfg(unix)]

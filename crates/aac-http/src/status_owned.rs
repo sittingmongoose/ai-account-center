@@ -246,7 +246,6 @@ impl StatusOwned {
         })
     }
 
-
     /// The readers-check rows, when the R4 groups own that row: the status scan's rows with
     /// the pins the front door last pushed (`owned-pins`), written through the leased writer.
     fn flush_check(&self, reports: &AgentReportsState, docs: &StatusDocsState, now: u64) {

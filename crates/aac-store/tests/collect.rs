@@ -5,7 +5,7 @@
 //! captured, so this pins the aggregation arithmetic, not the models.dev registry.
 use aac_store::collect::{self, Pricing, PricingResolution, Rates};
 use aac_store::report::{self, ReportArgs};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 
 fn vectors() -> Value {
@@ -113,11 +113,20 @@ fn collection_matches_the_ts_aggregation() {
 
 #[test]
 fn provider_normalization_matches_the_alias_map() {
-    assert_eq!(collect::normalize_provider(Some("claude")).as_deref(), Some("anthropic"));
+    assert_eq!(
+        collect::normalize_provider(Some("claude")).as_deref(),
+        Some("anthropic")
+    );
     assert_eq!(collect::normalize_provider(Some("CODEX")).as_deref(), Some("openai"));
-    assert_eq!(collect::normalize_provider(Some("  Gemini ")).as_deref(), Some("google"));
+    assert_eq!(
+        collect::normalize_provider(Some("  Gemini ")).as_deref(),
+        Some("google")
+    );
     assert_eq!(collect::normalize_provider(Some("qwen")).as_deref(), Some("alibaba"));
-    assert_eq!(collect::normalize_provider(Some("anthropic")).as_deref(), Some("anthropic"));
+    assert_eq!(
+        collect::normalize_provider(Some("anthropic")).as_deref(),
+        Some("anthropic")
+    );
     assert_eq!(collect::normalize_provider(Some("")).as_deref(), None);
     assert_eq!(collect::normalize_provider(None).as_deref(), None);
 }

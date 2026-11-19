@@ -4,9 +4,9 @@
 //! the two-scan transient rule, the removal grace, and the scan's writer/card/byte limits.
 
 use super::{
-    Problem, ShareFs, TransientMisses, compare, folder_row_problem, is_missing, is_transient,
-    sha256_hex, share_local_path, showable, stat_key, MISSING_GRACE_MS, PERSISTENT_LISTING_ERROR,
-    PERSISTENT_SHARE_ERROR, SEQ_WENT_BACK,
+    MISSING_GRACE_MS, PERSISTENT_LISTING_ERROR, PERSISTENT_SHARE_ERROR, Problem, SEQ_WENT_BACK, ShareFs,
+    TransientMisses, compare, folder_row_problem, is_missing, is_transient, sha256_hex, share_local_path, showable,
+    stat_key,
 };
 use crate::validate::is_writer_name;
 use indexmap::IndexMap;
@@ -71,12 +71,7 @@ pub struct AgentReportsState {
 
 /// At most `limit` names: all of them when they fit, else those whose folder changed most
 /// recently (never read, 0, last), the tie in `localeCompare` order.
-fn newest_folders(
-    names: Vec<String>,
-    limit: usize,
-    fs: &dyn ShareFs,
-    dir: &Path,
-) -> Vec<String> {
+fn newest_folders(names: Vec<String>, limit: usize, fs: &dyn ShareFs, dir: &Path) -> Vec<String> {
     if names.len() <= limit {
         return names;
     }
@@ -134,7 +129,6 @@ impl AgentReportsReader {
     pub fn root(&self) -> &Path {
         &self.root
     }
-
 
     fn set_problem(
         &mut self,
@@ -359,14 +353,7 @@ impl AgentReportsReader {
             seen.insert(key.clone());
             if let Some(reason) = &reason {
                 let entry = self.entries.get(&key).cloned().expect("listed entry");
-                if self.set_problem(
-                    &key,
-                    entry.kind,
-                    &entry.writer,
-                    &folder_row_problem(reason),
-                    "",
-                    since,
-                ) {
+                if self.set_problem(&key, entry.kind, &entry.writer, &folder_row_problem(reason), "", since) {
                     changed = true;
                 }
             }
@@ -447,7 +434,16 @@ impl AgentReportsReader {
             let listed: HashSet<String> = match fs.list(&base) {
                 Ok(entries) => entries.into_iter().map(|entry| entry.name).collect(),
                 Err(error) => {
-                    if self.listing_failed(name, "", &error, &mut seen, &mut failed_listings, now, &mut folder_problems, &before) {
+                    if self.listing_failed(
+                        name,
+                        "",
+                        &error,
+                        &mut seen,
+                        &mut failed_listings,
+                        now,
+                        &mut folder_problems,
+                        &before,
+                    ) {
                         changed = true;
                     }
                     continue;
@@ -469,7 +465,16 @@ impl AgentReportsReader {
                 Ok(cards) => cards,
                 Err(error) => {
                     // A listing failure is not a withdrawal: keep the cards already known.
-                    if self.listing_failed(name, "cards/", &error, &mut seen, &mut failed_listings, now, &mut folder_problems, &before) {
+                    if self.listing_failed(
+                        name,
+                        "cards/",
+                        &error,
+                        &mut seen,
+                        &mut failed_listings,
+                        now,
+                        &mut folder_problems,
+                        &before,
+                    ) {
                         changed = true;
                     }
                     Vec::new()
@@ -623,21 +628,11 @@ impl AgentReportsReader {
         let mut next = Map::new();
         for given in paths {
             let local = share_local_path(&given, &self.root);
-            let mtime = local.and_then(|local| {
-                fs.stat(&local)
-                    .ok()
-                    .filter(|stat| stat.file)
-                    .map(|stat| stat.mtime_ms)
-            });
-            next.insert(
-                given,
-                mtime.map(|ms| Json::from(ms)).unwrap_or(Json::Null),
-            );
+            let mtime = local.and_then(|local| fs.stat(&local).ok().filter(|stat| stat.file).map(|stat| stat.mtime_ms));
+            next.insert(given, mtime.map(|ms| Json::from(ms)).unwrap_or(Json::Null));
         }
-        let changed = next.len() != self.boards.len()
-            || next
-                .iter()
-                .any(|(key, value)| self.boards.get(key) != Some(value));
+        let changed =
+            next.len() != self.boards.len() || next.iter().any(|(key, value)| self.boards.get(key) != Some(value));
         self.boards = next;
         changed
     }
@@ -668,15 +663,9 @@ impl AgentReportsReader {
     /// None when the share says the card is not there, the file does not pass the reader's
     /// rules, or it is older than a seq this reader has already read. An error when the
     /// share cannot say: that is not the card changing.
-    pub fn read_card_now(
-        &self,
-        fs: &dyn ShareFs,
-        card_id: &str,
-    ) -> Result<Option<(Json, String)>, std::io::Error> {
+    pub fn read_card_now(&self, fs: &dyn ShareFs, card_id: &str) -> Result<Option<(Json, String)>, std::io::Error> {
         // `cardId.slice(0, cardId.indexOf('--'))`: without a `--`, all but the last character.
-        let at = card_id
-            .find("--")
-            .unwrap_or_else(|| card_id.len().saturating_sub(1));
+        let at = card_id.find("--").unwrap_or_else(|| card_id.len().saturating_sub(1));
         let writer = &card_id[..at];
         if !is_writer_name(writer) {
             return Ok(None);
@@ -707,8 +696,7 @@ impl AgentReportsReader {
             Err(super::ReadError::OverCap) => return Ok(None),
             Err(super::ReadError::Io(error)) => return Err(error),
         };
-        let Ok((doc, sha256)) = super::report::parse_report_file("card", &bytes, writer, card_id)
-        else {
+        let Ok((doc, sha256)) = super::report::parse_report_file("card", &bytes, writer, card_id) else {
             return Ok(None);
         };
         let held = self
@@ -766,10 +754,7 @@ pub fn state_json(state: &AgentReportsState) -> Json {
                     out.insert("sha256".to_string(), Json::from(row.sha256.clone()));
                     out.insert("firstSeenAt".to_string(), Json::from(row.first_seen_at));
                     out.insert("writtenAtMs".to_string(), Json::from(row.written_at_ms));
-                    out.insert(
-                        "problem".to_string(),
-                        problem_json(row.problem.as_ref()),
-                    );
+                    out.insert("problem".to_string(), problem_json(row.problem.as_ref()));
                     Json::Object(out)
                 })
                 .collect(),

@@ -6,7 +6,7 @@
 //! private file: these are the reference's own mechanics, kept byte for byte (the one-file
 //! policy gate allowlists this module for that reason).
 
-use super::catalog::{parse_catalog_file, CATALOG_FILES};
+use super::catalog::{CATALOG_FILES, parse_catalog_file};
 use serde_json::Value as Json;
 use std::fs;
 use std::path::Path;
@@ -64,12 +64,7 @@ fn entry_ids(file: &Json, member: &str) -> Vec<String> {
             .unwrap_or_default(),
         "effortSuffixes" => file["effortSuffixes"]
             .as_array()
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(Json::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
+            .map(|rows| rows.iter().filter_map(Json::as_str).map(str::to_string).collect())
             .unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -134,9 +129,7 @@ fn member_span(text: &str, key: &str) -> Option<(usize, usize)> {
         i += 1;
     }
     match span {
-        Some((open, close)) if named == 1 && close != usize::MAX && close > open => {
-            Some((open, close))
-        }
+        Some((open, close)) if named == 1 && close != usize::MAX && close > open => Some((open, close)),
         _ => None,
     }
 }
@@ -146,12 +139,7 @@ fn member_span(text: &str, key: &str) -> Option<(usize, usize)> {
 /// byte already in `text` stays as it was (`appendToMember`).
 fn append_to_member(text: &str, span: (usize, usize), entries: &[NewEntry]) -> String {
     let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    let indented = |entry: &str, indent: &str| {
-        entry
-            .split('\n')
-            .collect::<Vec<_>>()
-            .join(&format!("{eol}{indent}"))
-    };
+    let indented = |entry: &str, indent: &str| entry.split('\n').collect::<Vec<_>>().join(&format!("{eol}{indent}"));
     let (open, close) = span;
     let inner = &text[open + 1..close];
     if inner.trim().is_empty() {
@@ -162,14 +150,16 @@ fn append_to_member(text: &str, span: (usize, usize), entries: &[NewEntry]) -> S
             .collect();
         let body = entries
             .iter()
-            .map(|entry| format!("{}{}", format!("{outer}  "), indented(&entry.wide, &format!("{outer}  "))))
+            .map(|entry| {
+                format!(
+                    "{}{}",
+                    format!("{outer}  "),
+                    indented(&entry.wide, &format!("{outer}  "))
+                )
+            })
             .collect::<Vec<_>>()
             .join(&format!(",{eol}"));
-        return format!(
-            "{}{eol}{body}{eol}{outer}{}",
-            &text[..open + 1],
-            &text[close..]
-        );
+        return format!("{}{eol}{body}{eol}{outer}{}", &text[..open + 1], &text[close..]);
     }
     let first = open + 1 + (inner.len() - inner.trim_start().len());
     let newline = text[..first].rfind('\n');
@@ -180,12 +170,7 @@ fn append_to_member(text: &str, span: (usize, usize), entries: &[NewEntry]) -> S
     let insert = match newline {
         Some(at) if at > open => entries
             .iter()
-            .map(|entry| {
-                format!(
-                    ",{eol}{}",
-                    indented(&entry.wide, &text[at + 1..first])
-                )
-            })
+            .map(|entry| format!(",{eol}{}", indented(&entry.wide, &text[at + 1..first])))
             .collect::<Vec<_>>()
             .join(""),
         _ => entries
@@ -220,9 +205,7 @@ fn missing_entries(member: &str, seed: &Json, have: &[String]) -> Vec<NewEntry> 
             .as_array()
             .map(|rows| {
                 rows.iter()
-                    .filter(|row| {
-                        row["model"].as_str().is_some_and(|model| !has(model))
-                    })
+                    .filter(|row| row["model"].as_str().is_some_and(|model| !has(model)))
                     .map(|row| NewEntry {
                         id: row["model"].as_str().unwrap_or_default().to_string(),
                         wide: serde_json::to_string_pretty(row).unwrap_or_default(),
@@ -237,11 +220,7 @@ fn missing_entries(member: &str, seed: &Json, have: &[String]) -> Vec<NewEntry> 
                 map.iter()
                     .filter(|(written, _)| !has(written))
                     .map(|(written, canonical)| {
-                        let entry = format!(
-                            "{}: {}",
-                            Json::from(written.clone()),
-                            canonical
-                        );
+                        let entry = format!("{}: {}", Json::from(written.clone()), canonical);
                         NewEntry {
                             id: written.clone(),
                             wide: entry.clone(),
@@ -270,9 +249,7 @@ fn appended_text(name: &str, share_text: &str, appends: &[(String, Vec<String>, 
         let next_ids = entry_ids(&parsed, member);
         let mut expected: Vec<String> = have.clone();
         expected.extend(entries.iter().map(|entry| entry.id.clone()));
-        if next_ids.len() != expected.len()
-            || next_ids.iter().any(|id| !expected.contains(id))
-        {
+        if next_ids.len() != expected.len() || next_ids.iter().any(|id| !expected.contains(id)) {
             return None;
         }
     }
@@ -363,18 +340,12 @@ fn append_missing(
                     return Ok(Outcome::NoAppends);
                 }
             };
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)?;
+            fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
             fs::write(&temp, next.as_bytes())?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(
-                    &temp,
-                    fs::Permissions::from_mode(found_mode & 0o777),
-                );
+                let _ = fs::set_permissions(&temp, fs::Permissions::from_mode(found_mode & 0o777));
             }
             #[cfg(not(unix))]
             let _ = found_mode;
@@ -469,8 +440,8 @@ pub fn seed_catalog(
                 .unwrap_or(0)
         ));
         let outcome = (|| -> Result<(), std::io::Error> {
-            let bytes = seed(name)
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no packaged seed"))?;
+            let bytes =
+                seed(name).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no packaged seed"))?;
             fs::write(&temp, bytes)?;
             #[cfg(unix)]
             {
@@ -502,7 +473,9 @@ pub fn seed_catalog(
 pub fn embedded_seed(name: &str) -> Option<&'static [u8]> {
     match name {
         "models.json" => Some(include_str!("../../../../docs/agent-reports/catalog/models.json").as_bytes()),
-        "model-aliases.json" => Some(include_str!("../../../../docs/agent-reports/catalog/model-aliases.json").as_bytes()),
+        "model-aliases.json" => {
+            Some(include_str!("../../../../docs/agent-reports/catalog/model-aliases.json").as_bytes())
+        }
         "task-types.json" => Some(include_str!("../../../../docs/agent-reports/catalog/task-types.json").as_bytes()),
         "measures.json" => Some(include_str!("../../../../docs/agent-reports/catalog/measures.json").as_bytes()),
         "uses.json" => Some(include_str!("../../../../docs/agent-reports/catalog/uses.json").as_bytes()),

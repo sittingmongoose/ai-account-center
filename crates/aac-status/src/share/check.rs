@@ -5,7 +5,7 @@
 //! writer. The write goes through the registry's leased writer (L2): the row moves to the
 //! service with the R4 groups, and TS's writer refuses it once it has.
 
-use super::{compare, Problem};
+use super::{Problem, compare};
 use crate::validate::is_writer_name;
 use aac_files::registry::{self, Owners, Role};
 use indexmap::IndexMap;
@@ -237,10 +237,7 @@ impl ReadersCheckWriter {
         }
         // Files refused with no good copy to keep: the row is the refusal itself. A row put
         // this call keeps its seq, sha and pin; an earlier scan's row never hides this one.
-        let problems = reports
-            .problems
-            .iter()
-            .chain(statuses.problems.iter());
+        let problems = reports.problems.iter().chain(statuses.problems.iter());
         for problem in problems {
             let Some((writer, rest)) = writer_and_file(&problem.file) else {
                 continue;
@@ -395,10 +392,7 @@ mod tests {
         assert_eq!(normalise_thread_id("t3-thread://x/ABC-123"), "abc-123");
         assert_eq!(normalise_thread_id("mcp:launch:abc-123"), "abc-123");
         assert_eq!(normalise_thread_id("%61bc-123"), "abc-123");
-        assert_eq!(
-            normalise_thread_id("mcp%3Alaunch%3Aabc-123"),
-            "abc-123"
-        );
+        assert_eq!(normalise_thread_id("mcp%3Alaunch%3Aabc-123"), "abc-123");
     }
 
     #[test]

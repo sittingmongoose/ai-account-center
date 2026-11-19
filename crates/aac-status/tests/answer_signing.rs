@@ -47,8 +47,7 @@ struct Corpus {
 
 #[test]
 fn the_rust_signer_matches_the_typescript_signer_case_for_case() {
-    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/spec/answer-signing.json");
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/spec/answer-signing.json");
     let text = std::fs::read_to_string(&file)
         .unwrap_or_else(|error| panic!("the case table is missing ({}): {error}", file.display()));
     let corpus: Corpus = serde_json::from_str(&text).expect("case table parses");
@@ -66,7 +65,10 @@ fn the_rust_signer_matches_the_typescript_signer_case_for_case() {
     std::fs::write(dir.path().join("answer-key.pem"), &corpus.private_pem).expect("key file");
     let key = load_or_create_answer_key(dir.path()).expect("key loads");
     assert_eq!(key.key_id, corpus.key_id, "key id from the SPKI DER");
-    assert_eq!(key.public_key_pem, corpus.public_key_pem, "public PEM as Node exports it");
+    assert_eq!(
+        key.public_key_pem, corpus.public_key_pem,
+        "public PEM as Node exports it"
+    );
 
     for case in &corpus.signed {
         let signed = sign_answer(&case.unsigned, &key);
@@ -104,9 +106,16 @@ fn the_rust_key_file_is_pkcs8_v1_as_node_writes_it() {
     let dir = tempfile::tempdir().expect("temp dir");
     let key = load_or_create_answer_key(dir.path()).expect("key created");
     let text = std::fs::read_to_string(dir.path().join("answer-key.pem")).expect("key file");
-    assert!(text.starts_with("-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEI"), "{text}");
+    assert!(
+        text.starts_with("-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEI"),
+        "{text}"
+    );
     assert!(text.ends_with("\n-----END PRIVATE KEY-----\n"), "{text}");
-    assert_eq!(text.len(), 119, "one 64-char base64 line, as Node exports a 48-byte DER");
+    assert_eq!(
+        text.len(),
+        119,
+        "one 64-char base64 line, as Node exports a 48-byte DER"
+    );
     // Loading it again gives the same key (no re-creation).
     let again = load_or_create_answer_key(dir.path()).expect("key loads");
     assert_eq!(again.key_id, key.key_id);
@@ -160,7 +169,19 @@ fn bun_imports_the_key_rust_writes() {
     assert_eq!(seen["runtime"], "bun");
     assert_eq!(seen["keyId"], key.key_id.as_str());
     assert_eq!(seen["publicKeyPem"], key.public_key_pem.as_str());
-    assert_eq!(seen["exportedPem"], written.as_str(), "Bun exports the same PKCS#8 bytes");
-    assert_eq!(seen["fileAfter"], written.as_str(), "TS left the key file as Rust wrote it");
-    assert_eq!(seen["entries"], serde_json::json!(["answer-key.pem"]), "nothing moved aside");
+    assert_eq!(
+        seen["exportedPem"],
+        written.as_str(),
+        "Bun exports the same PKCS#8 bytes"
+    );
+    assert_eq!(
+        seen["fileAfter"],
+        written.as_str(),
+        "TS left the key file as Rust wrote it"
+    );
+    assert_eq!(
+        seen["entries"],
+        serde_json::json!(["answer-key.pem"]),
+        "nothing moved aside"
+    );
 }

@@ -10,19 +10,19 @@
 
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
-use aac_status::model_identity::{normalize_model, AliasTable, Model};
-use aac_status::read_context::{Date, Presentation};
-use aac_status::share::catalog::{self, CatalogReader};
 use aac_files::registry::{Owners, Role};
-use aac_status::share::check::{ReadersCheckWriter, RunRow};
-use aac_status::share::Problem;
+use aac_status::model_identity::{AliasTable, Model, normalize_model};
+use aac_status::read_context::{Date, Presentation};
 use aac_status::share::NodeFs;
+use aac_status::share::Problem;
+use aac_status::share::catalog::{self, CatalogReader};
+use aac_status::share::check::{ReadersCheckWriter, RunRow};
 use aac_status::validate;
 use aac_views::decline::Decline;
 use aac_views::js_json::Writer;
 use indexmap::IndexMap;
 use serde::Deserialize;
-use serde_json::{json, Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -118,7 +118,11 @@ struct PreparedDocs {
 
 impl PreparedDocs {
     /// The newest positions under this facts generation, made once per id.
-    fn positions(&self, facts_id: &str, facts: &std::sync::Arc<Presentation>) -> Option<Arc<Vec<usize>>> {
+    fn positions(
+        &self,
+        facts_id: &str,
+        facts: &std::sync::Arc<Presentation>,
+    ) -> Option<Arc<Vec<usize>>> {
         let mut held = self.order.lock().unwrap_or_else(|p| p.into_inner());
         if let Some((id, positions)) = held.as_ref()
             && id == facts_id
@@ -126,7 +130,8 @@ impl PreparedDocs {
             return positions.clone();
         }
         let docs: Vec<&Json> = self.docs.iter().collect();
-        let positions = aac_status::read_scoreboard::newest_positions(&docs, facts.clone()).map(Arc::new);
+        let positions =
+            aac_status::read_scoreboard::newest_positions(&docs, facts.clone()).map(Arc::new);
         *held = Some((facts_id.to_string(), positions.clone()));
         positions
     }
@@ -155,7 +160,12 @@ struct HeldRuns {
 }
 
 impl HeldRuns {
-    fn new(key: (u64, String), rows: Vec<(u64, Json)>, problems: Vec<Json>, accepted: Option<Vec<Json>>) -> Self {
+    fn new(
+        key: (u64, String),
+        rows: Vec<(u64, Json)>,
+        problems: Vec<Json>,
+        accepted: Option<Vec<Json>>,
+    ) -> Self {
         let state_rows = rows
             .iter()
             .map(|(_, run)| {
@@ -229,7 +239,10 @@ struct Composing<'a> {
 
 impl Drop for Composing<'_> {
     fn drop(&mut self) {
-        self.set.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
+        self.set
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.key);
     }
 }
 
@@ -336,9 +349,14 @@ impl ScoreboardOwned {
                 *newest = held.key.0;
                 let made: Vec<RunRow>;
                 let rows: &[RunRow] = match &picked {
-                    None => held.accepted_rows.get_or_init(|| check_rows(held.accepted.as_deref().unwrap_or(&[]))),
+                    None => held
+                        .accepted_rows
+                        .get_or_init(|| check_rows(held.accepted.as_deref().unwrap_or(&[]))),
                     Some(picked) => {
-                        let state: Vec<&Json> = picked.iter().map(|&index| &held.state_rows[index]).collect();
+                        let state: Vec<&Json> = picked
+                            .iter()
+                            .map(|&index| &held.state_rows[index])
+                            .collect();
                         made = check_rows_of(&state);
                         &made
                     }
@@ -375,8 +393,8 @@ impl ScoreboardOwned {
     /// and the store records what passes.
     pub(crate) async fn ingest_pass(&self, force_full: bool) {
         let now = now_ms();
-        let full = force_full
-            || now.saturating_sub(self.last_full_at.load(Ordering::Relaxed)) >= FULL_MS;
+        let full =
+            force_full || now.saturating_sub(self.last_full_at.load(Ordering::Relaxed)) >= FULL_MS;
         let scan = match self
             .store
             .call(
@@ -410,7 +428,10 @@ impl ScoreboardOwned {
         };
         let (problems, more) = (request.problems, request.more);
         let generation = record["generation"].as_u64().unwrap_or(0);
-        let catalog_hash = record["catalogHash"].as_str().unwrap_or_default().to_string();
+        let catalog_hash = record["catalogHash"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let changed = {
             let mut pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
             let changed = pass.generation != generation || pass.catalog_hash != catalog_hash;
@@ -455,7 +476,10 @@ impl ScoreboardOwned {
         }
         // One unfiltered read of the snapshot, with the rows' cursors and the receipts.
         let full = self
-            .read_store(&json!({"includeReceipts": true, "includeCursors": true}), clock)
+            .read_store(
+                &json!({"includeReceipts": true, "includeCursors": true}),
+                clock,
+            )
             .await?;
         let rows = full
             .runs
@@ -484,7 +508,10 @@ impl ScoreboardOwned {
     /// The store's paged read of one query (see [`Self::read`] for the held snapshot).
     async fn read_store(&self, query: &Json, clock: Option<u64>) -> Result<CompletedRead, Decline> {
         let signature = json!([
-            query["fromMs"], query["toMs"], query["source"], query["taskType"],
+            query["fromMs"],
+            query["toMs"],
+            query["source"],
+            query["taskType"],
             query["reviewsOnly"].as_bool().unwrap_or(false),
         ])
         .to_string();
@@ -571,12 +598,18 @@ impl ScoreboardOwned {
     async fn runs_state(&self, query: &Json, clock: Option<u64>) -> Result<Json, Decline> {
         let held = self.held(clock).await?;
         let picked = held.pick(query);
-        self.state_of(&held, &picked, clock.unwrap_or_else(now_ms)).await
+        self.state_of(&held, &picked, clock.unwrap_or_else(now_ms))
+            .await
     }
 
     /// The runs state (`RunsStore.state`) of the held snapshot's `picked` rows: the receipts,
     /// the problems (refused files, the pass's, the snapshot's) and the rows, at `clock`.
-    async fn state_of(&self, held: &HeldRuns, picked: &[usize], clock: u64) -> Result<Json, Decline> {
+    async fn state_of(
+        &self,
+        held: &HeldRuns,
+        picked: &[usize],
+        clock: u64,
+    ) -> Result<Json, Decline> {
         self.state_with(held, picked, clock, true).await
     }
 
@@ -584,7 +617,11 @@ impl ScoreboardOwned {
     /// read that overlaps a write is used once and not held.
     async fn store_facts(&self) -> Arc<StoreFacts> {
         let epoch = self.store_epoch.load(Ordering::SeqCst);
-        if let Some((at, facts)) = self.store_facts.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
+        if let Some((at, facts)) = self
+            .store_facts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
             && *at == epoch
         {
             return facts.clone();
@@ -596,29 +633,49 @@ impl ScoreboardOwned {
                 .ok()
                 .and_then(|text| serde_json::from_str::<Json>(&text).ok())
         };
-        let refused = call("runsRefused").await.and_then(|value| value.as_array().cloned()).unwrap_or_default();
+        let refused = call("runsRefused")
+            .await
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
         let identity = call("runsIdentity").await.unwrap_or(Json::Null);
-        let status_runs = call("runsStatus").await.map(|status| status["runs"].clone()).unwrap_or(Json::Null);
+        let status_runs = call("runsStatus")
+            .await
+            .map(|status| status["runs"].clone())
+            .unwrap_or(Json::Null);
         let facts = Arc::new(StoreFacts {
             refused,
             identity,
             status_runs,
         });
         if self.store_epoch.load(Ordering::SeqCst) == epoch && epoch % 2 == 0 {
-            *self.store_facts.lock().unwrap_or_else(|p| p.into_inner()) = Some((epoch, facts.clone()));
+            *self.store_facts.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some((epoch, facts.clone()));
         }
         facts
     }
 
     /// [`Self::state_of`]; without `receipts` the state leaves out `accepted` (the composer
     /// never reads it; the readers-check rows take the held receipts directly).
-    async fn state_with(&self, held: &HeldRuns, picked: &[usize], clock: u64, receipts: bool) -> Result<Json, Decline> {
+    async fn state_with(
+        &self,
+        held: &HeldRuns,
+        picked: &[usize],
+        clock: u64,
+        receipts: bool,
+    ) -> Result<Json, Decline> {
         self.state_rows(held, picked, clock, receipts, true).await
     }
 
     /// [`Self::state_with`]; without `rows` the state's `runs` is empty (the composer takes the
     /// held rows by reference).
-    async fn state_rows(&self, held: &HeldRuns, picked: &[usize], clock: u64, receipts: bool, rows: bool) -> Result<Json, Decline> {
+    async fn state_rows(
+        &self,
+        held: &HeldRuns,
+        picked: &[usize],
+        clock: u64,
+        receipts: bool,
+        rows: bool,
+    ) -> Result<Json, Decline> {
         let store_facts = self.store_facts().await;
         let refused = &store_facts.refused;
         let safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
@@ -643,7 +700,11 @@ impl ScoreboardOwned {
         let runs: Vec<Json> = picked
             .iter()
             .map(|&index| {
-                writers.insert(held.rows[index].1["doc"]["writer"].as_str().unwrap_or_default());
+                writers.insert(
+                    held.rows[index].1["doc"]["writer"]
+                        .as_str()
+                        .unwrap_or_default(),
+                );
                 index
             })
             .collect::<Vec<usize>>()
@@ -653,7 +714,11 @@ impl ScoreboardOwned {
             .collect();
         // Built by moving the rows in (`json!` would serialize, a deep copy of every row).
         let writers = writers.len();
-        let state = if pass.state.is_empty() { "ok" } else { pass.state.as_str() };
+        let state = if pass.state.is_empty() {
+            "ok"
+        } else {
+            pass.state.as_str()
+        };
         let mut out = Map::new();
         out.insert("correctionsResolved".to_string(), Json::Bool(true));
         out.insert(
@@ -667,7 +732,10 @@ impl ScoreboardOwned {
         out.insert("scannedAt".to_string(), json!(clock));
         out.insert("runs".to_string(), Json::Array(runs));
         out.insert("writers".to_string(), json!(writers));
-        out.insert("skipped".to_string(), json!({"runFiles": 0, "writerFolders": 0}));
+        out.insert(
+            "skipped".to_string(),
+            json!({"runFiles": 0, "writerFolders": 0}),
+        );
         out.insert("problems".to_string(), Json::Array(problems));
         Ok(Json::Object(out))
     }
@@ -682,7 +750,11 @@ impl ScoreboardOwned {
     }
 
     /// Each doc's display model resolution over the held catalog.
-    fn normalized_doc_list<'d>(&self, docs: impl Iterator<Item = &'d Json>, catalog: &Json) -> Vec<Json> {
+    fn normalized_doc_list<'d>(
+        &self,
+        docs: impl Iterator<Item = &'d Json>,
+        catalog: &Json,
+    ) -> Vec<Json> {
         let models: Vec<Model<'_>> = catalog["models"]
             .as_array()
             .map(|rows| {
@@ -748,7 +820,8 @@ impl ScoreboardOwned {
             if id.is_empty() {
                 return doc.clone();
             }
-            let resolved = normalize_model(id, doc["model"]["effort"].as_str(), &models, Some(&table));
+            let resolved =
+                normalize_model(id, doc["model"]["effort"].as_str(), &models, Some(&table));
             let mut doc = doc.clone();
             doc["model"]["id"] = json!(resolved.id);
             doc["model"]["effort"] = json!(resolved.effort);
@@ -766,7 +839,8 @@ impl ScoreboardOwned {
         {
             return made.clone();
         }
-        let mut normalized = self.normalized_doc_list(held.rows.iter().map(|(_, row)| &row["doc"]), catalog);
+        let mut normalized =
+            self.normalized_doc_list(held.rows.iter().map(|(_, row)| &row["doc"]), catalog);
         for (doc, (_, row)) in normalized.iter_mut().zip(&held.rows) {
             if row["doc"]["review"].is_object() {
                 doc["review"] = row["doc"]["review"].clone();
@@ -777,7 +851,8 @@ impl ScoreboardOwned {
             .iter()
             .zip(&normalized)
             .map(|(row, doc)| {
-                aac_status::read_context::proto_named(row) || aac_status::read_context::proto_named(doc)
+                aac_status::read_context::proto_named(row)
+                    || aac_status::read_context::proto_named(doc)
             })
             .collect();
         let facts = held
@@ -845,7 +920,15 @@ impl ScoreboardOwned {
             query.insert("taskType".to_string(), json!(task_type));
         }
         let query = Json::Object(query);
-        let cache_key = json!([feed.from, feed.to, feed.source, feed.task_type, generation, catalog_hash]).to_string();
+        let cache_key = json!([
+            feed.from,
+            feed.to,
+            feed.source,
+            feed.task_type,
+            generation,
+            catalog_hash
+        ])
+        .to_string();
         let now = feed.now.max(0) as u64;
         // The 60 s view cache: a hit fills only cacheAgeSeconds, as the TS service does.
         {
@@ -868,7 +951,10 @@ impl ScoreboardOwned {
             if !composing.insert(cache_key.clone()) {
                 return Err(Decline::Busy);
             }
-            Composing { set: &self.composing, key: cache_key.clone() }
+            Composing {
+                set: &self.composing,
+                key: cache_key.clone(),
+            }
         };
         // The facts generation is pushed once per runs generation and shared by its requests;
         // parsed once per id. The request's own `now` comes from its header words.
@@ -885,7 +971,8 @@ impl ScoreboardOwned {
                 }
             }
         };
-        let now_date = Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Shape)?;
+        let now_date =
+            Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Shape)?;
         // The held snapshot answers every filter: the store is read once per generation.
         let held = self.held(Some(now)).await?;
         let picked = held.pick(&query);
@@ -916,12 +1003,16 @@ impl ScoreboardOwned {
         if picked.iter().any(|&index| prepared.proto[index]) {
             return Err(Decline::Unsupported);
         }
-        let rows: Vec<&Json> = picked.iter().map(|&index| &held.state_rows[index]).collect();
+        let rows: Vec<&Json> = picked
+            .iter()
+            .map(|&index| &held.state_rows[index])
+            .collect();
         let docs: Vec<&Json> = picked.iter().map(|&index| &prepared.docs[index]).collect();
         let row_facts: Vec<&aac_status::read_scoreboard::RowFacts> =
             picked.iter().map(|&index| &prepared.facts[index]).collect();
         let positions = prepared.positions(&feed.facts, &presentation);
-        let order: Option<Vec<usize>> = positions.map(|positions| picked.iter().map(|&index| positions[index]).collect());
+        let order: Option<Vec<usize>> =
+            positions.map(|positions| picked.iter().map(|&index| positions[index]).collect());
         let store_facts = self.store_facts().await;
         let identity = store_facts.identity.clone();
         let status_runs = store_facts.status_runs.clone();
@@ -933,11 +1024,7 @@ impl ScoreboardOwned {
                     .collect()
             })
             .unwrap_or_default();
-        let importing = self
-            .pass
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .more;
+        let importing = self.pass.lock().unwrap_or_else(|p| p.into_inner()).more;
         let seed_failures = self
             .seed_failures
             .lock()
@@ -1067,10 +1154,7 @@ pub(crate) fn ingest_request(
             }
         };
         let mut files: Vec<Json> = Vec::new();
-        let mut refused: Vec<Json> = scan["refused"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let mut refused: Vec<Json> = scan["refused"].as_array().cloned().unwrap_or_default();
         for row in scan["refused"].as_array().cloned().unwrap_or_default() {
             if let Some(path) = row["path"].as_str() {
                 remember(path);
@@ -1167,17 +1251,16 @@ pub(crate) fn ingest_request(
 
 /// The ingest loop: a pass now, again within a second while a backfill has more, then every
 /// two minutes; single-flight (the loop awaits each pass), until the service ends.
-pub(crate) async fn ingest_jobs(owner: Arc<ScoreboardOwned>, stop: Arc<std::sync::atomic::AtomicBool>) {
+pub(crate) async fn ingest_jobs(
+    owner: Arc<ScoreboardOwned>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
     owner.ingest_pass(false).await;
     loop {
         if stop.load(Ordering::Acquire) {
             return;
         }
-        let more = owner
-            .pass
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .more;
+        let more = owner.pass.lock().unwrap_or_else(|p| p.into_inner()).more;
         tokio::time::sleep(std::time::Duration::from_millis(if more {
             MORE_MS
         } else {
@@ -1192,7 +1275,10 @@ pub(crate) async fn ingest_jobs(owner: Arc<ScoreboardOwned>, stop: Arc<std::sync
 }
 
 /// The catalog loop: a scan now and every 30 s, until the service ends.
-pub(crate) async fn catalog_jobs(owner: Arc<ScoreboardOwned>, stop: Arc<std::sync::atomic::AtomicBool>) {
+pub(crate) async fn catalog_jobs(
+    owner: Arc<ScoreboardOwned>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
     owner.catalog_pass(now_ms());
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(30_000)).await;

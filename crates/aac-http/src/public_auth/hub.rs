@@ -339,11 +339,7 @@ impl Hub {
         let key = match key {
             Ok(Some(key)) => key,
             Ok(None) => {
-                return error(
-                    404,
-                    "usage_hub_off",
-                    "The usage hub is off.",
-                );
+                return error(404, "usage_hub_off", "The usage hub is off.");
             }
             Err(_) => return unreadable(),
         };

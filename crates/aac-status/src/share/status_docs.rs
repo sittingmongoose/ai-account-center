@@ -4,10 +4,10 @@
 //! validation the TypeScript wrapper ran before the native call, and the last-good-copy state.
 
 use super::{
-    Problem, ShareFs, TransientMisses, compare, folder_row_problem, is_missing, is_transient,
-    MISSING_GRACE_MS, PERSISTENT_LISTING_ERROR, SEQ_WENT_BACK,
+    MISSING_GRACE_MS, PERSISTENT_LISTING_ERROR, Problem, SEQ_WENT_BACK, ShareFs, TransientMisses, compare,
+    folder_row_problem, is_missing, is_transient,
 };
-use crate::status_doc::{parse_status_file, STATUS_SIZE_CAP};
+use crate::status_doc::{STATUS_SIZE_CAP, parse_status_file};
 use crate::validate::{is_writer_name, obj, share_json_from_bytes};
 use indexmap::IndexMap;
 use serde_json::{Value as Json, json};
@@ -127,20 +127,13 @@ impl StatusDocsReader {
                 since,
             },
         };
-        let changed = held.map(|h| (h.reason.as_str(), h.since))
-            != Some((problem.reason.as_str(), problem.since));
+        let changed = held.map(|h| (h.reason.as_str(), h.since)) != Some((problem.reason.as_str(), problem.since));
         entry.problem = Some(problem);
         entry.stat_key = None; // Retry the read next scan.
         changed
     }
 
-    fn record_problem(
-        &mut self,
-        rel: &str,
-        writer: &str,
-        reason: &str,
-        since: u64,
-    ) -> bool {
+    fn record_problem(&mut self, rel: &str, writer: &str, reason: &str, since: u64) -> bool {
         let changed = self
             .entries
             .get(rel)
@@ -156,10 +149,8 @@ impl StatusDocsReader {
                 entry.stat_key = None;
             }
             None => {
-                self.entries.insert(
-                    rel.to_string(),
-                    Entry::problem_only(writer, reason, since, since),
-                );
+                self.entries
+                    .insert(rel.to_string(), Entry::problem_only(writer, reason, since, since));
             }
         }
         changed
@@ -269,13 +260,7 @@ impl StatusDocsReader {
     }
 
     /// One writer's `status.json`. Resolves whether anything the view shows changed.
-    fn scan_writer(
-        &mut self,
-        fs: &dyn ShareFs,
-        writer: &str,
-        now: u64,
-        failed_listings: &mut HashSet<String>,
-    ) -> bool {
+    fn scan_writer(&mut self, fs: &dyn ShareFs, writer: &str, now: u64, failed_listings: &mut HashSet<String>) -> bool {
         let rel = format!("writers/{writer}/status.json");
         let folder = self.root.join("v1").join("writers").join(writer);
         let listed = match fs.list(&folder) {
@@ -328,15 +313,10 @@ impl StatusDocsReader {
                 if !stat.file {
                     problem = Some(("is not a regular file".to_string(), now));
                 } else {
-                    let key = format!(
-                        "{}:{}",
-                        aac_num::ecma::to_string(stat.mtime_ms),
-                        stat.size
-                    );
-                    let unchanged = self
-                        .entries
-                        .get(&rel)
-                        .is_some_and(|entry| entry.stat_key.as_deref() == Some(key.as_str()) && entry.problem.is_none());
+                    let key = format!("{}:{}", aac_num::ecma::to_string(stat.mtime_ms), stat.size);
+                    let unchanged = self.entries.get(&rel).is_some_and(|entry| {
+                        entry.stat_key.as_deref() == Some(key.as_str()) && entry.problem.is_none()
+                    });
                     if unchanged {
                         self.misses.remove(&rel);
                         return false;
@@ -431,10 +411,7 @@ impl StatusDocsReader {
                     *raced = true;
                     (String::new(), now)
                 }
-                Some(first) => (
-                    "could not be read on two scans in a row".to_string(),
-                    *first,
-                ),
+                Some(first) => ("could not be read on two scans in a row".to_string(), *first),
             }
         } else {
             ("could not be read".to_string(), now)
@@ -491,12 +468,7 @@ impl StatusDocsReader {
 }
 
 /// The agent-reports reader's newest-folder selection, over the writer folders.
-fn newest_folders(
-    names: Vec<String>,
-    limit: usize,
-    fs: &dyn ShareFs,
-    dir: &std::path::Path,
-) -> Vec<String> {
+fn newest_folders(names: Vec<String>, limit: usize, fs: &dyn ShareFs, dir: &std::path::Path) -> Vec<String> {
     if names.len() <= limit {
         return names;
     }

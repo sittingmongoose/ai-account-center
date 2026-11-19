@@ -913,7 +913,14 @@ pub fn compose_fed_parts(
 
 /// `order`: each row's position in the stable newest order (see [`newest_positions`]), when
 /// the caller holds it; otherwise the two sorts run here.
-fn compose_core(ctx: &Context, input: &V, rows: &[&V], docs: &[&V], facts: &[&RowFacts], order: Option<&[usize]>) -> Option<V> {
+fn compose_core(
+    ctx: &Context,
+    input: &V,
+    rows: &[&V],
+    docs: &[&V],
+    facts: &[&RowFacts],
+    order: Option<&[usize]>,
+) -> Option<V> {
     let now = input["now"].as_i64()?;
     let catalog = &input["catalog"];
     let raw: Vec<&V> = rows.iter().map(|r| &r["doc"]).collect();
@@ -925,7 +932,8 @@ fn compose_core(ctx: &Context, input: &V, rows: &[&V], docs: &[&V], facts: &[&Ro
     let known_models: HashSet<_> = models.iter().map(|m| s(&m["model"])).collect();
     let known_types: HashSet<_> = types.iter().map(|t| s(&t["id"])).collect();
     let (mut no_model, mut no_type, mut unknown_model, mut unknown_type) = (0, 0, 0, 0);
-    let (mut missing_types, mut missing_models, mut unknown_tally) = (Tally::default(), Tally::default(), Tally::default());
+    let (mut missing_types, mut missing_models, mut unknown_tally) =
+        (Tally::default(), Tally::default(), Tally::default());
     // The unscored runs, as (index into `raw`, reason): only the ten shown are built.
     let mut examples: Vec<(usize, &'static str)> = Vec::new();
     let mut by_type: HashMap<String, Vec<V>> = HashMap::new();
@@ -969,7 +977,8 @@ fn compose_core(ctx: &Context, input: &V, rows: &[&V], docs: &[&V], facts: &[&Ro
         })
         .count();
     let scan_limit = input["runs"]["skipped"]["runFiles"].as_u64().unwrap_or(0) as usize;
-    let (missing_types, missing_models, mut unknown_counts) = (missing_types.order, missing_models.order, unknown_tally.order);
+    let (missing_types, missing_models, mut unknown_counts) =
+        (missing_types.order, missing_models.order, unknown_tally.order);
     unknown_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| ctx.compare(&a.0, &b.0)));
     // `newest` reads `endedAt` and `id`, which each example copies from its run.
     let example_order = match order {

@@ -209,11 +209,7 @@ fn replay(scenario: &Json) -> usize {
             "submit" => {
                 let entries = op["entries"].as_array().unwrap();
                 let results = answers
-                    .submit_and_ring(
-                        entries,
-                        op["device"].as_str().unwrap(),
-                        op["clientSendId"].as_str(),
-                    )
+                    .submit_and_ring(entries, op["device"].as_str().unwrap(), op["clientSendId"].as_str())
                     .unwrap_or_else(|_| panic!("{at}: submit failed"));
                 assert_eq!(
                     js_stringify(&Json::Array(results)),

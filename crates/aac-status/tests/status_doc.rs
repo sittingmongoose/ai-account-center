@@ -194,7 +194,10 @@ fn there_is_exactly_one_secret_filter_and_it_is_the_rust_one() {
     let bytes = serde_json::to_vec(&doc).unwrap();
     // The one filter refuses it, on both read paths' entry points.
     let source = std::str::from_utf8(&bytes).unwrap();
-    assert_eq!(aac_status::secret_policy::find_secret_in(source, &doc), Some("an API key"));
+    assert_eq!(
+        aac_status::secret_policy::find_secret_in(source, &doc),
+        Some("an API key")
+    );
     let reason = aac_status::validate::share_json_from_bytes(&bytes, 64 * 1024).unwrap_err();
     assert_eq!(reason, "refused: it contains what looks like an API key");
     // The parse after it does not filter a second time.
@@ -205,8 +208,17 @@ fn there_is_exactly_one_secret_filter_and_it_is_the_rust_one() {
     let policy = std::fs::read_to_string(root.join("src/shared/secret-policy.ts")).unwrap();
     let typed = std::fs::read_to_string(root.join("src/web-server/status/typed-secrets.ts")).unwrap();
     for (file, text) in [("secret-policy.ts", &policy), ("typed-secrets.ts", &typed)] {
-        for implementation in ["new RegExp", "SECRET_PATTERNS", "NAMED_VALUE", "secretValue(", "embeddedJson("] {
-            assert!(!text.contains(implementation), "{file} holds a second filter ({implementation})");
+        for implementation in [
+            "new RegExp",
+            "SECRET_PATTERNS",
+            "NAMED_VALUE",
+            "secretValue(",
+            "embeddedJson(",
+        ] {
+            assert!(
+                !text.contains(implementation),
+                "{file} holds a second filter ({implementation})"
+            );
         }
     }
     assert!(policy.contains("native.findSecret(text)") && policy.contains("native.findSecretIn("));

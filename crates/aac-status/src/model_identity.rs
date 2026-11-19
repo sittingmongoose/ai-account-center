@@ -58,9 +58,8 @@ pub fn normalize_model(
         let first = found.next()?;
         found.next().is_none().then(|| first.model.to_string())
     };
-    let base_of = |written: &str| -> Option<String> {
-        exact(written).or_else(|| aliased(written)).or_else(|| bare(written))
-    };
+    let base_of =
+        |written: &str| -> Option<String> { exact(written).or_else(|| aliased(written)).or_else(|| bare(written)) };
     if let Some(direct) = base_of(id) {
         return Resolved {
             id: direct,

@@ -21,8 +21,8 @@ pub mod seed;
 pub mod status_docs;
 
 use aac_files::read::{Read, ReadPolicy, Stat};
-use sha2::{Digest, Sha256};
 use serde_json::Value as Json;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -32,12 +32,10 @@ use std::path::{Path, PathBuf};
 pub const MISSING_GRACE_MS: u64 = 120_000;
 
 /// A lower `seq` than the one already accepted: the older copy is ignored and said out loud.
-pub const SEQ_WENT_BACK: &str =
-    "its seq is lower than one already read, so this copy is ignored";
+pub const SEQ_WENT_BACK: &str = "its seq is lower than one already read, so this copy is ignored";
 
 /// A listed file whose ENOENT or ESTALE came back on the next scan too.
-pub const PERSISTENT_SHARE_ERROR: &str =
-    "could not be read on two scans in a row (the share says it is gone or stale)";
+pub const PERSISTENT_SHARE_ERROR: &str = "could not be read on two scans in a row (the share says it is gone or stale)";
 
 /// The same rule for a listed folder whose own listing fails twice in a row.
 pub const PERSISTENT_LISTING_ERROR: &str =
@@ -139,19 +137,17 @@ impl ShareFs for NodeFs {
             Read::Unreadable(kind) | Read::ChainUnreadable(kind) => {
                 Err(ReadError::Io(io::Error::new(kind, "share read failed")))
             }
-            Read::Foreign | Read::BadMode | Read::Unproved => Err(ReadError::Io(
-                io::Error::new(io::ErrorKind::PermissionDenied, "share read refused"),
-            )),
+            Read::Foreign | Read::BadMode | Read::Unproved => Err(ReadError::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "share read refused",
+            ))),
         }
     }
 }
 
 /// ENOENT or ENOTDIR: the name is not there (the readers' `isMissing`).
 pub fn is_missing(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-    ) || error.raw_os_error() == Some(20) // ENOTDIR where the kind does not say it
+    matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) || error.raw_os_error() == Some(20) // ENOTDIR where the kind does not say it
 }
 
 /// ENOENT or ESTALE: the share is between a delete and a rename, or holds a stale handle.
@@ -223,10 +219,7 @@ pub fn stat_key(stat: &Stat) -> String {
 
 /// Hex SHA-256 of the bytes as read (the good copies and the readers check quote it).
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// `JSON.stringify`'s text for a parsed value, for the change keys the TypeScript readers
@@ -242,9 +235,7 @@ pub fn js_text(value: &Json) -> String {
         Json::Object(map) => {
             let parts: Vec<String> = map
                 .iter()
-                .map(|(key, value)| {
-                    format!("{}:{}", Json::from(key.clone()), js_text(value))
-                })
+                .map(|(key, value)| format!("{}:{}", Json::from(key.clone()), js_text(value)))
                 .collect();
             format!("{{{}}}", parts.join(","))
         }

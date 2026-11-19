@@ -27,7 +27,11 @@ fn rust_owns_readers_check() -> (Vec<registry::Row>, Owners) {
     let files: BTreeMap<String, String> = rows
         .iter()
         .map(|row| {
-            let word = if row.id == "readers-check" { "rust-service" } else { row.owner.word() };
+            let word = if row.id == "readers-check" {
+                "rust-service"
+            } else {
+                row.owner.word()
+            };
             (row.id.clone(), word.to_owned())
         })
         .collect();
@@ -88,7 +92,10 @@ fn the_rust_check_files_equal_the_ts_ones() {
         let name = entry.file_name().into_string().unwrap();
         // The registry's file lease keeps `<name>.lock` beside each file; the TS writer has none.
         if name.ends_with(".json") {
-            got.insert(format!("v1/readers/aac/{name}"), std::fs::read_to_string(entry.path()).unwrap());
+            got.insert(
+                format!("v1/readers/aac/{name}"),
+                std::fs::read_to_string(entry.path()).unwrap(),
+            );
         }
     }
     let want: BTreeMap<String, String> = v["check"]

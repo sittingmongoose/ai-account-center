@@ -9,7 +9,7 @@
 //! arithmetic — a logged cost wins, the rest prices at list rates, and the fallback part is kept
 //! apart. [`Pricing`] is the fed-facts seam the host supplies and the parity vectors pin.
 use aac_num::ecma::{parse_instant, to_iso_string};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
@@ -107,10 +107,7 @@ pub trait Pricing {
 
 /// A label the store accepts: no control characters, trimmed, bounded; never empty for a model.
 fn label(value: &str, max: usize) -> String {
-    let cleaned: String = value
-        .chars()
-        .filter(|c| !(*c <= '\u{1f}' || *c == '\u{7f}'))
-        .collect();
+    let cleaned: String = value.chars().filter(|c| !(*c <= '\u{1f}' || *c == '\u{7f}')).collect();
     cleaned.trim().chars().take(max).collect()
 }
 
@@ -121,21 +118,13 @@ fn as_f64(value: &Value) -> f64 {
 /// `Math.floor(v)` for a finite number, else 0 (the collector's token counts are non-negative).
 fn floor_count(value: &Value) -> i64 {
     let n = as_f64(value);
-    if n.is_finite() {
-        n.floor() as i64
-    } else {
-        0
-    }
+    if n.is_finite() { n.floor() as i64 } else { 0 }
 }
 
 /// `count`: a finite positive number floored, else 0.
 fn count(value: &Value) -> u64 {
     let n = as_f64(value);
-    if n.is_finite() && n > 0.0 {
-        n.floor() as u64
-    } else {
-        0
-    }
+    if n.is_finite() && n > 0.0 { n.floor() as u64 } else { 0 }
 }
 
 fn iso(ms: i64) -> String {
@@ -256,17 +245,11 @@ pub fn cells_from_compact(
             continue;
         }
         let hour = iso(at.div_euclid(HOUR) * HOUR);
-        let provider = entry["provider"]
-            .as_str()
-            .or_else(|| entry["target"].as_str());
+        let provider = entry["provider"].as_str().or_else(|| entry["target"].as_str());
         let route = label(&normalize_provider(provider).unwrap_or_default(), MAX_ROUTE).to_lowercase();
         let model_raw = {
             let raw = label(entry["model"].as_str().unwrap_or(""), MAX_MODEL);
-            if raw.is_empty() {
-                "unknown".to_string()
-            } else {
-                raw
-            }
+            if raw.is_empty() { "unknown".to_string() } else { raw }
         };
         let raw = entry["sessionId"].as_str().unwrap_or("");
         let session_key = if raw.is_empty() {
@@ -316,14 +299,9 @@ pub fn cells_from_compact(
             count(&entry["cacheCreationTokens"]),
             count(&entry["cacheReadTokens"]),
         ];
-        for (field, value) in [
-            "inputTokens",
-            "outputTokens",
-            "cacheCreationTokens",
-            "cacheReadTokens",
-        ]
-        .iter()
-        .zip(tokens)
+        for (field, value) in ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens"]
+            .iter()
+            .zip(tokens)
         {
             let current = slot.cell[*field].as_u64().unwrap_or(0);
             slot.cell.insert((*field).into(), json!(current + value));
@@ -349,11 +327,7 @@ pub fn cells_from_compact(
         let resolved = cache
             .entry(key)
             .or_insert_with(|| {
-                let provider = if route.is_empty() {
-                    None
-                } else {
-                    Some(route.as_str())
-                };
+                let provider = if route.is_empty() { None } else { Some(route.as_str()) };
                 pricing.resolve(&model_raw, provider)
             })
             .clone();
@@ -445,11 +419,7 @@ pub fn aggregate_sessions(rows: &[Value], pricing: &dyn Pricing) -> Vec<Value> {
         if let Some(target) = row["target"].as_str() {
             bucket.target = Some(target.to_string());
         }
-        let provider = normalize_provider(
-            row["provider"]
-                .as_str()
-                .or_else(|| row["target"].as_str()),
-        );
+        let provider = normalize_provider(row["provider"].as_str().or_else(|| row["target"].as_str()));
         let model_name = row["model"].as_str().unwrap_or("").to_string();
         let model_key = format!("{}\u{0}{model_name}", provider.as_deref().unwrap_or(""));
         if !bucket.models.iter().any(|(k, _)| k == &model_key) {
@@ -471,12 +441,7 @@ pub fn aggregate_sessions(rows: &[Value], pricing: &dyn Pricing) -> Vec<Value> {
             .find(|(k, _)| k == &model_key)
             .expect("model")
             .1;
-        for field in [
-            "inputTokens",
-            "outputTokens",
-            "cacheCreationTokens",
-            "cacheReadTokens",
-        ] {
+        for field in ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens"] {
             let current = model[field].as_u64().unwrap_or(0);
             model.insert(field.into(), json!(current + count(&row[field])));
         }
@@ -485,14 +450,9 @@ pub fn aggregate_sessions(rows: &[Value], pricing: &dyn Pricing) -> Vec<Value> {
             *bucket.logged.entry(model_key.clone()).or_insert(0.0) += cost.unwrap_or(0.0);
         } else {
             let pending = bucket.unlogged.entry(model_key.clone()).or_insert([0.0; 4]);
-            for (i, field) in [
-                "inputTokens",
-                "outputTokens",
-                "cacheCreationTokens",
-                "cacheReadTokens",
-            ]
-            .iter()
-            .enumerate()
+            for (i, field) in ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens"]
+                .iter()
+                .enumerate()
             {
                 pending[i] += count(&row[field]) as f64;
             }
@@ -511,8 +471,7 @@ pub fn aggregate_sessions(rows: &[Value], pricing: &dyn Pricing) -> Vec<Value> {
                 .or_insert_with(|| pricing.resolve(&model_name, provider.as_deref()))
                 .clone();
             let rates = resolved.rates;
-            let [input, output, write, read] =
-                bucket.unlogged.get(&model_key).copied().unwrap_or([0.0; 4]);
+            let [input, output, write, read] = bucket.unlogged.get(&model_key).copied().unwrap_or([0.0; 4]);
             let listed = (input / 1_000_000.0) * rates.input
                 + (output / 1_000_000.0) * rates.output
                 + (write / 1_000_000.0) * rates.cache_creation

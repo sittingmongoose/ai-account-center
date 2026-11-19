@@ -97,12 +97,7 @@ fn records_match_the_ts_backfill() {
                 assert_eq!(Value::String(got.source.clone()), numbers(&want["source"]));
                 assert_eq!(Value::String(got.status.clone()), numbers(&want["status"]));
                 assert_eq!(Value::Bool(got.is_active), numbers(&want["isActive"]));
-                let windows = Value::Array(
-                    got.windows
-                        .iter()
-                        .map(|w| Value::Object(w.clone()))
-                        .collect(),
-                );
+                let windows = Value::Array(got.windows.iter().map(|w| Value::Object(w.clone())).collect());
                 assert_eq!(numbers(&windows), numbers(&want["windows"]), "record {index} windows");
             }
         }

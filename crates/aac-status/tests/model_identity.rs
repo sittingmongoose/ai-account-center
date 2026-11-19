@@ -2,7 +2,7 @@
 //! `tests/spec/model-identity-vectors.mjs` from the real TypeScript lookup over the
 //! packaged catalog): the Rust port must resolve every case the same way.
 
-use aac_status::model_identity::{normalize_model, AliasTable, Model};
+use aac_status::model_identity::{AliasTable, Model, normalize_model};
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 

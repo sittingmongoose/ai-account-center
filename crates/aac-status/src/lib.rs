@@ -15,10 +15,10 @@
 //! owned readers apply it themselves, as `jsonFromBytes` does; the NAPI `parseStatus` path
 //! still receives only reports TypeScript accepted, and the check is idempotent there.
 
-pub mod computers;
 pub mod answer_delivery;
 pub mod answer_signing;
 pub mod answers_engine;
+pub mod computers;
 pub mod error;
 pub mod http_views;
 pub mod model_identity;
@@ -39,10 +39,10 @@ pub mod reset_claude_source;
 pub mod reset_inventory;
 pub mod reset_source;
 pub mod scoreboard;
+pub mod share;
 pub mod spend;
 pub mod status_doc;
 pub mod validate;
-pub mod share;
 pub mod writer_lock;
 
 #[cfg(feature = "node")]

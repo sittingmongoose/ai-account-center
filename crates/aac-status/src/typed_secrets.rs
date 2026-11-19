@@ -34,7 +34,9 @@ impl Scan {
     fn each<'t>(&self, text: &'t str, mut visit: impl FnMut(&regex::Captures<'t>) -> bool) -> bool {
         let mut pos = 0;
         while pos <= text.len() {
-            let Some(caps) = self.re.captures_at(text, pos) else { break };
+            let Some(caps) = self.re.captures_at(text, pos) else {
+                break;
+            };
             let whole = caps.get(0).expect("match");
             let start = whole.start();
             let rejected = text[..start].chars().next_back().is_some_and(self.before);
@@ -44,7 +46,11 @@ impl Scan {
                 }
                 // `lastIndex`: the end of the part outside the lookahead (group `end`, empty).
                 let end = caps.name("end").map_or(whole.end(), |m| m.start());
-                pos = if end > start { end } else { start + next_len(text, start) };
+                pos = if end > start {
+                    end
+                } else {
+                    start + next_len(text, start)
+                };
             } else {
                 pos = start + next_len(text, start);
             }
@@ -198,15 +204,73 @@ fn secret_kind(name: &str, separator: &str, flag: bool) -> Option<Kind> {
     let spaced = r.camel.replace_all(stripped, "$1 $2").to_lowercase();
     let words: Vec<&str> = r.word_split.split(&spaced).filter(|w| !w.is_empty()).collect();
     const NOT_A_SECRET_NAME: &[&str] = &[
-        "file", "files", "path", "dir", "url", "uri", "name", "names", "count", "limit", "length", "len", "size",
-        "ttl", "type", "kind", "mode", "policy", "budget", "usage", "id", "ids", "at", "expires", "expiry", "env",
-        "hash", "hashes", "manager", "scanning", "scanner", "fingerprint", "min", "max", "ref", "refs", "endpoint",
+        "file",
+        "files",
+        "path",
+        "dir",
+        "url",
+        "uri",
+        "name",
+        "names",
+        "count",
+        "limit",
+        "length",
+        "len",
+        "size",
+        "ttl",
+        "type",
+        "kind",
+        "mode",
+        "policy",
+        "budget",
+        "usage",
+        "id",
+        "ids",
+        "at",
+        "expires",
+        "expiry",
+        "env",
+        "hash",
+        "hashes",
+        "manager",
+        "scanning",
+        "scanner",
+        "fingerprint",
+        "min",
+        "max",
+        "ref",
+        "refs",
+        "endpoint",
         "helper",
     ];
-    const KEY_PAIR: &[&str] = &["api", "access", "private", "secret", "signing", "encryption", "master", "deploy"];
+    const KEY_PAIR: &[&str] = &[
+        "api",
+        "access",
+        "private",
+        "secret",
+        "signing",
+        "encryption",
+        "master",
+        "deploy",
+    ];
     const LOOKUP_KEY: &[&str] = &[
-        "cache", "sort", "partition", "primary", "foreign", "idempotency", "dedupe", "dedup", "hot", "row", "shard",
-        "routing", "lookup", "map", "group", "index", "object",
+        "cache",
+        "sort",
+        "partition",
+        "primary",
+        "foreign",
+        "idempotency",
+        "dedupe",
+        "dedup",
+        "hot",
+        "row",
+        "shard",
+        "routing",
+        "lookup",
+        "map",
+        "group",
+        "index",
+        "object",
     ];
     let last = *words.last()?;
     if NOT_A_SECRET_NAME.contains(&last) {
@@ -291,7 +355,11 @@ fn secret_value(kind: Kind, raw: &str, separator: &str, more: bool) -> bool {
         let human = len >= 8 && r.letter.is_match(value) && r.digit.is_match(value);
         // a test or step name (`TestAuth_2`, `Step_2_Done`, `round_16_ok`) is no password; a password ends in a
         // digit or a symbol (`Summer_Winter_2026`)
-        let words = r.part_split.split(value).filter(|part| r.letters_only.is_match(part)).count();
+        let words = r
+            .part_split
+            .split(value)
+            .filter(|part| r.letters_only.is_match(part))
+            .count();
         let test_name = r.test_name.is_match(value) || (words >= 2 && r.ends_letter.is_match(value));
         if !human || test_name {
             return false;
@@ -321,7 +389,10 @@ pub fn find_typed_secret(text: &str) -> Option<&'static str> {
     let text = crate::secret_policy::regex_text(text);
     let text = text.as_ref();
     let named = r.named.each(text, |m| {
-        let separator: String = m[2].chars().filter(|c| !matches!(c, '\'' | '"' | ']') && !c.is_whitespace()).collect();
+        let separator: String = m[2]
+            .chars()
+            .filter(|c| !matches!(c, '\'' | '"' | ']') && !c.is_whitespace())
+            .collect();
         found(
             secret_kind(&m[1], &separator, false),
             m.get(4).map(|v| v.as_str()),
@@ -332,16 +403,26 @@ pub fn find_typed_secret(text: &str) -> Option<&'static str> {
     if named {
         return Some(FOUND);
     }
-    if r.setx.each(text, |m| found(secret_kind(&m[1], "=", false), m.get(3).map(|v| v.as_str()), "=", false)) {
+    if r.setx.each(text, |m| {
+        found(secret_kind(&m[1], "=", false), m.get(3).map(|v| v.as_str()), "=", false)
+    }) {
         return Some(FOUND);
     }
-    if r.flag.each(text, |m| found(secret_kind(&m[1], "=", true), m.get(3).map(|v| v.as_str()), "=", false)) {
+    if r.flag.each(text, |m| {
+        found(secret_kind(&m[1], "=", true), m.get(3).map(|v| v.as_str()), "=", false)
+    }) {
         return Some(FOUND);
     }
     for scan in [&r.auth, &r.url_password, &r.glued, &r.login, &r.user] {
         if scan.each(text, |m| {
             // The value is the last capture (after the empty `end` marker).
-            let value = m.iter().skip(1).flatten().filter(|g| !g.is_empty()).last().map(|g| g.as_str());
+            let value = m
+                .iter()
+                .skip(1)
+                .flatten()
+                .filter(|g| !g.is_empty())
+                .last()
+                .map(|g| g.as_str());
             found(Some(Kind::Password), value, "=", false)
         }) {
             return Some(FOUND);
