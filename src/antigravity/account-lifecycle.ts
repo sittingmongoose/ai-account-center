@@ -375,7 +375,8 @@ export class AntigravityAccountLifecycle {
             previous,
             credential,
             liveFingerprint,
-            save
+            save,
+            this.ccsDir()
           );
           if (outcome !== 'renewed') throw new AntigravityLifecycleError(outcome);
         } else {

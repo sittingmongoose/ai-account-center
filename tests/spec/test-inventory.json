@@ -253,6 +253,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/antigravity_renewal.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/app_update_routes.rs",
       "kind": "internal",
       "evidence": [],

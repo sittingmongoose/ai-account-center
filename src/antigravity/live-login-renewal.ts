@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { runLifecycleEffects } from '../web-server/services/lifecycle-effect-pipe';
 import {
   checkedIdentity,
   credentialFingerprint,
@@ -103,27 +104,50 @@ export async function renewLiveLogin(
   previous: SavedProfileSnapshot,
   credential: NativeCredential,
   expected: string,
-  save: () => void
+  save: () => void,
+  root: string
 ): Promise<'renewed' | 'write_failed' | 'live_login_not_updated'> {
-  save();
-  try {
-    await live.install(credential, expected);
-    return 'renewed';
-  } catch {
-    // Checked below: the exchange may have finished before the failure.
-  }
-  try {
-    if (credentialFingerprint(await live.read()) === credentialFingerprint(credential))
-      return 'renewed';
-  } catch {
-    // Unknown: treated as not installed.
-  }
-  try {
-    registry.restoreProfile(previous);
-  } catch {
-    return 'live_login_not_updated';
-  }
-  return 'write_failed';
+  let restored = false;
+  const renewed = await runLifecycleEffects(
+    root,
+    ['--antigravity-renew-login'],
+    ['save', 'install', 'verify', 'restore'] as const,
+    async (effect) => {
+      switch (effect) {
+        case 'save':
+          save();
+          return true;
+        case 'install':
+          try {
+            await live.install(credential, expected);
+            return true;
+          } catch {
+            return false;
+          }
+        case 'verify':
+          try {
+            return credentialFingerprint(await live.read()) === credentialFingerprint(credential);
+          } catch {
+            return false;
+          }
+        case 'restore':
+          try {
+            registry.restoreProfile(previous);
+            restored = true;
+          } catch {
+            restored = false;
+          }
+          return restored;
+      }
+    },
+    async (perform) => {
+      await perform('save');
+      if ((await perform('install')) || (await perform('verify'))) return true;
+      await perform('restore');
+      return false;
+    }
+  );
+  return renewed ? 'renewed' : restored ? 'write_failed' : 'live_login_not_updated';
 }
 
 /**
