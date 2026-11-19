@@ -12,7 +12,6 @@ mod native_reads;
 mod native_settings;
 // Merged before its first registering group: the host is exercised by the groups that land
 // on top of it (W-status-home first), so its API is not dead in the composed cut.
-#[cfg(unix)]
 #[allow(dead_code)]
 mod owner_host;
 mod policy;
@@ -394,30 +393,36 @@ pub(crate) async fn run_public_at(
         )
     };
     let hub = HubCache::default();
+    let composed = backend.is_some();
+    let owner_host =
+        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let (native, native_jobs) = if let Some(groups) = groups {
-        let (native, jobs) = native_owners::NativeOwners::start(
-            root.clone(),
-            groups,
-            hub.clone(),
-            auth.events(),
-            snapshot
-                .as_deref()
-                .and_then(std::path::Path::parent)
-                .map(std::path::Path::to_owned),
-        )?;
-        (Some(native), Some(jobs))
+        let worker_directory = snapshot
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_owned);
+        if let Some(host) = &owner_host {
+            host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
+            (host.public_owners(), None)
+        } else {
+            let (native, jobs) = native_owners::NativeOwners::start(
+                root.clone(),
+                groups,
+                hub.clone(),
+                auth.events(),
+                worker_directory,
+            )?;
+            (Some(native), Some(jobs))
+        }
     } else {
         (None, None)
     };
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
-    let composed = backend.is_some();
-    // The one owner host (AAC_RUST_CUT_NATIVE_ROUTES=on): the running service's descriptor, or
-    // the same service in-process for a worker-less cut boot. Groups register on top of it.
-    #[cfg(unix)]
-    let owner_host =
-        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let mut api = Router::new();
+    if let Some(host) = &owner_host {
+        api = host.mount(api);
+    }
     if cut || !composed {
         api = api.route(
             "/api/health",
@@ -472,7 +477,6 @@ pub(crate) async fn run_public_at(
         println!("aac-http public TLS listening on {address}");
     }
     println!("aac-http public listening on {address}");
-    #[cfg(unix)]
     if let Some(host) = &owner_host {
         let host = host.clone();
         tokio::spawn(async move { host.warm().await });
@@ -531,13 +535,12 @@ pub(crate) async fn run_public_at(
         feed.abort();
         let _ = feed.await;
     }
-    #[cfg(unix)]
+    if let Some(host) = &owner_host {
+        host.stop_public().await;
+    }
     if let Some(jobs) = native_jobs {
         jobs.stop().await;
     }
-    #[cfg(not(unix))]
-    let _ = native_jobs;
-    #[cfg(unix)]
     if let Some(host) = &owner_host {
         host.stop().await;
     }

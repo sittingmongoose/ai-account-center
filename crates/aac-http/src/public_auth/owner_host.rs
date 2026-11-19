@@ -14,8 +14,14 @@
 //! second copy of an owner. `AAC_RUST_CUT_NATIVE_ROUTES=off` makes the host absent, so the cut's
 //! shipped worker keeps answering.
 
+#[cfg(unix)]
 use super::service_link::{ServiceLink, ServiceReply};
-use serde_json::{Value as Json, json};
+use super::{HubCache, native_owners};
+use crate::public_auth::DashboardEvents;
+#[cfg(unix)]
+use serde_json::Value as Json;
+#[cfg(unix)]
+use serde_json::json;
 use std::{
     path::{Path, PathBuf},
     sync::Mutex,
@@ -29,10 +35,23 @@ pub(super) struct OwnerHost {
     /// Start the in-process service for a worker-less cut boot (`dashboard` with no backend).
     /// A composition fixture has a backend and its own supervisor: never a second service there.
     embed: bool,
+    #[cfg(unix)]
     link: Mutex<Option<ServiceLink>>,
+    #[cfg(unix)]
     embedded: tokio::sync::Mutex<Option<Embedded>>,
+    /// The in-process public owners this boot started (Accounts collection, Re-check,
+    /// App Updates, settings/writes). One set, whichever platform; the groups ask it directly.
+    public: Mutex<Option<PublicOwners>>,
+    /// Route groups registered on this host, mounted on the public API router before the guard.
+    routes: Mutex<Vec<(&'static str, axum::Router)>>,
 }
 
+struct PublicOwners {
+    native: native_owners::NativeOwners,
+    jobs: native_owners::Jobs,
+}
+
+#[cfg(unix)]
 struct Embedded {
     stop: tokio::sync::oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
@@ -44,6 +63,7 @@ pub(super) fn enabled() -> bool {
     std::env::var(SWITCH).as_deref() == Ok("on")
 }
 
+#[cfg(unix)]
 fn random_hex<const N: usize>() -> Option<String> {
     super::storage::random::<N>()
         .ok()
@@ -55,8 +75,12 @@ impl OwnerHost {
         std::sync::Arc::new(Self {
             root,
             embed,
+            #[cfg(unix)]
             link: Mutex::new(None),
+            #[cfg(unix)]
             embedded: tokio::sync::Mutex::new(None),
+            public: Mutex::new(None),
+            routes: Mutex::new(Vec::new()),
         })
     }
 
@@ -64,17 +88,80 @@ impl OwnerHost {
         &self.root
     }
 
+    /// Register one named in-process route group. Its router is merged into the public API
+    /// router before the dashboard guard, so its handlers see `Extension<DashboardAccess>`
+    /// (the verified principal and the origin/transport facts) exactly as `edges` does; the
+    /// group keeps its own admission sentences and encoding.
+    #[allow(dead_code)] // registered by the groups that land after the host
+    pub(super) fn register(&self, name: &'static str, routes: axum::Router) {
+        let mut held = self.routes.lock().unwrap_or_else(|p| p.into_inner());
+        if !held.iter().any(|(held, _)| *held == name) {
+            held.push((name, routes));
+        }
+    }
+
+    /// The registered groups, merged onto the API router.
+    pub(super) fn mount(&self, router: axum::Router) -> axum::Router {
+        let held = self.routes.lock().unwrap_or_else(|p| p.into_inner());
+        let mut router = router;
+        for (_, routes) in held.iter() {
+            router = router.merge(routes.clone());
+        }
+        router
+    }
+
+    /// Start the platform's public owners (the same `NativeOwners` the direct call site used).
+    /// The host is then the one place that owns them and their jobs.
+    pub(super) fn start_public(
+        &self,
+        groups: native_owners::Groups,
+        hub: HubCache,
+        events: DashboardEvents,
+        worker_directory: Option<PathBuf>,
+    ) -> std::io::Result<()> {
+        let (native, jobs) = native_owners::NativeOwners::start(
+            self.root.clone(),
+            groups,
+            hub,
+            events,
+            worker_directory,
+        )?;
+        *self.public.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(PublicOwners { native, jobs });
+        Ok(())
+    }
+
+    /// The public owners this boot started, for the routes that answer from them.
+    pub(super) fn public_owners(&self) -> Option<native_owners::NativeOwners> {
+        self.public
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|owners| owners.native.clone())
+    }
+
+    /// Stop the public owners' jobs (their collectors) at shutdown.
+    pub(super) async fn stop_public(&self) {
+        let owners = self.public.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(owners) = owners {
+            owners.jobs.stop().await;
+        }
+    }
+
+    #[cfg(unix)]
     fn cached(&self) -> Option<ServiceLink> {
         self.link.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
+    #[cfg(unix)]
     fn remember(&self, link: ServiceLink) -> ServiceLink {
         *self.link.lock().unwrap_or_else(|p| p.into_inner()) = Some(link.clone());
         link
     }
 
     /// The service's endpoint: a running one's descriptor, else the in-process service this
-    /// host starts for a worker-less boot.
+    /// host starts for a worker-less boot. Windows has no private service yet: no link there.
+    #[cfg(unix)]
     async fn link(&self) -> Option<ServiceLink> {
         if let Some(link) = self.cached() {
             return Some(link);
@@ -95,12 +182,20 @@ impl OwnerHost {
 
     /// Whether a private service (running or started here) answers this boot.
     pub(super) async fn ready(&self) -> bool {
-        self.link().await.is_some()
+        #[cfg(unix)]
+        {
+            self.link().await.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     /// One request a group already admitted: the service's reply, or `None` when no owner is
     /// reachable (the group answers its own decline). A failed hop drops the cached endpoint so
     /// the next request picks up a restarted service's descriptor.
+    #[cfg(unix)]
     pub(super) async fn request(
         &self,
         method: &str,
@@ -120,12 +215,17 @@ impl OwnerHost {
     /// Start the private service before the first request, so a cold boot never spends the
     /// first request's budget on the service's own start.
     pub(super) async fn warm(&self) {
-        let _ = self.link().await;
+        #[cfg(unix)]
+        {
+            let _ = self.link().await;
+        }
     }
 
     /// Stop the service this boot started, if any (a running one belongs to its own supervisor).
     pub(super) async fn stop(&self) {
+        #[cfg(unix)]
         let embedded = self.embedded.lock().await.take();
+        #[cfg(unix)]
         if let Some(embedded) = embedded {
             let _ = embedded.stop.send(());
             let _ = embedded.task.await;
@@ -136,6 +236,7 @@ impl OwnerHost {
     /// The boot the supervisor resolves for a plain cut: the store under `<ccs>/store` and the
     /// owned readers on the configured share roots. Only an explicitly configured boot starts
     /// here: without named share roots this would read the real share.
+    #[cfg(unix)]
     fn boot_config(&self) -> Option<Json> {
         if std::env::var("AAC_RUST_STORE").as_deref() == Ok("off") {
             return None;
@@ -172,6 +273,7 @@ impl OwnerHost {
         }))
     }
 
+    #[cfg(unix)]
     async fn start_embedded(&self) -> Option<Embedded> {
         let config = self.boot_config()?;
         let socket = PathBuf::from(config.get("socketPath")?.as_str()?);
@@ -214,6 +316,7 @@ impl OwnerHost {
 
 /// The supervisor's descriptor (`run/aac-http.json`), written the way the front door reads it:
 /// private 0600, replaced atomically, holding the boot's own id and secret.
+#[cfg(unix)]
 pub(super) fn write_descriptor(
     path: &Path,
     ccs: &Path,
@@ -242,7 +345,7 @@ pub(super) fn write_descriptor(
     std::fs::rename(&temporary, path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
