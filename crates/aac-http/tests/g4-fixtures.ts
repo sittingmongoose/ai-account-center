@@ -171,10 +171,10 @@ scenarios.push(runScenario('peer-429-hold', museTarget(''), template(), [
 const claudeTarget = (ccsDir: string): UsageFailoverTarget => ({ ccsDir, accountId: 'claude:default', provider: 'claude', binding: 'claude-binding', primarySources: [{ ...MAC, selector: 'default', claudeProfile: { id: 'default', email: 'same@example.test' } }], claudeDesktopCadence: true });
 const claudeTemplate = (): DashboardAccount => ({ ...template(), id: 'claude:default', provider: 'claude', providerLabel: 'Claude', platform: 'mac' });
 scenarios.push(runScenario('claude-429-cadence', claudeTarget(''), claudeTemplate(), [
-  { op: 'collect', now: BASE_TIME, inventories: { mac: [candidate({ identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 120 } } },
+  { op: 'collect', now: BASE_TIME, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 120 } } },
   { op: 'cooldownUntil', now: BASE_TIME + 1000, inventories: {}, collections: {} },
-  { op: 'collect', now: BASE_TIME + 400000, inventories: { mac: [candidate({ identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 60 } } },
-  { op: 'collect', now: BASE_TIME + 1000000, inventories: { mac: [candidate({ identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: okCollection(BASE_TIME + 1000000) } },
+  { op: 'collect', now: BASE_TIME + 400000, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 60 } } },
+  { op: 'collect', now: BASE_TIME + 1000000, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: okCollection(BASE_TIME + 1000000) } },
   { op: 'cooldownUntil', now: BASE_TIME + 1000001, inventories: {}, collections: {} },
 ]));
 
@@ -202,7 +202,7 @@ scenarios.push(runScenario('external-hold', museTarget(''), template(), [
 
 // 8. needs_sign_in on a Claude desktop primary adds the sign-in selector.
 scenarios.push(runScenario('claude-signin', claudeTarget(''), claudeTemplate(), [
-  { op: 'collect', now: BASE_TIME, inventories: { mac: [candidate({ identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'needs_sign_in' } }, signInNeeded: { mac: ['default'] } },
+  { op: 'collect', now: BASE_TIME, inventories: { mac: [candidate({ selectors: ['default'], identity: { kind: 'claude-oauth', key: 'd'.repeat(64) } })], windows: [], ubuntu: [] }, collections: { mac: { sample: null, failureCode: 'needs_sign_in' } }, signInNeeded: { mac: ['default'] } },
   { op: 'peek', now: BASE_TIME + 1000, inventories: {}, collections: {} },
 ]));
 
