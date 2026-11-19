@@ -42,6 +42,8 @@ mod lifecycle_effect_pipe;
 #[cfg(unix)]
 pub mod lifecycle_maintenance;
 #[cfg(unix)]
+pub mod lifecycle_policy;
+#[cfg(unix)]
 pub mod lifecycle_queue;
 pub mod lifecycle_recheck;
 pub mod lifecycle_signin;

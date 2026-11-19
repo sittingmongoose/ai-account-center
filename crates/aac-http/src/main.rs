@@ -1,7 +1,5 @@
 //! Private Unix service and the explicitly enabled public TCP front door.
 #[cfg(unix)]
-mod lifecycle_policy;
-#[cfg(unix)]
 mod provider_write;
 #[cfg(unix)]
 mod registered_write;
@@ -40,7 +38,7 @@ fn main() {
         )),
         Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
         Some("--lifecycle-queue") => std::process::exit(lifecycle_queue()),
-        Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
+        Some("--lifecycle-plan") => std::process::exit(aac_http::lifecycle_policy::run()),
         _ => {}
     }
     // Two async workers; at most 24 blocking threads: the 8 read, 4 store, 4 fed-Status and

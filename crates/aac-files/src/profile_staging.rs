@@ -258,3 +258,43 @@ pub fn remove_antigravity_marker(root: &Path, name: &str, dev: u64, ino: u64) ->
         _ => Ok(false),
     }
 }
+
+/// Sweep expired Antigravity marker drafts and markers whose holder is gone or
+/// silent. The caller supplies the provider's holder-record decoder.
+pub fn sweep_antigravity_markers(
+    root: &Path,
+    now_ms: u64,
+    mut holder_stale: impl FnMut(&[u8], u64) -> Option<bool>,
+) -> io::Result<usize> {
+    let parent = root.join("antigravity-signin");
+    owned_directory(&parent)?;
+    let mut count = 0;
+    for entry in fs::read_dir(&parent)?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let Some(modified) = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|time| u64::try_from(time.as_millis()).ok())
+        else {
+            continue;
+        };
+        let age = now_ms.saturating_sub(modified);
+        let stale = if marker_name(name) {
+            super::read_bounded(&entry.path(), 512)
+                .ok()
+                .and_then(|bytes| holder_stale(&bytes, modified))
+                .unwrap_or(age > 30 * 60_000)
+        } else {
+            marker_temp(name) && meta.is_file() && age > 60 * 60_000
+        };
+        if stale && remove_antigravity_marker(root, name, meta.dev(), meta.ino()).unwrap_or(false) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}

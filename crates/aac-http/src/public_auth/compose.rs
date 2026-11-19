@@ -43,6 +43,7 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/signin-jobs/:id/code", &["POST"]),
     ("/api/accounts/trash/:id/purge", &["POST"]),
     ("/api/accounts/trash/:id/restore", &["POST"]),
+    #[cfg(not(unix))]
     ("/api/accounts/:id", &["PATCH"]),
     ("/api/accounts/:id/key", &["PUT"]),
     #[cfg(not(unix))]

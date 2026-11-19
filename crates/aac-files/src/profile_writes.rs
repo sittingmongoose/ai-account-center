@@ -3,7 +3,7 @@ use super::{read_bounded, require_absolute, set_private, sync_directory};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 /// Upper bound for individual private provider inputs.
@@ -28,6 +28,86 @@ pub(crate) fn owned_directory(dir: &Path) -> io::Result<()> {
 
 /// An inherited descriptor of the exact marker created by the existing lock protocol.
 pub struct LegacyLease(File);
+
+/// A short maintenance transaction using the provider's existing directory lock.
+pub struct AntigravityMaintenanceLease {
+    marker: PathBuf,
+    lease: LegacyLease,
+    holder: File,
+}
+
+impl AntigravityMaintenanceLease {
+    /// Reserve the same name as the compatibility registry. A present marker
+    /// belongs to that transaction and must be left for its recovery path.
+    pub fn claim(root: &Path, holder_record: &[u8]) -> io::Result<Self> {
+        let parent = root.join("antigravity-profiles");
+        owned_directory(&parent)?;
+        if holder_record.is_empty() || holder_record.len() > 512 {
+            return Err(refused());
+        }
+        let marker = parent.join(".transaction-lock");
+        if fs::symlink_metadata(&marker).is_ok() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "transaction lock held",
+            ));
+        }
+        let stage = tempfile::Builder::new()
+            .prefix(".transaction-lock.new-")
+            .tempdir_in(&parent)?;
+        fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o700))?;
+        let mut holder = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(stage.path().join("holder.json"))?;
+        holder.write_all(holder_record)?;
+        holder.sync_all()?;
+        let directory = File::open(stage.path())?;
+        // Every legitimate hold has a holder file already staged, so rename
+        // cannot replace a competing holder's nonempty directory.
+        #[cfg(target_os = "linux")]
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            stage.path(),
+            rustix::fs::CWD,
+            &marker,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        #[cfg(not(target_os = "linux"))]
+        fs::rename(stage.path(), &marker)?;
+        let lease = LegacyLease::verify(&marker, directory)?;
+        Ok(Self {
+            marker,
+            lease,
+            holder,
+        })
+    }
+
+    /// The verified descriptor used by the existing provider writer.
+    pub fn writer(&self) -> &LegacyLease {
+        &self.lease
+    }
+}
+
+impl Drop for AntigravityMaintenanceLease {
+    fn drop(&mut self) {
+        let file = self.marker.join("holder.json");
+        if self.lease.check(&self.marker).is_ok()
+            && let Ok(held) = self.holder.metadata()
+            && let Ok(named) = fs::symlink_metadata(&file)
+            && named.is_file()
+            && named.dev() == held.dev()
+            && named.ino() == held.ino()
+        {
+            let _ =
+                rustix::fs::unlinkat(&self.lease.0, "holder.json", rustix::fs::AtFlags::empty());
+            if self.lease.check(&self.marker).is_ok() {
+                let _ = fs::remove_dir(&self.marker);
+            }
+        }
+    }
+}
 
 impl LegacyLease {
     /// Verify a marker name still identifies the caller's open directory.

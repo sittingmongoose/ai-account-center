@@ -86,92 +86,7 @@ impl State {
     }
 }
 
-/// The job error codes (`SignInJobErrorCode`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ErrorCode {
-    /// The sign-in tool is absent.
-    ToolMissing,
-    /// An unrecognized answer.
-    UnexpectedOutput,
-    /// Another account's sign-in.
-    IdentityMismatch,
-    /// An account already saved elsewhere.
-    DuplicateIdentity,
-    /// The overall timeout.
-    Timeout,
-    /// The CLI refused or its code expired.
-    ProviderDenied,
-    /// A safe save failed.
-    WriteFailed,
-    /// The live login could not be updated.
-    LiveLoginNotUpdated,
-    /// The server restarted.
-    ServerRestarted,
-}
-
-impl ErrorCode {
-    /// The wire word.
-    pub fn word(self) -> &'static str {
-        match self {
-            ErrorCode::ToolMissing => "tool_missing",
-            ErrorCode::UnexpectedOutput => "unexpected_output",
-            ErrorCode::IdentityMismatch => "identity_mismatch",
-            ErrorCode::DuplicateIdentity => "duplicate_identity",
-            ErrorCode::Timeout => "timeout",
-            ErrorCode::ProviderDenied => "provider_denied",
-            ErrorCode::WriteFailed => "write_failed",
-            ErrorCode::LiveLoginNotUpdated => "live_login_not_updated",
-            ErrorCode::ServerRestarted => "server_restarted",
-        }
-    }
-
-    /// The fixed message (`SIGNIN_ERROR_MESSAGES`).
-    pub fn message(self) -> &'static str {
-        match self {
-            ErrorCode::ToolMissing => "The sign-in tool is not installed on this server.",
-            ErrorCode::UnexpectedOutput => {
-                "The sign-in tool answered in a way this page does not recognize. Nothing was changed."
-            }
-            ErrorCode::IdentityMismatch => {
-                "That sign-in belongs to a different account. Nothing was changed."
-            }
-            ErrorCode::DuplicateIdentity => {
-                "That account is already saved in another profile. Nothing was changed."
-            }
-            ErrorCode::Timeout => "The sign-in was not finished in time. Nothing was changed.",
-            ErrorCode::ProviderDenied => {
-                "The sign-in was not approved, or its code expired. Nothing was changed."
-            }
-            ErrorCode::WriteFailed => {
-                "The new sign-in could not be saved safely. Nothing was changed."
-            }
-            ErrorCode::LiveLoginNotUpdated => {
-                "The new sign-in was saved to its profile, but the live login on this computer could not be updated. Sign in again."
-            }
-            ErrorCode::ServerRestarted => {
-                "The server restarted, so this sign-in stopped. Start it again."
-            }
-        }
-    }
-}
-
-/// The authorization code grammar (`SIGNIN_CODE_PATTERN`): URL-safe plus `/`, one line.
-pub fn valid_code(code: &str) -> bool {
-    !code.is_empty()
-        && code.len() <= 2048
-        && code
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._~/-".contains(&b))
-}
-
-/// The job id grammar (`JOB_ID_PATTERN`).
-pub fn valid_job_id(id: &str) -> bool {
-    id.len() == 20
-        && id.starts_with("job_")
-        && id[4..]
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-}
+pub use aac_core::signin::{ErrorCode, valid_code, valid_job_id};
 
 /// One session's spec: the flow metadata plus the prepared command (`SignInFlowSpec` minus
 /// the callbacks, which stay in TypeScript).
@@ -532,25 +447,7 @@ pub(crate) fn iso(ms: i64) -> String {
 
 /// The restarted placeholder (`RestartedSignInJob`): an id this boot never issued.
 pub fn restarted_placeholder(id: &str, now_ms: i64) -> Value {
-    json!({
-        "id": id,
-        "provider": Value::Null,
-        "kind": Value::Null,
-        "mode": Value::Null,
-        "accountId": Value::Null,
-        "profileName": Value::Null,
-        "platform": Value::Null,
-        "state": "failed",
-        "verification": Value::Null,
-        "result": Value::Null,
-        "error": {
-            "code": ErrorCode::ServerRestarted.word(),
-            "message": ErrorCode::ServerRestarted.message(),
-        },
-        "startedAt": Value::Null,
-        "updatedAt": iso(now_ms),
-        "expiresAt": Value::Null,
-    })
+    aac_core::signin::restarted_placeholder(id, Some(iso(now_ms)))
 }
 
 #[cfg(test)]

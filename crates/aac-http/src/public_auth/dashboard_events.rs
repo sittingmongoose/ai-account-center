@@ -137,16 +137,22 @@ pub struct SignInError {
     pub message: String,
 }
 
+impl DashboardSignInJob {
+    pub(super) fn redact(&mut self) {
+        self.verification = None;
+        if let Some(result) = &mut self.result {
+            result.email = None;
+        }
+    }
+}
+
 impl DashboardEvent {
     pub(super) fn for_client(mut self, session: bool, secure: bool) -> Option<Self> {
         if !session && !matches!(self, Self::AccountsChanged {}) {
             return None;
         }
         if !secure && let Self::SigninJob { job } = &mut self {
-            job.verification = None;
-            if let Some(result) = &mut job.result {
-                result.email = None;
-            }
+            job.redact();
         }
         Some(self)
     }

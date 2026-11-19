@@ -722,7 +722,7 @@ impl Agents {
         timeout_ms: u64,
         max_bytes: usize,
     ) -> Option<Value> {
-        if !matches!(verb, "claude-host" | "claude-history")
+        if !matches!(verb, "claude-host" | "claude-history" | "signin-session")
             || deadline_ms == 0
             || deadline_ms > aac_protocol::MAX_DEADLINE_MS
             || timeout_ms == 0

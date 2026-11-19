@@ -129,7 +129,7 @@ pub(crate) fn timestamp_shape(value: &str) -> bool {
         && bytes[bytes.len() - 1] == b'Z'
 }
 
-fn trash_id(id: &str) -> bool {
+pub(crate) fn trash_id(id: &str) -> bool {
     id.strip_prefix("tr_").is_some_and(|hex| {
         hex.len() == 16
             && hex
@@ -189,6 +189,10 @@ fn public_trash_entry(entry: &Value) -> Option<Value> {
 }
 
 pub(crate) fn list_trash(root: &Path) -> Option<Vec<Value>> {
+    read_trash(root)?.iter().map(public_trash_entry).collect()
+}
+
+pub(crate) fn read_trash(root: &Path) -> Option<Vec<Value>> {
     let row = registry::row("claude-trash").ok()?;
     let file = root.join(row.file(None).ok()?);
     let bytes = match read::private_store(&file, row.max_bytes) {
@@ -196,10 +200,20 @@ pub(crate) fn list_trash(root: &Path) -> Option<Vec<Value>> {
         Read::Bytes(bytes, _) => bytes,
         _ => return None,
     };
-    let doc: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).ok()?;
-    let entries = doc["entries"].as_array()?;
-    if doc["version"].as_f64() != Some(1.0) || entries.len() > 64 {
+    let mut document: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).ok()?;
+    if document["version"].as_f64() != Some(1.0) {
         return None;
     }
-    entries.iter().map(public_trash_entry).collect()
+    let entries = document["entries"].as_array_mut()?;
+    if entries.len() > 64 {
+        return None;
+    }
+    for entry in entries.iter_mut() {
+        public_trash_entry(entry)?;
+        // The reference drops unknown per-host metadata and keeps every launcher field.
+        for (_, detail) in entry["hosts"].as_object_mut()? {
+            *detail = json!({"trashName":detail["trashName"],"launcher":detail["launcher"]});
+        }
+    }
+    Some(std::mem::take(entries))
 }

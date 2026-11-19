@@ -238,10 +238,7 @@ impl DashboardAuth {
                 return settings.handle(&access, family, request).await;
             }
             if let Some(native) = &native_owners
-                && native_owners::NativeOwners::owns(
-                    request.method(),
-                    request.uri().path().trim_end_matches('/'),
-                )
+                && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 return native.handle(request).await;
             }

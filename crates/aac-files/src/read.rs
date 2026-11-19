@@ -288,6 +288,17 @@ pub fn private_store(path: &Path, cap: u64) -> Read {
     read(path, &ReadPolicy::capped(cap).mode(Mode::Private))
 }
 
+/// Check the key store's private, non-link directory before reading key metadata.
+pub fn private_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| {
+        #[cfg(unix)]
+        if meta.bits() & 0o077 != 0 {
+            return false;
+        }
+        meta.is_dir() && !meta.file_type().is_symlink()
+    })
+}
+
 /// Open one file under `policy` for a reader that needs only part of it (an archive header, a
 /// byte range). The cap applies to the metadata; the caller bounds what it reads.
 pub fn open(path: &Path, policy: &ReadPolicy) -> Result<(File, Meta), Read> {

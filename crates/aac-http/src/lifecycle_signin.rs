@@ -37,15 +37,6 @@ fn identifier(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
-fn job_id(id: &str) -> bool {
-    id.strip_prefix("job_").is_some_and(|part| {
-        part.len() == 16
-            && part
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
-}
-
 fn ascii(value: &str, cap: usize) -> bool {
     !value.is_empty() && value.len() <= cap && value.bytes().all(|b| (0x20..=0x7e).contains(&b))
 }
@@ -127,7 +118,7 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
         || !ascii(root, 1024)
         || !provider_matches
         || !account_matches
-        || !job_id(&start.job_id)
+        || !aac_core::signin::valid_job_id(&start.job_id)
         || start.front_door_pid == 0
         || !start.profile_name.as_deref().is_some_and(identifier)
         || !(100..=900_000).contains(&start.timeout_ms)
