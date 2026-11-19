@@ -29,12 +29,15 @@ export interface UnifiedConfig {
    * on (default-ready), and `off` restores D7's path. `groups.status`
    * (R2, `AAC_RUST_GROUP_STATUS` overrides): the same for Status, off by default. `store` (R3, `AAC_RUST_STORE` overrides)
    * hosts the history store when the mode is on. Off keeps the in-process store; exhausting the restart
-   * budget automatically falls back to it on the same files.
+   * budget automatically falls back to it on the same files. `homeProducer` (G17, `AAC_RUST_HOME_PRODUCER`
+   * overrides): the Rust service produces the Home feed generations from the raw inputs; off by default
+   * until the collection feeds it, and the TS producer stays available until the cut.
    */
   rustService?: {
     mode?: 'off' | 'shadow' | 'on';
     groups?: { home?: 'off' | 'on'; status?: 'off' | 'on' };
     store?: 'off' | 'on';
+    homeProducer?: 'off' | 'on';
   };
   /** Config version */
   version: number;

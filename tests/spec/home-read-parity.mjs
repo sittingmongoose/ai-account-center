@@ -52,6 +52,9 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
   NO_COLOR: '1',
 });
+// G17: --producer runs the fed path through the Rust feed producer (`PUT /internal/home-inputs`) instead of
+// the TS push; the corpus must stay byte-equal or declined through it too.
+if (args.includes('--producer')) process.env.AAC_RUST_HOME_PRODUCER = 'on';
 const MANIFEST = {
   version: 1,
   profiles: ['fixture-a', 'fixture-b', 'fixture-c'].map((id, i) => ({

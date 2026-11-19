@@ -12,15 +12,29 @@ import type { Request, Response } from 'express';
 import { homeFedService } from '../../../src/web-server/views/offered-views';
 import { createHomeViewRouter } from '../../../src/web-server/routes/home-view-routes';
 import { RustService } from '../../../src/web-server/rust-service';
+import type { RustHomeInputs } from '../../../src/web-server/rust-service-transport';
 import { withPassedResetsAt } from '../../../src/web-server/services/account-dashboard-service';
 import { ClaudeOpenOperations } from '../../../src/web-server/services/claude-open-operations';
 import type { AccountDashboard } from '../../../src/web-server/services/account-dashboard-types';
 import { passFaithful, resetEpochs } from '../../../src/web-server/views/home-feed';
-import { homeZoneAgrees, serverZoneFacts, HOME_ZONE_DAYS } from '../../../src/web-server/views/home-zone';
+import {
+  homeZoneAgrees,
+  serverZoneFacts,
+  HOME_ZONE_DAYS,
+} from '../../../src/web-server/views/home-zone';
 import type { HomeContext } from '../../../src/web-server/views/home-context';
 
 const NOW = Date.parse('2026-11-14T12:00:00.000Z');
-const PROBE = ['-1,234.57', '1.23M', '-$1,234.50', 'Jan 5, 12:07 AM', '1:07 PM', 'Mon, Jan 5, 1:07 PM', 'Jan 5', '_abB'];
+const PROBE = [
+  '-1,234.57',
+  '1.23M',
+  '-$1,234.50',
+  'Jan 5, 12:07 AM',
+  '1:07 PM',
+  'Mon, Jan 5, 1:07 PM',
+  'Jan 5',
+  '_abB',
+];
 const SCOPE = '/fixture/home/.ccs';
 const CONTEXT = {
   now: NOW,
@@ -74,15 +88,27 @@ class StandIn extends RustService {
   override feedBoot(scope: string): string | null {
     return scope === SCOPE ? this.boot : null;
   }
-  override async pushFeed(boot: string, source: string, generation: string, data: string, facts: string) {
+  override async pushFeed(
+    boot: string,
+    source: string,
+    generation: string,
+    data: string,
+    facts: string
+  ) {
     if (this.pushGate) await this.pushGate;
     if (boot !== this.boot || this.failPush) return null;
     this.puts.push({ source, generation, data, facts });
     const current = this.held.get(source);
-    if (!current || Number(generation) > Number(current.generation)) this.held.set(source, { generation, data, facts });
+    if (!current || Number(generation) > Number(current.generation))
+      this.held.set(source, { generation, data, facts });
     return this.held.get(source)?.generation ?? null;
   }
-  override async fedView(_req: Request, route: string, headers: Record<string, string>, view: string) {
+  override async fedView(
+    _req: Request,
+    route: string,
+    headers: Record<string, string>,
+    view: string
+  ) {
     expect(route).toBe('/api/views/home');
     this.views.push(headers);
     if (this.decline) {
@@ -95,8 +121,24 @@ class StandIn extends RustService {
       ['home-opens', feed.opens],
       ['home-antigravity', feed.antigravity],
     ];
-    if (named.some(([source, generation]) => this.held.get(source)?.generation !== generation)) return 'stale';
+    if (named.some(([source, generation]) => this.held.get(source)?.generation !== generation))
+      return 'stale';
     return { bytes: Buffer.from(RUST_BYTES), etag: ETAG, view };
+  }
+  inputsCalls: RustHomeInputs[] = [];
+  produceDecline: string | null = null;
+  override async putHomeInputs(inputs: RustHomeInputs) {
+    this.inputsCalls.push(inputs);
+    if (this.produceDecline) return { declined: this.produceDecline };
+    const ids = { dashboard: '900', opens: '901', antigravity: '902' };
+    this.held.set(`home-dashboard-${inputs.platform}-${inputs.secure ? 1 : 0}`, {
+      generation: ids.dashboard,
+      data: '',
+      facts: '',
+    });
+    this.held.set('home-opens', { generation: ids.opens, data: '', facts: '' });
+    this.held.set('home-antigravity', { generation: ids.antigravity, data: '', facts: '' });
+    return ids;
   }
 }
 
@@ -109,6 +151,7 @@ const saved = {
   auth: process.env.CCS_DASHBOARD_AUTH_ENABLED,
   home: process.env.AAC_RUST_HOME_VIEW,
   group: process.env.AAC_RUST_GROUP_HOME,
+  producer: process.env.AAC_RUST_HOME_PRODUCER,
 };
 
 function app(fed: boolean) {
@@ -122,8 +165,12 @@ function app(fed: boolean) {
   instance.use(
     '/api/views',
     createHomeViewRouter({
-      readHomeDashboard: async () => ({ dashboard: { ...structuredClone(dashboard), updatedAt }, now: NOW }),
-      getDashboard: async () => withPassedResetsAt({ ...structuredClone(dashboard), updatedAt }, NOW),
+      readHomeDashboard: async () => ({
+        dashboard: { ...structuredClone(dashboard), updatedAt },
+        now: NOW,
+      }),
+      getDashboard: async () =>
+        withPassedResetsAt({ ...structuredClone(dashboard), updatedAt }, NOW),
       readProfiles: async () => [{ id: 'p1', email: 'one@example.invalid', openOperation: null }],
       readInventory: async () => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
       runtimeInventory: async () => {
@@ -155,6 +202,7 @@ afterAll(() => {
     CCS_DASHBOARD_AUTH_ENABLED: saved.auth,
     AAC_RUST_HOME_VIEW: saved.home,
     AAC_RUST_GROUP_HOME: saved.group,
+    AAC_RUST_HOME_PRODUCER: saved.producer,
   }))
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -175,11 +223,14 @@ beforeEach(async () => {
   [plainServer, plainUrl] = await listen(app(false));
 });
 afterEach(async () => {
-  for (const server of [fedServer, plainServer]) await new Promise<void>((resolve) => server.close(() => resolve()));
+  for (const server of [fedServer, plainServer])
+    await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
 const get = (url: string, headers: Record<string, string> = {}) =>
-  fetch(`${url}/api/views/home`, { headers: { 'x-aac-home-context': header(CONTEXT), ...headers } });
+  fetch(`${url}/api/views/home`, {
+    headers: { 'x-aac-home-context': header(CONTEXT), ...headers },
+  });
 const sources = () => service.puts.map((p) => p.source);
 
 describe('GET /api/views/home, fed (R1)', () => {
@@ -206,10 +257,16 @@ describe('GET /api/views/home, fed (R1)', () => {
       opens: service.held.get('home-opens')?.generation,
       antigravity: service.held.get('home-antigravity')?.generation,
     });
-    expect(decodeURIComponent(service.views[2]['x-aac-home-context'])).toBe(JSON.stringify(CONTEXT));
+    expect(decodeURIComponent(service.views[2]['x-aac-home-context'])).toBe(
+      JSON.stringify(CONTEXT)
+    );
     // The pushed text is the change key: JSON.stringify of the offered answer before its pass, updatedAt blank.
     const pushed = service.puts[0];
-    const offered = { ...dashboard, updatedAt: '', server: { version: '0.0.0-test', commit: null, views: ['home'] } };
+    const offered = {
+      ...dashboard,
+      updatedAt: '',
+      server: { version: '0.0.0-test', commit: null, views: ['home'] },
+    };
     expect(pushed.data).toBe(JSON.stringify(offered));
     expect(JSON.parse(pushed.facts)).toEqual({
       order: { 'claude:a': 0 },
@@ -225,11 +282,20 @@ describe('GET /api/views/home, fed (R1)', () => {
   it('a changed source is pushed once with a newer generation; the others are not', async () => {
     await get(fedUrl);
     const first = service.held.get('home-dashboard-mac-1')?.generation;
-    (dashboard.accounts[0] as unknown as { windows: { usedPercent: number }[] }).windows[0].usedPercent = 41;
+    (
+      dashboard.accounts[0] as unknown as { windows: { usedPercent: number }[] }
+    ).windows[0].usedPercent = 41;
     expect((await get(fedUrl)).status).toBe(200);
     await get(fedUrl);
-    expect(sources()).toEqual(['home-dashboard-mac-1', 'home-opens', 'home-antigravity', 'home-dashboard-mac-1']);
-    expect(Number(service.held.get('home-dashboard-mac-1')?.generation)).toBeGreaterThan(Number(first));
+    expect(sources()).toEqual([
+      'home-dashboard-mac-1',
+      'home-opens',
+      'home-antigravity',
+      'home-dashboard-mac-1',
+    ]);
+    expect(Number(service.held.get('home-dashboard-mac-1')?.generation)).toBeGreaterThan(
+      Number(first)
+    );
     // Another platform is another generation.
     await fetch(`${fedUrl}/api/views/home?platform=windows`, {
       headers: { 'x-aac-home-context': header({ ...CONTEXT, platform: 'windows' }) },
@@ -267,7 +333,11 @@ describe('GET /api/views/home, fed (R1)', () => {
 
   it("a front door whose numbers are behind the service's (an earlier process fed it) moves past them", async () => {
     // Another front door pushed a generation far ahead; this one's push loses once, then lands.
-    service.held.set('home-dashboard-mac-1', { generation: '9000000000000000', data: '{}', facts: '{}' });
+    service.held.set('home-dashboard-mac-1', {
+      generation: '9000000000000000',
+      data: '{}',
+      facts: '{}',
+    });
     const first = await get(fedUrl);
     expect(await first.text()).toBe(await (await get(plainUrl)).text());
     const second = await get(fedUrl);
@@ -305,9 +375,14 @@ describe('GET /api/views/home, fed (R1)', () => {
       }
     };
     // A Rust decline (any named reason).
-    await check('locale', () => (service.decline = 'locale'), () => (service.decline = null));
+    await check(
+      'locale',
+      () => (service.decline = 'locale'),
+      () => (service.decline = null)
+    );
     // A push that does not land (new content, so the dashboard must be pushed).
-    const settings = (dashboard as unknown as { settings: { refreshIntervalSeconds: number } }).settings;
+    const settings = (dashboard as unknown as { settings: { refreshIntervalSeconds: number } })
+      .settings;
     await check(
       'feed',
       () => {
@@ -323,15 +398,24 @@ describe('GET /api/views/home, fed (R1)', () => {
       () => delete (dashboard as unknown as Record<string, unknown>).extra
     );
     // A page zone this engine does not agree with.
-    const shifted = { ...CONTEXT, zone: { ...CONTEXT.zone, offsets: CONTEXT.zone?.offsets.map(([s, m]) => [s, m + 60]) } };
+    const shifted = {
+      ...CONTEXT,
+      zone: { ...CONTEXT.zone, offsets: CONTEXT.zone?.offsets.map(([s, m]) => [s, m + 60]) },
+    };
     const zoned = await get(fedUrl, { 'x-aac-home-context': header(shifted) });
-    expect(await zoned.text()).toBe(await (await get(plainUrl, { 'x-aac-home-context': header(shifted) })).text());
+    expect(await zoned.text()).toBe(
+      await (await get(plainUrl, { 'x-aac-home-context': header(shifted) })).text()
+    );
     // The Antigravity runtime failed: today's handler reads it again.
     const was = inventory;
-    await check('input', () => (inventory = THROWS), () => (inventory = was));
-    const counted = (service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>)[
-      '/api/views/home'
-    ];
+    await check(
+      'input',
+      () => (inventory = THROWS),
+      () => (inventory = was)
+    );
+    const counted = (
+      service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>
+    )['/api/views/home'];
     for (const reason of ['locale', 'feed', 'input', 'zone'])
       expect(counted.unavailable[reason]).toBeGreaterThan(0);
     expect(reasons).toEqual(['locale', 'feed', 'input', 'input']);
@@ -347,8 +431,9 @@ describe('GET /api/views/home, fed (R1)', () => {
     expect(service.puts).toEqual([]);
   });
 
-  it('review L1: a window whose JSON is not what the pass reads goes to today\'s handler', async () => {
-    const window = () => (dashboard.accounts[0] as unknown as { windows: Record<string, unknown>[] }).windows[0];
+  it("review L1: a window whose JSON is not what the pass reads goes to today's handler", async () => {
+    const window = () =>
+      (dashboard.accounts[0] as unknown as { windows: Record<string, unknown>[] }).windows[0];
     for (const [name, setup] of [
       // TS's spread keeps this member's place; the JSON text has none, so Rust would append the flag.
       ['resetPassed: undefined', () => (window().resetPassed = undefined)],
@@ -364,9 +449,9 @@ describe('GET /api/views/home, fed (R1)', () => {
       expect([name, await reply.text()]).toEqual([name, await (await get(plainUrl)).text()]);
       expect(service.puts.length).toBe(before);
     }
-    const counted = (service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>)[
-      '/api/views/home'
-    ];
+    const counted = (
+      service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>
+    )['/api/views/home'];
     expect(counted.unavailable.input).toBe(3);
   });
 
@@ -378,9 +463,9 @@ describe('GET /api/views/home, fed (R1)', () => {
       expect(reply.headers.get('etag')).not.toBe(ETAG);
     }
     expect(sources()).not.toContain('home-dashboard-mac-1');
-    const counted = (service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>)[
-      '/api/views/home'
-    ];
+    const counted = (
+      service.diagnostics().routes as Record<string, { unavailable: Record<string, number> }>
+    )['/api/views/home'];
     expect(counted.unavailable.cap).toBe(3);
   });
 
@@ -419,9 +504,19 @@ describe('fed facts', () => {
   it('passFaithful admits plain JSON members and refuses what JSON would change or drop', () => {
     const with_ = (window: Record<string, unknown>, account: Record<string, unknown> = {}) =>
       ({ accounts: [{ ...account, windows: [window] }] }) as unknown as AccountDashboard;
-    expect(passFaithful(with_({ resetAt: '2026-11-14T11:00:00.000Z', sampledAt: null, resetPassed: false }))).toBe(true);
-    expect(passFaithful(with_({ resetAt: 5, sampledAt: 'x', resetPassed: true }, { sampledAt: 1 }))).toBe(true);
-    expect(passFaithful({ accounts: [null, 3, { windows: 'x' }, { windows: [null, 1, []] }] } as unknown as AccountDashboard)).toBe(true);
+    expect(
+      passFaithful(
+        with_({ resetAt: '2026-11-14T11:00:00.000Z', sampledAt: null, resetPassed: false })
+      )
+    ).toBe(true);
+    expect(
+      passFaithful(with_({ resetAt: 5, sampledAt: 'x', resetPassed: true }, { sampledAt: 1 }))
+    ).toBe(true);
+    expect(
+      passFaithful({
+        accounts: [null, 3, { windows: 'x' }, { windows: [null, 1, []] }],
+      } as unknown as AccountDashboard)
+    ).toBe(true);
     for (const bad of [
       with_({ resetPassed: undefined }),
       with_({ resetAt: new Date(0) }),
@@ -437,15 +532,21 @@ describe('fed facts', () => {
   it('the epochs are every string markPassedResets hands to Date.parse', () => {
     const epochs = resetEpochs({
       accounts: [
-        { sampledAt: '2026-11-14T10:00:00.000Z', windows: [{ resetAt: 'never' }, { sampledAt: 5 }, null, 3] },
+        {
+          sampledAt: '2026-11-14T10:00:00.000Z',
+          windows: [{ resetAt: 'never' }, { sampledAt: 5 }, null, 3],
+        },
         { windows: 'x' },
         null,
       ],
     } as unknown as AccountDashboard);
-    expect(epochs).toEqual({ '2026-11-14T10:00:00.000Z': Date.parse('2026-11-14T10:00:00.000Z'), never: null });
+    expect(epochs).toEqual({
+      '2026-11-14T10:00:00.000Z': Date.parse('2026-11-14T10:00:00.000Z'),
+      never: null,
+    });
   });
 
-  it("forScope is forProfile for every profile of the scope that has an Open", async () => {
+  it('forScope is forProfile for every profile of the scope that has an Open', async () => {
     let clock = 1000;
     const operations = new ClaudeOpenOperations({ now: () => clock });
     let finish: () => void = () => {};
@@ -465,14 +566,73 @@ describe('fed facts', () => {
   it("the server's zone facts are the page's own algorithm and window (view-model.mjs homeZoneFacts)", async () => {
     const page = await import('../../../web-dashboard/public/view-model.mjs');
     expect(page.HOME_ZONE_DAYS).toEqual(HOME_ZONE_DAYS);
-    for (const zone of ['America/New_York', 'Europe/London', 'Asia/Kolkata', 'Australia/Lord_Howe', 'UTC', 'Africa/Casablanca'])
+    for (const zone of [
+      'America/New_York',
+      'Europe/London',
+      'Asia/Kolkata',
+      'Australia/Lord_Howe',
+      'UTC',
+      'Africa/Casablanca',
+    ])
       for (const at of [NOW, Date.parse('2027-03-14T06:59:59.000Z')]) {
         const facts = serverZoneFacts(zone, at);
         expect(facts).toEqual(page.homeZoneFacts(zone, at));
-        expect(homeZoneAgrees({ ...CONTEXT, timeZone: zone, now: at, zone: facts } as HomeContext)).toBe(true);
-        const shifted = { ...facts!, offsets: facts!.offsets.map(([s, m]) => [s, m + 30] as [number, number]) };
-        expect(homeZoneAgrees({ ...CONTEXT, timeZone: zone, now: at, zone: shifted } as HomeContext)).toBe(false);
+        expect(
+          homeZoneAgrees({ ...CONTEXT, timeZone: zone, now: at, zone: facts } as HomeContext)
+        ).toBe(true);
+        const shifted = {
+          ...facts!,
+          offsets: facts!.offsets.map(([s, m]) => [s, m + 30] as [number, number]),
+        };
+        expect(
+          homeZoneAgrees({ ...CONTEXT, timeZone: zone, now: at, zone: shifted } as HomeContext)
+        ).toBe(false);
       }
     expect(serverZoneFacts('Mars/Olympus', NOW)).toBeNull();
+  });
+});
+
+describe('GET /api/views/home, the Rust feed producer (G17)', () => {
+  it('producer on: the raw inputs go to Rust, its generations name the fed request, and TS pushes nothing', async () => {
+    process.env.AAC_RUST_HOME_PRODUCER = 'on';
+    try {
+      const response = await get(fedUrl);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(RUST_BYTES);
+      expect(service.puts).toHaveLength(0);
+      expect(service.inputsCalls).toHaveLength(1);
+      const inputs = service.inputsCalls[0];
+      // The dashboard goes as read (updatedAt present, server.views offered), not as the blanked change key.
+      expect((inputs.dashboard as { updatedAt: string }).updatedAt).toBe(updatedAt);
+      expect((inputs.dashboard as { server: { views: string[] } }).server.views).toEqual(['home']);
+      expect(inputs.antigravity).toEqual(inventory);
+      expect(inputs.platform).toBe('mac');
+      const feed = JSON.parse(service.views[0]['x-aac-feed']) as Record<string, string>;
+      expect([feed.dashboard, feed.opens, feed.antigravity]).toEqual(['900', '901', '902']);
+    } finally {
+      delete process.env.AAC_RUST_HOME_PRODUCER;
+    }
+  });
+
+  it("a producer decline answers from today's handler", async () => {
+    process.env.AAC_RUST_HOME_PRODUCER = 'on';
+    service.produceDecline = 'collation';
+    try {
+      const response = await get(fedUrl);
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toBe(RUST_BYTES);
+      expect(service.inputsCalls).toHaveLength(1);
+      expect(service.views).toHaveLength(0);
+    } finally {
+      delete process.env.AAC_RUST_HOME_PRODUCER;
+    }
+  });
+
+  it('producer off (the default): the TS producer pushes as before', async () => {
+    delete process.env.AAC_RUST_HOME_PRODUCER;
+    const response = await get(fedUrl);
+    expect(response.status).toBe(200);
+    expect(service.inputsCalls).toHaveLength(0);
+    expect(sources()).toEqual(['home-dashboard-mac-1', 'home-opens', 'home-antigravity']);
   });
 });

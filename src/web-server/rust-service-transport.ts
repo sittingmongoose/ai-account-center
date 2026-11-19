@@ -248,6 +248,32 @@ export function pushRustFeedText(
   );
 }
 
+/** G17: the raw Home inputs the Rust feed producer produces generations from (the dashboard as read, this
+ * process's Open progress, the runtime's inventory). The reply names the three held generations, or a
+ * private 503 with the producer's named decline. */
+export interface RustHomeInputs {
+  platform: string;
+  secure: boolean;
+  dashboard: unknown;
+  opens: unknown;
+  antigravity: unknown;
+}
+
+export function putRustHomeInputs(
+  connection: RustConnection,
+  inputs: RustHomeInputs,
+  active: Set<http.ClientRequest>
+): Promise<RustReply> {
+  return requestRust(
+    connection,
+    '/internal/home-inputs',
+    FRONT_DOOR_PRINCIPAL,
+    active,
+    inputs,
+    'PUT'
+  );
+}
+
 /**
  * L1 events: the service's NDJSON stream (`facts-needed` today; `status-changed`,
  * `scoreboard-changed` and `store-health` as their groups move). Its own connection, no

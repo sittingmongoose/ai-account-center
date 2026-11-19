@@ -72,6 +72,8 @@ struct Shared {
     limits: Limits,
     identity: Identity,
     feeds: Feeds,
+    /// G17: the Home feed producer (the TS producer's work, in process).
+    producer: Arc<crate::home_producer::HomeProducer>,
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
@@ -457,6 +459,26 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // G17: the Home feed producer — the raw Home inputs in, the held generations named. The transitional
+        // socket form of the producer; lane I's collection feeds it in process once it owns the dashboard read.
+        Handler::HomeInputs => {
+            let Ok(bytes) = to_bytes(req.into_body(), INPUT_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(inputs) = serde_json::from_slice::<crate::home_producer::Inputs>(&bytes) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let feeds = shared.feeds.clone();
+            let producer = shared.producer.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || producer.produce(&feeds, &inputs))
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         // R1: Home from the fed generations (no body; the ids, clock and context in headers). Without
         // `x-aac-feed` it is D7's envelope read below, which TS's own handler still uses.
         Handler::Home if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
@@ -620,6 +642,7 @@ pub async fn serve(
         limits: Limits::new(),
         identity,
         feeds: Feeds::new(),
+        producer: Arc::new(crate::home_producer::HomeProducer::default()),
         agents,
         store: store.clone(),
     }));

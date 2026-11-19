@@ -24,6 +24,7 @@ pub(crate) enum Handler {
     StoreStatus,
     Feed,
     FeedStatus,
+    HomeInputs,
     Events,
     Agent,
     AgentControl,
@@ -45,6 +46,7 @@ impl Handler {
             "store-status" => Handler::StoreStatus,
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
+            "home-inputs" => Handler::HomeInputs,
             "events" => Handler::Events,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
@@ -204,7 +206,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     handler,
                     Handler::Agent | Handler::AgentControl | Handler::Store
                 ))
-            || (method == axum::http::Method::PUT && handler != Handler::Feed)
+            || (method == axum::http::Method::PUT
+                && !matches!(handler, Handler::Feed | Handler::HomeInputs))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)

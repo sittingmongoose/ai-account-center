@@ -658,6 +658,70 @@ fn home_is_answered_from_the_fed_generations_with_its_etag() -> Result<()> {
     Ok(())
 }
 
+// G17: the Rust feed producer produces the generations the TS producer pushes, and the fed answer from them
+// is byte-equal to the push path's. The facts here are the real `Date.parse` epochs of the fixture's strings
+// (Node: 2026-11-14T10:00Z = 1794650400000, 12:00Z = 1794657600000, 2026-11-20T12:00Z = 1795176000000).
+const PRODUCER_FACTS: &str = r#"{"order":{"claude:a":0},"epochs":{"2026-11-14T10:00:00.000Z":1794650400000,"2026-11-14T12:00:00.000Z":1794657600000,"2026-11-20T12:00:00.000Z":1795176000000}}"#;
+
+#[test]
+fn home_inputs_produce_the_generations_the_ts_producer_pushes() -> Result<()> {
+    let s = Service::start(&[])?;
+    write_manifest(&s)?;
+    let mut dashboard: Value = serde_json::from_str(FED_DASHBOARD)?;
+    dashboard["updatedAt"] = json!("2026-11-14T12:00:00.500Z");
+    let inputs = json!({
+        "platform": "mac", "secure": false,
+        "dashboard": dashboard,
+        "opens": serde_json::from_str::<Value>(FED_OPENS)?,
+        "antigravity": {"schemaVersion": 1, "hostId": "ubuntu", "profiles": []},
+    });
+    let body = inputs.to_string();
+    let reply = s.call("PUT", "/internal/home-inputs", &front_door(), Some(body.as_bytes()))?;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let ids = reply.json()?;
+    let produced = fed_home(
+        &s,
+        &feed([
+            ids["dashboard"].as_str().ok_or("dashboard id")?,
+            ids["opens"].as_str().ok_or("opens id")?,
+            ids["antigravity"].as_str().ok_or("antigravity id")?,
+        ]),
+        "",
+    )?;
+    assert_eq!(produced.status, 200, "{}", produced.body);
+    assert_eq!(produced.header("x-aac-view"), Some("home@3"));
+    // The push path with the same real facts answers the very bytes.
+    let t = Service::start(&[])?;
+    write_manifest(&t)?;
+    for (source, data, facts) in [
+        ("home-dashboard-mac-0", FED_DASHBOARD, PRODUCER_FACTS),
+        ("home-opens", FED_OPENS, "null"),
+        ("home-antigravity", FED_ANTIGRAVITY, "null"),
+    ] {
+        assert_eq!(push(&t, source, "1", data, facts)?.status, 200);
+    }
+    let pushed = fed_home(&t, &feed(["1", "1", "1"]), "")?;
+    assert_eq!(produced.body, pushed.body);
+    // Unchanged inputs name the same generations (the change keys hold).
+    let again = s.call("PUT", "/internal/home-inputs", &front_door(), Some(body.as_bytes()))?;
+    assert_eq!(again.json()?, ids);
+    // A sort word outside the proved collation domain declines; the TS producer answers there.
+    let mut bad = inputs.clone();
+    bad["dashboard"]["accounts"][0]["id"] = json!("claude:é");
+    let refused = s.call(
+        "PUT",
+        "/internal/home-inputs",
+        &front_door(),
+        Some(bad.to_string().as_bytes()),
+    )?;
+    assert_eq!(refused.status, 503);
+    assert_eq!(refused.header("x-aac-decline"), Some("collation"));
+    // Only the front door's service principal reaches the producer.
+    let forbidden = s.call("PUT", "/internal/home-inputs", &admin(), Some(body.as_bytes()))?;
+    assert_eq!(forbidden.status, 401);
+    Ok(())
+}
+
 #[test]
 fn home_declines_a_missing_stale_or_unproven_generation() -> Result<()> {
     let s = Service::start(&[])?;
