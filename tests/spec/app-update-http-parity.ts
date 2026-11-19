@@ -63,6 +63,19 @@ try {
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   const origin = `http://127.0.0.1:${address.port}`;
+  if (bridge) {
+    const response = await fetch(origin + '/api/app-updates/status', {
+      headers: { 'x-fixture-session': 'yes' },
+    });
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+    assert.equal(bridge.stats.served, 0, 'the Rust binary must have no job owner');
+    assert.equal(
+      bridge.stats.fallbacks,
+      1,
+      'the actual Rust route must report an unbound job owner'
+    );
+  }
   for (const probe of fixtures.cases) {
     current = probe;
     const response = await fetch(`${origin}/api/app-updates/${probe.op}`, {
@@ -74,7 +87,7 @@ try {
     assert.equal(response.headers.get('cache-control'), 'no-store');
   }
   if (bridge) {
-    assert.equal(bridge.stats.fallbacks, fixtures.cases.length);
+    assert.equal(bridge.stats.fallbacks, fixtures.cases.length + 1);
     assert.equal(bridge.stats.served, 0);
     const headers = { origin, 'x-fixture-session': 'yes', 'content-type': 'application/json' };
     const version = startCalls;
@@ -84,7 +97,7 @@ try {
       body: '{}',
     });
     assert.equal(invalid.status, 400);
-    assert.equal(bridge.stats.fallbacks, fixtures.cases.length);
+    assert.equal(bridge.stats.fallbacks, fixtures.cases.length + 1);
     bridge.stop();
     const unavailable = await fetch(origin + '/api/app-updates/start', {
       method: 'POST',

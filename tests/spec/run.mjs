@@ -42,7 +42,7 @@ for (const [program, args] of [
     'bun',
     [
       'tests/spec/app-update-http-parity.ts',
-      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? ['--rust-unbound'] : []),
+      ...(process.env.AAC_SPEC_APP_UPDATES_UNBOUND === '1' ? ['--rust-unbound'] : []),
     ],
   ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
