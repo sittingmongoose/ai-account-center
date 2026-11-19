@@ -1,4 +1,4 @@
-//! Quota collection and app updates share the public service's boot and L5 pool.
+//! Quota collection and lifecycle share the public service's boot and L5 pool.
 use super::{
     DashboardAccess, DashboardEvent, DashboardEvents, DashboardPrincipal, HubCache, Reply,
 };
@@ -11,11 +11,6 @@ use crate::{
     collection::Collection,
     limits::Limits,
     table::Pool,
-};
-#[cfg(unix)]
-use crate::{
-    app_update_routes::{BoundJobs, LaneHJobs, Operation},
-    app_updates::AppUpdates,
 };
 use aac_files::registry::{self, Owners, Role};
 use aac_providers::ProviderId;
@@ -51,7 +46,6 @@ pub(super) struct Groups {
     pub(super) collection: bool,
     pub(super) lifecycle: bool,
     writes: bool,
-    app_updates: bool,
     home: bool,
     analytics_writers: bool,
     store: bool,
@@ -80,7 +74,6 @@ impl Groups {
                 && on("analytics", "AAC_RUST_GROUP_ANALYTICS"),
             collection: on("collection", "AAC_RUST_GROUP_COLLECTION"),
             writes: on("writes", "AAC_RUST_GROUP_WRITES"),
-            app_updates: on("app-updates", "AAC_RUST_GROUP_APP_UPDATES"),
             home: on("home", "AAC_RUST_GROUP_HOME")
                 || std::env::var("AAC_RUST_HOME_VIEW").as_deref() == Ok("on"),
         }
@@ -97,8 +90,6 @@ pub(crate) struct NativeOwners {
     events: DashboardEvents,
     usage: Option<Arc<Usage>>,
     lifecycle_usage: Option<LifecycleUsage>,
-    #[cfg(unix)]
-    apps: Option<Arc<BoundJobs>>,
     writes: bool,
     limits: Limits,
 }
@@ -182,22 +173,6 @@ impl NativeOwners {
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
         let agents = Arc::new(Agents::with_default(root.clone(), true));
-        #[cfg(unix)]
-        let apps = groups.app_updates.then(|| {
-            #[cfg(feature = "parity-fixtures")]
-            if std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
-                return Arc::new(BoundJobs::new(Arc::new(crate::app_update_routes::M0Jobs)));
-            }
-            let events = events.clone();
-            let owner = AppUpdates::with_events(
-                root.clone(),
-                agents.clone(),
-                Some(Box::new(move |event| {
-                    events.publish(event);
-                })),
-            );
-            Arc::new(BoundJobs::new(Arc::new(LaneHJobs(owner))))
-        });
         let cancel = CancellationToken::new();
         let mut jobs = Jobs {
             cancel: cancel.clone(),
@@ -304,8 +279,6 @@ impl NativeOwners {
                     antigravity: usage.antigravity.clone(),
                 }),
                 usage,
-                #[cfg(unix)]
-                apps,
                 writes: groups.writes,
                 limits: Limits::new(),
             },
@@ -385,7 +358,6 @@ impl NativeOwners {
                     producer,
                     antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
                 }),
-                apps: None,
                 writes: true,
                 limits: Limits::new(),
             },
@@ -444,7 +416,6 @@ impl NativeOwners {
             || lifecycle_open::route(method, path).is_some()
             || lifecycle_label::route(method, path).is_some()
             || (self.lifecycle_jobs.is_some() && Self::owns_lifecycle(method, path))
-            || Self::app_operation(method, path).is_some()
     }
 
     fn changed(&self) {
@@ -458,19 +429,9 @@ impl NativeOwners {
         matches!(*method, Method::GET | Method::HEAD) && path == "/api/accounts/dashboard"
     }
 
-    #[cfg(unix)]
-    fn app_operation(method: &Method, path: &str) -> Option<Operation> {
-        let method = if method == Method::HEAD {
-            &Method::GET
-        } else {
-            method
-        };
-        Operation::from_route(method, path)
-    }
-
-    #[cfg(not(unix))]
-    fn app_operation(_method: &Method, _path: &str) -> Option<()> {
-        None
+    pub(super) fn profile_inputs(&self) -> (Arc<Agents>, Option<AccountUsageCache>) {
+        let cache = self.usage.as_ref().map(|usage| usage.cache.clone());
+        (self.agents.clone(), cache)
     }
 
     pub(crate) async fn handle(&self, request: Request) -> Reply {
@@ -533,15 +494,6 @@ impl NativeOwners {
             };
             return no_store(reply);
         }
-        if let Some(operation) = Self::app_operation(request.method(), path) {
-            #[cfg(unix)]
-            return no_store(self.app_update(&access, operation, request).await);
-            #[cfg(not(unix))]
-            return {
-                let _ = operation;
-                super::plain(404, "API endpoint was not found.")
-            };
-        }
         super::plain(404, "API endpoint was not found.")
     }
 
@@ -584,43 +536,6 @@ impl NativeOwners {
             return no_store(reply);
         }
         read(cache, uri, headers).await
-    }
-
-    #[cfg(unix)]
-    async fn app_update(&self, access: &DashboardAccess, op: Operation, request: Request) -> Reply {
-        if !matches!(access.principal, DashboardPrincipal::Browser { .. }) {
-            return super::plain(401, "Authentication required");
-        }
-        if !matches!(op, Operation::Status) {
-            if !access.origin_present || !access.same_origin {
-                return super::plain(403, "App updates require the dashboard origin.");
-            }
-            if !json_content(&request) {
-                return super::plain(415, "App updates require application/json.");
-            }
-            if request.uri().query().is_some_and(|q| !q.is_empty())
-                || !object_body(request, 100 * 1024)
-                    .await
-                    .is_some_and(|body| body.is_empty())
-            {
-                return super::plain(400, "Provide an empty JSON object.");
-            }
-        }
-        let Some(apps) = &self.apps else {
-            return unavailable();
-        };
-        match apps.call(op).await {
-            Ok(reply) => super::response(reply.status, reply.body),
-            Err(_) => match op {
-                Operation::Status => {
-                    super::plain(503, "App update status could not be read safely.")
-                }
-                Operation::Start => super::plain(500, "App updates could not start safely."),
-                Operation::Cancel => {
-                    super::plain(503, "App update cancellation could not be confirmed.")
-                }
-            },
-        }
     }
 }
 

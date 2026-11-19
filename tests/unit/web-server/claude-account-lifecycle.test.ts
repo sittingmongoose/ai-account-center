@@ -8,10 +8,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { registerFileWriter } from '../../../src/shared/private-file-lease';
-import { ProfileError } from '../../../src/errors/error-types';
 import { listClaudeDesktopProfiles } from '../../../src/web-server/services/claude-desktop-profile-service';
-import { openClaudeDesktopProfile } from '../../../src/web-server/services/claude-desktop-open-service';
-import * as desktopTransport from '../../../src/web-server/services/claude-desktop-transport';
 import {
   ClaudeAccountLifecycle,
   ClaudeLifecycleError,
@@ -338,47 +335,6 @@ describe('Claude Add', () => {
     await expect(lifecycle.checkPendingSignIn('work2', 'mac', null)).rejects.toMatchObject({
       code: 'host_unreachable',
     });
-  });
-});
-
-describe('Pending profiles open on both hosts', () => {
-  it('opens a newly added id on Mac and on Windows; an unknown id is refused', async () => {
-    const { lifecycle } = setup();
-    await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
-    const macOpen = spyOn(desktopTransport, 'openClaudeMacLauncher').mockResolvedValue(undefined);
-    const windowsOpen = spyOn(desktopTransport, 'openClaudeWindowsLauncher').mockResolvedValue(
-      undefined
-    );
-    await openClaudeDesktopProfile('work2', 'mac');
-    expect(macOpen).toHaveBeenCalledTimes(1);
-    expect(macOpen).toHaveBeenCalledWith({
-      launcherName: 'Claude (work2)',
-      launcherPath: '/fake/mac/Claude (work2).app',
-      profilePath: '/fake/mac/Claude-work2',
-      sshHost: 'mac-host',
-    });
-    await openClaudeDesktopProfile('work2', 'windows');
-    expect(windowsOpen).toHaveBeenCalledTimes(1);
-    expect(windowsOpen).toHaveBeenCalledWith(
-      {
-        launcherName: 'Claude (work2)',
-        launcherPath: '/fake/windows/Claude (work2).app',
-        profilePath: '/fake/windows/Claude-work2',
-        sshHost: 'windows-host',
-      },
-      'work2',
-      // The launcher's account list is rebuilt from the current profiles in the same call:
-      // the Windows default first, then the others, the new pending profile included.
-      ['gmail', 'party', 'work2']
-    );
-    // In neither the pending registry nor the manifest: refused, nothing opens.
-    // A malformed id is refused the same way.
-    for (const id of ['no-such-id', 'bad;id']) {
-      await expect(openClaudeDesktopProfile(id, 'mac')).rejects.toBeInstanceOf(ProfileError);
-      await expect(openClaudeDesktopProfile(id, 'windows')).rejects.toBeInstanceOf(ProfileError);
-    }
-    expect(macOpen).toHaveBeenCalledTimes(1);
-    expect(windowsOpen).toHaveBeenCalledTimes(1);
   });
 });
 

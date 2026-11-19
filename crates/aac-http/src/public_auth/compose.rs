@@ -36,20 +36,6 @@ const ACCOUNT_LITERALS: &[&str] = &[
 const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/analytics", &["GET"]),
     ("/api/accounts/analytics/capture", &["GET", "PUT"]),
-    ("/api/antigravity/profiles", &["GET"]),
-    ("/api/antigravity/profiles/quotas", &["GET"]),
-    #[cfg(not(unix))]
-    ("/api/app-updates/status", &["GET"]),
-    #[cfg(not(unix))]
-    ("/api/app-updates/start", &["POST"]),
-    #[cfg(not(unix))]
-    ("/api/app-updates/cancel", &["POST"]),
-    ("/api/claude/desktop-profiles", &["GET"]),
-    ("/api/claude/desktop-profiles/usage", &["GET"]),
-    ("/api/claude/desktop-profiles/:id/open", &["POST"]),
-    ("/api/claude/history-snapshots/cleanup", &["POST"]),
-    ("/api/codex/profiles", &["GET"]),
-    ("/api/codex/profiles/quotas", &["GET"]),
     ("/api/scoreboard", &["GET"]),
     ("/api/status", &["GET"]),
     ("/api/status/answers", &["GET", "POST"]),
@@ -101,8 +87,7 @@ mod tests {
 
     #[test]
     fn cut_forwards_only_the_adapter_contract() {
-        // The settings group is native on both platforms; the Windows-only worker groups keep
-        // forwarding there and are already native on Unix.
+        // These settings, profile and app-update routes are native on both platforms.
         assert!(!cut_route(&Method::GET, "/api/accounts/dashboard"));
         assert!(!cut_route(&Method::HEAD, "/api/accounts/dashboard"));
         assert!(!cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"));
@@ -115,18 +100,21 @@ mod tests {
         assert!(!cut_route(&Method::GET, "/api/accounts/visibility"));
         assert!(!cut_route(&Method::PUT, "/api/accounts/visibility"));
         assert!(!cut_route(&Method::PATCH, "/api/accounts/visibility"));
-        assert_eq!(
-            cut_route(&Method::GET, "/api/app-updates/status"),
-            cfg!(not(unix))
-        );
-        assert_eq!(
-            cut_route(&Method::POST, "/api/app-updates/start"),
-            cfg!(not(unix))
-        );
-        assert_eq!(
-            cut_route(&Method::POST, "/api/app-updates/cancel"),
-            cfg!(not(unix))
-        );
+        for (method, path) in [
+            (Method::GET, "/api/app-updates/status"),
+            (Method::POST, "/api/app-updates/start"),
+            (Method::POST, "/api/app-updates/cancel"),
+            (Method::GET, "/api/claude/desktop-profiles"),
+            (Method::GET, "/api/claude/desktop-profiles/usage"),
+            (Method::POST, "/api/claude/desktop-profiles/example/open"),
+            (Method::POST, "/api/claude/history-snapshots/cleanup"),
+            (Method::GET, "/api/codex/profiles"),
+            (Method::GET, "/api/codex/profiles/quotas"),
+            (Method::GET, "/api/antigravity/profiles"),
+            (Method::GET, "/api/antigravity/profiles/quotas"),
+        ] {
+            assert!(!cut_route(&method, path), "{method} {path}");
+        }
         assert!(!cut_route(
             &Method::POST,
             "/api/accounts/example/reset-claims/prepare"

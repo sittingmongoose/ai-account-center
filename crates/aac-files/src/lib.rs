@@ -19,7 +19,6 @@ pub mod history_snapshots;
 pub mod key_sweep;
 pub mod lifecycle_queue;
 pub mod path;
-#[cfg(unix)]
 pub mod presence;
 pub mod process;
 pub mod profile_staging;

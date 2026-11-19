@@ -7,29 +7,21 @@
 // The helper boundary's errors are opaque by design: no error detail may cross it, exactly
 // as the TS adapters throw untyped errors the core reduces to fixed reason tokens.
 #![allow(clippy::result_unit_err)]
+#[cfg(all(test, unix))]
+mod fixture_tests;
+mod fsrules;
 pub mod js;
 pub mod manifest;
-// The POSIX marker, policy, copy and Open orchestrators serve the Linux Open path only: the
-// TS core refuses to arm a marker on a non-POSIX host, so Windows keeps its existing owner.
-#[cfg(all(unix, test))]
-mod fixture_tests;
-#[cfg(all(unix, test))]
+#[cfg(all(test, unix))]
 mod marker_tests;
-#[cfg(unix)]
 pub mod markers;
-#[cfg(unix)]
 pub mod open;
-#[cfg(unix)]
 pub mod operations;
-#[cfg(unix)]
 pub mod policy;
-#[cfg(unix)]
 pub mod remote;
-#[cfg(all(unix, test))]
+#[cfg(all(test, unix))]
 mod socket_tests;
-#[cfg(unix)]
 pub mod sync;
-#[cfg(unix)]
 pub mod sync_service;
-#[cfg(all(unix, test))]
+#[cfg(test)]
 mod table_tests;

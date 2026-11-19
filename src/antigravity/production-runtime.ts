@@ -6,7 +6,10 @@ import {
   createPersistentAntigravityRuntime,
   type AntigravityRuntimeDependencies,
 } from './runtime-composition';
-import type { AntigravityRuntimeFactory } from './runtime-service';
+import type { AntigravityRuntime } from './runtime-composition';
+
+/** Build the runtime for a private scope, or null when this scope has none. */
+export type AntigravityRuntimeFactory = (privateCcsDirectory: string) => AntigravityRuntime | null;
 import { createAntigravityQuotaWorker } from './quota-worker-transport';
 import { createUbuntuNativeCredentialStore } from './native-credential-transport';
 import { createUbuntuAntigravityDriver } from './ubuntu-driver';

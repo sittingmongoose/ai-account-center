@@ -8,7 +8,13 @@
  */
 import type { ClaudeDesktopUsageFacts } from './services/claude-desktop-usage-service';
 import type { CodexAuthProfilesFacts } from '../codex-auth/codex-auth-dashboard-service';
-import type { CodexProfileQuotaFacts } from './services/codex-profile-quota-service';
+/** The quota composition input the retired service read (the Rust route reads its own now). */
+interface CodexProfileQuotaFacts {
+  profiles: Array<{ name: string; authValid: boolean }>;
+  rows: unknown[];
+  renewals: ReadonlyMap<string, unknown>;
+  now: number;
+}
 import { rustReadInput } from './rust-read-input';
 
 function object(value: unknown): value is Record<string, unknown> {

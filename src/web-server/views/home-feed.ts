@@ -8,7 +8,7 @@
  *     key, so it is written once per request and sent only when it differs). Its facts, computed once per
  *     generation: the `localeCompare` ranks of the words Home sorts by and the `Date.parse` epochs of every
  *     `resetAt`/`sampledAt` string the pass reads;
- *   - `home-opens`: this process's Claude Open progress per profile (`ClaudeOpenOperations.forScope`);
+ *   - `home-opens`: the Claude Open progress per profile (the Rust owner holds it now);
  *   - `home-antigravity`: the runtime's inventory in the ISO envelope, which Rust composes when it arrives.
  * - **Per request** only the generation ids, the clock (`now`, `updatedAt`), the platform, the transport fact and
  *   the page's context cross (`x-aac-feed`, `x-aac-home-context`; no body). Rust reads the desktop manifest
@@ -27,7 +27,6 @@ import { jsonExact, rustAntigravityInventoryInput } from '../rust-profile-input'
 import { sendRustView } from '../rust-view-reply';
 import type { AccountDashboard } from '../services/account-dashboard-types';
 import type { HomeDashboardRead } from '../services/account-dashboard-service';
-import { getClaudeOpenOperations } from '../services/claude-open-operations';
 import { homeSortWords, type HomeContext } from './home-context';
 import { homeZoneAgrees } from './home-zone';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
@@ -325,7 +324,8 @@ export async function answerHomeFed(
       platform: input.platform,
       secure: input.secure,
       dashboard,
-      opens: getClaudeOpenOperations().forScope(input.scope),
+      // G13: Open progress now lives in the Rust owner and rides the desktop-profiles read.
+      opens: [],
       antigravity: input.inventory,
     });
     if (!produced) return declined('feed');
@@ -339,7 +339,8 @@ export async function answerHomeFed(
       { generation: produced.antigravity },
     ];
   } else {
-    const opens = JSON.stringify(getClaudeOpenOperations().forScope(input.scope));
+    // G13: Open progress now lives in the Rust owner and rides the desktop-profiles read.
+    const opens = JSON.stringify([]);
     // R1b: the inventory's own JSON text is its change key: its ISO envelope (`rustReadInput`) is a function of
     // that text, so it is computed only when the key changes. A value JSON cannot carry exactly is pushed as null.
     const antigravityKey = inventoryExact

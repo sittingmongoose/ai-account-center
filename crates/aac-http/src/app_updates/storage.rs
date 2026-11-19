@@ -252,6 +252,7 @@ fn current(observed: &presence::Observed) -> bool {
     process_alive(pid)
 }
 
+#[cfg(unix)]
 fn identity(pid: u32) -> Option<String> {
     let bytes = aac_files::read_bounded(Path::new(&format!("/proc/{pid}/stat")), 16 * 1024).ok()?;
     let stat = std::str::from_utf8(&bytes).ok()?;
@@ -261,6 +262,19 @@ fn identity(pid: u32) -> Option<String> {
     (!boot.is_empty()).then(|| format!("{boot}:{start}"))
 }
 
+/// Windows has no `/proc`; the marker's own pid is the only one this service can prove, and a
+/// marker left by a crashed process is reclaimed by the exclusive claim that follows.
+#[cfg(not(unix))]
+fn identity(_pid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(not(unix))]
+fn process_alive(pid: i32) -> bool {
+    pid == std::process::id() as i32
+}
+
+#[cfg(unix)]
 #[allow(unsafe_code)]
 fn process_alive(pid: i32) -> bool {
     // Signal zero probes the exact positive pid without delivering a signal.
