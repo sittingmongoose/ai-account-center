@@ -206,7 +206,10 @@ fn word(text: &str) -> bool {
 /// The app-update route surface: it stays with the private Unix front door until Windows'
 /// worker routes are retired, so only Unix validates the row.
 #[cfg(unix)]
-fn app_update_route(method: &axum::http::Method, path: &str) -> Option<crate::app_update_routes::Operation> {
+fn app_update_route(
+    method: &axum::http::Method,
+    path: &str,
+) -> Option<crate::app_update_routes::Operation> {
     crate::app_update_routes::Operation::from_route(method, path)
 }
 

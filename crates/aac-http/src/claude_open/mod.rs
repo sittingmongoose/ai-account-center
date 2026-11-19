@@ -11,25 +11,25 @@ pub mod js;
 pub mod manifest;
 // The POSIX marker, policy, copy and Open orchestrators serve the Linux Open path only: the
 // TS core refuses to arm a marker on a non-POSIX host, so Windows keeps its existing owner.
-#[cfg(unix)]
-pub mod markers;
-#[cfg(unix)]
-pub mod operations;
-#[cfg(unix)]
-pub mod open;
-#[cfg(unix)]
-pub mod policy;
-#[cfg(unix)]
-pub mod remote;
-#[cfg(unix)]
-pub mod sync;
-#[cfg(unix)]
-pub mod sync_service;
 #[cfg(all(unix, test))]
 mod fixture_tests;
 #[cfg(all(unix, test))]
 mod marker_tests;
+#[cfg(unix)]
+pub mod markers;
+#[cfg(unix)]
+pub mod open;
+#[cfg(unix)]
+pub mod operations;
+#[cfg(unix)]
+pub mod policy;
+#[cfg(unix)]
+pub mod remote;
 #[cfg(all(unix, test))]
 mod socket_tests;
+#[cfg(unix)]
+pub mod sync;
+#[cfg(unix)]
+pub mod sync_service;
 #[cfg(all(unix, test))]
 mod table_tests;

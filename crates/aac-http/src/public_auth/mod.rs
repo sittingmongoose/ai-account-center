@@ -191,15 +191,7 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream,
-            cache,
-            ui_root,
-            None,
-            false,
-            None,
-            None,
-            None,
-            None,
+            downstream, cache, ui_root, None, false, None, None, None, None,
         )
     }
 
@@ -225,8 +217,7 @@ impl DashboardAuth {
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
             if let Some(settings) = &native_settings
-                && let Some(family) =
-                    native_settings::route(request.method(), request.uri().path())
+                && let Some(family) = native_settings::route(request.method(), request.uri().path())
             {
                 let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
                     return service_error();
@@ -1647,9 +1638,19 @@ mod tests {
         let origin = format!("Origin: http://{addr}\r\n");
         let json = format!("{origin}Content-Type: application/json\r\nCookie: {cookie}\r\n");
 
-        let default = request(addr, "/api/accounts/settings", "GET", &format!("Cookie: {cookie}\r\n"), "").await;
+        let default = request(
+            addr,
+            "/api/accounts/settings",
+            "GET",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        )
+        .await;
         assert!(default.starts_with("HTTP/1.1 200"), "{default}");
-        assert!(default.contains(r#"{"refreshIntervalSeconds":60}"#), "{default}");
+        assert!(
+            default.contains(r#"{"refreshIntervalSeconds":60}"#),
+            "{default}"
+        );
 
         let saved = request(
             addr,
@@ -1660,7 +1661,10 @@ mod tests {
         )
         .await;
         assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
-        assert!(saved.contains(r#"{"refreshIntervalSeconds":45}"#), "{saved}");
+        assert!(
+            saved.contains(r#"{"refreshIntervalSeconds":45}"#),
+            "{saved}"
+        );
         assert_eq!(
             std::fs::read(root.join("account-refresh-settings.json")).unwrap(),
             b"{\"refreshIntervalSeconds\":45}\n"
@@ -1675,7 +1679,10 @@ mod tests {
         )
         .await;
         assert!(shape.starts_with("HTTP/1.1 400"), "{shape}");
-        assert!(shape.contains("Choose a whole number of seconds from 30 to 3600."), "{shape}");
+        assert!(
+            shape.contains("Choose a whole number of seconds from 30 to 3600."),
+            "{shape}"
+        );
 
         let no_origin = request(
             addr,

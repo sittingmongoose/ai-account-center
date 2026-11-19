@@ -5,7 +5,9 @@
 //! and the same fixed sentences. The owners behind them are the existing ones — the registered
 //! settings leaf, the preferences writer and the visibility writer — so a save keeps the
 //! registry lease, the transaction intent and the atomic replacement.
-use super::{DashboardAccess, DashboardEvent, DashboardEvents, DashboardPrincipal, Reply, set_header};
+use super::{
+    DashboardAccess, DashboardEvent, DashboardEvents, DashboardPrincipal, Reply, set_header,
+};
 use crate::registered;
 use aac_files::registry::{self, Owners, Role};
 use axum::{
@@ -150,7 +152,11 @@ impl Settings {
         }
         let patch = request.method() == Method::PATCH;
         let body = match self
-            .write(request, Family::Preferences, crate::preferences_write::INPUT_CAP)
+            .write(
+                request,
+                Family::Preferences,
+                crate::preferences_write::INPUT_CAP,
+            )
             .await
         {
             Ok(body) => body,
@@ -208,7 +214,10 @@ impl Settings {
             return no_store(truncate(reply, head));
         }
         let patch = request.method() == Method::PATCH;
-        let body = match self.write(request, Family::Visibility, VISIBILITY_CAP).await {
+        let body = match self
+            .write(request, Family::Visibility, VISIBILITY_CAP)
+            .await
+        {
             Ok(body) => body,
             Err(reply) => return reply,
         };
@@ -217,9 +226,7 @@ impl Settings {
         let saved = self
             .limits
             .blocking(crate::table::Pool::Reads, move || {
-                Ok(crate::visibility_write::save(
-                    &root, &owners, patch, &body,
-                ))
+                Ok(crate::visibility_write::save(&root, &owners, patch, &body))
             })
             .await;
         let reply = match saved {
@@ -289,9 +296,7 @@ fn media_refusal(family: Family) -> Reply {
 
 fn body_refusal(family: Family) -> Reply {
     match family {
-        Family::Settings => {
-            super::plain(400, "Choose a whole number of seconds from 30 to 3600.")
-        }
+        Family::Settings => super::plain(400, "Choose a whole number of seconds from 30 to 3600."),
         Family::Preferences => super::plain(400, "Preferences are not valid."),
         Family::Visibility => super::error(
             400,

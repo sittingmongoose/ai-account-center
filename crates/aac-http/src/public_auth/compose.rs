@@ -103,10 +103,7 @@ mod tests {
         assert!(!cut_route(&Method::GET, "/api/accounts/dashboard"));
         assert!(!cut_route(&Method::HEAD, "/api/accounts/dashboard"));
         assert!(!cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"));
-        assert!(!cut_route(
-            &Method::POST,
-            "/api/accounts/example/recheck"
-        ));
+        assert!(!cut_route(&Method::POST, "/api/accounts/example/recheck"));
         assert!(!cut_route(&Method::GET, "/api/accounts/settings"));
         assert!(cut_route(&Method::PUT, "/api/accounts/settings"));
         assert!(!cut_route(&Method::GET, "/api/accounts/preferences"));

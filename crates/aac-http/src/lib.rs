@@ -5,9 +5,11 @@
 mod account_approvals;
 mod account_reads;
 pub mod account_usage;
+mod agent_transport;
+#[cfg(unix)]
+mod analytics_writers;
 #[cfg(unix)]
 mod answers_owned;
-mod agent_transport;
 pub mod antigravity_host;
 pub mod antigravity_probes;
 pub mod antigravity_quota;
@@ -26,8 +28,6 @@ mod collection;
 mod collection_cache;
 mod dashboard_fed;
 pub mod dashboard_observations;
-#[cfg(unix)]
-mod analytics_writers;
 mod feed;
 #[cfg(unix)]
 mod home_fed;

@@ -46,8 +46,8 @@ fn stored(root: &Path, id: &str) -> Result<Option<Vec<u8>>, Decline> {
 /// `readDashboardPreferences` does after an interrupted save.
 pub(crate) fn pending(root: &Path) -> Option<Value> {
     let bytes = stored(root, TRANSACTION).ok()??;
-    let documents: Documents = crate::json_object::from_slice(&bytes, &["primary", "companion"])
-        .ok()?;
+    let documents: Documents =
+        crate::json_object::from_slice(&bytes, &["primary", "companion"]).ok()?;
     response(&documents).ok()
 }
 
@@ -192,8 +192,7 @@ pub(crate) fn save_public(
     patch: bool,
     body: &[u8],
 ) -> Result<Value, PublicError> {
-    let value: Value =
-        serde_json::from_slice(body).map_err(|_| PublicError::Invalid)?;
+    let value: Value = serde_json::from_slice(body).map_err(|_| PublicError::Invalid)?;
     if !value.is_object() {
         return Err(PublicError::Invalid);
     }
@@ -204,7 +203,11 @@ pub(crate) fn save_public(
         .get("usageLogSources")
         .and_then(Value::as_array)
         .cloned()
-        .or_else(|| value.get("addUsageLogSource").map(|source| vec![source.clone()]))
+        .or_else(|| {
+            value
+                .get("addUsageLogSource")
+                .map(|source| vec![source.clone()])
+        })
         .unwrap_or_default();
     if named.iter().any(|source| {
         source.get("tool").and_then(Value::as_str) == Some("jsonl")
@@ -262,16 +265,12 @@ fn patch_valid(patch: &Value, hosts: &[(String, String)]) -> bool {
         return false;
     }
     patch.iter().all(|(key, value)| match key.as_str() {
-        "timeZone" => {
-            crate::account_reads::time_zone(Some(value)) == Some(true)
-        }
+        "timeZone" => crate::account_reads::time_zone(Some(value)) == Some(true),
         "snapshotCleanup" => {
             let Some(cleanup) = value.as_object() else {
                 return false;
             };
-            cleanup.len() == 1
-                && cleanup.contains_key("auto")
-                && cleanup["auto"].is_boolean()
+            cleanup.len() == 1 && cleanup.contains_key("auto") && cleanup["auto"].is_boolean()
         }
         "addUsageLogSource" => crate::account_reads::usage_log_source(value, false, hosts),
         "removeUsageLogSource" => value
@@ -296,12 +295,16 @@ fn apply_patch(current: &mut Value, patch: &Value) {
         current.insert("snapshotCleanup".into(), cleanup.clone());
     }
     if let Some(remove) = patch.get("removeUsageLogSource").and_then(Value::as_str)
-        && let Some(sources) = current.get_mut("usageLogSources").and_then(Value::as_array_mut)
+        && let Some(sources) = current
+            .get_mut("usageLogSources")
+            .and_then(Value::as_array_mut)
     {
         sources.retain(|source| source.get("id").and_then(Value::as_str) != Some(remove));
     }
     if let Some(add) = patch.get("addUsageLogSource")
-        && let Some(sources) = current.get_mut("usageLogSources").and_then(Value::as_array_mut)
+        && let Some(sources) = current
+            .get_mut("usageLogSources")
+            .and_then(Value::as_array_mut)
     {
         sources.push(add.clone());
     }
@@ -309,10 +312,7 @@ fn apply_patch(current: &mut Value, patch: &Value) {
 
 /// The two documents the TS writer materialized: legacy-storage hosts in the primary file,
 /// every other host in the companion; the same validation and path-overlap rules run first.
-fn prepare_documents(
-    value: &Value,
-    hosts: &[(String, String)],
-) -> Result<Documents, PublicError> {
+fn prepare_documents(value: &Value, hosts: &[(String, String)]) -> Result<Documents, PublicError> {
     let sources = value
         .get("usageLogSources")
         .and_then(Value::as_array)
@@ -341,8 +341,7 @@ fn prepare_documents(
     let extra: Vec<Value> = sources.iter().filter(|s| !legacy(s)).cloned().collect();
     Ok(Documents {
         primary: format!("{}\n", primary),
-        companion: (!extra.is_empty())
-            .then(|| format!("{}\n", json!({"usageLogSources": extra}))),
+        companion: (!extra.is_empty()).then(|| format!("{}\n", json!({"usageLogSources": extra}))),
     })
 }
 
@@ -376,9 +375,7 @@ fn normalize_posix(path: &str) -> String {
 fn normalize_windows(path: &str) -> String {
     let text = path.replace('/', "\\");
     let (prefix, rest) = match text.split_once(':') {
-        Some((drive, rest))
-            if drive.len() == 1 && drive.as_bytes()[0].is_ascii_alphabetic() =>
-        {
+        Some((drive, rest)) if drive.len() == 1 && drive.as_bytes()[0].is_ascii_alphabetic() => {
             (format!("{drive}:"), rest)
         }
         _ => (String::new(), text.as_str()),
