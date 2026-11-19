@@ -212,8 +212,9 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
     let mut checked = 0;
     for scenario in scenarios {
         let name = scenario["name"].as_str().unwrap_or("?");
-        let ccs = tempfile::tempdir().expect("ccs");
-        let ccs_dir = ccs.path().to_path_buf();
+        let ccs_dir = std::env::temp_dir().join("aac-g4-parity").join(name);
+        let _ = std::fs::remove_dir_all(&ccs_dir);
+        std::fs::create_dir_all(&ccs_dir).expect("ccs");
         let tgt = target(&scenario["target"], ccs_dir.clone());
         let template = scenario["template"].clone();
         let state = Arc::new(Mutex::new(FakeState { hosts: vec![host(&json!({"host":"mac","platform":"mac","sshHost":"fixture-mac"})), host(&json!({"host":"ubuntu","platform":"ubuntu","sshHost":"fixture-ubuntu"})), host(&json!({"host":"windows","platform":"windows","sshHost":"fixture-windows"}))], ..Default::default() }));

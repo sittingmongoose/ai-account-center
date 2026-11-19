@@ -64,7 +64,9 @@ interface Step {
 }
 
 async function runScenario(name: string, target: UsageFailoverTarget, baseTemplate: DashboardAccount, steps: Step[]) {
-  const ccsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-g4-fixture-'));
+  const ccsDir = path.join(os.tmpdir(), 'aac-g4-parity', name);
+  await fs.rm(ccsDir, { recursive: true, force: true });
+  await fs.mkdir(ccsDir, { recursive: true });
   target.ccsDir = ccsDir;
   let now = BASE_TIME;
   let hosts: UsageHost[] = [MAC, UBUNTU, WINDOWS];
