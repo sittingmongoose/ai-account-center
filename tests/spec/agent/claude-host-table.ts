@@ -181,15 +181,55 @@ const table = {
   permits,
 };
 
+/** The SAFE_PATH L/M/N ranges, from the same engine that defines the TS allowlist. */
+function categoryRanges(re: RegExp): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  let start = -1;
+  for (let cp = 0; cp <= 0x10ffff; cp++) {
+    const hit = re.test(String.fromCodePoint(cp));
+    if (hit && start < 0) start = cp;
+    if (!hit && start >= 0) {
+      out.push([start, cp - 1]);
+      start = -1;
+    }
+  }
+  if (start >= 0) out.push([start, 0x10ffff]);
+  return out;
+}
+
+function categoriesSource(): string {
+  const fmt = (name: string, ranges: Array<[number, number]>) =>
+    `pub(crate) const ${name}: &[(u32, u32)] = &[\n` +
+    ranges.map(([a, b]) => `    (0x${a.toString(16)}, 0x${b.toString(16)}),\n`).join('') +
+    '];\n';
+  return (
+    '//! Unicode L/M/N category ranges for the SAFE_PATH port, generated from Node (the engine\n' +
+    '//! that defines the TS spec). Regenerate: bun tests/spec/agent/claude-host-table.ts.\n' +
+    fmt('LETTER', categoryRanges(/\p{L}/u)) +
+    fmt('MARK', categoryRanges(/\p{M}/u)) +
+    fmt('NUMBER', categoryRanges(/\p{N}/u))
+  );
+}
+
+const categoriesTarget = path.join(
+  import.meta.dir,
+  '../../../crates/aac-agent/src/claude_host/categories.rs'
+);
 const target = path.join(import.meta.dir, 'claude-host-table.json');
 const text = JSON.stringify(table, null, 2) + '\n';
+const categoriesText = categoriesSource();
 if (process.argv.includes('--check')) {
   if (fs.readFileSync(target, 'utf8') !== text) {
     console.error('claude-host-table.json drifted; run: bun tests/spec/agent/claude-host-table.ts');
     process.exit(1);
   }
+  if (fs.readFileSync(categoriesTarget, 'utf8') !== categoriesText) {
+    console.error('categories.rs drifted; run: bun tests/spec/agent/claude-host-table.ts');
+    process.exit(1);
+  }
   console.log(`claude-host-table: ${scripts.length} scripts, ${open.length} open commands current`);
 } else {
   fs.writeFileSync(target, text);
+  fs.writeFileSync(categoriesTarget, categoriesText);
   console.log(`claude-host-table: wrote ${scripts.length} scripts, ${open.length} open commands`);
 }
