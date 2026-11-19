@@ -28,13 +28,20 @@ use std::{
 pub type Meta = fs::Metadata;
 
 /// The facts every admission check reads, from an `lstat`, an `fstatat` or an `fstat`.
+///
+/// Owner, mode and identity are Unix facts: Windows has no owner check, no POSIX bits and no
+/// `(dev, ino)` pair to compare, so those checks are not compiled there.
 trait Facts {
     fn link(&self) -> bool;
     fn regular(&self) -> bool;
     fn size(&self) -> u64;
+    #[cfg(unix)]
     fn owner(&self) -> u32;
+    #[cfg(unix)]
     fn bits(&self) -> u32;
+    #[cfg(unix)]
     fn device(&self) -> u64;
+    #[cfg(unix)]
     fn inode(&self) -> u64;
 }
 
@@ -53,36 +60,20 @@ impl Facts for fs::Metadata {
         use std::os::unix::fs::MetadataExt;
         self.uid()
     }
-    #[cfg(not(unix))]
-    fn owner(&self) -> u32 {
-        0
-    }
     #[cfg(unix)]
     fn bits(&self) -> u32 {
         use std::os::unix::fs::MetadataExt;
         self.mode()
-    }
-    #[cfg(not(unix))]
-    fn bits(&self) -> u32 {
-        0
     }
     #[cfg(unix)]
     fn device(&self) -> u64 {
         use std::os::unix::fs::MetadataExt;
         self.dev()
     }
-    #[cfg(not(unix))]
-    fn device(&self) -> u64 {
-        0
-    }
     #[cfg(unix)]
     fn inode(&self) -> u64 {
         use std::os::unix::fs::MetadataExt;
         self.ino()
-    }
-    #[cfg(not(unix))]
-    fn inode(&self) -> u64 {
-        0
     }
 }
 

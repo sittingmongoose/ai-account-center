@@ -17,6 +17,16 @@ pub struct Presentation {
     epochs: HashMap<String, i64>,
     order: HashMap<String, usize>,
 }
+impl Presentation {
+    /// No facts. A caller whose timestamps are already canonical ISO words needs none.
+    pub fn empty() -> Self {
+        Self {
+            dates: HashMap::new(),
+            epochs: HashMap::new(),
+            order: HashMap::new(),
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Date {
