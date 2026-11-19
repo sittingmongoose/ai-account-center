@@ -30,10 +30,29 @@ checks the journal's single writer and recovery, and verifies that an explicit
 retry can run after recovery. Recovery preserves saved rows, closes missing rows
 as unknown and clears the fixture installer's partial file.
 
-In a parity build the fixture actions require `AAC_APPS_FIXTURE_ROOT` and the
-`app-updates-fixture` marker. They take a lowercase, 32-hex `jobId`. Normal builds
-delegate update and cancel to Python. Real installer, restart and transport timing
-checks remain outside this fixture gate.
+In production the Rust agent holds the host update lease and passes each selected
+app to a bounded Python `--apply --app` subprocess. The D3 adapter is labeled
+`aac-agent apps installer fallback: python` on stderr. App updates have a 31-minute
+agent deadline and a 33-minute service deadline. Cancel sends a job-bound request
+through L5 and reaps the selected worker, marking that app and queued work skipped.
+Ubuntu and Mac admit up to four workers. Windows serializes requests to its one
+registered interactive updater task. The agent never falls back to the full Python
+job after work starts.
+
+The Rust service API uses the same rollback and expanded job files as the guarded
+TS routes. Its unit cases cover TS row bytes and the abandoned-job display.
+The L5 integration gate checks the five host selectors, job conflict, counts,
+persistence and per-host cancel through an SSH recorder that opens no sockets.
+
+```sh
+cargo test --locked --offline -p aac-http --lib app_updates -j 2
+cargo test --locked --offline -p aac-http --test app_updates -j 2
+python3 -B tests/unit/app-updates/app_update_agent_worker_test.py
+```
+
+The separate `time-app-update-ssh.py` harness measures a fixed fixture workload
+over real pinned OpenSSH, alternating separate connections and a new control
+master. It validates the control master and the returned bytes on every round.
 
 ## Scan usage
 

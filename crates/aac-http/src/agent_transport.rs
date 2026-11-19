@@ -250,6 +250,98 @@ impl Agents {
             active: Mutex::new(BTreeMap::new()),
         }
     }
+    async fn client(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Option<AgentClient> {
+        let mut loaded = self.registry.subscribe();
+        if !self.loading.swap(true, Ordering::AcqRel) {
+            let root = self.root.clone();
+            let ready = self.registry.clone();
+            tokio::spawn(async move {
+                // Exactly one initialization job per boot, even if its waiting HTTP request
+                // expires. A missing catalog, a known_hosts file added later, and computer or
+                // identity edits stay unavailable until the service restarts (L5 review L5).
+                // A slow mount cannot accumulate abandoned config/hash workers.
+                let result = tokio::task::spawn_blocking(move || Registry::load(&root))
+                    .await
+                    .unwrap_or_else(|_| Err(refused()));
+                ready.send_replace(Some(Arc::new(result)));
+            });
+        }
+        let registry = tokio::time::timeout_at(deadline, async {
+            loop {
+                if let Some(registry) = loaded.borrow_and_update().clone() {
+                    break Some(registry);
+                }
+                if loaded.changed().await.is_err() {
+                    break None;
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        registry
+            .as_deref()
+            .and_then(|result| result.as_ref().ok())
+            .and_then(|registry| registry.client(selector))
+    }
+
+    pub(crate) async fn app_call(
+        &self,
+        platform: &str,
+        alias: Option<&str>,
+        id: String,
+        args: Value,
+        budget: Duration,
+        progress: mpsc::Sender<Event>,
+    ) -> Result<Vec<Event>, Failure> {
+        let started = tokio::time::Instant::now();
+        let deadline = started + budget;
+        let _permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Failure::new(Cause::Busy, "agent transport saturated"))?;
+        let client = self
+            .client(
+                &Selector {
+                    platform: platform.into(),
+                    ssh_host: alias.map(str::to_owned),
+                },
+                deadline,
+            )
+            .await
+            .ok_or_else(refused)?;
+        let deadline_ms = aac_protocol::deadline_cap("apps", &args).min(
+            u64::try_from(
+                deadline
+                    .saturating_duration_since(tokio::time::Instant::now())
+                    .as_millis(),
+            )
+            .unwrap_or(0),
+        );
+        let request = Request {
+            protocol: PROTOCOL_VERSION,
+            verb: "apps".into(),
+            id,
+            deadline_ms,
+            args,
+        };
+        let mut options = CallOptions::new(budget, aac_protocol::MAX_FRAME_BYTES * 2);
+        options.deadline = deadline;
+        if alias.is_none() {
+            options.local_app_update_state_dir = Some(self.root.join("app-updates"));
+        }
+        let (_input, controls) = mpsc::channel(1);
+        let wire = serde_json::to_vec(&request).map_err(|_| refused())?;
+        client
+            .call_controlled_encoded(&request, &wire, &options, controls, progress)
+            .await
+    }
+
     pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
         let started = tokio::time::Instant::now();
         let Ok(call) = crate::json_object::from_slice::<Call>(
@@ -280,7 +372,12 @@ impl Agents {
             ]
             .contains(&verb)
             || call.deadline_ms == 0
-            || call.deadline_ms > aac_protocol::MAX_DEADLINE_MS
+            || call.deadline_ms
+                > if verb == "apps" {
+                    aac_protocol::APP_UPDATE_DEADLINE_MS
+                } else {
+                    aac_protocol::MAX_DEADLINE_MS
+                }
             || call.timeout_ms == 0
             || call.timeout_ms > call.deadline_ms + 5000
             || call.max_bytes == 0
@@ -303,38 +400,7 @@ impl Agents {
             return unavailable(&call.call_id, "busy");
         };
         let deadline = started + Duration::from_millis(budget);
-        let mut loaded = self.registry.subscribe();
-        if !self.loading.swap(true, Ordering::AcqRel) {
-            let root = self.root.clone();
-            let ready = self.registry.clone();
-            tokio::spawn(async move {
-                // Exactly one initialization job per boot, even if its waiting HTTP request
-                // expires. A missing catalog, a known_hosts file added later, and computer or
-                // identity edits stay unavailable until the service restarts (L5 review L5).
-                // A slow mount cannot accumulate abandoned config/hash workers.
-                let result = tokio::task::spawn_blocking(move || Registry::load(&root))
-                    .await
-                    .unwrap_or_else(|_| Err(refused()));
-                ready.send_replace(Some(Arc::new(result)));
-            });
-        }
-        let registry = tokio::time::timeout_at(deadline, async {
-            loop {
-                if let Some(registry) = loaded.borrow_and_update().clone() {
-                    break Some(registry);
-                }
-                if loaded.changed().await.is_err() {
-                    break None;
-                }
-            }
-        })
-        .await
-        .ok()
-        .flatten();
-        let client = registry
-            .as_deref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.client(&call.computer));
+        let client = self.client(&call.computer, deadline).await;
         let Some(client) = client else {
             return unavailable(&call.call_id, "unavailable");
         };
@@ -350,6 +416,12 @@ impl Agents {
         let mut options = CallOptions::new(Duration::ZERO, call.max_bytes);
         options.deadline = deadline;
         options.scan = verb == "scan-usage";
+        if verb == "apps"
+            && call.computer.ssh_host.is_none()
+            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+        {
+            options.local_app_update_state_dir = Some(self.root.join("app-updates"));
+        }
         let (input, controls) = mpsc::channel(8);
         let (done, finished) = watch::channel(None);
         let (output, receiver) = mpsc::channel(8);

@@ -4,6 +4,8 @@ mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
 #[cfg(unix)]
+pub mod app_updates;
+#[cfg(unix)]
 mod feed;
 #[cfg(unix)]
 mod home_fed;

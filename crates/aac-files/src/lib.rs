@@ -11,6 +11,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 pub mod path;
+#[cfg(unix)]
+pub mod presence;
 pub mod read;
 pub mod registry;
 
