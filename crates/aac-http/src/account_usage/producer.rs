@@ -97,7 +97,7 @@ impl CompanionInputs {
 #[cfg(test)]
 #[test]
 fn cut_lifecycle_snapshot_supplies_capabilities_and_active_job_ids() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tempfile::tempdir().expect("temporary lifecycle fixture");
     let sample = json!({
         "mounted": true,
         "blocked": {"codex":"tool_missing","other":"tool_missing","claude":{"unexpected":true}},
@@ -114,13 +114,13 @@ fn cut_lifecycle_snapshot_supplies_capabilities_and_active_job_ids() {
         &sample.to_string(),
         0o600,
     )
-    .unwrap();
+    .expect("write the lifecycle fixture");
     inputs.load_lifecycle(directory.path());
     assert!(inputs.lifecycle.mounted);
     assert_eq!(
         inputs.lifecycle.blocked,
         serde_json::from_value::<serde_json::Map<String, Value>>(json!({"codex":"tool_missing"}))
-            .unwrap()
+            .expect("the blocked providers fixture is an object")
     );
     assert_eq!(
         inputs.lifecycle.remove_disabled,
