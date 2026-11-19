@@ -242,11 +242,16 @@ export interface AnswerDelivery {
  * Creates the folders from `v1` down to `dir`, one level at a time and never `v1` or its parents, so
  * a share that goes away mid-write cannot grow a local folder where its mount point was.
  */
-async function mkdirBelow(v1: string, dir: string, check: () => void): Promise<void> {
+async function mkdirBelow(
+  share: ShareFs,
+  v1: string,
+  dir: string,
+  check: () => void
+): Promise<void> {
   let current = v1;
   for (const segment of path.relative(v1, dir).split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
-    await fs.promises.mkdir(current).catch((error: NodeJS.ErrnoException) => {
+    await share.mkdir(current).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'EEXIST') throw error;
     });
     check();
@@ -259,6 +264,7 @@ async function mkdirBelow(v1: string, dir: string, check: () => void): Promise<v
  * A share that wakes after the deadline or a lock handoff cannot publish an obsolete attempt.
  */
 async function writeAtomic(
+  share: ShareFs,
   v1: string,
   file: string,
   body: string,
@@ -268,14 +274,14 @@ async function writeAtomic(
   const check = () => {
     if (!proceed()) throw new ShareWriteDroppedError();
   };
-  await mkdirBelow(v1, path.dirname(file), check);
+  await mkdirBelow(share, v1, path.dirname(file), check);
   check();
   const temp = path.join(
     path.dirname(file),
     `.${path.basename(file)}.tmp-${randomBytes(6).toString('hex')}`
   );
   try {
-    const handle = await fs.promises.open(temp, 'wx', 0o644);
+    const handle = await share.open(temp, 'wx', 0o644);
     try {
       check();
       await handle.writeFile(body);
@@ -291,7 +297,7 @@ async function writeAtomic(
     check();
     fs.renameSync(temp, file);
   } catch (error) {
-    await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+    await share.rm(temp, { force: true }).catch(() => undefined);
     throw error;
   }
 }
@@ -306,6 +312,7 @@ async function writeAtomic(
  * Any other read error, or an ENOENT for a file the folder lists, throws: the write fails and is retried.
  */
 async function keepPublishedSummary(
+  share: ShareFs,
   file: string,
   body: string,
   unsigned: object,
@@ -319,7 +326,7 @@ async function keepPublishedSummary(
     if (code === 'ENOTREG' || code === 'ELOOP') return;
     if (
       code === 'ENOENT' &&
-      !(await fs.promises.readdir(path.dirname(file))).includes(path.basename(file))
+      !(await share.readdir(path.dirname(file))).includes(path.basename(file))
     )
       return;
     throw error;
@@ -482,7 +489,37 @@ export interface StatusAnswersDeps {
   /** Called after any change the page shows (a new answer, a delivery step). */
   onChange?: () => void;
   timing?: Partial<AnswerTiming>;
+  /**
+   * The share's own file calls. Production leaves this out (the real fs). It is one object so a
+   * test can hang or gate a single share write without replacing `fs.promises` process-wide:
+   * Bun 1.4.2 does not always make such a replacement visible to a module's own reads.
+   */
+  shareFs?: ShareFs;
 }
+
+/** A file handle's share write methods: write, flush, close. */
+export interface ShareHandle {
+  writeFile(body: string): Promise<void>;
+  sync(): Promise<void>;
+  close(): Promise<void>;
+}
+
+/** The share's file calls, as {@link StatusAnswers} writes it (see `writeShareFile`). */
+export interface ShareFs {
+  mkdir(dir: string): Promise<unknown>;
+  open(file: string, flags: string, mode?: number): Promise<ShareHandle>;
+  rm(file: string, options: { force: true }): Promise<void>;
+  readdir(dir: string): Promise<string[]>;
+  stat(file: string): Promise<{ isDirectory(): boolean }>;
+}
+
+const realShareFs: ShareFs = {
+  mkdir: (dir) => fs.promises.mkdir(dir),
+  open: (file, flags, mode) => fs.promises.open(file, flags, mode),
+  rm: (file, options) => fs.promises.rm(file, options),
+  readdir: (dir) => fs.promises.readdir(dir),
+  stat: (file) => fs.promises.stat(file),
+};
 
 const RECORD_KINDS: readonly string[] = ['answer', 'note', 'object', 'done'];
 
@@ -598,6 +635,10 @@ export class StatusAnswers {
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
+  }
+
+  private shareFs(): ShareFs {
+    return this.deps.shareFs ?? realShareFs;
   }
 
   private storeDir(): string {
@@ -1152,7 +1193,9 @@ export class StatusAnswers {
     };
     await withDeadline(
       (async () => {
-        const stat = await fs.promises.stat(v1).catch(() => null);
+        const stat = await this.shareFs()
+          .stat(v1)
+          .catch(() => null);
         check();
         if (!stat?.isDirectory()) throw new ShareUnavailableError();
         const key = this.answerKey();
@@ -1165,11 +1208,12 @@ export class StatusAnswers {
             .then((bytes) => bytes.toString('utf8'))
             .catch(() => '');
           check();
-          if (current !== key.publicKeyPem) await writeAtomic(v1, file, key.publicKeyPem, proceed);
+          if (current !== key.publicKeyPem)
+            await writeAtomic(this.shareFs(), v1, file, key.publicKeyPem, proceed);
           check();
         }
         const target = path.join(v1, 'answers', name);
-        await writeAtomic(v1, target, body, proceed, () =>
+        await writeAtomic(this.shareFs(), v1, target, body, proceed, () =>
           beforeRename ? beforeRename(target) : Promise.resolve()
         );
       })(),
@@ -1310,7 +1354,7 @@ export class StatusAnswers {
       const key = this.answerKey();
       const body = `${JSON.stringify(signDocument(unsigned, key), null, 2)}\n`;
       await this.writeShareFile(`batches/${send.sendId}.json`, body, limitMs, undefined, (file) =>
-        keepPublishedSummary(file, body, unsigned, key.publicKeyPem)
+        keepPublishedSummary(this.shareFs(), file, body, unsigned, key.publicKeyPem)
       );
     } catch (error) {
       if (!(error instanceof SummaryPublishedError)) {
