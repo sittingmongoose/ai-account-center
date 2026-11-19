@@ -780,11 +780,25 @@ async fn scoreboard(
             Some(reply) if reply.status == 200 => {
                 return fed_view(&reply, facts.if_none_match.as_deref());
             }
-            Some(reply) if declined(&reply) => continue,
-            _ => return super::decline(),
+            Some(reply) if declined(&reply) => {
+                let reason = decline_reason(&reply).unwrap_or("");
+                if !matches!(reason, "stale" | "busy") {
+                    return decline_because(match reason {
+                        "unsupported" => "unsupported",
+                        "shape" => "shape",
+                        _ => "declined",
+                    });
+                }
+                if attempt < 5 {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    continue;
+                }
+                return decline_because("answer");
+            }
+            _ => return decline_because("answer"),
         }
     }
-    super::decline()
+    decline_because("answer")
 }
 
 /// One fed view reply: the service's own bytes, ETag and `x-aac-view`, written with the
