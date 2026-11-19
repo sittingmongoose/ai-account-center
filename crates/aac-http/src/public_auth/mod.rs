@@ -592,15 +592,11 @@ pub(crate) async fn run_public_at(
     };
     let mut api = Router::new();
     if let Some(host) = &owner_host {
-        if let Some(settings) = &native_settings {
+        if enabled && let Some(settings) = &native_settings {
             host.register("settings", settings.router(Router::new()));
         }
         api = host.mount(api);
     }
-    let native_settings = match &owner_host {
-        Some(_) => None,
-        None => native_settings,
-    };
     if cut || !composed {
         api = api.route(
             "/api/health",
@@ -1856,7 +1852,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = auth.protect(auth.edges(
-            Router::new(),
+            settings.router(Router::new()),
             HubCache::default(),
             None,
             None,
@@ -1912,6 +1908,19 @@ mod tests {
         assert_eq!(
             std::fs::read(root.join("account-refresh-settings.json")).unwrap(),
             b"{\"refreshIntervalSeconds\":45}\n"
+        );
+        let alias = request(
+            addr,
+            "/api/accounts/settings/",
+            "GET",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        )
+        .await;
+        assert!(alias.starts_with("HTTP/1.1 200"), "{alias}");
+        assert!(
+            alias.contains(r#"{"refreshIntervalSeconds":45}"#),
+            "{alias}"
         );
 
         let shape = request(
