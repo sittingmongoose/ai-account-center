@@ -814,11 +814,12 @@ for the method contract, caps, shutdown order, fixture drills and turn-on soak.
 
 ## M6 dashboard authentication
 
-The Rust public front door is opt-in. Run the `aac-http` binary with `--public`,
+The shipped `ai-account-center dashboard` starts the Rust public listener by
+default. For an isolated fixture, run the `aac-http` binary with `--public`,
 an explicit `CCS_DIR` (or `CCS_HOME`), and a numeric
-`AAC_RUST_PUBLIC_LISTEN` such as `127.0.0.1:0` for an isolated fixture. The
-binary prints the actual bound address. The existing no-argument command still
-selects the private service. On a host with a configured
+`AAC_RUST_PUBLIC_LISTEN` such as `127.0.0.1:0`. The binary prints the actual
+bound address. Running `aac-http` without arguments starts the private
+service. On a host with a configured
 `dashboard_tls.https_listener`, public mode also starts the native HTTPS
 listener on its configured port when the certificate and key pass admission.
 
@@ -828,8 +829,9 @@ session and device documents, the signed `connect.sid` cookie, and the
 private-file registry. Set the same `CCS_SESSION_SECRET` in both processes if
 the installation overrides the file secret. Stop the TS server before starting
 Rust on the same private root. Rust refuses the TS session-owner marker.
-Use separate private roots while comparing the two processes. TS keeps
-ownership in its private-socket modes, including `on`.
+Use separate private roots while comparing the legacy server and the Rust
+listener. The packaged compatibility sidecar starts behind the Rust listener
+for the routes and callbacks that still need TypeScript.
 
 To integrate the other public routes, supply the composed public router to
 `DashboardAuth::protect`. Handlers read `DashboardAccess` from the request
