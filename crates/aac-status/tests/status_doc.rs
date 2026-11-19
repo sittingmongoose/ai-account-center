@@ -181,13 +181,33 @@ fn damaged_bytes_are_refused_with_the_shared_reasons() {
 }
 
 #[test]
-fn the_owned_status_reader_rejects_secrets_in_unprojected_fields() {
-    // The native owner applies the shared secret policy before projection.
+fn secrets_are_type_scripts_to_check_this_module_reads_what_it_is_given() {
+    // There is exactly one secret filter, the TypeScript one (`jsonFromBytes` in
+    // schema-helpers.ts); the reader runs it on every report before these bytes reach
+    // `parseStatus` (owner decision 2026-11-09). This module keeps no copy of it, so a
+    // token-shaped fixture in a field the projection ignores parses like any other text —
+    // the reader's own test suite holds the refusal. Joined at runtime so this source file
+    // holds no whole token.
     let api_key = ["sk", "ant", &"a".repeat(24)].join("-");
     let mut doc = valid();
     doc["summary"] = json!("Working.");
     doc["note"] = json!(format!("Use {api_key} for now."));
-    assert_eq!(refused(&doc), "refused: it contains what looks like an API key");
+    let parsed = parse(&doc).unwrap();
+    assert_eq!(parsed.doc.summary, "Working.");
+}
+
+#[test]
+fn the_owned_share_read_is_the_one_filter_where_no_typescript_reader_runs() {
+    // R4: in the service, the owned readers read the share themselves and no TypeScript
+    // `jsonFromBytes` runs, so `share_json_from_bytes` applies the one packaged policy in its
+    // place (same fixed words). The NAPI parse above stays filter-free: one filter per read.
+    let api_key = ["sk", "ant", &"a".repeat(24)].join("-");
+    let mut doc = valid();
+    doc["note"] = json!(format!("Use {api_key} for now."));
+    let bytes = serde_json::to_vec(&doc).unwrap();
+    let reason = aac_status::validate::share_json_from_bytes(&bytes, 64 * 1024).unwrap_err();
+    assert!(reason.starts_with("refused: it contains what looks like"), "{reason}");
+    assert!(aac_status::validate::json_from_bytes(&bytes, 64 * 1024).is_ok());
 }
 
 #[test]

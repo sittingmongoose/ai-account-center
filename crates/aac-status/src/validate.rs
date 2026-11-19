@@ -1,9 +1,15 @@
 //! The shared validators of the agent report documents, ported field for field from
 //! `src/web-server/status/schema-helpers.ts`: same caps counted the same way (string lengths
 //! are UTF-16 code units, as in JavaScript), same fixed refusal reasons, nothing echoing a
-//! file's text. The secret check is the one packaged policy (`src/shared/secret-policy.json`),
-//! compiled here as `crate::secret_policy` exactly as aac-store compiles it: the R4 owned
-//! readers apply it themselves, and the NAPI path re-checks reports TypeScript accepted.
+//! file's text.
+//!
+//! One secret filter per read, never two (owner decision 2026-11-09): on the NAPI path
+//! TypeScript checks status reports for secrets (`jsonFromBytes` in schema-helpers.ts) and
+//! the native module only reads reports TypeScript accepted, so [`json_from_bytes`] keeps no
+//! secret check. The R4 owned readers in the service run where no TypeScript reader runs;
+//! they read through [`share_json_from_bytes`], which applies the same packaged policy
+//! (`src/shared/secret-policy.json`, compiled as `crate::secret_policy` exactly as aac-store
+//! compiles it) in that reader's place.
 
 use serde_json::{Map, Value as Json};
 
@@ -248,11 +254,15 @@ pub fn head(doc: &Map<String, Json>, schema: &str, writer: &str) -> Valid<DocHea
     })
 }
 
-/// Bytes of one share file -> its JSON value, under the rules every reader applies: the
+/// Bytes of one share file -> its JSON value, under the byte rules every reader applies: the
 /// size cap, no NUL bytes (a damaged write), UTF-8, valid JSON that Rust can hold (an
 /// overflowing number, a lone surrogate or nesting past serde's limit is "not valid JSON",
-/// as `nativeUnreadable` makes it in TypeScript), and no secret. Every refusal is a fixed
-/// reason, the same strings as `jsonFromBytes` in schema-helpers.ts.
+/// as `nativeUnreadable` makes it in TypeScript). Every refusal is a fixed reason, the same
+/// strings as `jsonFromBytes` in schema-helpers.ts.
+///
+/// The secret check is not here: TypeScript checks status reports for secrets
+/// (`jsonFromBytes` in schema-helpers.ts, the one secret filter); the native module only
+/// reads reports TypeScript accepted (owner decision 2026-11-09).
 pub fn json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
     if bytes.len() > cap_bytes {
         return Err(format!("larger than the {} KB cap", cap_bytes / 1024));
@@ -264,7 +274,17 @@ pub fn json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
         return Err("contains NUL bytes from a damaged write".to_string());
     }
     let source = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
-    let value: Json = serde_json::from_str(source).map_err(|_| "not valid JSON".to_string())?;
+    serde_json::from_str(source).map_err(|_| "not valid JSON".to_string())
+}
+
+/// [`json_from_bytes`] plus the secret check, for the R4 owned share readers only: there the
+/// service reads the share itself and no TypeScript `jsonFromBytes` runs, so this is the one
+/// secret filter of that read (same packaged policy, same fixed words). Never call it on the
+/// NAPI path, where TypeScript already filtered the bytes.
+pub fn share_json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
+    let value = json_from_bytes(bytes, cap_bytes)?;
+    // Valid UTF-8 is established above.
+    let source = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
     if let Some(kind) = crate::secret_policy::find_secret_in(source, &value) {
         return Err(format!("refused: it contains what looks like {kind}"));
     }

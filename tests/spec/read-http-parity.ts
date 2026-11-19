@@ -34,7 +34,9 @@ if (worker < 0) {
         }
       );
       if (result.status !== 0)
-        throw new Error(result.stderr || result.stdout || 'HTTP fixture child failed');
+        throw new Error(
+          (result.stdout || '').slice(-2000) + '\n' + (result.stderr || 'HTTP fixture child failed')
+        );
       reports.push(JSON.parse(fs.readFileSync(file, 'utf8')));
       process.stdout.write(result.stdout);
     }

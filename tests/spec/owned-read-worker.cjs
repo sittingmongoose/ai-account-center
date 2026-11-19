@@ -110,6 +110,19 @@ async function waitOwned(timeoutMs = 30000, marker = null) {
   throw new Error('the owned Status readers never produced the expected generation');
 }
 
+/** Data-aware: the owned Scoreboard has its catalog and has ingested `runs` runs. */
+async function waitScoreboard(runs, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let seen = null;
+  while (Date.now() < deadline) {
+    const inputs = await rust.internalJson('/internal/scoreboard/inputs');
+    seen = Array.isArray(inputs?.runs?.runs) ? inputs.runs.runs.length : null;
+    if (inputs && inputs.catalog && seen !== null && seen >= runs) return inputs.generation;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`the owned Scoreboard never ingested ${runs} runs (saw ${seen})`);
+}
+
 async function main() {
   if (mode === 'owned') {
     await rust.start(binary);
@@ -153,6 +166,8 @@ async function main() {
         send({ ok: true, out });
       } else if (message.cmd === 'wait-owned') {
         send({ ok: true, generation: await waitOwned(30000, message.marker ?? null) });
+      } else if (message.cmd === 'wait-scoreboard') {
+        send({ ok: true, generation: await waitScoreboard(message.runs ?? 1) });
       } else if (message.cmd === 'audit') {
         if (mode === 'owned') {
           const lease = rust.lease;

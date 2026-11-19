@@ -4,7 +4,10 @@
  * checked by tests/answer_signing.rs). Ed25519 is deterministic: the same key and canonical
  * bytes give the same signature, so a byte-equal signature proves both directions' interop.
  *
- *   node tests/spec/answer-signing-vectors.mjs [--check]
+ * The keys are fixed fixture keys (not secrets: test seeds only), so `--check` regenerates the
+ * same table and compares it. It imports the TypeScript sources, so it runs in Bun:
+ *
+ *   bun tests/spec/answer-signing-vectors.mjs [--check]
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -22,7 +25,26 @@ import {
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const out = path.join(root, 'tests/spec/answer-signing.json');
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-answer-signing-'));
+// A fixed Ed25519 key as a PKCS#8 v1 PEM file, exactly as Node writes one: the DER prefix
+// (RFC 8410 section 7) and a 32-byte fixture seed.
+const fixtureKeyDir = (prefix, seedByte) => {
+  const der = Buffer.concat([
+    Buffer.from('302e020100300506032b657004220420', 'hex'),
+    Buffer.alloc(32, seedByte),
+  ]);
+  const body = der.toString('base64');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  fs.writeFileSync(
+    path.join(folder, 'answer-key.pem'),
+    `-----BEGIN PRIVATE KEY-----
+${body}
+-----END PRIVATE KEY-----
+`,
+    { mode: 0o600 }
+  );
+  return folder;
+};
+const dir = fixtureKeyDir('aac-answer-signing-', 0x11);
 const key = loadOrCreateAnswerKey(dir);
 const privatePem = key.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 
@@ -94,7 +116,7 @@ const first = signed[0].signed;
 const text = (doc) => `${JSON.stringify(doc, null, 2)}\n`;
 const tampered = JSON.parse(JSON.stringify(first));
 tampered.note = 'tampered';
-const wrongKeyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-answer-signing-other-'));
+const wrongKeyDir = fixtureKeyDir('aac-answer-signing-other-', 0x22);
 const otherKey = loadOrCreateAnswerKey(wrongKeyDir);
 const badBase64 = JSON.parse(JSON.stringify(first));
 badBase64.signature.value = '!!!!';

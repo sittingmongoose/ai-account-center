@@ -635,8 +635,25 @@ if (regenerate) {
   console.log(`wrote ${corpusFile} (${steps.length} steps, native status docs: ${statusHandle !== null})`);
 } else {
   const held = JSON.parse(fs.readFileSync(corpusFile, 'utf8'));
-  assert.deepEqual(JSON.parse(JSON.stringify(corpus)), held, 'the readers changed; review and --regenerate');
-  console.log(`share-read parity: ${steps.length} steps match the corpus`);
+  const ran = JSON.parse(JSON.stringify(corpus));
+  // The corpus is recorded with the native module (the status-documents projection the
+  // TypeScript wrapper calls). Without it this run has no status-documents answers, so the
+  // check compares every other reader and leaves the docs expectations to a module run.
+  const docsChecked = statusHandle !== null || held.nativeStatusDocs !== true;
+  if (!docsChecked) {
+    for (const doc of [held, ran]) {
+      delete doc.nativeStatusDocs;
+      for (const step of doc.steps) {
+        delete step.expect.docs;
+        delete step.expect.docsChanged;
+      }
+    }
+  }
+  assert.deepEqual(ran, held, 'the readers changed; review and --regenerate');
+  console.log(
+    `share-read parity: ${steps.length} steps match the corpus` +
+      (docsChecked ? '' : ' (status documents not checked: no native module; set AAC_STATUS_MODULE)')
+  );
 }
 
 // Restore the real filesystem for any later import.

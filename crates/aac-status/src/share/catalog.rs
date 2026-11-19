@@ -287,7 +287,7 @@ fn file_schema(name: &str) -> Option<(&'static str, &'static str)> {
 
 /// Bytes of one catalog file -> its projected content (tagged with its kind), or a reason.
 pub fn parse_catalog_file(name: &str, bytes: &[u8]) -> Result<Json, String> {
-    let raw = validate::json_from_bytes(bytes, CATALOG_CAP_BYTES)?;
+    let raw = validate::share_json_from_bytes(bytes, CATALOG_CAP_BYTES)?;
     let project = || -> Valid<Json> {
         let doc = obj(Some(&raw), "document")?;
         let (schema, key) = file_schema(name).ok_or_else(|| fail("schema"))?;
