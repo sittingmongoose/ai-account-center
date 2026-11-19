@@ -16,6 +16,7 @@ pub(crate) enum Handler {
     Diag,
     Settings,
     WriteSettings,
+    WriteVisibility,
     Home,
     Accounts,
     Profiles,
@@ -38,6 +39,7 @@ impl Handler {
             "diag" => Handler::Diag,
             "settings" => Handler::Settings,
             "write-settings" => Handler::WriteSettings,
+            "write-visibility" => Handler::WriteVisibility,
             "home" => Handler::Home,
             "accounts" => Handler::Accounts,
             "profiles" => Handler::Profiles,
@@ -187,6 +189,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             "GET" => axum::http::Method::GET,
             "PUT" => axum::http::Method::PUT,
             "POST" => axum::http::Method::POST,
+            "PATCH" => axum::http::Method::PATCH,
             _ => return Err(failure()),
         };
         // Internal routes are the front door's alone; public routes never are.
@@ -207,11 +210,24 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     Handler::Agent | Handler::AgentControl | Handler::Store
                 ))
             || (method == axum::http::Method::PUT
-                && !matches!(handler, Handler::Feed | Handler::WriteSettings))
+                && !matches!(
+                    handler,
+                    Handler::Feed | Handler::WriteSettings | Handler::WriteVisibility
+                ))
             || (handler == Handler::WriteSettings
                 && (method != axum::http::Method::PUT
                     || row.group != "writes"
-                    || roles != [Role::Admin]))
+                    || roles != [Role::Admin]
+                    || !matches!(
+                        row.path.as_str(),
+                        "/api/accounts/settings" | "/api/accounts/analytics/capture"
+                    )))
+            || (method == axum::http::Method::PATCH && handler != Handler::WriteVisibility)
+            || (handler == Handler::WriteVisibility
+                && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
+                    || row.group != "writes"
+                    || roles != [Role::Admin]
+                    || row.path != "/api/accounts/visibility"))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)

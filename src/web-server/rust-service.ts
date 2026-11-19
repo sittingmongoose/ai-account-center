@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { performance } from 'perf_hooks';
 import routes from './rust-service-routes.json';
 import { tsWritesRow } from '../shared/private-files';
+import { getCcsDir } from '../utils/config-manager';
 import type { RustLease } from './rust-service-lifecycle';
 import {
   canonicalRoot,
@@ -100,7 +101,7 @@ export class RustService extends RustSupervisor {
     input?: unknown,
     query = '',
     headers?: Record<string, string>,
-    method: 'GET' | 'PUT' = 'GET'
+    method: 'GET' | 'PUT' | 'PATCH' = 'GET'
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -425,12 +426,12 @@ export class RustService extends RustSupervisor {
    */
   /** A guarded write to a store assigned to this boot. A lost or invalid reply can follow a
    * committed replacement, so this method never retries a request or invokes a second writer. */
-  async mutate(
+  async mutate<T>(
     req: Request,
     route: string,
     input: unknown,
-    accepts: (body: unknown) => boolean
-  ): Promise<unknown> {
+    accepts: (body: unknown) => body is T
+  ): Promise<T> {
     const row = routes.find(
       (r) =>
         r.path === route && r.method === req.method && r.group === 'writes' && r.owner === 'rust'
@@ -438,10 +439,11 @@ export class RustService extends RustSupervisor {
     const verified = principal(req, route);
     if (
       this.mode !== 'on' ||
-      req.method !== 'PUT' ||
+      (req.method !== 'PUT' && req.method !== 'PATCH') ||
       !row ||
       !verified ||
       !row.roles?.includes(verified.role) ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
       this.inFlight >= IN_FLIGHT
     ) {
       throw new Error('Rust writer unavailable');
@@ -714,7 +716,5 @@ export async function writeWithRust<T>(
   if (tsWritesRow(store)) return legacy();
   const service: unknown = res.locals.rustService;
   if (!(service instanceof RustService)) throw new Error('Rust writer unavailable');
-  const result = await service.mutate(req, route, input, accepts);
-  if (!accepts(result)) throw new Error('Rust write reply refused');
-  return result;
+  return service.mutate(req, route, input, accepts);
 }

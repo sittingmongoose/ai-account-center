@@ -1,4 +1,7 @@
 import type { Router } from 'express';
+import path from 'node:path';
+import { getCcsDir } from '../../utils/config-manager';
+import { withPrivateFileLock } from '../services/private-json-store';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
@@ -7,7 +10,7 @@ import {
   type AccountAnalyticsComposer,
 } from '../services/account-analytics-service';
 import type { AccountAnalyticsComposed } from '../services/account-analytics-compose';
-import { composeWithRust } from '../rust-service';
+import { composeWithRust, writeWithRust } from '../rust-service';
 import { isRustAnalyticsComposed, rustAnalyticsInput } from '../rust-account-input';
 import { defaultAnalyticsProviderIds } from '../services/account-analytics-providers';
 import {
@@ -20,6 +23,7 @@ import {
 } from '../services/account-analytics-range';
 import type { AccountAnalytics, AccountAnalyticsQuery } from '../services/account-analytics-types';
 import {
+  ANALYTICS_CAPTURE_FILE,
   readAnalyticsCaptureSettings,
   writeAnalyticsCaptureSettings,
   type AnalyticsCaptureSettings,
@@ -148,7 +152,7 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
   router.get('/analytics/capture', (_req, res) => {
     res.json((deps.readCapture ?? readAnalyticsCaptureSettings)());
   });
-  router.put('/analytics/capture', (req, res) => {
+  router.put('/analytics/capture', async (req, res) => {
     if (
       typeof req.headers.origin !== 'string' ||
       !req.headers.origin ||
@@ -178,13 +182,35 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
       return;
     }
     try {
-      // The setting first, so a scan finishing now saves no folder; then the folders already saved.
-      (deps.writeCapture ?? writeAnalyticsCaptureSettings)({ cwd: body.cwd });
-      const cleared = body.cwd ? undefined : (deps.clearCwds ?? clearAnalyticsRemoteCwds)();
-      res.json({
-        ...(deps.readCapture ?? readAnalyticsCaptureSettings)(),
-        ...(cleared ? { cleared } : {}),
+      const cwd = body.cwd;
+      const ccs = getCcsDir();
+      const saved = await withPrivateFileLock(path.join(ccs, ANALYTICS_CAPTURE_FILE), async () => {
+        // Persist before removing folders, so a scan finishing now observes the new setting.
+        if (deps.writeCapture) deps.writeCapture({ cwd });
+        else
+          await writeWithRust(
+            req,
+            res,
+            '/api/accounts/analytics/capture',
+            'analytics-capture',
+            { cwd },
+            (value): value is AnalyticsCaptureSettings =>
+              !!value &&
+              typeof value === 'object' &&
+              Object.keys(value).length === 1 &&
+              (value as AnalyticsCaptureSettings).cwd === cwd,
+            () => {
+              writeAnalyticsCaptureSettings({ cwd }, ccs);
+              return { cwd };
+            }
+          );
+        const cleared = cwd ? undefined : (deps.clearCwds ?? clearAnalyticsRemoteCwds)();
+        return {
+          ...(deps.readCapture ?? (() => readAnalyticsCaptureSettings(ccs)))(),
+          ...(cleared ? { cleared } : {}),
+        };
       });
+      res.json(saved);
     } catch {
       res.status(500).json({ error: 'Capture settings could not be saved.', code: 'save_failed' });
     }

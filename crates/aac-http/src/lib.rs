@@ -34,6 +34,8 @@ mod unix;
 #[cfg(unix)]
 pub mod view_reply;
 #[cfg(unix)]
+mod visibility_write;
+#[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
 pub use unix::{Boot, serve, short_name};

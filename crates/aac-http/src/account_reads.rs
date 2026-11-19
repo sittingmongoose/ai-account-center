@@ -3,7 +3,7 @@
 //! Rust answers only a read it can prove equal to the TS reader, side effects included: every
 //! case where TS logs (corrupt or migrated preferences), answers an error (an unsafe or invalid
 //! visibility file), or could parse what strict JSON refuses returns `None`, and the bridge
-//! serves the TS reader. TS remains both files' only writer.
+//! serves the TS reader.
 use serde_json::{Map, Value, json};
 
 type Object = Map<String, Value>;
@@ -80,7 +80,7 @@ pub(crate) const ADMITTED_TIME_ZONES: &[&str] = &[
 /// Whether the private-store folder logs its group-writable line, or refuses (`None`).
 /// The boot root is canonical, so it is never the symlinked-folder case (the bridge sends a
 /// symlinked or other folder to TS before forwarding).
-fn store_folder(root: &Path) -> Option<Vec<Value>> {
+pub(crate) fn store_folder(root: &Path) -> Option<Vec<Value>> {
     let meta = fs::symlink_metadata(root).ok()?;
     if !meta.is_dir() || meta.file_type().is_symlink() || meta.mode() & 0o002 != 0 {
         return None;
@@ -149,12 +149,12 @@ fn provider_list(values: Vec<Value>) -> Option<Vec<Value>> {
 }
 
 /// `parseIdList`.
-fn id_list(value: &Value) -> Option<Vec<Value>> {
+pub(crate) fn id_list(value: &Value) -> Option<Vec<Value>> {
     let values = value.as_array()?;
     (values.len() <= 128 && values.iter().all(public_account_id)).then(|| unique(values.clone()))
 }
 
-fn known_providers(value: &Value) -> Option<Vec<Value>> {
+pub(crate) fn known_providers(value: &Value) -> Option<Vec<Value>> {
     let values = value.as_array()?;
     if !values.iter().all(|v| v.as_str().is_some()) {
         return None;

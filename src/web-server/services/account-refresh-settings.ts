@@ -12,7 +12,7 @@ export interface AccountRefreshSettings {
 
 export const DEFAULT_ACCOUNT_REFRESH_SECONDS = 60;
 
-const SETTINGS_FILE = 'account-refresh-settings.json';
+export const ACCOUNT_REFRESH_SETTINGS_FILE = 'account-refresh-settings.json';
 const MAX_SETTINGS_BYTES = 4096;
 
 const logger = createLogger('account-refresh-settings');
@@ -45,7 +45,7 @@ function warnCorruptSettings(file: string): void {
 }
 
 export function readAccountRefreshSettings(ccsDir = getCcsDir()): AccountRefreshSettings {
-  const file = path.join(ccsDir, SETTINGS_FILE);
+  const file = path.join(ccsDir, ACCOUNT_REFRESH_SETTINGS_FILE);
   let corrupt = false;
   try {
     const stat = fs.lstatSync(file);
@@ -95,7 +95,7 @@ function removeLeftoverTemporaries(directory: string): void {
     return;
   }
   for (const entry of entries) {
-    if (!entry.startsWith(`${SETTINGS_FILE}.`) || !entry.endsWith('.tmp')) continue;
+    if (!entry.startsWith(`${ACCOUNT_REFRESH_SETTINGS_FILE}.`) || !entry.endsWith('.tmp')) continue;
     try {
       fs.unlinkSync(path.join(directory, entry));
     } catch {
@@ -114,7 +114,7 @@ export function writeAccountRefreshSettings(
   ccsDir = getCcsDir()
 ): AccountRefreshSettings {
   if (!isAccountRefreshSettings(value)) throw new ConfigError('Invalid usage refresh interval');
-  const file = path.join(ccsDir, SETTINGS_FILE);
+  const file = path.join(ccsDir, ACCOUNT_REFRESH_SETTINGS_FILE);
   assertTsWritesFile(file, ccsDir);
   fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;

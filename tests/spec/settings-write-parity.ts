@@ -26,7 +26,17 @@ const { createAccountRefreshSettingsRouter } = await import(
   '../../src/web-server/routes/account-refresh-settings-routes'
 );
 
+const { createAccountAnalyticsRouter } = await import(
+  '../../src/web-server/routes/account-analytics-routes'
+);
+
+const { createAccountVisibilityRouter } = await import(
+  '../../src/web-server/routes/account-visibility-routes'
+);
+const visibilityFile = path.join(ccs, 'account-visibility.json');
+
 const file = path.join(ccs, 'account-refresh-settings.json');
+const captureFile = path.join(ccs, 'analytics-capture.json');
 const cases = [
   {
     body: '{"refreshIntervalSeconds":120}',
@@ -107,6 +117,25 @@ async function run(mode: 'off' | 'shadow' | 'on'): Promise<void> {
     });
     let changed = 0;
     app.use('/api/accounts', createAccountRefreshSettingsRouter({ onChanged: () => changed++ }));
+    let clears = 0;
+    app.use(
+      '/api/accounts',
+      createAccountAnalyticsRouter({
+        clearCwds: () => {
+          assert.equal(fs.readFileSync(captureFile, 'utf8'), '{"cwd":false}\n');
+          clears++;
+          return { folders: 3, caches: 2 };
+        },
+      })
+    );
+    let visibilityChanges = 0;
+    app.use(
+      '/api/accounts',
+      createAccountVisibilityRouter({
+        onChanged: () => visibilityChanges++,
+        audit: () => {},
+      })
+    );
     server = await new Promise<Server>((resolve) => {
       const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
     });
@@ -152,6 +181,179 @@ async function run(mode: 'off' | 'shadow' | 'on'): Promise<void> {
       assert.equal(service.stats.served, mode === 'on' ? writes : 0, label);
       assert.equal(service.stats.fallbacks, 0, label);
     }
+
+    const capture = (
+      body: string,
+      origin = base,
+      session = true,
+      query = '',
+      contentType = 'application/json'
+    ) =>
+      fetch(base + '/api/accounts/analytics/capture' + query, {
+        method: 'PUT',
+        headers: {
+          origin,
+          'content-type': contentType,
+          ...(session ? { 'x-fixture-session': 'yes' } : {}),
+        },
+        body,
+      });
+    fs.writeFileSync(captureFile, '{"cwd":true}\n', { mode: 0o600 });
+    for (const [request, status, expected] of [
+      [
+        () => capture('{"cwd":false}', base, false),
+        401,
+        '{"error":"Authentication required","code":"auth_required"}',
+      ],
+      [
+        () => capture('{"cwd":false}', 'https://untrusted.example'),
+        403,
+        '{"error":"Capture settings require the dashboard origin.","code":"origin_required"}',
+      ],
+      [
+        () => capture('{"cwd":false}', ''),
+        403,
+        '{"error":"Capture settings require the dashboard origin.","code":"origin_required"}',
+      ],
+      [
+        () => capture('{"cwd":false}', base, true, '?unexpected=1'),
+        400,
+        '{"error":"Unexpected capture settings query.","code":"invalid_query"}',
+      ],
+      [
+        () => capture('{"cwd":false}', base, true, '', 'text/plain'),
+        415,
+        '{"error":"Capture settings require application/json."}',
+      ],
+      ...['{}', '{"cwd":0}', '{"cwd":true,"extra":false}'].map(
+        (body) =>
+          [
+            () => capture(body),
+            400,
+            JSON.stringify({
+              error: 'Send {"cwd": true} or {"cwd": false}.',
+              code: 'invalid_body',
+            }),
+          ] as const
+      ),
+    ] as const) {
+      const response = await request();
+      assert.equal(response.status, status, mode);
+      assert.equal(await response.text(), expected, mode);
+      assert.equal(fs.readFileSync(captureFile, 'utf8'), '{"cwd":true}\n');
+      assert.equal(clears, 0);
+    }
+    for (const cwd of [false, true]) {
+      const response = await capture(JSON.stringify({ cwd }));
+      assert.equal(response.status, 200, mode);
+      assert.equal(response.headers.get('cache-control'), 'no-store', mode);
+      assert.equal(
+        await response.text(),
+        cwd ? '{"cwd":true}' : '{"cwd":false,"cleared":{"folders":3,"caches":2}}',
+        mode
+      );
+      assert.equal(clears, 1, mode);
+      assert.equal(fs.readFileSync(captureFile, 'utf8'), JSON.stringify({ cwd }) + '\n');
+      writes++;
+      assert.equal(service.stats.served, mode === 'on' ? writes : 0, mode);
+      assert.equal(service.stats.fallbacks, 0, mode);
+    }
+    const visibility = (method: string, body: unknown, origin = base, session = true) =>
+      fetch(base + '/api/accounts/visibility', {
+        method,
+        headers: {
+          origin,
+          'content-type': 'application/json',
+          ...(session ? { 'x-fixture-session': 'yes' } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+    const codex = 'codex:fixture@example.com';
+    const claude = 'claude:fixture@example.com';
+    fs.writeFileSync(
+      visibilityFile,
+      JSON.stringify({
+        version: 1,
+        hiddenProviders: ['codex', 'removed-provider'],
+        hiddenAccountIds: [codex],
+      }),
+      { mode: 0o600 }
+    );
+    for (const [request, status, code] of [
+      [() => visibility('PUT', { hiddenProviders: [] }, base, false), 401, 'auth_required'],
+      [
+        () =>
+          visibility(
+            'PATCH',
+            { hiddenProviders: { show: ['codex'] } },
+            'https://untrusted.example'
+          ),
+        403,
+        'origin_required',
+      ],
+      [() => visibility('PUT', { hiddenProviders: ['unknown'] }), 400, 'invalid_body'],
+      [
+        () => visibility('PATCH', { hiddenAccountIds: { show: [codex], hide: [codex] } }),
+        400,
+        'invalid_body',
+      ],
+    ] as const) {
+      const response = await request();
+      assert.equal(response.status, status, mode);
+      assert.equal((await response.json()).code, code, mode);
+      assert.equal(visibilityChanges, 0, mode);
+    }
+    const patched = {
+      hiddenProviders: ['codex'],
+      hiddenAccountIds: [claude],
+      trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
+    };
+    const replaced = { ...patched, trayHiddenProviders: ['claude'] };
+    const empty = {
+      hiddenProviders: [],
+      hiddenAccountIds: [],
+      trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
+    };
+    for (const [request, expected] of [
+      [
+        () => visibility('PATCH', { hiddenAccountIds: { show: [codex], hide: [claude, claude] } }),
+        patched,
+      ],
+      [() => visibility('PUT', { trayHiddenProviders: ['claude', 'claude'] }), replaced],
+      [
+        () => {
+          fs.writeFileSync(visibilityFile, 'torn');
+          return visibility('PATCH', { hiddenProviders: { show: ['claude'] } });
+        },
+        null,
+      ],
+      [() => visibility('PUT', empty), empty],
+    ] as const) {
+      const response = await request();
+      if (expected) {
+        assert.equal(response.status, 200, mode);
+        assert.equal(await response.text(), JSON.stringify(expected), mode);
+        assert.equal(
+          fs.readFileSync(visibilityFile, 'utf8'),
+          JSON.stringify({ version: 1, ...expected }, null, 2) + '\n',
+          mode
+        );
+        writes++;
+      } else {
+        assert.equal(response.status, 500, mode);
+        assert.equal(
+          await response.text(),
+          '{"error":"Account visibility could not be read safely.","code":"visibility_unavailable"}',
+          mode
+        );
+        assert.equal(fs.readFileSync(visibilityFile, 'utf8'), 'torn', mode);
+      }
+    }
+    assert.equal(visibilityChanges, 3, mode);
+    assert.equal(service.stats.served, mode === 'on' ? writes + 1 : 0, mode);
+    assert.equal(service.stats.fallbacks, 0, mode);
   } finally {
     service.stop();
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -163,7 +365,7 @@ try {
   await run('shadow');
   if (!tsOnly) await run('on');
   console.log(
-    `settings write parity: ${cases.length} cases x ${tsOnly ? 'off/shadow' : 'off/shadow/on'}`
+    `settings write parity: ${cases.length} refresh + 10 capture + 8 visibility cases x ${tsOnly ? 'off/shadow' : 'off/shadow/on'}`
   );
 } finally {
   fs.rmSync(home, { recursive: true, force: true });
