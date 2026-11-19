@@ -79,8 +79,15 @@ class AgentWorkerTest(unittest.TestCase):
                     return True
                 return False
 
-            with mock.patch.object(updates, "__file__", str(helper)):
+            stage = root / "agent-staging" / app
+            stage.mkdir(parents=True)
+            (stage / ".aac-app-worker").write_bytes(b"aac app worker stage v1")
+            (stage / "stale.part").write_bytes(b"old fixture")
+            (root / "unrelated.part").write_bytes(b"preserved")
+            with mock.patch.object(updates, "__file__", str(helper)), mock.patch.dict(os.environ, {"AAC_UPDATE_STATE_DIR": str(root)}):
                 payload = updates.supervised_app(args, events.append, cancel)
+            self.assertFalse(stage.exists())
+            self.assertEqual((root / "unrelated.part").read_bytes(), b"preserved")
             self.assertIsNotNone(stopping)
             self.assertEqual([event["phase"] for event in events], ["downloading"])
             self.assertEqual(payload["results"][0]["messageCode"], "skipped_cancelled")

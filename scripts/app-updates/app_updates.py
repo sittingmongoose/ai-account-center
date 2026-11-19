@@ -6,6 +6,7 @@ restarts anything. There are no configurable app IDs, commands, hosts or URLs.
 """
 
 import argparse
+import contextlib
 import ctypes
 import json
 import os
@@ -1294,6 +1295,33 @@ def detect_one(app, platform):
         return Install(app, platform, None, probe="failed")
 
 
+@contextlib.contextmanager
+def worker_stage(app):
+    """An owned, stable stage directory makes the previous worker's scratch recoverable."""
+    state = os.environ.get("AAC_UPDATE_STATE_DIR")
+    root = (pathlib.Path(state) if state else pathlib.Path.home() / ".ccs/app-updates") / "agent-staging"
+    directory = root / app
+    marker = directory / ".aac-app-worker"
+    stamp = b"aac app worker stage v1"
+    is_link = lambda path: path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+    if is_link(root) or is_link(directory):
+        raise UpdateFailure("readiness_unknown")
+    if directory.exists():
+        if not marker.is_file() or is_link(marker):
+            raise UpdateFailure("readiness_unknown")
+        with marker.open("rb") as stream:
+            if stream.read(64) != stamp:
+                raise UpdateFailure("readiness_unknown")
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True, mode=0o700)
+    marker.write_bytes(stamp)
+    try:
+        yield directory
+    finally:
+        if not is_link(directory) and directory.is_dir():
+            shutil.rmtree(directory)
+
+
 def supervised_app(args, emit, cancelled):
     """Run one worker under a parent that owns its process tree and its input pipe."""
     import subprocess
@@ -1307,8 +1335,10 @@ def supervised_app(args, emit, cancelled):
     flags = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
     budget = time.monotonic() + min(args.worker_seconds, HOST_DEADLINE_SECONDS)
     code = "host_timeout"
-    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          env=environment({"AAC_UPDATE_PROGRESS": "1"}), **flags) as child:
+    with worker_stage(args.app) as stage, subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=environment({"AAC_UPDATE_PROGRESS": "1", "AAC_UPDATE_WORKER_STAGING": str(stage)}),
+            **flags) as child:
         # The child emits only small JSON frames. The queue lets the parent check
         # for aborts even while a downloader has produced no progress for minutes.
         from queue import Empty, Full, Queue

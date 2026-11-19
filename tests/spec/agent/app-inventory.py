@@ -197,9 +197,11 @@ ConcretePath = type(pathlib.Path())
 
 
 def fixture_path_parts(parts):
-    if (parts and isinstance(parts[0], str) and parts[0].startswith("/")
-            and not parts[0].startswith("//") and not ConcretePath(parts[0]).is_relative_to(root)):
-        return (system / parts[0].lstrip("/"), *parts[1:])
+    if parts and isinstance(parts[0], str) and parts[0].startswith("/") and not parts[0].startswith("//"):
+        # The reference can reconstruct a path using a separate POSIX root
+        # component. Test the complete path before redirecting system paths.
+        if not ConcretePath(*parts).is_relative_to(root):
+            return (system / parts[0].lstrip("/"), *parts[1:])
     return parts
 
 

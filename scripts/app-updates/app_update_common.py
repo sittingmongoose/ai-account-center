@@ -1355,7 +1355,8 @@ def remote_fingerprint(url, timeout=15):
 
 @contextlib.contextmanager
 def private_temporary():
-    root = pathlib.Path.home() / ".ccs/app-updates"
+    staging = os.environ.get("AAC_UPDATE_WORKER_STAGING")
+    root = pathlib.Path(staging) if staging else pathlib.Path.home() / ".ccs/app-updates"
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix="stage-", dir=root) as value:
         yield pathlib.Path(value)
