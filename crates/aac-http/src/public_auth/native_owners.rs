@@ -465,6 +465,13 @@ impl NativeOwners {
         (self.agents.clone(), cache)
     }
 
+    pub(super) async fn codex_profile_rows(&self, now: i64) -> Vec<Value> {
+        match &self.usage {
+            Some(usage) => usage.producer.codex_profile_rows(now).await,
+            None => Vec::new(),
+        }
+    }
+
     pub(crate) async fn handle(&self, request: Request) -> Reply {
         let path = request.uri().path().trim_end_matches('/');
         let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {

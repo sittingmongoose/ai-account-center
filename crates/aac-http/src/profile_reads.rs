@@ -85,7 +85,12 @@ fn envelope(bytes: &[u8]) -> Option<Envelope> {
     crate::json_object::from_slice(bytes, &["data", "presentation"]).ok()
 }
 
-pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
+pub(crate) fn answer(
+    path: &str,
+    root: &Path,
+    bytes: &[u8],
+    cache: Option<&crate::account_usage::AccountUsageCache>,
+) -> Option<Value> {
     match path {
         "/api/claude/desktop-profiles" if bytes.is_empty() => desktop_profiles(root),
         "/api/claude/desktop-profiles/usage" => {
@@ -102,6 +107,13 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
             .ok()?;
             aac_views::codex_profiles::summary(&input).ok()
         }
+        // M3: an adopted collection answers the quota route from the generation it holds; the
+        // public route no longer has to wait for a local cache that the adoption switched off.
+        "/api/codex/profiles/quotas" if bytes.is_empty() => {
+            let at = now_ms();
+            let rows = crate::codex_quotas::rows_from_cache(cache?, at);
+            crate::codex_quotas::answer(root, rows, at)
+        }
         "/api/codex/profiles/quotas" => aac_views::codex_profiles::quotas(envelope(bytes)?).ok(),
         // G6: the installed runtime answers with its own live proof, workers and probes once TS
         // stops sending its input. A host that cannot resolve its trusted paths declines (TS).
@@ -115,5 +127,77 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
         }
         "/api/antigravity/profiles/quotas" => aac_views::antigravity::quotas(envelope(bytes)?).ok(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M3: an adopted private service holds the Accounts generation; an empty Codex quota read
+    /// composes the profile's measured windows from it instead of declining for a TS envelope.
+    #[test]
+    fn an_adopted_generation_answers_codex_profile_quotas() {
+        let directory = tempfile::tempdir().expect("temporary registry");
+        std::fs::write(
+            directory.path().join("codex-profiles.yaml"),
+            "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+        )
+        .expect("write the registry");
+        use base64::Engine as _;
+        let encode = |value: serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
+        };
+        let token = format!(
+            "{}.{}.{}",
+            encode(json!({"alg": "none", "typ": "JWT"})),
+            encode(json!({"email": "work@example.com"})),
+            encode(json!("signature"))
+        );
+        let instance = directory.path().join("codex-instances/work");
+        std::fs::create_dir_all(&instance).expect("instance folder");
+        std::fs::write(
+            instance.join("auth.json"),
+            json!({"tokens": {"id_token": token, "account_id": null}}).to_string(),
+        )
+        .expect("saved login");
+        let iso = "2026-01-01T00:00:00.000Z";
+        let cache = crate::account_usage::AccountUsageCache::default();
+        cache
+            .publish(
+                crate::account_usage::Desktop::Mac,
+                false,
+                1,
+                json!({
+                    "schemaVersion": 1,
+                    "updatedAt": iso,
+                    "accounts": [{
+                        "id": "codex:work",
+                        "capabilities": {"codexProfile": "work"},
+                        "status": "ok",
+                        "fetchedAt": iso,
+                        "sampledAt": iso,
+                        "windows": [{
+                            "key": "five_hour",
+                            "label": "5-hour limit",
+                            "usedPercent": 24.0,
+                            "resetAt": iso
+                        }]
+                    }]
+                }),
+                json!({"order": {}, "epochs": {iso: 1_767_225_600_000_i64}}),
+            )
+            .expect("publish the generation");
+        let answer = answer(
+            "/api/codex/profiles/quotas",
+            directory.path(),
+            b"",
+            Some(&cache),
+        )
+        .expect("the adopted generation answers");
+        assert_eq!(answer["profiles"][0]["profileName"], "work");
+        assert_eq!(answer["profiles"][0]["status"], "available");
+        assert_eq!(answer["profiles"][0]["windows"][0]["key"], "five_hour");
+        assert_eq!(answer["profiles"][0]["windows"][0]["usedPercent"], 24.0);
     }
 }

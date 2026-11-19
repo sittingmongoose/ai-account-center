@@ -17,7 +17,9 @@ const serviceBinary = process.env.AAC_RUST_SERVICE_BINARY;
 assert(launcher && path.isAbsolute(launcher), 'set AAC_M6_TARGET_CLI to a native build');
 assert(serviceBinary && path.isAbsolute(serviceBinary), 'set AAC_RUST_SERVICE_BINARY');
 
-const root = await mkdtemp(path.join(os.tmpdir(), 'aac-adopted-'));
+const base = await mkdtemp(path.join(os.tmpdir(), 'aac-adopted-'));
+const root = path.join(base, '.ccs');
+await mkdir(root, { mode: 0o700 });
 const children = [];
 const accountId = 'zai:acct:0123abcd';
 const accountPath = '/api/accounts/' + encodeURIComponent(accountId);
@@ -26,7 +28,9 @@ const credentials = { username: 'fixture-owner', password: 'fixture-password-onl
 const env = {
   ...process.env,
   CCS_DIR: root,
-  CCS_HOME: root,
+  CCS_HOME: base,
+  HOME: base,
+  CODEX_HOME: path.join(root, '.codex'),
   AAC_TS_SIDECAR: 'off',
   AAC_AGENT_VERBS: 'off',
   AAC_AGENT_TRANSPORT: 'off',
@@ -256,6 +260,37 @@ try {
     { mode: 0o600 }
   );
   await writeSource('Before');
+  await writeFile(
+    path.join(root, 'codex-profiles.yaml'),
+    "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+    { mode: 0o600 }
+  );
+  const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const idToken = [
+    b64({ alg: 'none', typ: 'JWT' }),
+    b64({
+      email: 'fixture@example.com',
+      exp: 1900000000,
+      'https://api.openai.com/auth': { chatgpt_account_id: 'acct-fixture' },
+    }),
+    Buffer.from('fixture-signature').toString('base64url'),
+  ].join('.');
+  await mkdir(path.join(root, 'codex-instances/work'), { recursive: true, mode: 0o700 });
+  await writeFile(
+    path.join(root, 'codex-instances/work/auth.json'),
+    JSON.stringify({ tokens: { id_token: idToken, account_id: null } }),
+    { mode: 0o600 }
+  );
+  await mkdir(path.join(root, '.codex/sessions/2026/11/19'), { recursive: true, mode: 0o700 });
+  await writeFile(
+    path.join(root, '.codex/sessions/2026/11/19/rollout-fixture.jsonl'),
+    JSON.stringify({
+      payload: {
+        rate_limits: { primary: { used_percent: 24, resets_at: 1795090800, window_minutes: 300 } },
+      },
+    }) + '\n',
+    { mode: 0o600 }
+  );
   const share = path.join(root, 'usage-share');
   await mkdir(share, { mode: 0o700 });
   await writeFile(
@@ -443,6 +478,12 @@ try {
           const text = await readFile(path.join(share, 'usage.json'), 'utf8').catch(() => '');
           return text !== '' && label(JSON.parse(text)) === 'Before';
         });
+        const quotas = await send('/api/codex/profiles/quotas', { headers: { cookie } });
+        assert.equal(quotas.status, 200);
+        assert.deepEqual(
+          (await quotas.json()).profiles.map((profile) => profile.profileName),
+          ['work']
+        );
         const tag = initial.headers.get('etag');
         assert(tag);
         const head = await send(dashboardPath, { method: 'HEAD', headers: { cookie } });
@@ -513,5 +554,5 @@ try {
   }
 } finally {
   for (const child of children.reverse()) await stop(child);
-  await rm(root, { recursive: true, force: true });
+  await rm(base, { recursive: true, force: true });
 }

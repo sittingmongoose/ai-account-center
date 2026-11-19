@@ -72,28 +72,6 @@ pub fn publish_native_hub(
     hub::publish_native_snapshot(directory, cache.hub_dashboards(&timestamp, now));
 }
 
-/// The latest native Accounts rows that carry a saved Codex profile, one per name. The public
-/// Codex quota route reads these same collector rows the Accounts dashboard shows.
-fn codex_dashboard_rows(cache: &crate::account_usage::AccountUsageCache) -> Vec<Value> {
-    let at = now();
-    let Some(timestamp) = storage::iso(at) else {
-        return Vec::new();
-    };
-    let mut seen = std::collections::HashSet::new();
-    let mut rows = Vec::new();
-    for dashboard in cache.hub_dashboards(&timestamp, at) {
-        for row in dashboard["accounts"].as_array().into_iter().flatten() {
-            let Some(name) = row["capabilities"]["codexProfile"].as_str() else {
-                continue;
-            };
-            if seen.insert(name.to_owned()) {
-                rows.push(row.clone());
-            }
-        }
-    }
-    rows
-}
-
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
 pub struct DashboardAccess {
@@ -117,6 +95,25 @@ pub struct DashboardAccess {
 }
 
 impl DashboardAccess {
+    #[cfg(all(test, unix))]
+    pub(super) fn test_browser() -> Self {
+        Self {
+            auth_enabled: true,
+            principal: DashboardPrincipal::Browser {
+                username: "fixture".into(),
+            },
+            secure_transport: true,
+            same_origin: true,
+            origin_present: true,
+            local_access: true,
+            session_id: Some("f".repeat(64)),
+            credential_transport: "loopback",
+            direct_loopback: true,
+            lan_proxy: false,
+            client_address: None,
+        }
+    }
+
     /// The admitted session's identifier for the private service's principal (never a cookie).
     pub(super) fn session_key(&self) -> String {
         self.session_id
@@ -506,6 +503,8 @@ pub(crate) async fn run_public_at(
     #[cfg(not(unix))]
     let has_external = false;
     let collection_enabled = groups.is_some_and(|groups| groups.collection);
+    #[cfg(unix)]
+    let adopted_quotas = adopted.clone().filter(|_| collection_enabled);
     let groups = groups.map(|mut groups| {
         if has_external {
             groups.collection = false;
@@ -576,8 +575,17 @@ pub(crate) async fn run_public_at(
     let analytics_hop: Option<analytics_routes::Hop> = None;
     let (profiles, app_updates) = if let Some(native) = native.as_ref() {
         let (agents, cache) = native.profile_inputs();
-        let rows: profile_routes::RowsSource =
-            Arc::new(move || cache.as_ref().map(codex_dashboard_rows).unwrap_or_default());
+        let rows: profile_routes::RowsSource = Arc::new(move || {
+            cache
+                .as_ref()
+                .map(|cache| crate::codex_quotas::rows_from_cache(cache, now()))
+                .unwrap_or_default()
+        });
+        let collector = native.clone();
+        let quota_rows: profile_routes::QuotaRows = Arc::new(move |at| {
+            let collector = collector.clone();
+            Box::pin(async move { collector.codex_profile_rows(at).await })
+        });
         #[cfg(unix)]
         let (profiles, app_updates) = if let Some(host) = owner_host.as_ref().filter(|_| enabled) {
             (
@@ -605,6 +613,9 @@ pub(crate) async fn run_public_at(
             profile_routes::Profiles::start(root.clone(), rows, agents.clone()),
             app_updates_owner::Owner::start(root.clone(), auth.events(), agents),
         );
+        let profiles = profiles.with_quota_rows(quota_rows);
+        #[cfg(unix)]
+        let profiles = profiles.with_adopted_quotas(adopted_quotas);
         (Some(profiles), Some(app_updates))
     } else {
         (None, None)

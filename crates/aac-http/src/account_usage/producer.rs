@@ -213,6 +213,16 @@ impl Producer {
             .await
     }
 
+    /// Read the saved Codex profiles through the collector's existing quota and renewal readers.
+    pub async fn codex_profile_rows(&self, now: i64) -> Vec<Value> {
+        let root = self.root.clone();
+        let Ok(Ok(profiles)) = tokio::task::spawn_blocking(move || codex_names(&root)).await else {
+            return Vec::new();
+        };
+        let entries = self.renewal_entries(now).await;
+        self.codex_rows(profiles, &entries, now).await
+    }
+
     /// Build all desktop/transport variants in one pass. Only the presentation
     /// differs between variants, so a provider is read once per generation.
     pub async fn collect(

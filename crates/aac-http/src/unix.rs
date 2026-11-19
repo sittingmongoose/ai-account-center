@@ -766,6 +766,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                             query,
                             &root,
                             &bytes,
+                            None,
                         )
                     })
                     .await
@@ -1375,6 +1376,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                             query.is_some(),
                             &root,
                             &body,
+                            None,
                         )
                     })
                     .await
@@ -1427,10 +1429,18 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let root = shared.boot.ccs_dir.clone();
             let profiles_path = path.clone();
             let profiles_root = root.clone();
+            let usage_cache = shared.account_usage.clone();
             match shared
                 .limits
                 .blocking(row.pool, move || {
-                    crate::read_routes::answer(read, &path, query, &root, &bytes)
+                    crate::read_routes::answer(
+                        read,
+                        &path,
+                        query,
+                        &root,
+                        &bytes,
+                        Some(&usage_cache),
+                    )
                 })
                 .await
             {
