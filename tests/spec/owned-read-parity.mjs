@@ -347,7 +347,7 @@ try {
     );
   }
   await today.command('scan');
-  await owned.command('wait-owned');
+  await owned.command('wait-owned', { marker: 'mac.second' });
   await compare('a new report scanned', '/api/status', { view: 'status@1' });
 
   // Ingest parity: the store's runs audit after each side's passes over the same share.

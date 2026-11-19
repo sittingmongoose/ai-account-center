@@ -94,15 +94,20 @@ app.use(
 
 const send = (message) => process.send && process.send(message);
 
-async function waitOwned(timeoutMs = 20000) {
+async function waitOwned(timeoutMs = 30000, marker = null) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const inputs = await rust.internalJson('/internal/status/inputs');
-    if (inputs && typeof inputs.generation === 'number' && inputs.generation > 0)
+    if (
+      inputs &&
+      typeof inputs.generation === 'number' &&
+      inputs.generation > 0 &&
+      (!marker || JSON.stringify(inputs.reports ?? null).includes(marker))
+    )
       return inputs.generation;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error('the owned Status readers never produced a generation');
+  throw new Error('the owned Status readers never produced the expected generation');
 }
 
 async function main() {
@@ -133,7 +138,7 @@ async function main() {
         await scoreboard.view(ALL_RUNS);
         send({ ok: true });
       } else if (message.cmd === 'wait-owned') {
-        send({ ok: true, generation: await waitOwned() });
+        send({ ok: true, generation: await waitOwned(30000, message.marker ?? null) });
       } else if (message.cmd === 'audit') {
         if (mode === 'owned') {
           const lease = rust.lease;
