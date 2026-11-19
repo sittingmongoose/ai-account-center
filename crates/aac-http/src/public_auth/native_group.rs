@@ -85,6 +85,8 @@ fn decline_reason(reply: &ServiceReply) -> Option<&str> {
 /// answered from the same read; a worker-less boot has nobody else).
 fn decline_because(reason: &'static str) -> Reply {
     tracing::warn!(reason, "native group route declined");
+    // The CLI dashboard has no tracing subscriber; its stderr is the operator's log.
+    eprintln!("aac-http: native group route declined ({reason})");
     super::decline()
 }
 
@@ -477,12 +479,16 @@ async fn answers_post(
 /// The display zone the Status producers format in: the saved preference, else the reference's
 /// default. A zone the database does not hold declines (the reference's `Intl` throw).
 fn status_zone(root: &Path) -> Option<(String, crate::zone_facts::ZoneOffsets)> {
-    let preferences = crate::account_reads::preferences(root)?;
-    let name = preferences
-        .get("timeZone")
-        .and_then(Json::as_str)
-        .unwrap_or("America/New_York")
-        .to_owned();
+    // The preferences reader answers the saved zone; an absent file is the reference's default
+    // (the TypeScript reader falls back the same way), never a missing zone.
+    let name = crate::account_reads::preferences(root)
+        .and_then(|preferences| {
+            preferences
+                .get("timeZone")
+                .and_then(Json::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "America/New_York".to_owned());
     let now = i64::try_from(now_ms()).ok()?;
     let facts = crate::zone_facts::server_zone_facts(&name, now)?;
     Some((name, facts))
@@ -503,13 +509,13 @@ async fn status(
         return super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS);
     }
     let Some(principal) = access.service_principal() else {
-        return super::decline();
+        return decline_because("principal");
     };
     if !routes.hosted().await {
-        return super::decline();
+        return decline_because("service");
     }
     let Some((time_zone, offsets)) = status_zone(routes.root()) else {
-        return super::decline();
+        return decline_because("zone");
     };
     let now = now_ms().to_string();
     let zone = json!({
@@ -524,13 +530,33 @@ async fn status(
         ("x-aac-now", now.as_str()),
         ("x-aac-zone", zone.as_str()),
     ];
-    match routes
-        .request("GET", "/api/status", &principal, &headers, None)
-        .await
-    {
-        Some(reply) if reply.status == 200 => fed_view(&reply, facts.if_none_match.as_deref()),
-        _ => super::decline(),
+    // The first owned Status request can beat the service's first report scan; retry a cold
+    // `unsupported`/`stale`/`busy` for a moment instead of declining to nobody.
+    for attempt in 0..6 {
+        match routes
+            .request("GET", "/api/status", &principal, &headers, None)
+            .await
+        {
+            Some(reply) if reply.status == 200 => {
+                return fed_view(&reply, facts.if_none_match.as_deref());
+            }
+            Some(reply) if declined(&reply) => {
+                let reason = decline_reason(&reply).unwrap_or("");
+                tracing::warn!(reason, "the owned Status read declined");
+                eprintln!("aac-http: owned Status read declined ({reason})");
+                if !matches!(reason, "unsupported" | "stale" | "busy") {
+                    return decline_because("status");
+                }
+                if attempt < 5 {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    continue;
+                }
+                return decline_because("status");
+            }
+            _ => return decline_because("status"),
+        }
     }
+    decline_because("status")
 }
 
 /// The service principal internal routes admit (`VerifiedPrincipal::valid`).
@@ -818,6 +844,7 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
             .map(str::to_owned)
     };
     let (Some(etag), Some(view)) = (header("etag"), header("x-aac-view")) else {
+        eprintln!("aac-http: fed view missing its etag or view header");
         return super::decline();
     };
     if !matches!(
@@ -826,6 +853,7 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
     ) || !etag.starts_with("W/\"")
         || etag.len() != 67
     {
+        eprintln!("aac-http: fed view refused: {view} {etag}");
         return super::decline();
     }
     let mut out = if not_modified(if_none_match, &etag) {
