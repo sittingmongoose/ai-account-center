@@ -158,6 +158,8 @@ if (mode !== 'fixture' && process.platform !== 'win32') {
 function normalize(value: unknown, key = ''): unknown {
   if (value === undefined) return value;
   if (key === 'etag') return '<etag>';
+  // The dashboard names the build it came from; a rebuild must not read as a behaviour change.
+  if (key === 'commit') return '<commit>';
   if (key === 'x-ccs-bar-token') return '<bar-proof>';
   // A store boot's own identity (capture.ts nulls the same members when it records the row),
   // the workers' live host readings (capture.ts does the same), and clock numbers.
@@ -370,7 +372,10 @@ try {
               ? overrides['contract/' + fixture]
               : undefined) ??
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
-        const { request, response: expected } = contract;
+        const { request, response: expectedRaw } = contract;
+        // Recorded rows were written normalized; a row read back is compared the same way, so a
+        // build identity (a commit hash, an etag) never reads as a difference.
+        const expected = normalize(expectedRaw);
         const headers = await roleHeaders(rust.url, role);
         let status: number;
         let body: unknown;
