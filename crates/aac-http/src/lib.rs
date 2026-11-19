@@ -6,6 +6,8 @@ mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
 #[cfg(unix)]
+pub mod claude_lifecycle;
+#[cfg(unix)]
 pub mod app_update_routes;
 #[cfg(unix)]
 mod feed;

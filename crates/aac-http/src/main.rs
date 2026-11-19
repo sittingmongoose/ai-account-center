@@ -18,6 +18,7 @@ fn main() {
         Some("--provider-write") => std::process::exit(provider_write::commit()),
         Some("--codex-staging") => std::process::exit(provider_write::staging(false)),
         Some("--antigravity-staging") => std::process::exit(provider_write::staging(true)),
+        Some("--claude-workflow") => std::process::exit(claude_workflow()),
         Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
         Some("--lifecycle-queue") => std::process::exit(lifecycle_queue()),
         Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
@@ -35,6 +36,18 @@ fn main() {
         std::process::exit(1);
     };
     runtime.block_on(run());
+}
+
+#[cfg(unix)]
+fn claude_workflow() -> i32 {
+    let Some(mode) = std::env::args().nth(2) else {
+        return 74;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().build();
+    let result = runtime.and_then(|runtime| {
+        runtime.block_on(aac_http::claude_lifecycle::compatibility_pipe(&mode))
+    });
+    if result.is_ok() { 0 } else { 74 }
 }
 
 #[cfg(unix)]

@@ -1,3 +1,4 @@
+import { runClaudeWorkflow } from './claude-lifecycle-workflow';
 import { lifecyclePlan } from '../../shared/private-file-lease';
 import { serialized } from './account-lifecycle-queue';
 import { randomBytes } from 'crypto';
@@ -180,47 +181,51 @@ export class ClaudeAccountLifecycle {
     const aliases = await this.hostAliases();
     if (!aliases) throw new ClaudeLifecycleError('not_configured');
     const created: Partial<Record<ClaudeHost, ClaudeHostLauncher>> = {};
-    const undo = async () => {
-      for (const host of [...CLAUDE_HOSTS].reverse()) {
-        const launcher = created[host];
-        if (!launcher) continue;
-        await this.deps.transport
-          .undoCreate(host, { profileId: input.profileId, launcher })
-          .catch(() => undefined);
-      }
-    };
-    for (const host of CLAUDE_HOSTS) {
-      try {
-        created[host] = await this.deps.transport.create(host, {
-          profileId: input.profileId,
-          sshHost: aliases[host],
-        });
-      } catch {
-        await undo();
-        throw new ClaudeLifecycleError('host_unreachable', host);
-      }
-    }
-    const profile: PendingClaudeProfile = {
+    const root = this.ccsDir();
+    const pending = () => ({
       id: input.profileId,
       label: input.label,
       mac: created.mac as ClaudeHostLauncher,
       windows: created.windows as ClaudeHostLauncher,
       createdAt: stamp(this.now()),
       expectedEmail: input.email,
-    };
-    try {
-      await updatePendingProfiles(this.ccsDir(), async (profiles) => {
-        if (profiles.some((candidate) => candidate.id === profile.id)) {
-          throw new ClaudeLifecycleError('id_in_use');
+    });
+    let profile: PendingClaudeProfile | null = null;
+    await runClaudeWorkflow(root, 'add', async (effect) => {
+      if (effect === 'commit') {
+        const record = pending();
+        try {
+          await updatePendingProfiles(root, async (profiles) => {
+            if (profiles.some((candidate) => candidate.id === record.id)) {
+              throw new ClaudeLifecycleError('id_in_use');
+            }
+            return { next: [...profiles, record], result: undefined };
+          });
+        } catch (error) {
+          throw error instanceof ClaudeLifecycleError
+            ? error
+            : new ClaudeLifecycleError('write_failed');
         }
-        return { next: [...profiles, profile], result: undefined };
-      });
-    } catch (error) {
-      await undo();
-      throw error instanceof ClaudeLifecycleError
-        ? error
-        : new ClaudeLifecycleError('write_failed');
-    }
+        profile = record;
+        return;
+      }
+      const host = effect.endsWith('-mac') ? 'mac' : 'windows';
+      if (effect.startsWith('undo-')) {
+        const launcher = created[host];
+        if (launcher)
+          await this.deps.transport.undoCreate(host, { profileId: input.profileId, launcher });
+        return;
+      }
+      try {
+        created[host] = await this.deps.transport.create(host, {
+          profileId: input.profileId,
+          sshHost: aliases[host],
+        });
+      } catch {
+        throw new ClaudeLifecycleError('host_unreachable', host);
+      }
+    });
+    if (!profile) throw new ClaudeLifecycleError('write_failed');
     return profile;
   }
 
@@ -272,66 +277,60 @@ export class ClaudeAccountLifecycle {
       throw new ClaudeLifecycleError('not_removable');
     }
     const now = this.now();
-    const moved: Array<[ClaudeHost, ClaudeTrashEntry['hosts'][ClaudeHost]]> = [];
-    const putBack = async () => {
-      for (const [host, detail] of moved.reverse()) {
-        if (!detail) continue;
-        await this.deps.transport
-          .restore(host, { profileId: profile.id, ...detail })
-          .catch(() => undefined);
+    const moved: ClaudeTrashEntry['hosts'] = {};
+    const root = this.ccsDir();
+    const trashId = `tr_${randomBytes(8).toString('hex')}`;
+    const purgeAfter = stamp(now + CLAUDE_TRASH_DAYS * DAY_MS);
+    await runClaudeWorkflow(root, 'remove', async (effect) => {
+      if (effect === 'commit') {
+        const entry: ClaudeTrashEntry = {
+          trashId,
+          provider: 'claude',
+          accountId: `claude:${profile.id}`,
+          label: profile.label,
+          source: profile.source,
+          hosts: moved,
+          entry: profile.entry,
+          trashedAt: stamp(now),
+          purgeAfter,
+          state: 'trashed',
+        };
+        try {
+          await updateTrash(root, async (entries) => ({
+            next: [...entries, entry],
+            result: undefined,
+          }));
+        } catch {
+          throw new ClaudeLifecycleError('remove_failed');
+        }
+        try {
+          await this.dropFromStore(profile);
+        } catch {
+          await updateTrash(root, async (entries) => ({
+            next: entries.filter((candidate) => candidate.trashId !== trashId),
+            result: undefined,
+          })).catch(() => undefined);
+          throw new ClaudeLifecycleError('remove_failed');
+        }
+        return;
       }
-    };
-    for (const host of CLAUDE_HOSTS) {
+      const host = effect.endsWith('-mac') ? 'mac' : 'windows';
       const launcher = profile.hosts[host];
-      if (!launcher) continue;
+      if (!launcher) return false;
       const detail = { trashName: trashName(profile.id, now), launcher };
-      let outcome: 'moved' | 'cross_volume';
-      try {
-        outcome = await this.deps.transport.trash(host, { profileId: profile.id, ...detail });
-      } catch {
-        await putBack();
-        throw new ClaudeLifecycleError('remove_failed', host);
+      if (effect.startsWith('undo-')) {
+        await this.deps.transport.restore(host, { profileId: profile.id, ...detail });
+        return;
       }
-      if (outcome === 'cross_volume') {
-        await putBack();
-        throw new ClaudeLifecycleError('trash_cross_volume', host);
-      }
-      moved.push([host, detail]);
-    }
-    const entry: ClaudeTrashEntry = {
-      trashId: `tr_${randomBytes(8).toString('hex')}`,
-      provider: 'claude',
-      accountId: `claude:${profile.id}`,
-      label: profile.label,
-      source: profile.source,
-      hosts: Object.fromEntries(moved),
-      entry: profile.entry,
-      trashedAt: stamp(now),
-      purgeAfter: stamp(now + CLAUDE_TRASH_DAYS * DAY_MS),
-      state: 'trashed',
-    };
-    // The trash record is written first: if dropping the entry fails after it, the
-    // record is taken out again, so the profile is never missing from both.
-    try {
-      await updateTrash(this.ccsDir(), async (entries) => ({
-        next: [...entries, entry],
-        result: undefined,
-      }));
-    } catch {
-      await putBack();
-      throw new ClaudeLifecycleError('remove_failed');
-    }
-    try {
-      await this.dropFromStore(profile);
-    } catch {
-      await updateTrash(this.ccsDir(), async (entries) => ({
-        next: entries.filter((candidate) => candidate.trashId !== entry.trashId),
-        result: undefined,
-      })).catch(() => undefined);
-      await putBack();
-      throw new ClaudeLifecycleError('remove_failed');
-    }
-    return { trashId: entry.trashId, purgeAfter: entry.purgeAfter };
+      const outcome = await this.deps.transport
+        .trash(host, { profileId: profile.id, ...detail })
+        .catch(() => {
+          throw new ClaudeLifecycleError('remove_failed', host);
+        });
+      if (outcome === 'cross_volume') throw new ClaudeLifecycleError('trash_cross_volume', host);
+      moved[host] = detail;
+    });
+    return { trashId, purgeAfter };
   }
 
   private async dropFromStore(profile: ClaudeProfileRecord): Promise<void> {
@@ -371,40 +370,36 @@ export class ClaudeAccountLifecycle {
       }
       for (const profile of await this.listPending()) ids.add(profile.id);
       if (ids.has(id)) throw new ClaudeLifecycleError('id_in_use');
-      const restored: ClaudeHost[] = [];
-      for (const host of CLAUDE_HOSTS) {
-        const detail = entry.hosts[host];
-        if (!detail) continue;
-        try {
-          await this.deps.transport.restore(host, { profileId: id, ...detail });
-          restored.push(host);
-        } catch {
-          for (const done of restored) {
-            const back = entry.hosts[done];
-            if (back) {
-              await this.deps.transport
-                .trash(done, { profileId: id, ...back })
-                .catch(() => undefined);
+      await runClaudeWorkflow(this.ccsDir(), 'restore', async (effect) => {
+        if (effect === 'commit') {
+          try {
+            if (entry.source === 'pending') {
+              await updatePendingProfiles(this.ccsDir(), async (profiles) => ({
+                next: [...profiles, entry.entry as unknown as PendingClaudeProfile],
+                result: undefined,
+              }));
+            } else {
+              await updateInventory(this.ccsDir(), (profiles) => ({
+                next: [...profiles, entry.entry],
+                result: undefined,
+              }));
             }
+          } catch {
+            throw new ClaudeLifecycleError('write_failed');
           }
+          return;
+        }
+        const host = effect.endsWith('-mac') ? 'mac' : 'windows';
+        const detail = entry.hosts[host];
+        if (!detail) return false;
+        if (effect.startsWith('undo-')) {
+          await this.deps.transport.trash(host, { profileId: id, ...detail });
+          return;
+        }
+        await this.deps.transport.restore(host, { profileId: id, ...detail }).catch(() => {
           throw new ClaudeLifecycleError('restore_failed', host);
-        }
-      }
-      try {
-        if (entry.source === 'pending') {
-          await updatePendingProfiles(this.ccsDir(), async (profiles) => ({
-            next: [...profiles, entry.entry as unknown as PendingClaudeProfile],
-            result: undefined,
-          }));
-        } else {
-          await updateInventory(this.ccsDir(), (profiles) => ({
-            next: [...profiles, entry.entry],
-            result: undefined,
-          }));
-        }
-      } catch {
-        throw new ClaudeLifecycleError('write_failed');
-      }
+        });
+      });
       return {
         next: entries.filter((candidate) => candidate.trashId !== trashId),
         result: { accountId: entry.accountId },
@@ -457,29 +452,34 @@ export class ClaudeAccountLifecycle {
 
   private async performPurgeOne(trashId: string, reviewed?: string): Promise<{ trashId: string }> {
     const entry = await this.reservePurge(trashId, reviewed);
-    let failedHost: ClaudeHost | null = null;
-    for (const host of CLAUDE_HOSTS) {
-      const detail = entry.hosts[host];
-      if (!detail) continue;
+    await this.purgeHosts(entry, async () => {
       try {
-        await this.deps.transport.purge(host, {
+        await updateTrash(this.ccsDir(), async (entries) => ({
+          next: entries.filter((candidate) => candidate.trashId !== trashId),
+          result: undefined,
+        }));
+      } catch {
+        throw new ClaudeLifecycleError('purge_failed');
+      }
+    });
+    return { trashId };
+  }
+
+  private async purgeHosts(entry: ClaudeTrashEntry, commit: () => Promise<void>): Promise<void> {
+    await runClaudeWorkflow(this.ccsDir(), 'purge', async (effect) => {
+      if (effect === 'commit') return commit();
+      const host = effect.endsWith('-mac') ? 'mac' : 'windows';
+      const detail = entry.hosts[host];
+      if (!detail) return false;
+      await this.deps.transport
+        .purge(host, {
           sshHost: detail.launcher.sshHost,
           trashName: detail.trashName,
+        })
+        .catch(() => {
+          throw new ClaudeLifecycleError('host_unreachable', host);
         });
-      } catch {
-        failedHost ??= host;
-      }
-    }
-    if (failedHost) throw new ClaudeLifecycleError('host_unreachable', failedHost);
-    try {
-      await updateTrash(this.ccsDir(), async (entries) => ({
-        next: entries.filter((candidate) => candidate.trashId !== trashId),
-        result: undefined,
-      }));
-    } catch {
-      throw new ClaudeLifecycleError('purge_failed');
-    }
-    return { trashId };
+    });
   }
 
   /** Delete trash past `purgeAfter`; an unreachable host keeps the entry as `deleting`. */
@@ -514,20 +514,9 @@ export class ClaudeAccountLifecycle {
       } catch {
         continue;
       }
-      let complete = true;
-      for (const host of CLAUDE_HOSTS) {
-        const detail = entry.hosts[host];
-        if (!detail) continue;
-        try {
-          await this.deps.transport.purge(host, {
-            sshHost: detail.launcher.sshHost,
-            trashName: detail.trashName,
-          });
-        } catch {
-          complete = false;
-        }
-      }
-      if (complete) purged.add(entry.trashId);
+      await this.purgeHosts(entry, async () => {
+        purged.add(entry.trashId);
+      }).catch(() => undefined);
     }
     if (purged.size === 0) return 0;
     await updateTrash(this.ccsDir(), async (entries) => ({
