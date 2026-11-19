@@ -49,6 +49,10 @@
             "string",
             "null"
           ]
+        },
+        "who": {
+          "type": "string",
+          "maxLength": 40
         }
       },
       "required": [
@@ -101,10 +105,12 @@
         "machine": {
           "description": "Machine the agent runs on.",
           "enum": [
-            "mac",
-            "nas1",
             "vm",
-            "windows"
+            "mac",
+            "windows",
+            "nas1",
+            "alexis",
+            null
           ],
           "type": [
             "string",
@@ -199,7 +205,10 @@
         "total",
         "unit"
       ],
-      "type": "object"
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "project": {
       "description": "Project id, e.g. puppet-master.",
@@ -246,7 +255,7 @@
     },
     "writer": {
       "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.tools-lead.",
-      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1|alexis)\\.[a-z0-9][a-z0-9.-]{0,62}$",
       "type": "string"
     },
     "writtenAt": {
@@ -525,6 +534,41 @@
     },
     "readmeQuestions": {
       "type": "boolean"
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "nextBy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nextByDay": {
+      "description": "Calendar deadline as YYYY-MM-DD. Use null for a precise timestamp.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "nextByNote": {
+      "type": "string",
+      "maxLength": 60
+    },
+    "more": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "saidAt": {
+      "$ref": "#/$defs/timestamp"
     }
   },
   "required": [

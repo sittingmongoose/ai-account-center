@@ -344,7 +344,24 @@ export const tests = {
     await t.check('answered: the answered card leads with its chip', answered?.text === 'R7' && answered.first, JSON.stringify(answered));
   },
 
-  async 'status waits on others show beside an owner wait'(t) {
+  async 'status keeps an old unanswered card open while its writer is quiet'(t) {
+    const data = view();
+    const old = data.cards.open[0];
+    const notice = 'asked 7 days ago; thread quiet since 2026-11-11';
+    old.quietNotice = notice;
+    for (const format of [FORMATS[0], FORMATS[2]]) {
+      await openStatus(t, format, data);
+      await t.text(`${CARD} .q-why`, notice);
+      await t.check(`${format.name}: the original card is still displayed`, (await t.page.locator(`${CARD} .q-title`).textContent()).includes(old.title));
+      await t.check(`${format.name}: the card can still be answered`, await t.page.locator(`${CARD} .opt-pick:not([disabled])`).count() > 0);
+      if (!format.mobile) {
+        const row = t.page.locator('.q-list .q-item', { hasText: old.title });
+        await t.check('the question list labels the same card', (await row.textContent()).includes(notice));
+      }
+    }
+  },
+
+  async 'status legacy owner waits are kept with other waits'(t) {
     for (const format of [FORMATS[2], FORMATS[0], FORMATS[3]]) {
       await openStatus(t, format, view());
       const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
@@ -352,9 +369,10 @@ export const tests = {
       await t.page.waitForSelector(`${sheet} .fx`);
       const facts = await t.page.$$eval(`${sheet} .fx > *`, (els) => els.map((e) => e.textContent.trim()));
       const at = (label) => facts[facts.indexOf(label) + 1] ?? '';
-      await t.check(`${format.name}: For you says the owner wait`, at('For you').includes(OWNER_WAIT), at('For you'));
+      await t.check(`${format.name}: For you does not repeat a legacy blocker`, !at('For you').includes(OWNER_WAIT), at('For you'));
       await t.check(`${format.name}: For you holds no one else's wait`, !/Browsers|reviewer|rebuild/i.test(at('For you')), at('For you'));
       const waiting = at('Waiting on');
+      await t.check(`${format.name}: Waiting on keeps the reported wait`, waiting.includes(OWNER_WAIT), waiting);
       for (const [head, words] of [['A machine (SWEEP)', 'Browsers on the VM and Nas1'], ['A review (PAGE-FRAME)', 'Second reviewer pass'], ['An agent (GLM-FIXES)', 'Rebuild after the GLM fixes']])
         await t.check(`${format.name}: Waiting on shows ${head}`, waiting.includes(head) && waiting.includes(words), waiting);
       await t.check(`${format.name}: not "Nothing else" while others are waited on`, !/Nothing else/.test(waiting), waiting);

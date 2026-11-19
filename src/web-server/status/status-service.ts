@@ -212,7 +212,6 @@ export class StatusService {
         run: deps.run,
         readRemote: deps.readRemotePins,
         now: () => this.now(),
-        timeZone: () => this.timeZone(),
         reportsRoot: () => this.reader.root,
         // Same root as the readers, so the check file lands beside what it describes.
         readersCheck: new ReadersCheckWriter({

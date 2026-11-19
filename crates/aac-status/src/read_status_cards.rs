@@ -167,6 +167,29 @@ fn card(i: &Inputs, doc: &V, hash: &V, problem: V, notes: Vec<V>) -> Option<V> {
         json!({"id":doc["id"],"media":doc.get("media").cloned().unwrap_or(json!([])),"label":doc.get("label").filter(|v|!v.is_null()).unwrap_or(&fallback_label),"writer":doc["writer"],"seq":doc["seq"],"project":doc["project"],"stream":doc["stream"],"askedBy":doc["askedBy"],"title":doc["title"],"now":doc["now"],"nowAsOf":doc["nowAsOf"],"oldAnswer":doc["oldAnswer"],"whatChanged":doc["whatChanged"],"options":options,"recommendation":doc["recommendation"],"multiple":doc["multiple"]==true,"urgency":doc["urgency"],"blocks":doc["blocks"],"sections":sections(writer,&doc["sections"])?,"batch":doc["batch"],"evidence":doc.get("evidence").cloned().unwrap_or(json!([])),"replies":doc.get("replies").cloned().unwrap_or(json!([])),"kind":doc.get("kind").cloned().unwrap_or(json!("question")),"neededBy":doc["neededBy"],"exception":doc["exception"],"reversible":doc["reversible"],"verdict":doc["verdict"],"group":doc["group"],"agreement":doc["agreement"],"doubt":doc["doubt"],"appliesTo":doc["appliesTo"],"changesCanon":doc.get("changesCanon").cloned().unwrap_or(json!([])),"related":doc.get("related").cloned().unwrap_or(json!([])),"askedAt":doc["askedAt"],"ageSeconds":number(&i.age(i.at(&doc["askedAt"]))).unwrap_or(0.0),"askerState":asker,"cardSha256":hash,"notes":notes,"problem":if !problem.is_null(){problem.clone()}else if anchored{json!("This judgement card carries a recommendation, so it cannot be answered: a judgement must not anchor the answer.")}else{V::Null},"answerable":problem.is_null()&&!anchored&&doc["kind"]!="sample"}),
     )
 }
+fn quiet_notice(i: &Inputs, doc: &V) -> Option<String> {
+    const DAY_MS: i64 = 86_400_000;
+    const EST_MS: i64 = 5 * 3_600_000;
+    let asked = i.at(&doc["askedAt"])?;
+    if !i.after(asked, 3 * DAY_MS) {
+        return None;
+    }
+    let thread = rows(&i.data["reports"]["threads"])
+        .iter()
+        .find(|row| row["writer"] == doc["writer"] && row["problem"].is_null())?;
+    let last = i.seen(thread)?;
+    let ttl = thread["doc"]["ttlSeconds"].as_i64().unwrap_or(86_400);
+    if !i.after(last, ttl * 1000) {
+        return None;
+    }
+    let date = aac_num::ecma::to_iso_string(last - EST_MS)?;
+    Some(format!(
+        "asked {} days ago; thread quiet since {}",
+        (i.now - asked) / DAY_MS,
+        &date[..10]
+    ))
+}
+
 pub(super) fn compose(i: &Inputs) -> Option<V> {
     let answers = i.data["answers"].as_array()?;
     let mut open = Vec::new();
@@ -190,6 +213,9 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
             V::Null
         };
         let mut c = card(i, doc, &row["sha256"], problem, notes)?;
+        if let Some(notice) = quiet_notice(i, doc) {
+            c["quietNotice"] = json!(notice);
+        }
         if !s(&i.data["answerHistoryProblem"]).is_empty() {
             c["answerable"] = json!(false);
             c["problem"] = i.data["answerHistoryProblem"].clone();
@@ -290,5 +316,40 @@ mod tests {
         };
         data["reports"]["cards"][0] = json!({"doc": asked["doc"], "sha256": "other-hash"});
         assert_eq!(compose(&i).unwrap()["open"][0]["seq"], 2308);
+    }
+
+    #[test]
+    fn old_cards_get_a_notice_only_after_the_card_and_heartbeat_cutoffs() {
+        const DAY: i64 = 86_400_000;
+        let now = aac_num::ecma::parse_instant("2026-11-18T20:00:00Z").unwrap();
+        let asked = now - 4 * DAY;
+        let fixture = |last| Inputs {
+            data: Data::Whole(json!({"reports":{"threads":[{
+                "writer":"vm.fixture", "writtenAtMs":last, "firstSeenAt":now,
+                "doc":{"state":"waiting","ttlSeconds":null}
+            }]}})),
+            ctx: Context::new(
+                serde_json::from_value(json!({
+                    "dates":{}, "epochs":{"2026-11-14T20:00:00Z":asked}, "order":{}
+                }))
+                .unwrap(),
+            ),
+            now,
+            owner_cards: Default::default(),
+            trace: Default::default(),
+        };
+        let card = json!({"writer":"vm.fixture","askedAt":"2026-11-14T20:00:00Z"});
+        assert_eq!(
+            quiet_notice(&fixture(now - 2 * DAY), &card).as_deref(),
+            Some("asked 4 days ago; thread quiet since 2026-11-16")
+        );
+        assert_eq!(quiet_notice(&fixture(now - DAY), &card), None);
+        assert_eq!(
+            quiet_notice(
+                &fixture(now - 2 * DAY),
+                &json!({"writer":"vm.fixture","askedAt":now - 3 * DAY})
+            ),
+            None
+        );
     }
 }

@@ -244,3 +244,25 @@ fn optional_v2_fields_and_blocker_details_survive() {
     assert_eq!(doc["title"], raw["title"]);
     assert_eq!(doc["blockers"], raw["blockers"]);
 }
+
+#[test]
+fn contract_v3_status_fields_survive_the_native_reader() {
+    let mut doc = valid();
+    let fields = json!({
+        "goal": "Finish the browser checks",
+        "nextBy": null,
+        "nextByNote": "unknown:the slot has no time yet",
+        "more": "The checks run on two machines.",
+        "saidAt": "2026-11-08T15:45:00Z"
+    });
+    for (key, value) in fields.as_object().unwrap() {
+        doc[key] = value.clone();
+    }
+    doc["blockers"][0]["who"] = json!("Browser tools");
+    let parsed = parse(&doc).unwrap();
+    let projected = serde_json::to_value(&parsed.doc).unwrap();
+    for (key, value) in fields.as_object().unwrap() {
+        assert_eq!(projected.get(key), Some(value), "{key}");
+    }
+    assert_eq!(projected["blockers"][0]["who"], "Browser tools");
+}

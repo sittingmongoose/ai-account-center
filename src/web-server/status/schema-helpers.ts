@@ -200,6 +200,13 @@ export function optIso(value: unknown, field: string): string | null {
   return value === null || value === undefined ? null : iso(value, field);
 }
 
+export function optDay(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) fail(field);
+  iso(`${value}T00:00:00Z`, field);
+  return value;
+}
+
 export function bool(value: unknown, field: string, fallback: boolean): boolean {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== 'boolean') fail(field);

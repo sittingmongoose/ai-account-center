@@ -16,7 +16,7 @@ const cases = () => fixture('pinned-composer-cases.json');
 const withPins = (pinned) => ({ ...fixture('status-design-view.json'), pinned });
 
 /** Opens the first pin's sheet on `first`. `change(view, ready)` serves `view` and re-reads until `ready` holds in the page. */
-async function openSheet(t, first) {
+async function openSheet(t, first, title) {
 	await t.newContext(PHONE);
 	await t.app.signIn();
 	let current = first;
@@ -25,7 +25,8 @@ async function openSheet(t, first) {
 	await t.page.context().route((u) => new URL(u).pathname === '/api/status/deliverable', (r) =>
 		r.fulfill({ contentType: 'image/jpeg', body: fs.readFileSync(path.join(LEPTOS, 'fixtures', 'media', 'option-a.jpg')) }));
 	await t.goto('/app/status', { settleMs: 300 });
-	await t.page.locator(ROW).first().click();
+	const row = title ? t.page.locator(ROW, { hasText: title }) : t.page.locator(ROW).first();
+	await row.click();
 	await t.page.waitForSelector(SHEET);
 	return {
 		async change(view, ready, arg) {
@@ -90,12 +91,13 @@ export const tests = {
 	},
 
 	async 'status open pin sheet shows newer figures and keeps its place'(t) {
-		// The C2 fixture's first row (Needs you) has a long sheet: facts, things to open, stages and tasks.
+		// Open the long sheet by thread title so this check is independent of the roster order.
 		const c2 = fixture('status-c2-pins.json');
 		const view = { ...fixture('status-design-view.json'), pinned: c2.pinned, projects: c2.projects };
 		const newer = structuredClone(view);
-		newer.pinned.updates.find((u) => u.id === 'c2-ready').reported.now = 'The second round-2 review started.';
-		const sheet = await openSheet(t, view);
+		const update = newer.pinned.updates.find((u) => u.id === 'c2-ready');
+		update.reported.now = 'The second round-2 review started.';
+		const sheet = await openSheet(t, view, update.title);
 		const scroller = t.page.locator('.sheet');
 		await scroller.evaluate((el) => { el.scrollTop = 200; });
 		const before = await scroller.evaluate((el) => el.scrollTop);

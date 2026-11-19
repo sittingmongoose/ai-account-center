@@ -140,6 +140,11 @@ pub struct PinnedUpdate {
     pub heartbeat: Option<PinnedUpdated>,
     /// The task board behind the tasks, percent and loop, and whether it is another writer's (a shared stream board).
     pub board: Option<PinnedBoard>,
+    pub display_state: Option<String>,
+    pub card_title: Option<String>,
+    pub thin_report: Option<String>,
+    pub next_time: Option<PinnedTime>,
+    pub late_count: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -151,10 +156,12 @@ pub struct PinnedWait {
     #[serde(deserialize_with = "nullable")]
     pub text: String,
     pub short: Option<String>,
+    pub who: Option<String>,
     /// The board item that waits.
     pub task: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
+    pub until_time: Option<PinnedTime>,
     /// thread, tasks or status.
     #[serde(deserialize_with = "nullable")]
     pub from: String,
@@ -231,6 +238,9 @@ pub struct PinnedItem {
     pub title: String,
     /// The report's one short fact for this task ("running since 9:19 AM"), when it gave one.
     pub note: Option<String>,
+    pub time: Option<PinnedTime>,
+    pub outcome: Option<String>,
+    pub needs_you: Option<String>,
     /// The item's own state, when the server passes it on.
     pub state: Option<String>,
 }
@@ -243,6 +253,15 @@ pub struct PinnedUpdated {
     #[serde(deserialize_with = "nullable")]
     pub at: String,
     pub age_seconds: Option<i64>,
+    pub clock: Option<String>,
+}
+
+/// The server's time words for a pinned report.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct PinnedTime {
+    pub text: String,
+    pub late: bool,
 }
 
 /// Spend by stream: one sentence, a table of shares per account limit, and the footnote (CONTRACT-spend-bymodel.md).
@@ -618,6 +637,7 @@ pub struct Card {
     #[serde(deserialize_with = "nullable")]
     pub asked_by: String,
     pub asker_state: Option<String>,
+    pub quiet_notice: Option<String>,
     #[serde(deserialize_with = "nullable")]
     pub title: String,
     #[serde(deserialize_with = "nullable")]

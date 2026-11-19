@@ -105,8 +105,13 @@ fn items(value: Option<&Json>, field: &str) -> Valid<Vec<StatusItem>> {
 
 fn blocker(value: &Json, field: &str) -> Valid<Blocker> {
     let row = obj(Some(value), field)?;
+    let who = opt_text(row.get("who"), &format!("{field}.who"), 40)?;
+    let mut additions = additions(row, &["short", "since", "until", "card"]);
+    if let Some(who) = who {
+        additions.insert("who".into(), Json::String(who));
+    }
     Ok(Blocker {
-        additions: additions(row, &["short", "since", "until", "card"]),
+        additions,
         text: text(row.get("text"), &format!("{field}.text"), 500)?,
         waiting_on: slug(row.get("waitingOn"), &format!("{field}.waitingOn"))?,
     })
@@ -154,6 +159,12 @@ pub fn parse_status_file(bytes: &[u8], writer: &str) -> Result<ParsedStatus, Str
                     "title",
                     "now",
                     "next",
+                    "goal",
+                    "nextBy",
+                    "nextByDay",
+                    "nextByNote",
+                    "more",
+                    "saidAt",
                     "stages",
                     "deliverables",
                     "progress",

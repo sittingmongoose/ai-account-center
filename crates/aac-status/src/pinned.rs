@@ -9,6 +9,7 @@
 //! disk here, and every unknown is said in words ("No task list.", "Can't tell.") — a
 //! missing piece is never invented as a zero or a no.
 
+use aac_num::{civil, ecma::parse_instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -74,8 +75,6 @@ fn machine_label(machine: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct ComposeInput {
     pub now_ms: i64,
-    /// The dashboard time zone's UTC offset in minutes at `now_ms`, for clock times.
-    pub utc_offset_minutes: i64,
     #[serde(default)]
     pub pins: Vec<PinIn>,
     #[serde(default)]
@@ -217,6 +216,14 @@ pub struct TasksIn {
 pub struct ItemIn {
     #[serde(default)]
     pub note: Option<String>,
+    pub why: Option<String>,
+    pub due: Option<String>,
+    pub due_day: Option<String>,
+    pub due_note: Option<String>,
+    pub due_was: Option<String>,
+    pub done_at: Option<String>,
+    pub outcome: Option<String>,
+    pub needs_you: Option<String>,
     pub id: String,
     pub title: String,
     pub state: String,
@@ -445,6 +452,11 @@ pub struct PinnedUpdate {
     /// which stream. `shared` when it is another writer's board for the same project and stream.
     #[serde(default)]
     pub board: Option<BoardOut>,
+    pub display_state: &'static str,
+    pub card_title: Option<String>,
+    pub thin_report: Option<String>,
+    pub next_time: Option<TimeView>,
+    pub late_count: usize,
 }
 
 /// One wait, as a report gave it.
@@ -459,6 +471,8 @@ pub struct WaitOut {
     /// The report's short form of the same wait (v2 `short`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub short: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub who: Option<String>,
     /// The board item that waits, when the wait is a task's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
@@ -466,6 +480,8 @@ pub struct WaitOut {
     pub since: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until_time: Option<TimeView>,
     /// Where it was read: `thread`, `tasks` or `status`.
     pub from: &'static str,
 }
@@ -529,6 +545,7 @@ pub struct LoopingView {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ItemOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
@@ -536,6 +553,14 @@ pub struct ItemOut {
     pub blocked_on: Option<Json>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<TimeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_you: Option<String>,
     pub id: String,
     pub title: String,
 }
@@ -546,6 +571,13 @@ pub struct UpdatedView {
     pub text: String,
     pub at: String,
     pub age_seconds: i64,
+    pub clock: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimeView {
+    pub text: String,
+    pub late: bool,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -664,20 +696,150 @@ fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
 fn worst_loop(items: &[ItemIn], now_ms: i64) -> Option<ItemLoop> {
     items
         .iter()
-        .filter(|item| !matches!(item.state.as_str(), "landed" | "done" | "dropped"))
+        .filter(|item| is_open(item))
         .map(|item| item_loop(item, now_ms))
         .filter(|counts| counts.rounds >= LOOP_ROUNDS_MIN || counts.rounds >= LOOP_ROW_MIN)
         .max_by_key(|counts| counts.rounds)
 }
 
-fn item_out(item: &ItemIn) -> ItemOut {
-    let known = [
-        "todo", "working", "review", "fixing", "blocked", "ready", "landed", "done", "dropped",
-    ]
-    .contains(&item.state.as_str());
+fn task_state(state: &str) -> &str {
+    match state {
+        "fixing" => "review",
+        "landing" | "ready" => "working",
+        "landed" => "done",
+        "queued" => "todo",
+        "superseded" => "dropped",
+        _ => state,
+    }
+}
+
+fn is_open(item: &ItemIn) -> bool {
+    !matches!(task_state(&item.state), "done" | "dropped")
+}
+
+fn task_line(item: &ItemIn) -> Option<String> {
+    let line = [item.note.as_deref(), item.why.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    if line.chars().count() <= 110 {
+        return Some(line.to_string());
+    }
+    let (end, next) = line.char_indices().nth(109)?;
+    let prefix = &line[..end];
+    let boundary = if next.is_whitespace() {
+        end
+    } else {
+        prefix.rfind(char::is_whitespace).unwrap_or(end)
+    };
+    Some(format!("{}…", prefix[..boundary].trim_end()))
+}
+
+const EST: i64 = -5 * 60;
+const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+fn report_instant(text: &str) -> Option<i64> {
+    if let Some((whole, suffix)) = text.split_once('.') {
+        let (fraction, zone) = suffix.split_at(suffix.find(|c: char| !c.is_ascii_digit())?);
+        if (1..3).contains(&fraction.len()) {
+            return parse_instant(&format!("{whole}.{fraction:0<3}{zone}"));
+        }
+    }
+    parse_instant(text)
+}
+
+fn est_day(at: i64) -> i64 {
+    (at + EST * 60_000).div_euclid(DAY_MS)
+}
+
+fn date_clock(at: i64, now: i64) -> String {
+    let clock = clock_text(at, EST);
+    if est_day(at) == est_day(now) {
+        clock
+    } else {
+        format!("{} {clock}", WEEKDAYS[civil::weekday(est_day(at))])
+    }
+}
+
+fn report_day(day: &str) -> Option<i64> {
+    report_instant(&format!("{day}T00:00:00Z")).map(|at| at.div_euclid(DAY_MS))
+}
+
+fn calendar_due(day: i64, now: i64) -> (String, bool) {
+    (format!("by {}", WEEKDAYS[civil::weekday(day)]), day < est_day(now))
+}
+
+fn next_due_day(marker: Option<&Json>, due: Option<&str>) -> Option<i64> {
+    if let Some(day) = marker {
+        // A date names a calendar day. An explicit null leaves the timestamp precise.
+        return day.as_str().and_then(report_day);
+    }
+    // Agent-report 1.9 encodes a day as 23:59:59 New York time, which can be
+    // 22:59:59 EST in summer. Older reports did not distinguish that instant.
+    let at = due.and_then(report_instant)?;
+    (at.rem_euclid(3_600_000) == 3_599_000
+        && matches!((at + EST * 60_000).div_euclid(3_600_000).rem_euclid(24), 22 | 23))
+    .then(|| est_day(at))
+}
+
+fn due_words(due: Option<&str>, day: Option<i64>, note: Option<&str>, was: Option<&str>, now: i64) -> Option<TimeView> {
+    let moment = due.and_then(report_instant);
+    let (mut text, late) = if let Some(at) = moment {
+        (date_clock(at, now), at < now)
+    } else if let Some(day) = day {
+        calendar_due(day, now)
+    } else {
+        let note = note?.trim();
+        let text = match note.split_once(':') {
+            Some(("after", what)) => what.trim().to_string(),
+            Some(("unknown", why)) => format!("no time: {}", why.trim()),
+            _ => format!("no time: {note}"),
+        };
+        (text, false)
+    };
+    if late {
+        text = format!("late, was due {text}");
+    }
+    if let Some(was) = was.and_then(report_instant) {
+        text.push_str(&format!(", was {}", date_clock(was, now)));
+    }
+    Some(TimeView { text, late })
+}
+
+fn finished_at(item: &ItemIn) -> Option<i64> {
+    item.done_at
+        .as_deref()
+        .and_then(report_instant)
+        .or_else(|| item.landed.as_ref().and_then(|landed| landed.at_ms))
+        .or(item.updated_at_ms)
+}
+
+fn item_out(item: &ItemIn, now: i64, needs_you: Option<String>) -> ItemOut {
+    let state = task_state(&item.state);
+    let known = ["todo", "working", "review", "waiting", "blocked", "done", "dropped"].contains(&state);
+    let open = is_open(item);
+    let time = if open {
+        due_words(
+            item.due.as_deref(),
+            item.due_day.as_deref().and_then(report_day),
+            item.due_note.as_deref(),
+            item.due_was.as_deref(),
+            now,
+        )
+    } else {
+        item.done_at.as_deref().and_then(report_instant).map(|at| TimeView {
+            text: date_clock(at, now),
+            late: false,
+        })
+    };
     ItemOut {
-        state: Some(item.state.clone()),
-        note: item.note.clone(),
+        state: Some(state.to_string()),
+        note: task_line(item),
+        time,
+        outcome: if open { None } else { item.outcome.clone() },
+        done_at: if open { None } else { item.done_at.clone() },
+        needs_you,
         blocked_on: item
             .blocked_on
             .as_ref()
@@ -747,6 +909,10 @@ fn lite_out(item: &ItemLiteIn) -> ItemOut {
     ItemOut {
         state: None,
         note: None,
+        time: None,
+        outcome: None,
+        done_at: None,
+        needs_you: None,
         blocked_on: None,
         id: item.id.clone(),
         title: item.title.clone(),
@@ -763,25 +929,26 @@ fn addition_text(additions: &std::collections::BTreeMap<String, Json>, key: &str
         .map(str::to_string)
 }
 
-/// Adds one wait unless the same wait is already there, by who it waits on and its words: the
-/// thread and its status repeat the same `--waiting-on-you`. Two tasks blocked on the same words
-/// are two waits (agents copy blocker words across items), so a repeat merges only when the tasks
-/// agree or one names none; unexplained blocks count once per task. A repeat fills what the first
-/// copy left out (its short form, task, since or due time).
+/// Merge copies of the same wait from the thread and status documents. Named waits keep
+/// separate thread and task timing. Older unnamed waits keep their existing grouping.
 fn push_wait(waits: &mut Vec<WaitOut>, wait: WaitOut) {
     let same = |held: &WaitOut| {
-        let tasks_agree = if wait.on == "unknown" {
-            held.task == wait.task
-        } else {
-            held.task.is_none() || wait.task.is_none() || held.task == wait.task
-        };
-        held.on == wait.on && held.text.trim() == wait.text.trim() && tasks_agree
+        let legacy_repeat = wait.on != "unknown"
+            && held.who.is_none()
+            && wait.who.is_none()
+            && (held.task.is_none() || wait.task.is_none());
+        (held.task == wait.task || legacy_repeat)
+            && held.on == wait.on
+            && (held.who.is_none() || wait.who.is_none() || held.who == wait.who)
+            && held.text.trim() == wait.text.trim()
     };
     if let Some(held) = waits.iter_mut().find(|held| same(held)) {
+        held.who = held.who.take().or(wait.who);
         held.since = held.since.take().or(wait.since);
         held.short = held.short.take().or(wait.short);
         held.task = held.task.take().or(wait.task);
         held.until = held.until.take().or(wait.until);
+        held.until_time = held.until_time.take().or(wait.until_time);
         return;
     }
     waits.push(wait);
@@ -820,10 +987,21 @@ fn compose_update(
     .into_iter()
     .flatten()
     {
+        if source.contains_key("next") {
+            additions.remove("nextBy");
+            additions.remove("nextByDay");
+            additions.remove("nextByNote");
+        }
         for key in [
             "title",
             "now",
             "next",
+            "goal",
+            "nextBy",
+            "nextByDay",
+            "nextByNote",
+            "more",
+            "saidAt",
             "stages",
             "deliverables",
             "progress",
@@ -857,7 +1035,9 @@ fn compose_update(
         if !thread.state.is_empty() {
             additions.insert("state".into(), Json::String(thread.state.clone()));
         }
-        additions.insert("writer".into(), Json::String(thread.writer.clone()));
+    }
+    if let Some(writer) = thread.map(|doc| &doc.writer).or(status.map(|doc| &doc.writer)) {
+        additions.insert("writer".into(), Json::String(writer.clone()));
     }
     let mut update = PinnedUpdate {
         additions,
@@ -888,6 +1068,11 @@ fn compose_update(
         status_updated: None,
         heartbeat: None,
         board: None,
+        display_state: "notReporting",
+        card_title: None,
+        thin_report: None,
+        next_time: None,
+        late_count: 0,
     };
 
     // ---- Who and Now --------------------------------------------------------------------
@@ -952,16 +1137,21 @@ fn compose_update(
             text: format!("Updated {words}", words = age_words(age)),
             at: written_at,
             age_seconds: age / 1000,
+            clock: date_clock(at, input.now_ms),
         });
     }
     // The two clocks apart: a heartbeat rewrites thread.json and carries the last words, so the
     // newest of the two alone made a day-old summary read as current.
-    update.status_updated = status.map(|doc| {
-        let age = input.now_ms - doc.written_at_ms;
+    let said_at = addition_text(&update.additions, "saidAt")
+        .and_then(|at| report_instant(&at).map(|ms| (at, ms)))
+        .or_else(|| status.map(|doc| (doc.written_at.clone(), doc.written_at_ms)));
+    update.status_updated = said_at.map(|(at, ms)| {
+        let age = input.now_ms - ms;
         UpdatedView {
             text: format!("Updated {}", age_words(age)),
-            at: doc.written_at.clone(),
+            at,
             age_seconds: age / 1000,
+            clock: date_clock(ms, input.now_ms),
         }
     });
     update.heartbeat = thread.map(|doc| {
@@ -970,6 +1160,7 @@ fn compose_update(
             text: format!("Active {}", age_words(age)),
             at: doc.written_at.clone(),
             age_seconds: age / 1000,
+            clock: date_clock(doc.written_at_ms, input.now_ms),
         }
     });
 
@@ -1010,53 +1201,16 @@ fn compose_update(
         .and_then(|doc| doc.ttl_seconds)
         .map(|seconds| seconds * 1000)
         .unwrap_or(0);
-    // A thread whose last report says it waits on the owner is never stale: it ended its turn to
-    // wait for him, so the longer it waits the more the page must keep saying so (B2), whatever
-    // its heartbeat said. The `updated` line above still shows its true age.
-    let waiting_on_owner = [
-        thread
-            .and_then(|doc| doc.blocked_on.as_ref())
-            .map(|kind| kind.kind.as_str()),
-        tasks.and_then(|board| {
-            board
-                .items
-                .iter()
-                .filter(|item| !matches!(item.state.as_str(), "landed" | "done" | "dropped"))
-                .find(|item| item.blocked_on.as_ref().is_some_and(|kind| kind.kind == "owner"))
-                .map(|_| "owner")
-        }),
-        status.and_then(|doc| {
-            doc.blockers
-                .iter()
-                .find(|blocker| blocker.waiting_on == "owner")
-                .map(|_| "owner")
-        }),
-        // Waiting through an open question card is waiting too (F4): the thread asked
-        // and ended its turn, exactly as a blockedOn says so.
-        thread.and_then(|doc| {
-            input
-                .open_cards
-                .iter()
-                .find(|card| card.writer == doc.writer && is_question_kind(&card.kind))
-                .map(|_| "owner")
-        }),
-        // A blocked/waiting state with no heartbeat is exempt too (N4): the thread ended
-        // its turn waiting, whatever state it ended in. With a ttl set, the state alone
-        // does not exempt — the owner signals above must name it.
-        thread
-            .filter(|doc| doc.ttl_seconds.is_none())
-            .filter(|doc| matches!(doc.state.as_str(), "blocked" | "waiting"))
-            .map(|_| "owner"),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|kind| kind == "owner");
+    let cards: Vec<&CardIn> = input
+        .open_cards
+        .iter()
+        .filter(|card| pin_writers.contains(&card.writer.as_str()) && is_question_kind(&card.kind))
+        .collect();
+    let waiting_without_heartbeat =
+        thread.is_some_and(|doc| doc.ttl_seconds.is_none() && matches!(doc.state.as_str(), "blocked" | "waiting"));
     if let Some(since) = unreadable_since {
         update.report_state = "unreadable";
-        update.unreadable_note = Some(format!(
-            "Could not be read since {}.",
-            clock_text(since, input.utc_offset_minutes)
-        ));
+        update.unreadable_note = Some(format!("Could not be read since {}.", clock_text(since, EST)));
     } else if thread.map(|doc| doc.problem.is_some()).unwrap_or(false)
         || status.map(|doc| doc.problem.is_some()).unwrap_or(false)
     {
@@ -1064,7 +1218,7 @@ fn compose_update(
         // never invent a moment.
         update.report_state = "unreadable";
         update.unreadable_note = Some("Could not be read since the last scan.".to_string());
-    } else if !waiting_on_owner && (age > DAY_MS || (ttl_ms > 0 && age > ttl_ms)) {
+    } else if cards.is_empty() && !waiting_without_heartbeat && (age > DAY_MS || (ttl_ms > 0 && age > ttl_ms)) {
         update.report_state = "stale";
         update.stale_note = Some(format!(
             "No status update for {}. If it is finished, unpin it in T3.",
@@ -1094,11 +1248,15 @@ fn compose_update(
 
     // ---- Percent: the task list first, the thread's own estimate beside it ----------------
     let board_counts = tasks.map(|board| {
-        let of = board.items.iter().filter(|item| item.state != "dropped").count() as u64;
+        let of = board
+            .items
+            .iter()
+            .filter(|item| task_state(&item.state) != "dropped")
+            .count() as u64;
         let done = board
             .items
             .iter()
-            .filter(|item| matches!(item.state.as_str(), "landed" | "done"))
+            .filter(|item| task_state(&item.state) == "done")
             .count() as u64;
         (done, of)
     });
@@ -1153,33 +1311,35 @@ fn compose_update(
         let loop_ids: Vec<String> = worst_loop(&board.items, input.now_ms)
             .map(|counts| vec![counts.id])
             .unwrap_or_default();
-        let mut left: Vec<&ItemIn> = board
-            .items
-            .iter()
-            .filter(|item| !matches!(item.state.as_str(), "landed" | "done" | "dropped"))
-            .collect();
+        let mut left: Vec<&ItemIn> = board.items.iter().filter(|item| is_open(item)).collect();
         // Blocked and looping ones first; the board's own order within each group.
         left.sort_by_key(|item| {
             let blocked = item.state == "blocked" || item.blocked_on.is_some();
             let looping = loop_ids.contains(&item.id);
             !(blocked || looping)
         });
-        update.left = Some(left.into_iter().map(item_out).collect());
+        update.left = Some(
+            left.into_iter()
+                .map(|item| {
+                    let card = item
+                        .needs_you
+                        .as_deref()
+                        .and_then(|id| cards.iter().find(|card| card.writer == board.writer && card.id == id));
+                    item_out(item, input.now_ms, card.map(|card| card.title.clone()))
+                })
+                .collect(),
+        );
         let mut done: Vec<&ItemIn> = board
             .items
             .iter()
-            .filter(|item| matches!(item.state.as_str(), "landed" | "done"))
+            .filter(|item| task_state(&item.state) == "done")
             .collect();
-        done.sort_by_key(|item| {
-            std::cmp::Reverse(
-                item.landed
-                    .as_ref()
-                    .and_then(|landed| landed.at_ms)
-                    .or(item.updated_at_ms)
-                    .unwrap_or(0),
-            )
-        });
-        update.done = Some(done.into_iter().map(item_out).collect());
+        done.sort_by_key(|item| std::cmp::Reverse(finished_at(item)));
+        update.done = Some(
+            done.into_iter()
+                .map(|item| item_out(item, input.now_ms, None))
+                .collect(),
+        );
     } else if let Some(doc) = status {
         update.left = Some(doc.left.iter().map(lite_out).collect());
         update.done = Some(doc.done.iter().map(lite_out).collect());
@@ -1281,40 +1441,38 @@ fn compose_update(
     }
 
     // ---- Blocked / waiting on you ----------------------------------------------------------
-    let mut waiting: Vec<String> = Vec::new();
     let mut blocked: Vec<String> = Vec::new();
-    // The earliest moment one of the waiting-on-you reports names, for "since <clock>".
-    let mut waiting_since: Option<i64> = None;
-    let mut note_waiting_since = |kind: &BlockedIn| {
-        if kind.kind == "owner"
-            && let Some(since) = kind.since_ms
-        {
-            waiting_since = Some(waiting_since.map_or(since, |held: i64| held.min(since)));
-        }
-    };
     // Blocked in so many words with no `blockedOn` to name: the state is known, the reason
     // is not, and neither may be dropped — the update says blocked and that the report does
     // not say on what, never "None.".
     let mut unexplained: Vec<String> = Vec::new();
     // The same waits, structured, for the page (`waits`).
     let mut waits: Vec<WaitOut> = Vec::new();
+    let until_words = |until: Option<&str>| {
+        let mut time = due_words(until, None, None, None, input.now_ms)?;
+        if !time.late {
+            time.text = format!("until {}", time.text);
+        }
+        Some(time)
+    };
     let blocked_wait = |kind: &BlockedIn, task: Option<&str>, from: &'static str| WaitOut {
         on: kind.kind.clone(),
         text: kind.what.clone(),
         short: addition_text(&kind.additions, "short"),
+        who: addition_text(&kind.additions, "who"),
         task: task.map(str::to_string),
         since: kind.since.clone().filter(|since| !since.is_empty()),
         until: addition_text(&kind.additions, "until"),
+        until_time: until_words(addition_text(&kind.additions, "until").as_deref()),
         from,
     };
     if let Some(kind) = thread.and_then(|doc| doc.blocked_on.as_ref()) {
         push_wait(&mut waits, blocked_wait(kind, None, "thread"));
-        if kind.kind == "owner" {
-            note_waiting_since(kind);
-            waiting.push(kind.what.clone());
-        } else {
-            blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
-        }
+        blocked.push(format!(
+            "{} (waiting on {})",
+            kind.what,
+            addition_text(&kind.additions, "who").as_deref().unwrap_or(&kind.kind)
+        ));
     } else if thread.is_some_and(|doc| doc.state == "blocked") {
         let words = "Blocked; the report does not say on what.".to_string();
         push_wait(
@@ -1323,9 +1481,11 @@ fn compose_update(
                 on: "unknown".into(),
                 text: words.clone(),
                 short: None,
+                who: None,
                 task: None,
                 since: None,
                 until: None,
+                until_time: None,
                 from: "thread",
             },
         );
@@ -1333,18 +1493,17 @@ fn compose_update(
     }
     if let Some(board) = tasks {
         for item in &board.items {
-            if matches!(item.state.as_str(), "landed" | "done" | "dropped") {
+            if !is_open(item) {
                 continue;
             }
             // An item that names a blocker is a blocked item, whatever its state column says.
             if let Some(kind) = &item.blocked_on {
                 push_wait(&mut waits, blocked_wait(kind, Some(&item.id), "tasks"));
-                if kind.kind == "owner" {
-                    note_waiting_since(kind);
-                    waiting.push(kind.what.clone());
-                } else {
-                    blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
-                }
+                blocked.push(format!(
+                    "{} (waiting on {})",
+                    kind.what,
+                    addition_text(&kind.additions, "who").as_deref().unwrap_or(&kind.kind)
+                ));
             } else if item.state == "blocked" {
                 // Name the item; the reason was not reported to name.
                 push_wait(
@@ -1353,9 +1512,11 @@ fn compose_update(
                         on: "unknown".into(),
                         text: "Blocked; the report does not say on what.".into(),
                         short: None,
+                        who: None,
                         task: Some(item.id.clone()),
                         since: None,
                         until: None,
+                        until_time: None,
                         from: "tasks",
                     },
                 );
@@ -1365,48 +1526,48 @@ fn compose_update(
     }
     if let Some(doc) = status {
         for blocker in &doc.blockers {
+            let who = addition_text(&blocker.additions, "who");
+            let text = who
+                .as_deref()
+                .and_then(|who| blocker.text.strip_prefix(&format!("{who}: ")))
+                .unwrap_or(&blocker.text);
+            let until = addition_text(&blocker.additions, "until");
             push_wait(
                 &mut waits,
                 WaitOut {
                     on: blocker.waiting_on.clone(),
-                    text: blocker.text.clone(),
+                    text: text.to_string(),
                     short: addition_text(&blocker.additions, "short"),
+                    who: who.clone(),
                     task: None,
                     since: addition_text(&blocker.additions, "since"),
-                    until: addition_text(&blocker.additions, "until"),
+                    until_time: until_words(until.as_deref()),
+                    until,
                     from: "status",
                 },
             );
-            if blocker.waiting_on == "owner" {
-                waiting.push(blocker.text.clone());
-            } else {
-                blocked.push(format!("{} (waiting on {})", blocker.text, blocker.waiting_on));
-            }
+            blocked.push(format!(
+                "{} (waiting on {})",
+                text,
+                who.as_deref().unwrap_or(&blocker.waiting_on)
+            ));
         }
     }
     update.waits = waits;
-    // An open card this thread asked is a question of the owner's, whatever else it waits
-    // on — but only question, judgement and action cards count (D10): silence is fine on
-    // an objection, and a sample wants no answer.
-    if let Some(thread) = thread {
-        for card in &input.open_cards {
-            if card.writer == thread.writer && is_question_kind(&card.kind) {
-                waiting.push(card.title.clone());
-            }
-        }
-    }
-    // Each wait once, wherever it repeats: a `--waiting-on-you` is written to the thread and to
-    // its status, with the board's waits read between the two.
-    let waiting = unique_words(waiting);
+    update.card_title = cards.first().map(|card| card.title.clone());
     let blocked = unique_words(blocked);
     let mut parts: Vec<String> = Vec::new();
-    if !waiting.is_empty() {
-        // "Waiting on you since 6:55 PM: pick the reviewers." — the since is the earliest moment
-        // a waiting report names; without one the sentence stays as it was.
-        let since = waiting_since
-            .map(|at| format!(" since {}", clock_text(at, input.utc_offset_minutes)))
+    if !cards.is_empty() {
+        let since = cards
+            .iter()
+            .filter_map(|card| card.asked_at_ms)
+            .min()
+            .map(|at| format!(" since {}", clock_text(at, EST)))
             .unwrap_or_default();
-        parts.push(format!("Waiting on you{since}: {}.", waiting.join("; ")));
+        let titles = unique_words(cards.iter().map(|card| card.title.clone()).collect());
+        let titles = titles.join("; ");
+        let stop = if titles.ends_with(['.', '!', '?']) { "" } else { "." };
+        parts.push(format!("Waiting on you{since}: {titles}{stop}"));
     }
     if !blocked.is_empty() {
         parts.push(format!("Blocked: {}.", blocked.join("; ")));
@@ -1415,7 +1576,7 @@ fn compose_update(
     if !parts.is_empty() {
         update.blocked = Some(BlockedView {
             text: parts.join(" "),
-            waiting_on_you: !waiting.is_empty(),
+            waiting_on_you: !cards.is_empty(),
         });
     } else if tasks.is_some() {
         // A board where nothing is blocked may say "None."; without one there is nothing to
@@ -1426,6 +1587,76 @@ fn compose_update(
         });
     }
 
+    let own_rows: Vec<&ItemIn> = tasks
+        .filter(|board| pin_writers.contains(&board.writer.as_str()))
+        .into_iter()
+        .flat_map(|board| board.items.iter())
+        .filter(|item| is_open(item))
+        .collect();
+    update.display_state = if !cards.is_empty() {
+        "needsYou"
+    } else if update.report_state == "stale" {
+        "quiet"
+    } else {
+        match thread.map(|doc| doc.state.as_str()) {
+            Some("done") => "done",
+            Some("blocked")
+                if !thread
+                    .and_then(|doc| doc.blocked_on.as_ref())
+                    .is_some_and(|wait| wait.kind == "owner") =>
+            {
+                "blocked"
+            }
+            Some("paused") => "waiting",
+            _ if own_rows
+                .iter()
+                .any(|item| matches!(task_state(&item.state), "working" | "review")) =>
+            {
+                "working"
+            }
+            Some("waiting" | "blocked") => "waiting",
+            _ if !own_rows.is_empty()
+                && own_rows
+                    .iter()
+                    .all(|item| matches!(task_state(&item.state), "waiting" | "blocked")) =>
+            {
+                "waiting"
+            }
+            _ => "working",
+        }
+    };
+
+    let has_next = addition_text(&update.additions, "next").is_some();
+    if has_next {
+        let due = addition_text(&update.additions, "nextBy");
+        let note = addition_text(&update.additions, "nextByNote");
+        let day = next_due_day(update.additions.get("nextByDay"), due.as_deref());
+        update.next_time = due_words(
+            due.as_deref().filter(|_| day.is_none()),
+            day,
+            note.as_deref(),
+            None,
+            input.now_ms,
+        );
+    }
+    let rows = update.left.as_deref().unwrap_or_default();
+    let missing = rows.iter().filter(|row| row.note.is_none()).count();
+    let mut thin = Vec::new();
+    if !has_next {
+        thin.push("no next step".to_string());
+    }
+    if update.next_time.is_none() && rows.iter().all(|row| row.time.is_none()) {
+        thin.push("no times".to_string());
+    }
+    if missing > 0 {
+        thin.push(format!("{} with no line", plural(missing as i64, "row")));
+    }
+    update.thin_report = (!thin.is_empty()).then(|| format!("Thin report: {}.", thin.join(", ")));
+    update.late_count = rows
+        .iter()
+        .filter(|row| row.time.as_ref().is_some_and(|time| time.late))
+        .count()
+        + usize::from(update.next_time.as_ref().is_some_and(|time| time.late));
     update
 }
 
@@ -1447,29 +1678,6 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
             .iter()
             .filter(|doc| same_thread_id(&doc.t3_thread, &pin.id))
             .max_by_key(|doc| (doc.written_at_ms, doc.seq));
-        // The board comes from the report's project and stream; a thread that reports only
-        // `status.json` names neither, so the same writer's `tasks.json` is its board (B8).
-        let tasks = thread
-            .and_then(|thread| thread.project.as_ref().zip(thread.stream.as_ref()))
-            .and_then(|(project, stream)| {
-                input
-                    .tasks
-                    .iter()
-                    .filter(|board| &board.project == project && &board.stream == stream)
-                    .max_by_key(|board| (board.written_at_ms, board.seq))
-            })
-            .or_else(|| {
-                let writer = thread
-                    .map(|thread| thread.writer.as_str())
-                    .or(status.map(|doc| doc.writer.as_str()));
-                writer.and_then(|writer| {
-                    input
-                        .tasks
-                        .iter()
-                        .filter(|board| board.writer == writer)
-                        .max_by_key(|board| (board.written_at_ms, board.seq))
-                })
-            });
         // A standalone status refusal (no good copy) for this pin's writer attaches to
         // the pin itself (F13), matched the way B8 matches: the report whose thread
         // names this pin by the normalised id. The panel entry stays, too.
@@ -1496,6 +1704,19 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
                 pin_writers.push(writer);
             }
         }
+        let tasks = input
+            .tasks
+            .iter()
+            .filter(|board| pin_writers.contains(&board.writer.as_str()))
+            .max_by_key(|board| (board.written_at_ms, board.seq))
+            .or_else(|| {
+                let (project, stream) = thread.and_then(|doc| doc.project.as_ref().zip(doc.stream.as_ref()))?;
+                input
+                    .tasks
+                    .iter()
+                    .filter(|board| &board.project == project && &board.stream == stream)
+                    .max_by_key(|board| (board.written_at_ms, board.seq))
+            });
         updates.push(compose_update(
             pin,
             input,

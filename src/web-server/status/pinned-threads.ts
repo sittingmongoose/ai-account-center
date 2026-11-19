@@ -1,5 +1,5 @@
 import { MACHINE_IDS } from '../services/dashboard-hosts';
-import { reportV2 } from './report-v2';
+import { reportV2, reportV3 } from './report-v2';
 /**
  * The pinned-threads panel's collector: every machine's T3 pins (the VM's database read by
  * the aac-status native module, the Mac's, Windows' and Nas1's fetched with one short
@@ -68,7 +68,6 @@ export interface PinnedThreadsDeps {
   /** One machine's `sqlite3 -json` answer (tests fake the ssh route). */
   readRemote?: (machine: Exclude<MachineId, 'vm'>, run: CommandRunner) => Promise<string>;
   now?: () => number;
-  timeZone?: () => string;
   /** The reports share root, for the status@1 documents. */
   reportsRoot?: () => string;
   /** Written the readers check file after each compose (null in tests that fake the module). */
@@ -244,7 +243,6 @@ export class PinnedThreadsCollector {
     const answered = resolvedCardWaits(reports, closed);
     const input = {
       nowMs: this.now(),
-      utcOffsetMinutes: zoneOffsetMinutes(this.deps.timeZone?.() ?? 'UTC', this.now()),
       pins: this.merged,
       machineProblems: this.problems,
       threads: reports.threads.map((row) => ({
@@ -264,6 +262,12 @@ export class PinnedThreadsCollector {
         stream: row.doc.stream,
         state: row.doc.state,
         doing: row.doc.doing,
+        goal: row.doc.goal,
+        nextBy: row.doc.nextBy,
+        nextByDay: row.doc.nextByDay,
+        nextByNote: row.doc.nextByNote,
+        more: row.doc.more,
+        saidAt: row.doc.saidAt,
         blockedOn: blockedOnIn(activeBlocker(answered, row.writer, row.doc.blockedOn)),
         progress: row.doc.progress,
         ttlSeconds: row.doc.ttlSeconds,
@@ -284,6 +288,14 @@ export class PinnedThreadsCollector {
           id: item.id,
           title: item.title,
           note: item.note,
+          why: item.why,
+          due: item.due,
+          dueDay: item.dueDay,
+          dueNote: item.dueNote,
+          dueWas: item.dueWas,
+          doneAt: item.doneAt,
+          outcome: item.outcome,
+          needsYou: item.needsYou,
           state: item.state,
           reviews: item.reviews.map((review) => ({
             atMs: review.at ? Date.parse(review.at) : null,
@@ -306,6 +318,7 @@ export class PinnedThreadsCollector {
         })),
       statuses: statuses.docs.map((row) => ({
         ...reportV2(row.doc),
+        ...reportV3(row.doc),
         writer: row.writer,
         writtenAt: row.doc.writtenAt,
         writtenAtMs: row.writtenAtMs,

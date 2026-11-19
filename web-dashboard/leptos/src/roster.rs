@@ -6,7 +6,7 @@
 //! pin is its own plate and the sheet rises from the bottom.
 //!
 //! Everything here is read from what the reports said (`reported`, validated by the server in report-v2.ts) and the
-//! composer's fields. A fact a report did not give says so ("Not reported"); nothing is filled in. A report written
+//! composer's fields. A report written
 //! before these fields existed is drawn with the composer's fields alone.
 
 use crate::api::*;
@@ -131,6 +131,8 @@ pub struct Reported {
     pub title: Option<String>,
     pub now: Option<String>,
     pub next: Option<String>,
+    pub goal: Option<String>,
+    pub more: Option<String>,
     pub stages: Vec<Stage>,
     pub deliverables: Vec<Deliverable>,
     pub readme_questions: bool,
@@ -173,6 +175,8 @@ pub fn reported(u: &PinnedUpdate) -> Reported {
         title: text_of(v, "title"),
         now: text_of(v, "now"),
         next: text_of(v, "next"),
+        goal: text_of(v, "goal"),
+        more: text_of(v, "more"),
         stages: rows(v, "stages"),
         deliverables: rows(v, "deliverables"),
         readme_questions: field::<bool>(v, "readmeQuestions").unwrap_or(false),
@@ -188,13 +192,10 @@ pub fn reported(u: &PinnedUpdate) -> Reported {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Word {
-    ReadyForYou,
     WaitingOnYou,
     Waiting,
     Working,
-    Idle,
-    /// A fresh report that does not say whether it works, idles or is done (the server doesn't pass thread state).
-    Reporting,
+    Blocked,
     Done,
     Quiet,
     NotReporting,
@@ -203,12 +204,10 @@ pub enum Word {
 impl Word {
     pub fn text(self) -> &'static str {
         match self {
-            Word::ReadyForYou => "Ready for you",
             Word::WaitingOnYou => "Waiting on you",
             Word::Waiting => "Waiting",
             Word::Working => "Working",
-            Word::Idle => "Idle",
-            Word::Reporting => "Reporting",
+            Word::Blocked => "Blocked",
             Word::Done => "Done",
             Word::Quiet => "Quiet",
             Word::NotReporting => "Not reporting",
@@ -216,7 +215,7 @@ impl Word {
     }
     pub fn tone(self) -> Option<&'static str> {
         match self {
-            Word::ReadyForYou | Word::WaitingOnYou => Some("warn"),
+            Word::WaitingOnYou | Word::Blocked => Some("warn"),
             Word::Done => Some("good"),
             Word::Quiet | Word::NotReporting => Some("mute"),
             _ => None,
@@ -225,11 +224,10 @@ impl Word {
     /// The roster group the word sits under.
     pub fn group(self) -> &'static str {
         match self {
-            Word::ReadyForYou | Word::WaitingOnYou => "Needs you",
+            Word::WaitingOnYou => "Needs you",
             Word::Waiting => "Waiting",
             Word::Working => "Working",
-            Word::Idle => "Idle",
-            Word::Reporting => "Reporting",
+            Word::Blocked => "Blocked",
             Word::Done => "Done",
             Word::Quiet => "Quiet",
             Word::NotReporting => "Not reporting",
@@ -242,51 +240,36 @@ impl Word {
 pub fn open_cards_for<'a>(r: &Reported, open: &'a [Card]) -> Vec<&'a Card> {
     open.iter()
         .filter(|c| {
-            r.writer.as_deref().is_some_and(|w| w == c.writer)
-                || r.deliverables.iter().any(|d| d.cards.contains(&c.id))
+            matches!(c.kind.as_str(), "" | "question" | "action" | "judgement")
+                && (r.writer.as_deref().is_some_and(|w| w == c.writer)
+                    || r.deliverables.iter().any(|d| d.cards.contains(&c.id)))
         })
         .collect()
 }
 
-fn blocked_known(u: &PinnedUpdate) -> bool {
-    let t = u.blocked.text.trim();
-    !t.is_empty() && t != "None." && t != "None"
-}
-
 pub fn state_word(u: &PinnedUpdate, r: &Reported, cards: usize) -> Word {
-    match u.report_state.as_str() {
-        "none" => return Word::NotReporting,
-        "stale" => return Word::Quiet,
+    match u.display_state.as_deref() {
+        Some("needsYou") => return Word::WaitingOnYou,
+        Some("blocked") => return Word::Blocked,
+        Some("waiting") => return Word::Waiting,
+        Some("working") => return Word::Working,
+        Some("done") => return Word::Done,
+        Some("quiet") => return Word::Quiet,
+        Some("notReporting") => return Word::NotReporting,
         _ => {}
     }
-    if r.deliverables.iter().any(Deliverable::is_ready_for_owner) {
-        return Word::ReadyForYou;
-    }
-    let owner_blocker = r.blockers.iter().any(|b| b.who() == "owner")
-        || r.blocked_on.as_ref().is_some_and(|b| b.who() == "owner");
-    if cards > 0 || u.blocked.waiting_on_you || owner_blocker {
+    // Older packaged views carry report state but have no composed presentation state.
+    if cards > 0 {
         return Word::WaitingOnYou;
     }
-    if blocked_known(u)
-        || !r.blockers.is_empty()
-        || r.blocked_on.is_some()
-        || matches!(r.state.as_deref(), Some("waiting" | "blocked"))
-    {
-        return Word::Waiting;
+    match (u.report_state.as_str(), r.state.as_deref()) {
+        ("none", _) => Word::NotReporting,
+        ("stale", _) => Word::Quiet,
+        (_, Some("waiting" | "paused")) => Word::Waiting,
+        (_, Some("blocked")) => Word::Blocked,
+        (_, Some("done")) => Word::Done,
+        _ => Word::Working,
     }
-    match r.state.as_deref() {
-        Some("working") => Word::Working,
-        Some("idle") => Word::Idle,
-        Some("done") => Word::Done,
-        _ => Word::Reporting,
-    }
-}
-
-/// Whether a stage the owner acts in waits now (amber, and the thread counts under Needs you).
-pub fn owner_stage_waiting(r: &Reported) -> bool {
-    r.stages
-        .iter()
-        .any(|s| s.by.as_deref() == Some("owner") && s.state == "waiting")
 }
 
 // ---- Words ---------------------------------------------------------------------------------------------------------
@@ -522,7 +505,7 @@ pub fn mark(version: &str, opened: &Opened) -> Mark {
 // ---- Tasks ---------------------------------------------------------------------------------------------------------
 
 pub const GROUPS: [&str; 7] = [
-    "Waits on you",
+    "Waiting",
     "Blocked",
     "In work",
     "State not recognised",
@@ -536,6 +519,8 @@ pub struct TaskRow {
     pub id: String,
     pub title: String,
     pub note: Option<String>,
+    pub time: Option<PinnedTime>,
+    pub needs_you: Option<String>,
     /// The raw state of an item whose state is not one of the nine.
     pub odd_state: Option<String>,
 }
@@ -554,9 +539,20 @@ impl TaskGroup {
     }
 }
 
-const KNOWN: [&str; 9] = [
-    "todo", "working", "review", "fixing", "blocked", "ready", "landed", "done", "dropped",
+const KNOWN: [&str; 7] = [
+    "todo", "working", "review", "waiting", "blocked", "done", "dropped",
 ];
+
+fn canonical_state(state: &str) -> &str {
+    match state {
+        "fixing" => "review",
+        "landing" | "ready" => "working",
+        "landed" => "done",
+        "queued" => "todo",
+        "superseded" => "dropped",
+        _ => state,
+    }
+}
 
 /// "Title (state not recognised: queued)", the composer's words for an unknown state, split back into title and state.
 pub fn split_odd(title: &str) -> (String, Option<String>) {
@@ -569,18 +565,14 @@ pub fn split_odd(title: &str) -> (String, Option<String>) {
     (title.to_string(), None)
 }
 
-fn group_of(state: &str, owner_block: bool, blocked: bool) -> &'static str {
-    if owner_block {
-        return "Waits on you";
-    }
-    if state == "blocked" || blocked {
-        return "Blocked";
-    }
+fn group_of(state: &str) -> &'static str {
     match state {
-        "working" | "fixing" => "In work",
+        "blocked" => "Blocked",
+        "waiting" => "Waiting",
+        "working" => "In work",
         "todo" => "To do",
-        "review" | "ready" => "In review",
-        "done" | "landed" => "Done",
+        "review" => "In review",
+        "done" => "Done",
         _ => "State not recognised",
     }
 }
@@ -598,7 +590,11 @@ pub fn board_for<'a>(u: &PinnedUpdate, projects: &'a [Project]) -> Option<&'a St
         return None;
     }
     let mut hits = projects.iter().flat_map(|p| p.streams.iter()).filter(|s| {
-        let items: Vec<&Item> = s.items.iter().filter(|i| i.state != "dropped").collect();
+        let items: Vec<&Item> = s
+            .items
+            .iter()
+            .filter(|i| canonical_state(&i.state) != "dropped")
+            .collect();
         items.len() == pin.len()
             && pin
                 .iter()
@@ -608,13 +604,15 @@ pub fn board_for<'a>(u: &PinnedUpdate, projects: &'a [Project]) -> Option<&'a St
     hits.next().is_none().then_some(first)
 }
 
-fn blocked_note(b: &BlockedOn) -> String {
-    let who = who_words(&b.kind);
-    if b.what.is_empty() {
-        who.to_string()
-    } else {
-        format!("{who}: {}", b.what)
-    }
+fn task_note(item: &PinnedItem, closed: bool) -> Option<String> {
+    let outcome = item
+        .outcome
+        .as_ref()
+        .filter(|text| closed && !text.is_empty());
+    outcome
+        .or(item.note.as_ref())
+        .filter(|text| !text.is_empty())
+        .cloned()
 }
 
 /// The task groups, in the fixed order, without empty groups. With the board's item states each item goes to its
@@ -627,7 +625,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
             Some(g) => g.rows.push(row),
             None => groups.push(TaskGroup {
                 label,
-                warn: matches!(label, "Waits on you" | "State not recognised"),
+                warn: label == "State not recognised",
                 rows: vec![row],
             }),
         };
@@ -640,18 +638,20 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
     {
         // The server passed each item's own state: no board needed.
         for item in u.left.iter().chain(u.done.iter()) {
-            let state = item.state.clone().unwrap_or_default();
+            let state = canonical_state(item.state.as_deref().unwrap_or_default());
             if state == "dropped" {
                 continue;
             }
             let (title, _) = split_odd(&item.title);
             push(
-                group_of(&state, false, false),
+                group_of(state),
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&title, 60),
-                    note: item.note.clone().filter(|n| !n.is_empty()),
-                    odd_state: (!KNOWN.contains(&state.as_str())).then_some(state),
+                    note: task_note(item, state == "done"),
+                    time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
+                    odd_state: (!KNOWN.contains(&state)).then(|| state.to_string()),
                 },
             );
         }
@@ -659,20 +659,20 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
         let by_id = |id: &str| board.items.iter().find(|i| i.id == id);
         for item in u.left.iter().chain(u.done.iter()) {
             let Some(it) = by_id(&item.id) else { continue };
-            let owner = it.blocked_on.as_ref().is_some_and(|b| b.kind == "owner");
-            let label = group_of(&it.state, owner, it.blocked_on.is_some());
-            let odd = (!KNOWN.contains(&it.state.as_str())).then(|| it.state.clone());
-            let note = item
-                .note
-                .clone()
-                .filter(|n| !n.is_empty())
-                .or_else(|| it.blocked_on.as_ref().filter(|_| !owner).map(blocked_note));
+            let state = canonical_state(&it.state);
+            if state == "dropped" {
+                continue;
+            }
+            let label = group_of(state);
+            let odd = (!KNOWN.contains(&state)).then(|| state.to_string());
             push(
                 label,
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&it.title, 60),
-                    note,
+                    note: task_note(item, state == "done"),
+                    time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
                     odd_state: odd,
                 },
             );
@@ -690,7 +690,9 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&title, 60),
-                    note: item.note.clone().filter(|n| !n.is_empty()),
+                    note: task_note(item, false),
+                    time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
                     odd_state: odd,
                 },
             );
@@ -701,7 +703,9 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
                 TaskRow {
                     id: item.id.clone(),
                     title: cut(&split_odd(&item.title).0, 60),
-                    note: item.note.clone().filter(|n| !n.is_empty()),
+                    note: task_note(item, true),
+                    time: item.time.clone(),
+                    needs_you: item.needs_you.clone(),
                     odd_state: None,
                 },
             );
@@ -727,42 +731,13 @@ pub fn wait_words(w: &PinnedWait) -> String {
         .unwrap_or_else(|| w.text.clone())
 }
 
-/// What the owner is waited on for, each once: from the composer's structured waits, or, from a server that does
-/// not send them, the words after the head of its waiting sentence (only the waiting-on-you part of it).
-pub fn owner_waits(u: &PinnedUpdate) -> Vec<String> {
-    if u.waits.is_empty() {
-        if !u.blocked.waiting_on_you {
-            return Vec::new();
-        }
-        let text = u.blocked.text.trim();
-        let rest = text.split_once(": ").map(|(_, r)| r).unwrap_or(text);
-        // An older sentence goes on with "Blocked: ..." for everyone else's waits; those are not the owner's.
-        let mine = rest.split(" Blocked: ").next().unwrap_or(rest);
-        return vec![mine.trim().to_string()];
-    }
-    let mut out: Vec<String> = Vec::new();
-    for w in u.waits.iter().filter(|w| w.on == "owner") {
-        let words = wait_words(w);
-        if !words.trim().is_empty() && !out.iter().any(|held| held.trim() == words.trim()) {
-            out.push(words);
-        }
-    }
-    out
-}
-
-/// Everyone else the thread waits on (an agent, a review, a machine, the landing lock, quota), whether or not it also
-/// waits on the owner. Empty from a server that does not send structured waits.
-pub fn other_waits(u: &PinnedUpdate) -> Vec<&PinnedWait> {
-    u.waits.iter().filter(|w| w.on != "owner").collect()
-}
-
 /// A wait's head word for the Waiting-on list: who it waits on, with the board item when it is a task's.
 pub fn other_wait_head(w: &PinnedWait) -> String {
-    let who = if w.on == "unknown" {
-        "Blocked"
-    } else {
-        who_words(&w.on)
-    };
+    let who = w.who.as_deref().unwrap_or_else(|| match w.on.as_str() {
+        "unknown" => "Blocked",
+        "owner" => "Reported wait",
+        on => who_words(on),
+    });
     match w.task.as_deref().filter(|t| !t.is_empty()) {
         Some(task) => format!("{who} ({task})"),
         None => who.to_string(),
@@ -805,7 +780,8 @@ pub const TWO_AGES_AFTER_SECONDS: i64 = 600;
 pub fn two_ages(u: &PinnedUpdate) -> Option<(i64, i64)> {
     let human = u.status_updated.as_ref()?.age_seconds?;
     let beat = u.heartbeat.as_ref()?.age_seconds?;
-    (human - beat > TWO_AGES_AFTER_SECONDS).then_some((human, beat))
+    let said = u.reported.as_ref().is_some_and(|r| r["saidAt"].is_string());
+    (said || human - beat > TWO_AGES_AFTER_SECONDS).then_some((human, beat))
 }
 
 /// A human update's age: hours up to two days ("35 h" says more than "1 d" about a summary that old), else as
@@ -931,10 +907,6 @@ pub fn things(n: usize) -> String {
     plural(n, "thing to open", "things to open")
 }
 
-pub fn questions(n: usize) -> String {
-    plural(n, "question", "questions")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,8 +928,7 @@ mod tests {
         };
         let r = reported(&u);
         assert_eq!(r, Reported::default());
-        // no state from the server: never guessed as working
-        assert_eq!(state_word(&u, &r, 0), Word::Reporting);
+        assert_eq!(state_word(&u, &r, 0), Word::Working);
     }
 
     #[test]
@@ -976,15 +947,15 @@ mod tests {
         let ready = update(
             json!({"deliverables": [{"id": "a", "name": "A", "kind": "concept", "version": "v1", "for": "owner", "state": "ready"}], "state": "working"}),
         );
-        assert_eq!(state_word(&ready, &reported(&ready), 0), Word::ReadyForYou);
+        assert_eq!(state_word(&ready, &reported(&ready), 0), Word::Working);
         let card = update(json!({"state": "working"}));
         assert_eq!(state_word(&card, &reported(&card), 2), Word::WaitingOnYou);
         let mut waiting = update(json!({"state": "working"}));
         waiting.blocked.text = "Waiting on an agent: B lands".into();
-        assert_eq!(state_word(&waiting, &reported(&waiting), 0), Word::Waiting);
+        assert_eq!(state_word(&waiting, &reported(&waiting), 0), Word::Working);
         for (s, w) in [
             ("working", Word::Working),
-            ("idle", Word::Idle),
+            ("idle", Word::Working),
             ("done", Word::Done),
         ] {
             let u = update(json!({ "state": s }));
@@ -992,7 +963,7 @@ mod tests {
         }
         let mut stale = update(json!({}));
         stale.report_state = "stale".into();
-        assert_eq!(state_word(&stale, &reported(&stale), 3), Word::Quiet);
+        assert_eq!(state_word(&stale, &reported(&stale), 3), Word::WaitingOnYou);
     }
 
     #[test]
@@ -1164,15 +1135,9 @@ mod tests {
         let groups = task_groups(&u, None);
         assert_eq!(
             groups.iter().map(|g| g.label).collect::<Vec<_>>(),
-            vec![
-                "In work",
-                "State not recognised",
-                "To do",
-                "In review",
-                "Done"
-            ]
+            vec!["In work", "To do", "In review", "Done"]
         );
-        assert_eq!(groups[1].rows[0].odd_state.as_deref(), Some("queued"));
+        assert!(groups[1].rows.iter().all(|row| row.odd_state.is_none()));
         // the writer the server matched finds that thread's open cards
         let r = Reported {
             writer: Some("vm.a".into()),
@@ -1271,23 +1236,25 @@ mod tests {
         let u = mixed_waits();
         // the unreadable row is left out, the rest kept
         assert_eq!(u.waits.len(), 6);
-        assert_eq!(
-            owner_waits(&u),
-            [
-                "Open the preview and answer card SM-0",
-                "Answers to WL1 to WL5."
-            ]
-        );
-        let others: Vec<(String, String)> = other_waits(&u)
-            .into_iter()
+        let others: Vec<(String, String)> = u
+            .waits
+            .iter()
             .map(|w| (other_wait_head(w), wait_words(w)))
             .collect();
         assert_eq!(
             others,
             [
                 (
+                    "Reported wait".into(),
+                    "Open the preview and answer card SM-0".into()
+                ),
+                (
                     "A machine (SWEEP)".to_string(),
                     "Browsers on the VM and Nas1 are reserved.".to_string()
+                ),
+                (
+                    "Reported wait (WORK-LANES)".into(),
+                    "Answers to WL1 to WL5.".into()
                 ),
                 (
                     "A review (PAGE-FRAME)".into(),
@@ -1300,17 +1267,6 @@ mod tests {
                 ),
             ]
         );
-    }
-
-    #[test]
-    fn an_older_server_sentence_keeps_only_the_owner_part_for_you() {
-        let mut u = mixed_waits();
-        u.waits.clear();
-        assert_eq!(
-            owner_waits(&u),
-            ["Open the preview and answer card SM-0; Answers to WL1 to WL5."]
-        );
-        assert!(other_waits(&u).is_empty());
     }
 
     #[test]
