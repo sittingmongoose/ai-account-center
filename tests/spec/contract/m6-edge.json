@@ -1,0 +1,983 @@
+{
+  "cli": [
+    {
+      "argv": [
+        "--help"
+      ],
+      "case": "cli: help",
+      "status": 0,
+      "stderr": "",
+      "stdout": "A<build-id>I<build-id> <build-id>A<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>C<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id>\n<build-id>\n<build-id>U<build-id>s<build-id>a<build-id>g<build-id>e<build-id>:<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id><<build-id>c<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id>><build-id> <build-id>[<build-id>o<build-id>p<build-id>t<build-id>i<build-id>o<build-id>n<build-id>s<build-id>]<build-id>\n<build-id>\n<build-id>C<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>O<build-id>p<build-id>e<build-id>n<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id>\n<build-id> <build-id> <build-id>c<build-id>o<build-id>d<build-id>e<build-id>x<build-id>-<build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>a<build-id>v<build-id>e<build-id> <build-id>C<build-id>o<build-id>d<build-id>e<build-id>x<build-id> <build-id>l<build-id>o<build-id>g<build-id>i<build-id>n<build-id>s<build-id> <build-id>w<build-id>h<build-id>o<build-id>s<build-id>e<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>r<build-id>e<build-id>a<build-id>d<build-id>s<build-id>\n<build-id> <build-id> <build-id>a<build-id>n<build-id>t<build-id>i<build-id>g<build-id>r<build-id>a<build-id>v<build-id>i<build-id>t<build-id>y<build-id> <build-id> <build-id> <build-id> <build-id>A<build-id>d<build-id>d<build-id> <build-id>o<build-id>r<build-id> <build-id>s<build-id>i<build-id>g<build-id>n<build-id> <build-id>i<build-id>n<build-id> <build-id>a<build-id>g<build-id>a<build-id>i<build-id>n<build-id> <build-id>t<build-id>o<build-id> <build-id>a<build-id> <build-id>s<build-id>a<build-id>v<build-id>e<build-id>d<build-id> <build-id>A<build-id>n<build-id>t<build-id>i<build-id>g<build-id>r<build-id>a<build-id>v<build-id>i<build-id>t<build-id>y<build-id> <build-id>p<build-id>r<build-id>o<build-id>f<build-id>i<build-id>l<build-id>e<build-id> <build-id>o<build-id>n<build-id> <build-id>U<build-id>b<build-id>u<build-id>n<build-id>t<build-id>u<build-id>\n<build-id> <build-id> <build-id>b<build-id>a<build-id>r<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>I<build-id>n<build-id>s<build-id>t<build-id>a<build-id>l<build-id>l<build-id>,<build-id> <build-id>l<build-id>a<build-id>u<build-id>n<build-id>c<build-id>h<build-id>,<build-id> <build-id>o<build-id>r<build-id> <build-id>i<build-id>n<build-id>s<build-id>p<build-id>e<build-id>c<build-id>t<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>n<build-id>a<build-id>t<build-id>i<build-id>v<build-id>e<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>b<build-id>a<build-id>r<build-id>\n<build-id> <build-id> <build-id>h<build-id>e<build-id>l<build-id>p<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>c<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id> <build-id>h<build-id>e<build-id>l<build-id>p<build-id>\n<build-id> <build-id> <build-id>v<build-id>e<build-id>r<build-id>s<build-id>i<build-id>o<build-id>n<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>v<build-id>e<build-id>r<build-id>s<build-id>i<build-id>o<build-id>n<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>i<build-id>n<build-id>s<build-id>t<build-id>a<build-id>l<build-id>l<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id> <build-id>p<build-id>a<build-id>t<build-id>h<build-id>s<build-id>\n<build-id>\n<build-id>C<build-id>o<build-id>m<build-id>p<build-id>a<build-id>t<build-id>i<build-id>b<build-id>i<build-id>l<build-id>i<build-id>t<build-id>y<build-id>:<build-id> <build-id>c<build-id>c<build-id>s<build-id> <build-id>u<build-id>s<build-id>e<build-id>s<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>s<build-id>a<build-id>m<build-id>e<build-id> <build-id>c<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id>s<build-id>;<build-id> <build-id>c<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id> <build-id>i<build-id>s<build-id> <build-id>a<build-id>n<build-id> <build-id>a<build-id>l<build-id>i<build-id>a<build-id>s<build-id> <build-id>f<build-id>o<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id>.<build-id>\n<build-id>G<build-id>l<build-id>o<build-id>b<build-id>a<build-id>l<build-id> <build-id>o<build-id>p<build-id>t<build-id>i<build-id>o<build-id>n<build-id>:<build-id> <build-id>-<build-id>-<build-id>c<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id>-<build-id>d<build-id>i<build-id>r<build-id> <build-id>P<build-id>A<build-id>T<build-id>H<build-id> <build-id>s<build-id>e<build-id>l<build-id>e<build-id>c<build-id>t<build-id>s<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>e<build-id>x<build-id>i<build-id>s<build-id>t<build-id>i<build-id>n<build-id>g<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>c<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id>u<build-id>r<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id> <build-id>d<build-id>i<build-id>r<build-id>e<build-id>c<build-id>t<build-id>o<build-id>r<build-id>y<build-id>.<build-id>\n<build-id>\n<build-id>E<build-id>x<build-id>a<build-id>m<build-id>p<build-id>l<build-id>e<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>-<build-id>-<build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>l<build-id>o<build-id>c<build-id>a<build-id>l<build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>-<build-id>-<build-id>p<build-id>o<build-id>r<build-id>t<build-id> <build-id>3<build-id>0<build-id>0<build-id>0<build-id> <build-id>-<build-id>-<build-id>n<build-id>o<build-id>-<build-id>o<build-id>p<build-id>e<build-id>n<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>e<build-id>t<build-id>u<build-id>p<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>c<build-id>o<build-id>d<build-id>e<build-id>x<build-id>-<build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>h<build-id>o<build-id>w<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>c<build-id>o<build-id>d<build-id>e<build-id>x<build-id>-<build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>l<build-id>o<build-id>g<build-id>i<build-id>n<build-id> <build-id>w<build-id>o<build-id>r<build-id>k<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>a<build-id>n<build-id>t<build-id>i<build-id>g<build-id>r<build-id>a<build-id>v<build-id>i<build-id>t<build-id>y<build-id> <build-id>s<build-id>i<build-id>g<build-id>n<build-id>i<build-id>n<build-id> <build-id>p<build-id>a<build-id>r<build-id>t<build-id>y<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>b<build-id>a<build-id>r<build-id> <build-id>v<build-id>e<build-id>r<build-id>s<build-id>i<build-id>o<build-id>n<build-id>\n<build-id>\n"
+    },
+    {
+      "argv": [
+        "--version"
+      ],
+      "case": "cli: version and paths",
+      "status": 0,
+      "stderr": "",
+      "stdout": "A<build-id>I<build-id> <build-id>A<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>C<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>v<build-id>8<build-id>.<build-id>1<build-id>0<build-id>.<build-id>0<build-id>\n<build-id>I<build-id>n<build-id>s<build-id>t<build-id>a<build-id>l<build-id>l<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id>:<build-id> <build-id>C<build-id>:<build-id>\\<build-id>U<build-id>s<build-id>e<build-id>r<build-id>s<build-id>\\<build-id>l<build-id>e<build-id>x<build-id>x<build-id>m<build-id>\\<build-id>a<build-id>a<build-id>c<build-id>-<build-id>l<build-id>a<build-id>n<build-id>e<build-id>s<build-id>\\<build-id>d<build-id>s<build-id>3<build-id>c<build-id>\\<build-id>d<build-id>i<build-id>s<build-id>t<build-id>\\<build-id>c<build-id>c<build-id>s<build-id>.<build-id>j<build-id>s<build-id>\n<build-id>A<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>c<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id>u<build-id>r<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id>:<build-id> <build-id><<build-id>f<build-id>i<build-id>x<build-id>t<build-id>u<build-id>r<build-id>e<build-id>-<build-id>h<build-id>o<build-id>m<build-id>e<build-id>><build-id>\\<build-id>.<build-id>c<build-id>c<build-id>s<build-id>\n<build-id>C<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id>:<build-id> <build-id><<build-id>f<build-id>i<build-id>x<build-id>t<build-id>u<build-id>r<build-id>e<build-id>-<build-id>h<build-id>o<build-id>m<build-id>e<build-id>><build-id>\\<build-id>.<build-id>c<build-id>c<build-id>s<build-id>\\<build-id>c<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id>.<build-id>j<build-id>s<build-id>o<build-id>n<build-id>\n<build-id>L<build-id>i<build-id>c<build-id>e<build-id>n<build-id>s<build-id>e<build-id>:<build-id> <build-id>M<build-id>I<build-id>T<build-id>;<build-id> <build-id>d<build-id>e<build-id>r<build-id>i<build-id>v<build-id>e<build-id>d<build-id> <build-id>f<build-id>r<build-id>o<build-id>m<build-id> <build-id>C<build-id>C<build-id>S<build-id> <build-id>b<build-id>y<build-id> <build-id>T<build-id>a<build-id>m<build-id> <build-id>N<build-id>h<build-id>u<build-id> <build-id>T<build-id>r<build-id>a<build-id>n<build-id> <build-id>(<build-id>K<build-id>a<build-id>i<build-id>)<build-id>.<build-id>\n<build-id>R<build-id>u<build-id>n<build-id> <build-id>'<build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>-<build-id>-<build-id>h<build-id>e<build-id>l<build-id>p<build-id>'<build-id> <build-id>f<build-id>o<build-id>r<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>i<build-id>n<build-id>f<build-id>o<build-id>r<build-id>m<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id>.<build-id>\n"
+    },
+    {
+      "argv": [
+        "dashboard",
+        "--help"
+      ],
+      "case": "cli: dashboard help",
+      "status": 0,
+      "stderr": "",
+      "stdout": "\n<build-id>U<build-id>s<build-id>a<build-id>g<build-id>e<build-id>:<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>[<build-id>c<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id>]<build-id> <build-id>[<build-id>o<build-id>p<build-id>t<build-id>i<build-id>o<build-id>n<build-id>s<build-id>]<build-id>\n<build-id>C<build-id>o<build-id>m<build-id>p<build-id>a<build-id>t<build-id>i<build-id>b<build-id>i<build-id>l<build-id>i<build-id>t<build-id>y<build-id>:<build-id> <build-id>c<build-id>c<build-id>s<build-id> <build-id>c<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id> <build-id>a<build-id>c<build-id>c<build-id>e<build-id>p<build-id>t<build-id>s<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>s<build-id>a<build-id>m<build-id>e<build-id> <build-id>a<build-id>r<build-id>g<build-id>u<build-id>m<build-id>e<build-id>n<build-id>t<build-id>s<build-id>.<build-id>\n<build-id>\n<build-id>O<build-id>p<build-id>e<build-id>n<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id>.<build-id>\n<build-id>\n<build-id>C<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>e<build-id>t<build-id>u<build-id>p<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>C<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id>u<build-id>r<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>u<build-id>s<build-id>e<build-id>r<build-id>n<build-id>a<build-id>m<build-id>e<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>p<build-id>a<build-id>s<build-id>s<build-id>w<build-id>o<build-id>r<build-id>d<build-id>\n<build-id> <build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>h<build-id>o<build-id>w<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>D<build-id>i<build-id>s<build-id>p<build-id>l<build-id>a<build-id>y<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id>e<build-id>n<build-id>t<build-id>i<build-id>c<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id>\n<build-id> <build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>d<build-id>i<build-id>s<build-id>a<build-id>b<build-id>l<build-id>e<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>D<build-id>i<build-id>s<build-id>a<build-id>b<build-id>l<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id>e<build-id>n<build-id>t<build-id>i<build-id>c<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>e<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>U<build-id>R<build-id>L<build-id> <build-id>f<build-id>o<build-id>r<build-id> <build-id>T<build-id>3<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>g<build-id>e<build-id>n<build-id>e<build-id>r<build-id>a<build-id>t<build-id>e<build-id> <build-id>-<build-id>-<build-id>s<build-id>t<build-id>d<build-id>o<build-id>u<build-id>t<build-id> <build-id> <build-id> <build-id>C<build-id>r<build-id>e<build-id>a<build-id>t<build-id>e<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>k<build-id>e<build-id>y<build-id> <build-id>(<build-id>s<build-id>h<build-id>o<build-id>w<build-id>n<build-id> <build-id>o<build-id>n<build-id>c<build-id>e<build-id>)<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>r<build-id>o<build-id>t<build-id>a<build-id>t<build-id>e<build-id> <build-id>-<build-id>-<build-id>s<build-id>t<build-id>d<build-id>o<build-id>u<build-id>t<build-id> <build-id> <build-id> <build-id> <build-id> <build-id>R<build-id>e<build-id>p<build-id>l<build-id>a<build-id>c<build-id>e<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>k<build-id>e<build-id>y<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>o<build-id>f<build-id>f<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>T<build-id>u<build-id>r<build-id>n<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>o<build-id>f<build-id>f<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>s<build-id>n<build-id>a<build-id>p<build-id>s<build-id>h<build-id>o<build-id>t<build-id> <build-id>s<build-id>e<build-id>t<build-id> <build-id><<build-id>f<build-id>o<build-id>l<build-id>d<build-id>e<build-id>r<build-id>><build-id> <build-id> <build-id> <build-id>P<build-id>u<build-id>b<build-id>l<build-id>i<build-id>s<build-id>h<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>f<build-id>o<build-id>r<build-id> <build-id>a<build-id>g<build-id>e<build-id>n<build-id>t<build-id>s<build-id> <build-id>i<build-id>n<build-id>t<build-id>o<build-id> <build-id><<build-id>f<build-id>o<build-id>l<build-id>d<build-id>e<build-id>r<build-id>><build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>s<build-id>n<build-id>a<build-id>p<build-id>s<build-id>h<build-id>o<build-id>t<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id>|<build-id>o<build-id>f<build-id>f<build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>o<build-id>r<build-id> <build-id>s<build-id>t<build-id>o<build-id>p<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>a<build-id>g<build-id>e<build-id>n<build-id>t<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>s<build-id>n<build-id>a<build-id>p<build-id>s<build-id>h<build-id>o<build-id>t<build-id>\n<build-id> <build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>w<build-id>h<build-id>e<build-id>t<build-id>h<build-id>e<build-id>r<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>L<build-id>A<build-id>N<build-id> <build-id>H<build-id>T<build-id>T<build-id>P<build-id>S<build-id> <build-id>r<build-id>e<build-id>v<build-id>e<build-id>r<build-id>s<build-id>e<build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>i<build-id>s<build-id> <build-id>t<build-id>r<build-id>u<build-id>s<build-id>t<build-id>e<build-id>d<build-id>\n<build-id> <build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>s<build-id>e<build-id>t<build-id> <build-id>-<build-id>-<build-id>a<build-id>d<build-id>d<build-id>r<build-id>e<build-id>s<build-id>s<build-id> <build-id><<build-id>i<build-id>p<build-id>><build-id> <build-id>-<build-id>-<build-id>o<build-id>r<build-id>i<build-id>g<build-id>i<build-id>n<build-id> <build-id><<build-id>h<build-id>t<build-id>t<build-id>p<build-id>s<build-id> <build-id>u<build-id>r<build-id>l<build-id>><build-id> <build-id> <build-id> <build-id>T<build-id>r<build-id>u<build-id>s<build-id>t<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>L<build-id>A<build-id>N<build-id> <build-id>H<build-id>T<build-id>T<build-id>P<build-id>S<build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id>\n<build-id> <build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>o<build-id>f<build-id>f<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>t<build-id>o<build-id>p<build-id> <build-id>t<build-id>r<build-id>u<build-id>s<build-id>t<build-id>i<build-id>n<build-id>g<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>L<build-id>A<build-id>N<build-id> <build-id>H<build-id>T<build-id>T<build-id>P<build-id>S<build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id>\n<build-id> <build-id> <build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>h<build-id>i<build-id>s<build-id>t<build-id>o<build-id>r<build-id>y<build-id> <build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>e<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>l<build-id>a<build-id>s<build-id>t<build-id> <build-id>b<build-id>a<build-id>c<build-id>k<build-id>u<build-id>p<build-id>\n<build-id> <build-id> <build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>c<build-id>h<build-id>e<build-id>c<build-id>k<build-id>|<build-id>b<build-id>a<build-id>c<build-id>k<build-id>u<build-id>p<build-id>|<build-id>r<build-id>e<build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id><<build-id>d<build-id>i<build-id>r<build-id>><build-id> <build-id> <build-id> <build-id>C<build-id>h<build-id>e<build-id>c<build-id>k<build-id>,<build-id> <build-id>b<build-id>a<build-id>c<build-id>k<build-id> <build-id>u<build-id>p<build-id> <build-id>o<build-id>r<build-id> <build-id>r<build-id>e<build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>i<build-id>t<build-id> <build-id>(<build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>s<build-id>t<build-id>o<build-id>p<build-id>p<build-id>e<build-id>d<build-id>)<build-id>\n<build-id> <build-id> <build-id>c<build-id>u<build-id>r<build-id>s<build-id>o<build-id>r<build-id>-<build-id>k<build-id>e<build-id>y<build-id> <build-id>s<build-id>e<build-id>t<build-id>|<build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id>|<build-id>r<build-id>e<build-id>m<build-id>o<build-id>v<build-id>e<build-id> <build-id> <build-id> <build-id>A<build-id>A<build-id>C<build-id>'<build-id>s<build-id> <build-id>C<build-id>u<build-id>r<build-id>s<build-id>o<build-id>r<build-id> <build-id>A<build-id>P<build-id>I<build-id> <build-id>k<build-id>e<build-id>y<build-id> <build-id>(<build-id>t<build-id>h<build-id>e<build-id> <build-id>k<build-id>e<build-id>y<build-id> <build-id>o<build-id>n<build-id> <build-id>s<build-id>t<build-id>d<build-id>i<build-id>n<build-id>,<build-id> <build-id>n<build-id>e<build-id>v<build-id>e<build-id>r<build-id> <build-id>p<build-id>r<build-id>i<build-id>n<build-id>t<build-id>e<build-id>d<build-id>)<build-id>\n<build-id>\n<build-id>O<build-id>p<build-id>t<build-id>i<build-id>o<build-id>n<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>p<build-id>o<build-id>r<build-id>t<build-id>,<build-id> <build-id>-<build-id>p<build-id> <build-id>P<build-id>O<build-id>R<build-id>T<build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>e<build-id>r<build-id>v<build-id>e<build-id>r<build-id> <build-id>p<build-id>o<build-id>r<build-id>t<build-id> <build-id>(<build-id>d<build-id>e<build-id>f<build-id>a<build-id>u<build-id>l<build-id>t<build-id>:<build-id> <build-id>a<build-id>u<build-id>t<build-id>o<build-id>-<build-id>d<build-id>e<build-id>t<build-id>e<build-id>c<build-id>t<build-id>)<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>h<build-id>o<build-id>s<build-id>t<build-id>,<build-id> <build-id>-<build-id>H<build-id> <build-id>H<build-id>O<build-id>S<build-id>T<build-id> <build-id> <build-id> <build-id> <build-id>B<build-id>i<build-id>n<build-id>d<build-id> <build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>(<build-id>d<build-id>e<build-id>f<build-id>a<build-id>u<build-id>l<build-id>t<build-id>:<build-id> <build-id>l<build-id>o<build-id>c<build-id>a<build-id>l<build-id>h<build-id>o<build-id>s<build-id>t<build-id>)<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>n<build-id>o<build-id>-<build-id>o<build-id>p<build-id>e<build-id>n<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>t<build-id>a<build-id>r<build-id>t<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>s<build-id>e<build-id>r<build-id>v<build-id>e<build-id>r<build-id> <build-id>w<build-id>i<build-id>t<build-id>h<build-id>o<build-id>u<build-id>t<build-id> <build-id>o<build-id>p<build-id>e<build-id>n<build-id>i<build-id>n<build-id>g<build-id> <build-id>a<build-id> <build-id>b<build-id>r<build-id>o<build-id>w<build-id>s<build-id>e<build-id>r<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>h<build-id>e<build-id>l<build-id>p<build-id>,<build-id> <build-id>-<build-id>h<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>t<build-id>h<build-id>i<build-id>s<build-id> <build-id>h<build-id>e<build-id>l<build-id>p<build-id> <build-id>m<build-id>e<build-id>s<build-id>s<build-id>a<build-id>g<build-id>e<build-id>\n<build-id>\n<build-id>L<build-id>i<build-id>n<build-id>u<build-id>x<build-id> <build-id>s<build-id>e<build-id>r<build-id>v<build-id>i<build-id>c<build-id>e<build-id> <build-id>s<build-id>t<build-id>a<build-id>r<build-id>t<build-id>u<build-id>p<build-id> <build-id>n<build-id>e<build-id>v<build-id>e<build-id>r<build-id> <build-id>o<build-id>p<build-id>e<build-id>n<build-id>s<build-id> <build-id>a<build-id> <build-id>b<build-id>r<build-id>o<build-id>w<build-id>s<build-id>e<build-id>r<build-id> <build-id>a<build-id>u<build-id>t<build-id>o<build-id>m<build-id>a<build-id>t<build-id>i<build-id>c<build-id>a<build-id>l<build-id>l<build-id>y<build-id>.<build-id>\n<build-id>\n<build-id>E<build-id>x<build-id>a<build-id>m<build-id>p<build-id>l<build-id>e<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>-<build-id>-<build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>l<build-id>o<build-id>c<build-id>a<build-id>l<build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>-<build-id>-<build-id>p<build-id>o<build-id>r<build-id>t<build-id> <build-id>3<build-id>0<build-id>0<build-id>0<build-id> <build-id>-<build-id>-<build-id>n<build-id>o<build-id>-<build-id>o<build-id>p<build-id>e<build-id>n<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>e<build-id>t<build-id>u<build-id>p<build-id>\n<build-id>\n"
+    },
+    {
+      "argv": [
+        "config",
+        "--help"
+      ],
+      "case": "cli: config is the dashboard alias",
+      "status": 0,
+      "stderr": "",
+      "stdout": "\n<build-id>U<build-id>s<build-id>a<build-id>g<build-id>e<build-id>:<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>[<build-id>c<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id>]<build-id> <build-id>[<build-id>o<build-id>p<build-id>t<build-id>i<build-id>o<build-id>n<build-id>s<build-id>]<build-id>\n<build-id>C<build-id>o<build-id>m<build-id>p<build-id>a<build-id>t<build-id>i<build-id>b<build-id>i<build-id>l<build-id>i<build-id>t<build-id>y<build-id>:<build-id> <build-id>c<build-id>c<build-id>s<build-id> <build-id>c<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id> <build-id>a<build-id>c<build-id>c<build-id>e<build-id>p<build-id>t<build-id>s<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>s<build-id>a<build-id>m<build-id>e<build-id> <build-id>a<build-id>r<build-id>g<build-id>u<build-id>m<build-id>e<build-id>n<build-id>t<build-id>s<build-id>.<build-id>\n<build-id>\n<build-id>O<build-id>p<build-id>e<build-id>n<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id>.<build-id>\n<build-id>\n<build-id>C<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>e<build-id>t<build-id>u<build-id>p<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>C<build-id>o<build-id>n<build-id>f<build-id>i<build-id>g<build-id>u<build-id>r<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>u<build-id>s<build-id>e<build-id>r<build-id>n<build-id>a<build-id>m<build-id>e<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>p<build-id>a<build-id>s<build-id>s<build-id>w<build-id>o<build-id>r<build-id>d<build-id>\n<build-id> <build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>h<build-id>o<build-id>w<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>D<build-id>i<build-id>s<build-id>p<build-id>l<build-id>a<build-id>y<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id>e<build-id>n<build-id>t<build-id>i<build-id>c<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id>\n<build-id> <build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>d<build-id>i<build-id>s<build-id>a<build-id>b<build-id>l<build-id>e<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>D<build-id>i<build-id>s<build-id>a<build-id>b<build-id>l<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id>e<build-id>n<build-id>t<build-id>i<build-id>c<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>e<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>U<build-id>R<build-id>L<build-id> <build-id>f<build-id>o<build-id>r<build-id> <build-id>T<build-id>3<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>g<build-id>e<build-id>n<build-id>e<build-id>r<build-id>a<build-id>t<build-id>e<build-id> <build-id>-<build-id>-<build-id>s<build-id>t<build-id>d<build-id>o<build-id>u<build-id>t<build-id> <build-id> <build-id> <build-id>C<build-id>r<build-id>e<build-id>a<build-id>t<build-id>e<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>k<build-id>e<build-id>y<build-id> <build-id>(<build-id>s<build-id>h<build-id>o<build-id>w<build-id>n<build-id> <build-id>o<build-id>n<build-id>c<build-id>e<build-id>)<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>r<build-id>o<build-id>t<build-id>a<build-id>t<build-id>e<build-id> <build-id>-<build-id>-<build-id>s<build-id>t<build-id>d<build-id>o<build-id>u<build-id>t<build-id> <build-id> <build-id> <build-id> <build-id> <build-id>R<build-id>e<build-id>p<build-id>l<build-id>a<build-id>c<build-id>e<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>k<build-id>e<build-id>y<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>h<build-id>u<build-id>b<build-id> <build-id>o<build-id>f<build-id>f<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>T<build-id>u<build-id>r<build-id>n<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>T<build-id>3<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>h<build-id>u<build-id>b<build-id> <build-id>o<build-id>f<build-id>f<build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>s<build-id>n<build-id>a<build-id>p<build-id>s<build-id>h<build-id>o<build-id>t<build-id> <build-id>s<build-id>e<build-id>t<build-id> <build-id><<build-id>f<build-id>o<build-id>l<build-id>d<build-id>e<build-id>r<build-id>><build-id> <build-id> <build-id> <build-id>P<build-id>u<build-id>b<build-id>l<build-id>i<build-id>s<build-id>h<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>f<build-id>o<build-id>r<build-id> <build-id>a<build-id>g<build-id>e<build-id>n<build-id>t<build-id>s<build-id> <build-id>i<build-id>n<build-id>t<build-id>o<build-id> <build-id><<build-id>f<build-id>o<build-id>l<build-id>d<build-id>e<build-id>r<build-id>><build-id>\n<build-id> <build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>-<build-id>s<build-id>n<build-id>a<build-id>p<build-id>s<build-id>h<build-id>o<build-id>t<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id>|<build-id>o<build-id>f<build-id>f<build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>o<build-id>r<build-id> <build-id>s<build-id>t<build-id>o<build-id>p<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>a<build-id>g<build-id>e<build-id>n<build-id>t<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id> <build-id>s<build-id>n<build-id>a<build-id>p<build-id>s<build-id>h<build-id>o<build-id>t<build-id>\n<build-id> <build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>w<build-id>h<build-id>e<build-id>t<build-id>h<build-id>e<build-id>r<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>L<build-id>A<build-id>N<build-id> <build-id>H<build-id>T<build-id>T<build-id>P<build-id>S<build-id> <build-id>r<build-id>e<build-id>v<build-id>e<build-id>r<build-id>s<build-id>e<build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>i<build-id>s<build-id> <build-id>t<build-id>r<build-id>u<build-id>s<build-id>t<build-id>e<build-id>d<build-id>\n<build-id> <build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>s<build-id>e<build-id>t<build-id> <build-id>-<build-id>-<build-id>a<build-id>d<build-id>d<build-id>r<build-id>e<build-id>s<build-id>s<build-id> <build-id><<build-id>i<build-id>p<build-id>><build-id> <build-id>-<build-id>-<build-id>o<build-id>r<build-id>i<build-id>g<build-id>i<build-id>n<build-id> <build-id><<build-id>h<build-id>t<build-id>t<build-id>p<build-id>s<build-id> <build-id>u<build-id>r<build-id>l<build-id>><build-id> <build-id> <build-id> <build-id>T<build-id>r<build-id>u<build-id>s<build-id>t<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>L<build-id>A<build-id>N<build-id> <build-id>H<build-id>T<build-id>T<build-id>P<build-id>S<build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id>\n<build-id> <build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>o<build-id>f<build-id>f<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>t<build-id>o<build-id>p<build-id> <build-id>t<build-id>r<build-id>u<build-id>s<build-id>t<build-id>i<build-id>n<build-id>g<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>L<build-id>A<build-id>N<build-id> <build-id>H<build-id>T<build-id>T<build-id>P<build-id>S<build-id> <build-id>p<build-id>r<build-id>o<build-id>x<build-id>y<build-id>\n<build-id> <build-id> <build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>h<build-id>i<build-id>s<build-id>t<build-id>o<build-id>r<build-id>y<build-id> <build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>s<build-id>t<build-id>a<build-id>t<build-id>e<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>l<build-id>a<build-id>s<build-id>t<build-id> <build-id>b<build-id>a<build-id>c<build-id>k<build-id>u<build-id>p<build-id>\n<build-id> <build-id> <build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>c<build-id>h<build-id>e<build-id>c<build-id>k<build-id>|<build-id>b<build-id>a<build-id>c<build-id>k<build-id>u<build-id>p<build-id>|<build-id>r<build-id>e<build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id><<build-id>d<build-id>i<build-id>r<build-id>><build-id> <build-id> <build-id> <build-id>C<build-id>h<build-id>e<build-id>c<build-id>k<build-id>,<build-id> <build-id>b<build-id>a<build-id>c<build-id>k<build-id> <build-id>u<build-id>p<build-id> <build-id>o<build-id>r<build-id> <build-id>r<build-id>e<build-id>s<build-id>t<build-id>o<build-id>r<build-id>e<build-id> <build-id>i<build-id>t<build-id> <build-id>(<build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>s<build-id>t<build-id>o<build-id>p<build-id>p<build-id>e<build-id>d<build-id>)<build-id>\n<build-id> <build-id> <build-id>c<build-id>u<build-id>r<build-id>s<build-id>o<build-id>r<build-id>-<build-id>k<build-id>e<build-id>y<build-id> <build-id>s<build-id>e<build-id>t<build-id>|<build-id>s<build-id>t<build-id>a<build-id>t<build-id>u<build-id>s<build-id>|<build-id>r<build-id>e<build-id>m<build-id>o<build-id>v<build-id>e<build-id> <build-id> <build-id> <build-id>A<build-id>A<build-id>C<build-id>'<build-id>s<build-id> <build-id>C<build-id>u<build-id>r<build-id>s<build-id>o<build-id>r<build-id> <build-id>A<build-id>P<build-id>I<build-id> <build-id>k<build-id>e<build-id>y<build-id> <build-id>(<build-id>t<build-id>h<build-id>e<build-id> <build-id>k<build-id>e<build-id>y<build-id> <build-id>o<build-id>n<build-id> <build-id>s<build-id>t<build-id>d<build-id>i<build-id>n<build-id>,<build-id> <build-id>n<build-id>e<build-id>v<build-id>e<build-id>r<build-id> <build-id>p<build-id>r<build-id>i<build-id>n<build-id>t<build-id>e<build-id>d<build-id>)<build-id>\n<build-id>\n<build-id>O<build-id>p<build-id>t<build-id>i<build-id>o<build-id>n<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>p<build-id>o<build-id>r<build-id>t<build-id>,<build-id> <build-id>-<build-id>p<build-id> <build-id>P<build-id>O<build-id>R<build-id>T<build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>e<build-id>r<build-id>v<build-id>e<build-id>r<build-id> <build-id>p<build-id>o<build-id>r<build-id>t<build-id> <build-id>(<build-id>d<build-id>e<build-id>f<build-id>a<build-id>u<build-id>l<build-id>t<build-id>:<build-id> <build-id>a<build-id>u<build-id>t<build-id>o<build-id>-<build-id>d<build-id>e<build-id>t<build-id>e<build-id>c<build-id>t<build-id>)<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>h<build-id>o<build-id>s<build-id>t<build-id>,<build-id> <build-id>-<build-id>H<build-id> <build-id>H<build-id>O<build-id>S<build-id>T<build-id> <build-id> <build-id> <build-id> <build-id>B<build-id>i<build-id>n<build-id>d<build-id> <build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>(<build-id>d<build-id>e<build-id>f<build-id>a<build-id>u<build-id>l<build-id>t<build-id>:<build-id> <build-id>l<build-id>o<build-id>c<build-id>a<build-id>l<build-id>h<build-id>o<build-id>s<build-id>t<build-id>)<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>n<build-id>o<build-id>-<build-id>o<build-id>p<build-id>e<build-id>n<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>t<build-id>a<build-id>r<build-id>t<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>s<build-id>e<build-id>r<build-id>v<build-id>e<build-id>r<build-id> <build-id>w<build-id>i<build-id>t<build-id>h<build-id>o<build-id>u<build-id>t<build-id> <build-id>o<build-id>p<build-id>e<build-id>n<build-id>i<build-id>n<build-id>g<build-id> <build-id>a<build-id> <build-id>b<build-id>r<build-id>o<build-id>w<build-id>s<build-id>e<build-id>r<build-id>\n<build-id> <build-id> <build-id>-<build-id>-<build-id>h<build-id>e<build-id>l<build-id>p<build-id>,<build-id> <build-id>-<build-id>h<build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>o<build-id>w<build-id> <build-id>t<build-id>h<build-id>i<build-id>s<build-id> <build-id>h<build-id>e<build-id>l<build-id>p<build-id> <build-id>m<build-id>e<build-id>s<build-id>s<build-id>a<build-id>g<build-id>e<build-id>\n<build-id>\n<build-id>L<build-id>i<build-id>n<build-id>u<build-id>x<build-id> <build-id>s<build-id>e<build-id>r<build-id>v<build-id>i<build-id>c<build-id>e<build-id> <build-id>s<build-id>t<build-id>a<build-id>r<build-id>t<build-id>u<build-id>p<build-id> <build-id>n<build-id>e<build-id>v<build-id>e<build-id>r<build-id> <build-id>o<build-id>p<build-id>e<build-id>n<build-id>s<build-id> <build-id>a<build-id> <build-id>b<build-id>r<build-id>o<build-id>w<build-id>s<build-id>e<build-id>r<build-id> <build-id>a<build-id>u<build-id>t<build-id>o<build-id>m<build-id>a<build-id>t<build-id>i<build-id>c<build-id>a<build-id>l<build-id>l<build-id>y<build-id>.<build-id>\n<build-id>\n<build-id>E<build-id>x<build-id>a<build-id>m<build-id>p<build-id>l<build-id>e<build-id>s<build-id>:<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>-<build-id>-<build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>l<build-id>o<build-id>c<build-id>a<build-id>l<build-id>h<build-id>o<build-id>s<build-id>t<build-id> <build-id>-<build-id>-<build-id>p<build-id>o<build-id>r<build-id>t<build-id> <build-id>3<build-id>0<build-id>0<build-id>0<build-id> <build-id>-<build-id>-<build-id>n<build-id>o<build-id>-<build-id>o<build-id>p<build-id>e<build-id>n<build-id>\n<build-id> <build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>e<build-id>t<build-id>u<build-id>p<build-id>\n<build-id>\n"
+    },
+    {
+      "argv": [
+        "update"
+      ],
+      "case": "cli: retired self-update",
+      "status": 1,
+      "stderr": "[<build-id>X<build-id>]<build-id> <build-id>U<build-id>p<build-id>s<build-id>t<build-id>r<build-id>e<build-id>a<build-id>m<build-id> <build-id>C<build-id>C<build-id>S<build-id> <build-id>s<build-id>e<build-id>l<build-id>f<build-id>-<build-id>u<build-id>p<build-id>d<build-id>a<build-id>t<build-id>e<build-id> <build-id>i<build-id>s<build-id> <build-id>r<build-id>e<build-id>t<build-id>i<build-id>r<build-id>e<build-id>d<build-id> <build-id>i<build-id>n<build-id> <build-id>A<build-id>I<build-id> <build-id>A<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>C<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>U<build-id>p<build-id>d<build-id>a<build-id>t<build-id>e<build-id> <build-id>A<build-id>I<build-id> <build-id>A<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>C<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>f<build-id>r<build-id>o<build-id>m<build-id> <build-id>i<build-id>t<build-id>s<build-id> <build-id>o<build-id>w<build-id>n<build-id> <build-id>r<build-id>e<build-id>l<build-id>e<build-id>a<build-id>s<build-id>e<build-id> <build-id>o<build-id>r<build-id> <build-id>c<build-id>h<build-id>e<build-id>c<build-id>k<build-id>o<build-id>u<build-id>t<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>I<build-id>n<build-id>s<build-id>t<build-id>a<build-id>l<build-id>l<build-id>e<build-id>d<build-id> <build-id>a<build-id>p<build-id>p<build-id>l<build-id>i<build-id>c<build-id>a<build-id>t<build-id>i<build-id>o<build-id>n<build-id> <build-id>u<build-id>p<build-id>d<build-id>a<build-id>t<build-id>e<build-id>s<build-id> <build-id>r<build-id>e<build-id>m<build-id>a<build-id>i<build-id>n<build-id> <build-id>a<build-id>v<build-id>a<build-id>i<build-id>l<build-id>a<build-id>b<build-id>l<build-id>e<build-id> <build-id>i<build-id>n<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>U<build-id>s<build-id>e<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id>,<build-id> <build-id>c<build-id>o<build-id>d<build-id>e<build-id>x<build-id>-<build-id>a<build-id>u<build-id>t<build-id>h<build-id>,<build-id> <build-id>b<build-id>a<build-id>r<build-id>,<build-id> <build-id>o<build-id>r<build-id> <build-id>-<build-id>-<build-id>h<build-id>e<build-id>l<build-id>p<build-id>.<build-id>\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "launch",
+        "work"
+      ],
+      "case": "cli: retired profile workflow",
+      "status": 1,
+      "stderr": "[<build-id>X<build-id>]<build-id> <build-id>\"<build-id>l<build-id>a<build-id>u<build-id>n<build-id>c<build-id>h<build-id>\"<build-id> <build-id>i<build-id>s<build-id> <build-id>a<build-id>n<build-id> <build-id>u<build-id>n<build-id>s<build-id>u<build-id>p<build-id>p<build-id>o<build-id>r<build-id>t<build-id>e<build-id>d<build-id> <build-id>c<build-id>o<build-id>m<build-id>m<build-id>a<build-id>n<build-id>d<build-id> <build-id>o<build-id>r<build-id> <build-id>r<build-id>e<build-id>t<build-id>i<build-id>r<build-id>e<build-id>d<build-id> <build-id>u<build-id>p<build-id>s<build-id>t<build-id>r<build-id>e<build-id>a<build-id>m<build-id> <build-id>C<build-id>C<build-id>S<build-id> <build-id>w<build-id>o<build-id>r<build-id>k<build-id>f<build-id>l<build-id>o<build-id>w<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>A<build-id>I<build-id> <build-id>A<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id> <build-id>C<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>m<build-id>a<build-id>n<build-id>a<build-id>g<build-id>e<build-id>s<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>s<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>;<build-id> <build-id>p<build-id>r<build-id>o<build-id>f<build-id>i<build-id>l<build-id>e<build-id>/<build-id>m<build-id>o<build-id>d<build-id>e<build-id>l<build-id> <build-id>C<build-id>L<build-id>I<build-id> <build-id>l<build-id>a<build-id>u<build-id>n<build-id>c<build-id>h<build-id>e<build-id>s<build-id> <build-id>a<build-id>r<build-id>e<build-id> <build-id>r<build-id>e<build-id>t<build-id>i<build-id>r<build-id>e<build-id>d<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>U<build-id>s<build-id>e<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id>,<build-id> <build-id>c<build-id>o<build-id>d<build-id>e<build-id>x<build-id>-<build-id>a<build-id>u<build-id>t<build-id>h<build-id>,<build-id> <build-id>b<build-id>a<build-id>r<build-id>,<build-id> <build-id>o<build-id>r<build-id> <build-id>-<build-id>-<build-id>h<build-id>e<build-id>l<build-id>p<build-id>.<build-id>\n",
+      "stdout": ""
+    },
+    {
+      "argv": [],
+      "case": "cli: retired legacy bin",
+      "status": 1,
+      "stderr": "[<build-id>X<build-id>]<build-id> <build-id>c<build-id>c<build-id>s<build-id>-<build-id>d<build-id>r<build-id>o<build-id>i<build-id>d<build-id> <build-id>i<build-id>s<build-id> <build-id>a<build-id> <build-id>r<build-id>e<build-id>t<build-id>i<build-id>r<build-id>e<build-id>d<build-id> <build-id>u<build-id>p<build-id>s<build-id>t<build-id>r<build-id>e<build-id>a<build-id>m<build-id> <build-id>C<build-id>C<build-id>S<build-id> <build-id>l<build-id>a<build-id>u<build-id>n<build-id>c<build-id>h<build-id>e<build-id>r<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>U<build-id>s<build-id>e<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>d<build-id>a<build-id>s<build-id>h<build-id>b<build-id>o<build-id>a<build-id>r<build-id>d<build-id> <build-id>f<build-id>o<build-id>r<build-id> <build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>s<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>u<build-id>s<build-id>a<build-id>g<build-id>e<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>U<build-id>s<build-id>e<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>c<build-id>o<build-id>d<build-id>e<build-id>x<build-id>-<build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>s<build-id>h<build-id>o<build-id>w<build-id> <build-id>t<build-id>o<build-id> <build-id>i<build-id>n<build-id>s<build-id>p<build-id>e<build-id>c<build-id>t<build-id> <build-id>s<build-id>a<build-id>v<build-id>e<build-id>d<build-id> <build-id>C<build-id>o<build-id>d<build-id>e<build-id>x<build-id> <build-id>l<build-id>o<build-id>g<build-id>i<build-id>n<build-id>s<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>U<build-id>s<build-id>e<build-id> <build-id>a<build-id>i<build-id>-<build-id>a<build-id>c<build-id>c<build-id>o<build-id>u<build-id>n<build-id>t<build-id>-<build-id>c<build-id>e<build-id>n<build-id>t<build-id>e<build-id>r<build-id> <build-id>c<build-id>o<build-id>d<build-id>e<build-id>x<build-id>-<build-id>a<build-id>u<build-id>t<build-id>h<build-id> <build-id>a<build-id>c<build-id>t<build-id>i<build-id>v<build-id>a<build-id>t<build-id>e<build-id> <build-id><<build-id>s<build-id>a<build-id>v<build-id>e<build-id>d<build-id>-<build-id>l<build-id>o<build-id>g<build-id>i<build-id>n<build-id>><build-id> <build-id>t<build-id>o<build-id> <build-id>a<build-id>c<build-id>t<build-id>i<build-id>v<build-id>a<build-id>t<build-id>e<build-id> <build-id>t<build-id>h<build-id>e<build-id> <build-id>s<build-id>h<build-id>a<build-id>r<build-id>e<build-id>d<build-id> <build-id>l<build-id>o<build-id>g<build-id>i<build-id>n<build-id>.<build-id>\n<build-id> <build-id> <build-id> <build-id> <build-id>S<build-id>h<build-id>e<build-id>l<build-id>l<build-id> <build-id>e<build-id>x<build-id>p<build-id>o<build-id>r<build-id>t<build-id>s<build-id>,<build-id> <build-id>i<build-id>s<build-id>o<build-id>l<build-id>a<build-id>t<build-id>e<build-id>d<build-id> <build-id>C<build-id>O<build-id>D<build-id>E<build-id>X<build-id>_<build-id>H<build-id>O<build-id>M<build-id>E<build-id> <build-id>l<build-id>a<build-id>u<build-id>n<build-id>c<build-id>h<build-id>e<build-id>s<build-id>,<build-id> <build-id>D<build-id>r<build-id>o<build-id>i<build-id>d<build-id> <build-id>r<build-id>o<build-id>u<build-id>t<build-id>i<build-id>n<build-id>g<build-id>,<build-id> <build-id>a<build-id>n<build-id>d<build-id> <build-id>C<build-id>L<build-id>I<build-id>P<build-id>r<build-id>o<build-id>x<build-id>y<build-id> <build-id>l<build-id>a<build-id>u<build-id>n<build-id>c<build-id>h<build-id>e<build-id>s<build-id> <build-id>a<build-id>r<build-id>e<build-id> <build-id>r<build-id>e<build-id>t<build-id>i<build-id>r<build-id>e<build-id>d<build-id>.<build-id>\n",
+      "stdout": ""
+    }
+  ],
+  "http": [
+    {
+      "case": "hub auth-files with a bearer key",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "files": [
+            {
+              "auth_index": "49a9393745dd05c6",
+              "disabled": false,
+              "email": "codex:alpha@example.com",
+              "id": "codex:alpha",
+              "label": "codex:alpha",
+              "provider": "codex",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "3b57faefdc629b5b",
+              "disabled": false,
+              "email": "codex:gamma@example.com",
+              "id": "codex:gamma",
+              "label": "codex:gamma",
+              "provider": "codex",
+              "sampled_at": null,
+              "status": "error",
+              "status_message": "AI Account Center has no current reading for this account.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "034c5a25f188dc4d",
+              "disabled": false,
+              "email": "claude:beta@example.com",
+              "id": "claude:beta",
+              "label": "claude:beta",
+              "provider": "claude",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "claude"
+            }
+          ]
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub auth-files with X-Management-Key",
+      "request": {
+        "headers": {
+          "x-management-key": "<management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "files": [
+            {
+              "auth_index": "49a9393745dd05c6",
+              "disabled": false,
+              "email": "codex:alpha@example.com",
+              "id": "codex:alpha",
+              "label": "codex:alpha",
+              "provider": "codex",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "3b57faefdc629b5b",
+              "disabled": false,
+              "email": "codex:gamma@example.com",
+              "id": "codex:gamma",
+              "label": "codex:gamma",
+              "provider": "codex",
+              "sampled_at": null,
+              "status": "error",
+              "status_message": "AI Account Center has no current reading for this account.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "034c5a25f188dc4d",
+              "disabled": false,
+              "email": "claude:beta@example.com",
+              "id": "claude:beta",
+              "label": "claude:beta",
+              "provider": "claude",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "claude"
+            }
+          ]
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: Codex usage",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"plan_type\":\"pro\",\"rate_limit\":{\"primary_window\":{\"used_percent\":30,\"reset_at\":1791298800,\"limit_window_seconds\":18000},\"secondary_window\":{\"used_percent\":78,\"reset_at\":1791581532,\"limit_window_seconds\":604800}}}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: Claude usage",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"five_hour\":{\"utilization\":10,\"resets_at\":null},\"seven_day\":{\"utilization\":50,\"resets_at\":\"2026-10-10T00:00:00.000Z\"},\"limits\":[]}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: an account with no reading answers 503 upstream",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"error\":{\"type\":\"no_cached_reading\",\"message\":\"AI Account Center has no current reading for this account.\"}}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 503
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: an unknown auth_index",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unknown_auth_index",
+          "error": "No account has this auth_index. List auth-files."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "hub api-call: a provider mismatch",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "This usage read does not match the account provider."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: a foreign URL is not proxied",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center answers only the Codex and Claude usage reads T3 makes. It is not a proxy."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: reset credits are refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center does not offer Codex reset credits to T3."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: a write is refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center answers only GET usage reads. It is not a proxy and changes nothing."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: invalid JSON",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "invalid_json",
+          "error": "Invalid JSON in request body"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 400
+      }
+    },
+    {
+      "case": "hub reset-quota is refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/reset-quota"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center does not reset quotas for T3. It only reports usage."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub: no key",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "missing_management_key",
+          "error": "A management key is required."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 401
+      }
+    },
+    {
+      "case": "hub: a wrong key",
+      "request": {
+        "headers": {
+          "authorization": "Bearer aacu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "invalid_management_key",
+          "error": "The management key is not valid."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 401
+      }
+    },
+    {
+      "case": "hub: a key in the query string is refused",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/v0/management/auth-files?key=<management-key>"
+      },
+      "response": {
+        "body": {
+          "code": "key_in_query",
+          "error": "Send the management key only in a request header."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 400
+      }
+    },
+    {
+      "case": "hub: any other path",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/other"
+      },
+      "response": {
+        "body": {
+          "code": "not_found",
+          "error": "AI Account Center offers only auth-files and api-call usage reads here."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "hub: a method it does not serve",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "PUT",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "not_found",
+          "error": "AI Account Center offers only auth-files and api-call usage reads here."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "page: /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "body": {
+          "disk": "app/index.html"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: /app/home",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/home"
+      },
+      "response": {
+        "body": {
+          "disk": "app/index.html"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: /login (bookmark alias)",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/login"
+      },
+      "response": {
+        "body": {
+          "disk": "app/index.html"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: HEAD",
+      "request": {
+        "headers": {},
+        "method": "HEAD",
+        "path": "/app/home"
+      },
+      "response": {
+        "body": "",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "frame stylesheet revalidates",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/app.css"
+      },
+      "response": {
+        "body": {
+          "disk": "app/app.css"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/css; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "classic upgrade module is a script",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/bridge.js"
+      },
+      "response": {
+        "body": {
+          "disk": "bridge.js"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: identity",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web.js"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: brotli variant",
+      "request": {
+        "headers": {
+          "accept-encoding": "br"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web.js"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: gzip variant",
+      "request": {
+        "headers": {
+          "accept-encoding": "gzip"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web.js"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "gzip",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: wasm",
+      "request": {
+        "headers": {
+          "accept-encoding": "br"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web_bg.wasm"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web_bg.wasm"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "application/wasm",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: a matching ETag revalidates",
+      "request": {
+        "headers": {
+          "accept-encoding": "gzip"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": "",
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 304
+      }
+    },
+    {
+      "case": "pkg: a precompressed file is never served directly",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js.br"
+      },
+      "response": {
+        "body": {
+          "error": "Not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "the build manifest is never served",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/ui-build-manifest.json"
+      },
+      "response": {
+        "body": {
+          "error": "Not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "service worker",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/sw.js"
+      },
+      "response": {
+        "body": {
+          "disk": "sw.js"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "service worker routing module",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/sw-route.js"
+      },
+      "response": {
+        "body": {
+          "disk": "sw-route.js"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "PWA manifest",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/manifest.webmanifest"
+      },
+      "response": {
+        "body": {
+          "disk": "manifest.webmanifest"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "application/manifest+json",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "PWA icon",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/icons/aac-192.png"
+      },
+      "response": {
+        "body": {
+          "disk": "icons/aac-192.png"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "image/png",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "root icon alias",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/favicon.ico"
+      },
+      "response": {
+        "body": {
+          "disk": "icons/apple-touch-icon-180-v2.png"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "image/png",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "an unknown API path answers JSON 404",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/api/definitely-not-a-route"
+      },
+      "response": {
+        "body": {
+          "error": "API endpoint was not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "an unknown page goes back to /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/definitely-not-a-page"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    },
+    {
+      "case": "an unknown asset goes back to /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/definitely-not-there.js"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    },
+    {
+      "case": "dot segments never escape the static folder",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/%2e%2e/%2e%2e/package.json"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    }
+  ],
+  "version": 1
+}
