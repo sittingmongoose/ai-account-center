@@ -252,6 +252,7 @@ function get(port, route) {
 const CLOCK_KEYS = new Set([
   'scannedAt',
   'asOf',
+  'asOfMs',
   'firstSeenAt',
   'generatedAt',
   'ageSeconds',
@@ -302,9 +303,11 @@ try {
         `${name}: differs at [${diff.join(', ')}]; ${k}: today=${sample(pa[k])} owned=${sample(pb[k])}`
       );
       if (!report.diffDir) {
-        report.diffDir = scratch;
-        fs.writeFileSync(path.join(scratch, 'diff-today.json'), a.body);
-        fs.writeFileSync(path.join(scratch, 'diff-owned.json'), b.body);
+        const dump = path.join(process.env.TMPDIR ?? os.tmpdir(), 'aac-r4-diff');
+        fs.mkdirSync(dump, { recursive: true });
+        report.diffDir = dump;
+        fs.writeFileSync(path.join(dump, 'diff-today.json'), a.body);
+        fs.writeFileSync(path.join(dump, 'diff-owned.json'), b.body);
       }
     }
     if (!served) report.failures.push(`${name}: the owned path did not serve (x-aac-view)`);

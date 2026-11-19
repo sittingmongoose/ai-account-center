@@ -123,9 +123,11 @@ async function ensureFacts(
   } catch {
     return null;
   }
-  // The feed's generation word admits only [A-Za-z0-9._:-]; zone names carry slashes.
+  // The feed's generation word admits only [A-Za-z0-9._:-] and at most 64 bytes; zone names
+  // carry slashes, and the full catalog hash alone is 64. Spell the zone with admitted
+  // characters and keep a hash prefix (the full hash still gates the answer's staleness).
   const zoneWord = zone.replace(/[^A-Za-z0-9._:-]/g, '-');
-  const factsId = `${input.generation}:${input.catalogHash}:${zoneWord}`;
+  const factsId = `${input.generation}:${String(input.catalogHash).slice(0, 12)}:${zoneWord}`;
   const held = await service.pushFeed(boot, 'scoreboard-facts', factsId, dataText, factsText);
   if (held === null) return null;
   state = {

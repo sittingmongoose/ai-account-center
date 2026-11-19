@@ -221,7 +221,7 @@ async function main() {
           out.held = await rust.pushFeed(
             boot,
             'scoreboard-facts',
-            `${input.generation}:${input.catalogHash}:America-New_York`,
+            `${input.generation}:${String(input.catalogHash).slice(0, 12)}:America-New_York`,
             rustInputText({ timeZone: zone }),
             factsText
           );
