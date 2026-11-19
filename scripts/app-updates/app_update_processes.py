@@ -19,7 +19,7 @@ import time
 import uuid
 
 from app_update_common import (
-    UpdateFailure, command, environment, in_service_cgroup, powershell, sanitize_unit_fragment, systemd_run_environment, systemd_user_service_argv,
+    UpdateFailure, command, environment, gui_launch_environment, in_service_cgroup, powershell, sanitize_unit_fragment, systemd_run_environment, systemd_user_service_argv,
 )
 
 # T3's own server and desktop, by exact location. A CLI process started below
@@ -897,7 +897,8 @@ def restart_desktops(install, contexts):
     for item in contexts:
         args = desktop_arguments(item, install.platform)
         if install.platform == "mac":
-            command(["/usr/bin/open", "-n", "-a", install.path, "--args", *args], timeout=15, stderr_tail=False)
+            command(["/usr/bin/open", "-n", "-a", install.path, "--args", *args], timeout=15, stderr_tail=False,
+                    env=gui_launch_environment(), preserve_env=True)
         elif install.platform == "windows":
             subprocess.Popen([str(install.path), *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)

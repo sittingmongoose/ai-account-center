@@ -59,6 +59,31 @@ def managed_root(host):
     return pathlib.Path.home() / ".t3/tools/antigravity-acp" / key if key else None
 
 
+T3_SETTINGS_MAX_BYTES = 4 * 1024 * 1024
+
+
+def custom_executable_instances():
+    """The instance ids whose T3 settings name a custom Antigravity executable.
+
+    T3 refuses to install its managed runtime through such an instance ("This instance
+    uses a custom executable"), and its own post-install refresh skips them. Jared's two
+    instances run through a per-instance sign-in wrapper (2026-11-19), so the install
+    goes through an instance without one, such as T3's disabled default. Only ids are
+    read, never other settings. An unreadable file names none: T3's refusal then decides."""
+    path = pathlib.Path.home() / ".t3/userdata/settings.json"
+    try:
+        if path.is_symlink() or path.stat().st_size > T3_SETTINGS_MAX_BYTES:
+            return set()
+        instances = json.loads(path.read_text(encoding="utf-8")).get("providerInstances")
+    except (OSError, ValueError, AttributeError):
+        return set()
+    if not isinstance(instances, dict):
+        return set()
+    return {key for key, value in instances.items()
+            if isinstance(value, dict) and isinstance(value.get("config"), dict)
+            and isinstance(value["config"].get("binaryPath"), str) and value["config"]["binaryPath"].strip()}
+
+
 def read_json(path):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 8192:
         raise UpdateFailure("readiness_unknown")
@@ -261,7 +286,13 @@ def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
             if not enabled:
                 raise UpdateFailure("t3_install_failed:provider_unavailable",
                                     reason="no_enabled_instance" if installable else "no_installable_instance")
-            instance = enabled[0]
+            # Install through an instance T3 manages (enabled first); refresh every enabled one after.
+            custom = custom_executable_instances()
+            managed = [p["instanceId"] for p in installable
+                       if isinstance(p.get("instanceId"), str) and p["instanceId"] not in custom]
+            instance = next((i for i in enabled if i in managed), managed[0] if managed else None)
+            if instance is None:
+                raise UpdateFailure("t3_install_failed:provider_unavailable", reason="no_managed_instance")
             offer = read_offer(client, instance)
             offered = offer.get("version") if offer and offer.get("version") and SEMVER.fullmatch(offer["version"]) else None
             current = detect_antigravity_acp(install.platform)

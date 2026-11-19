@@ -547,6 +547,27 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(processes.restart_desktops(install, [item]), 1)
         return run, popen
 
+    def test_mac_relaunch_leaves_the_ssh_session_behind(self):
+        # 2026-11-19: Update all reaches the Mac over SSH and `open` hands its environment to the
+        # app. T3 relaunched that way kept SSH_CONNECTION, and the Antigravity CLI it runs then
+        # refused Google sign-in as a "remote (SSH) session".
+        install = common.Install('t3-code', 'mac', pathlib.Path('/Applications/T3 Code (Nightly).app'), '1.0.0', 'official-download', 't3-code')
+        item = mock.Mock(args=['/Applications/T3 Code (Nightly).app/Contents/MacOS/T3 Code (Nightly)'], cwd='/', env={}, pid=1, ppid=0)
+        ssh = {'SSH_CONNECTION': '192.0.2.1 50000 192.0.2.2 22', 'SSH_CLIENT': '192.0.2.1 50000 22', 'SSH_TTY': '/dev/ttys009',
+               'SSH_AUTH_SOCK': '/private/tmp/ssh-x/agent.1', 'KEEP': 'yes', 'CCS_SESSION_SECRET': 'hidden'}
+        with mock.patch.dict(os.environ, ssh), \
+                mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'desktop_roots', return_value=[item]), \
+                mock.patch.object(processes, 'command') as run, mock.patch.object(processes.subprocess, 'Popen') as popen:
+            self.assertEqual(processes.restart_desktops(install, [item]), 1)
+        popen.assert_not_called()
+        self.assertEqual(run.call_args.args[0][:4], ['/usr/bin/open', '-n', '-a', install.path])
+        env = run.call_args.kwargs['env']
+        self.assertTrue(run.call_args.kwargs['preserve_env'])
+        self.assertEqual(env['KEEP'], 'yes')
+        self.assertFalse([key for key in env if key.startswith('SSH_')])
+        self.assertNotIn('CCS_SESSION_SECRET', env)
+
     def test_desktop_relaunch_leaves_the_dashboard_cgroup(self):
         run, popen = self._restart_ubuntu_desktop(True)
         popen.assert_not_called()

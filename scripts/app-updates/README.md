@@ -70,7 +70,7 @@ modify or export account credentials/configuration.
 | --- | --- |
 | Antigravity CLI | Native `agy update`; retired switching markers never select the managed coordinator (see below) |
 | Cursor CLI | Official managed `cursor-agent update`; Linux/Nas1 directly, Mac in the login GUI session, Windows the way Cursor's own `.cmd` runs it (`powershell -ExecutionPolicy Bypass -File cursor-agent.ps1`, a process-only policy) in the existing interactive task. Windows reads the version from the folder the launcher picks, without running it. A refused sign-in is `cursor_signin_needed`. No running agent is stopped. |
-| Antigravity ACP (T3) | After T3's own row: asks the local T3 server, once it answers, to install the release T3 offers on an enabled Antigravity instance, using a temporary scoped session, then refreshes every enabled instance's models. Only T3 writes `active.json`. Linux and Mac hold the move from the 1.3/1.4 runtime pair to the native 1.5+ CLI (sign-in). Separate from `agy`. |
+| Antigravity ACP (T3) | After T3's own row: asks the local T3 server, once it answers, to install the release T3 offers through an Antigravity instance T3 manages (enabled first; never one with a custom executable), using a temporary scoped session, then refreshes every enabled instance's models. Only T3 writes `active.json`. Linux and Mac hold the move from the 1.3/1.4 runtime pair to the native 1.5+ CLI (sign-in). Separate from `agy`. |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -185,7 +185,13 @@ not refreshed.
 AAC installs on an **enabled** Antigravity instance. T3 lists its disabled
 default `antigravity` instance first and refreshes models after an install only
 for the instance the install ran on, and only when it is enabled; installing on
-the disabled one left the Mac and VM model lists stale on 2026-11-13. After a
+the disabled one left the Mac and VM model lists stale on 2026-11-13. An instance
+whose T3 settings name a custom executable (`providerInstances.<id>.config.binaryPath`,
+the only setting AAC reads there) is never the install instance: T3 refuses an install
+through it. Since 2026-11-19 Jared's two instances run a per-instance sign-in wrapper,
+so the install goes through the disabled default, and the per-instance refresh below
+still covers them; with no instance left that T3 manages the row fails
+`provider_unavailable` / `no_managed_instance` before any install. After a
 successful install AAC calls `server.refreshProviders {instanceId, refreshModels:
 true}` for every enabled Antigravity instance, one request each, so another
 provider's refresh failure cannot hide this one's, and every instance is asked
@@ -1003,6 +1009,15 @@ its own 512 KiB limit. The page's cell names the cause ("Sign-in needed",
 lost" (only for an empty or unreadable reply), "T3 not ready")
 and its details add the cause, what ran, which copy, the step times and the
 output.
+
+## Mac relaunches leave the SSH session behind
+
+Update all reaches the Mac over SSH, and `/usr/bin/open` hands its own environment to
+the app it starts. Every `open` relaunch (T3 Code, desktop apps, the update Terminal)
+therefore drops `SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`, `SSH_AUTH_SOCK` and
+`SSH_ORIGINAL_COMMAND` first (`gui_launch_environment`). On 2026-11-19 a T3 relaunched
+with them made the Antigravity CLI treat every instance as a remote session and refuse
+Google sign-in ("No browser is available here").
 
 ## Relaunching from the dashboard's service
 
