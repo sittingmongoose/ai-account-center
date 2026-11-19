@@ -133,7 +133,7 @@ export function antigravityJobFlow(
         );
       }
       // A terminal sign-in for this profile holds the marker; never run twice.
-      marker = claimAntigravitySignInMarker(ccsDir, profileName);
+      marker = claimAntigravitySignInMarker(ccsDir, profileName, true);
       if (!marker) throw new SignInJobError('write_failed');
       try {
         staging = prepareSignInStaging(ccsDir, true);

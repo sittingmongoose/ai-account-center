@@ -75,7 +75,7 @@ pub(crate) fn commit() -> i32 {
 }
 
 pub(crate) fn staging(antigravity: bool) -> i32 {
-    let args: Vec<_> = std::env::args_os().skip(2).take(5).collect();
+    let args: Vec<_> = std::env::args_os().skip(2).take(6).collect();
     let Some(args) = args
         .iter()
         .map(|arg| arg.to_str())
@@ -85,6 +85,21 @@ pub(crate) fn staging(antigravity: bool) -> i32 {
     };
     use aac_files::profile_staging;
     let outcome = match (antigravity, args.as_slice()) {
+        (true, ["marker-claim", root, name, temp]) => {
+            let mut holder = Vec::new();
+            if io::stdin().take(513).read_to_end(&mut holder).is_err() {
+                return 74;
+            }
+            profile_staging::claim_antigravity_marker(Path::new(root), name, temp, &holder)
+                .map(usize::from)
+        }
+        (true, ["marker-remove", root, name, dev, ino]) => match (dev.parse(), ino.parse()) {
+            (Ok(dev), Ok(ino)) => {
+                profile_staging::remove_antigravity_marker(Path::new(root), name, dev, ino)
+                    .map(usize::from)
+            }
+            _ => return 74,
+        },
         (true, ["prepare", root, name]) => {
             let mut bus = Vec::new();
             if io::stdin().take(4097).read_to_end(&mut bus).is_err() {

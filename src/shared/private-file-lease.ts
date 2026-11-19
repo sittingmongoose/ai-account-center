@@ -101,7 +101,9 @@ export function signInStaging(
     | ['prepare', staging: string]
     | ['prepare', staging: string, shared: string]
     | ['cleanup', staging: string]
-    | ['sweep', now: string],
+    | ['sweep', now: string]
+    | ['marker-claim', name: string, temporary: string]
+    | ['marker-remove', name: string, dev: string, ino: string],
   input?: string
 ): number | undefined {
   const canonical = canonicalLeaseRoot(root);

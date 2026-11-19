@@ -104,7 +104,7 @@ describe('antigravityJobFlow', () => {
       refreshDescriptor: async () => ({ status: 'no-installation' }),
     });
     const command = await flow.prepare('job_0000000000000001');
-    if (nativeMode) expect(nativeWrites).toBe(1);
+    if (nativeMode) expect(nativeWrites).toBe(2);
     expect(command.file).toBe('/usr/bin/python3');
     expect(command.pty).toBe(false);
     expect(command.args[0]).toBe('-c');

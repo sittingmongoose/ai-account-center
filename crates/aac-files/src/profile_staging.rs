@@ -3,7 +3,7 @@ use super::{path, profile_writes::owned_directory, require_absolute, sync_direct
 use std::{
     fs,
     io::{self, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, symlink},
     path::Path,
     time::{Duration, UNIX_EPOCH},
 };
@@ -183,4 +183,78 @@ pub fn cleanup_antigravity(root: &Path, name: &str) -> io::Result<()> {
 /// Expire only abandoned Antigravity staging folders.
 pub fn sweep_antigravity(root: &Path, now_ms: u64) -> io::Result<usize> {
     sweep_expired(&root.join("antigravity-signin"), now_ms, antigravity_name)
+}
+
+fn marker_name(name: &str) -> bool {
+    name.strip_suffix(".running").is_some_and(|profile| {
+        profile
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_lowercase)
+            && profile.len() <= 48
+            && profile.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte)
+            })
+    })
+}
+
+fn marker_temp(name: &str) -> bool {
+    name.strip_prefix(".marker-").is_some_and(|id| {
+        id.len() == 16
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+/// Install a complete marker by exclusive hard link, refusing a competing claim.
+pub fn claim_antigravity_marker(
+    root: &Path,
+    name: &str,
+    temp: &str,
+    holder: &[u8],
+) -> io::Result<bool> {
+    let parent = root.join("antigravity-signin");
+    owned_directory(&parent)?;
+    if !marker_name(name) || !marker_temp(temp) || holder.is_empty() || holder.len() > 512 {
+        return Err(io::Error::other("invalid sign-in marker"));
+    }
+    let path = parent.join(temp);
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)?;
+    let result = (|| {
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(holder)?;
+        file.sync_all()?;
+        match fs::hard_link(&path, parent.join(name)) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error),
+        }
+    })();
+    let _ = fs::remove_file(path);
+    let _ = sync_directory(&parent);
+    result
+}
+
+/// Remove only the previously judged marker inode, never an intervening claim.
+pub fn remove_antigravity_marker(root: &Path, name: &str, dev: u64, ino: u64) -> io::Result<bool> {
+    let parent = root.join("antigravity-signin");
+    owned_directory(&parent)?;
+    if !marker_name(name) && !marker_temp(name) {
+        return Err(io::Error::other("invalid sign-in marker"));
+    }
+    let file = parent.join(name);
+    match fs::symlink_metadata(&file) {
+        Ok(meta) if meta.dev() == dev && meta.ino() == ino && !meta.is_dir() => {
+            fs::remove_file(file)?;
+            let _ = sync_directory(&parent);
+            Ok(true)
+        }
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(false),
+    }
 }
