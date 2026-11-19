@@ -689,7 +689,7 @@ pub fn parse_muse_peer(value: &Value, dashboard_hosts: &[&str]) -> Option<MuseUs
         return None;
     }
     let host = obj.get("host")?.as_str()?;
-    if !dashboard_hosts.contains(&host) {
+    if !dashboard_hosts.iter().any(|h| *h == host) {
         return None;
     }
     let identity = parse_identity(obj.get("identity")?)?;

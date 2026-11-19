@@ -314,7 +314,7 @@ impl FailoverCoordinator {
                     state.primary = parse_candidate(obj.get("primary").unwrap_or(&Value::Null));
                     if let Some(saved) = obj.get("saved").and_then(Value::as_object) {
                         let host = saved.get("host").and_then(Value::as_str).unwrap_or("");
-                        if self.dashboard_hosts.contains(&host) {
+                        if self.dashboard_hosts.iter().any(|h| *h == host) {
                             let reading = parse_reading(saved.get("reading").unwrap_or(&Value::Null), self.now());
                             let candidate = parse_candidate(saved.get("candidate").unwrap_or(&Value::Null));
                             if let (Some(candidate), Some(reading)) = (candidate, reading) {
