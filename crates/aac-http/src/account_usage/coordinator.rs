@@ -217,7 +217,8 @@ impl FailoverCoordinator {
         self.deps.now()
     }
 
-    fn key(&self, target: &UsageFailoverTarget) -> String {
+    /// The target's observation/cooldown key (the digest the TS coordinator hashes).
+    pub fn key(&self, target: &UsageFailoverTarget) -> String {
         let ccs = aac_files::path::node::resolve(&target.ccs_dir, &target.ccs_dir)
             .unwrap_or_else(|_| target.ccs_dir.clone());
         let sources: Vec<Value> = target.primary_sources.iter().map(|s| s.value()).collect();
