@@ -11,11 +11,32 @@ const spec = path.join(root, 'tests/spec');
 const fixture = JSON.parse(fs.readFileSync(path.join(spec, 'fixture.json'), 'utf8'));
 const regenerate = process.argv.includes('--regenerate');
 const composed = process.argv.includes('--composed');
+const legacyHome = process.argv.includes('--plain-home');
+const recordComposed = process.argv.includes('--regenerate-composed');
+const outputFlag = '--composed-golden-output=';
+const composedOutput = process.argv
+  .find((arg) => arg.startsWith(outputFlag))
+  ?.slice(outputFlag.length);
 assert.ok(!composed || !regenerate, 'record the contract from TypeScript');
+assert.ok(!recordComposed || (composed && !legacyHome), 'record the all-on composed listener');
+assert.ok(!composedOutput || recordComposed, 'a composed output requires --regenerate-composed');
 const differences: string[] = [];
 let matched = 0;
 let declines = 0;
 const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
+const nativePrivate = composed && process.platform !== 'win32';
+const nativeReset = nativePrivate || (composed && !!(
+  await import('../../src/status-native/native-loader')
+).loadNativeStatus().module);
+const composedGolden = path.join(
+  spec,
+  'contract',
+  `m0-composed-${nativePrivate ? 'unix' : 'windows'}.json`
+);
+type ComposedRecord = { request: { method: string; path: string; role: string }; response: unknown };
+const recorded: Record<string, ComposedRecord> = {};
+const savedComposed: Record<string, ComposedRecord> =
+  composed && !recordComposed ? JSON.parse(fs.readFileSync(composedGolden, 'utf8')) : {};
 const rustBinary = process.env.AAC_RUST_PUBLIC_BINARY ?? path.join(root, 'dist/native/aac-http');
 if (composed || rustMode !== 'off')
   assert.ok(fs.existsSync(rustBinary), 'contract replay requires an existing Rust binary');
@@ -39,8 +60,8 @@ Object.assign(process.env, {
   // The M0 contract captures the routes without the optional Home view. The Home group is default-ready
   // (on when unset under mode on), so pin it and the D7 switch off here to keep the goldens the plain answers.
   AAC_RUST_HOME_VIEW: 'off',
-  AAC_RUST_GROUP_HOME: composed && !process.argv.includes('--plain-home') ? 'on' : 'off',
-  AAC_RUST_HOME_PRODUCER: composed && !process.argv.includes('--plain-home') ? 'on' : 'off',
+  AAC_RUST_GROUP_HOME: composed && !legacyHome ? 'on' : 'off',
+  AAC_RUST_HOME_PRODUCER: composed && !legacyHome ? 'on' : 'off',
   ...(composed
     ? {
         // The M0 contract uses scripted app-update outcomes. The lane H native owner
@@ -428,12 +449,42 @@ for (const r of inventory) {
   if (r.path.startsWith('/v0/management')) r.writes = false;
 }
 inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
-function emit(relative: string, data: any) {
+// These rows differ from the historical TS fixture by contract. Select by request and boot
+// mode so an unexpected response, including a fallback or decline, still fails comparison.
+function composedOwner({ method, path, role }: ComposedRecord['request']) {
+  if (method !== 'GET' || !['session', 'bar'].includes(role)) return undefined;
+  if (path === '/api/accounts/fixture-missing/reset-claims' && nativeReset) return 'reset';
+  if (path === '/api/scoreboard' && nativePrivate) return 'scoreboard';
+  if (path === '/api/views/home' && !legacyHome) return 'home';
+  return undefined;
+}
+
+function emit(relative: string, data: any, view: string | null = null) {
   const file = path.join(spec, relative);
   const bytes = JSON.stringify(data, null, 2) + '\n';
   if (regenerate) fs.writeFileSync(file, bytes);
   else if (composed && /^contract\/[0-9]/.test(relative)) {
-    const expected = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const owner = composedOwner(data.request);
+    if (owner === 'scoreboard') {
+      assert.equal(view, 'scoreboard@1', 'the composed Scoreboard row must come from its owner');
+    }
+    if (owner && recordComposed) {
+      assert.equal(data.response.status, 200, `cannot record an unsuccessful ${owner} response`);
+      if (owner === 'reset') {
+        assert.equal(data.response.body?.status, 'unavailable');
+        assert.equal(data.response.body?.reason, 'provider-read-only');
+        assert.deepEqual(data.response.body?.grants, []);
+      }
+      if (owner === 'scoreboard') {
+        assert.equal(data.response.headers.vary, 'Cookie, Accept-Encoding');
+      }
+      if (owner === 'home') assert.equal(data.response.body?.schemaVersion, 1);
+      recorded[relative] = data;
+      matched++;
+      return;
+    }
+    const expected = owner ? savedComposed[relative] : JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(expected, `missing composed golden for ${relative}`);
     if (bytes === JSON.stringify(expected, null, 2) + '\n') {
       matched++;
       return;
@@ -687,15 +738,19 @@ try {
           .filter((k) => response.headers.has(k))
           .map((k) => [k, response.headers.get(k)])
       );
-      emit(`contract/${String(index).padStart(3, '0')}-${role}.json`, {
-        request: {
-          method: route.method,
-          path: url,
-          role,
-          ...(!['GET', 'HEAD', 'OPTIONS', 'UPGRADE'].includes(route.method) ? { body: {} } : {}),
+      emit(
+        `contract/${String(index).padStart(3, '0')}-${role}.json`,
+        {
+          request: {
+            method: route.method,
+            path: url,
+            role,
+            ...(!['GET', 'HEAD', 'OPTIONS', 'UPGRADE'].includes(route.method) ? { body: {} } : {}),
+          },
+          response: normalize({ status: response.status, headers: selected, body }),
         },
-        response: normalize({ status: response.status, headers: selected, body }),
-      });
+        response.headers.get('x-aac-view')
+      );
     }
     if (
       'restartPublic' in instance &&
@@ -856,6 +911,11 @@ try {
     );
     for (const failure of differences) console.log('M0 DIFFER ' + failure);
     assert.equal(differences.length, 0, 'composed M0 differences');
+    if (recordComposed) {
+      assert.ok(nativeReset, 'record with the reset owner available');
+      assert.equal(Object.keys(recorded).length, nativePrivate ? 6 : 4, 'composed fixture rows');
+      fs.writeFileSync(composedOutput ?? composedGolden, JSON.stringify(recorded, null, 2) + '\n');
+    }
   }
   console.log(
     `${inventory.length} routes x ${roles.length} roles captured; rustService=${rustMode}, routing and boundary checks passed`

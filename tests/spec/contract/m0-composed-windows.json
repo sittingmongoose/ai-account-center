@@ -1,0 +1,1120 @@
+{
+  "contract/003-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/accounts/fixture-missing/reset-claims",
+      "role": "session"
+    },
+    "response": {
+      "body": {
+        "attemptKey": null,
+        "bindingRevision": null,
+        "canonicalAccountKey": null,
+        "grants": [],
+        "history": [],
+        "pendingAttempt": null,
+        "reason": "provider-read-only",
+        "status": "unavailable"
+      },
+      "headers": {
+        "cache-control": "no-store",
+        "content-type": "application/json; charset=utf-8",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "status": 200
+    }
+  },
+  "contract/003-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/accounts/fixture-missing/reset-claims",
+      "role": "bar"
+    },
+    "response": {
+      "body": {
+        "attemptKey": null,
+        "bindingRevision": null,
+        "canonicalAccountKey": null,
+        "grants": [],
+        "history": [],
+        "pendingAttempt": null,
+        "reason": "provider-read-only",
+        "status": "unavailable"
+      },
+      "headers": {
+        "cache-control": "no-store",
+        "content-type": "application/json; charset=utf-8",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "status": 200
+    }
+  },
+  "contract/071-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/views/home",
+      "role": "session"
+    },
+    "response": {
+      "body": {
+        "antigravity": {
+          "hostId": "ubuntu",
+          "profiles": [],
+          "schemaVersion": 1
+        },
+        "dashboard": {
+          "accounts": [
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "antigravity:usage",
+              "isActive": false,
+              "label": "Antigravity",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "muse:usage",
+              "isActive": false,
+              "label": "Muse Code",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "muse",
+              "providerLabel": "Muse Code",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": "<timestamp>",
+              "hidden": false,
+              "id": "cursor:usage",
+              "isActive": false,
+              "label": "Cursor",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Cursor quota could not be read.",
+              "plan": null,
+              "platform": "windows",
+              "provider": "cursor",
+              "providerLabel": "Cursor",
+              "sampledAt": null,
+              "source": "Cursor API key",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "kimi-code:usage",
+              "isActive": false,
+              "label": "Kimi Code",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "kimi-code",
+              "providerLabel": "Kimi Code",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "qwen:usage",
+              "isActive": false,
+              "label": "Qwen token plan",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "qwen",
+              "providerLabel": "Qwen token plan",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "zai:usage",
+              "isActive": false,
+              "label": "Z.ai coding plan",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "zai",
+              "providerLabel": "Z.ai coding plan",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "opencode-go:usage",
+              "isActive": false,
+              "label": "OpenCode Go",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "opencode-go",
+              "providerLabel": "OpenCode Go",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            }
+          ],
+          "codexAutoSwitch": {
+            "activationInProgress": false,
+            "enabled": false,
+            "message": "Account switching was removed. AI Account Center shows usage only.",
+            "outcome": "disabled",
+            "pollIntervalSeconds": 60,
+            "thresholdPercent": 5,
+            "thresholdUsedPercent": 95
+          },
+          "providers": [
+            {
+              "accountCount": 0,
+              "capabilities": {
+                "add": false,
+                "multiAccount": true,
+                "openApp": [
+                  "mac",
+                  "windows"
+                ],
+                "recheck": false,
+                "remove": false,
+                "replaceKey": false,
+                "signInAgain": true
+              },
+              "extras": null,
+              "iconKey": "claude",
+              "id": "claude",
+              "label": "Claude",
+              "longLabel": "Claude",
+              "order": 0,
+              "signIn": {
+                "available": false,
+                "kind": "desktop-profile",
+                "label": "Desktop profile",
+                "platforms": [
+                  "mac",
+                  "windows"
+                ],
+                "secureTransportRequired": false,
+                "unavailableReason": "not_implemented"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 0,
+              "capabilities": {
+                "add": false,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": false,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "codex",
+              "id": "codex",
+              "label": "Codex",
+              "longLabel": "Codex",
+              "order": 1,
+              "signIn": {
+                "available": false,
+                "kind": "device-code",
+                "label": "Device-code sign-in",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": "tool_missing"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": false,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "antigravity",
+              "id": "antigravity",
+              "label": "Antigravity",
+              "longLabel": "Google Antigravity CLI",
+              "order": 2,
+              "signIn": {
+                "available": false,
+                "kind": "supervised-cli",
+                "label": "Supervised CLI login",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": "preflight_failed"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": false,
+                "openApp": [
+                  "mac"
+                ],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": true
+              },
+              "extras": null,
+              "iconKey": "cursor",
+              "id": "cursor",
+              "label": "Cursor",
+              "longLabel": "Cursor",
+              "order": 3,
+              "signIn": {
+                "available": true,
+                "kind": "app-session",
+                "label": "Desktop app session",
+                "platforms": [
+                  "mac",
+                  "windows"
+                ],
+                "secureTransportRequired": false,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": false,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": false
+              },
+              "extras": {
+                "kind": "browser-extension",
+                "label": "Quota sync by browser extension",
+                "platform": "mac"
+              },
+              "iconKey": "muse",
+              "id": "muse",
+              "label": "Muse Code",
+              "longLabel": "Muse Code",
+              "order": 4,
+              "signIn": {
+                "available": false,
+                "kind": "device-code",
+                "label": "Device-code sign-in",
+                "platforms": [
+                  "mac"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": "not_implemented"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": true,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": true,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "kimi-code",
+              "id": "kimi-code",
+              "label": "Kimi Code",
+              "longLabel": "Kimi Code",
+              "order": 5,
+              "signIn": {
+                "available": true,
+                "kind": "api-key",
+                "label": "API key",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": false,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": true
+              },
+              "extras": null,
+              "iconKey": "qwen",
+              "id": "qwen",
+              "label": "Qwen Token Plan",
+              "longLabel": "Qwen Token Plan",
+              "order": 6,
+              "signIn": {
+                "available": true,
+                "kind": "browser-session",
+                "label": "Console session by browser extension",
+                "platforms": [
+                  "windows"
+                ],
+                "secureTransportRequired": false,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": true,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": true,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "zai",
+              "id": "zai",
+              "label": "Z.ai Coding Plan",
+              "longLabel": "Z.ai Coding Plan",
+              "order": 7,
+              "signIn": {
+                "available": true,
+                "kind": "api-key",
+                "label": "API key",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": true,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": true,
+                "signInAgain": false
+              },
+              "extras": {
+                "kind": "browser-extension",
+                "label": "Console wallet by browser extension",
+                "platform": "mac"
+              },
+              "iconKey": "opencode-go",
+              "id": "opencode-go",
+              "label": "OpenCode Go",
+              "longLabel": "OpenCode Go",
+              "order": 8,
+              "signIn": {
+                "available": true,
+                "kind": "api-key",
+                "label": "API key",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            }
+          ],
+          "schemaVersion": 1,
+          "server": {
+            "commit": null,
+            "version": "8.10.0",
+            "views": [
+              "home"
+            ]
+          },
+          "settings": {
+            "hiddenAccountIds": [],
+            "hiddenProviders": [],
+            "refreshIntervalSeconds": 60,
+            "trayHiddenAccountIds": [],
+            "trayHiddenProviders": [],
+            "visibilityAvailable": true
+          },
+          "updatedAt": "<timestamp>"
+        },
+        "profiles": [],
+        "schemaVersion": 1,
+        "view": null
+      },
+      "headers": {
+        "cache-control": "no-store",
+        "content-type": "application/json; charset=utf-8",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+        "vary": "Accept-Encoding"
+      },
+      "status": 200
+    }
+  },
+  "contract/071-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/views/home",
+      "role": "bar"
+    },
+    "response": {
+      "body": {
+        "antigravity": {
+          "hostId": "ubuntu",
+          "profiles": [],
+          "schemaVersion": 1
+        },
+        "dashboard": {
+          "accounts": [
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "antigravity:usage",
+              "isActive": false,
+              "label": "Antigravity",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "muse:usage",
+              "isActive": false,
+              "label": "Muse Code",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "muse",
+              "providerLabel": "Muse Code",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": "<timestamp>",
+              "hidden": false,
+              "id": "cursor:usage",
+              "isActive": false,
+              "label": "Cursor",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Cursor quota could not be read.",
+              "plan": null,
+              "platform": "windows",
+              "provider": "cursor",
+              "providerLabel": "Cursor",
+              "sampledAt": null,
+              "source": "Cursor API key",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "kimi-code:usage",
+              "isActive": false,
+              "label": "Kimi Code",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "kimi-code",
+              "providerLabel": "Kimi Code",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "qwen:usage",
+              "isActive": false,
+              "label": "Qwen token plan",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "qwen",
+              "providerLabel": "Qwen token plan",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "zai:usage",
+              "isActive": false,
+              "label": "Z.ai coding plan",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "zai",
+              "providerLabel": "Z.ai coding plan",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            },
+            {
+              "capabilities": {
+                "claudePlatforms": [],
+                "claudeProfileId": null,
+                "codexProfile": null
+              },
+              "email": null,
+              "fetchedAt": null,
+              "hidden": false,
+              "id": "opencode-go:usage",
+              "isActive": false,
+              "label": "OpenCode Go",
+              "lifecycle": {
+                "jobId": null,
+                "state": "ready"
+              },
+              "message": "Saved account usage is unavailable on this computer.",
+              "plan": null,
+              "platform": "ubuntu",
+              "provider": "opencode-go",
+              "providerLabel": "OpenCode Go",
+              "sampledAt": null,
+              "source": "Account on Ubuntu",
+              "status": "unavailable",
+              "trayHidden": false,
+              "windows": []
+            }
+          ],
+          "codexAutoSwitch": {
+            "activationInProgress": false,
+            "enabled": false,
+            "message": "Account switching was removed. AI Account Center shows usage only.",
+            "outcome": "disabled",
+            "pollIntervalSeconds": 60,
+            "thresholdPercent": 5,
+            "thresholdUsedPercent": 95
+          },
+          "providers": [
+            {
+              "accountCount": 0,
+              "capabilities": {
+                "add": false,
+                "multiAccount": true,
+                "openApp": [
+                  "mac",
+                  "windows"
+                ],
+                "recheck": false,
+                "remove": false,
+                "replaceKey": false,
+                "signInAgain": true
+              },
+              "extras": null,
+              "iconKey": "claude",
+              "id": "claude",
+              "label": "Claude",
+              "longLabel": "Claude",
+              "order": 0,
+              "signIn": {
+                "available": false,
+                "kind": "desktop-profile",
+                "label": "Desktop profile",
+                "platforms": [
+                  "mac",
+                  "windows"
+                ],
+                "secureTransportRequired": false,
+                "unavailableReason": "not_implemented"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 0,
+              "capabilities": {
+                "add": false,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": false,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "codex",
+              "id": "codex",
+              "label": "Codex",
+              "longLabel": "Codex",
+              "order": 1,
+              "signIn": {
+                "available": false,
+                "kind": "device-code",
+                "label": "Device-code sign-in",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": "tool_missing"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": false,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "antigravity",
+              "id": "antigravity",
+              "label": "Antigravity",
+              "longLabel": "Google Antigravity CLI",
+              "order": 2,
+              "signIn": {
+                "available": false,
+                "kind": "supervised-cli",
+                "label": "Supervised CLI login",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": "preflight_failed"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": false,
+                "openApp": [
+                  "mac"
+                ],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": true
+              },
+              "extras": null,
+              "iconKey": "cursor",
+              "id": "cursor",
+              "label": "Cursor",
+              "longLabel": "Cursor",
+              "order": 3,
+              "signIn": {
+                "available": true,
+                "kind": "app-session",
+                "label": "Desktop app session",
+                "platforms": [
+                  "mac",
+                  "windows"
+                ],
+                "secureTransportRequired": false,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": false,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": false
+              },
+              "extras": {
+                "kind": "browser-extension",
+                "label": "Quota sync by browser extension",
+                "platform": "mac"
+              },
+              "iconKey": "muse",
+              "id": "muse",
+              "label": "Muse Code",
+              "longLabel": "Muse Code",
+              "order": 4,
+              "signIn": {
+                "available": false,
+                "kind": "device-code",
+                "label": "Device-code sign-in",
+                "platforms": [
+                  "mac"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": "not_implemented"
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": true,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": true,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "kimi-code",
+              "id": "kimi-code",
+              "label": "Kimi Code",
+              "longLabel": "Kimi Code",
+              "order": 5,
+              "signIn": {
+                "available": true,
+                "kind": "api-key",
+                "label": "API key",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": false,
+                "multiAccount": false,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": false,
+                "signInAgain": true
+              },
+              "extras": null,
+              "iconKey": "qwen",
+              "id": "qwen",
+              "label": "Qwen Token Plan",
+              "longLabel": "Qwen Token Plan",
+              "order": 6,
+              "signIn": {
+                "available": true,
+                "kind": "browser-session",
+                "label": "Console session by browser extension",
+                "platforms": [
+                  "windows"
+                ],
+                "secureTransportRequired": false,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": true,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": true,
+                "signInAgain": false
+              },
+              "extras": null,
+              "iconKey": "zai",
+              "id": "zai",
+              "label": "Z.ai Coding Plan",
+              "longLabel": "Z.ai Coding Plan",
+              "order": 7,
+              "signIn": {
+                "available": true,
+                "kind": "api-key",
+                "label": "API key",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            },
+            {
+              "accountCount": 1,
+              "capabilities": {
+                "add": true,
+                "multiAccount": true,
+                "openApp": [],
+                "recheck": true,
+                "remove": true,
+                "replaceKey": true,
+                "signInAgain": false
+              },
+              "extras": {
+                "kind": "browser-extension",
+                "label": "Console wallet by browser extension",
+                "platform": "mac"
+              },
+              "iconKey": "opencode-go",
+              "id": "opencode-go",
+              "label": "OpenCode Go",
+              "longLabel": "OpenCode Go",
+              "order": 8,
+              "signIn": {
+                "available": true,
+                "kind": "api-key",
+                "label": "API key",
+                "platforms": [
+                  "ubuntu"
+                ],
+                "secureTransportRequired": true,
+                "unavailableReason": null
+              },
+              "trayVisible": true,
+              "visible": true
+            }
+          ],
+          "schemaVersion": 1,
+          "server": {
+            "commit": null,
+            "version": "8.10.0",
+            "views": [
+              "home"
+            ]
+          },
+          "settings": {
+            "hiddenAccountIds": [],
+            "hiddenProviders": [],
+            "refreshIntervalSeconds": 60,
+            "trayHiddenAccountIds": [],
+            "trayHiddenProviders": [],
+            "visibilityAvailable": true
+          },
+          "updatedAt": "<timestamp>"
+        },
+        "profiles": [],
+        "schemaVersion": 1,
+        "view": null
+      },
+      "headers": {
+        "cache-control": "no-store",
+        "content-type": "application/json; charset=utf-8",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+        "vary": "Accept-Encoding"
+      },
+      "status": 200
+    }
+  }
+}
