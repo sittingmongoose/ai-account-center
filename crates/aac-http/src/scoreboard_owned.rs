@@ -80,7 +80,6 @@ fn now_ms() -> u64 {
 /// One ingest pass's state (`PassState`).
 #[derive(Clone, Default)]
 struct PassState {
-    at: u64,
     state: String,
     more: bool,
     generation: u64,
@@ -103,7 +102,9 @@ struct CompletedRead {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Feed {
     now: i64,
+    #[allow(dead_code)] // the protocol carries the clock words; the composer reads facts
     clock: String,
+    #[allow(dead_code)]
     day: String,
     time_zone: String,
     from: Option<String>,
@@ -378,7 +379,6 @@ impl ScoreboardOwned {
             let mut pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
             let changed = pass.generation != generation || pass.catalog_hash != catalog_hash;
             *pass = PassState {
-                at: now,
                 state: scan["state"].as_str().unwrap_or("error").to_string(),
                 more,
                 generation,

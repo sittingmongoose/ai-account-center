@@ -291,8 +291,13 @@ try {
     report.steps.push({ name, status: b.status, bytes: b.body.length, served });
     if (a.status !== 200 || b.status !== 200)
       report.failures.push(`${name}: status ${a.status}/${b.status}`);
-    else if (!sameJson(a.body, b.body))
-      report.failures.push(`${name}: the owned answer differs from today's (clocks normalized)`);
+    else if (!sameJson(a.body, b.body)) {
+      const pa = normalize(JSON.parse(a.body));
+      const pb = normalize(JSON.parse(b.body));
+      const keys = [...new Set([...Object.keys(pa), ...Object.keys(pb)])];
+      const diff = keys.filter((k) => JSON.stringify(pa[k]) !== JSON.stringify(pb[k]));
+      report.failures.push(`${name}: differs at [${diff.join(', ')}]`);
+    }
     if (!served) report.failures.push(`${name}: the owned path did not serve (x-aac-view)`);
     return b;
   }
@@ -300,6 +305,13 @@ try {
   await today.command('scan');
   await owned.command('wait-owned');
   await compare('first status read', '/api/status', { view: 'status@1' });
+  report.diag = await owned.command('diag');
+  const inputsProbe = await owned.command('inputs');
+  report.inputsProbe = {
+    statusGeneration: inputsProbe.status?.generation ?? null,
+    scoreboardGeneration: inputsProbe.scoreboard?.generation ?? null,
+    scoreboardCatalog: inputsProbe.scoreboard?.catalog ? 'present' : 'null',
+  };
   await compare('first scoreboard read', '/api/scoreboard', { view: 'scoreboard@1' });
   await compare(
     'filtered scoreboard',

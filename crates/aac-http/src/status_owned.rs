@@ -228,12 +228,6 @@ impl StatusOwned {
         })
     }
 
-    pub(crate) fn generation(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .generation
-    }
 
     /// The readers-check rows, when the R4 groups own that row: the status scan's rows with
     /// the pins the front door last pushed (`owned-pins`), written through the leased writer.
@@ -298,7 +292,7 @@ impl StatusOwned {
             ));
         }
         let (captures, keys) = {
-            let mut accepted = self.accepted.lock().unwrap_or_else(|p| p.into_inner());
+            let accepted = self.accepted.lock().unwrap_or_else(|p| p.into_inner());
             let mut captures: Vec<Json> = Vec::new();
             let mut keys: Vec<String> = Vec::new();
             for (kind, writer, doc, written_at_ms, first_seen_at, sha) in input {

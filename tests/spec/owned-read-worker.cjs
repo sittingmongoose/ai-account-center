@@ -151,6 +151,14 @@ async function main() {
           for (const name of fs.readdirSync(dir))
             if (name.endsWith('.json')) files[name] = fs.readFileSync(path.join(dir, name), 'utf8');
         send({ ok: true, files });
+      } else if (message.cmd === 'diag') {
+        send({ ok: true, data: rust.diagnostics(), lease: !!rust.lease });
+      } else if (message.cmd === 'inputs') {
+        send({
+          ok: true,
+          status: await rust.internalJson('/internal/status/inputs'),
+          scoreboard: await rust.internalJson('/internal/scoreboard/inputs'),
+        });
       } else if (message.cmd === 'stop-rust') {
         rust.stop();
         send({ ok: true });
