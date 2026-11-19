@@ -20,8 +20,11 @@ import {
   RUST_VIEW_CAP,
   rustFailureKind,
   type RustReply,
+  type RustRequestOptions,
   type VerifiedRustPrincipal,
 } from './rust-service-transport';
+import type { NativeStatusHandle } from '../status-native/native-loader';
+import { ProviderError } from '../errors/error-types';
 import { rustViewBytes, type RustViewBytes } from './rust-view-reply';
 import { canonical, orderedLike, principal, validReply } from './rust-service-values';
 import { logger, RustSupervisor } from './rust-service-supervisor';
@@ -31,14 +34,17 @@ export { rustServiceMode, type RustServiceMode } from './rust-service-supervisor
 
 /** Requests to Rust in flight per front door. */
 const IN_FLIGHT = 16;
+/** M5 lane K: a ledger transaction waits up to SQLite's 5 s busy timeout, then syncs fully. */
+const RESET_LEDGER_DEADLINE_MS = 10_000;
+/** A ticketed source read: the Claude helper's 4 s capture and 12 s read over SSH, or the Codex CLI. */
+const RESET_SOURCE_DEADLINE_MS = 30_000;
 /** Shadow comparisons in flight per route (L1); the rest are skipped and counted. */
 export const SHADOW_IN_FLIGHT = 2;
 
 /** The roles the table admits on a route (TS gates from the same table Rust dispatches from). */
 function routeRoles(route: string): readonly string[] {
   const row = routes.find((r) => r.path === route && r.owner === 'rust') as
-    | { roles?: string[] }
-    | undefined;
+    { roles?: string[] } | undefined;
   return row?.roles ?? [];
 }
 
@@ -112,7 +118,8 @@ export class RustService extends RustSupervisor {
     input?: unknown,
     query = '',
     headers?: Record<string, string>,
-    method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET'
+    method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET',
+    extra: RustRequestOptions = {}
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -132,7 +139,7 @@ export class RustService extends RustSupervisor {
         input,
         method,
         // R1: a fed view carries its ids in headers and comes back as bytes, never parsed here.
-        headers ? { headers, raw: true, cap: RUST_VIEW_CAP } : {}
+        headers ? { headers, raw: true, cap: RUST_VIEW_CAP, ...extra } : extra
       );
     } catch (error) {
       pending = Promise.reject(error);
@@ -585,6 +592,75 @@ export class RustService extends RustSupervisor {
     };
   }
 
+  /**
+   * M5 lane K: the reset claims file while the registry assigns it to this boot, else null (the
+   * native module stays its writer). The reset route calls this after its session, origin, query
+   * and body guards; the handle speaks the native `NativeStatus.call` ABI for the methods that
+   * write the file (`resetClaims`, and the ticketed `resetCodexSource`/`resetClaudeSource`
+   * reads), so the route and the source keep one code path. The path never crosses the socket.
+   * A lost or refused reply is an error, never a second attempt: it may follow a commit.
+   */
+  resetClaimsFile(): NativeStatusHandle | null {
+    if (!this.writesOn || tsWritesRow('reset-claims')) return null;
+    const route = '/internal/reset-claims';
+    const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
+    return {
+      call: async (method: string, raw: string) => {
+        const input = JSON.parse(raw) as Record<string, unknown>;
+        delete input.dbPath;
+        let body: Record<string, unknown>;
+        let refusal: string;
+        let deadlineMs: number;
+        if (method === 'resetClaims') {
+          body = input;
+          refusal = 'Reset operation refused.';
+          deadlineMs = RESET_LEDGER_DEADLINE_MS;
+        } else if (method === 'resetCodexSource' && input.write === null) {
+          delete input.write;
+          body = { op: 'sourceCodexRead', ...input };
+          refusal = 'Reset source unavailable.';
+          deadlineMs = RESET_SOURCE_DEADLINE_MS;
+        } else if (method === 'resetClaudeSource') {
+          body = { op: 'sourceClaudeRead', ...input };
+          refusal = 'Reset source unavailable.';
+          deadlineMs = RESET_SOURCE_DEADLINE_MS;
+        } else {
+          throw new ProviderError('Rust reset method refused', 'reset-claims');
+        }
+        if (
+          this.inFlight >= IN_FLIGHT ||
+          this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir())
+        )
+          throw new ProviderError('Rust reset claims unavailable', 'reset-claims');
+        let result: RustReply;
+        try {
+          result = await this.forward(route, verified, body, '', undefined, 'POST', { deadlineMs });
+        } catch (error) {
+          this.failed(route, error);
+          throw error;
+        }
+        const reply = result.body as { ok?: unknown; value?: unknown; code?: unknown } | null;
+        if (
+          result.status !== 200 ||
+          !reply ||
+          typeof reply !== 'object' ||
+          (reply.ok === true
+            ? !('value' in reply)
+            : reply.ok !== false || typeof reply.code !== 'string')
+        ) {
+          this.declined(route, result);
+          throw new ProviderError('Rust reset claims declined', 'reset-claims');
+        }
+        this.stats.served++;
+        this.record(route, { kind: 'served' });
+        // The native module raises `<code>: <message>`; the route reads only the code.
+        if (reply.ok === false)
+          throw new ProviderError(`${reply.code as string}: ${refusal}`, 'reset-claims');
+        return JSON.stringify(reply.value);
+      },
+    };
+  }
+
   feedBoot(scope: string): string | null {
     const lease = this.lease;
     return lease && !this.stopped && lease.connection.ccsDir === canonicalRoot(scope)
@@ -819,6 +895,19 @@ export async function readOwnedValueWithRust(
   return service instanceof RustService
     ? service.ownedValue(req, route, root, accept, legacy)
     : legacy();
+}
+
+/**
+ * M5 lane K: the reset claims file's writer for this request, after the route's guards. Null while
+ * the registry assigns TS the row (the in-process native module writes it). While the Rust service
+ * owns it, nothing else may open the file: an unavailable service is an error, never a fallback.
+ */
+export function rustResetClaimsFile(res: Response): NativeStatusHandle | null {
+  if (tsWritesRow('reset-claims')) return null;
+  const service: unknown = res.locals.rustService;
+  const handle = service instanceof RustService ? service.resetClaimsFile() : null;
+  if (!handle) throw new ProviderError('Rust reset claims unavailable', 'reset-claims');
+  return handle;
 }
 
 /** The guarded adapter keeps the TS handler whenever the registry assigns TS the file. */
