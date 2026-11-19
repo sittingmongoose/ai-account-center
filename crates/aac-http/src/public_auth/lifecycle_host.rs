@@ -12,13 +12,15 @@ pub(crate) use unix::{PACKET_CAP, receive};
 pub(super) struct Routes {
     host: Weak<OwnerHost>,
     private: bool,
+    private_collection: bool,
 }
 
 impl Routes {
-    pub(super) fn new(host: &Arc<OwnerHost>, private: bool) -> Self {
+    pub(super) fn new(host: &Arc<OwnerHost>, private: bool, private_collection: bool) -> Self {
         Self {
             host: Arc::downgrade(host),
             private,
+            private_collection,
         }
     }
 
@@ -49,8 +51,9 @@ impl Routes {
     }
 
     pub(super) fn owns(&self, request: &Request) -> bool {
-        #[cfg(unix)]
-        if self.private && NativeOwners::owns_collection(request.method(), request.uri().path()) {
+        if self.private_collection
+            && NativeOwners::owns_collection(request.method(), request.uri().path())
+        {
             return true;
         }
         NativeOwners::owns_lifecycle(request.method(), request.uri().path())

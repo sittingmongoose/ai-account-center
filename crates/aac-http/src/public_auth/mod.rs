@@ -330,7 +330,15 @@ impl DashboardAuth {
                     return reply;
                 }
             }
+            let worker_collection = backend.as_ref().is_some_and(|worker| {
+                worker.collection_fallback
+                    && native_owners::NativeOwners::owns_collection(
+                        request.method(),
+                        request.uri().path(),
+                    )
+            });
             if let Some(native) = &native_owners
+                && !worker_collection
                 && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 return native.handle(request).await;
@@ -348,7 +356,10 @@ impl DashboardAuth {
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
             {
-                if !cut || compose::cut_route(request.method(), request.uri().path()) {
+                if !cut
+                    || worker_collection
+                    || compose::cut_route(request.method(), request.uri().path())
+                {
                     return backend.forward(request).await;
                 }
                 return plain(404, "API endpoint was not found.");
@@ -483,6 +494,7 @@ pub(crate) async fn run_public_at(
         cut && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
     #[cfg(not(unix))]
     let has_external = false;
+    let collection_enabled = groups.is_some_and(|groups| groups.collection);
     let groups = groups.map(|mut groups| {
         if has_external {
             groups.collection = false;
@@ -494,6 +506,7 @@ pub(crate) async fn run_public_at(
             &root,
             address,
             groups.is_some_and(|groups| groups.collection),
+            !collection_enabled,
             has_external,
         )
         .await?
@@ -531,7 +544,8 @@ pub(crate) async fn run_public_at(
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
-        let routes = lifecycle_host::Routes::new(host, has_external);
+        let routes =
+            lifecycle_host::Routes::new(host, has_external, has_external && collection_enabled);
         host.register("lifecycle", routes.router());
         routes
     });

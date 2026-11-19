@@ -45,6 +45,7 @@ impl Sidecar {
         root: &Path,
         public: SocketAddr,
         native_collection: bool,
+        worker_collection: bool,
         private_lifecycle: bool,
     ) -> io::Result<Option<Self>> {
         let explicit = std::env::var_os("AAC_TS_SIDECAR");
@@ -87,6 +88,10 @@ impl Sidecar {
                 "AAC_CUT_PUBLIC_COLLECTION",
                 if native_collection { "1" } else { "0" },
             )
+            .env(
+                "AAC_CUT_WORKER_COLLECTION",
+                if worker_collection { "1" } else { "0" },
+            )
             .env("AAC_RUST_COMPOSE", "1")
             .env("AAC_RUST_SERVICE", "on")
             .env("AAC_RUST_SERVICE_BINARY", binary)
@@ -126,7 +131,7 @@ impl Sidecar {
             child,
             input: Some(input),
             output: Some(output),
-            backend: Backend::new(address, &proof)?,
+            backend: Backend::new(address, &proof, worker_collection)?,
             cache,
             _cache_directory: cache_directory,
         }))

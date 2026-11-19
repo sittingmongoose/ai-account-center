@@ -164,7 +164,8 @@ export class RustSupervisor {
     // the settings, preferences and visibility leaves and the collection caches.
     const publicNative = this.mode === 'on' && process.env.AAC_CUT_PUBLIC_OWNERS === '1';
     this.writesOn = native && rustGroupOn('writes');
-    const collectionOn = native && rustGroupOn('collection');
+    const workerCollection = process.env.AAC_CUT_WORKER_COLLECTION === '1';
+    const collectionOn = native && !workerCollection && rustGroupOn('collection');
     this.lifecycleInPrivate =
       this.writesOn &&
       collectionOn &&
@@ -182,7 +183,10 @@ export class RustSupervisor {
       },
       PRIVATE_FILE_ROWS,
       publicNative && process.platform === 'win32'
-        ? (id) => PUBLIC_NATIVE_ROWS[id] === true
+        ? (id) =>
+            PUBLIC_NATIVE_ROWS[id] === true &&
+            (!workerCollection ||
+              PRIVATE_FILE_ROWS.find((row) => row.id === id)?.movesWith !== 'collection')
         : undefined
     );
     this.breakers = new RouteBreakers(options.now);
