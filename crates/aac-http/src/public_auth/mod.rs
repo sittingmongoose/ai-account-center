@@ -10,7 +10,6 @@ mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
-#[cfg(unix)]
 mod native_group;
 mod owner_host;
 mod policy;
@@ -223,7 +222,6 @@ impl DashboardAuth {
             None,
             None,
             None,
-            #[cfg(unix)]
             None,
         )
     }
@@ -243,7 +241,7 @@ impl DashboardAuth {
         cut_root: Option<PathBuf>,
         native_owners: Option<native_owners::NativeOwners>,
         native_settings: Option<native_settings::Settings>,
-        #[cfg(unix)] native_group: Option<Arc<native_group::Routes>>,
+        native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
@@ -258,7 +256,6 @@ impl DashboardAuth {
                 };
                 return settings.handle(&access, family, request).await;
             }
-            #[cfg(unix)]
             if let Some(group) = &native_group
                 && group.owns(
                     request.method(),
@@ -461,7 +458,6 @@ pub(crate) async fn run_public_at(
     };
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
-    #[cfg(unix)]
     let group_routes = owner_host
         .as_ref()
         .map(|host| Arc::new(native_group::Routes::new(host.clone())));
@@ -488,7 +484,6 @@ pub(crate) async fn run_public_at(
         cut.then(|| root.clone()),
         native,
         native_settings,
-        #[cfg(unix)]
         group_routes.clone(),
     );
     let router = auth
@@ -1698,7 +1693,6 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
-            #[cfg(unix)]
             None,
         ));
         let handle = tokio::spawn(async move {

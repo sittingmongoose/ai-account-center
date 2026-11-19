@@ -22,13 +22,21 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
+use axum::http::HeaderMap;
 #[cfg(unix)]
-use super::service_link::{ServiceLink, ServiceReply};
+use super::service_link::ServiceLink;
 #[cfg(unix)]
 use serde_json::Value as Json;
 
 /// Set to `on` to let this boot answer its groups itself (the cutover switch).
 pub(super) const SWITCH: &str = "AAC_RUST_CUT_NATIVE_ROUTES";
+
+/// One service reply, as it crossed the socket (or an in-process owner's answer).
+pub(super) struct ServiceReply {
+    pub status: u16,
+    pub headers: HeaderMap,
+    pub body: Vec<u8>,
+}
 
 pub(super) struct OwnerHost {
     root: PathBuf,
@@ -44,6 +52,11 @@ pub(super) struct OwnerHost {
     public: Mutex<Option<PublicOwners>>,
     /// Route groups registered on this host, mounted on the public API router before the guard.
     routes: Mutex<Vec<(&'static str, axum::Router)>>,
+    /// The in-process owners for a platform without the private service (Windows).
+    #[cfg(not(unix))]
+    local: tokio::sync::Mutex<Option<std::sync::Arc<crate::owners::Owners>>>,
+    #[cfg(not(unix))]
+    local_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct PublicOwners {
@@ -81,6 +94,10 @@ impl OwnerHost {
             embedded: tokio::sync::Mutex::new(None),
             public: Mutex::new(None),
             routes: Mutex::new(Vec::new()),
+            #[cfg(not(unix))]
+            local: tokio::sync::Mutex::new(None),
+            #[cfg(not(unix))]
+            local_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -108,6 +125,74 @@ impl OwnerHost {
             router = router.merge(routes.clone());
         }
         router
+    }
+
+    /// The in-process owners this platform runs instead of a private service. Windows has no
+    /// private service: its Status/Scoreboard/store/answers owners run here, once, with their
+    /// jobs. Unix answers through the service (or its in-process start), so this is `None`.
+    pub(super) async fn local(&self) -> Option<std::sync::Arc<crate::owners::Owners>> {
+        #[cfg(unix)]
+        {
+            None
+        }
+        #[cfg(not(unix))]
+        {
+            let mut held = self.local.lock().await;
+            if let Some(owners) = held.as_ref() {
+                return Some(owners.clone());
+            }
+            let ccs = self.root.canonicalize().ok()?;
+            let reports = std::env::var_os("AAC_AGENT_REPORTS_DIR").map(PathBuf::from)?;
+            let registry_dir = std::env::var_os("AAC_PM_MAIL_REGISTRY_DIR").map(PathBuf::from)?;
+            let config = crate::owners::Config {
+                ccs_dir: ccs.clone(),
+                store: Some(crate::store_host::StoreBoot {
+                    binding_identity: aac_store::build_identity(),
+                    dir: ccs.join("store"),
+                    retention_days: 0,
+                    cache_bytes: None,
+                    activity_retention_days: None,
+                    snapshot_directory: None,
+                    share_backup_dir: None,
+                    share_backup_off: true,
+                }),
+                owned: Some(crate::owners::OwnedBoot {
+                    reports_root: reports,
+                    registry_dir,
+                    status: true,
+                    scoreboard: true,
+                }),
+                files: None,
+            };
+            let owners = std::sync::Arc::new(
+                crate::owners::Owners::start(config, crate::feed::Feeds::new()).ok()?,
+            );
+            if let Some(owner) = &owners.status_owned {
+                let owner = owner.clone();
+                let produce = owners.status_produce.clone();
+                let stop = self.local_stop.clone();
+                tokio::spawn(async move { crate::status_owned::jobs(owner, produce, stop).await });
+            }
+            if let Some(owner) = &owners.scoreboard_owned {
+                let catalog = owner.clone();
+                let stop = self.local_stop.clone();
+                tokio::spawn(
+                    async move { crate::scoreboard_owned::catalog_jobs(catalog, stop).await },
+                );
+                let ingest = owner.clone();
+                let stop = self.local_stop.clone();
+                tokio::spawn(
+                    async move { crate::scoreboard_owned::ingest_jobs(ingest, stop).await },
+                );
+            }
+            if let Some(answers) = &owners.answers_owned {
+                let answers = answers.clone();
+                let stop = self.local_stop.clone();
+                tokio::spawn(async move { crate::answers_owned::jobs(answers, stop).await });
+            }
+            *held = Some(owners.clone());
+            Some(owners)
+        }
     }
 
     /// Start the platform's public owners (the same `NativeOwners` the direct call site used).
@@ -202,7 +287,6 @@ impl OwnerHost {
     /// One request a group already admitted: the service's reply, or `None` when no owner is
     /// reachable (the group answers its own decline). A failed hop drops the cached endpoint so
     /// the next request picks up a restarted service's descriptor.
-    #[cfg(unix)]
     pub(super) async fn request(
         &self,
         method: &str,
@@ -211,12 +295,20 @@ impl OwnerHost {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Option<ServiceReply> {
-        let link = self.link().await?;
-        let reply = link.request(method, uri, principal, headers, body).await;
-        if reply.is_none() {
-            *self.link.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        #[cfg(unix)]
+        {
+            let link = self.link().await?;
+            let reply = link.request(method, uri, principal, headers, body).await;
+            if reply.is_none() {
+                *self.link.lock().unwrap_or_else(|p| p.into_inner()) = None;
+            }
+            reply
         }
-        reply
+        #[cfg(not(unix))]
+        {
+            let _ = (method, uri, principal, headers, body);
+            None
+        }
     }
 
     /// Start the private service before the first request, so a cold boot never spends the

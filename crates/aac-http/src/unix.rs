@@ -96,21 +96,7 @@ pub struct Boot {
     pub renewal: Option<RenewalBoot>,
 }
 
-/// R4 (DESIGN-M3-COMPLETE 1.2/1.4): which owners this boot runs, and the share roots they
-/// read. TS resolves the roots and the group switches once at start; the store host must be
-/// on for either owner (the runs tables and the report captures go through its lock).
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OwnedBoot {
-    /// The agent-reports root (`AAC_AGENT_REPORTS_DIR`, else the shared folder).
-    pub reports_root: PathBuf,
-    /// The pm-mail registry folder (`AAC_PM_MAIL_REGISTRY_DIR`, else the shared inbox).
-    pub registry_dir: PathBuf,
-    /// The owned Status readers (the status group on, under the store host).
-    pub status: bool,
-    /// The owned Scoreboard (the scoreboard group on, under the store host).
-    pub scoreboard: bool,
-}
+pub use crate::owners::OwnedBoot;
 
 /// G10: the saved-login renewal timer's boot config (the homes it reads).
 #[derive(Deserialize, Clone)]
@@ -1673,62 +1659,26 @@ async fn serve_inner(
             Arc::new(crate::app_update_routes::LaneHJobs(jobs)) as Arc<dyn AppUpdateJobs>
         })
     });
-    let store = boot.store.clone().map(crate::store_host::StoreHost::new);
     let collection = Arc::new(crate::collection::Collection::default());
-    // R4: the owned readers run under the store host, with the boot's share roots and the
-    // registry writers TS resolved at start.
-    // One readers-check writer for both owners (one file per writer carries the status
-    // scan's rows and the runs rows), and one flush in flight.
-    let check = Arc::new(std::sync::Mutex::new(
-        aac_status::share::check::ReadersCheckWriter::new(
-            boot.owned
-                .as_ref()
-                .map(|owned| owned.reports_root.clone())
-                .unwrap_or_default(),
-        ),
-    ));
-    let check_flushing = Arc::new(AtomicBool::new(false));
-    // G16b: the answer store moves with the owned Status group.
-    let answers_owned = match (&boot.owned, &store) {
-        (Some(owned), Some(_)) if owned.status => Some(crate::answers_owned::AnswersOwned::new(
-            boot.ccs_dir.clone(),
-            owned.reports_root.clone(),
-        )),
-        _ => None,
-    };
-    let status_owned = match (&boot.owned, &store) {
-        (Some(owned), Some(host)) if owned.status => Some(crate::status_owned::StatusOwned::new(
-            owned.reports_root.clone(),
-            owned.registry_dir.clone(),
-            Arc::clone(host),
-            feeds.clone(),
-            owners.clone(),
-            Arc::clone(&check),
-            Arc::clone(&check_flushing),
-        )),
-        _ => None,
-    };
-    // G16c: the producers of the fed Status generations (the owned Status group).
-    let status_produce = match (&boot.owned, &answers_owned) {
-        (Some(owned), Some(answers)) if owned.status => Some(crate::status_produce::Produce::new(
-            feeds.clone(),
-            Arc::clone(answers),
-        )),
-        _ => None,
-    };
-    let scoreboard_owned = match (&boot.owned, &store) {
-        (Some(owned), Some(host)) if owned.scoreboard => {
-            Some(crate::scoreboard_owned::ScoreboardOwned::new(
-                owned.reports_root.clone(),
-                Arc::clone(host),
-                feeds.clone(),
-                Arc::clone(&check),
-                owners.clone(),
-                Arc::clone(&check_flushing),
-            ))
-        }
-        _ => None,
-    };
+    // One construction for the owners, shared with the public host's in-process path.
+    let crate::owners::Owners {
+        store,
+        status_owned,
+        status_produce,
+        answers_owned,
+        scoreboard_owned,
+        check,
+        check_flushing,
+        ..
+    } = crate::owners::Owners::start(
+        crate::owners::Config {
+            ccs_dir: boot.ccs_dir.clone(),
+            store: boot.store.clone(),
+            owned: boot.owned.clone(),
+            files: boot.files.clone(),
+        },
+        feeds.clone(),
+    )?;
     let owned_reports_root = boot.owned.as_ref().map(|owned| owned.reports_root.clone());
     let renewal = boot.renewal.clone();
     let ccs_dir = boot.ccs_dir.clone();
