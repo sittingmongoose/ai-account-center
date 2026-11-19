@@ -296,8 +296,40 @@ mod tests {
         let rows = rows(ROUTES)?;
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
         assert!(rows.iter().all(|r| r.budget_ms > 0
-            || matches!(r.handler, Handler::Events | Handler::Agent | Handler::Store)));
+            || matches!(
+                r.handler,
+                Handler::Events | Handler::Agent | Handler::ResetClaims | Handler::Store
+            )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
+        // M5 lane K: the one reset claims row, internal, on its own pool.
+        let reset: Vec<&Row> = rows
+            .iter()
+            .filter(|r| r.handler == Handler::ResetClaims)
+            .collect();
+        assert_eq!(reset.len(), 1);
+        assert_eq!(reset[0].path, "/internal/reset-claims");
+        assert_eq!(reset[0].method, axum::http::Method::POST);
+        assert_eq!(reset[0].pool, Pool::Reset);
+        Ok(())
+    }
+
+    #[test]
+    fn startup_refuses_a_reset_claims_row_off_its_one_shape() {
+        let tail = r#"{"method":"*","path":"*","owner":"ts-fallback"}"#;
+        let good = r#"{"method":"POST","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#;
+        assert!(rows(&format!("[{good},{tail}]")).is_ok());
+        for bad in [
+            // a deadline the TS route owns
+            r#"{"method":"POST","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":400,"handler":"reset-claims"}"#,
+            // another path
+            r#"{"method":"POST","path":"/internal/reset","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#,
+            // a read
+            r#"{"method":"GET","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#,
+            // a public route
+            r#"{"method":"POST","path":"/api/accounts/x/reset-claims","owner":"rust","group":"writes","roles":["admin"],"budgetMs":0,"handler":"reset-claims"}"#,
+        ] {
+            assert!(rows(&format!("[{bad},{tail}]")).is_err(), "{bad}");
+        }
         Ok(())
     }
 
