@@ -1606,6 +1606,13 @@
       ]
     },
     {
+      "file": "tests/unit/app-updates/app_update_terminal_mac_ssh_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/app-updates/app_update_zcode_test.py",
       "kind": "helper",
       "evidence": [

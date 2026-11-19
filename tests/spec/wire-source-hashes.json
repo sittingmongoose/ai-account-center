@@ -47,7 +47,7 @@
   "scripts/app-updates/app_update_processes.py": "71a5ec8b625aea9ad092c99593494daff2431fc7d7ce098d685137e51888b730",
   "scripts/app-updates/app_update_t3.py": "2ea48b91ee3e58ebb97a1e4a39cfe64e76286d3ada8561e5a772d2c4e5ceb4bc",
   "scripts/app-updates/app_update_t3_rpc.py": "09cb91c390570ad6388e8880666f674d54c3357080b3745fa4d3a4a89a296432",
-  "scripts/app-updates/app_update_terminal.py": "4b0727f824bab283d711fb563f8eb4e57a4573a04e1750fe0f8c1570d9a1b60c",
+  "scripts/app-updates/app_update_terminal.py": "754a551da2fbe6fec04f71b7d077c1cc2cbdec9cb910f42cd1e9544593bee456",
   "scripts/app-updates/app_update_zcode.py": "b949dd919c947b524f7fe2a8ab6d375e254c08fe2fc2b47351374b52dac976d9",
   "scripts/app-updates/app_updates.py": "17bed3f90b7d8a7c43c0833b2fcfea83e98ef227444627ce8ef26bb6cbec8128",
   "scripts/claude-history/history_index_remote_v2.py": "841fbac41271845541eea806a5cec3b3e41d17df43428b34a685d78aaac2b570",
