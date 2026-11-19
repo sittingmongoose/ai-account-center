@@ -32,6 +32,8 @@ pub(crate) enum Handler {
     AgentControl,
     Approvals,
     AppUpdates,
+    /// M5 lane K: the reset claims file (ledger and ticketed source reads).
+    ResetClaims,
     Store,
 }
 
@@ -58,6 +60,7 @@ impl Handler {
             "agent-control" => Handler::AgentControl,
             "account-approvals" => Handler::Approvals,
             "app-updates" => Handler::AppUpdates,
+            "reset-claims" => Handler::ResetClaims,
             "store" => Handler::Store,
             _ => return None,
         })
@@ -105,6 +108,9 @@ pub(crate) enum Pool {
     /// Fed Status. Not a route-table group: the fed arm chooses it, and the envelope read stays
     /// on [`Pool::Reads`].
     Status,
+    /// The reset claims file: its own slots, so a seconds-long source read never holds a read
+    /// permit.
+    Reset,
 }
 
 /// One `rust` row, checked.
@@ -205,7 +211,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
+                && !matches!(
+                    handler,
+                    Handler::Events | Handler::Agent | Handler::ResetClaims | Handler::Store
+                ))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
@@ -217,6 +226,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::AgentControl
                         | Handler::AppUpdates
                         | Handler::Approvals
+                        | Handler::ResetClaims
                         | Handler::Store
                 ))
             || (method == axum::http::Method::PUT
@@ -253,6 +263,12 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     || row.group != "writes"
                     || roles != [Role::Admin]
                     || row.path != "/api/accounts/preferences"))
+            // The TS route owns the deadline (a Claude source read takes seconds); the work is
+            // one blocking transaction that cannot stop halfway, so the row's budget is 0.
+            || (handler == Handler::ResetClaims
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/reset-claims"
+                    || row.budget_ms != 0))
             || (handler == Handler::WriteVisibility
                 && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
                     || row.group != "writes"
@@ -270,6 +286,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             handler,
             pool: if row.group == "store" || handler == Handler::Store {
                 Pool::Store
+            } else if handler == Handler::ResetClaims {
+                Pool::Reset
             } else {
                 Pool::Reads
             },

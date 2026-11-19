@@ -1177,6 +1177,67 @@ fn wall_now() -> Result<i64> {
         .map_err(|_| "clock")
 }
 
+/// The ledger operations the reset claim route performs. `history` stays native-only.
+pub const SERVICE_OPS: [&str; 8] = [
+    "pending",
+    "inventory",
+    "prepareGate",
+    "claimGate",
+    "prepare",
+    "begin",
+    "finish",
+    "check",
+];
+
+/// The private Rust service's claims-file call (M5 lane K). The front door sends the same
+/// request as the native ABI minus `dbPath`: the claims file is the one the service owns and
+/// holds the writer lease for, never a path from the wire. Besides the ledger operations, the
+/// two ticketed source reads also write this file (the read ticket is allocated inside the
+/// capture transaction), so they move with it: `sourceCodexRead` is `resetCodexSource` without a
+/// write and `sourceClaudeRead` is `resetClaudeSource`. Each runs the native function unchanged.
+/// A source write never touches the file and stays with the front door.
+pub fn service_call(db_path: &Path, body: &[u8]) -> Result<Value> {
+    let mut input: serde_json::Map<String, Value> = serde_json::from_slice(body).map_err(|_| "shape")?;
+    let op = input.remove("op").ok_or("shape")?;
+    let op = op.as_str().ok_or("shape")?;
+    let exact = |input: &serde_json::Map<String, Value>, keys: &[&str]| {
+        input.len() == keys.len() && keys.iter().all(|k| input.get(*k).is_some_and(Value::is_string))
+    };
+    if input.contains_key("dbPath") {
+        return Err("shape");
+    }
+    let path = Value::String(db_path.to_str().ok_or("unsafe-storage")?.into());
+    match op {
+        "sourceCodexRead" => {
+            if !exact(&input, &["routeAccount", "home", "expectedAccount", "profile", "host"]) {
+                return Err("shape");
+            }
+            input.insert("dbPath".into(), path);
+            input.insert("write".into(), Value::Null);
+            crate::reset_source::dispatch(&Value::Object(input).to_string())
+        }
+        "sourceClaudeRead" => {
+            if input.len() != 2
+                || !input.get("routeAccount").is_some_and(Value::is_string)
+                || !input.contains_key("command")
+            {
+                return Err("shape");
+            }
+            input.insert("dbPath".into(), path);
+            crate::reset_claude_source::dispatch(&Value::Object(input).to_string())
+        }
+        _ => {
+            let entropy = input.get("entropy").and_then(Value::as_str).ok_or("shape")?;
+            if !SERVICE_OPS.contains(&op) || !opaque(entropy) {
+                return Err("shape");
+            }
+            input.insert("op".into(), Value::String(op.into()));
+            input.insert("dbPath".into(), path);
+            dispatch(&Value::Object(input).to_string())
+        }
+    }
+}
+
 /// Native ABI used only by the internal adapter. Errors are fixed codes, never raw provider bodies.
 pub fn dispatch(args: &str) -> Result<Value> {
     #[derive(Deserialize)]

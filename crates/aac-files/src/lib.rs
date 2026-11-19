@@ -281,6 +281,12 @@ impl OwnedStore {
         })
     }
 
+    /// The store's resolved path. For a store with its own engine (the reset claims SQLite),
+    /// the lease is the one-writer proof and the engine opens this path itself.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Read only a regular file and enforce the declared cap during streaming.
     pub fn read(&self) -> Result<Vec<u8>, Failure> {
         if self.parents == Parents::Private {
