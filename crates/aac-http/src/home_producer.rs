@@ -39,6 +39,7 @@ const FEED_CAP: usize = 4 * 1024 * 1024;
 const EXACT_DEPTH: usize = 64;
 /// `readFacts`'s safe-integer millisecond window (`rust-read-input.ts`).
 const TIME_MIN: f64 = 100_000_000_000.0;
+const TIME_MAX: f64 = 8_640_000_000_000_000.0;
 /// `Number.isSafeInteger`'s bound.
 const SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
@@ -151,10 +152,7 @@ fn reset_epochs(dashboard: &Value) -> Result<Map<String, Value>, Decline> {
         } else {
             return Err(Decline::Date);
         };
-        epochs.insert(
-            text.to_owned(),
-            ms.map(Value::from).unwrap_or(Value::Null),
-        );
+        epochs.insert(text.to_owned(), ms.map(Value::from).unwrap_or(Value::Null));
         Ok(())
     };
     for account in accounts {
@@ -185,7 +183,10 @@ fn reset_epochs(dashboard: &Value) -> Result<Map<String, Value>, Decline> {
 /// resetEpochs(dashboard)}`, the text `home-feed.ts` writes.
 pub(crate) fn dashboard_facts(dashboard: &Value) -> Result<Vec<u8>, Decline> {
     let mut facts = Map::new();
-    facts.insert("order".into(), Value::Object(ranks(&sort_words(dashboard)?)?));
+    facts.insert(
+        "order".into(),
+        Value::Object(ranks(&sort_words(dashboard)?)?),
+    );
     facts.insert("epochs".into(), Value::Object(reset_epochs(dashboard)?));
     Ok(js_json::write(&Value::Object(facts)))
 }
@@ -295,6 +296,12 @@ fn now_ms() -> u64 {
         .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(0))
 }
 
+/// `nextGeneration`: only forward, from the clock (ms x 1000).
+fn next_generation(last: &mut u64) -> String {
+    *last = (*last + 1).max(now_ms() * 1000);
+    last.to_string()
+}
+
 /// `seen`: a newer held generation moves the counter past it.
 fn seen(last: &mut u64, held: &str) {
     if let Ok(number) = held.parse::<u64>()
@@ -331,26 +338,17 @@ impl HomeProducer {
             u8::from(inputs.secure)
         );
         let mut state = self.state.lock().map_err(|_| Decline::Internal)?;
-        let dashboard = ensure_source(
-            &mut state,
-            feeds,
-            &source,
-            dashboard_key,
-            || {
-                let facts = dashboard_facts(&inputs.dashboard)?;
-                Ok((dashboard_data.clone(), facts))
-            },
-        )?;
+        let dashboard = ensure_source(&mut state, feeds, &source, dashboard_key, || {
+            let facts = dashboard_facts(&inputs.dashboard)?;
+            Ok((dashboard_data.clone(), facts))
+        })?;
         let opens = ensure_source(&mut state, feeds, HOME_OPENS, opens_key, || {
             Ok((js_json::write(&inputs.opens), b"null".to_vec()))
         })?;
-        let antigravity = ensure_source(
-            &mut state,
-            feeds,
-            HOME_ANTIGRAVITY,
-            inventory_key,
-            || Ok((antigravity_envelope(&inputs.antigravity)?, b"null".to_vec())),
-        )?;
+        let antigravity =
+            ensure_source(&mut state, feeds, HOME_ANTIGRAVITY, inventory_key, || {
+                Ok((antigravity_envelope(&inputs.antigravity)?, b"null".to_vec()))
+            })?;
         Ok(serde_json::json!({
             "dashboard": dashboard,
             "opens": opens,
@@ -371,11 +369,17 @@ fn ensure_source(
     if let Some(held) = state.sources.get(source)
         && held.key == key
     {
-        return match (&held.generation, held.refused) {
-            (Some(generation), _) => Ok(generation.clone()),
-            (None, Some(refused)) => Err(refused),
-            (None, None) => Err(Decline::Shape),
-        };
+        match (&held.generation, held.refused) {
+            (Some(generation), _) => {
+                // The service must still hold it: a raced push or a new boot invalidates it (the TS front
+                // door's `stale` -> clear -> re-push); re-produce below when it does not.
+                if feeds.current(source, generation).is_ok() {
+                    return Ok(generation.clone());
+                }
+            }
+            (None, Some(refused)) => return Err(refused),
+            (None, None) => return Err(Decline::Shape),
+        }
     }
     let (data, facts) = build()?;
     let generation = next_generation(&mut state.last);
@@ -427,7 +431,8 @@ mod tests {
 
     #[test]
     fn the_change_key_blanks_updated_at_in_its_own_position() {
-        let dashboard = json!({"schemaVersion": 1, "updatedAt": "2026-11-19T00:00:00.000Z", "accounts": []});
+        let dashboard =
+            json!({"schemaVersion": 1, "updatedAt": "2026-11-19T00:00:00.000Z", "accounts": []});
         assert_eq!(
             dashboard_text(&dashboard).unwrap(),
             br#"{"schemaVersion":1,"updatedAt":"","accounts":[]}"#
@@ -464,13 +469,12 @@ mod tests {
         let epochs = facts["epochs"].as_object().unwrap();
         assert_eq!(
             epochs.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec![
-                "2026-11-14T10:00:00.000Z",
-                "2026-11-14T12:00:00.000Z",
-                ""
-            ]
+            vec!["2026-11-14T10:00:00.000Z", "2026-11-14T12:00:00.000Z", ""]
         );
-        assert_eq!(epochs["2026-11-14T10:00:00.000Z"], json!(1_794_650_400_000i64));
+        assert_eq!(
+            epochs["2026-11-14T10:00:00.000Z"],
+            json!(1_794_650_400_000i64)
+        );
         assert_eq!(epochs[""], Value::Null);
     }
 
@@ -542,7 +546,10 @@ mod tests {
         };
         let first = producer.produce(&feeds, &inputs).unwrap();
         let second = producer.produce(&feeds, &inputs).unwrap();
-        assert_eq!(first, second, "an unchanged input names the same generations");
+        assert_eq!(
+            first, second,
+            "an unchanged input names the same generations"
+        );
         let mut changed = inputs.dashboard.clone();
         changed["updatedAt"] = json!("y");
         // updatedAt is blanked in the change key: the same key, the same generations.
@@ -558,7 +565,10 @@ mod tests {
         let held = feeds
             .current("home-dashboard-mac-0", third["dashboard"].as_str().unwrap())
             .unwrap();
-        assert!(matches!(held.prepared, crate::feed::Prepared::Dashboard(Ok(_))));
+        assert!(matches!(
+            held.prepared,
+            crate::feed::Prepared::Dashboard(Ok(_))
+        ));
     }
 
     /// The TS producer's own outputs (the Home corpus and the large fixture, generated by

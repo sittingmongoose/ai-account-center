@@ -676,7 +676,12 @@ fn home_inputs_produce_the_generations_the_ts_producer_pushes() -> Result<()> {
         "antigravity": {"schemaVersion": 1, "hostId": "ubuntu", "profiles": []},
     });
     let body = inputs.to_string();
-    let reply = s.call("PUT", "/internal/home-inputs", &front_door(), Some(body.as_bytes()))?;
+    let reply = s.call(
+        "PUT",
+        "/internal/home-inputs",
+        &front_door(),
+        Some(body.as_bytes()),
+    )?;
     assert_eq!(reply.status, 200, "{}", reply.body);
     let ids = reply.json()?;
     let produced = fed_home(
@@ -703,7 +708,12 @@ fn home_inputs_produce_the_generations_the_ts_producer_pushes() -> Result<()> {
     let pushed = fed_home(&t, &feed(["1", "1", "1"]), "")?;
     assert_eq!(produced.body, pushed.body);
     // Unchanged inputs name the same generations (the change keys hold).
-    let again = s.call("PUT", "/internal/home-inputs", &front_door(), Some(body.as_bytes()))?;
+    let again = s.call(
+        "PUT",
+        "/internal/home-inputs",
+        &front_door(),
+        Some(body.as_bytes()),
+    )?;
     assert_eq!(again.json()?, ids);
     // A sort word outside the proved collation domain declines; the TS producer answers there.
     let mut bad = inputs.clone();
@@ -717,7 +727,12 @@ fn home_inputs_produce_the_generations_the_ts_producer_pushes() -> Result<()> {
     assert_eq!(refused.status, 503);
     assert_eq!(refused.header("x-aac-decline"), Some("collation"));
     // Only the front door's service principal reaches the producer.
-    let forbidden = s.call("PUT", "/internal/home-inputs", &admin(), Some(body.as_bytes()))?;
+    let forbidden = s.call(
+        "PUT",
+        "/internal/home-inputs",
+        &admin(),
+        Some(body.as_bytes()),
+    )?;
     assert_eq!(forbidden.status, 401);
     Ok(())
 }
