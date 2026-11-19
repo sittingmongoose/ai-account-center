@@ -3,7 +3,7 @@ use crate::registry;
 use aac_core::{Cause, Failure};
 use std::{
     collections::HashSet,
-    fs::{self, File},
+    fs,
     path::Path,
     time::{Duration, SystemTime},
 };
@@ -20,12 +20,37 @@ fn key_id(id: &str) -> bool {
 /// Sweep one provider under its workflow queue and inherited folder lease.
 /// Callers obtain the named keys from a validated v2 registry before invoking
 /// this function. Key bytes are never read.
+#[cfg(unix)]
 pub fn sweep(
     root: &Path,
     provider: &str,
     named: &[String],
     now_ms: u64,
-    lease: File,
+    lease: fs::File,
+) -> Result<usize, Failure> {
+    let marker = format!("{provider}-00000000.json");
+    let store = registry::inherit_writer("account-keys", root, Some(&marker), lease)?;
+    sweep_held(&store, provider, named, now_ms)
+}
+
+/// Sweep one provider from the in-process owner while its workflow queue is held.
+pub fn sweep_owned(
+    root: &Path,
+    owners: &registry::Owners,
+    provider: &str,
+    named: &[String],
+    now_ms: u64,
+) -> Result<usize, Failure> {
+    let marker = format!("{provider}-00000000.json");
+    let store = owners.claim(registry::rows()?, "account-keys", root, Some(&marker))?;
+    sweep_held(&store, provider, named, now_ms)
+}
+
+fn sweep_held(
+    store: &crate::OwnedStore,
+    provider: &str,
+    named: &[String],
+    now_ms: u64,
 ) -> Result<usize, Failure> {
     let refused = || Failure::new(Cause::Refused, "invalid key sweep inputs");
     if provider.is_empty()
@@ -42,8 +67,6 @@ pub fn sweep(
     )) else {
         return Err(refused());
     };
-    let marker = format!("{provider}-00000000.json");
-    let store = registry::inherit_writer("account-keys", root, Some(&marker), lease)?;
     let parent = store.path.parent().ok_or_else(refused)?;
     let prefix = format!("{provider}-");
     let named: HashSet<_> = named.iter().map(String::as_str).collect();

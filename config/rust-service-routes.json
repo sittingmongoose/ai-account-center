@@ -42,6 +42,8 @@
   { "method": "POST", "path": "/internal/agent/{verb}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "agent" },
   { "method": "POST", "path": "/internal/agent/{callId}/control", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 2500, "handler": "agent-control" },
   { "method": "POST", "path": "/internal/account-confirmations", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "account-approvals" },
+  { "method": "POST", "path": "/internal/accounts/lifecycle", "owner": "rust", "group": "internal", "roles": ["admin"], "budgetMs": 0, "handler": "account-lifecycle" },
+  { "method": "POST", "path": "/internal/accounts/collection", "owner": "rust", "group": "internal", "roles": ["admin", "device"], "budgetMs": 0, "handler": "account-lifecycle" },
   { "method": "POST", "path": "/internal/reset-claims", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "reset-claims" },
   { "method": "PUT", "path": "/internal/collection-signins", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "collection-signins" },
   { "method": "PUT", "path": "/internal/collection-signin-poll", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "collection-signin-poll" },

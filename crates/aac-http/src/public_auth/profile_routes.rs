@@ -35,6 +35,14 @@ use std::{
 /// collection where that group runs. Empty when no collection owner exists (Windows).
 pub(super) type RowsSource = Arc<dyn Fn() -> Vec<Value> + Send + Sync>;
 
+/// One fresh Codex quota pass through the existing producer reader. A source with no owner
+/// (collection off) answers no rows and the route falls back to the cached dashboard rows.
+pub(super) type QuotaRows = Arc<
+    dyn Fn(i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Value>> + Send>>
+        + Send
+        + Sync,
+>;
+
 const MISSING_HISTORY: &str = "CCS_DESKTOP_USAGE_MISSING";
 const MAX_HISTORY_BYTES: u64 = 1024 * 1024;
 const SSH_TIMEOUT_MS: u64 = 8_000;
@@ -53,6 +61,7 @@ pub(super) struct Profiles {
     open: Arc<ClaudeOpen>,
     agents: Arc<Agents>,
     rows: RowsSource,
+    quota_rows: QuotaRows,
     /// The one owner host when this boot answers its groups through it.
     #[cfg(unix)]
     host: Option<Arc<super::owner_host::OwnerHost>>,
@@ -67,7 +76,12 @@ enum HistoryRead {
 
 impl Profiles {
     /// The owner for one boot root. Construction spawns and reads nothing.
-    pub(super) fn start(root: PathBuf, rows: RowsSource, agents: Arc<Agents>) -> Self {
+    pub(super) fn start(
+        root: PathBuf,
+        rows: RowsSource,
+        agents: Arc<Agents>,
+        quota_rows: QuotaRows,
+    ) -> Self {
         let package = crate::agent_transport::package_root().unwrap_or_else(|| root.clone());
         let remote = Arc::new(crate::claude_open::remote::AgentRemote::new(
             Arc::clone(&agents),
@@ -85,6 +99,7 @@ impl Profiles {
             open,
             agents,
             rows,
+            quota_rows,
             #[cfg(unix)]
             host: None,
         }
@@ -96,11 +111,12 @@ impl Profiles {
         root: PathBuf,
         rows: RowsSource,
         agents: Arc<Agents>,
+        quota_rows: QuotaRows,
         host: Arc<super::owner_host::OwnerHost>,
     ) -> Self {
         Self {
             host: Some(host),
-            ..Self::start(root, rows, agents)
+            ..Self::start(root, rows, agents, quota_rows)
         }
     }
 
@@ -483,13 +499,20 @@ impl Profiles {
             return Self::relay(reply, false);
         }
         let root = self.root.clone();
-        let rows = Arc::clone(&self.rows);
         let now = super::now();
-        let value =
-            tokio::task::spawn_blocking(move || codex_quota_answer(&root, rows.as_ref(), now))
+        let fresh = (self.quota_rows)(now).await;
+        let rows = if fresh.is_empty() {
+            let rows = Arc::clone(&self.rows);
+            tokio::task::spawn_blocking(move || rows())
                 .await
-                .ok()
-                .flatten();
+                .unwrap_or_default()
+        } else {
+            fresh
+        };
+        let value = tokio::task::spawn_blocking(move || codex_quota_answer(&root, rows, now))
+            .await
+            .ok()
+            .flatten();
         match value {
             Some(value) => super::response(200, value),
             None => super::plain(500, "Codex profile usage could not be read safely."),
@@ -837,7 +860,7 @@ fn path_text(path: &Path) -> String {
 /// The quota answer from the native owners: the registry's profiles, the collector rows the
 /// Accounts dashboard already holds, and the renewal status file — composed by the existing
 /// Codex quota view, with the ISO facts that view reads.
-fn codex_quota_answer(root: &Path, rows: &dyn Fn() -> Vec<Value>, now: i64) -> Option<Value> {
+fn codex_quota_answer(root: &Path, dashboard_rows: Vec<Value>, now: i64) -> Option<Value> {
     let (_, records) = read_codex_profile_registry(root).ok()?;
     let profiles: Vec<Value> = records
         .iter()
@@ -860,7 +883,6 @@ fn codex_quota_answer(root: &Path, rows: &dyn Fn() -> Vec<Value>, now: i64) -> O
         })))
         .ok();
     }
-    let dashboard_rows = rows();
     let mut quota_rows = Vec::new();
     let mut epochs = Map::new();
     for profile in &profiles {

@@ -1,7 +1,7 @@
-//! The cut's native settings read and authenticated access to the remaining store host.
-use super::{Reply, storage};
+//! The cut's authenticated access to the remaining store host.
+use super::storage;
 use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
-use axum::{body::Body, extract::Request, http::Uri};
+use axum::{body::Body, extract::Request};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
@@ -52,34 +52,6 @@ impl CollectionEndpoint {
             && metadata.mode() & 0o777 == 0o600)
             .then_some(endpoint)
     }
-}
-
-pub(super) async fn settings(root: PathBuf, signed_in: bool, uri: Uri, head: bool) -> Reply {
-    let mut reply = if !signed_in {
-        super::plain(401, "Authentication required")
-    } else if uri.query().is_some_and(|query| {
-        url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| !key.is_empty())
-    }) {
-        super::plain(400, "Unexpected settings query.")
-    } else {
-        let pref = tokio::task::spawn_blocking(move || {
-            crate::unix::read_settings(&root)
-                .ok()
-                .map(|settings| json!(settings))
-        })
-        .await
-        .ok()
-        .flatten();
-        super::response(
-            200,
-            pref.unwrap_or_else(|| json!({"refreshIntervalSeconds":60})),
-        )
-    };
-    super::set_header(&mut reply, "cache-control", "no-store");
-    if head {
-        *reply.body_mut() = Body::empty();
-    }
-    reply
 }
 
 /// Forward a completed native generation to the existing store owner. The G14

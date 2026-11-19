@@ -7,13 +7,14 @@ mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
-#[cfg(unix)]
-mod native_owners;
+mod lifecycle;
+pub(crate) mod lifecycle_host;
+pub(crate) mod native_owners;
 #[cfg(unix)]
 mod native_reads;
+mod native_settings;
 // Merged before its first registering group: the host is exercised by the groups that land
 // on top of it (W-status-home first), so its API is not dead in the composed cut.
-#[cfg(unix)]
 #[allow(dead_code)]
 mod owner_host;
 mod policy;
@@ -22,7 +23,6 @@ mod request_log;
 mod reset_routes;
 mod routes;
 #[cfg(unix)]
-#[allow(dead_code)]
 mod service_link;
 mod sidecar;
 mod static_ui;
@@ -73,7 +73,6 @@ pub fn publish_native_hub(
 
 /// The latest native Accounts rows that carry a saved Codex profile, one per name. The public
 /// Codex quota route reads these same collector rows the Accounts dashboard shows.
-#[cfg(unix)]
 fn codex_dashboard_rows(cache: &crate::account_usage::AccountUsageCache) -> Vec<Value> {
     let at = now();
     let Some(timestamp) = storage::iso(at) else {
@@ -242,17 +241,7 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream,
-            cache,
-            ui_root,
-            None,
-            false,
-            None,
-            None,
-            None,
-            None,
-            #[cfg(unix)]
-            None,
+            downstream, cache, ui_root, None, false, None, None, None, None, None, None, None,
         )
     }
 
@@ -269,38 +258,34 @@ impl DashboardAuth {
         partial_api: bool,
         backend: Option<compose::Backend>,
         cut_root: Option<PathBuf>,
+        native_owners: Option<native_owners::NativeOwners>,
+        native_settings: Option<native_settings::Settings>,
+        lifecycle_routes: Option<lifecycle_host::Routes>,
         profiles: Option<profile_routes::Profiles>,
         app_updates: Option<app_updates_owner::Owner>,
-        #[cfg(unix)] native_owners: Option<native_owners::NativeOwners>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
-            #[cfg(unix)]
-            if let Some(root) = cut_root
-                && matches!(*request.method(), Method::GET | Method::HEAD)
-                && matches!(
-                    request.uri().path(),
-                    "/api/accounts/settings" | "/api/accounts/settings/"
-                )
+            if let Some(settings) = &native_settings
+                && let Some(family) = native_settings::route(request.method(), request.uri().path())
             {
-                let session = request
-                    .extensions()
-                    .get::<DashboardAccess>()
-                    .is_some_and(|access| {
-                        matches!(access.principal, DashboardPrincipal::Browser { .. })
-                    });
-                let head = request.method() == Method::HEAD;
-                return native_reads::settings(root, session, request.uri().clone(), head).await;
+                let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
+                    return service_error();
+                };
+                return settings.handle(&access, family, request).await;
             }
-            #[cfg(unix)]
-            if let Some(native) = native_owners
-                && native_owners::NativeOwners::owns(
-                    request.method(),
-                    request.uri().path().trim_end_matches('/'),
-                )
+            // The account-id PATCH route shares this path depth with the settings literals.
+            // Let those routes keep precedence and accept trailing slashes as the TS router did.
+            if let Some(routes) = &lifecycle_routes
+                && routes.owns(&request)
+            {
+                return routes.handle(request).await;
+            }
+            if let Some(native) = &native_owners
+                && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 return native.handle(request).await;
             }
@@ -433,7 +418,6 @@ pub(crate) async fn run_public_at(
     let interactive = std::io::stdout().is_terminal()
         || (!cut && std::env::var("AAC_RUST_COMPOSE_STDOUT_TTY").as_deref() == Ok("1"));
     let auth = DashboardAuth::open_public(root.clone(), interactive)?;
-    #[cfg(unix)]
     let groups = if cut {
         let config = auth
             .0
@@ -447,14 +431,24 @@ pub(crate) async fn run_public_at(
     } else {
         None
     };
+    let enabled = owner_host::enabled();
+    #[cfg(unix)]
+    let has_external =
+        cut && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
+    #[cfg(not(unix))]
+    let has_external = false;
+    let groups = groups.map(|mut groups| {
+        if has_external {
+            groups.collection = false;
+        }
+        groups
+    });
     let mut worker = if cut {
         sidecar::Sidecar::start(
             &root,
             address,
-            #[cfg(unix)]
             groups.is_some_and(|groups| groups.collection),
-            #[cfg(not(unix))]
-            false,
+            has_external,
         )
         .await?
     } else {
@@ -472,93 +466,95 @@ pub(crate) async fn run_public_at(
         )
     };
     let hub = HubCache::default();
-    // One L5 pool for every public owner: the Accounts collection, the profile reads and the
-    // app-update fan-out share the boot's clients, exactly as the private service does.
-    let agents = Arc::new(crate::agent_transport::Agents::with_default(root.clone(), true));
-    // One collection cache for the boot: the native owners publish the dashboard generations
-    // the profile routes read their Codex quota rows from.
-    #[cfg(unix)]
-    let account_usage = crate::account_usage::AccountUsageCache::default();
-    #[cfg(unix)]
-    let (native, native_jobs) = if let Some(groups) = groups {
-        let (native, jobs) = native_owners::NativeOwners::start(
-            root.clone(),
-            groups,
-            hub.clone(),
-            auth.events(),
-            snapshot
-                .as_deref()
-                .and_then(std::path::Path::parent)
-                .map(std::path::Path::to_owned),
-            account_usage.clone(),
-            Arc::clone(&agents),
-        )?;
-        (Some(native), Some(jobs))
-    } else {
-        (None, None)
-    };
     let composed = backend.is_some();
-    // The one owner host (AAC_RUST_CUT_NATIVE_ROUTES=on): the running service's descriptor, or
-    // the same service in-process for a worker-less cut boot. Groups register on top of it.
-    #[cfg(unix)]
-    let owner_host =
-        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
-    // The profile routes and the app-update jobs run on both platforms; the worker's copies of
-    // both leave the allowlist in the same cut.
+    let owner_host = (enabled || cut)
+        .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
+    let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
+        groups.lifecycle = !has_external;
+        let worker_directory = snapshot
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_owned);
+        host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
+        host.public_owners()
+    } else {
+        None
+    };
+    // The host owns the one public collector; the profile reads and the app-update fan-out use
+    // the same L5 pool and the same AccountUsageCache instead of opening their own copies.
+    let agents = native
+        .as_ref()
+        .map(native_owners::NativeOwners::agents)
+        .unwrap_or_else(|| Arc::new(crate::agent_transport::Agents::with_default(root.clone(), true)));
+    let account_usage = native
+        .as_ref()
+        .and_then(native_owners::NativeOwners::cache)
+        .unwrap_or_default();
+    let quota_rows: profile_routes::QuotaRows = {
+        let native = native.clone();
+        Arc::new(move |now| {
+            let native = native.clone();
+            Box::pin(async move {
+                match native {
+                    Some(owner) => owner.codex_profile_rows(now).await.unwrap_or_default(),
+                    None => Vec::new(),
+                }
+            })
+        })
+    };
     let (profiles, app_updates) = if cut {
-        #[cfg(unix)]
         let rows: profile_routes::RowsSource = {
             let cache = account_usage.clone();
             Arc::new(move || codex_dashboard_rows(&cache))
         };
+        #[cfg(unix)]
+        let profiles = match &owner_host {
+            Some(host) => profile_routes::Profiles::start_with_host(
+                root.clone(),
+                rows,
+                Arc::clone(&agents),
+                Arc::clone(&quota_rows),
+                Arc::clone(host),
+            ),
+            None => profile_routes::Profiles::start(
+                root.clone(),
+                rows,
+                Arc::clone(&agents),
+                Arc::clone(&quota_rows),
+            ),
+        };
         #[cfg(not(unix))]
-        let rows: profile_routes::RowsSource = Arc::new(Vec::new);
-        (
-            Some({
-                #[cfg(unix)]
-                let profiles = match &owner_host {
-                    Some(host) => profile_routes::Profiles::start_with_host(
-                        root.clone(),
-                        rows,
-                        Arc::clone(&agents),
-                        Arc::clone(host),
-                    ),
-                    None => profile_routes::Profiles::start(root.clone(), rows, Arc::clone(&agents)),
-                };
-                #[cfg(not(unix))]
-                let profiles = profile_routes::Profiles::start(root.clone(), rows, Arc::clone(&agents));
-                profiles
-            }),
-            Some({
-                #[cfg(unix)]
-                let app_updates = match &owner_host {
-                    Some(host) => app_updates_owner::Owner::start_with_host(
-                        root.clone(),
-                        auth.events(),
-                        Arc::clone(&agents),
-                        Arc::clone(host),
-                    ),
-                    None => app_updates_owner::Owner::start(
-                        root.clone(),
-                        auth.events(),
-                        Arc::clone(&agents),
-                    ),
-                };
-                #[cfg(not(unix))]
-                let app_updates = app_updates_owner::Owner::start(
-                    root.clone(),
-                    auth.events(),
-                    Arc::clone(&agents),
-                );
-                app_updates
-            }),
-        )
+        let profiles = profile_routes::Profiles::start(
+            root.clone(),
+            rows,
+            Arc::clone(&agents),
+            Arc::clone(&quota_rows),
+        );
+        // Unix's NativeOwners already serves the three app-update rows; Windows, where that
+        // arm is not compiled, uses this owner.
+        #[cfg(unix)]
+        let app_updates: Option<app_updates_owner::Owner> = None;
+        #[cfg(not(unix))]
+        let app_updates = Some(app_updates_owner::Owner::start(
+            root.clone(),
+            auth.events(),
+            Arc::clone(&agents),
+        ));
+        (Some(profiles), app_updates)
     } else {
         (None, None)
     };
-    #[cfg(unix)]
+    let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
+    let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
+        let routes = lifecycle_host::Routes::new(host, has_external);
+        host.register("lifecycle", routes.router());
+        routes
+    });
     let mut api = Router::new();
+    if let Some(host) = &owner_host {
+        api = host.mount(api);
+    }
     if cut || !composed {
         api = api.route(
             "/api/health",
@@ -576,10 +572,11 @@ pub(crate) async fn run_public_at(
         !composed,
         backend,
         cut.then(|| root.clone()),
+        native,
+        native_settings,
+        lifecycle_routes,
         profiles,
         app_updates,
-        #[cfg(unix)]
-        native,
     );
     let router = auth
         .protect(reset_routes::mount(
@@ -595,7 +592,6 @@ pub(crate) async fn run_public_at(
             },
             request_log::record,
         ));
-    #[cfg(unix)]
     let router = if cut {
         router.layer(middleware::from_fn(
             |request: Request, next: Next| async move {
@@ -616,7 +612,6 @@ pub(crate) async fn run_public_at(
         println!("aac-http public TLS listening on {address}");
     }
     println!("aac-http public listening on {address}");
-    #[cfg(unix)]
     if let Some(host) = &owner_host {
         let host = host.clone();
         tokio::spawn(async move { host.warm().await });
@@ -707,9 +702,11 @@ pub(crate) async fn run_public_at(
         feed.abort();
         let _ = feed.await;
     }
-    #[cfg(unix)]
-    if let Some(jobs) = native_jobs {
-        jobs.stop().await;
+    if let Some(host) = &owner_host {
+        host.stop_public().await;
+    }
+    if let Some(host) = &owner_host {
+        host.stop().await;
     }
     #[cfg(unix)]
     if let Some(host) = &owner_host {
@@ -1791,6 +1788,164 @@ mod tests {
         assert!(unsigned.starts_with("HTTP/1.1 401"));
         let signed = request(addr, "/api/accounts/dashboard", "GET", &session, "").await;
         assert!(signed.starts_with("HTTP/1.1 503"));
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    /// The cut's own settings, preferences and visibility routes: the TS admission sentences
+    /// and the files the existing owners write.
+    #[tokio::test]
+    async fn the_cut_writes_settings_preferences_and_visibility_under_the_ts_guards() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().to_path_buf();
+        let hash = bcrypt::hash("fixture-password", 4).unwrap();
+        Files::save_config(
+            &aac_files::OwnedStore::claim_dashboard_config(&root).unwrap(),
+            &json!({"dashboard_auth":{"enabled":true,"username":"fixture-admin","password_hash":hash}}),
+        )
+        .unwrap();
+        let auth = DashboardAuth::open_with(root.clone(), Overrides::default(), 4, false).unwrap();
+        let settings = native_settings::Settings::new(root.clone(), auth.events());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = auth.protect(auth.edges(
+            Router::new(),
+            HubCache::default(),
+            None,
+            None,
+            true,
+            None,
+            Some(root.clone()),
+            None,
+            Some(settings),
+            None,
+            None,
+            None,
+        ));
+        let handle = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let cookie = login(addr).await;
+        let origin = format!("Origin: http://{addr}\r\n");
+        let json = format!("{origin}Content-Type: application/json\r\nCookie: {cookie}\r\n");
+
+        let default = request(
+            addr,
+            "/api/accounts/settings",
+            "GET",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        )
+        .await;
+        assert!(default.starts_with("HTTP/1.1 200"), "{default}");
+        assert!(
+            default.contains(r#"{"refreshIntervalSeconds":60}"#),
+            "{default}"
+        );
+
+        let saved = request(
+            addr,
+            "/api/accounts/settings",
+            "PUT",
+            &json,
+            r#"{"refreshIntervalSeconds":45}"#,
+        )
+        .await;
+        assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+        assert!(
+            saved.contains(r#"{"refreshIntervalSeconds":45}"#),
+            "{saved}"
+        );
+        assert_eq!(
+            std::fs::read(root.join("account-refresh-settings.json")).unwrap(),
+            b"{\"refreshIntervalSeconds\":45}\n"
+        );
+
+        let shape = request(
+            addr,
+            "/api/accounts/settings",
+            "PUT",
+            &json,
+            r#"{"refreshIntervalSeconds":29}"#,
+        )
+        .await;
+        assert!(shape.starts_with("HTTP/1.1 400"), "{shape}");
+        assert!(
+            shape.contains("Choose a whole number of seconds from 30 to 3600."),
+            "{shape}"
+        );
+
+        let no_origin = request(
+            addr,
+            "/api/accounts/settings",
+            "PUT",
+            &format!("Content-Type: application/json\r\nCookie: {cookie}\r\n"),
+            r#"{"refreshIntervalSeconds":60}"#,
+        )
+        .await;
+        assert!(no_origin.starts_with("HTTP/1.1 403"), "{no_origin}");
+
+        let visibility = request(
+            addr,
+            "/api/accounts/visibility",
+            "PUT",
+            &json,
+            r#"{"hiddenProviders":["claude"]}"#,
+        )
+        .await;
+        assert!(visibility.starts_with("HTTP/1.1 200"), "{visibility}");
+        assert!(
+            visibility.contains(
+                r#"{"hiddenProviders":["claude"],"hiddenAccountIds":[],"trayHiddenProviders":[],"trayHiddenAccountIds":[]}"#
+            ),
+            "{visibility}"
+        );
+        let read = request(
+            addr,
+            "/api/accounts/visibility",
+            "GET",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        )
+        .await;
+        assert!(read.contains(r#""hiddenProviders":["claude"]"#), "{read}");
+
+        let preferences = request(
+            addr,
+            "/api/accounts/preferences",
+            "PUT",
+            &json,
+            r#"{"timeZone":"UTC","snapshotCleanup":{"auto":false},"usageLogSources":[]}"#,
+        )
+        .await;
+        assert!(preferences.starts_with("HTTP/1.1 200"), "{preferences}");
+        assert!(preferences.contains(r#""timeZone":"UTC""#), "{preferences}");
+        let patched = request(
+            addr,
+            "/api/accounts/preferences",
+            "PATCH",
+            &json,
+            r#"{"addUsageLogSource":{"id":"extra","tool":"claude-code","host":"ubuntu","path":"/var/log/extra"}}"#,
+        )
+        .await;
+        assert!(patched.starts_with("HTTP/1.1 200"), "{patched}");
+        assert!(patched.contains(r#""id":"extra""#), "{patched}");
+        let overlap = request(
+            addr,
+            "/api/accounts/preferences",
+            "PATCH",
+            &json,
+            r#"{"addUsageLogSource":{"id":"again","tool":"claude-code","host":"ubuntu","path":"/home/fixture/.claude/projects/nested"}}"#,
+        )
+        .await;
+        assert!(overlap.starts_with("HTTP/1.1 400"), "{overlap}");
+        assert!(overlap.contains("overlaps a built-in root"), "{overlap}");
+
         handle.abort();
         let _ = handle.await;
     }

@@ -155,7 +155,7 @@ impl AppUpdateJobs for M0Jobs {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use axum::body::to_bytes;

@@ -37,15 +37,6 @@ fn identifier(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
-fn job_id(id: &str) -> bool {
-    id.strip_prefix("job_").is_some_and(|part| {
-        part.len() == 16
-            && part
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
-}
-
 fn ascii(value: &str, cap: usize) -> bool {
     !value.is_empty() && value.len() <= cap && value.bytes().all(|b| (0x20..=0x7e).contains(&b))
 }
@@ -127,7 +118,7 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
         || !ascii(root, 1024)
         || !provider_matches
         || !account_matches
-        || !job_id(&start.job_id)
+        || !aac_core::signin::valid_job_id(&start.job_id)
         || start.front_door_pid == 0
         || !start.profile_name.as_deref().is_some_and(identifier)
         || !(100..=900_000).contains(&start.timeout_ms)
@@ -172,6 +163,7 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn antigravity_driver_reaches_the_agent_as_printable_argv_without_altering_the_program() {
         let program = "import sys\nassert sys.argv[1] == 'fixture'\n";
@@ -192,23 +184,39 @@ mod tests {
         assert_eq!(command.args[4], "fixture");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn the_unix_antigravity_driver_is_refused_on_windows() {
+        let command = Command {
+            file: "/usr/bin/python3".into(),
+            args: vec!["-c".into(), "import sys\n".into()],
+            env: Default::default(),
+            pty: false,
+        };
+        assert!(command.bind("antigravity").is_none());
+    }
+
     #[test]
     fn lifecycle_uses_one_boot_scoped_journal_even_for_a_muse_job() {
+        let (root, ssh) = if cfg!(windows) {
+            (r"C:\fixture\ccs", r"C:\fixture\ssh.exe")
+        } else {
+            ("/fixture/ccs", "/fixture/ssh")
+        };
         let mut request = json!({
             "jobId":"job_0123456789abcdef","frontDoorPid":42,"provider":"muse",
             "kind":"device-code","mode":"signin-again","accountId":"muse:usage",
             "profileName":"muse:usage","platform":"mac",
             "allowedOrigins":["https://auth.meta.com"],"timeoutMs":300000,
-            "command":{"file":"/fixture/ssh","args":[],"env":{},"pty":false}
+            "command":{"file":ssh,"args":[],"env":{},"pty":false}
         });
-        let root = Path::new("/fixture/ccs");
         let (deadline, wire) =
-            agent_start(root, &request.to_string()).expect("valid prepared flow");
+            agent_start(Path::new(root), &request.to_string()).expect("valid prepared flow");
         assert_eq!(deadline, 360_000);
-        assert_eq!(wire["ccs"], "/fixture/ccs");
+        assert_eq!(wire["ccs"], root);
         assert_eq!(wire["action"], "start");
         assert_eq!(wire["platform"], "mac");
         request["ccs"] = json!("/another/journal");
-        assert!(agent_start(root, &request.to_string()).is_none());
+        assert!(agent_start(Path::new(root), &request.to_string()).is_none());
     }
 }

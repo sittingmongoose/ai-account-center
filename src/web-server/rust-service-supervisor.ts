@@ -31,7 +31,7 @@ import {
   type RustRenewalBoot,
   type RustStoreBootInput,
 } from './rust-service-transport';
-import { settlePrivateFileOwners } from '../shared/private-files';
+import { settlePrivateFileOwners, PRIVATE_FILE_ROWS } from '../shared/private-files';
 import { registerFileWriter, rememberFileLeaseBinary } from '../shared/private-file-lease';
 import {
   rustComposeSelected,
@@ -48,6 +48,23 @@ import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
 
 export type RustServiceMode = 'off' | 'shadow' | 'on';
+
+/**
+ * The rows the cut's native public listener writes where it has no private socket (Windows):
+ * the settings, preferences and visibility leaves its public routes own, and the collection
+ * caches its producer owns. TS keeps the wallet pointer, the lifecycle and key rows.
+ */
+const PUBLIC_NATIVE_ROWS: Readonly<Record<string, true>> = {
+  'account-refresh-settings': true,
+  'dashboard-preferences': true,
+  'dashboard-preferences-extra-sources': true,
+  'dashboard-preferences-transaction': true,
+  'account-visibility': true,
+  'account-usage-observations': true,
+  'cursor-quota-observation': true,
+  'claude-live-snapshots': true,
+  'opencode-wallet-account': true,
+};
 
 /**
  * `AAC_RUST_SERVICE`, else `rustService.mode` in config.yaml, else off. Invalid values stay off.
@@ -74,6 +91,7 @@ export const HUNG_TIMEOUTS = 3;
 export class RustSupervisor {
   readonly mode: RustServiceMode;
   readonly writesOn: boolean;
+  readonly lifecycleInPrivate: boolean;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */
@@ -142,15 +160,31 @@ export class RustSupervisor {
   ) {
     this.mode = rustServiceMode(mode);
     const native = this.mode === 'on' && process.platform !== 'win32';
+    // On Windows the native public listener has no private socket but still writes its own rows:
+    // the settings, preferences and visibility leaves and the collection caches.
+    const publicNative = this.mode === 'on' && process.env.AAC_CUT_PUBLIC_OWNERS === '1';
     this.writesOn = native && rustGroupOn('writes');
     const collectionOn = native && rustGroupOn('collection');
+    this.lifecycleInPrivate =
+      this.writesOn &&
+      collectionOn &&
+      process.env.AAC_RUST_CUT_WORKER === '1' &&
+      (process.env.AAC_CUT_PRIVATE_LIFECYCLE === '1' ||
+        (!publicNative && process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on'));
     // One readers-check file carries the Status and Scoreboard writers.
-    settlePrivateFileOwners((group) => {
-      if (!native) return false;
-      if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
-      if (group === 'scoreboard') return rustOwnedScoreboardOn();
-      return (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn);
-    });
+    settlePrivateFileOwners(
+      (group) => {
+        if (!native) return false;
+        if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
+        if (group === 'scoreboard') return rustOwnedScoreboardOn();
+        if (group === 'lifecycle') return this.lifecycleInPrivate;
+        return (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn);
+      },
+      PRIVATE_FILE_ROWS,
+      publicNative && process.platform === 'win32'
+        ? (id) => PUBLIC_NATIVE_ROWS[id] === true
+        : undefined
+    );
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }
@@ -337,6 +371,15 @@ export class RustSupervisor {
       if (this.lease !== lease) return;
       dispatchRustServiceEvent(event);
       const { type, job } = event;
+      if (lease.connection.nativeLifecycle) {
+        if (type === 'accounts-changed') broadcastDashboardEvent({ type });
+        if (type === 'signin-job' && job && typeof job === 'object') {
+          broadcastDashboardEvent({
+            type,
+            job: job as Extract<DashboardEvent, { type: 'signin-job' }>['job'],
+          });
+        }
+      }
       if (appUpdates && type === 'app-update-job' && job && typeof job === 'object') {
         // The public Rust listener validates this DTO again and applies the session policy.
         broadcastDashboardEvent({

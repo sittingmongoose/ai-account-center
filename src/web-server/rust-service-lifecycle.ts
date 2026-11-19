@@ -43,6 +43,8 @@ export interface RustBoot extends RustConnection {
   owned: RustOwnedBoot | null;
   /** G10: the renewal timer's homes this boot was started with; null keeps the timer in TS. */
   renewal: RustRenewalBoot | null;
+  /** The same private service owns lifecycle and its collection generation. */
+  nativeLifecycle?: true;
 }
 
 /**
@@ -346,6 +348,7 @@ async function readBoot(
       store: boot.store ?? null,
       owned: boot.owned ?? null,
       renewal: boot.renewal ?? null,
+      ...(boot.nativeLifecycle === true ? { nativeLifecycle: true } : {}),
     };
   } catch {
     return null;
@@ -551,6 +554,12 @@ async function acquireWithinBudget(
   if (!layout) return { ...result, failure: 'socket_path' };
   const directory = layout.folders[layout.folders.length - 1];
   const agent = rustAgent();
+  const publicOwners = process.env.AAC_CUT_PUBLIC_OWNERS === '1';
+  const nativeCollection =
+    (!publicOwners || process.env.AAC_CUT_PRIVATE_LIFECYCLE === '1') &&
+    process.env.AAC_RUST_CUT_WORKER === '1' &&
+    rustGroupOn('collection');
+  const files = privateFileOwners();
   const boot: RustBoot = {
     ccsDir,
     binary,
@@ -559,10 +568,13 @@ async function acquireWithinBudget(
     bootId,
     // Filled from the service's own health reply once it answers.
     build: { commit: 'unknown', sha256, protocol: RUST_SERVICE_PROTOCOL, storeSchema: 0 },
-    files: privateFileOwners(),
+    files,
     store,
     owned,
     renewal,
+    ...(nativeCollection && files['opencode-wallet-source'] === 'rust-service'
+      ? { nativeLifecycle: true }
+      : {}),
     agent,
   };
   let child: ChildProcess | undefined;
@@ -636,9 +648,6 @@ async function acquireWithinBudget(
         }
       }
     });
-    const publicOwners = process.env.AAC_CUT_PUBLIC_OWNERS === '1';
-    const nativeCollection =
-      !publicOwners && process.env.AAC_RUST_CUT_WORKER === '1' && rustGroupOn('collection');
     child = spawn(binary, nativeCollection ? ['--native-collection'] : [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
@@ -681,6 +690,7 @@ async function acquireWithinBudget(
         store: boot.store,
         owned: boot.owned,
         renewal: boot.renewal,
+        nativeLifecycle: boot.nativeLifecycle,
       }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.

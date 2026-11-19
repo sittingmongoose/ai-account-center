@@ -1,11 +1,13 @@
 //! Read the installed account sources and publish a complete Accounts generation.
 mod claude;
 mod codex_local;
+mod failover;
 mod history;
-mod peers;
 pub mod recheck;
 mod selection;
+mod signin_state;
 
+use super::coordinator::FailoverCoordinator;
 use super::{AccountUsageCache, Desktop, dashboard, rows, sampler, sources};
 use crate::{agent_transport::Agents, collection::Collection};
 use aac_core::UtcMs;
@@ -146,6 +148,10 @@ pub struct Producer {
     recheck_forced: Arc<std::sync::Mutex<HashMap<String, i64>>>,
     /// The renewal status the Codex rows read, cached for the TS status TTL (15 s).
     renewal_status: Arc<std::sync::Mutex<Option<RenewalSnapshot>>>,
+    /// The one display-failover coordinator (G4) every provider's row goes through.
+    failover: Arc<FailoverCoordinator>,
+    /// The cached `claude-host` session answers (the TS five-minute probe).
+    sign_in_state: signin_state::SignInCache,
 }
 
 type RenewalSnapshot = (
@@ -167,6 +173,7 @@ impl Producer {
         collection: Arc<Collection>,
         cursor: Arc<super::cursor::Reader>,
     ) -> Self {
+        let failover = failover::coordinator(agents.clone(), collection.clone(), owners.clone());
         Self {
             root,
             home: std::env::var_os("HOME").map(PathBuf::from),
@@ -178,6 +185,8 @@ impl Producer {
             active_identities: Arc::default(),
             recheck_forced: Arc::default(),
             renewal_status: Arc::default(),
+            failover,
+            sign_in_state: Arc::default(),
         }
     }
 
@@ -198,6 +207,24 @@ impl Producer {
         self.collection
             .read_value(self.agents.clone(), platform, alias, verb, args)
             .await
+    }
+
+    /// One fresh quota pass over every saved Codex profile: the same registry read, the same
+    /// `failover-collect` reader and the same renewal notes `codex_rows` uses for a dashboard
+    /// generation. The public Codex quota route calls this so it never has to wait for the
+    /// Accounts collection to publish a generation first.
+    pub async fn codex_profile_rows(&self, now: i64) -> Vec<Value> {
+        let root = self.root.clone();
+        let Ok(profiles) = tokio::task::spawn_blocking(move || codex_names(&root)).await else {
+            return Vec::new();
+        };
+        let profiles = match profiles {
+            Ok(profiles) => profiles,
+            // A malformed registry is the route's empty profile list, not a provider read.
+            Err(_) => return Vec::new(),
+        };
+        let entries = self.renewal_entries(now).await;
+        self.codex_rows(profiles, &entries, now).await
     }
 
     /// Build all desktop/transport variants in one pass. Only the presentation
@@ -236,23 +263,16 @@ impl Producer {
             now,
             force,
         );
+        let history = self.mac_history_rows(&disk.claude_private, now).await;
+        let claude = self.claude_rows(&disk.claude, &history, force);
         let entries = self.renewal_entries(now).await;
         let codex = self.codex_rows(disk.codex, &entries, now);
-        let claude = self.claude_rows(&disk.claude_private, disk.refresh, now);
-        let history = self.mac_history_rows(&disk.claude_private, now);
-        let (additional, codex, claude, history) = tokio::join!(additional, codex, claude, history);
+        let (additional, codex, claude) = tokio::join!(additional, codex, claude);
 
         let mut samples = Vec::with_capacity(4);
-        for desktop in [Desktop::Mac, Desktop::Windows] {
+        for (selected, desktop) in [Desktop::Mac, Desktop::Windows].into_iter().enumerate() {
             let mut rows = codex.clone();
-            rows.extend(
-                disk.claude
-                    .iter()
-                    .zip(claude.iter().zip(&history))
-                    .filter_map(|(profile, (raw, history))| {
-                        rows::claude(profile, desktop, raw.as_ref(), history.as_ref())
-                    }),
-            );
+            rows.extend(claude.iter().filter_map(|pair| pair[selected].clone()));
             for profile in &disk.claude_pending {
                 let pending = rows::pending_claude(profile, desktop);
                 if !rows.iter().any(|row| row["id"] == pending["id"]) {
@@ -402,6 +422,8 @@ impl Producer {
         }
         let platform = if cfg!(target_os = "macos") {
             "mac"
+        } else if cfg!(windows) {
+            "windows"
         } else {
             "ubuntu"
         };
@@ -834,7 +856,7 @@ pub(crate) fn has_codex_profile(root: &Path, name: &str) -> bool {
     codex_names(root).is_ok_and(|profiles| profiles.iter().any(|profile| profile.name == name))
 }
 
-fn source_host(platform: &str, alias: Option<&str>) -> (String, String) {
+pub(crate) fn source_host(platform: &str, alias: Option<&str>) -> (String, String) {
     let table: Value =
         serde_json::from_str(crate::account_reads::COMPUTERS).expect("bundled computers");
     let known = table.as_object().and_then(|entries| {
@@ -855,15 +877,23 @@ mod tests {
     use aac_renewal::renewal::CodexProfileRenewalProfileStatus;
     use aac_renewal::{CodexRenewalReason, CodexRenewalState};
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    fn set_mode(path: &Path, mode: u32) {
+        #[cfg(unix)]
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("fixture mode");
+        #[cfg(not(unix))]
+        let _ = (path, mode);
+    }
 
     fn private_bytes(file: &Path, bytes: &[u8]) {
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent).expect("fixture folder");
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).expect("folder mode");
+            set_mode(parent, 0o700);
         }
         fs::write(file, bytes).expect("fixture file");
-        fs::set_permissions(file, fs::Permissions::from_mode(0o600)).expect("file mode");
+        set_mode(file, 0o600);
     }
 
     fn state(word: &str) -> CodexRenewalState {
@@ -1036,5 +1066,40 @@ mod tests {
             renewal_row_note(&entries, "party", false, false, now).is_none(),
             "a live source never gets a note"
         );
+    }
+}
+
+#[cfg(test)]
+mod codex_quota_tests {
+    use super::*;
+
+    /// The public quota route needs one fresh pass even before the Accounts collection has
+    /// published a generation. This reads the saved registry and the profile's own login, so a
+    /// saved profile answers a row with no cache present; the old cache-only path answered
+    /// `{profiles: []}` here.
+    #[tokio::test]
+    async fn a_fresh_codex_pass_reads_the_registry_without_a_dashboard_cache() {
+        let directory = tempfile::tempdir().expect("temporary registry fixture");
+        std::fs::write(
+            directory.path().join("codex-profiles.yaml"),
+            "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+        )
+        .expect("write the registry fixture");
+        let owners = crate::account_usage::producer::Owners::defaults(
+            aac_files::registry::rows().expect("bundled private files"),
+        );
+        let root = directory.path().to_path_buf();
+        let producer = Producer::shared(
+            root.clone(),
+            owners,
+            Arc::new(Agents::new(root.clone())),
+            Arc::default(),
+            Arc::default(),
+        )
+        .with_home(Some(root));
+        let rows = producer.codex_profile_rows(1_700_000_000_000).await;
+        assert_eq!(rows.len(), 1, "one saved profile, one row");
+        assert_eq!(rows[0]["capabilities"]["codexProfile"], "work");
+        assert!(rows[0]["status"].is_string());
     }
 }

@@ -44,6 +44,7 @@ pub(crate) enum Handler {
     CollectionCache,
     AgentControl,
     Approvals,
+    Lifecycle,
     AppUpdates,
     /// M5 lane K: the reset claims file (ledger and ticketed source reads).
     ResetClaims,
@@ -90,6 +91,7 @@ impl Handler {
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "account-approvals" => Handler::Approvals,
+            "account-lifecycle" => Handler::Lifecycle,
             "app-updates" => Handler::AppUpdates,
             "reset-claims" => Handler::ResetClaims,
             "collection-signins" => Handler::SignInHealth,
@@ -203,6 +205,27 @@ fn word(text: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// The app-update route surface: it stays with the private Unix front door until Windows'
+/// worker routes are retired, so only Unix validates the row.
+#[cfg(unix)]
+fn app_update_route(
+    method: &axum::http::Method,
+    path: &str,
+) -> Option<crate::app_update_routes::Operation> {
+    crate::app_update_routes::Operation::from_route(method, path)
+}
+
+#[cfg(not(unix))]
+fn app_update_route(method: &axum::http::Method, path: &str) -> Option<()> {
+    // The same three rows, without the Unix job owner's route parser.
+    let expected = match path {
+        "/api/app-updates/status" => axum::http::Method::GET,
+        "/api/app-updates/start" | "/api/app-updates/cancel" => axum::http::Method::POST,
+        _ => return None,
+    };
+    (*method == expected).then_some(())
+}
+
 /// Parse and check the table: every `rust` row has all seven keys, a known handler, known
 /// roles, a word group and a budget of at most 10 s; the one `ts-fallback` wildcard row has
 /// exactly its three keys and comes last.
@@ -262,6 +285,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ClaudeHistoryCleanup
                         | Handler::StatusAnswers
                         | Handler::SignInPoll
+                        | Handler::Lifecycle
                 ))
             || (row.group == "internal" && !internal)
             || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
@@ -277,7 +301,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::CursorAccount
                         | Handler::Collect
                 ))
-            || internal != roles.iter().all(|r| *r == Role::Service)
+            || (handler != Handler::Lifecycle && internal != roles.iter().all(|r| *r == Role::Service))
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
             || (method == axum::http::Method::POST
@@ -289,6 +313,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::Collect
                         | Handler::AppUpdates
                         | Handler::Approvals
+                        | Handler::Lifecycle
                         | Handler::ResetClaims
                         | Handler::Store
                         | Handler::UsageSample
@@ -329,11 +354,18 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (handler == Handler::AppUpdates
                 && (row.group != "app-updates"
                     || roles != [Role::Admin]
-                    || crate::app_update_routes::Operation::from_route(&method, &row.path)
-                        .is_none()))
+                    || app_update_route(&method, &row.path).is_none()))
             || (handler == Handler::Approvals
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/account-confirmations"))
+            || (handler == Handler::Lifecycle
+                && (method != axum::http::Method::POST
+                    || row.budget_ms != 0
+                    || !matches!(
+                        (row.path.as_str(), roles.as_slice()),
+                        (crate::public_auth::lifecycle_host::ENDPOINT, [Role::Admin])
+                            | (crate::public_auth::lifecycle_host::COLLECTION_ENDPOINT, [Role::Admin, Role::Device])
+                    )))
             // The TS route owns the deadline (a Claude source read takes seconds); the work is
             // one blocking transaction that cannot stop halfway, so the row's budget is 0.
             || (handler == Handler::ResetClaims
@@ -422,7 +454,17 @@ mod tests {
                     | Handler::ClaudeHistoryCleanup
                     | Handler::StatusAnswers
                     | Handler::SignInPoll
-            )));
+            )
+            || (r.handler == Handler::Lifecycle
+                && r.method == axum::http::Method::POST
+                && matches!(
+                    (r.path.as_str(), r.roles.as_slice()),
+                    (crate::public_auth::lifecycle_host::ENDPOINT, [Role::Admin])
+                        | (
+                            crate::public_auth::lifecycle_host::COLLECTION_ENDPOINT,
+                            [Role::Admin, Role::Device]
+                        )
+                ))));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.
         let reset: Vec<&Row> = rows
@@ -438,6 +480,14 @@ mod tests {
             ("/internal/collection/recheck", Handler::CollectionRecheck),
             ("/internal/collection-signin-poll", Handler::SignInPoll),
             ("/internal/status/answers", Handler::StatusAnswers),
+            (
+                crate::public_auth::lifecycle_host::ENDPOINT,
+                Handler::Lifecycle,
+            ),
+            (
+                crate::public_auth::lifecycle_host::COLLECTION_ENDPOINT,
+                Handler::Lifecycle,
+            ),
         ] {
             assert!(
                 rows.iter()

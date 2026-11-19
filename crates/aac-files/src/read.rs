@@ -271,6 +271,34 @@ pub fn read(path: &Path, policy: &ReadPolicy) -> Read {
     read_with(path, policy, &mut |_| {})
 }
 
+/// The lifecycle private-JSON policy. A registered store may live in a symlinked
+/// directory, but its target must be a directory and must not be world-writable.
+pub fn private_store(path: &Path, cap: u64) -> Read {
+    #[cfg(unix)]
+    {
+        let Some(parent) = path.parent() else {
+            return Read::Unproved;
+        };
+        match fs::metadata(parent) {
+            Ok(meta) if meta.is_dir() && meta.bits() & 0o002 == 0 => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Read::Absent,
+            _ => return Read::Unproved,
+        }
+    }
+    read(path, &ReadPolicy::capped(cap).mode(Mode::Private))
+}
+
+/// Check the key store's private, non-link directory before reading key metadata.
+pub fn private_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| {
+        #[cfg(unix)]
+        if meta.bits() & 0o077 != 0 {
+            return false;
+        }
+        meta.is_dir() && !meta.file_type().is_symlink()
+    })
+}
+
 /// Open one file under `policy` for a reader that needs only part of it (an archive header, a
 /// byte range). The cap applies to the metadata; the caller bounds what it reads.
 pub fn open(path: &Path, policy: &ReadPolicy) -> Result<(File, Meta), Read> {
@@ -653,6 +681,15 @@ pub enum Listed {
     TooMany,
     /// One entry could not be read.
     Entry(io::Error),
+}
+
+/// Whether the named entry exists, including a dangling link.
+pub fn entry_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// A folder listing that yields at most `cap` entries, then [`Listed::TooMany`] once if there

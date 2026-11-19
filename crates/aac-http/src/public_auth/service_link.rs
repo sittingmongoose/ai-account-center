@@ -36,6 +36,8 @@ struct CollectionEndpoint {
     socket_path: PathBuf,
     secret: String,
     boot_id: String,
+    #[serde(default)]
+    native_lifecycle: bool,
 }
 
 /// One service reply, as it crossed the socket.
@@ -50,6 +52,7 @@ pub(super) struct ServiceLink {
     socket: PathBuf,
     secret: String,
     boot_id: String,
+    native_lifecycle: bool,
 }
 
 impl ServiceLink {
@@ -87,7 +90,12 @@ impl ServiceLink {
                 socket: endpoint.socket_path,
                 secret: endpoint.secret,
                 boot_id: endpoint.boot_id,
+                native_lifecycle: endpoint.native_lifecycle,
             })
+    }
+
+    pub(super) fn owns_lifecycle(&self) -> bool {
+        self.native_lifecycle
     }
 
     /// One request the front door has already admitted. `principal` is the verified identity
@@ -111,7 +119,15 @@ impl ServiceLink {
         }
         let body = body.unwrap_or_default().to_vec();
         let request = builder.body(Body::from(body)).ok()?;
-        tokio::time::timeout(DEADLINE, async {
+        let deadline = if matches!(
+            uri,
+            super::lifecycle_host::ENDPOINT | super::lifecycle_host::COLLECTION_ENDPOINT
+        ) {
+            Duration::from_secs(150)
+        } else {
+            DEADLINE
+        };
+        tokio::time::timeout(deadline, async {
             let stream = UnixStream::connect(&self.socket).await.ok()?;
             let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.ok()?;
             // The connection future drives the reply body; dropping it would stall the read.

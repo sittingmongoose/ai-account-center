@@ -230,9 +230,17 @@ fn preferences_answer_admitted_zones_and_defaults_only() -> Result<()> {
         body,
         r#"{"timeZone":"Europe/Paris","snapshotCleanup":{"auto":false},"usageLogSources":[{"path":"/x","host":"nas1","tool":"muse","id":"m"}]}"#
     );
+    // The engine resolves this IANA name (an alias of Asia/Calcutta), so the native reader
+    // answers it and keeps the spelling the file holds.
+    let kolkata =
+        r#"{"timeZone":"Asia/Kolkata","snapshotCleanup":{"auto":true},"usageLogSources":[]}"#;
+    s.write("dashboard-preferences.json", kolkata, 0o600)?;
+    let (status, body) = s.admin("/api/accounts/preferences", None)?;
+    assert_eq!(status, 200, "{kolkata}");
+    assert_eq!(body, kolkata);
     for text in [
-        r#"{"timeZone":"Asia/Kolkata","snapshotCleanup":{"auto":true},"usageLogSources":[]}"#,
         r#"{"timeZone":"UTC","snapshotCleanup":{"auto":true}"#,
+        r#"{"timeZone":"Mars/Olympus_Mons","snapshotCleanup":{"auto":true},"usageLogSources":[]}"#,
         r#"{"timeZone":"UTC","snapshotCleanup":{"auto":true},"usageLogSources":[{"id":"j","tool":"jsonl","host":"mac","path":"/j","fieldMapping":{"timestamp":"t","model":"m"}}]}"#,
     ] {
         s.write("dashboard-preferences.json", text, 0o600)?;

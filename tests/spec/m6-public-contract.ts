@@ -5,6 +5,7 @@
  * --require-complete fails for any changed answer or explicit unmounted route.
  * --route-group=<name> selects one worker-removal lane and implies --require-complete.
  * --composed-golden applies the platform's existing recorder overrides.
+ * --record-windows-registry=<path> writes the two native Windows registry replies after parity checks.
  */
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
@@ -50,6 +51,21 @@ const groups = {
 const group =
   process.argv.find((arg) => arg.startsWith('--route-group='))?.split('=', 2)[1] ??
   (process.argv.includes('--group=reset-claims') ? 'resets' : undefined);
+const registryOutput = process.argv
+  .find((argument) => argument.startsWith('--record-windows-registry='))
+  ?.slice('--record-windows-registry='.length);
+const registryRecords: Record<string, Contract> = {};
+if (registryOutput !== undefined) {
+  assert.equal(process.platform, 'win32', 'record the registry on native Windows');
+  assert.equal(mode, 'cut-rust-only', 'record the native registry without the worker');
+  assert.equal(group, 'lifecycle', 'run the complete lifecycle group when recording');
+  assert(path.isAbsolute(registryOutput), 'record to an absolute scratch path');
+  const inCheckout = path.relative(path.resolve(spec, '../..'), registryOutput);
+  assert(
+    path.isAbsolute(inCheckout) || inCheckout.startsWith('..' + path.sep),
+    'record outside the checkout'
+  );
+}
 const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   if (group === undefined) return true;
   assert.equal(mode, 'cut-rust-only', 'A worker-removal group requires --cut-rust-only.');
@@ -73,6 +89,12 @@ const overrides: Record<string, Contract> =
         )
       )
     : {};
+const lifecycleOverrides: Record<string, Contract> =
+  mode !== 'fixture' && process.platform === 'win32' && registryOutput === undefined
+    ? JSON.parse(
+        await fs.readFile(path.join(spec, 'contract', 'm0-lifecycle-windows.json'), 'utf8')
+      )
+    : {};
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-m6-contract-'));
 const username = 'fixture-admin';
 const password = 'fixture-password-only';
@@ -80,6 +102,10 @@ const credentials = { username, password };
 const nonce = 'f'.repeat(32);
 const hub = 'aacu_' + 'f'.repeat(43);
 const environment = fixtureEnvironment();
+if (mode !== 'fixture') {
+  // The recorded registry fixture has no Codex CLI. Mask command discovery as well as homes.
+  environment.CCS_CODEX_PATH = path.join(root, 'fixture-missing-codex');
+}
 if (mode === 'cut') {
   const preload = path.join(spec, 'm6-cut-worker-fixture.cjs').split(path.sep).join('/');
   Object.assign(environment, {
@@ -90,7 +116,9 @@ if (mode === 'cut') {
     AAC_RUST_GROUP_HOME: 'off',
     AAC_RUST_HOME_VIEW: 'off',
     AAC_RUST_GROUP_APP_UPDATES: 'off',
-    AAC_RUST_GROUP_COLLECTION: 'off',
+    // The migration lanes serve Accounts and Re-check natively in both modes, so the native
+    // collection runs here too; the worker still owns its remaining routes.
+    AAC_RUST_GROUP_COLLECTION: 'on',
     AAC_AGENT_VERBS: 'off',
     AAC_AGENT_TRANSPORT: 'off',
     AAC_STATUS_DOORBELL: 'off',
@@ -275,15 +303,38 @@ try {
   }
   let rust = await startRustFixture(binary, root, environment, false, mode);
   try {
+    let windowsPreflightReason: string | undefined;
+    if (registryOutput !== undefined) {
+      const { antigravitySignInPreflight } = await import('../../src/antigravity/signin-sandbox');
+      const result = antigravitySignInPreflight(root);
+      assert(!result.ok, 'the TypeScript preflight refuses the Windows fixture');
+      windowsPreflightReason = result.reason;
+    }
     for (const [index, route] of selectedRoutes) {
       const name = route.method + ' ' + route.path;
       const ownsReset = nativeReset(route.method, route.path);
+      const ownsLifecycle = mode !== 'fixture' && groups.lifecycle.test(name);
       for (const role of route.roles) {
         const fixture = String(index).padStart(3, '0') + '-' + role + '.json';
+        const recordRegistryRow =
+          windowsPreflightReason !== undefined &&
+          name === 'GET /api/accounts/registry' &&
+          (role === 'session' || role === 'bar');
         const contract: Contract =
+          (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
           (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
-        const { request, response: expected } = contract;
+        const { request } = contract;
+        const expected = recordRegistryRow ? structuredClone(contract.response) : contract.response;
+        if (recordRegistryRow) {
+          const registry = expected.body as {
+            providers: { id: string; signIn: { unavailableReason: string } }[];
+          };
+          const antigravity = registry.providers.find((provider) => provider.id === 'antigravity');
+          assert(antigravity, 'the registry fixture has an Antigravity row');
+          assert.equal(antigravity.signIn.unavailableReason, 'tool_missing');
+          antigravity.signIn.unavailableReason = windowsPreflightReason!;
+        }
         const headers = await roleHeaders(rust.url, role);
         let status: number;
         let body: unknown;
@@ -334,6 +385,11 @@ try {
             : normalize({ status, headers: selected, body });
         try {
           assert.deepEqual(actual, expected);
+          if (recordRegistryRow)
+            registryRecords['contract/' + fixture] = {
+              request,
+              response: actual as Contract['response'],
+            };
           counts.match++;
           if (owns(route.path)) owned.match++;
           if (ownsReset) resets.match++;
@@ -391,3 +447,9 @@ assert.equal(owned.failed, 0, 'M6-owned M0 contract');
 assert.equal(resets.failed, 0, 'Rust reset M0 contract');
 if (group !== undefined || process.argv.includes('--require-complete'))
   assert.equal(counts.decline + counts.different, 0, 'Rust M0 cutover gate');
+if (registryOutput !== undefined) {
+  assert.equal(Object.keys(registryRecords).length, 2, 'record both registry roles');
+  await fs.writeFile(registryOutput, JSON.stringify(registryRecords, null, 2) + '\n', {
+    flag: 'wx',
+  });
+}

@@ -15,42 +15,27 @@ use tokio::{net::TcpStream, sync::Semaphore};
 const PROOF: &str = "x-aac-compose-proof";
 const ACCESS: &str = "x-aac-compose-access";
 
+/// The literal second segments `/api/accounts` mounts. A request for one is never matched by
+/// the `:id` pattern: Express reaches the literal router first, and the settings family is
+/// native now, so forwarding it as an account id would answer from the wrong owner.
+const ACCOUNT_LITERALS: &[&str] = &[
+    "add",
+    "analytics",
+    "dashboard",
+    "preferences",
+    "registry",
+    "settings",
+    "signin-command",
+    "signin-jobs",
+    "trash",
+    "visibility",
+];
+
 // Only the cut uses this list. The composition fixture remains a reference for
 // the complete legacy router, including its handling of unknown methods.
 const CUT_ROUTES: &[(&str, &[&str])] = &[
-    #[cfg(not(unix))]
-    ("/api/accounts/dashboard", &["GET"]),
-    (
-        "/api/accounts/settings",
-        if cfg!(unix) {
-            &["PUT"]
-        } else {
-            &["GET", "PUT"]
-        },
-    ),
-    ("/api/accounts/preferences", &["GET", "PUT", "PATCH"]),
-    ("/api/accounts/visibility", &["GET", "PUT", "PATCH"]),
     ("/api/accounts/analytics", &["GET"]),
     ("/api/accounts/analytics/capture", &["GET", "PUT"]),
-    ("/api/accounts/registry", &["GET"]),
-    ("/api/accounts/add", &["POST"]),
-    ("/api/accounts/signin-command", &["GET"]),
-    ("/api/accounts/signin-jobs/:id", &["GET"]),
-    ("/api/accounts/signin-jobs/:id/cancel", &["POST"]),
-    ("/api/accounts/signin-jobs/:id/code", &["POST"]),
-    ("/api/accounts/trash", &["GET"]),
-    ("/api/accounts/trash/:id/purge", &["POST"]),
-    ("/api/accounts/trash/:id/restore", &["POST"]),
-    ("/api/accounts/:id", &["PATCH"]),
-    ("/api/accounts/:id/key", &["PUT"]),
-    ("/api/accounts/:id/open", &["POST"]),
-    #[cfg(not(unix))]
-    ("/api/accounts/:id/recheck", &["POST"]),
-    ("/api/accounts/:id/remove", &["POST"]),
-    ("/api/accounts/:id/signin-again", &["POST"]),
-    ("/api/accounts/:id/reset-claims", &["GET", "POST"]),
-    ("/api/accounts/:id/reset-claims/check", &["POST"]),
-    ("/api/accounts/:id/reset-claims/prepare", &["POST"]),
     ("/api/scoreboard", &["GET"]),
     ("/api/status", &["GET"]),
     ("/api/status/answers", &["GET", "POST"]),
@@ -87,6 +72,7 @@ pub(super) fn cut_route(method: &Method, path: &str) -> bool {
             }
             if (part.starts_with(':') && segment.is_empty())
                 || (!part.starts_with(':') && part != segment)
+                || (part == ":id" && ACCOUNT_LITERALS.contains(&segment))
             {
                 return false;
             }
@@ -101,15 +87,21 @@ mod tests {
 
     #[test]
     fn cut_forwards_only_the_adapter_contract() {
-        assert_eq!(
-            cut_route(&Method::HEAD, "/api/accounts/dashboard"),
-            cfg!(not(unix))
-        );
-        assert_eq!(
-            cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"),
-            cfg!(not(unix))
-        );
-        // G13/G6/G10 and H/J moved to the native public listener: no worker hop remains.
+        // The settings group is native on both platforms; the Windows-only worker groups keep
+        // forwarding there and are already native on Unix.
+        assert!(!cut_route(&Method::GET, "/api/accounts/dashboard"));
+        assert!(!cut_route(&Method::HEAD, "/api/accounts/dashboard"));
+        assert!(!cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"));
+        assert!(!cut_route(&Method::POST, "/api/accounts/example/recheck"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/settings"));
+        assert!(!cut_route(&Method::PUT, "/api/accounts/settings"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/preferences"));
+        assert!(!cut_route(&Method::PUT, "/api/accounts/preferences"));
+        assert!(!cut_route(&Method::PATCH, "/api/accounts/preferences"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/visibility"));
+        assert!(!cut_route(&Method::PUT, "/api/accounts/visibility"));
+        assert!(!cut_route(&Method::PATCH, "/api/accounts/visibility"));
+        // The profile group is native on both platforms: no worker hop remains.
         for (method, path) in [
             (Method::GET, "/api/app-updates/status"),
             (Method::POST, "/api/app-updates/start"),
@@ -125,9 +117,7 @@ mod tests {
         ] {
             assert!(!cut_route(&method, path), "{method} {path}");
         }
-        assert!(cut_route(&Method::PATCH, "/api/accounts/preferences"));
-        // W-resets owns the reset rows; they leave this list with that lane.
-        assert!(cut_route(
+        assert!(!cut_route(
             &Method::POST,
             "/api/accounts/example/reset-claims/prepare"
         ));
@@ -136,9 +126,14 @@ mod tests {
             "/api/status/files/example/nested/file.md"
         ));
         assert!(!cut_route(&Method::GET, "/api/status/files/example"));
-        assert!(!cut_route(&Method::POST, "/api/accounts/dashboard"));
         assert!(!cut_route(&Method::POST, "/api/accounts//recheck"));
         assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/signin-command"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/trash"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/registry"));
+        assert!(!cut_route(&Method::POST, "/api/accounts/add"));
+        assert!(!cut_route(&Method::PUT, "/api/zai:usage/key"));
+        assert!(!cut_route(&Method::PATCH, "/api/accounts/zai:usage"));
         assert!(!cut_route(&Method::GET, "/api/auth/session"));
         assert!(!cut_route(&Method::GET, "/internal/collection/recheck"));
     }

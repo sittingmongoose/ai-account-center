@@ -56,7 +56,7 @@ enum Request {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-enum Edit {
+pub(crate) enum Edit {
     Label {
         id: String,
         label: Option<String>,
@@ -82,7 +82,9 @@ struct Deadline {
     at: Option<i64>,
 }
 
-pub(crate) fn run() -> i32 {
+/// The private compatibility command used by the existing lifecycle adapters.
+#[doc(hidden)]
+pub fn run() -> i32 {
     let mut bytes = Vec::new();
     if io::stdin()
         .take(INPUT_MAX + 1)
@@ -187,7 +189,7 @@ fn evaluate(request: Request) -> Option<Value> {
     })
 }
 
-fn edit_registry(mut registry: Value, edit: Edit) -> Option<Value> {
+pub(crate) fn edit_registry(mut registry: Value, edit: Edit) -> Option<Value> {
     if registry.get("version").and_then(Value::as_u64) != Some(2) {
         return None;
     }

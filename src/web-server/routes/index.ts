@@ -98,7 +98,9 @@ apiRoutes.use('/accounts', accountPreferencesRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
 apiRoutes.use('/accounts', accountAnalyticsRoutes);
 apiRoutes.use('/accounts', accountVisibilityRoutes);
-apiRoutes.use('/accounts', accountLifecycleRoutes);
+if (process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1') {
+  apiRoutes.use('/accounts', accountLifecycleRoutes);
+}
 apiRoutes.use('/auth', authRoutes);
 apiRoutes.use('/views', homeViewRoutes);
 apiRoutes.use('/bar', barRoutes);

@@ -32,6 +32,19 @@ impl Desktop {
             Self::Windows => "windows",
         }
     }
+
+    /// The selector a dashboard query names; the renderer's default is the Mac view.
+    pub fn from_query(uri: &axum::http::Uri) -> Self {
+        let platform = uri.query().and_then(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find(|(key, _)| key == "platform")
+                .map(|(_, value)| value.into_owned())
+        });
+        match platform.as_deref() {
+            Some("windows") => Self::Windows,
+            _ => Self::Mac,
+        }
+    }
 }
 
 /// The exact same immutable dashboard generations the private Home and Accounts routes render.
@@ -41,6 +54,7 @@ pub struct AccountUsageCache {
     pub(crate) feeds: Feeds,
     refresh: Arc<tokio::sync::Notify>,
     last_refresh: Arc<std::sync::atomic::AtomicU64>,
+    published: Arc<tokio::sync::Notify>,
 }
 
 impl Default for AccountUsageCache {
@@ -49,6 +63,7 @@ impl Default for AccountUsageCache {
             feeds: Feeds::new(),
             refresh: Arc::default(),
             last_refresh: Arc::default(),
+            published: Arc::default(),
         }
     }
 }
@@ -80,7 +95,33 @@ impl AccountUsageCache {
             "facts": facts,
         }));
         let held = self.feeds.put_dashboard(&source, &body)?;
+        self.published.notify_one();
         Ok(held["generation"] == generation)
+    }
+
+    /// Wait, bounded, for a selector's first generation after a refresh request. A cold
+    /// reader asks for one so the Accounts page does not answer before the first pass.
+    pub async fn await_generation(
+        &self,
+        desktop: Desktop,
+        secure: bool,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let source = source(desktop.word(), secure);
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.feeds.latest(&source).is_ok() {
+                return true;
+            }
+            let wait = self.published.notified();
+            tokio::pin!(wait);
+            tokio::select! {
+                _ = wait => {}
+                _ = tokio::time::sleep_until(deadline) => {
+                    return self.feeds.latest(&source).is_ok();
+                }
+            }
+        }
     }
 
     /// Ask the native sampler to start a fresh generation, with the dashboard's

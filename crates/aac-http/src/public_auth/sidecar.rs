@@ -45,6 +45,7 @@ impl Sidecar {
         root: &Path,
         public: SocketAddr,
         native_collection: bool,
+        private_lifecycle: bool,
     ) -> io::Result<Option<Self>> {
         let explicit = std::env::var_os("AAC_TS_SIDECAR");
         if explicit.as_deref() == Some(std::ffi::OsStr::new("off")) {
@@ -76,7 +77,12 @@ impl Sidecar {
             .env("CCS_DIR", root)
             .env("AAC_RUST_CUT_WORKER", "1")
             .env("AAC_CUT_HUB_DIRECTORY", cache_directory.path())
-            .env("AAC_CUT_PUBLIC_OWNERS", if cfg!(unix) { "1" } else { "0" })
+            .env("AAC_CUT_PUBLIC_OWNERS", "1")
+            .env("AAC_CUT_PUBLIC_LIFECYCLE", "1")
+            .env(
+                "AAC_CUT_PRIVATE_LIFECYCLE",
+                if private_lifecycle { "1" } else { "0" },
+            )
             .env(
                 "AAC_CUT_PUBLIC_COLLECTION",
                 if native_collection { "1" } else { "0" },
