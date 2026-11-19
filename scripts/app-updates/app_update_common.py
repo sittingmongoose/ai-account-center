@@ -29,7 +29,7 @@ NO_AUTO_UPDATE = {
 
 
 class UpdateFailure(Exception):
-    def __init__(self, code="update_failed", output="", exit_code=None, cause=None, reason=None):
+    def __init__(self, code="update_failed", output="", exit_code=None, cause=None, reason=None, quota_reset=None):
         super().__init__(code)
         self.code = code
         # Diagnostic text for in-memory classification only; it is never emitted as is
@@ -40,6 +40,9 @@ class UpdateFailure(Exception):
         # A fixed cause class (CAUSES) and a fixed reason word, when the raiser knows better than the code.
         self.cause = cause
         self.reason = reason
+        # The reset time Muse itself printed with its used-up-subscription answer,
+        # when the failure carries one: one line, bounded, verbatim (never computed).
+        self.quota_reset = quota_reset
 
 
 # ---------------------------------------------------------------------------

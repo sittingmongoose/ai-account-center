@@ -68,6 +68,8 @@ export interface AppUpdateResult {
   forcedStops: number;
   /** The newest build a `held` row did not install, when the helper could read it. */
   heldVersion?: string;
+  /** The reset time Muse itself printed with its used-up-quota note; verbatim, never computed. */
+  quotaReset?: string;
   /** The two ACP adapters a `t3-acp-adapters` row covers; each carries its own versions. */
   parts?: AdapterPart[];
   /** Other Codex or Claude copies beside a managed install; present only when there are some. */
@@ -239,7 +241,12 @@ export function normalizeAppUpdateResults(
 }
 
 /** A row's words; "quit first" and "in use" name the app, so the page says what to close. */
-function codeWords(code: MessageCode, appId: UpdateAppId, parts: AdapterPart[]): string {
+function codeWords(
+  code: MessageCode,
+  appId: UpdateAppId,
+  parts: AdapterPart[],
+  quotaReset: string | null
+): string {
   if (code === 'quit_first')
     return `Quit ${UPDATE_APP_LABELS[appId]} to finish its update, then run Update apps again.`;
   // An adapters row that holds a part names it; without one (a row saved before parts held) the words stay generic.
@@ -247,15 +254,24 @@ function codeWords(code: MessageCode, appId: UpdateAppId, parts: AdapterPart[]):
     return adapterInUseMessage(parts);
   if (code === 'in_use')
     return `${UPDATE_APP_LABELS[appId]} is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.`;
+  if (code === 'muse_quota_exhausted' || code === 'muse_quota_current')
+    return museQuotaWords(code, quotaReset);
   return MESSAGES[code];
 }
 
-/** What a row's words may depend on besides its code: its strays, its own version and its adapter parts. */
+/** The words for a Muse row whose catalog warm met a used-up quota; the reset time is Muse's own. */
+function museQuotaWords(code: MessageCode, reset: string | null): string {
+  const lead = code === 'muse_quota_current' ? 'Muse is current.' : 'Updated Muse.';
+  return `${lead} Its quota is used up${reset ? ` until ${reset}` : ''}, so the new models appear after its next session.`;
+}
+
+/** What a row's words may depend on besides its code: its strays, its own version, its adapter parts and its quota note. */
 export interface MessageContext {
   strays?: AppUpdateStray[];
   version?: string | null;
   parts?: AdapterPart[];
   restartedProcesses?: number;
+  quotaReset?: string | null;
 }
 
 /**
@@ -265,12 +281,18 @@ export interface MessageContext {
 export function messageFor(
   code: MessageCode,
   appId: UpdateAppId,
-  { strays = [], version = null, parts = [], restartedProcesses }: MessageContext = {}
+  {
+    strays = [],
+    version = null,
+    parts = [],
+    restartedProcesses,
+    quotaReset = null,
+  }: MessageContext = {}
 ): string {
   const words =
     code === 'updated' && appId === 'antigravity-cli' && restartedProcesses === 0
       ? 'Updated Antigravity. Copies already open keep the old version until restarted.'
-      : codeWords(code, appId, parts);
+      : codeWords(code, appId, parts, quotaReset);
   const older = olderShadow(strays, version);
   if (!older) return words;
   // Some words end without a full stop ("Skipped: cancelled"); the sentence needs one before it.
@@ -289,6 +311,7 @@ export function rowMessage(
     strays: rowStrays(row, appId),
     version: safeVersion(row.version) ?? safeVersion(row.previousVersion),
     parts: appId === 't3-acp-adapters' ? normalizeParts(row.parts) : [],
+    quotaReset: typeof row.quotaReset === 'string' ? row.quotaReset : null,
   });
 }
 
@@ -301,6 +324,25 @@ function processCount(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 10000
     ? value
     : 0;
+}
+
+/** The two codes a Muse row may carry its quota note on; the words then name the reset time. */
+const MUSE_QUOTA_CODES: readonly MessageCode[] = ['muse_quota_exhausted', 'muse_quota_current'];
+
+/**
+ * The reset time a Muse quota row may carry: Muse's own words, one line, bounded (null when absent).
+ * Undefined when the field is misplaced or malformed: only the helper's two quota codes carry it,
+ * and a time that long or full of control characters is not one Muse printed.
+ */
+function quotaResetOf(row: Record<string, unknown>, code: MessageCode, appId: UpdateAppId) {
+  const value: unknown = row.quotaReset;
+  if (value === undefined) return null;
+  const printable =
+    typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= 64 &&
+    !/[\u0000-\u001f\u007f]/.test(value);
+  return appId === 'muse-code' && MUSE_QUOTA_CODES.includes(code) && printable ? value : undefined;
 }
 
 /** One helper row for a known app; anything unexpected becomes a fixed helper_invalid row. */
@@ -319,6 +361,9 @@ export function normalizeAppUpdateRow(
   const code = row.messageCode as MessageCode;
   const count = processCount(row.restartedProcesses);
   const forced = processCount(row.forcedStops);
+  // The quota note rides only the two Muse quota codes, and only when Muse printed it well-formed.
+  const quotaReset = quotaResetOf(row, code, appId);
+  if (quotaReset === undefined) return failure(platform, appId, 'helper_invalid');
   // The Linux computers restart T3 through its systemd service; the Mac and Windows its desktop
   // app. Windows alone also closes and reopens a running Codex, Claude or ZCode desktop app.
   const linux = HOST_OS[platform] === 'linux';
@@ -402,6 +447,10 @@ export function normalizeAppUpdateRow(
     // warm failed); both say the catalog did not refresh.
     (code === 'model_catalog_unrefreshed' &&
       (appId !== 'muse-code' || (row.status !== 'restart_failed' && row.status !== 'failed'))) ||
+    // A quota answer excuses only the catalog warm, never the install: the binary
+    // moved (updated) or was already current; either way the job does not fail.
+    (code === 'muse_quota_exhausted' && (appId !== 'muse-code' || row.status !== 'updated')) ||
+    (code === 'muse_quota_current' && (appId !== 'muse-code' || row.status !== 'current')) ||
     (code === 'cursor_updated' && (appId !== 'cursor-cli' || row.status !== 'updated')) ||
     (code === 'cursor_update_staged' &&
       (appId !== 'cursor-cli' ||
@@ -457,6 +506,7 @@ export function normalizeAppUpdateRow(
     restartedProcesses: count,
     forcedStops: forced,
     ...(heldVersion ? { heldVersion } : {}),
+    ...(quotaReset ? { quotaReset } : {}),
     ...(parts ? { parts } : {}),
     ...(strays.length ? { strays } : {}),
     ...(diagnostics ? { diagnostics } : {}),
