@@ -1172,6 +1172,81 @@ describe('analytics remote sources', () => {
     }
   );
 
+  it('keeps a mirror owner while its cache file is missing, so hours never count twice (history-L5)', async () => {
+    const orphan = createHash('sha256').update('agent-orphan-l5.jsonl').digest('hex');
+    const mirrorFile = 'aa'.repeat(32);
+    const claudeLogNames = () => ({ originals: new Set<string>(), complete: true });
+    const options = {
+      hosts,
+      cacheDir: cache,
+      claudeLogNames,
+      runHelper: async (
+        _alias: string,
+        host: AnalyticsRemoteHost,
+        request: { kinds: string[]; fingerprints: Record<string, Record<string, unknown>> }
+      ) => {
+        if (!request.kinds.includes('claude'))
+          return parseAnalyticsRemoteResponse(JSON.stringify(response({ rows: [], kinds: {} })));
+        const prints: Record<string, unknown> = {};
+        if (host === 'mac' || host === 'windows')
+          prints[mirrorFile] = {
+            size: 10,
+            mtimeMs: 20,
+            claudeName: orphan,
+            claudeMirror: true,
+            claudeGroup: orphan,
+          };
+        const fresh = Object.keys(prints).filter((key) => !request.fingerprints.claude?.[key]);
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              kinds: { claude: { state: 'ok', fingerprints: prints, replacedFiles: fresh } },
+              rows: fresh.map((f) => row({ k: 'claude', f, n: 1, c: 0 })),
+              srows: fresh.map((f) => srow({ k: 'claude', f, n: 1, c: 0 })),
+            })
+          )
+        );
+      },
+    };
+    const count = (answer: Awaited<ReturnType<typeof loadAnalyticsRemoteSources>>) =>
+      answer.results
+        .filter((r) => r.tool === 'claude')
+        .reduce((sum, r) => sum + (r.data.eventCount ?? 0), 0);
+    const claudeRowCount = (
+      answer: Awaited<ReturnType<typeof loadAnalyticsRemoteSources>>,
+      host: string
+    ) => answer.states.find((s) => s.host === host && s.tool === 'claude')?.rowCount ?? 0;
+
+    // Both hosts hold one orphan mirror; the fixed order elects the Mac and saves its ownership.
+    const first = await loadAnalyticsRemoteSources(MIN_DATE, options);
+    expect(count(first)).toBe(1);
+    expect(claudeRowCount(first, 'mac')).toBe(1);
+    expect(claudeRowCount(first, 'windows')).toBe(0);
+    const ownersFile = path.join(cache, 'analytics-remote-v1', 'claude-mirror-owners.json');
+    expect(JSON.parse(fs.readFileSync(ownersFile, 'utf8'))).toEqual({
+      version: 1,
+      owners: { [orphan]: 'mac' },
+    });
+
+    // The Mac's cache file goes missing: the saved owner keeps the mirror counted nowhere
+    // (never handed to Windows), so no hours settle on a second owner while the first is out.
+    const macCache = path.join(cache, 'analytics-remote-v1', 'mac.json');
+    const saved = fs.readFileSync(macCache);
+    fs.rmSync(macCache);
+    const missing = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache, claudeLogNames });
+    expect(count(missing)).toBe(0);
+    expect(claudeRowCount(missing, 'windows')).toBe(0);
+
+    // The file returns: the Mac owns its mirror again and Windows never counted it, so the
+    // same hours were published once, never twice.
+    fs.writeFileSync(macCache, saved);
+    const back = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache, claudeLogNames });
+    expect(count(back)).toBe(1);
+    expect(claudeRowCount(back, 'mac')).toBe(1);
+    expect(claudeRowCount(back, 'windows')).toBe(0);
+    expect(JSON.parse(fs.readFileSync(ownersFile, 'utf8')).owners).toEqual({ [orphan]: 'mac' });
+  });
+
   it('merges per-host aggregates and converts them to worker results', async () => {
     const { results, states } = await loadAnalyticsRemoteSources(MIN_DATE, {
       hosts,
