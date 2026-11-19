@@ -1247,8 +1247,13 @@ export class StatusAnswers {
 
   /** R4: the key's public facts from the Rust signer, with the TypeScript key as fallback. */
   private async answerKeyInfo(): Promise<{ publicKeyPem: string; keyId: string }> {
-    return (await answerKeyInfoNative(this.storeDir())) ?? this.answerKey();
+    const info = (await answerKeyInfoNative(this.storeDir())) ?? this.answerKey();
+    this.knownKeyId = info.keyId;
+    return info;
   }
+
+  /** The key id last read: every ring follows its record's share write, which read it. */
+  private knownKeyId: string | null = null;
 
   private async signAnswerWith(unsigned: UnsignedAnswer): Promise<SignedAnswer> {
     return (
@@ -1636,7 +1641,13 @@ export class StatusAnswers {
             (this.deps.doorbell ?? pmMailDoorbell())(
               group.to,
               ringSubject(records),
-              ringBody(group.sendId, records, (await this.answerKeyInfo()).keyId),
+              // No await when the id is known (always, after the share write): an await here would let
+              // the send return before its ring goes out.
+              ringBody(
+                group.sendId,
+                records,
+                this.knownKeyId ?? (await this.answerKeyInfo()).keyId
+              ),
               Date.now() + this.timing.ringMs
             ),
             this.timing.ringMs,

@@ -826,15 +826,24 @@ export class StatusService {
       registry: answer.registry,
       docs: answer.docs,
     };
+    // The same publication as a local scan (shared answers, then one staged presentation),
+    // over the service's snapshots; report captures run in the service.
+    const { reports, docs } = this.ownedInputs;
     try {
-      const { reports, docs } = this.ownedInputs;
-      await this.publishStatus({ reports, docs, shared: this.answers.sharedAnswersFor(reports.cards) });
+      await this.answers.scanSharedAnswers(reports.cards, this.readAnswerHistory([]).answers);
+      await this.publishStatus({
+        reports,
+        docs,
+        shared: this.answers.sharedAnswersFor(reports.cards),
+      });
       this.pushOwnedPins();
     } catch {
-      /* The panel keeps its last composed view. */
+      /* Keep the last published presentation. */
+      this.changed();
+    } finally {
+      this.answers.pruneSharedAnswers(reports.cards);
     }
     await this.composeSpendByStream();
-    this.changed();
   }
 
   /** The service stayed down: the stateless share readers catch up in one cycle (design 1.2). */
