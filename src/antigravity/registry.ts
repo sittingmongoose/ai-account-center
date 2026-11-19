@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { writeProviderFile } from '../shared/private-file-lease';
 import { createHash, randomBytes } from 'crypto';
 import {
   HOLDER_RECORD_BYTES,
@@ -603,13 +604,21 @@ export class AntigravityProfileRegistry {
   private readonly readOnly: boolean;
   private readonly heartbeatMs: number;
   private lockHeld = false;
+  private heldDirectory: DirectoryIdentity | null = null;
 
   /**
    * `readOnly` opens existing storage without creating any folder; such a
    * registry reads but never locks or writes. It throws when the profiles
    * folder does not exist. `heartbeatMs` exists for tests.
    */
-  constructor(ccsDirectory: string, options: { readOnly?: boolean; heartbeatMs?: number } = {}) {
+  constructor(
+    private readonly ccsDirectory: string,
+    private readonly options: {
+      readOnly?: boolean;
+      heartbeatMs?: number;
+      lifecycleWrites?: boolean;
+    } = {}
+  ) {
     this.readOnly = options.readOnly === true;
     this.heartbeatMs = options.heartbeatMs ?? LOCK_HEARTBEAT_MS;
     this.profilesDirectory = path.join(ccsDirectory, 'antigravity-profiles');
@@ -649,6 +658,7 @@ export class AntigravityProfileRegistry {
     const lock = path.join(this.profilesDirectory, LOCK_NAME);
     const held = this.acquireLock(lock);
     this.lockHeld = true;
+    this.heldDirectory = held.identity;
     // The heartbeat goes to our own record by its descriptor, never by path,
     // so a lock that was taken over is never refreshed on another's behalf.
     const heartbeat = setInterval(() => {
@@ -664,6 +674,7 @@ export class AntigravityProfileRegistry {
       return await operation();
     } finally {
       this.lockHeld = false;
+      this.heldDirectory = null;
       clearInterval(heartbeat);
       this.releaseLock(lock, held);
     }
@@ -793,12 +804,27 @@ export class AntigravityProfileRegistry {
     }
   }
 
+  private publishLifecycleFile(
+    type: ['antigravity-index', string] | ['antigravity-credential', string, string],
+    filename: string,
+    bytes: Buffer,
+    parent: DirectoryIdentity
+  ): void {
+    if (this.options.lifecycleWrites && this.heldDirectory) {
+      const marker = path.join(this.profilesDirectory, LOCK_NAME);
+      assertDirectory(marker, this.heldDirectory);
+      if (writeProviderFile(this.ccsDirectory, marker, type, bytes) === 'committed') return;
+    }
+    writeExclusive(filename, bytes, parent);
+  }
+
   private publish(state: RegistryState): void {
     if (!this.lockHeld) throw new PrivateStorageError('unsafe');
     const next = { ...state, revision: state.revision + 1 };
     const name = `registry-${String(next.revision).padStart(12, '0')}.json`;
     validateState(next);
-    writeExclusive(
+    this.publishLifecycleFile(
+      ['antigravity-index', String(next.revision).padStart(12, '0')],
       path.join(this.profilesDirectory, name),
       Buffer.from(JSON.stringify(next)),
       this.profilesIdentity
@@ -926,7 +952,12 @@ export class AntigravityProfileRegistry {
         throw new PrivateStorageError('corrupt');
       }
     } else {
-      writeExclusive(filename, credential.bytes, hostIdentity);
+      this.publishLifecycleFile(
+        ['antigravity-credential', profileId, fingerprint],
+        filename,
+        credential.bytes,
+        hostIdentity
+      );
     }
     const record: ProfileRecord = {
       id: profileId,

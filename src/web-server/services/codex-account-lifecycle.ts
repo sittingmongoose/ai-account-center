@@ -1,5 +1,7 @@
 import { createHash } from 'crypto';
 import fs from 'fs/promises';
+import { getCcsDir } from '../../utils/config-manager';
+import { canonicalLeaseRoot, writeProviderFile } from '../../shared/private-file-lease';
 import path from 'path';
 import * as lockfile from 'proper-lockfile';
 import { CodexProfileRegistry } from '../../codex-auth/codex-profile-registry';
@@ -32,6 +34,7 @@ import {
 import {
   readCodexLogin,
   readCodexLoginIdentity,
+  readCodexLoginSnapshot,
   sameCodexIdentity,
   sameText as same,
   type CodexLoginIdentity,
@@ -91,12 +94,20 @@ const PASSED_ENV = [
 ];
 
 export type CodexRemoveRefusal =
-  'account_active' | 'account_default' | 'last_account' | 'activation_running' | 'signin_running';
+  | 'account_active'
+  | 'account_default'
+  | 'last_account'
+  | 'activation_running'
+  | 'signin_running';
 
 export class CodexLifecycleError extends Error {
   constructor(
     readonly code:
-      CodexRemoveRefusal | 'unknown_account' | 'remove_failed' | 'id_in_use' | 'tool_missing'
+      | CodexRemoveRefusal
+      | 'unknown_account'
+      | 'remove_failed'
+      | 'id_in_use'
+      | 'tool_missing'
   ) {
     super(code);
     this.name = 'CodexLifecycleError';
@@ -131,7 +142,7 @@ export class CodexAccountLifecycle {
   }
 
   registry(): CodexProfileRegistry {
-    return this.deps.registry?.() ?? new CodexProfileRegistry();
+    return this.deps.registry?.() ?? new CodexProfileRegistry(undefined, true);
   }
 
   private instancesDir(): string {
@@ -306,6 +317,25 @@ export class CodexAccountLifecycle {
     }
   }
 
+  private moveProfile(from: string, to: string): boolean {
+    const root = canonicalLeaseRoot(getCcsDir());
+    const instances = path.join(root, 'codex-instances');
+    if (
+      canonicalLeaseRoot(path.dirname(from)) !== instances ||
+      canonicalLeaseRoot(path.dirname(to)) !== instances
+    )
+      return false;
+    const home = canonicalLeaseRoot(this.codexHome());
+    return (
+      writeProviderFile(
+        root,
+        path.join(home, '.ccs-activation.lock'),
+        ['codex-move', home, path.basename(from), path.basename(to)],
+        ''
+      ) === 'committed'
+    );
+  }
+
   /** Add: device-code sign-in into staging, then rename into `codex-instances/<name>`. */
   addFlow(name: string): SignInFlowSpec {
     return this.flow('add', name, async (jobId, control) => {
@@ -318,7 +348,7 @@ export class CodexAccountLifecycle {
         }
         if (await this.nameInUse(name)) throw new SignInJobError('write_failed');
         const target = this.profileDir(name);
-        await fs.rename(staging, target);
+        if (!this.moveProfile(staging, target)) await fs.rename(staging, target);
         try {
           this.registry().createProfile(name, {
             created: new Date(this.now()).toISOString(),
@@ -328,7 +358,11 @@ export class CodexAccountLifecycle {
             ...(login.accountId ? { account_id: login.accountId } : {}),
           });
         } catch {
-          await fs.rename(target, staging).catch(() => undefined);
+          try {
+            if (!this.moveProfile(target, staging)) await fs.rename(target, staging);
+          } catch {
+            /* The job remains failed and the owned folder is preserved for recovery. */
+          }
           throw new SignInJobError('write_failed');
         }
         return login;
@@ -343,8 +377,9 @@ export class CodexAccountLifecycle {
   signInAgainFlow(name: string): SignInFlowSpec {
     return this.flow('signin-again', name, async (jobId, control) => {
       const staged = path.join(this.stagingDir(jobId), 'auth.json');
-      const login = await readCodexLogin(staged);
-      if (!login) throw new SignInJobError('write_failed');
+      const snapshot = await readCodexLoginSnapshot(staged);
+      if (!snapshot) throw new SignInJobError('write_failed');
+      const { identity: login, bytes: content } = snapshot;
       return this.commitUnderLock(control, async () => {
         const registry = this.registry();
         if (!registry.hasProfile(name)) throw new SignInJobError('write_failed');
@@ -356,12 +391,6 @@ export class CodexAccountLifecycle {
           throw new SignInJobError('duplicate_identity');
         }
         const liveAuth = await this.liveLoginToRenew(name, authPath, login);
-        let content: Buffer;
-        try {
-          content = await fs.readFile(staged);
-        } catch {
-          throw new SignInJobError('write_failed');
-        }
         await this.installLogin(`${process.pid}.${jobId}`, content, authPath, liveAuth);
         try {
           registry.updateProfile(name, {
@@ -419,6 +448,24 @@ export class CodexAccountLifecycle {
     authPath: string,
     liveAuth: string | null
   ): Promise<void> {
+    const root = canonicalLeaseRoot(getCcsDir());
+    const profileFolder = path.dirname(authPath);
+    if (canonicalLeaseRoot(path.dirname(profileFolder)) === path.join(root, 'codex-instances')) {
+      const home = canonicalLeaseRoot(this.codexHome());
+      try {
+        const result = writeProviderFile(
+          root,
+          path.join(home, '.ccs-activation.lock'),
+          ['codex-login', home, path.basename(profileFolder), liveAuth ? 'live' : 'saved'],
+          content
+        );
+        if (result === 'committed') return;
+        if (result === 'partial') throw new SignInJobError('live_login_not_updated');
+      } catch (error) {
+        if (error instanceof SignInJobError) throw error;
+        throw new SignInJobError('write_failed');
+      }
+    }
     const temporaries: string[] = [];
     const stage = async (target: string, bytes: Buffer): Promise<string> => {
       const temporary = `${target}.tmp.${tag}.${temporaries.length}`;
@@ -516,7 +563,10 @@ export class CodexAccountLifecycle {
       const registry = this.registry();
       if (!registry.hasProfile(name)) throw new CodexLifecycleError('unknown_account');
       if (registry.listProfiles().length <= 1) throw new CodexLifecycleError('last_account');
-      await removeCodexProfileUnderLock(registry, name, home, { warn: () => undefined });
+      await removeCodexProfileUnderLock(registry, name, home, {
+        warn: () => undefined,
+        move: (from, to) => this.moveProfile(from, to),
+      });
     } catch (error) {
       if (error instanceof CodexLifecycleError) throw error;
       if (error instanceof CodexProfileRemovalError) {

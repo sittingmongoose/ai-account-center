@@ -18,10 +18,7 @@ import {
 } from '../../../src/web-server/services/account-lifecycle-runtime';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
-import type {
-  NativeCredential,
-  VerifiedIdentity,
-} from '../../../src/antigravity/types';
+import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 import { SignInJobStopped } from '../../../src/web-server/services/signin-jobs';
 import type { SignInPreflight } from '../../../src/antigravity/signin-sandbox';
 import { claimAntigravitySignInMarker } from '../../../src/antigravity/signin-marker';
@@ -165,8 +162,8 @@ describe('antigravityJobFlow', () => {
       accountId: 'antigravity:profile:party',
       email: 'party@example.com',
       plan: 'Google AI Pro',
-      if (nativeMode) expect(nativeWrites).toBeGreaterThan(0);
-  });
+    });
+    if (nativeMode) expect(nativeWrites).toBeGreaterThan(0);
     expect(agy.hasProfile('party')).toBe(true);
     expect(refreshed).toEqual([{ ccsDir, home }]);
   });
@@ -207,7 +204,9 @@ describe('antigravityJobFlow', () => {
     });
     const command = await flow.prepare('job_0000000000000005');
     writeToken(command.args[2], 'party');
-    await expect(flow.complete('job_0000000000000005', { stopped: () => false })).rejects.toMatchObject({
+    await expect(
+      flow.complete('job_0000000000000005', { stopped: () => false })
+    ).rejects.toMatchObject({
       code: 'duplicate_identity',
     });
   });
@@ -327,7 +326,9 @@ describe('antigravitySignInFlow gate', () => {
     expect(antigravitySignInFlow('/home/b', 1_000, counting)).toBe(null);
     expect(calls).toBe(2);
     // Past the TTL the cached home probes again.
-    expect(antigravitySignInFlow('/home/b', 1_000 + ANTIGRAVITY_FLOW_CACHE_MS, counting)).toBe(null);
+    expect(antigravitySignInFlow('/home/b', 1_000 + ANTIGRAVITY_FLOW_CACHE_MS, counting)).toBe(
+      null
+    );
     expect(calls).toBe(3);
     // An explicit reset drops the cache.
     resetAntigravitySignInFlowCache();

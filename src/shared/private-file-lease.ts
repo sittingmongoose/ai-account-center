@@ -54,6 +54,46 @@ export function commitWithFileLease(
     throw new RegisteredWriteUnclearError('The private file write could not be confirmed.');
   throw new ConfigError('The private file could not be saved safely.');
 }
+type ProviderWrite =
+  | ['codex-metadata']
+  | ['codex-move', home: string, previous: string, next: string]
+  | ['codex-login', home: string, profile: string, scope: 'saved' | 'live']
+  | ['antigravity-credential', profile: string, fingerprint: string]
+  | ['antigravity-index', generation: string];
+
+/** Delegate a prevalidated provider write while the caller still owns its original lock. */
+export function writeProviderFile(
+  root: string,
+  marker: string,
+  operation: ProviderWrite,
+  input: string | Buffer
+): 'unavailable' | 'committed' | 'partial' {
+  const canonical = canonicalLeaseRoot(root);
+  const writer = writers.get(canonical);
+  if (!writer) return 'unavailable';
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  const fd = fs.openSync(marker, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  try {
+    const [name, ...args] = operation;
+    const result = spawnSync(writer.binary, ['--provider-write', name, canonical, ...args], {
+      input,
+      stdio: ['pipe', 'ignore', fd],
+      timeout: 5000,
+      windowsHide: true,
+    });
+    if (result.status === 0) {
+      writer.committed();
+      return 'committed';
+    }
+    if (result.status === 78 && name === 'codex-login') return 'partial';
+    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT')
+      return 'unavailable';
+    throw new ConfigError('The provider file could not be saved safely.');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
 export function rememberFileLeaseBinary(root: string, binary: string, writesOn = false): void {

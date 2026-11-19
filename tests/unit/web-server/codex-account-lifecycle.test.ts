@@ -483,48 +483,51 @@ describe('Codex Sign in again', () => {
     }
   });
 
-  it.skipIf(nativeMode)('puts the saved login back when the live login cannot be replaced', async () => {
-    addProfile('party', 'party@example.com', 'acct-party');
-    addProfile('gmail', 'gmail@example.com');
-    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
-    const liveAuth = path.join(codexHome, 'auth.json');
-    fs.copyFileSync(authPath, liveAuth);
-    const before = { saved: fs.readFileSync(authPath), live: fs.readFileSync(liveAuth) };
-    const realRename = fsPromises.rename;
-    let failRestore = false;
-    const rename = spyOn(fsPromises, 'rename').mockImplementation((async (from, to) => {
-      if (to === liveAuth) throw Object.assign(new Error('EIO'), { code: 'EIO' });
-      if (failRestore && to === authPath && String(from).endsWith('.2')) {
-        throw Object.assign(new Error('EIO'), { code: 'EIO' });
+  it.skipIf(nativeMode)(
+    'puts the saved login back when the live login cannot be replaced',
+    async () => {
+      addProfile('party', 'party@example.com', 'acct-party');
+      addProfile('gmail', 'gmail@example.com');
+      const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
+      const liveAuth = path.join(codexHome, 'auth.json');
+      fs.copyFileSync(authPath, liveAuth);
+      const before = { saved: fs.readFileSync(authPath), live: fs.readFileSync(liveAuth) };
+      const realRename = fsPromises.rename;
+      let failRestore = false;
+      const rename = spyOn(fsPromises, 'rename').mockImplementation((async (from, to) => {
+        if (to === liveAuth) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        if (failRestore && to === authPath && String(from).endsWith('.2')) {
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        }
+        return realRename(from, to);
+      }) as typeof fsPromises.rename);
+      try {
+        const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+        const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+        expect(done).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
+        expect(fs.readFileSync(authPath)).toEqual(before.saved);
+        expect(fs.readFileSync(liveAuth)).toEqual(before.live);
+        expect(fs.readdirSync(codexHome)).toEqual(['auth.json']);
+        expect(fs.readdirSync(path.dirname(authPath))).toEqual(['auth.json']);
+        // When even the way back fails, the job says what landed.
+        failRestore = true;
+        const again = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+        const partial = await finished(again, again.start(lifecycle().signInAgainFlow('party')).id);
+        expect(partial).toMatchObject({
+          state: 'failed',
+          error: { code: 'live_login_not_updated' },
+        });
+        expect(JSON.parse(fs.readFileSync(authPath, 'utf8')).tokens.access_token).toBe(
+          'access-renewed'
+        );
+        expect(fs.readFileSync(liveAuth)).toEqual(before.live);
+        expect(fs.readdirSync(codexHome)).toEqual(['auth.json']);
+        expect(fs.readdirSync(path.dirname(authPath))).toEqual(['auth.json']);
+      } finally {
+        rename.mockRestore();
       }
-      return realRename(from, to);
-    }) as typeof fsPromises.rename);
-    try {
-      const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
-      const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
-      expect(done).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
-      expect(fs.readFileSync(authPath)).toEqual(before.saved);
-      expect(fs.readFileSync(liveAuth)).toEqual(before.live);
-      expect(fs.readdirSync(codexHome)).toEqual(['auth.json']);
-      expect(fs.readdirSync(path.dirname(authPath))).toEqual(['auth.json']);
-      // When even the way back fails, the job says what landed.
-      failRestore = true;
-      const again = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
-      const partial = await finished(again, again.start(lifecycle().signInAgainFlow('party')).id);
-      expect(partial).toMatchObject({
-        state: 'failed',
-        error: { code: 'live_login_not_updated' },
-      });
-      expect(JSON.parse(fs.readFileSync(authPath, 'utf8')).tokens.access_token).toBe(
-        'access-renewed'
-      );
-      expect(fs.readFileSync(liveAuth)).toEqual(before.live);
-      expect(fs.readdirSync(codexHome)).toEqual(['auth.json']);
-      expect(fs.readdirSync(path.dirname(authPath))).toEqual(['auth.json']);
-    } finally {
-      rename.mockRestore();
     }
-  });
+  );
 });
 
 describe('Codex Remove', () => {
