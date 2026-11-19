@@ -33,6 +33,9 @@ import { rustViewBytes, type RustViewBytes } from './rust-view-reply';
 import { canonical, orderedLike, principal, validReply } from './rust-service-values';
 import { logger, RustSupervisor } from './rust-service-supervisor';
 export type { VerifiedRustPrincipal } from './rust-service-transport';
+
+/** R4: the owned inputs rows' budget (rust-service-routes.json `status-inputs`, `scoreboard-inputs`). */
+export const RUST_INPUTS_DEADLINE_MS = 5000;
 export { skeletonDiagnostics } from './rust-service-values';
 export { rustServiceMode, type RustServiceMode } from './rust-service-supervisor';
 
@@ -855,7 +858,17 @@ export class RustService extends RustSupervisor {
     const lease = this.lease;
     if (!lease || this.stopped || this.mode !== 'on') return null;
     try {
-      const result = await requestRust(lease.connection, path, FRONT_DOOR_PRINCIPAL, this.active);
+      // R4: the owned inputs (every report, or the whole runs state) are far past a GET's 64 KiB
+      // and, on a large home, past the hop's 500 ms: a view's cap and the inputs rows' budget.
+      const result = await requestRust(
+        lease.connection,
+        path,
+        FRONT_DOOR_PRINCIPAL,
+        this.active,
+        undefined,
+        'GET',
+        { cap: RUST_VIEW_CAP, deadlineMs: RUST_INPUTS_DEADLINE_MS }
+      );
       this.replied(lease);
       return result.status === 200 ? result.body : null;
     } catch (error) {

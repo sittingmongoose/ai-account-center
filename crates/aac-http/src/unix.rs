@@ -1088,11 +1088,16 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let (Some(feed), false, true) = (feed, query, body.is_empty()) else {
                 return decline(row.handler, Decline::Shape);
             };
-            match owner.answer(&feed).await {
-                Ok((bytes, etag)) => {
+            // Its own task: a compose that outlives this request's budget still finishes and
+            // fills the owner's view cache, so the next request for the filter is a cache hit
+            // (today's handler answers this one).
+            let answering = tokio::spawn(async move { owner.answer(&feed).await });
+            match answering.await {
+                Ok(Ok((bytes, etag))) => {
                     crate::view_reply::respond_tagged("scoreboard", 1, bytes, &etag)
                 }
-                Err(reason) => decline(row.handler, reason),
+                Ok(Err(reason)) => decline(row.handler, reason),
+                Err(_) => decline(row.handler, Decline::Internal),
             }
         }
         // R4: the owned Status snapshots the front door forwards as the fed generations

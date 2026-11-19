@@ -500,7 +500,34 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/cli/antigravity.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/cli/bar.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/cli/codex_auth.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/cli/config_write.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/cli/native_app_paths.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -647,6 +674,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/status_run.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/store_host.rs",
       "kind": "internal",
       "evidence": [],
@@ -727,6 +760,13 @@
     },
     {
       "file": "crates/aac-http/tests/socket.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-http/tests/status_produce_bytes.rs",
       "kind": "table",
       "evidence": [
         "table"
@@ -995,6 +1035,61 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/produce/answered.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/produce/answers_feed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/produce/browsers.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "crates/aac-status/src/produce/facts.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/produce/machines.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/produce/pinned_input.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/produce/simlock.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/produce/sources.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/produce/usage.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/src/read_context.rs",
       "kind": "internal",
       "evidence": [],
@@ -1202,6 +1297,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/tests/secret_filter.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/tests/share_parity.rs",
       "kind": "table",
       "evidence": [
@@ -1219,6 +1320,14 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/status_produce.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
     },
     {
       "file": "crates/aac-status/tests/writer_lock_cross.rs",

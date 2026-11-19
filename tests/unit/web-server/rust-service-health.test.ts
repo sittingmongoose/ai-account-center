@@ -251,6 +251,8 @@ describe('route table (L1)', () => {
         'claude-history-cleanup': 0,
         'collection-cache': 450,
         'agent-control': 2500,
+        'status-inputs': 5000,
+        'scoreboard-inputs': 5000,
       };
       const budget = budgets[String(row.handler)] ?? 400;
       expect(row.budgetMs).toBe(budget);

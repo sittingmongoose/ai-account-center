@@ -734,8 +734,25 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     if crate::read_context::proto_named(&envelope.data) {
         return None;
     }
-    let ctx = Context::new(envelope.presentation);
-    let mut input = envelope.data;
+    compose_in(Context::new(envelope.presentation), envelope.data)
+}
+
+/// R4 owned: the same view over facts held once per pushed facts generation (shared by every
+/// request that names it) plus the request's own `now` and its date words, which a generation's
+/// facts cannot hold. Byte-equal to [`compose`] of an envelope whose facts also hold `now`.
+pub fn compose_fed(
+    data: V,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+) -> Option<V> {
+    if crate::read_context::proto_named(&data) {
+        return None;
+    }
+    compose_in(Context::shared(facts, Some(now)), data)
+}
+
+fn compose_in(ctx: Context, data: V) -> Option<V> {
+    let mut input = data;
     // Epoch facts normalize UTC seconds; the resolver separately retains all nine fractional digits.
     crate::run_corrections::resolve_state(&mut input["runs"], |v| ctx.epoch(v))?;
     let effective: HashMap<String, V> = input["runs"]["runs"]
