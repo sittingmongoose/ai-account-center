@@ -1,6 +1,7 @@
 /** Accounts/tray bytes and guards through the real private Rust socket. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -20,7 +21,9 @@ const express = require('express');
 const { RustService } = load('web-server/rust-service.js');
 const { createAccountDashboardRouter } = load('web-server/routes/account-dashboard-routes.js');
 const { withPassedResetsAt } = load('web-server/services/account-dashboard-service.js');
-const { cases } = JSON.parse(fs.readFileSync(new URL('./views/home/cases.json', import.meta.url), 'utf8'));
+const { cases } = JSON.parse(
+  fs.readFileSync(new URL('./views/home/cases.json', import.meta.url), 'utf8')
+);
 
 const rust = new RustService('on');
 const servers = [];
@@ -42,33 +45,47 @@ async function start(service) {
     res.locals.rustService = service;
     next();
   });
-  app.use('/api/accounts', createAccountDashboardRouter({
-    ...(service ? { readDashboard: read } : {}),
-    getDashboard: async () => {
-      const input = await read();
-      return withPassedResetsAt(input.dashboard, input.now);
-    },
-    scope: () => root,
-  }));
+  app.use(
+    '/api/accounts',
+    createAccountDashboardRouter({
+      ...(service ? { readDashboard: read } : {}),
+      getDashboard: async () => {
+        const input = await read();
+        return withPassedResetsAt(input.dashboard, input.now);
+      },
+      scope: () => root,
+    })
+  );
   const server = app.listen(0, '127.0.0.1');
   servers.push(server);
   await once(server, 'listening');
   return `http://127.0.0.1:${server.address().port}/api/accounts/dashboard`;
 }
 
-async function query(url, suffix, auth, headers = {}) {
-  const res = await fetch(url + suffix, {
-    // Fetch's default cache mode adds a no-cache directive with If-None-Match.
-    cache: 'force-cache',
-    headers: { 'x-fixture-auth': auth, ...headers },
+function query(url, suffix, auth, headers = {}) {
+  // Send precisely the requested conditional headers. Fetch can add no-cache
+  // and Pragma to a request with If-None-Match.
+  return new Promise((resolve, reject) => {
+    const request = http.get(
+      url + suffix,
+      { headers: { 'x-fixture-auth': auth, ...headers } },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('error', reject);
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode,
+            cache: res.headers['cache-control'] ?? null,
+            type: res.headers['content-type'] ?? null,
+            etag: res.headers.etag ?? null,
+            body: Buffer.concat(chunks).toString('utf8'),
+          })
+        );
+      }
+    );
+    request.on('error', reject);
   });
-  return {
-    status: res.status,
-    cache: res.headers.get('cache-control'),
-    type: res.headers.get('content-type'),
-    etag: res.headers.get('etag'),
-    body: await res.text(),
-  };
 }
 
 try {
@@ -96,18 +113,31 @@ try {
   const tray = await query(on, '?platform=windows', 'tray');
   assert.deepEqual(tray, await query(ts, '?platform=windows', 'tray'));
   assert.ok(served() > prior, 'paired tray request was served by Rust');
-  assert.equal((await query(on, '?platform=windows', 'tray', { 'if-none-match': tray.etag })).status, 304);
+  const validators = { 'if-none-match': tray.etag };
+  for (const [headers, expected] of [
+    [validators, 304],
+    [{ ...validators, 'cache-control': 'no-cache' }, 200],
+  ]) {
+    const conditional = await query(on, '?platform=windows', 'tray', headers);
+    assert.equal(conditional.status, expected);
+    assert.deepEqual(conditional, await query(ts, '?platform=windows', 'tray', headers));
+  }
   const beforeBad = calls;
   for (const [suffix, auth, code] of [
-    ['', '', 401], ['?platform=linux', 'session', 400], ['?refresh=yes', 'tray', 400],
-    ['?unused=1', 'session', 400], ['?platform=mac&platform=windows', 'tray', 400],
+    ['', '', 401],
+    ['?platform=linux', 'session', 400],
+    ['?refresh=yes', 'tray', 400],
+    ['?unused=1', 'session', 400],
+    ['?platform=mac&platform=windows', 'tray', 400],
   ]) {
     const actual = await query(on, suffix, auth);
     assert.equal(actual.status, code);
     assert.deepEqual(actual, await query(ts, suffix, auth));
   }
   assert.equal(calls, beforeBad);
-  console.log(`PASS Accounts/dashboard: ${equal} Rust byte/header matches, ${declined} identical TS fallbacks, tray/304 and five guards`);
+  console.log(
+    `PASS Accounts/dashboard: ${equal} Rust byte/header matches, ${declined} identical TS fallbacks, tray/304 and five guards`
+  );
 } finally {
   await rust.stop();
   for (const server of servers) await new Promise((resolve) => server.close(resolve));
