@@ -1482,7 +1482,11 @@ fn unscored_unit(u: &Unscored) -> &'static str {
     if files == 0 {
         runs_word(u.total)
     } else if files == u.total {
-        if u.total == 1 { "run file" } else { "run files" }
+        if u.total == 1 {
+            "run file"
+        } else {
+            "run files"
+        }
     } else {
         "runs and run files"
     }
@@ -1853,18 +1857,37 @@ mod tests {
     #[test]
     fn the_unscored_head_distinguishes_run_files_from_runs() {
         // Two skipped files and no other reason: the count is files, not runs (RECHECK-lane-c Low 3).
-        let files = Unscored { total: 2, scan_limit: 2, ..Default::default() };
+        let files = Unscored {
+            total: 2,
+            scan_limit: 2,
+            ..Default::default()
+        };
         assert_eq!(unscored_head(&files), "2 run files not scored");
-        assert_eq!(sentence(&files), "2 run files not scored: 2 not read (scan limit)");
-        let one = Unscored { total: 1, unreadable: 1, ..Default::default() };
+        assert_eq!(
+            sentence(&files),
+            "2 run files not scored: 2 not read (scan limit)"
+        );
+        let one = Unscored {
+            total: 1,
+            unreadable: 1,
+            ..Default::default()
+        };
         assert_eq!(unscored_head(&one), "1 run file not scored");
         // A mixed total names both units; a pure-run total keeps "runs".
-        let mixed = Unscored { total: 3, scan_limit: 2, no_model: 1, ..Default::default() };
+        let mixed = Unscored {
+            total: 3,
+            scan_limit: 2,
+            no_model: 1,
+            ..Default::default()
+        };
         assert_eq!(unscored_head(&mixed), "3 runs and run files not scored");
         assert_eq!(unscored_head(&unscored(1, 0, 0)), "1 run not scored");
         // The mixed words stay one no-break piece, like every other count's words.
         let note = unscored_note(&mixed);
-        assert_eq!(note[1].text, "\u{a0}runs\u{a0}and\u{a0}run\u{a0}files\u{a0}not\u{a0}scored: ");
+        assert_eq!(
+            note[1].text,
+            "\u{a0}runs\u{a0}and\u{a0}run\u{a0}files\u{a0}not\u{a0}scored: "
+        );
     }
 
     #[test]
