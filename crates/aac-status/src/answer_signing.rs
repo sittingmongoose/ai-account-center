@@ -7,7 +7,7 @@
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use ed25519_dalek::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey,
+    DecodePrivateKey, DecodePublicKey, EncodePublicKey,
 };
 use pem_rfc7468::LineEnding;
 use serde_json::Value as Json;

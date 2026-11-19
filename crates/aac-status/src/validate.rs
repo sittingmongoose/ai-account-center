@@ -3,13 +3,12 @@
 //! are UTF-16 code units, as in JavaScript), same fixed refusal reasons, nothing echoing a
 //! file's text.
 //!
-//! One secret filter per read, never two (owner decision 2026-11-09): on the NAPI path
-//! TypeScript checks status reports for secrets (`jsonFromBytes` in schema-helpers.ts) and
-//! the native module only reads reports TypeScript accepted, so [`json_from_bytes`] keeps no
-//! secret check. The R4 owned readers in the service run where no TypeScript reader runs;
-//! they read through [`share_json_from_bytes`], which applies the same packaged policy
-//! (`src/shared/secret-policy.json`, compiled as `crate::secret_policy` exactly as aac-store
-//! compiles it) in that reader's place.
+//! Exactly one secret filter, the Rust one (owner, 2026-11-19): `crate::secret_policy` (the
+//! packaged `src/shared/secret-policy.json`, compiled as aac-store compiles it) plus
+//! `crate::typed_secrets` for notes. On the NAPI path TypeScript's `jsonFromBytes` calls it
+//! through this module before the bytes reach the parse, so [`json_from_bytes`] does not run it
+//! a second time; the R4 owned readers in the service read through [`share_json_from_bytes`],
+//! which runs it in place.
 
 use serde_json::{Map, Value as Json};
 
@@ -260,9 +259,8 @@ pub fn head(doc: &Map<String, Json>, schema: &str, writer: &str) -> Valid<DocHea
 /// as `nativeUnreadable` makes it in TypeScript). Every refusal is a fixed reason, the same
 /// strings as `jsonFromBytes` in schema-helpers.ts.
 ///
-/// The secret check is not here: TypeScript checks status reports for secrets
-/// (`jsonFromBytes` in schema-helpers.ts, the one secret filter); the native module only
-/// reads reports TypeScript accepted (owner decision 2026-11-09).
+/// The secret check is not here: on the NAPI path TypeScript's `jsonFromBytes` already ran the
+/// one (Rust) filter over these bytes; the owned readers use [`share_json_from_bytes`].
 pub fn json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
     if bytes.len() > cap_bytes {
         return Err(format!("larger than the {} KB cap", cap_bytes / 1024));
@@ -277,10 +275,9 @@ pub fn json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
     serde_json::from_str(source).map_err(|_| "not valid JSON".to_string())
 }
 
-/// [`json_from_bytes`] plus the secret check, for the R4 owned share readers only: there the
-/// service reads the share itself and no TypeScript `jsonFromBytes` runs, so this is the one
-/// secret filter of that read (same packaged policy, same fixed words). Never call it on the
-/// NAPI path, where TypeScript already filtered the bytes.
+/// [`json_from_bytes`] plus the one secret filter, for the R4 owned share readers: the service
+/// reads the share itself and no TypeScript `jsonFromBytes` runs, so the filter runs here (same
+/// fixed words). Not on the NAPI path, where TypeScript already ran the same filter.
 pub fn share_json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
     let value = json_from_bytes(bytes, cap_bytes)?;
     // Valid UTF-8 is established above.

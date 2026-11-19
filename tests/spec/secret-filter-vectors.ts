@@ -1,15 +1,16 @@
 /**
- * The secret filter's verdict corpus, recorded from the last TypeScript implementation before
- * the one filter moved into Rust (src/shared/secret-policy.ts `findSecret`/`findSecretIn` and
+ * The secret filter's verdict corpus, recorded (73322befc) from the last TypeScript implementation
+ * before the one filter moved into Rust (src/shared/secret-policy.ts `findSecret`/`findSecretIn` and
  * src/web-server/status/typed-secrets.ts `findTypedSecret`). Inputs: every document of the
  * shared refusal fixture (tests/fixtures/secret-policy-cases.json) in both source forms, and
  * every typed-secret text the Status review suite pins (status-server-review.test.ts), with the
  * long linear-time notes as repeat specs. `crates/aac-status/tests/secret_filter.rs` requires
- * byte-equal verdicts from the Rust filter; the TS suites call the same Rust filter through the
- * native module.
+ * byte-equal verdicts from the Rust filter. TypeScript's entry points now call that filter
+ * through the native module, so `--check` proves the TS-to-Rust path end to end. There is no
+ * TypeScript implementation left to record from: regenerating needs `--record` and is only
+ * meaningful at 73322befc.
  *
- *   bun tests/spec/secret-filter-vectors.ts            # regenerate (TS implementation present)
- *   bun tests/spec/secret-filter-vectors.ts --check    # compare
+ *   bun tests/spec/secret-filter-vectors.ts --check    # compare (needs the aac-status module)
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -77,7 +78,9 @@ if (process.argv.includes('--check')) {
   console.log(
     `secret-filter vectors: ${typed.length} texts, ${repeats.length} long notes, ${documents.length} documents match`
   );
-} else {
+} else if (process.argv.includes('--record')) {
   fs.writeFileSync(out, `${JSON.stringify(corpus, null, 2)}\n`);
   console.log(`wrote ${out} (${typed.length} texts, ${repeats.length} long notes, ${documents.length} documents)`);
+} else {
+  throw new Error('check only: pass --check (see the header for --record)');
 }

@@ -138,7 +138,7 @@ fn rules() -> &'static Rules {
 /// The shared patterns have ASCII literals/classes, JS whitespace and negated classes.
 /// JS regexes without `u` count UTF-16 units and never fold non-ASCII letters into ASCII.
 /// Preserve whitespace and represent other non-ASCII units by a non-folding placeholder.
-fn regex_text(text: &str) -> Cow<'_, str> {
+pub fn regex_text(text: &str) -> Cow<'_, str> {
     if text.is_ascii() {
         return Cow::Borrowed(text);
     }

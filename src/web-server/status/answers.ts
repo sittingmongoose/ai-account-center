@@ -73,6 +73,7 @@ import {
 import { readRegularFile } from './share-read';
 import { findSecretIn, realTimestamp } from './schema-helpers';
 import { findTypedSecret } from './typed-secrets';
+import { UNCHECKED_SECRET_KIND } from '../../shared/secret-policy';
 import { holdWriterLock, WriterBusyError } from './writer-lock';
 import { registerCleanup } from '../../errors/cleanup-registry';
 import { ConfigError } from '../../errors/error-types';
@@ -1775,7 +1776,13 @@ export class StatusAnswers {
     if (note === null) return refused(entry.cardId, 'invalid_note');
     // the note is signed and written to the share and the mail: the same secret check as any file there (decoded,
     // JSON inside it walked); the refusal names no part of it
-    const secret = note ? (findSecretIn(note, note) ?? findTypedSecret(note)) : null;
+    let secret: string | null = null;
+    try {
+      secret = note ? (findSecretIn(note, note) ?? findTypedSecret(note)) : null;
+    } catch {
+      // the one secret filter could not run: the note is refused, never sent unchecked
+      secret = UNCHECKED_SECRET_KIND;
+    }
     if (secret) return refused(entry.cardId, 'note_secret', secret);
     // Before the card is read: a retried answer's card has closed since, and that is no refusal.
     this.list();
