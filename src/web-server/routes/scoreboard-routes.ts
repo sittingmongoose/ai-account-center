@@ -73,7 +73,8 @@ export function createScoreboardRouter(
     // R4 (`rustService.groups.scoreboard: on` under the store host): the service answers from
     // its own catalog and runs store; on any decline today's handler answers from the same read.
     const owned = scoreboardOwnedService(res);
-    if (owned && (await answerScoreboardOwned(req, res, owned, parsed.filters, getCcsDir()))) return;
+    if (owned && (await answerScoreboardOwned(req, res, owned, parsed.filters, getCcsDir())))
+      return;
     try {
       const bridge: unknown = res.locals.rustService;
       const composer =

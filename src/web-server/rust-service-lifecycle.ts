@@ -441,9 +441,14 @@ export async function acquireRustServiceDetailed(
   acquiring++;
   const budget = AbortSignal.timeout(5000);
   const stopped = signal ? AbortSignal.any([signal, budget]) : budget;
-  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput, ownedInput).finally(
-    () => acquiring--
-  );
+  const pending = acquireWithinBudget(
+    privateRoot,
+    binaryPath,
+    active,
+    stopped,
+    storeInput,
+    ownedInput
+  ).finally(() => acquiring--);
   // Async filesystem work may finish late; every continuation checks the signal before adoption.
   return new Promise((resolve) => {
     const aborted = () =>

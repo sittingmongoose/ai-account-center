@@ -598,7 +598,13 @@ export class StatusService {
     if (!service || !boot) return;
     const pins = this.pinned.pins().map((pin) => ({ id: pin.id, title: pin.title }));
     lastPinsGeneration = Math.max(lastPinsGeneration + 1, Date.now() * 1000);
-    void service.pushFeed(boot, 'owned-pins', String(lastPinsGeneration), JSON.stringify(pins), 'null');
+    void service.pushFeed(
+      boot,
+      'owned-pins',
+      String(lastPinsGeneration),
+      JSON.stringify(pins),
+      'null'
+    );
   }
 
   private wanted(): boolean {
@@ -644,7 +650,10 @@ export class StatusService {
       now,
       timeZone: this.timeZone(),
       reports: this.ownedReports(),
-      registry: this.owned && !this.ownedFallenBack && this.ownedInputs ? this.ownedInputs.registry : this.registry,
+      registry:
+        this.owned && !this.ownedFallenBack && this.ownedInputs
+          ? this.ownedInputs.registry
+          : this.registry,
       machines: this.machines,
       browsers: this.browsers,
       simlock: this.simlock,
@@ -723,7 +732,11 @@ export class StatusService {
       docs: answer.docs,
     };
     try {
-      await this.pinned.compose(this.ownedInputs.reports, this.listAnswersSafe(), this.ownedInputs.docs);
+      await this.pinned.compose(
+        this.ownedInputs.reports,
+        this.listAnswersSafe(),
+        this.ownedInputs.docs
+      );
     } catch {
       /* The panel keeps its last composed view. */
     }
