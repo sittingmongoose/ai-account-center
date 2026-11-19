@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 pub mod history_snapshots;
 #[cfg(unix)]
+pub mod key_sweep;
+#[cfg(unix)]
 pub mod lifecycle_queue;
 pub mod path;
 #[cfg(unix)]

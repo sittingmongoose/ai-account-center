@@ -82,6 +82,46 @@ pub(crate) fn commit() -> i32 {
     }
 }
 
+pub(crate) fn sweep_orphan_keys() -> i32 {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Sweep {
+        provider: String,
+        named: Vec<String>,
+        now_ms: u64,
+    }
+    let mut args = std::env::args_os().skip(2);
+    let (Some(root), None) = (args.next(), args.next()) else {
+        return 74;
+    };
+    let mut bytes = Vec::new();
+    if io::stdin().take(8193).read_to_end(&mut bytes).is_err() || bytes.len() > 8192 {
+        return 74;
+    }
+    let Ok(input) = serde_json::from_slice::<Sweep>(&bytes) else {
+        return 74;
+    };
+    if !aac_providers::provider(&input.provider).is_some_and(|entry| entry.key_store) {
+        return 74;
+    }
+    let Ok(lock) = io::stderr().as_fd().try_clone_to_owned() else {
+        return 74;
+    };
+    match aac_files::key_sweep::sweep(
+        Path::new(&root),
+        &input.provider,
+        &input.named,
+        input.now_ms,
+        File::from(lock),
+    ) {
+        Ok(count) => {
+            println!("{count}");
+            0
+        }
+        Err(_) => 75,
+    }
+}
+
 fn append_answer(store: &aac_files::OwnedStore, value: &serde_json::Value, bytes: &[u8]) -> i32 {
     use aac_files::AnswerAppendError;
     let Some(line) = value.get("line").and_then(serde_json::Value::as_str) else {

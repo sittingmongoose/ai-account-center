@@ -88,7 +88,9 @@ describe('sweepOrphanKeys', () => {
     const directory = path.join(ccsDir, 'account-usage', 'keys');
     const outside = path.join(root, 'unrelated');
     fs.writeFileSync(outside, 'fixture');
-    fs.symlinkSync(outside, path.join(directory, 'zai-bbbbbbbb.json'));
+    const nonregular = path.join(directory, 'zai-bbbbbbbb.json');
+    if (process.platform === 'win32') fs.mkdirSync(nonregular);
+    else fs.symlinkSync(outside, nonregular);
     expect(await sweepOrphanKeys(ccsDir, () => NOW)).toBe(1);
     expect(keyFiles()).toEqual(['zai-bbbbbbbb.json']);
     expect(fs.readFileSync(outside, 'utf8')).toBe('fixture');

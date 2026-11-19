@@ -10,10 +10,12 @@ import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import { collectAgentWithFallback, runKeyStoreAgent } from './agent-verbs';
 import { assertTsWritesRow } from '../../shared/private-files';
 import {
+  activeFileWriterBinary,
   canonicalLeaseRoot,
   claimFileLease,
   commitWithFileLease,
   hasFileWriterHandoff,
+  sweepKeysWithFileLease,
 } from '../../shared/private-file-lease';
 import { withPrivateFileLock } from './private-json-store';
 
@@ -239,6 +241,31 @@ export class LocalKeyStore implements KeyStoreBackend {
     } finally {
       await handle?.close().catch(() => undefined);
     }
+  }
+
+  /** Sweep a provider's unreferenced keys after its registry and queue checks. */
+  async sweepOrphans(
+    provider: KeyProvider,
+    named: ReadonlySet<string>,
+    now: () => number
+  ): Promise<number | undefined> {
+    const root = canonicalLeaseRoot(this.ccsDir);
+    if (!activeFileWriterBinary(root)) return undefined;
+    return withPrivateFileLock(this.directory, async () => {
+      try {
+        await this.ensureDirectory(false);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+        throw error;
+      }
+      const lease = claimFileLease(root, this.directory, true);
+      if (!lease) throw new KeyStoreError();
+      try {
+        return sweepKeysWithFileLease(root, lease, { provider, nowMs: now(), named: [...named] });
+      } finally {
+        lease.close();
+      }
+    });
   }
 
   /** Key ids of this provider's regular key files, with their modification times. */

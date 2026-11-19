@@ -59,6 +59,30 @@ export function commitWithFileLease(
     throw new RegisteredWriteUnclearError('The private file write could not be confirmed.');
   throw new ConfigError('The private file could not be saved safely.');
 }
+/** Sweep key metadata while the caller holds the registered key-folder lease. */
+export function sweepKeysWithFileLease(
+  root: string,
+  lease: FileLease,
+  input: { provider: string; nowMs: number; named: string[] }
+): number | undefined {
+  const writer = writers.get(root);
+  if (!writer || lease.descriptor === undefined) return undefined;
+  const result = spawnSync(writer.binary, ['--sweep-orphan-keys', root], {
+    input: JSON.stringify(input),
+    stdio: ['pipe', 'pipe', lease.descriptor],
+    timeout: 5000,
+    maxBuffer: 64,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  const count = Number(result.stdout?.trim());
+  if (result.status !== 0 || !Number.isSafeInteger(count) || count < 0)
+    throw new ConfigError('The orphan key sweep could not be confirmed.');
+  if (count > 0) writer.committed();
+  return count;
+}
+
 type ProviderWrite =
   | ['codex-metadata']
   | ['codex-move', home: string, previous: string, next: string]

@@ -14,6 +14,7 @@ fn main() {
         .and_then(std::ffi::OsStr::to_str)
     {
         Some("--file-lease") => std::process::exit(file_lease()),
+        Some("--sweep-orphan-keys") => std::process::exit(registered_write::sweep_orphan_keys()),
         Some("--registered-write") => std::process::exit(registered_write::commit()),
         Some("--provider-write") => std::process::exit(provider_write::commit()),
         Some("--codex-staging") => std::process::exit(provider_write::staging(false)),

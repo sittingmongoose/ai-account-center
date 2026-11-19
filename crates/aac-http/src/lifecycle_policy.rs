@@ -47,12 +47,6 @@ enum Request {
         now: i64,
         entries: Vec<Deadline>,
     },
-    OrphanKeys {
-        now: i64,
-        min_age: i64,
-        named: Vec<String>,
-        files: Vec<Deadline>,
-    },
 }
 
 #[derive(Deserialize)]
@@ -187,22 +181,6 @@ fn evaluate(request: Request) -> Option<Value> {
                     .into_iter()
                     .filter(|entry| entry.at.is_some_and(|at| at <= now))
                     .map(|entry| entry.id)
-                    .collect::<Vec<_>>()
-            )
-        }
-        Request::OrphanKeys {
-            now,
-            min_age,
-            named,
-            files,
-        } => {
-            let named: std::collections::HashSet<_> = named.into_iter().collect();
-            json!(
-                files
-                    .into_iter()
-                    .filter(|file| !named.contains(&file.id)
-                        && file.at.is_some_and(|at| now.saturating_sub(at) >= min_age))
-                    .map(|file| file.id)
                     .collect::<Vec<_>>()
             )
         }

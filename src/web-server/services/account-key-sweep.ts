@@ -1,4 +1,3 @@
-import { lifecyclePlan } from '../../shared/private-file-lease';
 import { KEY_PROVIDERS, LocalKeyStore } from './account-key-store';
 import { readAdditionalEntries } from './account-lifecycle-accounts';
 import { keyQueue, serialized } from './account-lifecycle-queue';
@@ -35,21 +34,13 @@ export async function sweepOrphanKeys(
       } catch {
         return 0;
       }
+      const native = await store.sweepOrphans(provider, named, now).catch(() => 0);
+      if (native !== undefined) return native;
       const files = await store.keyFiles(provider);
       const checkedAt = now();
-      const planned = lifecyclePlan(ccsDir, {
-        operation: 'orphan-keys',
-        now: checkedAt,
-        minAge: ORPHAN_KEY_AGE_MS,
-        named: [...named],
-        files: files.map((file) => ({ id: file.keyId, at: Math.ceil(file.modifiedAt) })),
-      });
-      const candidates =
-        planned === undefined ? null : new Set(Array.isArray(planned) ? planned : []);
       let count = 0;
       for (const file of files) {
         if (named.has(file.keyId) || checkedAt - file.modifiedAt < ORPHAN_KEY_AGE_MS) continue;
-        if (candidates && !candidates.has(file.keyId)) continue;
         try {
           await store.delete(provider, file.keyId);
           count += 1;
