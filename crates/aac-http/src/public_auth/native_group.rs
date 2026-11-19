@@ -14,6 +14,8 @@
 //! headers and lengths.
 
 use super::{DashboardAccess, DashboardPrincipal, Reply, owner_host::ServiceReply, set_header};
+use crate::scoreboard_owned::ScoreboardOwned;
+use aac_views::decline::Decline;
 use axum::{
     body::to_bytes,
     extract::Request,
@@ -718,16 +720,21 @@ fn scoreboard_query(raw: Option<&str>) -> Result<ScoreboardQuery, (&'static str,
 /// it in the display zone, and the held generation id. `None` declines to the route's 503.
 async fn scoreboard_facts(
     routes: &Routes,
+    local: Option<&ScoreboardOwned>,
     time_zone: &str,
     now: u64,
 ) -> Option<(u64, String, String)> {
-    let reply = routes
-        .request("GET", "/internal/scoreboard/inputs", SERVICE, &[], None)
-        .await?;
-    if reply.status != 200 {
-        return None;
-    }
-    let input = json_of(&reply)?;
+    let input = if let Some(owner) = local {
+        owner.inputs().await.ok()?
+    } else {
+        let reply = routes
+            .request("GET", "/internal/scoreboard/inputs", SERVICE, &[], None)
+            .await?;
+        if reply.status != 200 {
+            return None;
+        }
+        json_of(&reply)?
+    };
     let generation = input.get("generation")?.as_u64()?;
     let catalog_hash = input.get("catalogHash")?.as_str()?.to_owned();
     let catalog = input.get("catalog")?.clone();
@@ -785,19 +792,24 @@ async fn scoreboard_facts(
         data_text,
         facts_text
     );
-    let reply = routes
-        .request(
-            "PUT",
-            "/internal/feed/scoreboard-facts",
-            SERVICE,
-            &[("content-type", "application/json")],
-            Some(body.as_bytes()),
-        )
-        .await?;
-    if reply.status != 200 {
-        return None;
-    }
-    let held = json_of(&reply)?.get("generation")?.as_str()?.to_owned();
+    let publication = if let Some(owner) = local {
+        owner.publish_facts(body.as_bytes()).ok()?
+    } else {
+        let reply = routes
+            .request(
+                "PUT",
+                "/internal/feed/scoreboard-facts",
+                SERVICE,
+                &[("content-type", "application/json")],
+                Some(body.as_bytes()),
+            )
+            .await?;
+        if reply.status != 200 {
+            return None;
+        }
+        json_of(&reply)?
+    };
+    let held = publication.get("generation")?.as_str()?.to_owned();
     Some((generation, catalog_hash, held))
 }
 
@@ -819,7 +831,11 @@ async fn scoreboard(
     let Some(principal) = access.service_principal() else {
         return decline_because("principal");
     };
-    if !routes.hosted().await {
+    let local = routes
+        .local()
+        .await
+        .and_then(|owners| owners.scoreboard_owned.clone());
+    if local.is_none() && !routes.hosted().await {
         return decline_because("service");
     }
     let Some((time_zone, offsets)) = status_zone(routes.root()) else {
@@ -853,7 +869,7 @@ async fn scoreboard(
     // A cold boot's first seed can take a moment: retry briefly, then answer honestly.
     for attempt in 0..6 {
         let Some((generation, catalog_hash, held)) =
-            scoreboard_facts(routes, &time_zone, now).await
+            scoreboard_facts(routes, local.as_deref(), &time_zone, now).await
         else {
             return decline_because("facts");
         };
@@ -873,35 +889,41 @@ async fn scoreboard(
             "facts": held,
         })
         .to_string();
-        match routes
-            .request(
-                "GET",
-                "/api/scoreboard",
-                &principal,
-                &[("x-aac-feed", feed.as_str())],
-                None,
-            )
-            .await
-        {
-            Some(reply) if reply.status == 200 => {
-                return fed_view(&reply, facts.if_none_match.as_deref());
-            }
-            Some(reply) if declined(&reply) => {
-                let reason = decline_reason(&reply).unwrap_or("");
-                if !matches!(reason, "stale" | "busy") {
-                    return decline_because(match reason {
-                        "unsupported" => "unsupported",
-                        "shape" => "shape",
-                        _ => "declined",
-                    });
+        let reason = if let Some(owner) = local.as_deref() {
+            match owner.answer(&feed).await {
+                Ok((bytes, etag)) => {
+                    return fed_bytes(bytes, &etag, "scoreboard@1", facts.if_none_match.as_deref());
                 }
-                if attempt < 5 {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    continue;
-                }
-                return decline_because("answer");
+                Err(reason) => Some(reason),
             }
-            _ => return decline_because("answer"),
+        } else {
+            match routes
+                .request(
+                    "GET",
+                    "/api/scoreboard",
+                    &principal,
+                    &[("x-aac-feed", feed.as_str())],
+                    None,
+                )
+                .await
+            {
+                Some(reply) if reply.status == 200 => {
+                    return fed_view(&reply, facts.if_none_match.as_deref());
+                }
+                Some(reply) if declined(&reply) => Decline::ALL
+                    .into_iter()
+                    .find(|reason| Some(reason.as_str()) == decline_reason(&reply)),
+                _ => return decline_because("answer"),
+            }
+        };
+        match reason {
+            Some(Decline::Stale | Decline::Busy) if attempt < 5 => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            Some(Decline::Stale | Decline::Busy) => return decline_because("answer"),
+            Some(Decline::Unsupported) => return decline_because("unsupported"),
+            Some(Decline::Shape) => return decline_because("shape"),
+            _ => return decline_because("declined"),
         }
     }
     decline_because("answer")

@@ -873,6 +873,13 @@ impl ScoreboardOwned {
         made
     }
 
+    pub(crate) fn publish_facts(&self, body: &[u8]) -> Result<Json, Decline> {
+        if body.len() > 4 * 1024 * 1024 {
+            return Err(Decline::Shape);
+        }
+        self.feeds.put("scoreboard-facts", body)
+    }
+
     /// The owned answer: the final bytes and ETag, or a named decline.
     pub(crate) async fn answer(&self, feed: &str) -> Result<(Vec<u8>, String), Decline> {
         let feed: Feed = crate::json_object::from_slice(
