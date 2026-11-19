@@ -30,7 +30,8 @@ fn unscored_run_reviews_move_no_measure() {
         "native/TS mismatch: {actual}"
     );
     // And the rule itself is visible, not just absent: item A stays failed, B and C stay
-    // passed (the joining unscored review moved B nowhere), only A is overturned.
+    // passed (the joining unscored review moved B nowhere), only A is overturned. Counts are
+    // compared as numbers: the native view emits 2 where the oracle's JSON says 2.
     let rows = actual["uses"]
         .as_array()
         .unwrap()
@@ -49,12 +50,13 @@ fn unscored_run_reviews_move_no_measure() {
         .find(|r| r["model"].as_str().is_some_and(|m| m.contains("opus")))
         .unwrap()["observed"]
         .clone();
-    assert_eq!(opus["measures"]["quality"]["of"], 2);
-    assert_eq!(opus["measures"]["quality"]["per"], 3);
-    assert_eq!(opus["measures"]["quality"]["firstTry"], 2);
-    assert_eq!(opus["measures"]["overclaim"]["value"], 0.3333);
-    assert_eq!(opus["measures"]["overclaim"]["of"], 1);
-    assert_eq!(opus["measures"]["overclaim"]["per"], 3);
+    let number = |at: &str| opus.pointer(at).and_then(Value::as_f64);
+    assert_eq!(number("/measures/quality/of"), Some(2.0));
+    assert_eq!(number("/measures/quality/per"), Some(3.0));
+    assert_eq!(number("/measures/quality/firstTry"), Some(2.0));
+    assert_eq!(number("/measures/overclaim/value"), Some(0.3333));
+    assert_eq!(number("/measures/overclaim/of"), Some(1.0));
+    assert_eq!(number("/measures/overclaim/per"), Some(3.0));
     assert!(
         actual["sources"][0]["detail"]
             .as_str()
