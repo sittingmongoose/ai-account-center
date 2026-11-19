@@ -320,9 +320,11 @@ try {
 
   await today.command('scan');
   await owned.command('wait-owned');
+  await owned.command('collect');
   // Let both owners' first collector tick (pinned, machines, simlock) land before comparing.
   await new Promise((resolve) => setTimeout(resolve, 1500));
   await compare('first status read', '/api/status', { view: 'status@1' });
+  report.pinsProbe = await owned.command('pins');
   await compare('first scoreboard read', '/api/scoreboard', { view: 'scoreboard@1' });
   await compare(
     'filtered scoreboard',
