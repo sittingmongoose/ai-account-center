@@ -4377,6 +4377,13 @@
       ]
     },
     {
+      "file": "web-dashboard/tests/browser/checks/status-question-lock.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "web-dashboard/tests/browser/checks/status-real-pins.check.mjs",
       "kind": "HTTP",
       "evidence": [

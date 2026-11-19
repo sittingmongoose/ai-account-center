@@ -234,6 +234,20 @@ export const tests = {
 		}
 	},
 
+	async 'analytics scope disclosure stays open through a refresh'(t) {
+		await t.viewport(1440, 900);
+		await stubData(t);
+		await t.app.signIn();
+		await openAnalytics(t);
+		const scope = t.page.getByRole('button', { name: 'What this page covers' });
+		await scope.click();
+		await t.page.evaluate(() => { window.__beforeAnalyticsRefresh = window.__aacLastAnalytics; });
+		await t.page.getByRole('button', { name: 'Refresh', exact: true }).click();
+		await t.page.waitForFunction(() => window.__aacLastAnalytics !== window.__beforeAnalyticsRefresh);
+		await t.equal('the scope button remains expanded', await scope.getAttribute('aria-expanded'), 'true');
+		await t.check('its scope list remains visible', await t.page.locator('.ax-page .scope-lines').isVisible());
+	},
+
 	async 'analytics: a second open shows the kept numbers before any data read answers, says so, then shows current ones'(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 		await t.app.signIn();

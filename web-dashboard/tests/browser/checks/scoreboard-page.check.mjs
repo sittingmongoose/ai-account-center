@@ -80,6 +80,28 @@ const matrixLines = (t) => t.page.evaluate(() => [...document.querySelectorAll('
 }));
 
 export const tests = {
+	async 'scoreboard disclosures stay open through a refresh'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		let view = { ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') };
+		await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => r.fulfill({ json: view }));
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.locator('.sb-unscored summary').click();
+		const how = t.page.getByRole('button', { name: 'How verdicts work' });
+		const runs = t.page.getByRole('button', { name: 'Latest runs of this model and effort' });
+		await how.click();
+		await runs.click();
+		view = structuredClone(view);
+		view.unscored.total += 1;
+		view.unscored.noModel += 1;
+		for (const v of view.byModel.views) for (const m of v.models) m.sheetHead = 'New reading after refresh';
+		await t.page.evaluate(() => window.dispatchEvent(new Event('online')));
+		await t.page.waitForFunction(() => /^49\s+runs/.test(document.querySelector('.sb-unscored summary')?.textContent || ''));
+		await t.check('unscored reasons stay open', (await listState(t)).open);
+		await t.equal('the verdict explanation stays open', await how.getAttribute('aria-expanded'), 'true');
+		await t.check('the latest-run list stays open', await t.page.locator('.sb-stack .plate.only-wide .sb-how').count() > 0);
+	},
+
 	// Against the real server's view, which has no byModel yet: an honest line, nothing guessed.
 	async 'scoreboard without the by-model view'(t) {
 		await t.viewport(1440, 900);

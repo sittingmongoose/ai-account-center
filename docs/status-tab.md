@@ -142,6 +142,7 @@ content alone, without the frame's chrome.
   "sources": [ Source ],
   "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
              "complete": true },
+  "reportProblems": [ { "file": "writers/vm.foo/thread.json", "reason": "not valid JSON", "since": 1793982600000 } ],
   "pinned": PinnedPanel,
   "projects": [ Project ],
   "threads": { "source": "...", "also": [ "pm-mail" ], "rows": [ Thread ] },
@@ -176,6 +177,12 @@ source keeps its last good readings, labelled cached with their age.
 
 Every number the page shows is in this view, already rounded and worded. A missing value is `null` with a reason
 word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago") and Eastern 12-hour on hover/tap.
+
+**Report problems** — `reportProblems` carries the general report reader's file, folder and scan-limit problems.
+The field is omitted when the reader has none. `file` is relative to the report share's `v1` folder, and `since`
+is the first observation time in epoch milliseconds. Status combines these records with `pinned.statusProblems`,
+pin refusals and pin-source machine failures. The disclosure lists each failed file or folder once. The source
+summary still reports freshness, and Questions shows answer and card-action problems.
 
 **Source** (one per input; every panel names the one it shows):
 ```jsonc

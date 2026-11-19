@@ -2741,6 +2741,10 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
    beside the roster; narrow, each pinned thread is its own plate and the sheet rises from the bottom.
    ========================================================================== */
 .sec-pinned.c2 .c2-body { border-top: 1px solid var(--rule-2); }
+.c2-report-problems { padding: 0 16px 6px; font-size: var(--fs-small); }
+.c2-report-problems summary { width: fit-content; padding: 5px 0; cursor: pointer; }
+.c2-report-problems ul { margin: 4px 0 6px; padding-inline-start: 18px; overflow-wrap: anywhere; }
+.c2-report-problems li + li { margin-top: 4px; }
 .c2-group { display: flex; align-items: baseline; gap: 6px; padding: 14px 16px 6px; }
 .c2-group .n, .c2-sec-head .n, .c2-tg .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .c2-rows { list-style: none; margin: 0; padding: 0; }
@@ -2849,7 +2853,6 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-tg-less { justify-content: end !important; }
 @container content (min-width: 900px) {
   .sec-pinned.c2 .c2-body { display: grid; grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); }
-  .sec-pinned.c2 .c2-body.solo { display: block; }
   .c2-roster { border-right: 1px solid var(--rule-2); min-width: 0; }
   .c2-roster .c2-group:first-child { padding-top: 12px; }
   .c2-row.sel { background: var(--sel-fill); box-shadow: inset 0 0 0 1px var(--sel-line); }

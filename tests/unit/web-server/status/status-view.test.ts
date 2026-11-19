@@ -574,7 +574,7 @@ describe('status view', () => {
     expect(thread?.ageSeconds).toBe(5 * 3600);
   });
 
-  it('names unreadable report files in the source and never calls them live', async () => {
+  it('carries unreadable reports both as structured problems and source freshness', async () => {
     const root = dirs.make();
     writeReport(root, 'vm.lead', 'tasks.json', Buffer.from('{oops'));
     const view = buildStatusView(await inputs(root));
@@ -583,6 +583,9 @@ describe('status view', () => {
     expect(source?.detail).toBe(
       '1 file unreadable since 11:30 AM: vm.lead/tasks.json (not valid JSON).'
     );
+    expect(view.reportProblems).toEqual([
+      { file: 'writers/vm.lead/tasks.json', reason: 'not valid JSON', since: NOW },
+    ]);
     expect(view.sources.find((s) => s.id === 'quota-watch')?.state).toBe('unconfigured');
     expect(view.sources.find((s) => s.id === 'usage')?.state).toBe('missing');
   });

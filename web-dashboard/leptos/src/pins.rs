@@ -4,9 +4,9 @@
 use crate::api::*;
 use crate::fmt;
 use crate::live::Live;
-use crate::media::{LiveMediaList, MediaList};
+use crate::media::LiveMediaList;
 use crate::roster::*;
-use crate::status::{SheetGrab, cached_notice, refusal_notice, refused_lines, sheet_drag_style};
+use crate::status::{SheetGrab, cached_notice, report_problem_lines, sheet_drag_style};
 use crate::ui::*;
 use leptos::prelude::*;
 
@@ -54,15 +54,7 @@ impl Pin {
     /// The problem lines, short (roster) and full (sheet), worst first.
     fn problems(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
-        if let Some(r) = self.u.refusal.as_ref() {
-            let head = if r.file.trim().is_empty() {
-                "A status file was refused".to_string()
-            } else {
-                format!("{} was refused", r.file)
-            };
-            let reason = r.reason.trim().trim_end_matches('.');
-            out.push((format!("{head}."), format!("{head}: {reason}.")));
-        } else if self.u.report_state == "unreadable" {
+        if self.u.report_state == "unreadable" {
             let note = self
                 .u
                 .unreadable_note
@@ -81,10 +73,10 @@ impl Pin {
                     .into(),
             ));
         }
-        if let Some(problem) = self.board.as_ref().and_then(|b| b.problem.clone()) {
+        if self.board.as_ref().is_some_and(|b| b.problem.is_some()) {
             out.push((
                 "Task list unreadable.".into(),
-                format!("Task list unreadable: {problem} Showing its last good copy."),
+                "Task list unreadable. Showing its last good copy.".into(),
             ));
         }
         out
@@ -348,131 +340,6 @@ fn media_of(list: &[ReportedMedia]) -> (Vec<Media>, usize) {
     (out, outside)
 }
 
-#[component]
-fn MediaThumbs(items: Vec<ReportedMedia>) -> impl IntoView {
-    let (media, outside) = media_of(&items);
-    let all = RwSignal::new(false);
-    let more = media.len().saturating_sub(3);
-    view! {
-        <div class="to-media">
-            {move || {
-                let shown: Vec<Media> = if all.get() { media.clone() } else { media.iter().take(3).cloned().collect() };
-                view! { <MediaList items=shown/> }
-            }}
-            {(more > 0).then(|| view! {
-                <button class="link" on:click=move |_| all.update(|a| *a = !*a)>
-                    {move || if all.get() { "Fewer".to_string() } else { format!("{more} more") }}
-                </button>
-            })}
-            {(outside > 0).then(|| view! { <p class="q3 to-sub">{format!("{} kept outside the share, so not shown here.", if outside == 1 { "1 more is".to_string() } else { format!("{outside} more are") })}</p> })}
-        </div>
-    }
-}
-
-#[component]
-fn ToOpenRow(pin: String, d: Deliverable) -> impl IntoView {
-    let store = expect_context::<OpenedStore>();
-    let opened = {
-        let (pin, id) = (pin.clone(), d.id.clone());
-        Signal::derive(move || store.for_one(&pin, &id))
-    };
-    let main = d.main == Some(true);
-    let version = d.version.clone();
-    let key = opened_key(&pin, &d.id, &d.version);
-    let on_open = Callback::new(move |_| store.record(key.clone()));
-    let o = opener(d.path.as_deref(), d.url.as_deref());
-    let outside = matches!(o, Opener::CopyPath(_));
-    let updated = d
-        .updated_at
-        .as_deref()
-        .map(fmt::clock)
-        .filter(|c| !c.is_empty());
-    let show_old = RwSignal::new(false);
-    let older = d.versions.clone();
-    let n_old = older.len();
-    let current = d.version.clone();
-    let (pin2, id2) = (pin.clone(), d.id.clone());
-    view! {
-        <li class="to-row" class:main=main>
-            <span class="to-kind cap">{kind_words(&d.kind)}</span>
-            <div class="to-main">
-                <b class="to-name">{d.name.clone()}</b>
-                <p class="to-line">
-                    <b class="to-ver">{d.version.clone()}</b>
-                    {updated.map(|u| view! { <span class="q3">{u}</span> })}
-                    {move || mark_view(mark(&version, &opened.get()))}
-                </p>
-                {outside.then(|| view! { <p class="q3 to-sub">"Kept outside the share, so it cannot be opened here"</p> })}
-                {d.note.clone().map(|n| view! { <p class="to-sub">{n}</p> })}
-                {(!d.media.is_empty()).then(|| view! { <MediaThumbs items=d.media.clone()/> })}
-                {(n_old > 0).then(|| view! {
-                    <p class="to-sub q3">
-                        {if n_old == 1 { "1 older version".to_string() } else { format!("{n_old} older versions") }}" "
-                        <button class="link" data-focus-role="versions-toggle" aria-expanded=move || show_old.get().to_string() on:click=move |_| show_old.update(|s| *s = !*s)>
-                            {move || if show_old.get() { "Hide" } else { "Show" }}
-                        </button>
-                    </p>
-                })}
-                <Show when=move || show_old.get()>
-                    <ul class="to-older">
-                        {older.iter().map(|v| {
-                            let key = opened_key(&pin2, &id2, &v.version);
-                            let on_open = Callback::new(move |_| store.record(key.clone()));
-                            let mine = store.for_one(&pin2, &id2).into_iter().find(|(x, _)| *x == v.version);
-                            let when = v.updated_at.as_deref().map(fmt::clock).filter(|c| !c.is_empty());
-                            view! {
-                                <li>
-                                    <span><b>{v.version.clone()}</b>{when.map(|w| format!(", {w}"))}", "<span class="q3">{format!("Superseded by {current}")}</span>
-                                    {mine.map(|(_, at)| view! { " "{mark_view(Mark::Opened(at))} })}</span>
-                                    {open_action(opener(v.path.as_deref(), v.url.as_deref()), false, on_open)}
-                                </li>
-                            }
-                        }).collect_view()}
-                    </ul>
-                </Show>
-            </div>
-            <span class="to-act">{open_action(o, main, on_open)}</span>
-        </li>
-    }
-}
-
-fn to_open_section(p: &Pin) -> AnyView {
-    let list = ordered(&p.r.deliverables);
-    if list.is_empty() {
-        return view! {
-            <section class="c2-sec">
-                <div class="c2-sec-head"><h4 class="cap">"To open"</h4></div>
-                <p class="q3 c2-none">"Nothing reported to open."</p>
-            </section>
-        }
-        .into_any();
-    }
-    let store = expect_context::<OpenedStore>();
-    let all_new = list
-        .iter()
-        .all(|d| store.for_one(&p.u.id, &d.id).is_empty());
-    let more = list.len().saturating_sub(6);
-    let all = RwSignal::new(false);
-    let pin = p.u.id.clone();
-    view! {
-        <section class="c2-sec">
-            <div class="c2-sec-head"><h4 class="cap">"To open"</h4><span class="n">{list.len().to_string()}</span>
-                {all_new.then(|| view! { <span class="c2-sec-end">"all new to you"</span> })}</div>
-            <ul class="to-list">
-                {move || {
-                    let rows: Vec<Deliverable> = if all.get() { list.clone() } else { list.iter().take(6).cloned().collect() };
-                    rows.into_iter().map(|d| view! { <ToOpenRow pin=pin.clone() d=d/> }).collect_view()
-                }}
-            </ul>
-            {(more > 0).then(|| view! {
-                <p class="c2-fold"><span>{format!("and {more} more")}</span>
-                    <button class="link" on:click=move |_| all.update(|a| *a = !*a)>{move || if all.get() { "Fewer" } else { "Show" }}</button></p>
-            })}
-        </section>
-    }
-    .into_any()
-}
-
 fn row_keys(values: impl Iterator<Item = String>) -> Vec<(String, usize)> {
     let mut seen = std::collections::BTreeMap::new();
     values
@@ -485,17 +352,47 @@ fn row_keys(values: impl Iterator<Item = String>) -> Vec<(String, usize)> {
         .collect()
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum PinDisclosure {
+    Tasks(&'static str),
+    Deliverables,
+    Media(String),
+    Versions(String),
+}
+
+#[derive(Clone, Copy)]
+struct PinDisclosures(RwSignal<std::collections::BTreeSet<PinDisclosure>>);
+
+impl PinDisclosures {
+    fn bind(self, key: PinDisclosure) -> (Memo<bool>, Callback<()>) {
+        let key = StoredValue::new(key);
+        let open = Memo::new(move |_| self.0.with(|keys| key.with_value(|k| keys.contains(k))));
+        let toggle = Callback::new(move |_| {
+            self.0.update(|keys| {
+                let key = key.get_value();
+                if !keys.remove(&key) {
+                    keys.insert(key);
+                }
+            })
+        });
+        (open, toggle)
+    }
+}
+
 #[component]
-fn LiveMediaThumbs(items: Memo<Vec<ReportedMedia>>) -> impl IntoView {
+fn LiveMediaThumbs(
+    items: Memo<Vec<ReportedMedia>>,
+    all: Memo<bool>,
+    toggle: Callback<()>,
+) -> impl IntoView {
     let parsed = Memo::new(move |_| items.with(|items| media_of(items)));
-    let all = RwSignal::new(false);
     let more = Memo::new(move |_| parsed.with(|(media, _)| media.len().saturating_sub(3)));
     let media = Memo::new(move |_| parsed.with(|(media, _)| media.clone()));
     let limit = Memo::new(move |_| if all.get() { usize::MAX } else { 3 });
     view! {
         <div class="to-media">
             <LiveMediaList items=media limit=limit/>
-            <Show when={move || more.get() > 0}><button class="link" data-focus-role="media-more" on:click=move |_| all.update(|all| *all = !*all)>
+            <Show when={move || more.get() > 0}><button class="link" data-focus-role="media-more" on:click=move |_| toggle.run(())>
                 {move || if all.get() { "Fewer".to_string() } else { format!("{} more", more.get()) }}
             </button></Show>
             {move || parsed.with(|(_, outside)| (*outside > 0).then(|| view! { <p class="q3 to-sub">{format!("{} kept outside the share, so not shown here.", if *outside == 1 { "1 more is".to_string() } else { format!("{outside} more are") })}</p> }))}
@@ -518,7 +415,9 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>, identity: String) -> impl In
         older.with(|versions| row_keys(versions.iter().map(|v| v.version.clone())))
     });
     let (older_keys, older_order_id) = hold_order(older_keys, None);
-    let show_old = RwSignal::new(false);
+    let disclosures = expect_context::<PinDisclosures>();
+    let (show_old, toggle_versions) = disclosures.bind(PinDisclosure::Versions(identity.clone()));
+    let (show_media, toggle_media) = disclosures.bind(PinDisclosure::Media(identity.clone()));
     let on_open = Callback::new(move |_| {
         store.record(opened_key(
             &pin.get_value(),
@@ -538,11 +437,11 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>, identity: String) -> impl In
                 </p>
                 <Show when=move || action.with(|o| matches!(o, Opener::CopyPath(_)))><p class="q3 to-sub">"Kept outside the share, so it cannot be opened here"</p></Show>
                 {move || d.with(|d| d.note.clone().map(|note| view! { <p class="to-sub">{note}</p> }))}
-                <Show when=move || !media.with(Vec::is_empty)><LiveMediaThumbs items=media/></Show>
+                <Show when=move || !media.with(Vec::is_empty)><LiveMediaThumbs items=media all=show_media toggle=toggle_media/></Show>
                 <Show when=move || !older.with(Vec::is_empty)>
                     <p class="to-sub q3">
                         {move || older.with(|versions| if versions.len() == 1 { "1 older version".to_string() } else { format!("{} older versions", versions.len()) })}" "
-                        <button class="link" data-focus-role="versions-toggle" aria-expanded=move || show_old.get().to_string() on:click=move |_| show_old.update(|s| *s = !*s)>{move || if show_old.get() { "Hide" } else { "Show" }}</button>
+                        <button class="link" data-focus-role="versions-toggle" aria-expanded=move || show_old.get().to_string() on:click=move |_| toggle_versions.run(())>{move || if show_old.get() { "Hide" } else { "Show" }}</button>
                     </p>
                 </Show>
                 <Show when=move || show_old.get()>
@@ -572,7 +471,7 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>, identity: String) -> impl In
 fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView {
     let store = expect_context::<OpenedStore>();
     let pin = StoredValue::new(pin);
-    let all = RwSignal::new(false);
+    let (all, toggle) = expect_context::<PinDisclosures>().bind(PinDisclosure::Deliverables);
     let available =
         Memo::new(move |_| list.with(|list| row_keys(list.iter().map(|d| d.id.clone()))));
     let limit = Memo::new(move |_| if all.get() { usize::MAX } else { 6 });
@@ -594,7 +493,7 @@ fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView
                     }/>
                 </ul>
                 <Show when={move || more.get() > 0}><p class="c2-fold"><span>{move || format!("and {} more", more.get())}</span>
-                    <button class="link" on:click=move |_| all.update(|all| *all = !*all)>{move || if all.get() { "Fewer" } else { "Show" }}</button>
+                    <button class="link" on:click=move |_| toggle.run(())>{move || if all.get() { "Fewer" } else { "Show" }}</button>
                 </p></Show>
             </Show>
         </section>
@@ -788,44 +687,6 @@ fn mini_track(stages: &[Stage]) -> Option<AnyView> {
     })
 }
 
-fn stages_section(p: &Pin) -> AnyView {
-    let shown: Vec<Stage> =
-        p.r.stages
-            .iter()
-            .filter(|s| s.state != "skipped")
-            .cloned()
-            .collect();
-    let line = stage_line(&p.r.stages);
-    let yours = shown
-        .iter()
-        .filter(|s| s.by.as_deref() == Some("owner"))
-        .count();
-    view! {
-        <section class="c2-sec">
-            <div class="c2-sec-head"><h4 class="cap">"Stages"</h4>
-                {line.map(|(t, at, of)| view! { <span class="c2-sec-end">{format!("{t}, ")}<b>{at.to_string()}</b>{format!(" of {of}")}</span> })}</div>
-            {if shown.len() < 2 {
-                view! { <p class="q3 c2-none">{foot_words(p)}</p> }.into_any()
-            } else {
-                view! {
-                    <div class="c2-track" aria-hidden="true">{shown.iter().map(|s| view! { <i class="fill" data-st=stage_tone(s)></i> }).collect_view()}</div>
-                    <ol class="c2-stages" style=format!("--n:{}", shown.len())>
-                        {shown.iter().map(|s| view! {
-                            <li data-st=stage_tone(s)>
-                                <span class="seg fill"></span>
-                                <span class="lab">{stage_label(s)}</span>
-                                <span class="st">{stage_state_words(s)}</span>
-                            </li>
-                        }).collect_view()}
-                    </ol>
-                    {(yours > 0).then(|| view! { <p class="q3 c2-sub">{format!("{yours} of these {} steps {} yours.", shown.len(), if yours == 1 { "is" } else { "are" })}</p> })}
-                }.into_any()
-            }}
-        </section>
-    }
-    .into_any()
-}
-
 #[component]
 fn LiveStages(pin: Memo<Option<Pin>>) -> impl IntoView {
     let stages = Memo::new(move |_| {
@@ -870,8 +731,8 @@ fn LiveStages(pin: Memo<Option<Pin>>) -> impl IntoView {
 }
 
 #[component]
-fn TaskGroupView(g: Signal<TaskGroup>) -> impl IntoView {
-    let open = RwSignal::new(false);
+fn TaskGroupView(g: Signal<TaskGroup>, group: &'static str) -> impl IntoView {
+    let (open, toggle) = expect_context::<PinDisclosures>().bind(PinDisclosure::Tasks(group));
     let folds = move || g.with(TaskGroup::folds);
     let n = move || g.with(|g| g.rows.len());
     let label = move || {
@@ -903,11 +764,11 @@ fn TaskGroupView(g: Signal<TaskGroup>) -> impl IntoView {
                                 })}
                             </li> }
                         }/>
-                        <Show when=folds><li class="c2-tg-less"><button class="link" on:click=move |_| open.set(false)>"Fewer"</button></li></Show>
+                        <Show when=folds><li class="c2-tg-less"><button class="link" on:click=move |_| toggle.run(())>"Fewer"</button></li></Show>
                     </ul>
             }>
                 <p class="c2-tg-fold"><span>{move || plural_tasks(n())}</span>
-                    <button class="link" on:click=move |_| open.set(true)>{move || format!("Show all {}", n())}</button></p>
+                    <button class="link" on:click=move |_| toggle.run(())>{move || format!("Show all {}", n())}</button></p>
             </Show>
         </div>
     }
@@ -919,33 +780,6 @@ fn plural_tasks(n: usize) -> String {
     } else {
         format!("{n} tasks")
     }
-}
-
-fn tasks_section(p: &Pin) -> AnyView {
-    let count = p.u.left.len() + p.u.done.len();
-    if count == 0 {
-        let words =
-            p.u.percent_note
-                .clone()
-                .unwrap_or_else(|| "No task list reported.".into());
-        return view! {
-            <section class="c2-sec">
-                <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4></div>
-                <p class="q3 c2-none">{words}</p>
-            </section>
-        }
-        .into_any();
-    }
-    let groups = task_groups(&p.u, p.board.as_ref());
-    // The list's own time, when its board is known; amber when 6 h older than the thread's report.
-    let as_of = tasks_as_of(p);
-    view! {
-        <section class="c2-sec">
-            <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4><span class="n">{count.to_string()}</span>{as_of}</div>
-            {groups.into_iter().map(|g| view! { <TaskGroupView g=Signal::derive(move || g.clone())/> }).collect_view()}
-        </section>
-    }
-    .into_any()
 }
 
 fn tasks_as_of(p: &Pin) -> Option<AnyView> {
@@ -1005,7 +839,7 @@ fn LiveTasks(pin: Memo<Option<Pin>>) -> impl IntoView {
             }>
                 <For each=move || keys.get() key=|label| *label children=move |label| {
                     let group = Memo::new(move |_| groups.with(|groups| groups.iter().find(|g| g.label == label).cloned().unwrap_or_default()));
-                    view! { <TaskGroupView g=group.into()/> }
+                    view! { <TaskGroupView g=group.into() group=label/> }
                 }/>
             </Show>
         </section>
@@ -1035,9 +869,11 @@ fn sheet_heading(p: &Pin) -> impl IntoView + use<> {
             <h3 class="c2-name">{p.title()}</h3>
             {(!meta.is_empty()).then(|| view! { <p class="c2-meta">{meta.join("  ·  ")}</p> })}
         </header>
-        {refusal_notice(&p.u)}
+        {(p.u.refusal.is_some() && !cached).then(|| view! {
+            <p class="pin-cached" data-tone="warn">"This report could not be read. See Report problems above the pinned list."</p>
+        })}
         {cached.then(|| cached_notice(&p.u))}
-        {problems.into_iter().skip(usize::from(p.u.refusal.is_some() || cached)).map(|(_, full)| view! { <p class="c2-prob" data-tone="warn">{full}</p> }).collect_view()}
+        {problems.into_iter().skip(usize::from(cached)).map(|(_, full)| view! { <p class="c2-prob" data-tone="warn">{full}</p> }).collect_view()}
     }
 }
 
@@ -1062,36 +898,9 @@ fn quiet_has_lists(p: &Pin) -> bool {
         || p.r.progress.is_some()
 }
 
-fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
-    let body = if matches!(p.word, Word::NotReporting)
-        || (matches!(p.word, Word::Quiet) && !quiet_has_lists(p))
-    {
-        quiet_body(p).into_any()
-    } else if matches!(p.word, Word::Quiet) {
-        // Quiet still shows what it reported, each list with its own time: the note says how old it is, and a thread that
-        // went past a day no longer drops its stages and tasks (2026-11-13 regression).
-        view! {
-            {quiet_body(p)}
-            <div class="c2-cols">
-                <div class="c2-col">{to_open_section(p)}</div>
-                <div class="c2-col">{stages_section(p)}{tasks_section(p)}</div>
-            </div>
-        }
-        .into_any()
-    } else {
-        view! {
-            <div class="c2-cols" class:dim={p.u.report_state == "unreadable"}>
-                <div class="c2-col">{facts(p, elapsed)}{to_open_section(p)}</div>
-                <div class="c2-col">{stages_section(p)}{tasks_section(p)}</div>
-            </div>
-        }
-        .into_any()
-    };
-    view! { {sheet_heading(p)}{body} }
-}
-
 #[component]
 fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
+    provide_context(PinDisclosures(RwSignal::new(Default::default())));
     let live = expect_context::<Live>();
     // Not reporting, or quiet with nothing but words: the note alone. Quiet with lists: the note, then what it reported
     // (stages, tasks, things to open), each with its own time; only the five facts, which would repeat the note's last
@@ -1238,7 +1047,6 @@ pub fn PinnedPanelView() -> impl IntoView {
                 .and_then(|(_, pins)| pins.iter().find(|p| p.u.id == id).cloned())
         })
     };
-    let shown = Memo::new(move |_| pin_of(shown_id.get()));
     let sheet_pin = Memo::new(move |_| pin_of(sheet_id.get()));
     Effect::new(move |_| {
         if sheet_id.with(|s| s.is_some()) && sheet_pin.with(|p| p.is_none()) {
@@ -1261,6 +1069,10 @@ pub fn PinnedPanelView() -> impl IntoView {
         }
     });
     let close_sheet = Callback::new(move |_: ()| sheet_id.set(None));
+    let report_problems = Memo::new(move |_| {
+        live.view
+            .with(|v| v.as_ref().map(report_problem_lines).unwrap_or_default())
+    });
     if let Some(frame) = use_context::<crate::frame::FrameCtx>() {
         Effect::new(move |_| {
             if frame.route.get() != crate::Page::Status {
@@ -1280,59 +1092,65 @@ pub fn PinnedPanelView() -> impl IntoView {
                     }
                 }))}</span>
             </div>
-            {move || match data.get() {
-                None => view! { <p class="empty">"Pinned threads are unavailable: this server doesn't send them yet."</p> }.into_any(),
-                Some((p, _)) if p.unavailable.is_some() => view! { <p class="empty">{p.unavailable.clone()}</p> }.into_any(),
-                Some((p, pins)) if pins.is_empty() => view! {
-                    {p.machine_problems.iter().map(|m| view! { <p class="plate-note problem">{m.text.clone()}</p> }).collect_view()}
-                    <p class="empty">"No threads are pinned in T3."</p>
-                }.into_any(),
-                Some((panel, pins)) => {
-                    let elapsed = live.elapsed_seconds();
-                    let (silent, live_pins): (Vec<Pin>, Vec<Pin>) = pins.into_iter().partition(is_silent);
-                    let mut groups: Vec<(&'static str, Vec<Pin>)> = Vec::new();
-                    for p in live_pins {
-                        let g = p.group();
-                        match groups.iter_mut().find(|(x, _)| *x == g) {
-                            Some((_, list)) => list.push(p),
-                            None => groups.push((g, vec![p])),
-                        }
-                    }
-                    let no_rows = groups.is_empty();
-                    view! {
-                        {panel.machine_problems.iter().map(|m| view! { <p class="plate-note problem">{m.text.clone()}</p> }).collect_view()}
-                        {refused_lines(&panel)}
-                        <div class="c2-body" class:solo=no_rows>
-                            {(!no_rows).then(|| view! {
-                                <div class="c2-roster">
-                                    {groups.into_iter().map(|(g, list)| view! {
-                                        <h3 class="cap c2-group" data-tone=(g == "Needs you").then_some("warn")>{g}" "<span class="n">{list.len().to_string()}</span></h3>
-                                        <ul class="c2-rows">
-                                            {list.into_iter().map(|p| {
-                                                let id = p.u.id.clone();
-                                                let id2 = id.clone();
-                                                let sel = Signal::derive(move || shown_id.get().as_deref() == Some(id.as_str()));
-                                                let open = Signal::derive(move || sheet_id.get().as_deref() == Some(id2.as_str()));
-                                                view! { <RosterRow p=p selected=sel open=open on_pick=on_pick/> }
-                                            }).collect_view()}
-                                        </ul>
-                                    }).collect_view()}
-                                </div>
-                                <div class="c2-pane" aria-live="polite">
-                                    {move || shown.get().map(|p| view! { <article class="c2-sheet">{sheet_body(&p, elapsed)}</article> })}
-                                </div>
-                            })}
-                        </div>
-                        {(!silent.is_empty()).then(|| view! {
-                            <div class="c2-silent">
-                                <h3 class="cap c2-group">"Not reporting "<span class="n">{silent.len().to_string()}</span></h3>
-                                <ul>{silent.iter().map(|p| view! { <li><b>{p.title()}</b><span class="q3">"no report yet"</span></li> }).collect_view()}</ul>
-                                <p class="c2-note">"A pin shows its status once its thread runs agent-report update."</p>
-                            </div>
-                        })}
-                    }.into_any()
-                }
-            }}
+            <details class="c2-report-problems" hidden=move || report_problems.with(Vec::is_empty)>
+                <summary data-tone="warn">{move || {
+                    let count = report_problems.with(Vec::len);
+                    format!("{count} report problem{}", if count == 1 { "" } else { "s" })
+                }}</summary>
+                <ul>{move || report_problems.get().into_iter().map(|line| view! { <li>{line}</li> }).collect_view()}</ul>
+            </details>
+            {move || data.with(|d| match d {
+                None => Some("Pinned threads are unavailable: this server doesn't send them yet.".to_string()),
+                Some((p, pins)) => p.unavailable.clone().or_else(|| pins.is_empty().then(|| "No threads are pinned in T3.".to_string())),
+            }).map(|words| view! { <p class="empty">{words}</p> })}
+            <div class="c2-body" hidden=move || shown_id.with(Option::is_none)>
+                <div class="c2-roster">
+                    {move || {
+                        let mut groups: Vec<(&'static str, Vec<Pin>)> = Vec::new();
+                        data.with(|d| {
+                            if let Some((_, pins)) = d {
+                                for p in pins.iter().filter(|p| !is_silent(p)) {
+                                    let g = p.group();
+                                    match groups.iter_mut().find(|(x, _)| *x == g) {
+                                        Some((_, list)) => list.push(p.clone()),
+                                        None => groups.push((g, vec![p.clone()])),
+                                    }
+                                }
+                            }
+                        });
+                        groups.into_iter().map(|(g, list)| view! {
+                            <h3 class="cap c2-group" data-tone=(g == "Needs you").then_some("warn")>{g}" "<span class="n">{list.len().to_string()}</span></h3>
+                            <ul class="c2-rows">
+                                {list.into_iter().map(|p| {
+                                    let id = p.u.id.clone();
+                                    let id2 = id.clone();
+                                    let sel = Signal::derive(move || shown_id.get().as_deref() == Some(id.as_str()));
+                                    let open = Signal::derive(move || sheet_id.get().as_deref() == Some(id2.as_str()));
+                                    view! { <RosterRow p=p selected=sel open=open on_pick=on_pick/> }
+                                }).collect_view()}
+                            </ul>
+                        }).collect_view()
+                    }}
+                </div>
+                <div class="c2-pane" aria-live="polite">
+                    // Match the portal's ownership: only a different pin starts a new set of controls.
+                    <For each=move || shown_id.get() key=|id| id.clone() children=move |id| {
+                        let pin = Memo::new(move |_| pin_of(Some(id.clone())));
+                        view! { <article class="c2-sheet"><LivePinBody pin=pin/></article> }
+                    }/>
+                </div>
+            </div>
+            {move || data.with(|d| {
+                let (_, pins) = d.as_ref()?;
+                let silent: Vec<_> = pins.iter().filter(|p| is_silent(p)).map(Pin::title).collect();
+                (!silent.is_empty()).then(|| view! {
+                    <div class="c2-silent">
+                        <h3 class="cap c2-group">"Not reporting "<span class="n">{silent.len().to_string()}</span></h3>
+                        <ul>{silent.into_iter().map(|title| view! { <li><b>{title}</b><span class="q3">"no report yet"</span></li> }).collect_view()}</ul>
+                        <p class="c2-note">"A pin shows its status once its thread runs agent-report update."</p>
+                    </div>
+                })
+            })}
             // A status poll changes the report, not the lifetime of the open overlay. Keep the portal,
             // scroll container, drag state and stack token until this pin closes or a different pin opens.
             <For each=move || sheet_id.get() key=|id| id.clone() children=move |_| {

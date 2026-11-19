@@ -32,6 +32,8 @@ pub struct StatusView {
     pub sources: Vec<Source>,
     pub cards: Cards,
     #[serde(deserialize_with = "nullable")]
+    pub report_problems: Vec<StatusProblem>,
+    #[serde(deserialize_with = "nullable")]
     pub projects: Vec<Project>,
     pub threads: Rows<Thread>,
     pub machines: Rows<Machine>,
@@ -63,7 +65,7 @@ pub struct PinnedPanel {
     pub updates: Vec<PinnedUpdate>,
 }
 
-/// A refused status@1 file (`writers/<writer>/status.json`) and why, in the server's fixed words.
+/// A file or folder the report readers could not read, with the reader's reason.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StatusProblem {
