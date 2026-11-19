@@ -64,8 +64,9 @@ describe('the published alias table', () => {
     for (const [written, canonical] of Object.entries(builtin.aliases))
       expect([written, packaged.aliases[written]]).toEqual([written, canonical]);
     for (const suffix of builtin.effortSuffixes) expect(packaged.effortSuffixes).toContain(suffix);
-    // The union (108), explicit Qwen spellings (4), Gemini 4 Hydrogen (2), and Astra 6.2 (6).
-    expect(Object.keys(packaged.aliases)).toHaveLength(120);
+    // Our built-in copy's 104 plus explicit Qwen spellings (9), Gemini 4 Hydrogen (2),
+    // DeepSeek V4.1 Flash (2), Astra 6.2 (6), Sol 6.2 (6) and Z.ai account spellings (2).
+    expect(Object.keys(packaged.aliases)).toHaveLength(131);
     const known = new Set(models.map((model) => model.model));
     for (const canonical of Object.values(packaged.aliases))
       expect(known.has(canonical)).toBe(true);
@@ -95,11 +96,13 @@ describe('the published alias table', () => {
     const builtinTable = { aliases: builtin.aliases, effortSuffixes: builtin.effortSuffixes };
     // agent-report's copy came with the catalog's 16 ids of Nov 11, before these were added.
     const NEW_MODELS = [
+      'openai/gpt-6.2-sol',
+      'openai/gpt-6.2-astra',
       'deepseek/deepseek-v4.1-flash',
       'alibaba/qwen3.8-max',
+      'alibaba/qwen4-max',
       'alibaba/qwen4-max-preview',
       'google/gemini-4-hydrogen',
-      'openai/gpt-6.2-astra',
     ];
     const nov11 = published.models.filter((model) => !NEW_MODELS.includes(model.model));
     expect(nov11).toHaveLength(16);
@@ -154,6 +157,21 @@ describe('the published alias table', () => {
     }
   });
 
+  it('resolves Sol 6.2 review spellings with its efforts', async () => {
+    const entry = models.find((model) => model.model === 'openai/gpt-6.2-sol');
+    expect(entry?.runtimes).toEqual(['codex']);
+    expect(entry?.efforts).toEqual(['medium', 'high', 'max']);
+    const published = await publishedTable();
+    for (const prefix of ['', 'codex/', 'cursor/', 'omp/', 'opencode-go/', 'zcode/']) {
+      const written = `${prefix}gpt-6.2-sol`;
+      expect(packaged.aliases[written]).toBe('openai/gpt-6.2-sol');
+      expect(normalizeModel(written, 'high', published.models, published.table)).toEqual({
+        id: 'openai/gpt-6.2-sol',
+        effort: 'high',
+      });
+    }
+  });
+
   // Review 1, L5: a catalog model whose own name ends in an effort word must have its spellings as
   // explicit entries, so no reader (AAC or agent-report) can split the word off as an effort.
   it('gives every catalog model whose name ends in an effort word explicit entries', () => {
@@ -162,8 +180,8 @@ describe('the published alias table', () => {
       const name = model.model.slice(model.model.indexOf('/') + 1);
       return suffixes.some((suffix) => name.endsWith(suffix));
     });
-    // Today only Qwen 3.8 Max; a new one fails here until its entries are added.
-    expect(named.map((model) => model.model)).toEqual(['alibaba/qwen3.8-max']);
+    // Today only Qwen 3.8 Max and Qwen 4 Max; a new one fails here until its entries are added.
+    expect(named.map((model) => model.model)).toEqual(['alibaba/qwen3.8-max', 'alibaba/qwen4-max']);
     for (const { model } of named) {
       const name = model.slice(model.indexOf('/') + 1);
       expect([name, packaged.aliases[name]]).toEqual([name, model]);
@@ -187,6 +205,13 @@ describe('the published alias table', () => {
         { id: 'alibaba/qwen3.8-max', effort: null },
       ]);
     for (const written of [
+      'alibaba/qwen4-max',
+      'qwen4-max',
+      'alibaba-token-plan/qwen4-max',
+      'omp/alibaba-token-plan/qwen4-max',
+    ])
+      expect([written, resolve(written)]).toEqual([written, { id: 'alibaba/qwen4-max', effort: null }]);
+    for (const written of [
       'alibaba/qwen4-max-preview',
       'qwen4-max-preview',
       'alibaba-token-plan/qwen4-max-preview',
@@ -197,9 +222,11 @@ describe('the published alias table', () => {
         { id: 'alibaba/qwen4-max-preview', effort: null },
       ]);
     // Every -max spelling is an explicit entry, so a reader that splits suffixes before a bare
-    // lookup still keeps it whole, even if a `qwen3.8` model is ever listed.
+    // lookup still keeps it whole, even if a `qwen3.8` or `qwen4` model is ever listed.
     for (const written of ['qwen3.8-max', 'alibaba-token-plan/qwen3.8-max'])
       expect(packaged.aliases[written]).toBe('alibaba/qwen3.8-max');
+    for (const written of ['qwen4-max', 'alibaba-token-plan/qwen4-max', 'omp/alibaba-token-plan/qwen4-max'])
+      expect(packaged.aliases[written]).toBe('alibaba/qwen4-max');
     const withBase = [...published.models, { model: 'alibaba/qwen3.8', efforts: ['max'] }];
     expect(normalizeModel('qwen3.8-max', null, withBase, published.table)).toEqual({
       id: 'alibaba/qwen3.8-max',

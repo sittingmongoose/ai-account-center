@@ -65,6 +65,21 @@
       "notes": ""
     },
     {
+      "model": "openai/gpt-6.2-sol",
+      "label": "Sol 6.2",
+      "family": "GPT-6",
+      "runtimes": [
+        "codex"
+      ],
+      "efforts": [
+        "medium",
+        "high",
+        "max"
+      ],
+      "prices": null,
+      "notes": ""
+    },
+    {
       "model": "openai/gpt-6-astra",
       "label": "Astra",
       "family": "GPT-6",
@@ -232,6 +247,17 @@
       "efforts": [],
       "prices": null,
       "notes": ""
+    },
+    {
+      "model": "alibaba/qwen4-max",
+      "label": "Qwen 4 Max",
+      "family": "Qwen",
+      "runtimes": [
+        "omp"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": "Released Qwen 4 Max on the Qwen token plan; no thinking option in OMP"
     },
     {
       "model": "alibaba/qwen4-max-preview",
