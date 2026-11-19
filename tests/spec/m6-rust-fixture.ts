@@ -2,16 +2,17 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
 
-async function ready(child: ChildProcess): Promise<string> {
+async function ready(child: ChildProcess, timeoutMs: number): Promise<string> {
   assert(child.stdout && child.stderr);
   const output = createInterface({ input: child.stdout });
   try {
     return await new Promise((resolve, reject) => {
       const timeout = setTimeout(
         () => reject(new Error('Rust TCP listener did not start')),
-        10_000
+        timeoutMs
       );
       child.once('error', reject);
       child.once('exit', (status) => reject(new Error(`Rust TCP listener exited with ${status}`)));
@@ -43,14 +44,39 @@ export async function startRustFixture(
   binary: string,
   root: string,
   env: NodeJS.ProcessEnv,
-  eventPipe = false
+  eventPipe = false,
+  mode: 'fixture' | 'cut' | 'cut-rust-only' = 'fixture'
 ) {
-  const child = spawn(binary, ['--public'], {
+  const args = ['--public'];
+  const cut = mode !== 'fixture';
+  if (cut) {
+    const reserve = createServer();
+    const listening = once(reserve, 'listening');
+    reserve.listen(0, '127.0.0.1');
+    await listening;
+    const address = reserve.address();
+    assert(address && typeof address === 'object');
+    await new Promise<void>((resolve, reject) =>
+      reserve.close((error) => (error ? reject(error) : resolve()))
+    );
+    args.splice(
+      0,
+      1,
+      'dashboard',
+      '--no-open',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(address.port)
+    );
+  }
+  const child = spawn(binary, args, {
     env: {
       ...env,
       CCS_DIR: root,
       AAC_RUST_PUBLIC_LISTEN: '127.0.0.1:0',
       AAC_RUST_PUBLIC_EVENT_STDIN: eventPipe ? '1' : '0',
+      AAC_TS_SIDECAR: mode === 'cut-rust-only' ? 'off' : env.AAC_TS_SIDECAR,
     },
     stdio: [eventPipe ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -60,7 +86,7 @@ export async function startRustFixture(
     if (audit.length < 1024) audit.push(chunk.toString());
   });
   try {
-    const url = await ready(child);
+    const url = await ready(child, cut ? 22_000 : 10_000);
     return { url, audit, pipe: child.stdin, stop: () => stop(child) };
   } catch (error) {
     await stop(child);

@@ -163,6 +163,7 @@ struct AppState(Arc<Shared>);
 struct NativeRecheck {
     producer: Arc<crate::account_usage::producer::Producer>,
     companions: Arc<dyn Fn() -> crate::account_usage::producer::CompanionInputs + Send + Sync>,
+    published: Arc<dyn Fn(&crate::account_usage::AccountUsageCache) + Send + Sync>,
 }
 
 #[derive(Deserialize)]
@@ -981,7 +982,10 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(row.handler, Decline::Shape);
             }
             match native.producer.recheck(&shared.account_usage, &(native.companions)(), &input.id).await {
-                Ok(Some(value)) => Json(value).into_response(),
+                Ok(Some(value)) => {
+                    (native.published)(&shared.account_usage);
+                    Json(value).into_response()
+                }
                 Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"code": "unknown_account"}))).into_response(),
                 Err(_) => store_error("recheck_failed: the account could not be checked safely"),
             }
@@ -1640,6 +1644,7 @@ async fn serve_inner(
     let native_recheck = producer.as_ref().zip(native.as_ref()).map(|(producer, native)| NativeRecheck {
         producer: Arc::clone(producer),
         companions: Arc::clone(&native.companions),
+        published: Arc::clone(&native.published),
     });
     let package_root = crate::agent_transport::package_root();
     let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(

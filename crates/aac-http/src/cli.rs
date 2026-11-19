@@ -214,28 +214,28 @@ fn retired(command: &str) -> i32 {
     1
 }
 
-pub(crate) fn typescript(args: &[String]) -> Result<i32, String> {
+pub(crate) fn antigravity_signin(args: &[String], ccs: &Path) -> Result<i32, String> {
     let script = env::var_os("AAC_TS_CLI")
         .map(PathBuf::from)
         .or_else(|| {
             let exe = env::current_exe().ok()?;
             let directory = exe.parent()?;
             [
-                directory.join("ccs.js"),
-                directory.join("../dist/ccs.js"),
-                directory.join("../../dist/ccs.js"),
+                "../antigravity/terminal-signin-entry.js",
+                "../../dist/antigravity/terminal-signin-entry.js",
             ]
             .into_iter()
+            .map(|relative| directory.join(relative))
             .find(|candidate| candidate.is_file())
         })
-        .ok_or("Set AAC_TS_CLI to the shipped TypeScript CLI (dist/ccs.js).")?;
+        .ok_or("The packaged Antigravity sign-in worker is missing.")?;
     let mut command = Command::new("node");
-    command.arg(script).args(args);
+    command.arg(script).args(args).env("CCS_DIR", ccs);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         Err(format!(
-            "Cannot start the TypeScript CLI: {}",
+            "Cannot start the Antigravity sign-in worker: {}",
             command.exec()
         ))
     }
@@ -244,7 +244,7 @@ pub(crate) fn typescript(args: &[String]) -> Result<i32, String> {
         command
             .status()
             .map(|status| status.code().unwrap_or(1))
-            .map_err(|error| format!("Cannot start the TypeScript CLI: {error}"))
+            .map_err(|error| format!("Cannot start the Antigravity sign-in worker: {error}"))
     }
 }
 

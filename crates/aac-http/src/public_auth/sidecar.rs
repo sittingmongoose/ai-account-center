@@ -106,13 +106,40 @@ impl Sidecar {
         }))
     }
 
-    pub fn attach(&mut self, events: DashboardEvents) -> Option<tokio::task::JoinHandle<()>> {
+    pub fn attach(
+        &mut self,
+        events: DashboardEvents,
+        shutdown: axum_server::Handle<SocketAddr>,
+        lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let output = self.output.take()?;
         Some(tokio::spawn(async move {
             if events.read_feed(output).await.is_err() {
                 tracing::warn!("dashboard.sidecar_event_feed.closed");
             }
+            lost.store(true, std::sync::atomic::Ordering::Relaxed);
+            shutdown.graceful_shutdown(Some(Duration::from_secs(3)));
         }))
+    }
+
+    #[cfg(unix)]
+    pub fn watch_native_usage(&self, events: DashboardEvents) -> tokio::task::JoinHandle<()> {
+        let path = self.cache.with_file_name(super::hub::NATIVE_SNAPSHOT);
+        tokio::spawn(async move {
+            let mut previous = None;
+            let mut cadence = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                cadence.tick().await;
+                let revision = std::fs::symlink_metadata(&path)
+                    .ok()
+                    .filter(|metadata| metadata.is_file())
+                    .and_then(|metadata| metadata.modified().ok());
+                if revision.is_some() && revision != previous {
+                    previous = revision;
+                    events.publish(super::DashboardEvent::AccountsChanged {});
+                }
+            }
+        })
     }
 
     pub async fn stop(mut self) {

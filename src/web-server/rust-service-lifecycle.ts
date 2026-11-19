@@ -645,6 +645,7 @@ async function acquireWithinBudget(
         AAC_RUST_NATIVE_APP_UPDATES:
           rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
         AAC_RUST_CUT_WORKER: process.env.AAC_RUST_CUT_WORKER,
+        AAC_CUT_HUB_DIRECTORY: process.env.AAC_CUT_HUB_DIRECTORY,
         AAC_RUST_GROUP_CLAUDE_OPEN: rustGroupOn('claude-open') ? 'on' : 'off',
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, '../../config/agent-artifacts.json'),

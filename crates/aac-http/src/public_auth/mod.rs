@@ -43,6 +43,19 @@ pub use dashboard_events::{
 };
 pub use hub::HubCache;
 
+/// Publish the native producer's transport-neutral Accounts rows to the public usage hub.
+#[cfg(unix)]
+pub fn publish_native_hub(
+    directory: &std::path::Path,
+    cache: &crate::account_usage::AccountUsageCache,
+) {
+    let now = now();
+    let Some(timestamp) = storage::iso(now) else {
+        return;
+    };
+    hub::publish_native_snapshot(directory, cache.hub_dashboards(&timestamp, now));
+}
+
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
 pub struct DashboardAccess {
@@ -172,7 +185,7 @@ impl DashboardAuth {
         cache: HubCache,
         ui_root: Option<PathBuf>,
     ) -> Router {
-        self.edges(downstream, cache, ui_root, None, false, None)
+        self.edges(downstream, cache, ui_root, None, false, None, false)
     }
 
     fn edges(
@@ -183,13 +196,15 @@ impl DashboardAuth {
         snapshot: Option<PathBuf>,
         partial_api: bool,
         backend: Option<compose::Backend>,
+        cut: bool,
     ) -> Router {
-        let hub = hub::Hub::new(self.0.clone(), cache, snapshot);
+        let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
+                && (!cut || compose::cut_route(request.method(), request.uri().path()))
             {
                 return backend.forward(request).await;
             }
@@ -315,9 +330,6 @@ pub(crate) async fn run_public_at(
         )
     };
     let composed = backend.is_some();
-    let worker_feed = worker
-        .as_mut()
-        .and_then(|child| child.attach(auth.events()));
     let mut api = Router::new();
     if cut || !composed {
         api = api.route(
@@ -333,6 +345,7 @@ pub(crate) async fn run_public_at(
             snapshot,
             !composed,
             backend,
+            cut,
         ))
         .layer(middleware::from_fn_with_state(
             request_log::Audit {
@@ -355,8 +368,16 @@ pub(crate) async fn run_public_at(
     let shutdown = axum_server::Handle::new();
     let signal = shutdown.clone();
     let feed_shutdown = shutdown.clone();
-    let feed_task =
-        (std::env::var("AAC_RUST_PUBLIC_EVENT_STDIN").as_deref() == Ok("1")).then(|| {
+    let worker_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    #[cfg(unix)]
+    let usage_feed = worker
+        .as_ref()
+        .map(|child| child.watch_native_usage(auth.events()));
+    let worker_feed = worker
+        .as_mut()
+        .and_then(|child| child.attach(auth.events(), shutdown.clone(), worker_lost.clone()));
+    let feed_task = (!cut && std::env::var("AAC_RUST_PUBLIC_EVENT_STDIN").as_deref() == Ok("1"))
+        .then(|| {
             let events = auth.events();
             tokio::spawn(async move {
                 if events.read_feed(tokio::io::stdin()).await.is_err() {
@@ -392,13 +413,23 @@ pub(crate) async fn run_public_at(
     if let Some(feed) = feed_task {
         feed.abort();
     }
+    if let Some(feed) = worker_feed {
+        feed.abort();
+        let _ = feed.await;
+    }
+    #[cfg(unix)]
+    if let Some(feed) = usage_feed {
+        feed.abort();
+    }
     if let Some(worker) = worker {
         worker.stop().await;
     }
-    if let Some(feed) = worker_feed {
-        feed.abort();
-    }
     auth.flush();
+    if result.is_ok() && worker_lost.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(std::io::Error::other(
+            "the private dashboard sidecar stopped",
+        ));
+    }
     result
 }
 

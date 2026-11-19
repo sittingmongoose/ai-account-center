@@ -35,7 +35,7 @@ CSS pixels, including the Duo rail.
 
 ## What a run does
 
-- **Build needed.** It serves this checkout's `dist/ccs.js` and `dist/ui` (it needs `dist/ui/app/index.html`), so run `bun install` and `bun run build:server` first. Build `dist/ui` with `bun run ui:build` on a build host (the VM refuses: `AAC_NO_LOCAL_RUST_BUILD=1`), or for a first look copy the installed package's `dist/ui`.
+- **Build needed.** Use `--set cut=1` for the shipped native launcher in `dist/native` and its private worker. The legacy fixture uses `dist/ccs.js`. Run `bun run build:server` and build `dist/ui` on a build host, or use the corresponding packaged assets.
 - **Isolated home.** The server starts with `CCS_HOME` and every home-like variable pointing at a temporary folder: `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, the XDG folders, `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Some collectors read the real home, so with only `CCS_HOME` set, real account emails and usage appear. Never point `home=` at a real home.
 - **Real sign-in.** `t.app.signIn()` goes through the real loopback setup (`POST /api/auth/setup`), or logs in once setup has happened. It runs as a `fetch` inside the page, so the session cookie lands in that page's jar.
 - **Pages.** `t.app.open({ page })` opens `/app/<page>?e2e` and waits for the frame (or, with `signIn: false`, the sign-in page). With `?e2e` the controllers keep their last views and toasts on `window` (`__aacLastAccounts`, `__aacLastAnalytics`, `__aacToasts`) and controls carry `data-probe` names; checks judge the DOM, so `t.audit` checks every control itself.

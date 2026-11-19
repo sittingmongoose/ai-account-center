@@ -3,7 +3,7 @@ use super::{DashboardAccess, DashboardPrincipal, Reply, error, request_log::Requ
 use axum::{
     body::Body,
     extract::Request,
-    http::{HeaderMap, HeaderName, HeaderValue, Uri},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, Uri},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hyper::client::conn::http1;
@@ -14,6 +14,114 @@ use tokio::{net::TcpStream, sync::Semaphore};
 
 const PROOF: &str = "x-aac-compose-proof";
 const ACCESS: &str = "x-aac-compose-access";
+
+// Only the cut uses this list. The composition fixture remains a reference for
+// the complete legacy router, including its handling of unknown methods.
+const CUT_ROUTES: &[(&str, &[&str])] = &[
+    ("/api/accounts/dashboard", &["GET"]),
+    ("/api/accounts/settings", &["GET", "PUT"]),
+    ("/api/accounts/preferences", &["GET", "PUT", "PATCH"]),
+    ("/api/accounts/visibility", &["GET", "PUT", "PATCH"]),
+    ("/api/accounts/analytics", &["GET"]),
+    ("/api/accounts/analytics/capture", &["GET", "PUT"]),
+    ("/api/accounts/registry", &["GET"]),
+    ("/api/accounts/add", &["POST"]),
+    ("/api/accounts/signin-command", &["GET"]),
+    ("/api/accounts/signin-jobs/:id", &["GET"]),
+    ("/api/accounts/signin-jobs/:id/cancel", &["POST"]),
+    ("/api/accounts/signin-jobs/:id/code", &["POST"]),
+    ("/api/accounts/trash", &["GET"]),
+    ("/api/accounts/trash/:id/purge", &["POST"]),
+    ("/api/accounts/trash/:id/restore", &["POST"]),
+    ("/api/accounts/:id", &["PATCH"]),
+    ("/api/accounts/:id/key", &["PUT"]),
+    ("/api/accounts/:id/open", &["POST"]),
+    ("/api/accounts/:id/recheck", &["POST"]),
+    ("/api/accounts/:id/remove", &["POST"]),
+    ("/api/accounts/:id/signin-again", &["POST"]),
+    ("/api/accounts/:id/reset-claims", &["GET", "POST"]),
+    ("/api/accounts/:id/reset-claims/check", &["POST"]),
+    ("/api/accounts/:id/reset-claims/prepare", &["POST"]),
+    ("/api/antigravity/profiles", &["GET"]),
+    ("/api/antigravity/profiles/quotas", &["GET"]),
+    ("/api/app-updates/status", &["GET"]),
+    ("/api/app-updates/start", &["POST"]),
+    ("/api/app-updates/cancel", &["POST"]),
+    ("/api/claude/desktop-profiles", &["GET"]),
+    ("/api/claude/desktop-profiles/usage", &["GET"]),
+    ("/api/claude/desktop-profiles/:id/open", &["POST"]),
+    ("/api/claude/history-snapshots/cleanup", &["POST"]),
+    ("/api/codex/profiles", &["GET"]),
+    ("/api/codex/profiles/quotas", &["GET"]),
+    ("/api/diag", &["GET"]),
+    ("/api/scoreboard", &["GET"]),
+    ("/api/status", &["GET"]),
+    ("/api/status/answers", &["GET", "POST"]),
+    (
+        "/api/status/deliverable",
+        &["GET", "POST", "PUT", "PATCH", "DELETE"],
+    ),
+    ("/api/status/files/:owner/*relative", &["GET"]),
+    ("/api/store/status", &["GET"]),
+    ("/api/usage/history", &["GET"]),
+    ("/api/usage/at", &["GET"]),
+    ("/api/usage/burn", &["GET"]),
+    ("/api/views/home", &["GET"]),
+];
+
+pub(super) fn cut_route(method: &Method, path: &str) -> bool {
+    let method = if method == Method::HEAD {
+        Method::GET.as_str()
+    } else {
+        method.as_str()
+    };
+    let path = path.strip_suffix('/').unwrap_or(path);
+    CUT_ROUTES.iter().any(|(pattern, methods)| {
+        if method != Method::OPTIONS.as_str() && !methods.contains(&method) {
+            return false;
+        }
+        let mut segments = path.split('/');
+        for part in pattern.split('/') {
+            let Some(segment) = segments.next() else {
+                return false;
+            };
+            if part.starts_with('*') {
+                return !segment.is_empty() || segments.next().is_some_and(|next| !next.is_empty());
+            }
+            if (part.starts_with(':') && segment.is_empty())
+                || (!part.starts_with(':') && part != segment)
+            {
+                return false;
+            }
+        }
+        segments.next().is_none()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cut_forwards_only_the_adapter_contract() {
+        assert!(cut_route(&Method::HEAD, "/api/accounts/dashboard"));
+        assert!(cut_route(&Method::PATCH, "/api/accounts/preferences"));
+        assert!(cut_route(
+            &Method::POST,
+            "/api/accounts/example/reset-claims/prepare"
+        ));
+        assert!(cut_route(
+            &Method::GET,
+            "/api/status/files/example/nested/file.md"
+        ));
+        assert!(!cut_route(&Method::GET, "/api/status/files/example"));
+        assert!(!cut_route(&Method::POST, "/api/accounts/dashboard"));
+        assert!(!cut_route(&Method::POST, "/api/accounts//recheck"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));
+        assert!(!cut_route(&Method::GET, "/api/auth/session"));
+        assert!(!cut_route(&Method::GET, "/internal/collection/recheck"));
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct Backend {

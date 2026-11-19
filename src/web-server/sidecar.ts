@@ -25,6 +25,7 @@ async function main(): Promise<void> {
   const ccs = getCcsDir();
   await mkdir(ccs, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(path.join(os.tmpdir(), 'aac-sidecar-'));
+  process.env.AAC_CUT_HUB_DIRECTORY = directory;
   const cache = path.join(directory, 'hub.json');
   const native = new Map<ClaudeDashboardPlatform, RenderedHubRows>();
   const refresh = () => {

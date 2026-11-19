@@ -1,5 +1,6 @@
 /**
- * Replay the M0 request/role inventory against the opt-in Rust TCP front door.
+ * Replay the M0 request/role inventory against a Rust TCP front door.
+ * --cut uses the shipped CLI with its private worker. --cut-rust-only disables the worker.
  * --require-complete fails for any changed answer or explicit unmounted route.
  */
 import assert from 'node:assert/strict';
@@ -18,6 +19,11 @@ type Contract = {
 };
 
 const binary = path.resolve(process.argv[2] ?? '');
+const mode = process.argv.includes('--cut-rust-only')
+  ? 'cut-rust-only'
+  : process.argv.includes('--cut')
+    ? 'cut'
+    : 'fixture';
 const spec = import.meta.dir;
 const routes = JSON.parse(await fs.readFile(path.join(spec, 'routes.json'), 'utf8')) as {
   path: string;
@@ -167,7 +173,7 @@ try {
     }),
     { mode: 0o600 }
   );
-  let rust = await startRustFixture(binary, root, environment);
+  let rust = await startRustFixture(binary, root, environment, false, mode);
   try {
     for (const [index, route] of routes.entries()) {
       const name = route.method + ' ' + route.path;
@@ -247,7 +253,7 @@ try {
       // spend the 5-attempt budget, so restart here with the same persisted fixture state.
       if (name === 'POST /api/auth/login') {
         await rust.stop();
-        rust = await startRustFixture(binary, root, environment);
+        rust = await startRustFixture(binary, root, environment, false, mode);
       }
     }
   } finally {

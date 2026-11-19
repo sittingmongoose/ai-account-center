@@ -595,6 +595,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/compose.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/dashboard_events.rs",
       "kind": "safety",
       "evidence": [

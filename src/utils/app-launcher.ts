@@ -21,10 +21,6 @@
 
 import { accessSync, constants } from 'fs';
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process';
-import { agentVerbs, runAgentVerb } from '../web-server/services/agent-verbs';
-import { createLogger } from '../services/logging';
-
-const launchLog = createLogger('app-launcher');
 
 export interface AppLaunchSpec {
   /** Short lowercase name used in the transient unit (aac-launch-<app>-<id>). */
@@ -203,56 +199,6 @@ export async function launchApp(
 ): Promise<AppLaunchResult> {
   const platform = deps.platform ?? process.platform;
   const spawnFn = deps.spawn ?? spawn;
-
-  // M4a: with the verbs on, the agent does the launch on this computer; the reference
-  // logic below stays the labelled fallback. Test seams (deps) bypass the agent attempt.
-  if (Object.keys(deps).length === 0 && agentVerbs() === 'on') {
-    const agentPlatform =
-      process.platform === 'linux'
-        ? 'ubuntu'
-        : process.platform === 'darwin'
-          ? 'mac'
-          : process.platform === 'win32'
-            ? 'windows'
-            : null;
-    if (agentPlatform !== null) {
-      try {
-        const result = await runAgentVerb(
-          { platform: agentPlatform, sshHost: null },
-          'launch',
-          {
-            app: spec.app,
-            exe: spec.exe,
-            args: spec.args,
-            ...(spec.cwd === undefined ? {} : { cwd: spec.cwd }),
-            ...(spec.env === undefined ? {} : { env: spec.env }),
-            ...(spec.logFile === undefined ? {} : { logFile: spec.logFile }),
-          },
-          { deadlineMs: 15000, maxBytes: 65536 }
-        );
-        if (result !== null) {
-          const value = JSON.parse(result) as { route?: unknown; unit?: unknown; pid?: unknown };
-          if (
-            value.route === 'systemd-service' &&
-            typeof value.unit === 'string' &&
-            /^aac-launch-[a-z0-9-]+-\d+-[0-9a-z]+$/.test(value.unit)
-          ) {
-            return { route: 'systemd-service', unit: value.unit };
-          }
-          if (
-            value.route === 'direct' &&
-            (value.pid === undefined ||
-              (typeof value.pid === 'number' && Number.isInteger(value.pid) && value.pid > 0))
-          ) {
-            return { route: 'direct', ...(value.pid === undefined ? {} : { pid: value.pid }) };
-          }
-        }
-      } catch {
-        /* The reference launcher below owns the fallback. */
-      }
-      launchLog.info('agent.verbs.fallback', 'fallback: typescript launcher', { verb: 'launch' });
-    }
-  }
 
   if (platform !== 'linux') {
     const child = spawnFn(spec.exe, spec.args, {

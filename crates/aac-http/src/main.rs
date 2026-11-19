@@ -189,6 +189,14 @@ async fn run() {
                 facts.lifecycle.mounted = true;
                 facts
             });
+            if let Some(directory) = std::env::var_os("AAC_CUT_HUB_DIRECTORY")
+                .map(std::path::PathBuf::from)
+                .filter(|path| path.is_absolute())
+            {
+                inputs.published = std::sync::Arc::new(move |cache| {
+                    aac_http::public_auth::publish_native_hub(&directory, cache);
+                });
+            }
         }
         aac_http::serve_with_native_account_usage(boot, shutdown, Default::default(), inputs).await
     } else if std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1") {

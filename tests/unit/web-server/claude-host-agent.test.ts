@@ -149,7 +149,7 @@ describe('labelled fallback with no artifact', () => {
     expect(calls).toHaveLength(3);
   });
 
-  it('launchApp falls through to the reference launcher and keeps its error', async () => {
+  it('the remote runtime launcher reports a locally unavailable executable', async () => {
     process.env.AAC_AGENT_VERBS = 'on';
     process.env.AAC_AGENT_TRANSPORT = 'off';
     const dir = fs.mkdtempSync(path.join(process.cwd(), '.tmp-launch-test-'));

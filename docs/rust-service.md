@@ -907,20 +907,17 @@ revalidating. Static files skip session persistence. Page and hub responses
 preserve rolling browser cookies.
 
 The native `ai-account-center` and `ccs` binaries share the same command parser.
-Set `AAC_RUST_DASHBOARD=1` to opt their dashboard launcher into the public Rust
-listener. The shipped TS CLI continues to run dashboard by default and handles
-the administrative subcommands and other existing commands. The native CLI
-locates the shipped entry point next to the executable or through
-`AAC_TS_CLI`. Release packaging can use the same native executable under
-the five retired names to keep their guidance.
+The shipped `ai-account-center dashboard` and `ccs config` commands start the
+public Rust listener. They supervise the private compatibility worker for the
+remaining dashboard adapters. Settings now handles retired administrative
+commands. The five retired executable names still print migration guidance.
 
-### Composed public listener
+### Private worker and reference fixtures
 
-Copy `config/rust-compose.example.yaml` to `config.yaml` in a fixture root and
-point `AAC_RUST_PUBLIC_BINARY` at the matching local `aac-http` build. Run the ordinary
-dashboard command with --no-open to leave browser startup to the fixture runner.
-The frontDoor setting selects composition when set to rust. AAC_RUST_COMPOSE=1
-is its environment override. The default selects the TypeScript listener.
+The native CLI loads the packaged worker and owns the public listener without
+a configuration switch. The worker defaults its Rust groups to on and uses
+the private socket for handlers it delegates. The former `frontDoor` selector
+and `AAC_RUST_COMPOSE` switch apply to legacy reference fixtures.
 
 The Rust listener owns public authentication, sessions, devices, WebSockets,
 static assets and T3 management. Other API paths go over the private loopback
@@ -934,7 +931,9 @@ Lane H fixture tests use synthetic installers. The composed M0 capture uses its
 existing synthetic app-update owner and disables agent transport for that run.
 `bun tests/spec/compose-app-update-parity.ts` exercises the actual H/J route
 binding and native progress through the public WebSocket with agent transport off.
-Use tests/spec/capture.ts --composed to compare with the checked-in TS goldens.
+Use `bun tests/spec/m6-public-contract.ts <native-cli> --cut-rust-only --require-complete`
+for the release gate and `--cut` to exercise the shipped listener with its worker.
+Use `tests/spec/capture.ts --composed` to compare the historical composition fixture with its TS goldens.
 The --plain-home flag matches the original Home setting. With Home enabled,
 the two signed-in Home rows return the newly offered view. The standalone Rust
 public mode remains available for auth and static fixture tests.

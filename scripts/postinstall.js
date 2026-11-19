@@ -63,6 +63,7 @@ function checkInstalledDashboard(packageRoot, platform = process.platform) {
     ...Object.values(bin),
     'dist/native/aac-http' + suffix,
     'dist/web-server/sidecar.js',
+    'dist/antigravity/terminal-signin-entry.js',
     'dist/ui/app/index.html',
   ]) {
     const file = fs.statSync(path.join(packageRoot, relative));

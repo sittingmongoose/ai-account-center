@@ -164,7 +164,7 @@ pub fn run(args: &[String], ccs: &Path) -> i32 {
             // works unchanged; the wrapper owns the usage contract above.
             let mut full = vec!["antigravity".to_string(), "signin".to_string()];
             full.extend(rest.iter().cloned());
-            match super::typescript(&full) {
+            match super::antigravity_signin(&full, ccs) {
                 Ok(code) => code,
                 Err(message) => {
                     err(&format!("[X] {message}\n"));

@@ -31,8 +31,8 @@ computer (most of it one Rust compile), with four toolchains.
    about 4,500 tests: a few minutes). They pass on a clean Linux or macOS account with no AI tools installed. If one
    fails anyway, don't change AAC to get past it: report the failing test names to the person (and as an issue on the
    repository), and use the next item meanwhile.
-4. **Without installing:** the build already runs from the checkout. Use `node dist/ccs.js` wherever this guide says
-   `ai-account-center` (for example `node dist/ccs.js dashboard auth setup`). Install later, once the checks pass.
+4. **Without installing:** start the dashboard from the checkout with
+   `node scripts/run-dashboard-native.js --host localhost --port 3000 --no-open`.
 
 Docker is the alternative (`docker/README.md`). It builds the same source.
 
@@ -40,12 +40,11 @@ Docker is the alternative (`docker/README.md`). It builds the same source.
 
 These need the person at the keyboard. Say what each is for, then wait:
 
-1. **Dashboard login:** `ai-account-center dashboard auth setup`. They choose the username and password; never ask
-   for it in chat and never write it down.
+1. **Dashboard login:** open the dashboard at localhost and enter the setup code printed in the terminal.
+   They choose the username and password. Never ask for it in chat or write it down.
 2. **Accounts:** start the dashboard (`ai-account-center dashboard --host localhost --port 3000 --no-open`), open
    `http://localhost:3000`, and have them add each account under **Accounts & Settings → Add account**, signing in to
-   each provider in the browser. A Codex login already on the computer can be saved with
-   `ai-account-center codex-auth import-default <name>`.
+   each provider in the browser. Save an existing Codex login through the Codex account action.
 3. **Trays** (optional): the Mac menu-bar app and the Windows tray (README step 4). They give the tray the dashboard
    address and password once.
 
