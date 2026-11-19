@@ -23,7 +23,7 @@
   "src/web-server/routes/codex-routes.ts": "c49b0a4a3cbd76165423140a9abfda25876ead87b7884c5cdae8791934c9b4de",
   "src/web-server/routes/home-view-routes.ts": "72c6d6a020d089ae71c041990de6d3a71a02ff73ba4619585ac2a8e1c37eefa9",
   "src/web-server/routes/index.ts": "0e5af7ae2b8922270575f49135248e3987e428f79b303bbc1fc1361de84d16e0",
-  "src/web-server/routes/reset-claim-routes.ts": "8c2fde59fdcef9964d0f7c40e76a193213e4fca394b8b887acf9f27d785ba8bf",
+  "src/web-server/routes/reset-claim-routes.ts": "32c85cd9a11df4686dd041583bb45b98b8e406fd52eb0adc7df53b07ece30981",
   "src/web-server/routes/revalidated-view.ts": "58d7382a0314411bb4e6b5cb079b0a8c73de2d9026521679b270e98b21b7923a",
   "src/web-server/routes/scoreboard-routes.ts": "ce5a57c3a5d52911b4dd77710574ff7c0d562a8a055f890814810c7ee7cadea9",
   "src/web-server/routes/share-route.ts": "6d83030ba0ae887724623a21256852902d3d8ab3eda7d5c84d93e24ac42d2025",
@@ -31,9 +31,9 @@
   "src/web-server/routes/store-routes.ts": "b7f7b45814d7b252a4fb1204eda744cc1c2b231b285ea07c8b4c2c337b18ba20",
   "src/web-server/rust-service-health.ts": "05a67c876dea55b6f9a17e9d9132d9b954f02ec748a3334ce42798a030d21c39",
   "src/web-server/rust-service-lifecycle.ts": "d60cc409499852a0047f7a88eb0a53e96f1d637405ebecf2215b2540b467ebae",
-  "src/web-server/rust-service-routes.json": "eee90456b6d8f6ab35fb2b859363524be7c4bfc7730c09262cf000704f82a03d",
+  "src/web-server/rust-service-routes.json": "7bb1727ac694216f0b97d95a86b12a9c5e4d397454355d07a93d5ceab224e1a8",
   "src/web-server/rust-service-supervisor.ts": "abf108d18faae236b1294216ae268f6eadec098371f195f9d05ad056ce1a7f17",
-  "src/web-server/rust-service-transport.ts": "9ade6a8ab7a012ff1adbeb3a097060a695cbaa5e7d198510802f407d95e0afa3",
-  "src/web-server/rust-service.ts": "2195f8b7a1fffedc00126fd6c6d3cd998254e960f746f4d5d4d3e97805044e3e",
+  "src/web-server/rust-service-transport.ts": "fcc66d650688a3248da389e132a15f895852cddda2e87ab724e5fef19f0cb643",
+  "src/web-server/rust-service.ts": "0632e09e00de89a99af6dc1a79f5e80da692b238b2b41e37810b21229213bc55",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
 }
