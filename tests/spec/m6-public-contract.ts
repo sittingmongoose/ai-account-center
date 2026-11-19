@@ -158,6 +158,9 @@ if (mode !== 'fixture') {
     CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
     AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
     AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+    ...(group === undefined || group === 'app-updates'
+      ? { AAC_RUST_CUT_APP_UPDATES_FIXTURE: '1' }
+      : {}),
   });
 }
 if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')) {
