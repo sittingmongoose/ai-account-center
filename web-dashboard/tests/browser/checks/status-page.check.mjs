@@ -376,7 +376,7 @@ export const tests = {
       return r.ok ? (await r.json()).bridge : null;
     });
     const route = bridge?.routes?.['/api/status'] ?? null;
-    if (t.args.rustStatusFed) {
+    if (t.args.rustStatusFed || t.args.rustOwned) {
       await t.check('the fed path served the real Status reads', (route?.served ?? 0) > 0, JSON.stringify(route));
       // A read racing a push answers through today's handler (`stale`); any other reason is a finding.
       const reasons = [...Object.keys(route?.declined ?? {}), ...Object.keys(route?.unavailable ?? {})];
