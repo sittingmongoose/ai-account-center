@@ -58,7 +58,11 @@ pub(super) async fn listener(
     // Select ring explicitly so another workspace consumer may enable a different provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let config = RustlsConfig::from_pem(cert, key).await.ok()?;
-    let listener = std::net::TcpListener::bind(address).ok()?;
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .ok()?
+        .into_std()
+        .ok()?;
     let server = axum_server::from_tcp_rustls(listener, config).ok()?;
     tracing::info!(port = address.port(), "auth.tls.listening");
     Some(server)

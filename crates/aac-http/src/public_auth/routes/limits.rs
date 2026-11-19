@@ -145,10 +145,8 @@ impl AuthRuntime {
         if let Some(client) = &budget.client {
             self.login.spend(client);
         }
-        if credential_refused {
-            if let Some(server) = &budget.server {
-                self.login_server.spend(server);
-            }
+        if credential_refused && let Some(server) = &budget.server {
+            self.login_server.spend(server);
         }
     }
 }

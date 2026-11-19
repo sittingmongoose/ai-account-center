@@ -505,18 +505,15 @@ pub(super) struct Sessions {
 impl Sessions {
     pub(super) fn open(files: &Files, secret: String) -> Self {
         let mut records = BTreeMap::new();
-        if let Ok(Some(doc)) = files.read_json(SESSIONS, 4 * 1024 * 1024) {
-            if let Some(entries) = doc["sessions"].as_array().filter(|_| doc["version"] == 1) {
-                for value in entries.iter().take(SESSION_CAP) {
-                    let Ok(record) = serde_json::from_value::<Stored>(value.clone()) else {
-                        continue;
-                    };
-                    if is_hex(&record.key, 64)
-                        && record.data.len() <= 8192
-                        && record.expires > now()
-                    {
-                        records.entry(record.key.clone()).or_insert(record);
-                    }
+        if let Ok(Some(doc)) = files.read_json(SESSIONS, 4 * 1024 * 1024)
+            && let Some(entries) = doc["sessions"].as_array().filter(|_| doc["version"] == 1)
+        {
+            for value in entries.iter().take(SESSION_CAP) {
+                let Ok(record) = serde_json::from_value::<Stored>(value.clone()) else {
+                    continue;
+                };
+                if is_hex(&record.key, 64) && record.data.len() <= 8192 && record.expires > now() {
+                    records.entry(record.key.clone()).or_insert(record);
                 }
             }
         }
@@ -570,7 +567,7 @@ impl Sessions {
             .into_values()
             .filter(|record| record.expires > at)
             .collect();
-        entries.sort_by(|a, b| b.expires.cmp(&a.expires));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.expires));
         entries.truncate(SESSION_CAP);
         files.write_json(SESSIONS, &json!({"version":1,"sessions":entries}))?;
         self.records = entries

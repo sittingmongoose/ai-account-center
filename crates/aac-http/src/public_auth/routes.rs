@@ -181,11 +181,11 @@ fn login(
             state.spend_login(&budget, false);
             return Err(plain(400, "Username and password required"));
         };
-        if req.connection.lan_proxy {
-            if let Err(reply) = secure(config, req) {
-                state.spend_login(&budget, false);
-                return Err(reply);
-            }
+        if req.connection.lan_proxy
+            && let Err(reply) = secure(config, req)
+        {
+            state.spend_login(&budget, false);
+            return Err(reply);
         }
         if !config.enabled || !config.configured() {
             return Err(plain(400, "Authentication not configured"));
@@ -311,17 +311,17 @@ fn logout(state: &mut AuthRuntime, req: &RequestInfo, session: &mut Browser) -> 
 
 fn bar(state: &AuthRuntime, req: &RequestInfo) -> Outcome {
     let mut reply = response(200, json!({"status":"ok"}));
-    if req.method == Method::GET && req.raw_path == "/api/bar/auth" {
-        if let Some(nonce) = header(&req.headers, "x-ccs-bar-nonce")
+    if req.method == Method::GET
+        && req.raw_path == "/api/bar/auth"
+        && let Some(nonce) = header(&req.headers, "x-ccs-bar-nonce")
             .map(str::trim)
             .filter(|nonce| (16..=128).contains(&nonce.len()) && is_hex(nonce, nonce.len()))
-        {
-            set_header(
-                &mut reply,
-                "x-ccs-bar-token",
-                &state.files.bar_proof(nonce)?,
-            );
-        }
+    {
+        set_header(
+            &mut reply,
+            "x-ccs-bar-token",
+            &state.files.bar_proof(nonce)?,
+        );
     }
     Ok(reply)
 }

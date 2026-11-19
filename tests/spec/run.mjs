@@ -10,6 +10,9 @@ for (const [program, args] of [
   // L2: one file policy (no raw file mechanics outside aac-files) and the shared registry.
   ['node', ['scripts/foundation/one-file-policy.mjs']],
   ['bun', ['test', 'tests/spec/private-files.test.ts']],
+  ...(process.env.AAC_RUST_PUBLIC_BINARY
+    ? [['bun', ['tests/spec/m6-auth-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]]]
+    : []),
   [
     'bun',
     [

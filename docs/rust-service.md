@@ -624,3 +624,46 @@ before opening the store. The internal store-method route retains the kernel
 single-writer lock and automatically rolls back to NAPI after five crashes.
 See [store.md, optional Rust store host](store.md#15-optional-rust-store-host-r3)
 for the method contract, caps, shutdown order, fixture drills and turn-on soak.
+
+## M6 dashboard authentication
+
+The Rust public front door is opt-in. Run the `aac-http` binary with `--public`,
+an explicit `CCS_DIR` (or `CCS_HOME`), and a numeric
+`AAC_RUST_PUBLIC_LISTEN` such as `127.0.0.1:0` for an isolated fixture. The
+binary prints the actual bound address. The existing no-argument command still
+selects the private service. On a host with a configured
+`dashboard_tls.https_listener`, public mode also starts the native HTTPS
+listener on its configured port when the certificate and key pass admission.
+
+Public mode owns dashboard sign-in, sessions, setup, password and setting
+changes, devices, the bar proof, and the `/ws` upgrade. It reuses the TS
+session and device documents, the signed `connect.sid` cookie, and the
+private-file registry. Set the same `CCS_SESSION_SECRET` in both processes if
+the installation overrides the file secret. Stop the TS server before starting
+Rust on the same private root. Rust refuses the TS session-owner marker.
+Use separate private roots while comparing the two processes. TS keeps
+ownership in its private-socket modes, including `on`.
+
+To integrate the other public routes, supply the composed public router to
+`DashboardAuth::protect`. Handlers read `DashboardAccess` from the request
+extensions. The public router and the secret-bearing private Unix router have
+separate entry points. Publish WebSocket hints through `DashboardAuth::events`
+and keep account, status, reset-claim and sign-in publishers in their existing
+work owners. The standalone entry point explicitly declines routes still
+outside its ownership.
+
+The Windows auth fixture uses separate temporary roots, the real TS auth
+routers, and the TCP binary. Run the following commands with a fixture binary.
+
+```sh
+cargo test --locked -p aac-http --lib
+cargo build --locked -p aac-http
+bun tests/spec/m6-auth-parity.ts /absolute/path/to/aac-http
+```
+
+Set `AAC_M6_OPENSSL` to the fixture's OpenSSL executable to exercise native HTTPS
+and setup audit redaction. `AAC_RUST_PUBLIC_BINARY` opts the same HTTP fixture
+into `tests/spec/run.mjs`. The parity fixture compares statuses and serialized
+body order, plus security, cookie and limiter headers. It normalizes generated
+identifiers, timestamps, cookie material and retry timing. It also checks a
+TS-issued cookie and paired token across handoff and a Rust restart.

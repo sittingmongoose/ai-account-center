@@ -1,4 +1,7 @@
 //! Public M6 authentication front door. The private service still owns its Unix protocol.
+// Reply errors are complete Axum responses with headers. Keep them inline like successes
+// so the guard can return a response without a second allocation.
+#![allow(clippy::result_large_err)]
 mod devices;
 mod policy;
 mod routes;
@@ -311,15 +314,19 @@ fn set_header(reply: &mut Reply, name: &'static str, value: &str) {
 
 fn response(status: u16, value: Value) -> Reply {
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (
+    let text = value.to_string();
+    let length = text.len().to_string();
+    let mut reply = (
         status,
         [(
             axum::http::header::CONTENT_TYPE,
             "application/json; charset=utf-8",
         )],
-        value.to_string(),
+        text,
     )
-        .into_response()
+        .into_response();
+    set_header(&mut reply, "content-length", &length);
+    reply
 }
 
 fn empty(status: u16) -> Reply {
@@ -527,13 +534,14 @@ fn authorize(state: &mut AuthRuntime, facts: Facts, ws: bool) -> Decision {
         });
     }
 
-    if let Some((_, value)) = session.as_mut() {
-        if value.authenticated && !(trusted && value.current(epoch)) {
-            value.authenticated = false;
-            value.username = None;
-            value.epoch = 0;
-            value.revoked = true;
-        }
+    if let Some((_, value)) = session.as_mut()
+        && value.authenticated
+        && !(trusted && value.current(epoch))
+    {
+        value.authenticated = false;
+        value.username = None;
+        value.epoch = 0;
+        value.revoked = true;
     }
     let lower = req.path.to_ascii_lowercase();
     let auth_path = lower == "/api/auth" || lower.starts_with("/api/auth/");
@@ -551,10 +559,11 @@ fn authorize(state: &mut AuthRuntime, facts: Facts, ws: bool) -> Decision {
             }
             if !public(&req.method, &req.path) {
                 if let Some(token) = bearer(&req.headers) {
-                    if req.method == Method::POST && req.path == "/api/auth/devices/me/rotate" {
-                        if let Err(reply) = routes::secure(&config, &req) {
-                            return Some(reply);
-                        }
+                    if req.method == Method::POST
+                        && req.path == "/api/auth/devices/me/rotate"
+                        && let Err(reply) = routes::secure(&config, &req)
+                    {
+                        return Some(reply);
                     }
                     let result = if token_valid(token) {
                         Devices::load(&state.files).and_then(|devices| {
@@ -700,12 +709,11 @@ async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: 
     };
     let auth_path = lower == "/api/auth" || lower.starts_with("/api/auth/");
     // HTTP/2 exposes the canonical request authority in the URI.
-    if !parts.headers.contains_key("host") {
-        if let Some(authority) = parts.uri.authority() {
-            if let Ok(host) = HeaderValue::from_str(authority.as_str()) {
-                parts.headers.insert("host", host);
-            }
-        }
+    if !parts.headers.contains_key("host")
+        && let Some(authority) = parts.uri.authority()
+        && let Ok(host) = HeaderValue::from_str(authority.as_str())
+    {
+        parts.headers.insert("host", host);
     }
     let json_content = header(&parts.headers, "content-type").is_some_and(|content| {
         content
@@ -880,6 +888,21 @@ mod tests {
             .into()
     }
 
+    #[test]
+    fn public_auth_refuses_a_second_writer_and_a_typescript_session_owner() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let first = DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).unwrap();
+        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_err());
+        drop(first);
+        let owner = root.join("auth/sessions.owner");
+        // The file is a test stand-in for a legacy dashboard's own owner marker.
+        std::fs::write(&owner, b"fixture TS process").unwrap();
+        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_err());
+        std::fs::remove_file(&owner).unwrap();
+        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_ok());
+    }
+
     #[tokio::test]
     async fn websocket_checks_origin_and_principal_and_closes_the_revoked_epoch() {
         let (_home, auth, addr, handle) = server().await;
@@ -950,7 +973,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_and_credential_writes_share_the_config_lease() {
+    async fn session_lifetime_changes_share_the_config_lease() {
         let (home, _auth, addr, handle) = server().await;
         let cookie = login(addr).await;
         let held = aac_files::OwnedStore::claim_dashboard_config(home.path()).unwrap();

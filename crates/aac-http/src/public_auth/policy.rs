@@ -232,7 +232,7 @@ impl Network {
         let client_header = headers
             .get_all("x-forwarded-for")
             .iter()
-            .last()
+            .next_back()
             .and_then(|value| value.to_str().ok());
         let via_proxy = proxy_hop && headers.contains_key("x-forwarded-for");
         let client = client_header

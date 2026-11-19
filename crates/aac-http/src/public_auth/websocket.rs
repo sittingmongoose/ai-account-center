@@ -157,10 +157,9 @@ pub(super) async fn serve(
         };
         if let Some(value) =
             event.and_then(|value| event_message(value, client.epoch.is_some(), secure))
+            && !send(&mut socket, Message::Text(value.to_string().into())).await
         {
-            if !send(&mut socket, Message::Text(value.to_string().into())).await {
-                return;
-            }
+            return;
         }
     }
 }
