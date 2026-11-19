@@ -12,6 +12,7 @@ import {
   holdUsageCooldown,
   identityUsageCooldownKey,
   readUsageCooldown,
+  readUsageCooldownState,
 } from './usage-failover-cooldown';
 import {
   projectClaudeFailoverExtras,
@@ -19,6 +20,7 @@ import {
   stripClaudeFailoverExtras,
 } from './usage-failover-claude-extras';
 import { readUsageCache, writeUsageCache } from './usage-failover-cache';
+import { claudeDesktopDelayMs, MAX_CLAUDE_429_STREAK } from './usage-failover-claude-cadence';
 import { readAccountRefreshSettings } from './account-refresh-settings';
 import {
   isBoundMusePeer,
@@ -197,10 +199,10 @@ export class UsageFailoverService {
         )
           state.primaryFailure = value.primaryFailure;
         const identity = parseUsageIdentity(value.identity);
-        if (
+        const identityMatchesTarget =
           identity &&
-          (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, identity))
-        ) {
+          (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, identity));
+        if (identityMatchesTarget) {
           state.identity = identity;
           state.observedPlan = tracksVerifiedPlan(target)
             ? safeUsageText(value.observedPlan)
@@ -240,9 +242,15 @@ export class UsageFailoverService {
                 : null;
           if (typeof value.freshUntil === 'number' && Number.isFinite(value.freshUntil))
             state.freshUntil = Math.min(value.freshUntil, this.now() + 86400_000);
-          if (typeof value.nextAttempt === 'number' && Number.isFinite(value.nextAttempt))
-            state.nextAttempt = Math.min(value.nextAttempt, this.now() + 86400_000);
         }
+        // A 429 can invalidate the source binding without ending its scheduled hold.
+        if (
+          (identityMatchesTarget ||
+            (target.claudeDesktopCadence && state.primaryFailure === 'source_changed')) &&
+          typeof value.nextAttempt === 'number' &&
+          Number.isFinite(value.nextAttempt)
+        )
+          state.nextAttempt = Math.min(value.nextAttempt, this.now() + 86400_000);
       }
     } catch {
       /* Missing or damaged cache is not quota. */
@@ -872,9 +880,19 @@ export class UsageFailoverService {
           () => !applyCooldown() && !peerHeld(),
           (value) => {
             if (value.action !== 'collect' || !responseIsRateLimited(value)) return;
-            const until =
-              this.now() + Math.max(60, Math.min(86400, value.retryAfterSeconds ?? 60)) * 1000;
-            state.nextAttempt = holdUsageCooldown(target.ccsDir, cooldownKey, until, this.now());
+            const now = this.now();
+            const providerUntil =
+              now + Math.max(60, Math.min(86400, value.retryAfterSeconds ?? 60)) * 1000;
+            let until = providerUntil;
+            let streak: number | undefined;
+            if (target.claudeDesktopCadence) {
+              const previous = readUsageCooldownState(target.ccsDir, cooldownKey, now);
+              streak = Math.min((previous.claude429Streak ?? 0) + 1, MAX_CLAUDE_429_STREAK);
+              until =
+                now + claudeDesktopDelayMs(this.key(target), (providerUntil - now) / 1000, streak);
+              state.primaryFailure = 'rate_limited';
+            }
+            state.nextAttempt = holdUsageCooldown(target.ccsDir, cooldownKey, until, now, streak);
             this.cooldowns.set(cooldownKey, state.nextAttempt);
             if (peerKey)
               this.cooldowns.set(
@@ -1020,6 +1038,19 @@ export class UsageFailoverService {
           );
       }
       if (blocked) return 'done';
+      if (target.claudeDesktopCadence && reading.status === 'ok' && response.failureCode === null) {
+        const now = this.now();
+        const cooldown = readUsageCooldownState(target.ccsDir, cooldownKey, now);
+        if (!cooldown.until && cooldown.claude429Streak)
+          holdUsageCooldown(target.ccsDir, cooldownKey, now, now, 0);
+        const floor = Math.max(
+          readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds,
+          response.refreshAfterSeconds ?? 0
+        );
+        state.nextAttempt = now + claudeDesktopDelayMs(this.key(target), floor);
+        if (state.fresh) state.freshUntil = state.nextAttempt;
+        return 'done';
+      }
       if (
         response.failureCode === null &&
         response.refreshAfterSeconds &&

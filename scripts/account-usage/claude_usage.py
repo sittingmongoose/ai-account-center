@@ -1098,6 +1098,7 @@ class WebClient:
         if not re.fullmatch(UUID, organization_uuid):
             raise UsageUnavailable()
         self.requests = requests
+        self.observe_http = None
         self.deadline = time.monotonic() + 7
         self.organization_uuid = organization_uuid
         self.cookie = "; ".join(item["name"] + "=" + item["value"] for item in cookies)
@@ -1108,12 +1109,20 @@ class WebClient:
         remaining = self.deadline - time.monotonic()
         if route not in self.routes or remaining <= 0:
             raise UsageUnavailable()
-        response = self.requests.get("https://claude.ai" + route,
-            headers={"Cookie": self.cookie, "Accept": "application/json", "Origin": "https://claude.ai", "Referer": "https://claude.ai/"},
-            impersonate="chrome", verify=True, allow_redirects=False, timeout=min(3, remaining), stream=True)
         try:
+            response = self.requests.get("https://claude.ai" + route,
+                headers={"Cookie": self.cookie, "Accept": "application/json", "Origin": "https://claude.ai", "Referer": "https://claude.ai/"},
+                impersonate="chrome", verify=True, allow_redirects=False, timeout=min(3, remaining), stream=True)
+        except Exception:
+            if self.observe_http:
+                self.observe_http("optional_web", None, None)
+            raise
+        try:
+            retry_after = retry_after_seconds(response.headers.get("Retry-After")) if self.observe_http or response.status_code == 429 else None
+            if self.observe_http:
+                self.observe_http("optional_web", response.status_code, retry_after)
             if response.status_code == 429:
-                raise UsageUnavailable("rate_limited", retry_after_seconds(response.headers.get("Retry-After")))
+                raise UsageUnavailable("rate_limited", retry_after)
             if response.status_code != 200:
                 raise UsageUnavailable()
             body = bytearray()
@@ -1133,7 +1142,7 @@ class WebClient:
                 pass
 
 
-def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, expected_email=None, profile_root=None, fail_closed=False):
+def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, expected_email=None, profile_root=None, fail_closed=False, observe_http=None):
     """The profile's existing web session, bound to the same OAuth account and org.
 
     Cookies stay on Windows. Private reset reads need the full provider inventory,
@@ -1156,6 +1165,7 @@ def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, 
     else:
         cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
     client = WebClient(cookies, organization_uuid)
+    client.observe_http = observe_http
     account = client.get("/api/account")
     if account.get("uuid") != account_uuid or account.get("email_address") != expected:
         raise WebIdentityMismatch()
@@ -1170,7 +1180,7 @@ def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, 
     return client
 
 
-def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None, cooldown=None, profile_root=None):
+def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None, cooldown=None, profile_root=None, observe_http=None):
     # Optional balances never turn valid native OAuth quota into a sign-in
     # request or an unreadable balance into zero. Existing callers keep a list;
     # the optional output parameter carries only a bounded provider cooldown.
@@ -1187,7 +1197,8 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
         return True
 
     try:
-        client = verified_web_client(profile_id, account_uuid, organization_uuid, home, expected_email, profile_root)
+        client = verified_web_client(profile_id, account_uuid, organization_uuid, home, expected_email, profile_root,
+                                     **({"observe_http": observe_http} if observe_http else {}))
     except Exception as error:
         rate_limited(error)
         return []

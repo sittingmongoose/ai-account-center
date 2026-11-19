@@ -407,7 +407,7 @@ def _claude_profile(value):
     return result
 
 
-def _run(request):
+def _run(request, claude_http):
     if not isinstance(request, dict):
         return _failure("invalid_response")
     action = request.get("action")
@@ -444,6 +444,13 @@ def _run(request):
     # Caller display metadata must not substitute for current source identity.
     # It remains only selection data; collection always receives the private row.
     context = {"claude_profile": claude_profile} if claude_profile is not None else {}
+    if provider == "claude":
+        def observe(stage, status, retry_after):
+            if (stage in ("oauth_profile", "oauth_usage", "optional_web") and len(claude_http) < 5 and
+                    (status is None or type(status) is int and 100 <= status <= 599)):
+                claude_http.append({"stage": stage, "status": status,
+                                    "retryAfterSeconds": _number(retry_after, nonnegative=True)})
+        context["observe_http"] = observe
     result = adapter.collect(private, home, platform, ccs_dir=ccs, **context)
     _reset_read_failures()
     try:
@@ -482,8 +489,11 @@ def _run(request):
 def run(request):
     """One request, one safe response. Adapter stdout/stderr are never forwarded."""
     try:
+        claude_http = []
         with contextlib.redirect_stdout(_Discard()), contextlib.redirect_stderr(_Discard()):
-            response = _run(request)
+            response = _run(request, claude_http)
+        if claude_http:
+            response["claudeHttp"] = claude_http
         encoded = json.dumps(response, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
         if len(encoded.encode("ascii")) > MAX_RESPONSE:
             raise ValueError()
