@@ -972,7 +972,10 @@ async fn parse_body(body: Body, auth: bool) -> Result<(Value, Bytes), Reply> {
         _ => Err(if auth {
             error(400, "invalid_json", "Invalid JSON in request body")
         } else {
-            plain(400, "Invalid JSON in request body")
+            response(
+                400,
+                json!({"error":"Invalid JSON in request body","code":"invalid_json"}),
+            )
         }),
     }
 }

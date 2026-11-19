@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use tokio::sync::Semaphore;
 
@@ -77,6 +77,7 @@ pub(super) struct StaticUi {
     partial_api: bool,
     variants: Arc<HashMap<String, HashMap<Coding, Variant>>>,
     permits: Arc<Semaphore>,
+    admission: Arc<Semaphore>,
 }
 
 impl StaticUi {
@@ -95,6 +96,7 @@ impl StaticUi {
             partial_api,
             variants: Arc::default(),
             permits: Arc::new(Semaphore::new(4)),
+            admission: Arc::new(Semaphore::new(64)),
         };
         let manifest = ui
             .read(MANIFEST, 1024 * 1024)
@@ -169,10 +171,18 @@ impl StaticUi {
         if !matches!(parts.method, Method::GET | Method::HEAD) {
             return unknown_method(&parts.method, parts.uri.path());
         }
-        let Ok(permit) = self.permits.clone().try_acquire_owned() else {
+        // A cold page and its worker can request many assets together. Keep the
+        // blocking read budget while allowing a bounded number to wait briefly.
+        let Ok(admitted) = self.admission.clone().try_acquire_owned() else {
+            return plain(503, "The dashboard is busy. Try again later.");
+        };
+        let Ok(Ok(permit)) =
+            tokio::time::timeout(Duration::from_secs(5), self.permits.clone().acquire_owned()).await
+        else {
             return plain(503, "The dashboard is busy. Try again later.");
         };
         tokio::task::spawn_blocking(move || {
+            let _admitted = admitted;
             let _permit = permit;
             self.answer(
                 parts.uri.path(),

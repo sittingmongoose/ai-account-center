@@ -181,19 +181,13 @@ fn damaged_bytes_are_refused_with_the_shared_reasons() {
 }
 
 #[test]
-fn secrets_are_type_scripts_to_check_this_module_reads_what_it_is_given() {
-    // There is exactly one secret filter, the TypeScript one (`jsonFromBytes` in
-    // schema-helpers.ts); the reader runs it on every report before these bytes reach
-    // `parseStatus` (owner decision 2026-11-09). This module keeps no copy of it, so a
-    // token-shaped fixture in a field the projection ignores parses like any other text —
-    // the reader's own test suite holds the refusal. Joined at runtime so this source file
-    // holds no whole token.
+fn the_owned_status_reader_rejects_secrets_in_unprojected_fields() {
+    // The native owner applies the shared secret policy before projection.
     let api_key = ["sk", "ant", &"a".repeat(24)].join("-");
     let mut doc = valid();
     doc["summary"] = json!("Working.");
     doc["note"] = json!(format!("Use {api_key} for now."));
-    let parsed = parse(&doc).unwrap();
-    assert_eq!(parsed.doc.summary, "Working.");
+    assert_eq!(refused(&doc), "refused: it contains what looks like an API key");
 }
 
 #[test]

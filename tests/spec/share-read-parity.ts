@@ -132,7 +132,7 @@ const fakeReaddir = async (dirPath: string, options?: { withFileTypes?: boolean 
 };
 
 const fakeStat = async (file: string) => {
-  file = file.replace(/\\/g, '/');
+  file = file.replace(/\\/g, '/').replace(/^[a-z]:\/fixture\//i, '/fixture/');
   const injected = errors[file]?.stat;
   if (injected) throw makeError(injected);
   const node = resolve(file);
