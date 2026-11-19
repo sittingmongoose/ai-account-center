@@ -6,7 +6,7 @@
 //! the arbitration that removes the TypeScript coordinator. The TS path stays until the cut.
 
 use super::contract::{
-    self, UsageCandidate, UsageIdentity, UsageReading, hex_digest, is_failure_code, parse_candidate,
+    self, UsageCandidate, UsageReading, hex_digest, is_failure_code, parse_candidate,
     parse_identity, parse_reading, same_identity, safe_usage_text, usage_timestamp,
 };
 use super::failover::{self, Cooldown};
