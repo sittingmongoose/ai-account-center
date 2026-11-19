@@ -87,7 +87,9 @@ const nativeGroupRow = (method: string, route: string) =>
     route.startsWith('/api/status/') ||
     route === '/api/store/status' ||
     route.startsWith('/api/usage/') ||
-    route === '/api/scoreboard');
+    route === '/api/scoreboard' ||
+    // W-home: the Home rows are this group's own composed answers.
+    (group === 'store-usage-home' && route === '/api/views/home'));
 const recordNative = process.argv
   .find((arg) => arg.startsWith('--record-native='))
   ?.slice('--record-native='.length);
