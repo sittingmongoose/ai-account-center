@@ -404,8 +404,9 @@ mod tests {
 
     #[test]
     fn the_route_guards_match_the_query_contract() {
-        assert!(valid_history(None, 1_767_225_600_000));
-        assert!(valid_history(Some("resolution=raw"), 1_767_225_600_000));
+        let now = 1_798_761_600_000;
+        assert!(valid_history(None, now));
+        assert!(valid_history(Some("resolution=raw"), now));
         for bad in [
             "resolution=minute",
             "from=yesterday",
@@ -413,12 +414,9 @@ mod tests {
             "bogus=1",
             "from=2026-11-06T00:00:00Z&to=2026-11-01T00:00:00Z",
         ] {
-            assert!(!valid_history(Some(bad), 1_767_225_600_000), "{bad}");
+            assert!(!valid_history(Some(bad), now), "{bad}");
         }
-        assert!(valid_history(
-            Some("from=2026-11-01T00:00:00Z"),
-            1_767_225_600_000
-        ));
+        assert!(valid_history(Some("from=2026-11-01T00:00:00Z"), now));
         assert!(valid_at(None));
         assert!(valid_at(Some("t=2026-11-01T00:00:00Z")));
         assert!(!valid_at(Some("t=nope")));

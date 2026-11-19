@@ -991,10 +991,6 @@ async fn card_media(
     let Some(principal) = access.service_principal() else {
         return super::decline();
     };
-    if !routes.hosted().await {
-        // No private service on this platform and no in-process file reader: fail closed.
-        return super::decline();
-    }
     let input = json!({
         "kind": "media",
         "root": reports_root(),
@@ -1004,6 +1000,14 @@ async fn card_media(
         "head": facts.head,
     });
     let body = input.to_string();
+    if !routes.hosted().await {
+        // No private service here: the shipped reader answers in this process, with the same
+        // descriptor proof it uses behind the service.
+        return match crate::read_files::answer("/api/status/files/{*path}", body.as_bytes()) {
+            Some(refusal) => local_file_reply(&refusal, facts.head, true),
+            None => super::decline(),
+        };
+    }
     match routes
         .request(
             "GET",
@@ -1059,9 +1063,6 @@ async fn deliverable(
     let Some(principal) = access.service_principal() else {
         return share_headers(super::decline());
     };
-    if !routes.hosted().await {
-        return share_headers(super::decline());
-    }
     let input = json!({
         "kind": "deliverable",
         "root": machine_share_root(),
@@ -1071,6 +1072,12 @@ async fn deliverable(
         "head": facts.head,
     });
     let body = input.to_string();
+    if !routes.hosted().await {
+        return match crate::read_files::answer("/api/status/deliverable", body.as_bytes()) {
+            Some(reply) => share_headers(local_file_reply(&reply, facts.head, false)),
+            None => share_headers(super::decline()),
+        };
+    }
     match routes
         .request(
             "GET",
@@ -1185,6 +1192,24 @@ fn raw_reply(status: u16, body: Vec<u8>) -> Reply {
 
 /// The service's file envelope, checked and written (`rust-file-response.ts`): only these
 /// header names, the route's own refusal sentences, and a body whose length matches.
+/// The shipped reader's envelope, handed to the same reply check the service's answer gets.
+fn local_file_reply(value: &Json, head: bool, media: bool) -> Reply {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "content-type",
+        "application/json".parse().expect("static header"),
+    );
+    file_reply(
+        &ServiceReply {
+            status: 200,
+            headers,
+            body: value.to_string().into_bytes(),
+        },
+        head,
+        media,
+    )
+}
+
 fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
     let Some(value) = json_of(reply) else {
         return super::service_error();

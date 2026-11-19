@@ -307,13 +307,46 @@ pub fn open(path: &Path, policy: &ReadPolicy) -> Result<(File, Meta), Read> {
 
 /// The path the kernel holds for an open descriptor (`/proc/self/fd/N`), for readers whose
 /// reference confines the resolved path; `None` where the platform cannot say.
+#[allow(unsafe_code)]
 pub fn opened_path(file: &File) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
         fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+        };
+        let handle = file.as_raw_handle() as *mut std::ffi::c_void;
+        let mut buffer = vec![0u16; 512];
+        let mut length = 0;
+        loop {
+            // SAFETY: the buffer is a live, zeroed u16 slice and the handle is owned by `file`.
+            let written = unsafe {
+                GetFinalPathNameByHandleW(
+                    handle,
+                    buffer.as_mut_ptr(),
+                    buffer.len() as u32,
+                    FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+                )
+            };
+            if written == 0 {
+                return None;
+            }
+            length = written as usize;
+            if length < buffer.len() {
+                break;
+            }
+            buffer.resize(length + 1, 0);
+        }
+        let mut buffer = buffer;
+        buffer.truncate(length);
+        Some(PathBuf::from(String::from_utf16_lossy(&buffer)))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = file;
         None
