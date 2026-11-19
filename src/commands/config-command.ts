@@ -197,7 +197,9 @@ export async function handleConfigCommand(
         deps.warn('Dashboard may be reachable from other devices that can connect to this machine.')
       );
       if (!authConfig.enabled) {
-        console.log(deps.info('Protect it before sharing: ai-account-center dashboard auth setup'));
+        console.log(
+          deps.info("Protect it before sharing: set a sign-in in the dashboard's Settings page")
+        );
       }
       if (isWildcardHost(urls.bindHost) && !urls.networkUrls?.length) {
         console.log(deps.info('Use your machine IP or hostname from the other device.'));

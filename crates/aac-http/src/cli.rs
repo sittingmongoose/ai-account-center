@@ -6,6 +6,11 @@ use std::{
     process::Command,
 };
 
+mod config_write;
+mod proxy;
+mod store;
+mod tls;
+
 const ROOT_HELP: &str = include_str!("cli/root-help.txt");
 const DASHBOARD_HELP: &str = include_str!("cli/dashboard-help.txt");
 const LEGACY_BINS: &[&str] = &["ccs-droid", "ccsd", "ccs-codex", "ccsx", "ccsxp"];
@@ -120,9 +125,18 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
             let subcommand = args.first().map(String::as_str);
             if matches!(
                 subcommand,
-                Some("auth" | "usage-hub" | "usage-snapshot" | "proxy" | "store" | "cursor-key")
+                Some("auth" | "usage-hub" | "usage-snapshot" | "cursor-key")
             ) {
-                return typescript(raw);
+                return Ok(settings_covered(subcommand.unwrap_or_default()));
+            }
+            if matches!(subcommand, Some("store" | "proxy")) {
+                let ccs = root(config_dir).unwrap_or_else(|| PathBuf::from(".ccs"));
+                let rest = &args[1..];
+                return Ok(if subcommand == Some("store") {
+                    store::run(rest, &ccs)
+                } else {
+                    proxy::run(rest, &ccs)
+                });
             }
             if subcommand == Some("help")
                 || args
@@ -144,6 +158,20 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
         (command, _) => return Ok(retired(command)),
     }
     Ok(0)
+}
+
+/// CUT1 = A (Jared, 2026-11-19): these admin families are managed in the dashboard's Settings
+/// page; the CLI points there instead of duplicating the writers.
+fn settings_covered(family: &str) -> i32 {
+    let (section, what) = match family {
+        "auth" => ("Sign-in & connection", "dashboard sign-in"),
+        "usage-hub" => ("Settings", "the usage hub key"),
+        "usage-snapshot" => ("Settings", "the usage snapshot folder"),
+        _ => ("Settings", "the Cursor key"),
+    };
+    eprintln!("[X] \"dashboard {family}\" is managed in the dashboard now ({what}).");
+    eprintln!("    Open ai-account-center dashboard, then Settings -> {section}.");
+    1
 }
 
 fn version(root: Option<PathBuf>) -> Result<(), String> {

@@ -279,6 +279,19 @@ impl Config {
     }
 }
 
+/// The parsed active settings of a config.yaml source and its retired raw blocks, separated
+/// exactly as the loader does (no defaults, settings files, environment or computers). The CLI
+/// config writer changes one section through this view and keeps every other section's value.
+pub fn split_active(original: &str) -> Result<(Value, BTreeMap<String, String>), Failure> {
+    let (active_yaml, retired) = yaml::separate_retired(original)?;
+    let value: Value = if active_yaml.trim().is_empty() {
+        json!({})
+    } else {
+        serde_yaml::from_str(&active_yaml).map_err(|_| yaml::damaged())?
+    };
+    Ok((value, retired))
+}
+
 fn optional_read(path: &Path, max: usize) -> Result<Option<Vec<u8>>, Failure> {
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
