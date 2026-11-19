@@ -16,6 +16,7 @@ import {
   type PendingClaudeProfile,
 } from './claude-account-stores';
 import type { ClaudeHostTransport } from './claude-host-transport';
+import { claudeHostPurgePermit } from './agent-verbs';
 import {
   inventoryRecord,
   pendingRecord,
@@ -432,6 +433,7 @@ export class ClaudeAccountLifecycle {
         await this.deps.transport.purge(host, {
           sshHost: detail.launcher.sshHost,
           trashName: detail.trashName,
+          token: claudeHostPurgePermit(host, detail.trashName),
         });
       } catch {
         failedHost ??= host;
@@ -478,6 +480,7 @@ export class ClaudeAccountLifecycle {
           await this.deps.transport.purge(host, {
             sshHost: detail.launcher.sshHost,
             trashName: detail.trashName,
+            token: claudeHostPurgePermit(host, detail.trashName),
           });
         } catch {
           complete = false;
