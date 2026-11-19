@@ -55,7 +55,10 @@ const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   if (group === undefined) return true;
   assert.equal(
     mode,
-    process.argv.some((arg) => arg.startsWith('--record-native=')) ? 'cut' : 'cut-rust-only',
+    process.argv.some((arg) => arg.startsWith('--record-native=')) &&
+      process.env.AAC_RECORD_RUST_ONLY !== '1'
+      ? 'cut'
+      : 'cut-rust-only',
     'A worker-removal group replays worker-less, or records through the shipped cut.'
   );
   assert(Object.hasOwn(groups, group), `Unknown worker-removal group ${group}.`);

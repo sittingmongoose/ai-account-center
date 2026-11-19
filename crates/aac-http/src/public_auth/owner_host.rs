@@ -167,6 +167,11 @@ impl OwnerHost {
             let owners = std::sync::Arc::new(
                 crate::owners::Owners::start(config, crate::feed::Feeds::new()).ok()?,
             );
+            // The hosted store opens once, before any route reads it (the service does this in
+            // its boot); a request must never wait behind an unopened Engine.
+            if let Some(store) = owners.store.clone() {
+                let _ = tokio::task::spawn_blocking(move || store.open_at_boot()).await;
+            }
             if let Some(owner) = &owners.status_owned {
                 let owner = owner.clone();
                 let produce = owners.status_produce.clone();

@@ -9,7 +9,7 @@ if (routeGroup || recording || process.argv.includes('--cut-rust-only') || legac
     process.env.AAC_M6_TARGET_CLI ??
     (legacyResetGroup ? process.env.AAC_RUST_PUBLIC_BINARY : undefined);
   if (!binary) throw new Error('Set AAC_M6_TARGET_CLI to the native dashboard command.');
-  const mode = recording ? '--cut' : '--cut-rust-only';
+  const mode = recording && process.env.AAC_RECORD_RUST_ONLY !== '1' ? '--cut' : '--cut-rust-only';
   execFileSync(
     'bun',
     [
