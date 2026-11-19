@@ -268,6 +268,7 @@ impl Agents {
         if !word(&call.call_id)
             || ![
                 "health",
+                "cursor-open",
                 "inventory",
                 "signin-expiry",
                 "quota-read",
@@ -412,6 +413,13 @@ impl Agents {
             let terminal = match result {
                 Ok(events) => match events.last() {
                     Some(Event::Result { value, .. }) if value == &json!({"fallback":"python"}) => {
+                        fallback(&request.id, "unsupported")
+                    }
+                    Some(Event::Failure { failure, .. })
+                        if request.verb == "cursor-open"
+                            && failure.cause == Cause::Refused
+                            && failure.detail.as_str() == "unsupported agent verb" =>
+                    {
                         fallback(&request.id, "unsupported")
                     }
                     Some(event) => {

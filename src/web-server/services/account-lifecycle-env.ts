@@ -1,3 +1,6 @@
+import { activeFileWriterBinary } from '../../shared/private-file-lease';
+import { agentTransport, agentVerbs } from './agent-verbs';
+import { openCursorThroughAgent } from './cursor-open';
 import { getCcsDir } from '../../utils/config-manager';
 import { broadcastDashboardEvent } from '../dashboard-events';
 import {
@@ -124,6 +127,12 @@ export function defaultLifecycleEnv(): LifecycleEnv {
     replaceRow: replaceAccountDashboardRow,
     keyStore: (location) => keyStoreFor(location, { ccsDir: getCcsDir() }),
     openCursor: async (sshHost) => {
+      const root = getCcsDir();
+      const native =
+        activeFileWriterBinary(root) !== undefined &&
+        agentTransport() === 'on' &&
+        agentVerbs() === 'on';
+      if (await openCursorThroughAgent(root, sshHost, native)) return;
       await runClaudeHostOverSsh(sshHost, OPEN_CURSOR_COMMAND, '');
     },
     onChanged: accountsChanged,

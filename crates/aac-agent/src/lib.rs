@@ -1,4 +1,5 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
+mod cursor_open;
 mod failover;
 mod files;
 mod history;
@@ -208,6 +209,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
             _ => history::run(&args),
         })
         .await;
+    }
+    if request.verb == "cursor-open" {
+        return cursor_open::run(&request.args).await;
     }
     if request.verb == "quota-read" {
         return quota::run(&request.args).await;

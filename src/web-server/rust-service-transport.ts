@@ -438,6 +438,13 @@ export async function requestRustAgent(
               const value = JSON.stringify(event.value);
               fallbackProven = value === '{"fallback":"python"}';
               result = fallbackProven ? null : value;
+            } else if (
+              verb === 'cursor-open' &&
+              event.type === 'fallback' &&
+              ['unavailable', 'unsupported', 'busy', 'shape'].includes(event.reason)
+            ) {
+              // These reasons are sent before the fixed launch has been dispatched.
+              fallbackProven = true;
             } else if (!['fallback', 'failure'].includes(event.type))
               throw new RustTransportError('reply', 'Invalid agent stream');
           } catch {

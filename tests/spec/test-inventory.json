@@ -91,6 +91,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/src/cursor_open.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-agent/src/failover.rs",
       "kind": "internal",
       "evidence": [],
