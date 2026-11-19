@@ -58,7 +58,7 @@ try {
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   const release = registerRustAgentConnection(
     root,
-    { ccsDir: root, socketPath, secret: 'fixture', bootId: 'fixture' },
+    { socketPath, secret: 'fixture', bootId: 'fixture' },
     new Set()
   );
   try {

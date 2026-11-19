@@ -40,7 +40,7 @@ try {
   assert.equal(await openCursorThroughAgent(root, 'fixture-mac', true), false);
   const release = registerRustAgentConnection(
     root,
-    { ccsDir: root, socketPath, secret: 'fixture', bootId: 'test' },
+    { socketPath, secret: 'fixture', bootId: 'test' },
     new Set()
   );
   try {

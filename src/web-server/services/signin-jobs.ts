@@ -1,4 +1,5 @@
 import { randomBytes } from 'crypto';
+import type { NativeSignInSession } from './lifecycle-signin-session';
 import { SignInOutputParser } from './signin-output';
 import {
   spawnSignInProcess,
@@ -42,6 +43,7 @@ export type TimerScheduler = (callback: () => void, ms: number) => () => void;
 
 export interface SignInJobRunnerDeps {
   spawn?: SignInSpawner;
+  nativeSession?: () => NativeSignInSession | undefined;
   now?: () => number;
   setTimer?: TimerScheduler;
   firstOutputTimeoutMs?: number;
@@ -65,6 +67,7 @@ interface JobRecord {
   job: SignInJob;
   spec: SignInFlowSpec;
   process: SignInProcessHandle | null;
+  native: NativeSignInSession | null;
   parser: SignInOutputParser;
   timers: Array<() => void>;
   finishedAt: number | null;
@@ -151,6 +154,7 @@ export class SignInJobRunner {
       job,
       spec,
       process: null,
+      native: null,
       parser: new SignInOutputParser({
         allowedOrigins: spec.allowedOrigins,
         expectsUserCode: spec.kind === 'device-code',
@@ -194,6 +198,11 @@ export class SignInJobRunner {
     }
     if (record.busy === preparing) record.busy = null;
     if (record.finishedAt !== null) return;
+    const native = this.deps.nativeSession?.();
+    if (native) {
+      const handled = await this.dispatchNative(record, command, native);
+      if (handled || record.finishedAt !== null) return;
+    }
     let child: SignInProcessHandle;
     try {
       child = (this.deps.spawn ?? spawnSignInProcess)(command);
@@ -204,6 +213,44 @@ export class SignInJobRunner {
     record.process = child;
     child.onData((chunk) => this.output(record, chunk));
     child.onExit((code, failure) => void this.exited(record, code, failure));
+  }
+
+  private async dispatchNative(
+    record: JobRecord,
+    command: SignInCommand,
+    native: NativeSignInSession
+  ): Promise<boolean> {
+    record.native = native;
+    const dispatched = native.start(record.job.id, record.spec, command, (job) => {
+      if (record.finishedAt !== null || record.job.state !== 'starting') return;
+      record.job.verification = job.verification ? { ...job.verification } : null;
+      this.update(record, job.state);
+    });
+    record.busy = dispatched;
+    try {
+      const reply = await dispatched;
+      record.busy = null;
+      if (reply === undefined) {
+        record.native = null;
+        return false;
+      }
+      if (record.finishedAt !== null) {
+        if (reply.installPending) await native.settle(record.job).catch(() => undefined);
+        return true;
+      }
+      if (reply.installPending) {
+        await this.install(record);
+        await native.settle(record.job).catch(() => undefined);
+      } else {
+        const { state, error } = reply.job;
+        if (state === 'failed' || state === 'expired' || state === 'cancelled')
+          this.finish(record, state, error?.code ?? null);
+      }
+    } catch {
+      record.busy = null;
+      this.finish(record, 'failed', 'server_restarted');
+    }
+    return true;
   }
 
   private output(record: JobRecord, chunk: string): void {
@@ -244,6 +291,10 @@ export class SignInJobRunner {
       this.finish(record, 'failed', 'provider_denied');
       return;
     }
+    await this.install(record);
+  }
+
+  private async install(record: JobRecord): Promise<void> {
     // Install phase: no timer may end the job while the login is being installed.
     for (const cancel of record.timers.splice(0)) cancel();
     record.installing = true;
@@ -286,6 +337,13 @@ export class SignInJobRunner {
     if (record.installing) {
       record.stop ??= { state, code };
       return;
+    }
+    const native = record.native;
+    if (native) {
+      const active = record.busy ?? Promise.resolve();
+      const cancel = native.cancel(record.job.id);
+      // Cleanup waits for both the start and the stop receipt.
+      record.busy = Promise.allSettled([active, cancel]);
     }
     this.finish(record, state, code);
   }
@@ -378,6 +436,16 @@ export class SignInJobRunner {
       return 'not_expected';
     }
     record.codeSent = true;
+    if (record.native) {
+      this.update(record, 'verifying');
+      void record.native.submit(record.job.id, code).then(
+        (accepted) => {
+          if (!accepted) this.requestStop(record, 'failed', 'write_failed');
+        },
+        () => this.requestStop(record, 'failed', 'write_failed')
+      );
+      return copy(record.job);
+    }
     if (!record.process?.write(`${code}\n`)) {
       this.finish(record, 'failed', 'write_failed');
       return copy(record.job);

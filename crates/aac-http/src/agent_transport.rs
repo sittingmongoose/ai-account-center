@@ -252,7 +252,7 @@ impl Agents {
     }
     pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
         let started = tokio::time::Instant::now();
-        let Ok(call) = crate::json_object::from_slice::<Call>(
+        let Ok(mut call) = crate::json_object::from_slice::<Call>(
             bytes,
             &[
                 "computer",
@@ -264,6 +264,25 @@ impl Agents {
             ],
         ) else {
             return unavailable("", "shape");
+        };
+        let verb = if verb == "lifecycle-signin" {
+            let Some((deadline, args)) =
+                crate::lifecycle_signin::agent_start(&self.root, call.args.get())
+            else {
+                return unavailable(&call.call_id, "shape");
+            };
+            let Ok(args) = serde_json::value::to_raw_value(&args) else {
+                return unavailable(&call.call_id, "shape");
+            };
+            call.computer = Selector {
+                platform: "ubuntu".into(),
+                ssh_host: None,
+            };
+            call.args = args;
+            call.deadline_ms = deadline;
+            "signin-session"
+        } else {
+            verb
         };
         if !word(&call.call_id)
             || ![
@@ -277,10 +296,11 @@ impl Agents {
                 "key-store",
                 "claude-history",
                 "failover-inventory",
+                "signin-session",
             ]
             .contains(&verb)
             || call.deadline_ms == 0
-            || call.deadline_ms > aac_protocol::MAX_DEADLINE_MS
+            || call.deadline_ms > aac_protocol::max_deadline_ms(verb)
             || call.timeout_ms == 0
             || call.timeout_ms > call.deadline_ms + 5000
             || call.max_bytes == 0
@@ -416,7 +436,7 @@ impl Agents {
                         fallback(&request.id, "unsupported")
                     }
                     Some(Event::Failure { failure, .. })
-                        if request.verb == "cursor-open"
+                        if matches!(request.verb.as_str(), "cursor-open" | "signin-session")
                             && failure.cause == Cause::Refused
                             && failure.detail.as_str() == "unsupported agent verb" =>
                     {

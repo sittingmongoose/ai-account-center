@@ -329,6 +329,30 @@ export function registerRustAgentConnection(
   return () => agentConnections.delete(key);
 }
 
+/** Send one control to the same authenticated service that owns the job stream. */
+export async function controlLifecycleAgent(
+  root: string,
+  callId: string,
+  control: { input: string } | { cancel: true }
+): Promise<{ accepted?: boolean; cancelled?: boolean } | undefined> {
+  const scope = canonicalRoot(root);
+  const held = [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
+  if (!held) return undefined;
+  const reply = await once(
+    held.connection,
+    `/internal/agent/${encodeURIComponent(callId)}/control`,
+    FRONT_DOOR_PRINCIPAL,
+    held.active,
+    JSON.stringify(control),
+    'POST',
+    4096,
+    Date.now() + 2500
+  );
+  if (reply.status !== 200 || !reply.body || typeof reply.body !== 'object') return undefined;
+  const body = reply.body as Record<string, unknown>;
+  return { accepted: body.accepted === true, cancelled: body.cancelled === true };
+}
+
 /**
  * POST is never retried: key-store may write. Undefined means an absent/old service, so the
  * labelled TS transport can run. Null means a handled refusal/failure and goes to the helper.
@@ -346,7 +370,8 @@ export async function requestRustAgent(
     callId: string;
   },
   onProgress?: (data: unknown) => void,
-  singleShot = false
+  singleShot = false,
+  signal?: AbortSignal
 ): Promise<string | null | undefined> {
   const scope = canonicalRoot(root);
   const held = [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
@@ -360,6 +385,7 @@ export async function requestRustAgent(
     };
     const request = http.request({
       socketPath: held.connection.socketPath,
+      signal,
       path: `/internal/agent/${encodeURIComponent(verb)}`,
       method: 'POST',
       agent: held.connection.agent ?? false,
@@ -380,7 +406,7 @@ export async function requestRustAgent(
       held.active.delete(request);
     });
     request.once('error', (error: NodeJS.ErrnoException) => {
-      held.health.failed?.(rustFailureKind(error));
+      if (!signal?.aborted) held.health.failed?.(rustFailureKind(error));
       if (['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '')) resolve(undefined);
       else uncertain();
     });
@@ -439,7 +465,7 @@ export async function requestRustAgent(
               fallbackProven = value === '{"fallback":"python"}';
               result = fallbackProven ? null : value;
             } else if (
-              verb === 'cursor-open' &&
+              (verb === 'cursor-open' || verb === 'lifecycle-signin') &&
               event.type === 'fallback' &&
               ['unavailable', 'unsupported', 'busy', 'shape'].includes(event.reason)
             ) {

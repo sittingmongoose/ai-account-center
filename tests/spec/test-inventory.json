@@ -283,6 +283,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/lifecycle_signin.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/limits.rs",
       "kind": "internal",
       "evidence": [],
