@@ -350,6 +350,12 @@
       ]
     },
     {
+      "file": "crates/aac-http/tests/lifecycle_queue.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/tests/profile_reads.rs",
       "kind": "internal",
       "evidence": [],
