@@ -458,10 +458,23 @@ export const tests = {
 				// days ago, so the 7D trend carries a gap band whose caption shares a line with "Logs read"
 				await stubData(t, { keptDays: 730, gapAll: true });
 				await openAnalytics(t, f.safe);
-				await t.until('charts laid out in their boxes', () => {
+				// The trend is drawn for its box only after the controller has rebuilt the view for the reported
+				// size (the first view is laid out at the 1320x380 default until then, so the SVG's width already
+				// matches the box while its labels are still the default-width ones: TOOL-ISSUES 40). Wait for the
+				// view's own laid-out width and height to be the box's, and for the chart's plot scale to be 1:1
+				// (the paths are scaled, not relaid out, until the reported size's view arrives).
+				await t.until('the trend is laid out for its box', () => {
 					const svg = document.querySelector('.trend-card svg.axes');
 					const box = document.querySelector('.trend-box');
-					return !!svg && !!box && Math.abs(svg.getBoundingClientRect().width - box.getBoundingClientRect().width) < 2;
+					const view = window.__aacLastAnalytics?.usage?.trend;
+					const plot = document.querySelector('.trend-data > svg > g');
+					if (!svg || !box || !view || !plot) return false;
+					const b = box.getBoundingClientRect();
+					return (
+						Math.abs(svg.getBoundingClientRect().width - b.width) < 2 &&
+						Math.abs(view.w - b.width) < 2 && Math.abs(view.h - b.height) < 2 &&
+						/scale\(1\.0000 1\.0000\)/.test(plot.getAttribute('transform') || '')
+					);
 				}, null, { timeout: 15000 });
 				await t.until('the gap is marked', () => !!document.querySelector('.trend-card rect.ax-gap'), null, { timeout: 15000 });
 				const wide = await t.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
