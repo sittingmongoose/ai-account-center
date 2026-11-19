@@ -724,14 +724,19 @@ mod tests {
         let provider = "zai";
         let old = "fixture-key-before";
         let new = "fixture-key-after";
+        let baseline = registry_entries(&root).unwrap();
         let added = add(&native, provider, old, Some("Work".into()))
             .await
             .unwrap();
         assert_eq!(added["check"], "unverified");
         assert!(!added.to_string().contains(old));
         let entries = registry_entries(&root).unwrap();
-        assert_eq!(entries.len(), 1);
-        let source = &entries[0];
+        assert_eq!(entries.len(), baseline.len() + 1);
+        assert_eq!(
+            serde_json::to_value(&entries[..baseline.len()]).unwrap(),
+            serde_json::to_value(&baseline).unwrap()
+        );
+        let source = entries.last().unwrap();
         assert_eq!(added["account"]["id"], source.id);
         assert!(matches!(
             add(&native, provider, old, None).await,
@@ -744,7 +749,7 @@ mod tests {
             fingerprint(new)
         );
         assert!(!replaced.to_string().contains(new));
-        assert_eq!(registry_entries(&root).unwrap().len(), 1);
+        assert_eq!(registry_entries(&root).unwrap().len(), baseline.len() + 1);
         let files = std::fs::read_dir(root.join("account-usage/keys"))
             .unwrap()
             .filter_map(Result::ok)
