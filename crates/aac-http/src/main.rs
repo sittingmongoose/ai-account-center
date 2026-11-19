@@ -20,6 +20,7 @@ fn main() {
         Some("--registered-write") => std::process::exit(registered_write::commit()),
         Some("--provider-write") => std::process::exit(provider_write::commit()),
         Some("--signin-callback") => std::process::exit(signin_callbacks::run()),
+        Some("--codex-registry-edit") => std::process::exit(signin_callbacks::registry_edit()),
         Some("--codex-staging") => std::process::exit(provider_write::staging(false)),
         Some("--antigravity-maintenance") => {
             std::process::exit(provider_write::antigravity_maintenance())

@@ -192,6 +192,105 @@ fn codex_prepare(root: &Path, staging: &str, shared: &Path, cli: &str, env: &Val
     }))
 }
 
+/// One registry mutation under the caller-held directory lease.
+#[derive(Deserialize)]
+#[serde(tag = "edit", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
+enum RegistryEdit {
+    /// Insert a profile (`createProfile`); `meta` is spread over the base in order.
+    Create {
+        name: String,
+        created: String,
+        meta: Vec<(String, FieldValue)>,
+    },
+    /// Merge a partial update (`updateProfile`).
+    Update {
+        name: String,
+        partial: Vec<(String, FieldValue)>,
+    },
+}
+
+/// A metadata field value: a string or null.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FieldValue {
+    /// A string scalar.
+    Str(String),
+    /// A null scalar.
+    Null,
+}
+
+impl From<FieldValue> for aac_files::codex_registry::Field {
+    fn from(value: FieldValue) -> Self {
+        match value {
+            FieldValue::Str(text) => Self::Str(text),
+            FieldValue::Null => Self::Null,
+        }
+    }
+}
+
+fn apply_edit(
+    registry: &mut aac_files::codex_registry::Registry,
+    edit: RegistryEdit,
+) -> Result<(), &'static str> {
+    match edit {
+        RegistryEdit::Create { name, created, meta } => {
+            let meta = meta.into_iter().map(|(key, value)| (key, value.into())).collect();
+            registry.create(&name, &created, meta).map_err(|_| "exists")
+        }
+        RegistryEdit::Update { name, partial } => {
+            let partial = partial.into_iter().map(|(key, value)| (key, value.into())).collect();
+            registry.update(&name, partial).map_err(|_| "not_found")
+        }
+    }
+}
+
+/// Apply a registry mutation while the caller holds the registry directory lease (inherited on
+/// stderr). Prints `committed` or `refused`; exit 74 declines so TypeScript answers.
+pub(crate) fn registry_edit() -> i32 {
+    use std::os::fd::AsFd;
+    let Some(root) = std::env::args_os().nth(2).and_then(|arg| arg.to_str().map(str::to_owned))
+    else {
+        return 74;
+    };
+    let root = Path::new(&root);
+    let Ok(fd) = io::stderr().as_fd().try_clone_to_owned() else {
+        return 74;
+    };
+    let marker = format!("{}.lock", root.display());
+    let Ok(lease) =
+        aac_files::profile_writes::LegacyLease::verify(Path::new(&marker), std::fs::File::from(fd))
+    else {
+        return 74;
+    };
+    let mut bytes = Vec::new();
+    if io::stdin().take(INPUT_MAX + 1).read_to_end(&mut bytes).is_err()
+        || bytes.len() as u64 > INPUT_MAX
+    {
+        return 74;
+    }
+    let Ok(edit) = serde_json::from_slice::<RegistryEdit>(&bytes) else {
+        return 74;
+    };
+    let Some(mut registry) = aac_files::codex_registry::read(&root.join("codex-profiles.yaml"))
+    else {
+        return 74;
+    };
+    if let Err(code) = apply_edit(&mut registry, edit) {
+        println!("{}", json!({"status": "refused", "code": code}));
+        return 0;
+    }
+    let Some(emitted) = aac_files::codex_registry::emit(&registry) else {
+        return 74;
+    };
+    match lease.codex_metadata(root, emitted.as_bytes()) {
+        Ok(()) => {
+            println!("{}", json!({"status": "committed"}));
+            0
+        }
+        Err(_) => 75,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

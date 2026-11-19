@@ -282,6 +282,55 @@ export function signInCallback(root: string, request: object): SignInCallbackAns
   }
 }
 
+/** A native registry mutation result: committed, or refused with a provider code. */
+export interface CodexRegistryEditResult {
+  status: 'committed' | 'refused';
+  code?: string;
+}
+
+/**
+ * Apply a Codex registry mutation in Rust while the caller holds the registry directory lease
+ * (inherited on stderr). Undefined when no writer is registered or Rust declines; the TypeScript
+ * read-modify-write then answers. A refused edit is returned for the caller to map to its error.
+ */
+export function editCodexRegistry(dir: string, edit: object): CodexRegistryEditResult | undefined {
+  const canonical = canonicalLeaseRoot(dir);
+  const writer = writers.get(canonical);
+  if (!writer) return undefined;
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  let descriptor: number;
+  try {
+    descriptor = fs.openSync(canonical + '.lock', O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  } catch {
+    return undefined;
+  }
+  try {
+    const result = spawnSync(writer.binary, ['--codex-registry-edit', canonical], {
+      input: JSON.stringify(edit),
+      stdio: ['pipe', 'pipe', descriptor],
+      timeout: 5000,
+      maxBuffer: 256 * 1024,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (result.status !== 0 || typeof result.stdout !== 'string') return undefined;
+    try {
+      const answer = JSON.parse(result.stdout) as CodexRegistryEditResult;
+      if (answer.status === 'committed') {
+        writer.committed();
+        return answer;
+      }
+      if (answer.status === 'refused') return answer;
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
 export function rememberFileLeaseBinary(root: string, binary: string, writesOn = false): void {
