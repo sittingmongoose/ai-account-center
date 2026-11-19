@@ -385,8 +385,15 @@ try {
   for (const name of checkNames) {
     const a = normalize(JSON.parse(checkToday.files[name]));
     const b = normalize(JSON.parse(checkOwned.files[name] ?? 'null'));
-    if (JSON.stringify(a) !== JSON.stringify(b))
-      report.failures.push(`readers check: ${name} differs`);
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      const keys = [...new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])];
+      const diff = keys.filter((k) => JSON.stringify(a?.[k]) !== JSON.stringify(b?.[k]));
+      const k = diff[0];
+      const sample = (v) => JSON.stringify(v ?? null).slice(0, 160);
+      report.failures.push(
+        `readers check: ${name} differs at [${diff.join(', ')}]; ${k}: today=${sample(a?.[k])} owned=${sample(b?.[k])}`
+      );
+    }
   }
 
   // The kill drill: the service stops; the TS share readers return and the page answers.
