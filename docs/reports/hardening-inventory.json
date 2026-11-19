@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1098,
-    "filesAffected": 111,
-    "hotpathOccurrences": 526,
-    "hotpathFilesAffected": 61,
+    "totalOccurrences": 1103,
+    "filesAffected": 112,
+    "hotpathOccurrences": 531,
+    "hotpathFilesAffected": 62,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -610,8 +610,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 459,
-      "coverageRatio": 0.0959,
+      "totalSourceFiles": 460,
+      "coverageRatio": 0.0957,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -627,7 +627,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 263,
+          "count": 264,
           "withLogger": 30
         },
         {
@@ -751,7 +751,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2342
+          "loc": 2398
         },
         {
           "file": "src/web-server/status/answers.ts",
