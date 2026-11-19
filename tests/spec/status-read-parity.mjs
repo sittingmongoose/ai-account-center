@@ -206,13 +206,14 @@ const same = (a, b) =>
   a.status === b.status && a.body === b.body && HEADERS.every((h) => a.headers[h] === b.headers[h]);
 
 const report = { steps: [], failures: [] };
+let stopOwner;
 try {
   const today = await start('off', 'off');
   const fed = await start('on', 'on');
   // R4: with the store host on, the owner forwards this service's owned snapshots (the fed
   // pipeline is unchanged); without it the owner keeps its TypeScript readers.
   setStatusRustService(fed);
-  const stopOwner = owner.start();
+  stopOwner = owner.start();
   // Let the first owned refresh (or TS scan) land before the first comparison.
   await new Promise((r) => setTimeout(r, 300));
   let fedServed = 0;
@@ -386,7 +387,7 @@ try {
   );
 } finally {
   for (const server of servers) server.close();
-  stopOwner();
+  stopOwner?.();
   for (const s of services) s.stop();
   await new Promise((r) => setTimeout(r, 300));
   fs.rmSync(scratch, { recursive: true, force: true });

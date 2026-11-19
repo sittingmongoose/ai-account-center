@@ -159,7 +159,7 @@ pub fn run(args: &[String], root: &Path) -> i32 {
         let answer = (|| -> Result<i32, aac_store::error::Error> {
             if command == "status" {
                 let status = call(&slot, "status", json!({}))?;
-                line(&serde_json::to_string_pretty(&sorted(status)).map_err(|error| {
+                line(&serde_json::to_string_pretty(&status).map_err(|error| {
                     aac_store::error::Error::new("invalid", error.to_string())
                 })?);
             }
@@ -201,25 +201,5 @@ pub fn run(args: &[String], root: &Path) -> i32 {
             err(&format!("[X] {}\n", code_message(error.code)));
             1
         }
-    }
-}
-
-/// The shipped Node binding builds aac-store without serde_json's preserve_order, so its JSON
-/// keys are alphabetical; this binary's dependency graph enables preserve_order. Sort the
-/// direct store answers to the binding's spelling so the CLI output is byte-equal.
-fn sorted(value: Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut entries: Vec<(String, Value)> = map.into_iter().collect();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key, sorted(value)))
-                    .collect(),
-            )
-        }
-        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
-        other => other,
     }
 }
