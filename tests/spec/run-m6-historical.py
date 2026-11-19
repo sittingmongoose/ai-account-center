@@ -141,8 +141,8 @@ def main():
     parser.add_argument("--filter", default="", help="Run matching historical paths only")
     args = parser.parse_args()
     output = args.output.resolve()
-    if not output.is_relative_to(ROOT / ".git"):
-        parser.error("use a scratch output directory under this checkout's .git")
+    if output.is_relative_to(ROOT):
+        parser.error("use a scratch output directory outside the checkout")
     if not shutil.which("bwrap") or not (ROOT / "dist/native/aac-http").is_file():
         parser.error("bubblewrap and the staged Linux Rust front door are required")
     binaries = {name: Path(shutil.which(name)).resolve() for name in ("node", "bun")}

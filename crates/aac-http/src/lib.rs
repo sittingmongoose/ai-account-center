@@ -6,6 +6,8 @@ mod account_reads;
 #[cfg(unix)]
 pub mod account_usage;
 #[cfg(unix)]
+mod answers_owned;
+#[cfg(unix)]
 mod agent_transport;
 pub mod antigravity_host;
 pub mod antigravity_probes;
@@ -76,6 +78,8 @@ mod reset_claims;
 mod reset_source_route;
 #[cfg(unix)]
 mod scoreboard_owned;
+#[cfg(all(unix, test))]
+mod runs_ingest_gate;
 #[cfg(unix)]
 mod status_cache;
 #[cfg(unix)]

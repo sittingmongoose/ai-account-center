@@ -35,7 +35,7 @@ import {
   DEFAULT_DASHBOARD_TIME_ZONE,
   readDashboardPreferences,
 } from '../services/dashboard-preferences';
-import { ValidationError } from '../../errors/error-types';
+import { NetworkError, ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { AgentReportsReader, ensureReportsLayout, publishSchemas } from './agent-reports-reader';
 import {
@@ -47,8 +47,10 @@ import {
 import {
   DOORBELL_SENDER,
   mergeSharedAnswers,
+  noteSecretOf,
   StatusAnswers,
   type AnswerHistoryEntry,
+  type EntryResult,
   type SendRecord,
 } from './answers';
 import { QuotaReportReader } from './quota-report';
@@ -95,6 +97,8 @@ const logger = createLogger('status-service');
 const REPORTS_EVERY_MS = 10_000;
 const REGISTRY_EVERY_MS = 30_000;
 const COLLECT_EVERY_MS = 60_000;
+/** G16b: a forwarded send's whole budget (30 s of entries, its summary) and a margin. */
+const FORWARDED_SEND_DEADLINE_MS = 50_000;
 const DEMAND_WINDOW_MS = 15 * 60_000;
 const HINT_GAP_MS = 5_000;
 
@@ -815,6 +819,7 @@ export class StatusService {
       return;
     }
     this.ownedFailures = 0;
+    this.answersInRust();
     if (this.ownedInputs && answer.generation === this.ownedInputs.generation) return;
     this.ownedInputs = {
       generation: answer.generation,
@@ -875,6 +880,79 @@ export class StatusService {
     // The page must not wait a whole cycle for the first fallback scan.
     void this.scanReports().catch(() => undefined);
     void this.scanRegistry().catch(() => undefined);
+    this.handAnswersToTs();
+  }
+
+  /**
+   * G16b: whether the service's answer store records sends and runs the retry pass. Owned mode only,
+   * until the first forward that cannot reach the service (or the owned fallback): from then on, for
+   * the rest of this process, the TS store does both (it takes the lock over once the service is gone).
+   */
+  private answersInRust(): boolean {
+    // This process's store holding the lock (a read failure makes `list()` gain it) means the service's
+    // cannot write: TS takes the answers back rather than leave them with no retry pass.
+    if (this.owned && !this.answersLocal && this.answers.holdsStore?.()) this.handAnswersToTs();
+    return this.owned && !this.answersLocal && rustServiceForStatus !== null;
+  }
+
+  private answersLocal = false;
+  private answersRetryTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** G16b: the TS store takes the answers back: its own minute retry pass starts now. */
+  private handAnswersToTs(): void {
+    if (this.answersLocal) return;
+    this.answersLocal = true;
+    if (!this.started) return;
+    let running = false;
+    const tick = () => {
+      if (running) return;
+      running = true;
+      void this.answers
+        .retryPending()
+        .catch(() => undefined)
+        .finally(() => {
+          running = false;
+        });
+    };
+    this.answersRetryTimer = setInterval(tick, COLLECT_EVERY_MS);
+    this.answersRetryTimer.unref?.();
+    tick();
+  }
+
+  private started = false;
+
+  /**
+   * One send (`POST /api/status/answers`). Owned: forwarded to the service's answer store with the
+   * note secret findings (the one TS filter); a forward that never reached the service, or that it
+   * declined, is recorded here instead and hands the answers to TS. A forward that may have reached
+   * it and failed throws: the route answers that some may have been recorded.
+   */
+  async submitAnswers(
+    entries: unknown[],
+    device: string,
+    clientSendId: string | null
+  ): Promise<EntryResult[]> {
+    const service = rustServiceForStatus;
+    if (!this.answersInRust() || !service) {
+      if (this.owned) this.handAnswersToTs();
+      return this.answers.submitSet(entries, device, clientSendId);
+    }
+    const reply = await service.internalSend(
+      '/internal/status/answers',
+      { entries, device, clientSendId, noteSecrets: entries.map(noteSecretOf) },
+      FORWARDED_SEND_DEADLINE_MS
+    );
+    if (reply.kind === 'reply' && reply.status === 200) {
+      const results = (reply.body as { results?: unknown } | null)?.results;
+      if (Array.isArray(results) && results.length === entries.length)
+        return results as EntryResult[];
+      throw new NetworkError('The answer store gave no result per entry.');
+    }
+    if (reply.kind === 'unreached' || (reply.kind === 'reply' && reply.decline !== null)) {
+      this.handAnswersToTs();
+      return this.answers.submitSet(entries, device, clientSendId);
+    }
+    throw new NetworkError('The answer store did not finish the send.');
   }
 
   /** Starts the timers; returns the stop call. */
@@ -912,7 +990,10 @@ export class StatusService {
     every(COLLECT_EVERY_MS, async () => {
       if (this.wanted()) await this.collect();
     });
-    every(COLLECT_EVERY_MS, () => this.answers.retryPending());
+    // G16b: owned, the service's answer store runs the retry pass; TS only once it takes them back.
+    this.started = true;
+    this.answersLocal = this.answersLocal || !this.owned;
+    if (this.answersLocal) every(COLLECT_EVERY_MS, () => this.answers.retryPending());
     const unsubscribe = (this.deps.subscribeUsage ?? onAccountAnalyticsSample)(this.recordUsage);
     return () => {
       this.answers.flushCompletions();
@@ -921,6 +1002,9 @@ export class StatusService {
       this.removeOwnedEvents?.();
       this.removeOwnedEvents = null;
       for (const timer of this.fallbackTimers) clearInterval(timer);
+      if (this.answersRetryTimer) clearInterval(this.answersRetryTimer);
+      this.answersRetryTimer = null;
+      this.started = false;
       if (this.hintTimer) clearTimeout(this.hintTimer);
       this.hintTimer = null;
     };

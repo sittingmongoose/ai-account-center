@@ -67,7 +67,7 @@ export interface RustRequestOptions {
   raw?: boolean;
   cap?: number;
   text?: string;
-  /** M5 lane K: a longer total deadline for a write whose work takes seconds (a reset source read). */
+  /** A longer total deadline for internal work that may take several seconds. */
   deadlineMs?: number;
   signal?: AbortSignal;
   payloadCap?: number;

@@ -49,6 +49,8 @@ export const RUST_SERVICE_ENV_NAMES: readonly string[] = [
   'WINDIR',
   'COMSPEC',
   'PATHEXT',
+  // G16b: the answer store's doorbell switch (`off` in tests and fixtures: no pm-mail ring).
+  'AAC_STATUS_DOORBELL',
 ];
 
 /**

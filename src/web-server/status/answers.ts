@@ -91,6 +91,19 @@ export {
   type RingResult,
 } from './answer-delivery';
 
+/**
+ * G16b: the note's secret finding for one raw entry, as `recordEntry` computes it (the one TS secret
+ * filter): what the front door hands the Rust answer store with a forwarded send. Null when the entry
+ * does not parse, its note is not acceptable or empty, or nothing was found.
+ */
+export function noteSecretOf(raw: unknown): string | null {
+  const entry = parseAnswerEntry(raw);
+  if (!entry) return null;
+  const note = normalizeNote(entry.note);
+  if (!note) return null;
+  return findSecretIn(note, note) ?? findTypedSecret(note) ?? null;
+}
+
 /** Retries of a failed share write, summary or ring before the history says it gave up. */
 export const MAX_DELIVERY_ATTEMPTS = 20;
 
@@ -677,6 +690,11 @@ export class StatusAnswers {
     const next = this.queue.then(work, work);
     this.queue = next.catch(() => undefined);
     return next;
+  }
+
+  /** G16b: whether this instance holds the store's writer lock (as of its last confirmation). */
+  holdsStore(): boolean {
+    return this.owner;
   }
 
   /** Every record in the private store, oldest first (folded with its delivery steps). */

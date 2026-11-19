@@ -27,6 +27,7 @@ pub(crate) enum Handler {
     Scoreboard,
     StoreStatus,
     StatusInputs,
+    StatusAnswers,
     ScoreboardInputs,
     Feed,
     FeedStatus,
@@ -68,6 +69,7 @@ impl Handler {
             "scoreboard" => Handler::Scoreboard,
             "store-status" => Handler::StoreStatus,
             "status-inputs" => Handler::StatusInputs,
+            "status-answers" => Handler::StatusAnswers,
             "scoreboard-inputs" => Handler::ScoreboardInputs,
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
@@ -249,6 +251,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::UsageSample
                         | Handler::ClaudeOpen
                         | Handler::ClaudeHistoryCleanup
+                        | Handler::StatusAnswers
                 ))
             || (row.group == "internal" && !internal)
             || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
@@ -292,7 +295,12 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::WritePreferences
                         | Handler::ProviderCache
                         | Handler::CursorAccount
+                        | Handler::StatusAnswers
                 ))
+            || (handler == Handler::StatusAnswers
+                && (method != axum::http::Method::PUT
+                    || row.path != "/internal/status/answers"
+                    || row.budget_ms != 0))
             || (handler == Handler::WriteSettings
                 && (method != axum::http::Method::PUT
                     || row.group != "writes"
@@ -396,6 +404,7 @@ mod tests {
                     | Handler::UsageSample
                     | Handler::ClaudeOpen
                     | Handler::ClaudeHistoryCleanup
+                    | Handler::StatusAnswers
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.

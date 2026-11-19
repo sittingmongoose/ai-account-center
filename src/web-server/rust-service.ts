@@ -869,6 +869,41 @@ export class RustService extends RustSupervisor {
     this.fallback(route, { kind: 'fedDeclined', reason });
   }
 
+  /**
+   * G16b: one internal write (a forwarded send) with its own deadline. `unreached` only when the
+   * request never reached the service (no lease, or the connection was refused): the caller may then
+   * do the work itself. Any other failure is `uncertain`: the service may have done it.
+   */
+  async internalSend(
+    path: string,
+    body: unknown,
+    deadlineMs: number
+  ): Promise<
+    | { kind: 'reply'; status: number; body: unknown; decline: string | null }
+    | { kind: 'unreached' }
+    | { kind: 'uncertain' }
+  > {
+    const lease = this.lease;
+    if (!lease || this.stopped || this.mode !== 'on') return { kind: 'unreached' };
+    try {
+      const result = await requestRust(
+        lease.connection,
+        path,
+        FRONT_DOOR_PRINCIPAL,
+        this.active,
+        body,
+        'PUT',
+        { deadlineMs, cap: 2 * 1024 * 1024 }
+      );
+      this.replied(lease);
+      return { kind: 'reply', status: result.status, body: result.body, decline: result.decline };
+    } catch (error) {
+      const kind = rustFailureKind(error);
+      this.transportFailed(lease, kind);
+      return kind === 'connect' ? { kind: 'unreached' } : { kind: 'uncertain' };
+    }
+  }
+
   async respond(
     req: Request,
     res: Response,

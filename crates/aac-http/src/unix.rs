@@ -130,6 +130,8 @@ struct Shared {
     usage: Arc<crate::usage_snapshot::UsageSnapshot>,
     /// G13: the Claude Open job owner, when the boot binds it.
     claude_open: Option<Arc<crate::claude_open::open::ClaudeOpen>>,
+    /// G16b: the answer store's writer, with the owned Status readers.
+    answers_owned: Option<Arc<crate::answers_owned::AnswersOwned>>,
 }
 
 #[derive(Clone)]
@@ -1026,6 +1028,25 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // G16b: one forwarded send, recorded by the service's answer store.
+        Handler::StatusAnswers => {
+            let Some(owner) = shared.answers_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let query = req.uri().query().is_some();
+            let Ok(bytes) = to_bytes(req.into_body(), crate::answers_owned::SEND_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if query {
+                return decline(row.handler, Decline::Shape);
+            }
+            match owner.submit(&bytes).await {
+                Ok(value) => Json(value).into_response(),
+                Err("shape") => decline(row.handler, Decline::Shape),
+                // Started and failed: not a decline (the front door must not record it again).
+                Err(_) => store_error("answers_failed: the answer store could not finish"),
+            }
+        }
         // R4: the owned Scoreboard input the front door computes the facts over.
         Handler::ScoreboardInputs => {
             let Some(owner) = shared.scoreboard_owned.clone() else {
@@ -1433,6 +1454,14 @@ async fn serve_inner(
         }
         _ => None,
     };
+    // G16b: the answer store moves with the owned Status group.
+    let answers_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(_)) if owned.status => Some(crate::answers_owned::AnswersOwned::new(
+            boot.ccs_dir.clone(),
+            owned.reports_root.clone(),
+        )),
+        _ => None,
+    };
     let owned_reports_root = boot.owned.as_ref().map(|owned| owned.reports_root.clone());
     let renewal = boot.renewal.clone();
     let ccs_dir = boot.ccs_dir.clone();
@@ -1484,6 +1513,7 @@ async fn serve_inner(
         scoreboard_owned: scoreboard_owned.clone(),
         usage,
         claude_open,
+        answers_owned: answers_owned.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -1592,6 +1622,11 @@ async fn serve_inner(
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { crate::status_owned::jobs(jobs, stop).await });
     }
+    if let Some(owner) = &answers_owned {
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::answers_owned::jobs(jobs, stop).await });
+    }
     if let Some(owner) = &scoreboard_owned {
         let seeder = Arc::clone(owner);
         let root = owned_reports_root.clone().expect("scoreboard owner");
@@ -1657,6 +1692,9 @@ async fn serve_inner(
     }
     jobs_stop.store(true, Ordering::Release);
     let _ = jobs_stop_tx.send(true);
+    if let Some(owner) = answers_owned {
+        let _ = tokio::task::spawn_blocking(move || owner.close()).await;
+    }
     if let Some(host) = store {
         let _ = tokio::task::spawn_blocking(move || host.close_engine()).await;
     }
