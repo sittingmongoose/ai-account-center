@@ -107,6 +107,8 @@ const nativeGroupRow = (method: string, route: string) =>
 const recordNative = process.argv
   .find((arg) => arg.startsWith('--record-native='))
   ?.slice('--record-native='.length);
+assert.notEqual(recordNative, '', '--record-native needs an output path');
+if (recordNative) assert.equal(mode, 'cut', 'record native rows on the shipped listener');
 const recordedNative: Record<string, Contract> = {};
 const groupOverrides: Record<string, Contract> = {};
 if (group !== undefined && mode === 'cut-rust-only') {
@@ -521,8 +523,16 @@ try {
   await fs.rm(root, { recursive: true, force: true });
 }
 if (recordNative) {
-  await fs.writeFile(path.join(spec, recordNative), JSON.stringify(recordedNative, null, 2) + '\n');
-  console.log(`Recorded ${Object.keys(recordedNative).length} native rows into ${recordNative}`);
+  const expected = selectedRoutes.reduce(
+    (total, [, route]) =>
+      total + (nativeGroupRow(route.method, route.path) ? route.roles.length : 0),
+    0
+  );
+  assert(expected > 0, 'select a group with native recorder rows');
+  assert.equal(Object.keys(recordedNative).length, expected, 'record every selected native row');
+  const output = path.resolve(spec, recordNative);
+  await fs.writeFile(output, JSON.stringify(recordedNative, null, 2) + '\n');
+  console.log(`Recorded ${expected} native rows into ${output}`);
 }
 console.log(
   `Rust public M0: ${counts.match} matching replies, ${counts.decline} explicit declines across ${declined.size} routes, ${counts.different} differences.`
