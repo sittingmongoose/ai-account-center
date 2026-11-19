@@ -60,6 +60,15 @@ export default (ctx) => {
 			if (!fs.existsSync(path.join(reports, 'v1', 'writers'))) {
 				const { writeStatusFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'status-fixture.mjs')).href);
 				writeStatusFixture(reports, { ccsDir: path.join(home, '.ccs'), withKinds: true });
+				// The writer folder also holds the card assets status-view.json's stubbed deck names
+				// (cards/F-Q3.assets/…): a page route answers them while a test runs, but a card video the
+				// page is still fetching once the next test's beforeEach has unrouted every route asks the
+				// real server, which had no such file and answered 404 — the console error failed the check
+				// that followed (TOOL-ISSUES 61). The server now serves what the deck asks for, ranges included.
+				const assets = path.join(reports, 'v1', 'writers', 'vm.pm-fo-lead', 'cards', 'F-Q3.assets');
+				fs.mkdirSync(assets, { recursive: true });
+				for (const name of ['option-a.jpg', 'option-b.mp4', 'option-b-poster.jpg'])
+					fs.copyFileSync(path.join(root, 'web-dashboard', 'leptos', 'fixtures', 'media', name), path.join(assets, name));
 				// The Model Scoreboard reads runs and the catalog from the same folder.
 				const { writeScoreboardFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'scoreboard-fixture.mjs')).href);
 				writeScoreboardFixture(reports);
