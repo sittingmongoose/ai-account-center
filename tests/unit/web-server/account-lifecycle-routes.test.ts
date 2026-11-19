@@ -215,6 +215,7 @@ async function fixture(
     antigravityFlow?: 'preflight_failed' | 'tool_missing' | null;
     museEnabled?: boolean;
     approvalBinary?: string;
+    writeParityMode?: 'off' | 'shadow' | 'on';
   } = {}
 ): Promise<Fixture> {
   const audits: Array<[string, Record<string, unknown>]> = [];
@@ -364,13 +365,18 @@ async function fixture(
   };
   const app = express();
   app.use(express.json());
-  const rustService = options.approvalBinary ? new RustService('on') : undefined;
+  const rustService =
+    options.writeParityMode || options.approvalBinary
+      ? new RustService(options.writeParityMode ?? 'on')
+      : undefined;
   if (rustService) {
     const service = rustService;
     closers.push(async () => service.stop());
-    await service.start(options.approvalBinary);
-    expect(service.stats.fallbacks).toBe(0);
-    expect(service.accountConfirmations()).toBeDefined();
+    if (service.mode === 'on') {
+      await service.start(options.approvalBinary);
+      expect(service.stats.fallbacks).toBe(0);
+      expect(service.accountConfirmations()).toBeDefined();
+    }
     app.use((_req, res, next) => {
       res.locals.rustService = service;
       next();
@@ -442,6 +448,56 @@ function files(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { recursive: true }).map(String).sort();
 }
+
+const writeParityMode = process.env.AAC_SPEC_LIFECYCLE_WRITE_MODE;
+it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
+  'registered lifecycle state write parity',
+  async () => {
+    const f = await fixture({
+      claudeEnabled: true,
+      writeParityMode: writeParityMode as 'off' | 'shadow' | 'on',
+      approvalBinary: process.env.AAC_RUST_SERVICE_BINARY,
+    });
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    expect(added.status).toBe(201);
+    const id = String((added.body.account as { id: string }).id);
+    const file = path.join(ccsDir, 'account-usage-accounts.json');
+    const old = fs.readFileSync(file, 'utf8');
+    expect(
+      (await f.request('PATCH', '/' + id, { label: 'No' }, { origin: 'https://foreign.test' }))
+        .status
+    ).toBe(403);
+    expect(fs.readFileSync(file, 'utf8')).toBe(old);
+    const renamed = await f.request('PATCH', '/' + id, { label: 'Fixture work' });
+    expect(renamed.status).toBe(200);
+    expect((renamed.body.account as { label: string }).label).toBe('Fixture work');
+    expect(
+      JSON.parse(fs.readFileSync(file, 'utf8')).accounts.find(
+        (entry: { id: string }) => entry.id === id
+      ).label
+    ).toBe('Fixture work');
+    const prepared = await f.request('POST', '/' + id + '/remove', {});
+    const token = (prepared.body.confirmation as { token: string }).token;
+    const removed = await f.request('POST', '/' + id + '/remove', { confirmationToken: token });
+    expect(removed.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+
+    const profile = await f.request('POST', '/add', {
+      provider: 'claude',
+      profileId: 'work2',
+      label: 'Work 2',
+      email: 'work2@example.com',
+    });
+    expect(profile.status).toBe(201);
+    expect(profile.body).toMatchObject({
+      account: { id: 'claude:work2', lifecycle: { state: 'pending_sign_in' } },
+      launchers: { mac: 'created', windows: 'created' },
+    });
+    const pending = JSON.parse(
+      fs.readFileSync(path.join(ccsDir, 'accounts/claude-pending.json'), 'utf8')
+    );
+    expect(pending.profiles.map((value: { id: string }) => value.id)).toContain('work2');
+  }
+);
 
 describe('lifecycle route scope and guards', () => {
   it('needs a browser session, the dashboard origin, JSON, a strict body and no query', async () => {
