@@ -62,7 +62,10 @@ const server = http.createServer(async (request, response) => {
     const identity =
       identityOutcome === 'unsupported'
         ? { type: 'fallback', reason: 'unsupported' }
-        : { type: 'result', value: { email: identityOutcome === 'found' ? 'muse@example.test' : null } };
+        : {
+            type: 'result',
+            value: { email: identityOutcome === 'found' ? 'muse@example.test' : null },
+          };
     response.end(JSON.stringify({ ...base, ...identity }) + '\n');
   } else if (route === '/internal/agent/signin-session' && call.args.action === 'settle') {
     assert.deepEqual(call.computer, { platform: 'ubuntu', sshHost: null });

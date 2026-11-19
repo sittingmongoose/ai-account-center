@@ -67,6 +67,7 @@ export type MuseSshRunner = (sshHost: string, command: string, input: string) =>
 export interface MuseLifecycleDeps {
   enabled: boolean;
   ssh?: MuseSshRunner;
+  identity?: (host: string, homeId: string | null) => Promise<string | null | undefined>;
 }
 
 const PASSED_ENV = [
@@ -168,7 +169,10 @@ export class MuseAccountLifecycle {
         if (control.stopped()) throw new SignInJobStopped();
         let email = '';
         try {
-          email = (await ssh(sshHost, remoteEmail, '')).trim();
+          const native = await this.deps.identity?.(sshHost, homeId);
+          email = (
+            native === undefined ? await ssh(sshHost, remoteEmail, '') : (native ?? '')
+          ).trim();
         } catch {
           throw new SignInJobError('write_failed');
         }

@@ -117,6 +117,12 @@
       ]
     },
     {
+      "file": "crates/aac-agent/src/muse_login.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-agent/src/quota.rs",
       "kind": "HTTP",
       "evidence": [

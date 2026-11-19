@@ -5,6 +5,7 @@ mod files;
 mod history;
 mod inventory;
 mod key_store;
+mod muse_login;
 mod pins;
 mod proof;
 mod quota;
@@ -197,7 +198,12 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
     if matches!(
         request.verb.as_str(),
-        "key-store" | "t3-pins" | "claude-history" | "failover-inventory" | "signin-expiry"
+        "key-store"
+            | "t3-pins"
+            | "claude-history"
+            | "failover-inventory"
+            | "signin-expiry"
+            | "muse-login-identity"
     ) {
         let args = request.args.clone();
         let verb = request.verb.clone();
@@ -206,6 +212,7 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
             "t3-pins" => pins::run(&args),
             "failover-inventory" => failover::run(&args),
             "signin-expiry" => signin::run(&args),
+            "muse-login-identity" => muse_login::run(&args),
             _ => history::run(&args),
         })
         .await;

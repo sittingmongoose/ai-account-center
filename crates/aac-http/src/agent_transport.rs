@@ -288,6 +288,7 @@ impl Agents {
             || ![
                 "health",
                 "cursor-open",
+                "muse-login-identity",
                 "inventory",
                 "signin-expiry",
                 "quota-read",
@@ -436,8 +437,10 @@ impl Agents {
                         fallback(&request.id, "unsupported")
                     }
                     Some(Event::Failure { failure, .. })
-                        if matches!(request.verb.as_str(), "cursor-open" | "signin-session")
-                            && failure.cause == Cause::Refused
+                        if matches!(
+                            request.verb.as_str(),
+                            "cursor-open" | "muse-login-identity" | "signin-session"
+                        ) && failure.cause == Cause::Refused
                             && failure.detail.as_str() == "unsupported agent verb" =>
                     {
                         fallback(&request.id, "unsupported")
