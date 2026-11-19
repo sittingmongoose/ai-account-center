@@ -112,16 +112,26 @@ def run_file(name, gates, binaries, dependencies, logs):
     text = output.decode("utf-8", errors="replace")
     name_on_disk = name.replace("/", "__").replace("\\", "__")
     (logs / (name_on_disk + ".log")).write_text(text, encoding="utf-8")
-    counts = dict(re.findall(r"(?m)^\s*(\d+) (pass|fail)\b", text))
-    # The parent runs the worker; a source file that only defines helpers may have no tests.
-    tests = re.findall(r"(?m)^\s*(\d+) (pass|fail)\b", text)
+    tests = {
+        word: int(count)
+        for count, word in re.findall(r"(?m)^\s*(\d+) (pass|fail)\b", text)
+    }
+    for word, count in re.findall(r"(?m)^[#ℹ] (pass|fail) (\d+)\s*$", text):
+        tests[word] = int(count)
+    unittest = re.search(r"(?m)^Ran (\d+) tests? in ", text)
+    if unittest and code == 0:
+        tests = {"pass": int(unittest[1]), "fail": 0}
     result.update({
         "state": "ran", "exitCode": code,
         "rustRequests": text.count(RUST_REQUEST),
         "rustFixtures": text.count("[m6 compose fixture]"),
-        "passed": next((int(num) for num, word in tests if word == "pass"), None),
-        "failed": next((int(num) for num, word in tests if word == "fail"), None),
+        "passed": tests.get("pass"),
+        "failed": tests.get("fail"),
     })
+    if text.startswith("bwrap:"):
+        result["frameworkError"] = text.splitlines()[0]
+    if code == 124:
+        result["frameworkError"] = f"file exceeded {BOUNDED_TIMEOUT} seconds"
     return result
 
 
