@@ -198,15 +198,19 @@ export interface UnscoredExample {
 
 /**
  * Runs that count toward no row and no verdict, by reason, so `total` is every run not scored.
- * `scanLimit` is the run files past any scan cap, from `RunsState.skipped.runFiles` (runs, writers
- * or bytes; the newest days/writers are kept, named in the runs Source). `unreadable` is the run files the runs reader
- * refused (named in the runs Source, and refused in the readers check) with no earlier good copy to
- * score. Every run it accepted has at most one reason, in this precedence: `no-model`, `no-task-type`,
- * `unknown-model` (its model resolves to no catalog id), `unknown-task-type` (its task type is not in
- * the catalog). The six counts sum to `total`. `unknownModels` names each raw unknown model id (sorted
- * by runs desc, then id, at most 20) so new aliases can be added from here. `examples` holds the newest
- * few accepted runs across every reason (at most 10, newest first; an unreadable file and a scan-limit
- * file have no run to show).
+ * `scanLimit` and `unreadable` count run FILES, not runs: a run copied into several date folders
+ * counts once per file past a scan cap (`RunsState.skipped.runFiles`: runs, writers or bytes, the
+ * newest days kept) or refused (named in the runs Source, and refused in the readers check, with no
+ * earlier good copy to score). Past the writer cap `scanLimit` is a lower bound; under a folder
+ * that could not be listed it is a provisional last-known count (`RunsState.provisionalRunFiles`),
+ * both qualified in the runs Source. The page's head names the unit the total counts (runs, run
+ * files, or both). Every run the scan accepted has at most
+ * one reason, in this precedence: `no-model`, `no-task-type`, `unknown-model` (its model resolves
+ * to no catalog id), `unknown-task-type` (its task type is not in the catalog). The six counts sum
+ * to `total`. `unknownModels` names each raw unknown model id (sorted by runs desc, then id, at
+ * most 20) so new aliases can be added from here. `examples` holds the newest few accepted runs
+ * across every reason (at most 10, newest first; an unreadable file and a scan-limit file has no
+ * run to show).
  */
 export interface UnscoredSummary {
   total: number;
@@ -294,7 +298,7 @@ export interface ScoreboardView {
   };
   uses: ScoreboardUse[];
   recent: RunSummary[];
-  /** Runs read but never scored, by reason (the page shows these instead of hiding them). */
+  /** Runs and run files left out of every verdict, by reason (the page shows these instead of hiding them). */
   unscored: UnscoredSummary;
   /** Scoreboard v2: the filters applied, the identity facts for grouping, and the history. */
   filters?: ScoreboardFiltersView;

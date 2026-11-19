@@ -489,8 +489,8 @@
         "count": 7,
         "calls": [],
         "markers": [
-          ": legacy();",
-          "? composer.compose(input, { ...finish, native: this.native !== null }, legacy)",
+          ": await legacy();",
+          "? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)",
           "const legacy = () =>",
           "legacy: () => Promise<ScoreboardView>"
         ]

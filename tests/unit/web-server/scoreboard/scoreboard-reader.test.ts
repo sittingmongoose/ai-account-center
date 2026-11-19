@@ -353,9 +353,12 @@ describe('scan limits', () => {
     ]);
   });
 
-  it('past the writer limit keeps the writers whose runs changed last, not the first by name', async () => {
+  it('past the writer limit keeps the writers with the newest run dates, not the newest runs/ folders', async () => {
     const root = dirs.make();
-    for (const writer of ['vm.a', 'vm.b', 'vm.c']) writeRun(root, runDoc(writer, 'R'));
+    // vm.a holds the newest run anywhere, but its runs/ folder changed longest ago.
+    writeRun(root, runDoc('vm.a', 'R'), '2026-11-09');
+    writeRun(root, runDoc('vm.b', 'R'), '2026-11-03');
+    writeRun(root, runDoc('vm.c', 'R'), '2026-11-07');
     const stamp = (writer: string, at: number) =>
       fs.utimesSync(path.join(root, 'v1', 'writers', writer, 'runs'), at, at);
     stamp('vm.a', 1000);
@@ -368,8 +371,202 @@ describe('scan limits', () => {
         .snapshot()
         .runs.map((run) => run.doc.writer)
         .sort()
-    ).toEqual(['vm.b', 'vm.c']);
+    ).toEqual(['vm.a', 'vm.c']);
     expect(r.snapshot().problems.map((p) => p.file)).toEqual(['limits/run-writers']);
+  });
+
+  it('a writer past the writer cap is not listed, and the cap says the not-read count is a lower bound', async () => {
+    const root = dirs.make();
+    writeRun(root, runDoc('vm.a', 'R'), '2026-11-07');
+    writeRun(root, runDoc('vm.b', 'R'), '2026-11-06');
+    const listings: string[] = [];
+    const counting: ReaderFs = {
+      ...nodeReaderFs,
+      readdir: (dir) => {
+        listings.push(dir);
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const r = new RunsReader({
+      root: () => root,
+      now: () => NOW,
+      fs: counting,
+      limits: { writers: 1 },
+    });
+    await r.scan();
+    const seen = r.snapshot();
+    expect(seen.runs.map((run) => run.doc.id)).toEqual(['vm.a--R']);
+    expect(seen.skipped).toEqual({ runFiles: 0, writerFolders: 1 });
+    const problem = seen.problems.find((p) => p.file === 'limits/run-writers');
+    expect(problem?.reason).toBe(
+      '1 writer folders past the limit of 1 were not listed (writers rank by their newest run-date folder, which may be empty, so a newer empty date folder can outrank a writer with newer runs), so their run files are not read and not counted: the not-read run file count is a lower bound'
+    );
+    // The dropped writer's date folders are never opened: ranking needs only its writer and runs/
+    // folders, so a share past the cap cannot grow the listing without bound.
+    expect(listings.filter((dir) => dir.includes(path.join('writers', 'vm.b')))).toEqual([
+      path.join(root, 'v1', 'writers', 'vm.b'),
+      path.join(root, 'v1', 'writers', 'vm.b', 'runs'),
+    ]);
+    // A writer the cap pushes out leaves the read set at once, not after the grace period.
+    const both = new RunsReader({ root: () => root, now: () => NOW, limits: { writers: 2 } });
+    await both.scan();
+    expect(both.snapshot().runs.map((run) => run.doc.id).sort()).toEqual(['vm.a--R', 'vm.b--R']);
+    const capped = new RunsReader({ root: () => root, now: () => NOW, limits: { writers: 1 } });
+    await capped.scan();
+    expect(capped.snapshot().runs.map((run) => run.doc.id)).toEqual(['vm.a--R']);
+  });
+
+  it('runs under a folder that cannot be listed stay counted as not read, from the last good listing', async () => {
+    const root = dirs.make();
+    writeRun(root, runDoc('vm.a', 'A'), '2026-11-07');
+    writeRun(root, runDoc('vm.b', 'B'), '2026-11-06');
+    let now = NOW;
+    let failWriter: string | null = null;
+    const flaky: ReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (failWriter && path.basename(dir) === failWriter) throw errno('EIO');
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const r = new RunsReader({ root: () => root, now: () => now, fs: flaky, limits: { runs: 1 } });
+    await r.scan();
+    let seen = r.snapshot();
+    expect(seen.runs.map((run) => run.doc.id)).toEqual(['vm.a--A']); // the newest day wins
+    expect(seen.skipped.runFiles).toBe(1); // vm.b's file past the run cap
+    // The writer folder stops listing: its run stays named and counted, not dropped from the total.
+    failWriter = 'vm.b';
+    now += 60_000;
+    await r.scan();
+    seen = r.snapshot();
+    expect(seen.skipped.runFiles).toBe(1);
+    expect(seen.problems.map((p) => [p.file, p.reason])).toEqual([
+      ['writers/vm.b', 'folder could not be listed'],
+    ]);
+    // A folder whose held copies still score is not also counted as not read.
+    failWriter = 'vm.a';
+    now += 60_000;
+    await r.scan();
+    seen = r.snapshot();
+    expect(seen.runs.map((run) => run.doc.id).sort()).toEqual(['vm.a--A', 'vm.b--B']);
+    expect(seen.skipped.runFiles).toBe(0);
+    expect(seen.problems.map((p) => [p.file, p.reason])).toEqual([
+      ['writers/vm.a', 'folder could not be listed'],
+    ]);
+  });
+
+  it('a grace-held copy of a deleted file never cancels a different never-read file (M1)', async () => {
+    const root = dirs.make();
+    // Run cap 1: A and B share a day; scan 1 reads A, skips B.
+    writeRun(root, runDoc('vm.a', 'A'), '2026-11-06');
+    writeRun(root, runDoc('vm.a', 'B'), '2026-11-06');
+    let now = NOW;
+    let failDate: string | null = null;
+    const flaky: ReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (failDate && path.basename(dir) === failDate) throw errno('EIO');
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const r = new RunsReader({ root: () => root, now: () => now, fs: flaky, limits: { runs: 1 } });
+    await r.scan();
+    expect(r.snapshot().runs.map((run) => run.doc.id)).toEqual(['vm.a--A']);
+    expect(r.snapshot().skipped.runFiles).toBe(1); // B past the cap
+    // A is deleted, C arrives on a newer day; scan 2 (within grace) holds A, reads C, skips B.
+    fs.rmSync(path.join(root, 'v1', 'writers', 'vm.a', 'runs', '2026-11-06', 'vm.a--A.json'));
+    writeRun(root, runDoc('vm.a', 'C'), '2026-11-07');
+    now += 60_000;
+    await r.scan();
+    expect(r.snapshot().runs.map((run) => run.doc.id).sort()).toEqual(['vm.a--A', 'vm.a--C']);
+    expect(r.snapshot().skipped.runFiles).toBe(1); // B still skipped
+    // The day B lives in stops listing. B still exists and was never read: the grace-held A (a
+    // different file, no longer listed) must not subtract from B's count.
+    failDate = '2026-11-06';
+    now += 60_000;
+    await r.scan();
+    const seen = r.snapshot();
+    expect(seen.skipped.runFiles).toBe(1);
+    expect(seen.provisionalRunFiles).toBe(1);
+    expect(seen.problems.map((p) => [p.file, p.reason])).toEqual([
+      ['writers/vm.a/runs/2026-11-06', 'folder could not be listed'],
+    ]);
+  });
+
+  it('a writer the cap pushed out keeps its known count for a later failed listing (M1)', async () => {
+    const root = dirs.make();
+    writeRun(root, runDoc('vm.a', 'A'), '2026-11-07');
+    writeRun(root, runDoc('vm.b', 'B'), '2026-11-06');
+    writeRun(root, runDoc('vm.b', 'C'), '2026-11-06');
+    let now = NOW;
+    let failRuns = false;
+    const flaky: ReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (failRuns && dir === path.join(root, 'v1', 'writers', 'vm.b', 'runs')) throw errno('EIO');
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const r = new RunsReader({ root: () => root, now: () => now, fs: flaky, limits: { writers: 2 } });
+    await r.scan();
+    expect(r.snapshot().runs).toHaveLength(3);
+    // Two newer writers push vm.b past the cap; its files leave at once and are not counted.
+    writeRun(root, runDoc('vm.c', 'D'), '2026-11-08');
+    writeRun(root, runDoc('vm.d', 'E'), '2026-11-09');
+    now += 60_000;
+    await r.scan();
+    expect(r.snapshot().runs.map((run) => run.doc.id).sort()).toEqual(['vm.c--D', 'vm.d--E']);
+    expect(r.snapshot().skipped).toEqual({ runFiles: 0, writerFolders: 2 });
+    // vm.b's runs/ folder now fails to list: its two never-read files stay counted from the last
+    // good listing, not lost because the cap had pushed the writer out.
+    failRuns = true;
+    now += 60_000;
+    await r.scan();
+    const seen = r.snapshot();
+    expect(seen.skipped.runFiles).toBe(2);
+    expect(seen.provisionalRunFiles).toBe(2);
+    expect(seen.problems.map((p) => p.file)).toContain('writers/vm.b/runs');
+  });
+
+  it('a failed listing counts a provisional last-known number, even for a file since deleted (M1)', async () => {
+    const root = dirs.make();
+    writeRun(root, runDoc('vm.a', 'A'), '2026-11-06');
+    writeRun(root, runDoc('vm.a', 'B'), '2026-11-06');
+    let now = NOW;
+    let fail = false;
+    const flaky: ReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (fail && path.basename(dir) === '2026-11-06') throw errno('EIO');
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const r = new RunsReader({ root: () => root, now: () => now, fs: flaky, limits: { runs: 1 } });
+    await r.scan();
+    expect(r.snapshot().skipped.runFiles).toBe(1); // B skipped
+    // B is deleted, then the folder fails to list: the reader cannot know B is gone, so it keeps
+    // the last-known count, flagged provisional (not a current count or a guaranteed lower bound).
+    fs.rmSync(path.join(root, 'v1', 'writers', 'vm.a', 'runs', '2026-11-06', 'vm.a--B.json'));
+    fail = true;
+    now += 60_000;
+    await r.scan();
+    const seen = r.snapshot();
+    expect(seen.skipped.runFiles).toBe(1);
+    expect(seen.provisionalRunFiles).toBe(1);
+  });
+
+  it('a newer empty date folder outranks a writer with newer runs, and the cap says so (Low 1)', async () => {
+    const root = dirs.make();
+    writeRun(root, runDoc('vm.a', 'A'), '2026-11-07');
+    writeRun(root, runDoc('vm.b', 'B'), '2026-11-06');
+    // vm.b's empty Nov 8 folder is newer than vm.a's run day, so the date-folder ranking keeps vm.b.
+    fs.mkdirSync(path.join(root, 'v1', 'writers', 'vm.b', 'runs', '2026-11-08'), { recursive: true });
+    const r = new RunsReader({ root: () => root, now: () => NOW, limits: { writers: 1 } });
+    await r.scan();
+    expect(r.snapshot().runs.map((run) => run.doc.id)).toEqual(['vm.b--B']);
+    const problem = r.snapshot().problems.find((p) => p.file === 'limits/run-writers');
+    expect(problem?.reason).toContain('newest run-date folder, which may be empty');
+    expect(problem?.reason).toContain('a newer empty date folder can outrank a writer with newer runs');
   });
 
   it('names a FIFO or a link in a run folder', async () => {
@@ -396,7 +593,10 @@ describe('scan limits', () => {
     const seen = r.snapshot();
     expect(seen.runs.map((run) => run.doc.id).sort()).toEqual(['vm.new--C', 'vm.old--B']);
     expect(seen.problems.map((p) => p.file)).toEqual(['limits/runs']);
-    expect(seen.problems[0].reason).toContain('1 run files past the limit');
+    // The cap counts run files, and says so.
+    expect(seen.problems[0].reason).toBe(
+      '1 run files past the limit of 2 run files or 256 MB were not read (the newest days are kept)'
+    );
   });
 
   it('names writers and bytes past their limits', async () => {

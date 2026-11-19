@@ -1474,9 +1474,23 @@ fn runs_word(n: u32) -> &'static str {
     if n == 1 { "run" } else { "runs" }
 }
 
-/// "41 runs not scored".
+/// The unit the unscored total counts: run files when every reason is a file (the scan limit or
+/// unreadable), runs when none is, and both when the count mixes them — the total counts runs and
+/// run files (docs/scoreboard.md), so the head never calls a file a run.
+fn unscored_unit(u: &Unscored) -> &'static str {
+    let files = u.scan_limit + u.unreadable;
+    if files == 0 {
+        runs_word(u.total)
+    } else if files == u.total {
+        if u.total == 1 { "run file" } else { "run files" }
+    } else {
+        "runs and run files"
+    }
+}
+
+/// "41 runs not scored", "2 run files not scored", or "5 runs and run files not scored".
 pub fn unscored_head(u: &Unscored) -> String {
-    format!("{} {} not scored", u.total, runs_word(u.total))
+    format!("{} {} not scored", u.total, unscored_unit(u))
 }
 
 fn plain(text: String) -> Run {
@@ -1505,7 +1519,7 @@ pub fn unscored_note(u: &Unscored) -> Vec<Run> {
         bold(u.total.to_string()),
         plain(format!(
             "\u{a0}{}{}",
-            nb(&format!("{} not scored", runs_word(u.total))),
+            nb(&format!("{} not scored", unscored_unit(u))),
             if last > 0 { ": " } else { "" }
         )),
     ];
@@ -1745,7 +1759,7 @@ mod tests {
         };
         assert_eq!(
             sentence(&all),
-            "10 runs not scored: 4 unreadable, 1 unknown model, 1 unknown task type, 2 no task type, 2 no model"
+            "10 runs and run files not scored: 4 unreadable, 1 unknown model, 1 unknown task type, 2 no task type, 2 no model"
         );
         assert_eq!(
             sentence(&Unscored {
@@ -1753,7 +1767,7 @@ mod tests {
                 unreadable: 4,
                 ..Default::default()
             }),
-            "4 runs not scored: 4 unreadable"
+            "4 run files not scored: 4 unreadable"
         );
         // each piece stays whole: a bold count, then its words joined by no-break spaces; the only break
         // opportunity is the plain space after a comma or the colon
@@ -1788,7 +1802,7 @@ mod tests {
         // order: unreadable first, scan limit second, then the model and task type reasons
         assert_eq!(
             sentence(&with_limit),
-            "5 runs not scored: 1 unreadable, 2 not read (scan limit), 2 unknown model"
+            "5 runs and run files not scored: 1 unreadable, 2 not read (scan limit), 2 unknown model"
         );
         // each count and its words stay on one line (no-break spaces): no plain space inside a piece
         let runs = unscored_note(&with_limit);
@@ -1832,8 +1846,25 @@ mod tests {
         assert_eq!(stated.scan_limit, 2);
         assert_eq!(
             sentence(&stated),
-            "3 runs not scored: 2 not read (scan limit), 1 no model"
+            "3 runs and run files not scored: 2 not read (scan limit), 1 no model"
         );
+    }
+
+    #[test]
+    fn the_unscored_head_distinguishes_run_files_from_runs() {
+        // Two skipped files and no other reason: the count is files, not runs (RECHECK-lane-c Low 3).
+        let files = Unscored { total: 2, scan_limit: 2, ..Default::default() };
+        assert_eq!(unscored_head(&files), "2 run files not scored");
+        assert_eq!(sentence(&files), "2 run files not scored: 2 not read (scan limit)");
+        let one = Unscored { total: 1, unreadable: 1, ..Default::default() };
+        assert_eq!(unscored_head(&one), "1 run file not scored");
+        // A mixed total names both units; a pure-run total keeps "runs".
+        let mixed = Unscored { total: 3, scan_limit: 2, no_model: 1, ..Default::default() };
+        assert_eq!(unscored_head(&mixed), "3 runs and run files not scored");
+        assert_eq!(unscored_head(&unscored(1, 0, 0)), "1 run not scored");
+        // The mixed words stay one no-break piece, like every other count's words.
+        let note = unscored_note(&mixed);
+        assert_eq!(note[1].text, "\u{a0}runs\u{a0}and\u{a0}run\u{a0}files\u{a0}not\u{a0}scored: ");
     }
 
     #[test]
@@ -1877,7 +1908,7 @@ mod tests {
         let u = shown_unscored(&view).expect("the fixture has runs not scored");
         assert_eq!(
             sentence(&u),
-            "48 runs not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model"
+            "48 runs and run files not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model"
         );
         assert_eq!((u.unreadable, u.unknown_task_type), (4, 3));
         assert_eq!(u.unknown_models.len(), 2);

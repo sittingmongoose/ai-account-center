@@ -502,6 +502,17 @@ fn counted(counts: &[(String, usize)], ctx: &Context) -> String {
         .join(", ")
 }
 fn runs_source(input: &V, docs: &[V], unscored: usize, index: &Index, now: i64, ctx: &Context) -> Option<V> {
+    let mut source = runs_source_of(input, docs, unscored, index, now, ctx)?;
+    // A snapshot taken while the scan was still running is partial, whatever its state says.
+    if input["runs"]["partial"] == true {
+        source["detail"] = json!(format!(
+            "{} The scan is still running; this view is partial.",
+            s(&source["detail"])
+        ));
+    }
+    Some(source)
+}
+fn runs_source_of(input: &V, docs: &[V], unscored: usize, index: &Index, now: i64, ctx: &Context) -> Option<V> {
     let runs = &input["runs"];
     let at = ctx.epoch(&runs["scannedAt"]);
     let base = source_base("scoreboard-runs", "Agent runs", at, now, ctx);
@@ -582,6 +593,13 @@ fn runs_source(input: &V, docs: &[V], unscored: usize, index: &Index, now: i64, 
             }
         ));
     }
+    let provisional = runs["provisionalRunFiles"].as_u64().unwrap_or(0) as usize;
+    if provisional > 0 {
+        parts.push(format!(
+            "{} not read under folders that could not be listed, counted from their last good listing: a provisional last-known count (files added or removed since are unknown), not a current count or a guaranteed lower bound.",
+            plural(provisional, "run file")
+        ));
+    }
     let problems = array(&runs["problems"]);
     let files: Vec<_> = problems
         .iter()
@@ -610,6 +628,23 @@ fn runs_source(input: &V, docs: &[V], unscored: usize, index: &Index, now: i64, 
     ))
 }
 fn catalog_source(
+    input: &V,
+    missing_types: &[(String, usize)],
+    missing_models: &[(String, usize)],
+    now: i64,
+    ctx: &Context,
+) -> Option<V> {
+    let mut source = catalog_source_of(input, missing_types, missing_models, now, ctx)?;
+    // A snapshot taken while the scan was still running is partial, whatever its state says.
+    if input["catalog"]["partial"] == true {
+        source["detail"] = json!(format!(
+            "{} The scan is still running; this view is partial.",
+            s(&source["detail"])
+        ));
+    }
+    Some(source)
+}
+fn catalog_source_of(
     input: &V,
     missing_types: &[(String, usize)],
     missing_models: &[(String, usize)],

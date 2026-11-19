@@ -151,8 +151,13 @@ export class ScoreboardService {
     check.flushSoon();
   }
 
-  /** Share only: every run read, no filters. */
-  private async buildFromShare(composer?: ScoreboardComposer): Promise<ScoreboardView> {
+  /**
+   * Share only: every run read, no filters. The flag says either scan outlasted the wait, so the
+   * view holds only part of the share (runs, catalog, or both).
+   */
+  private async buildFromShare(
+    composer?: ScoreboardComposer
+  ): Promise<{ view: ScoreboardView; partial: boolean }> {
     await this.bounded(Promise.all([this.catalog.scan(), this.runs.scan()]));
     const runs = this.runs.snapshot();
     this.recordCheck(runs);
@@ -176,9 +181,10 @@ export class ScoreboardService {
     };
     const legacy = () =>
       this.finish({ ...buildScoreboardView(input), ...finish } as ScoreboardView);
-    return composer
-      ? composer.compose(input, { ...finish, native: this.native !== null }, legacy)
-      : legacy();
+    const view = composer
+      ? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)
+      : await legacy();
+    return { view, partial: runs.partial === true || catalog.partial === true };
   }
 
   /** The store query of a filter: local days in the dashboard's zone. */
@@ -197,7 +203,7 @@ export class ScoreboardService {
   private async buildFromStore(
     filters: ScoreboardFilters,
     composer?: ScoreboardComposer
-  ): Promise<ScoreboardView> {
+  ): Promise<{ view: ScoreboardView; partial: boolean }> {
     await this.bounded(this.catalog.scan());
     const query = this.query(filters);
     const runs = await this.runsStore.state(query);
@@ -243,9 +249,11 @@ export class ScoreboardService {
     };
     const legacy = () =>
       this.finish({ ...buildScoreboardView(input), ...finish } as ScoreboardView);
-    return composer
-      ? composer.compose(input, { ...finish, native: this.native !== null }, legacy)
-      : legacy();
+    const view = composer
+      ? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)
+      : await legacy();
+    // The runs come from the store (complete); only the catalog scan can outlast the wait here.
+    return { view, partial: catalog.partial === true };
   }
 
   /** One ingest pass now, unless one ran within the cache time. Never rejects. */
@@ -278,11 +286,15 @@ export class ScoreboardService {
           ? this.buildFromStore(filters, composer).catch(() => this.buildFromShare(composer))
           : this.buildFromShare(composer)
       )
-        .then((view) => {
-          this.cached.delete(key);
-          this.cached.set(key, { at: this.now(), generation, view });
-          while (this.cached.size > VIEW_CACHE_ENTRIES)
-            this.cached.delete(this.cached.keys().next().value as string);
+        .then(({ view, partial }) => {
+          // A partial view (the scan outlasted the wait) is served once and never cached: the next
+          // read rebuilds it complete instead of holding a partial first view for the cache time.
+          if (!partial) {
+            this.cached.delete(key);
+            this.cached.set(key, { at: this.now(), generation, view });
+            while (this.cached.size > VIEW_CACHE_ENTRIES)
+              this.cached.delete(this.cached.keys().next().value as string);
+          }
           return view;
         })
         .finally(() => this.building.delete(key));

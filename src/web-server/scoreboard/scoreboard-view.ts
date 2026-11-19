@@ -268,8 +268,9 @@ function bump(map: Map<string, number>, key: string): void {
 /**
  * Run files the runs reader refused (each named in the runs Source and refused in the readers
  * check) that left no good copy to score. A refused newer version of a run whose earlier copy
- * still reads is scored from that copy and not counted; a folder the reader could not list is
- * named in the Source but holds no countable file.
+ * still reads is scored from that copy and not counted; the runs under a folder the reader could
+ * not list count under the scan limit instead, from the folder's last good listing (a lower
+ * bound), with the folder problem naming why.
  */
 function unreadableRuns(runs: RunsState): number {
   const read = new Set(runs.runs.map((run) => run.file));
@@ -279,8 +280,10 @@ function unreadableRuns(runs: RunsState): number {
 }
 
 /**
- * Run files past any scan cap (runs, writers or bytes), from the reader's structured count.
- * The newest days/writers are kept; the file count is named in the runs Source.
+ * Run files past any scan cap (run files, writers or bytes) or under a folder this scan could not
+ * list, from the reader's structured count. The newest days, and the writers with the newest
+ * run-date folders, are kept; past the writer cap the count is a lower bound, and under an
+ * unlistable folder a provisional last-known count. The runs Source names and qualifies both.
  */
 function scanLimitRuns(runs: RunsState): number {
   return runs.skipped?.runFiles ?? 0;

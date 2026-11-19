@@ -50,6 +50,20 @@ export function runsSource(
   unknownOutcomes: ReadonlyMap<string, number> = new Map(),
   negativeQuota: readonly string[] = []
 ) {
+  const source = runsSourceOf(inputs, unscored, ignoredReviews, unknownOutcomes, negativeQuota);
+  // A snapshot taken while the scan was still running is partial, whatever its state says.
+  return inputs.runs.partial === true
+    ? { ...source, detail: `${source.detail} The scan is still running; this view is partial.` }
+    : source;
+}
+
+function runsSourceOf(
+  inputs: ScoreboardInputs,
+  unscored: number,
+  ignoredReviews: number,
+  unknownOutcomes: ReadonlyMap<string, number> = new Map(),
+  negativeQuota: readonly string[] = []
+) {
   const { runs, now, timeZone, root } = inputs;
   const base = sourceBase('scoreboard-runs', 'Agent runs', runs.scannedAt, now);
   if (runs.scannedAt === null)
@@ -92,6 +106,11 @@ export function runsSource(
   }
   const fileProblems = runs.problems.filter((p) => !p.file.startsWith('limits/'));
   const limitProblems = runs.problems.filter((p) => p.file.startsWith('limits/'));
+  const provisional = runs.provisionalRunFiles ?? 0;
+  if (provisional > 0)
+    parts.push(
+      `${plural(provisional, 'run file')} not read under folders that could not be listed, counted from their last good listing: a provisional last-known count (files added or removed since are unknown), not a current count or a guaranteed lower bound.`
+    );
   if (fileProblems.length > 0) {
     const since = Math.min(...fileProblems.map((problem) => problem.since));
     parts.unshift(
@@ -116,6 +135,18 @@ function counted(names: ReadonlyMap<string, number>): string {
 }
 
 export function catalogSource(
+  inputs: ScoreboardInputs,
+  missingTypes: ReadonlyMap<string, number>,
+  missingModels: ReadonlyMap<string, number>
+) {
+  const source = catalogSourceOf(inputs, missingTypes, missingModels);
+  // A snapshot taken while the scan was still running is partial, whatever its state says.
+  return inputs.catalog.partial === true
+    ? { ...source, detail: `${source.detail} The scan is still running; this view is partial.` }
+    : source;
+}
+
+function catalogSourceOf(
   inputs: ScoreboardInputs,
   missingTypes: ReadonlyMap<string, number>,
   missingModels: ReadonlyMap<string, number>

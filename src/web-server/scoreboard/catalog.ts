@@ -334,6 +334,8 @@ export interface CatalogState {
   /** missing: no `v1/catalog` folder; error: the folder could not be listed. */
   state: 'ok' | 'missing' | 'error';
   scannedAt: number | null;
+  /** True when the snapshot was taken while a scan was still running: the catalog read so far, not the whole folder. */
+  partial?: boolean;
   /** Catalog files with no good copy and no named problem. */
   missingFiles: string[];
   problems: ReportProblem[];
@@ -415,6 +417,7 @@ export class CatalogReader {
     const aliasesFile = read('model-aliases.json', 'aliases');
     return {
       state: this.state,
+      ...(this.scanning !== null ? { partial: true } : {}),
       scannedAt: this.scannedAt,
       missingFiles: CATALOG_FILES.filter(
         (name) => !this.files.get(`catalog/${name}`) && !named.has(`catalog/${name}`)
