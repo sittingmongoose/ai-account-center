@@ -23,7 +23,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) const USAGE_SAMPLE_CAP: usize = 40 * 1024 * 1024;
 
 /// The pre-fetched facts one sample carries, read by the publisher's injectable deps.
-#[derive(Default)]
 struct Facts {
     sign_in_rows: Vec<Value>,
     sign_in_failed: bool,
@@ -134,11 +133,11 @@ impl UsageSnapshot {
         let facts_slot = Arc::clone(&self.facts);
         tokio::task::spawn_blocking(move || {
             let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else {
-                tracing::warn!(target: "aac_http", "agent_usage_snapshot.sample_unparsable", "A pushed usage sample could not be parsed");
+                tracing::warn!(target: "aac_http", event = "agent_usage_snapshot.sample_unparsable", "A pushed usage sample could not be parsed");
                 return;
             };
             let Some(event) = parse_event(&payload["event"]) else {
-                tracing::warn!(target: "aac_http", "agent_usage_snapshot.sample_shape", "A pushed usage sample was not the expected shape");
+                tracing::warn!(target: "aac_http", event = "agent_usage_snapshot.sample_shape", "A pushed usage sample was not the expected shape");
                 return;
             };
             let sign_in_since = payload["signIn"]["since"].as_i64();

@@ -640,6 +640,7 @@ pub async fn serve(
         boot.ccs_dir.clone(),
         package_root.clone(),
     ));
+    let record_root = boot.ccs_dir.clone();
     let state = AppState(Arc::new(Shared {
         boot,
         limits: Limits::new(),
@@ -687,7 +688,7 @@ pub async fn serve(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let unrecorded = aac_files::deployed_build::record_running_build(
-        &state.0.boot.ccs_dir,
+        &record_root,
         running_build.as_ref(),
         std::env::var("CCS_DIR").ok().as_deref(),
         std::env::var("CCS_HOME").ok().as_deref(),
@@ -695,7 +696,7 @@ pub async fn serve(
         record_now,
     );
     if unrecorded > 0 {
-        tracing::warn!(target: "aac_http", "web.deployed_build.unrecorded", "Running build could not be recorded");
+        tracing::warn!(target: "aac_http", event = "web.deployed_build.unrecorded", "Running build could not be recorded");
     }
     // R3: the hosted store opens beside the HTTP service (its calls wait for the open),
     // its jobs run on TS's cadence, and the engine closes cleanly when the service ends.
