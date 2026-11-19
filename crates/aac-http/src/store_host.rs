@@ -14,8 +14,7 @@ use aac_views::decline::Decline;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
-use tokio::sync::Semaphore;
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 /// Store calls in flight at most (L1's store pool size). Unlike the read pools, a full pool
 /// queues: the NAPI binding queues on libuv's pool too, and a producer must not lose a
@@ -121,11 +120,24 @@ struct State {
     jobs: Jobs,
 }
 
-/// The hosted store: one Engine slot behind the NAPI method contract, plus its jobs.
+/// One queued store call: the method contract plus the channel that carries its answer back
+/// to the async handler. The reply is dropped (the caller hung up) without disturbing the run.
+struct StoreCall {
+    method: String,
+    args: String,
+    reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+}
+
+/// The hosted store: one Engine slot behind the NAPI method contract, plus its jobs. Calls run
+/// on a dedicated pool of [`STORE_PERMITS`] threads fed by one queue, not the shared blocking
+/// pool: a store call costs one handoff to a store thread and one wake back, and never contends
+/// with the read routes' blocking tasks. The queue is work-conserving — whichever store thread
+/// is free takes the next call, so a long backup on one thread does not queue reads behind it.
 pub(crate) struct StoreHost {
     boot: StoreBoot,
     slot: Slot,
-    permits: Arc<Semaphore>,
+    sender: mpsc::Sender<StoreCall>,
+    queue: Arc<Mutex<mpsc::Receiver<StoreCall>>>,
     state: Mutex<State>,
     ready_changed: Condvar,
 }
@@ -139,17 +151,46 @@ fn meta_ms(status: &Value, key: &str) -> i64 {
 
 impl StoreHost {
     pub(crate) fn new(boot: StoreBoot) -> Arc<Self> {
-        Arc::new(Self {
+        let (sender, receiver) = mpsc::channel();
+        let host = Arc::new(Self {
             boot,
             slot: Slot::new(None),
-            permits: Arc::new(Semaphore::new(STORE_PERMITS)),
+            sender,
+            queue: Arc::new(Mutex::new(receiver)),
             state: Mutex::new(State {
                 ready: false,
                 boot_error: None,
                 jobs: Jobs::default(),
             }),
             ready_changed: Condvar::new(),
-        })
+        });
+        // One queue, STORE_PERMITS takers: a thread parks in recv holding the queue lock, and
+        // releases it before running the call, so the next free thread takes the next call.
+        // Workers hold a Weak: when the last Arc drops, the sender goes, recv ends, they exit.
+        for _ in 0..STORE_PERMITS {
+            let queue = Arc::clone(&host.queue);
+            let weak = Arc::downgrade(&host);
+            let spawned = std::thread::Builder::new()
+                .name("aac-store".to_string())
+                .spawn(move || {
+                    loop {
+                        let call = {
+                            let guard = queue.lock().unwrap_or_else(|p| p.into_inner());
+                            match guard.recv() {
+                                Ok(call) => call,
+                                Err(_) => return,
+                            }
+                        };
+                        let Some(host) = weak.upgrade() else { return };
+                        let result = host.call_blocking(&call.method, &call.args);
+                        let _ = call.reply.send(result);
+                    }
+                });
+            if spawned.is_err() {
+                tracing::warn!(target: "aac_http", "store host could not start a worker thread");
+            }
+        }
+        host
     }
 
     /// The boot open, on a blocking thread at service start: the same `open` TS would have
@@ -193,28 +234,23 @@ impl StoreHost {
             .map(Arc::clone)
     }
 
-    /// One store call from the front door. Queued on the store permits, run on the blocking
-    /// pool, with no deadline: `backup` and `maintain` take as long as they take, as they
-    /// did in process. The answer is the dispatch's JSON text; an error is its
-    /// `<code>: <message>`, exactly what the NAPI binding rejects with.
-    pub(crate) async fn call(
-        self: &Arc<Self>,
-        method: String,
-        args: String,
-    ) -> Result<String, String> {
-        let permit = self
-            .permits
-            .clone()
-            .acquire_owned()
-            .await
+    /// One store call from the front door. Queued on the store pool, run on a store thread,
+    /// with no deadline: `backup` and `maintain` take as long as they take, as they did in
+    /// process. The answer is the dispatch's JSON text; an error is its `<code>: <message>`,
+    /// exactly what the NAPI binding rejects with. A dropped caller (a hung-up request) does
+    /// not cancel the run: an admitted write may still commit, as it did on the blocking pool.
+    pub(crate) async fn call(&self, method: String, args: String) -> Result<String, String> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(StoreCall {
+                method,
+                args,
+                reply,
+            })
             .map_err(|_| "service_down: the store host is stopping".to_string())?;
-        let host = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            host.call_blocking(&method, &args)
-        })
-        .await
-        .unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
+        answer
+            .await
+            .map_err(|_| "service_down: the store host is stopping".to_string())?
     }
 
     fn call_blocking(&self, method: &str, args: &str) -> Result<String, String> {
