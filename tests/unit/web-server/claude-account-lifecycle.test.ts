@@ -606,6 +606,35 @@ describe('Claude Remove and trash', () => {
     expect(hosts.trashDirs.mac.size + hosts.trashDirs.windows.size).toBe(0);
   });
 
+  it('reserves a due purge before a Restore can move the same host files', async () => {
+    const { hosts, lifecycle, advance } = setup();
+    const { trashId } = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
+    advance(31 * DAY);
+    let began!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => (began = resolve));
+    const hold = new Promise<void>((resolve) => (release = resolve));
+    const purge = hosts.purge.bind(hosts);
+    const delayed = spyOn(hosts, 'purge').mockImplementation(async (host, step) => {
+      if (host === 'mac') {
+        began();
+        await hold;
+      }
+      return purge(host, step);
+    });
+    const sweeping = lifecycle.purgeDue();
+    try {
+      await started;
+      await expect(lifecycle.restore(trashId)).rejects.toMatchObject({ code: 'unknown_trash' });
+      expect((await lifecycle.listTrash())[0]).toMatchObject({ trashId, state: 'deleting' });
+    } finally {
+      release();
+      await sweeping;
+      delayed.mockRestore();
+    }
+    expect(await lifecycle.listTrash()).toEqual([]);
+  });
+
   it('purges one entry now on both hosts, before its 30 days', async () => {
     const { hosts, lifecycle } = setup();
     const { trashId } = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
@@ -635,7 +664,7 @@ describe('Claude Remove and trash', () => {
   });
 
   it('purgeOne refuses a default profile found in the trash and runs nothing', async () => {
-    const { ccsDir, hosts, lifecycle } = setup();
+    const { ccsDir, hosts, lifecycle, advance } = setup();
     const party = await lifecycle.findProfile('party');
     const { trashId } = await lifecycle.remove(party as never);
     // A default marker smuggled into the stored entry (Remove never writes one).
@@ -648,6 +677,8 @@ describe('Claude Remove and trash', () => {
     await expect(lifecycle.purgeOne(trashId)).rejects.toMatchObject({
       code: 'account_protected',
     });
+    advance(31 * DAY);
+    expect(await lifecycle.purgeDue()).toBe(0);
     expect(hosts.calls).toEqual([]);
     expect(await lifecycle.listTrash()).toHaveLength(1);
   });
