@@ -60,7 +60,9 @@ function dispatchUpgrade(instance: Awaited<ReturnType<typeof startServer>>, url:
     const socket = createConnection({ host: address, port });
     let data = '';
     socket.setEncoding('latin1');
-    socket.setTimeout(3000, () => socket.destroy(new Error('Server left the rejected upgrade open')));
+    socket.setTimeout(3000, () =>
+      socket.destroy(new Error('Server left the rejected upgrade open'))
+    );
     socket.once('error', reject);
     socket.once('connect', () => {
       socket.write(
@@ -84,7 +86,8 @@ function dispatchUpgrade(instance: Awaited<ReturnType<typeof startServer>>, url:
 }
 
 afterEach(async () => {
-  expect(renewalStart).toHaveBeenCalledTimes(1);
+  // Saved-login renewal now belongs to the native service, including its stop path.
+  expect(renewalStart).not.toHaveBeenCalled();
   expect(analyticsStart).toHaveBeenCalledTimes(1);
   while (instances.length > 0) {
     const instance = instances.pop();
@@ -95,6 +98,7 @@ afterEach(async () => {
     instance.cleanup();
     await new Promise<void>((resolve) => instance.server.close(() => resolve()));
   }
+  expect(renewalStop).not.toHaveBeenCalled();
 
   mock.restore();
   for (const key of fixtureEnvKeys) {
@@ -171,29 +175,6 @@ describe('startServer host binding', () => {
 
     expect(socket.data.startsWith('HTTP/1.1 400')).toBe(true);
     expect(socket.destroyed).toBe(true);
-  });
-});
-
-describe('startServer saved Codex login renewal', () => {
-  it('starts renewal once the server listens and stops it with the server', async () => {
-    const instance = await startServer({ port: 0 });
-    instances.push(instance);
-
-    expect(renewalStart).toHaveBeenCalledTimes(1);
-    expect(renewalStop).not.toHaveBeenCalled();
-    instance.cleanup();
-    expect(renewalStop).toHaveBeenCalled();
-  });
-
-  it('keeps the server running when renewal cannot start', async () => {
-    renewalStart.mockImplementationOnce(() => {
-      throw new Error('renewal unavailable');
-    });
-
-    const instance = await startServer({ port: 0 });
-    instances.push(instance);
-
-    expect(instance.server.listening).toBe(true);
   });
 });
 

@@ -770,11 +770,7 @@ try {
     await direct.arrayBuffer();
   }
   for (const [index, route] of inventory.entries()) {
-    if (MOVED_TO_RUST.has(`${route.method} ${route.path}`)) {
-      // The Rust-only public replay verifies these rows. The legacy recorder preserves them.
-      retained += roles.length;
-      continue;
-    }
+    const moved = MOVED_TO_RUST.has(`${route.method} ${route.path}`);
     for (const role of roles) {
       const auth = await import('../../src/web-server/middleware/auth-middleware');
       for (const ip of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) auth.loginRateLimiter.resetKey(ip);
@@ -864,6 +860,12 @@ try {
           `[SKIP] contract/${String(index).padStart(3, '0')}-${role}.json: ` +
             '/api/accounts/registry (host-dependent Antigravity sign-in reason)'
         );
+        continue;
+      }
+      if (moved) {
+        // Keep the fixture sign-ins and device setup that the recorded revocation count includes.
+        // The Rust-only public replay verifies the preserved route's reply.
+        retained++;
         continue;
       }
       const method = route.method === 'ALL' ? 'POST' : route.method;

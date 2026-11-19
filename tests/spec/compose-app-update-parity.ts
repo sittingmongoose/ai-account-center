@@ -7,9 +7,19 @@ import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import WebSocket from 'ws';
 import type { DashboardEvent } from '../../src/web-server/dashboard-events';
+import { startRustFixture } from './m6-rust-fixture';
 
+const cli = process.env.AAC_M6_TARGET_CLI;
 const binary = process.env.AAC_RUST_PUBLIC_BINARY;
-assert.ok(binary, 'AAC_RUST_PUBLIC_BINARY is required');
+const launcher =
+  cli ??
+  (binary
+    ? path.join(
+        path.dirname(binary),
+        process.platform === 'win32' ? 'ai-account-center.exe' : 'ai-account-center'
+      )
+    : undefined);
+assert.ok(launcher, 'AAC_M6_TARGET_CLI is required');
 const home = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-compose-app-update-'));
 const root = path.join(home, '.ccs');
 for (const key of Object.keys(process.env)) {
@@ -22,8 +32,8 @@ for (const key of [
 Object.assign(process.env, {
   CCS_DIR: root,
   CCS_DASHBOARD_AUTH_ENABLED: 'true',
-  AAC_RUST_COMPOSE: '1',
   AAC_RUST_SERVICE: 'on',
+  AAC_RUST_CUT_NATIVE_ROUTES: 'off',
   AAC_RUST_GROUP_APP_UPDATES: 'on',
   AAC_NO_LOCAL_RUST_BUILD: '1',
   AAC_AGENT_VERBS: 'off',
@@ -34,8 +44,7 @@ Object.assign(process.env, {
   AAC_PM_MAIL_REGISTRY_DIR: path.join(home, 'registry'),
 });
 
-const { startComposedServer } = await import('../../src/web-server/compose-server');
-let server: Awaited<ReturnType<typeof startComposedServer>> | undefined;
+let server: Awaited<ReturnType<typeof startRustFixture>> | undefined;
 
 async function waitFor(ready: () => boolean): Promise<void> {
   const stop = AbortSignal.timeout(6000);
@@ -43,10 +52,11 @@ async function waitFor(ready: () => boolean): Promise<void> {
 }
 
 try {
-  server = await startComposedServer({ host: '127.0.0.1', port: 0 }, path.resolve(binary));
-  const { rustService, publicAddress } = server;
-  await waitFor(() => rustService.diagnostics().service.state === 'ready');
-  const origin = `http://127.0.0.1:${publicAddress.port}`;
+  await fs.mkdir(root, { mode: 0o700 });
+  // The production owner is the only implementation in this boot. The old TypeScript
+  // supervisor's forwarding counter had no meaning after its route adapter was retired.
+  server = await startRustFixture(path.resolve(launcher), root, process.env, false, 'cut-rust-only');
+  const origin = server.url;
   const json = { origin, 'content-type': 'application/json' };
   const setupCode = (await fs.readFile(path.join(root, 'auth', 'setup-code'), 'utf8')).trim();
   const setup = await fetch(origin + '/api/auth/setup', {
@@ -58,7 +68,6 @@ try {
   const cookie = setup.headers.get('set-cookie')?.split(';')[0];
   assert.ok(cookie);
 
-  const before = rustService.stats.served;
   const status = await fetch(origin + '/api/app-updates/status', { headers: { cookie } });
   assert.equal(status.status, 200);
   assert.deepEqual(await status.json(), { job: null });
@@ -67,10 +76,9 @@ try {
   });
   assert.equal(cancel.status, 200);
   assert.deepEqual(await cancel.json(), { job: null, cancelling: false });
-  assert.equal(rustService.stats.served - before, 2, 'both routes used lane H');
 
   const events: Extract<DashboardEvent, { type: 'app-update-job' }>[] = [];
-  const socket = new WebSocket(`ws://127.0.0.1:${publicAddress.port}/ws`, {
+  const socket = new WebSocket(origin.replace(/^http:/, 'ws:') + '/ws', {
     headers: { cookie, origin },
   });
   try {
@@ -91,14 +99,8 @@ try {
   } finally {
     socket.terminate();
   }
-  console.log('Composed app updates: native status, idle cancellation, start and WebSocket progress passed.');
+  console.log('Native app updates: status, idle cancellation, start and WebSocket progress passed.');
 } finally {
-  if (server) {
-    const companion = server;
-    companion.cleanup();
-    companion.wss.close();
-    companion.server.closeAllConnections();
-    await new Promise<void>((resolve) => companion.server.close(() => resolve()));
-  }
+  await server?.stop();
   await fs.rm(home, { recursive: true, force: true });
 }
