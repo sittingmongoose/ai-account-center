@@ -188,7 +188,7 @@ try {
       headers: { 'content-type': 'application/json', cookie: await login(rust.url, localHost) },
       signal: AbortSignal.timeout(5000),
     });
-    assert.equal(noEndpoint.status, 503);
+    assert.equal(noEndpoint.status, 404);
     await noEndpoint.arrayBuffer();
   } finally {
     releaseHosts?.();
