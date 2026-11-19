@@ -327,10 +327,6 @@ impl OwnerHost {
         {
             let _ = self.link().await;
         }
-        #[cfg(not(unix))]
-        if enabled() {
-            let _ = self.local().await;
-        }
     }
 
     /// Stop the service this boot started, if any (a running one belongs to its own supervisor).

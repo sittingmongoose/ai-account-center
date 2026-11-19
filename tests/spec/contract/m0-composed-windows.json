@@ -2825,8 +2825,8 @@
             "asOf": "<timestamp>",
             "ageSeconds": "<elapsed-seconds>",
             "staleAfterSeconds": 180,
-            "state": "ok",
-            "detail": "0 runs from 0 writers read <clock> (0 observed, 0 benchmark)."
+            "state": "missing",
+            "detail": "No agent reports folder at <fixture-home>\\reports."
           },
           {
             "id": "scoreboard-catalog",
@@ -2868,7 +2868,7 @@
           "taskTypes": []
         },
         "identity": {
-          "catalogHash": "",
+          "catalogHash": "bd283c0c8c6f4c6b18903e75147690b8b28fa7b57594ac3d00641141fe62e6d3",
           "families": [],
           "models": {},
           "efforts": [
