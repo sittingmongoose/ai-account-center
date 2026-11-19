@@ -296,7 +296,11 @@ try {
       const pb = normalize(JSON.parse(b.body));
       const keys = [...new Set([...Object.keys(pa), ...Object.keys(pb)])];
       const diff = keys.filter((k) => JSON.stringify(pa[k]) !== JSON.stringify(pb[k]));
-      report.failures.push(`${name}: differs at [${diff.join(', ')}]`);
+      const k = diff[0];
+      const sample = (v) => JSON.stringify(v ?? null).slice(0, 220);
+      report.failures.push(
+        `${name}: differs at [${diff.join(', ')}]; ${k}: today=${sample(pa[k])} owned=${sample(pb[k])}`
+      );
     }
     if (!served) report.failures.push(`${name}: the owned path did not serve (x-aac-view)`);
     return b;
@@ -305,6 +309,12 @@ try {
   await today.command('scan');
   await owned.command('wait-owned');
   await compare('first status read', '/api/status', { view: 'status@1' });
+  await compare('first scoreboard read', '/api/scoreboard', { view: 'scoreboard@1' });
+  await compare(
+    'filtered scoreboard',
+    `/api/scoreboard?source=real&taskType=${encodeURIComponent(taskType)}`,
+    { view: 'scoreboard@1' }
+  );
   report.diag = await owned.command('diag');
   const inputsProbe = await owned.command('inputs');
   report.inputsProbe = {
@@ -312,12 +322,6 @@ try {
     scoreboardGeneration: inputsProbe.scoreboard?.generation ?? null,
     scoreboardCatalog: inputsProbe.scoreboard?.catalog ? 'present' : 'null',
   };
-  await compare('first scoreboard read', '/api/scoreboard', { view: 'scoreboard@1' });
-  await compare(
-    'filtered scoreboard',
-    `/api/scoreboard?source=real&taskType=${encodeURIComponent(taskType)}`,
-    { view: 'scoreboard@1' }
-  );
 
   // A new report on both shares; each side rescans in its own way.
   for (const mode of ['today', 'owned']) {

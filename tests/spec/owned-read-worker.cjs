@@ -111,6 +111,7 @@ async function main() {
     await owner.scanReports();
     await owner.scanRegistry();
     await owner.collect();
+    owner.start();
     // One ingest pass and a first view, so the store path is warm.
     await scoreboard.view(ALL_RUNS);
   }
