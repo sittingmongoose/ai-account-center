@@ -55,27 +55,66 @@ pub fn segments(time_zone: &str, from: i64, to: i64) -> Option<Vec<[i64; 2]>> {
     if time_zone == "UTC" {
         return Some(vec![[from, 0]]);
     }
-    let path = folder()?.join(time_zone);
-    let bytes = read_file(&path)?;
+    let root = folder()?.canonicalize().ok()?;
+    let path = zone_path(&root, time_zone)?;
+    let bytes = read_file(&root, &path)?;
     let table = parse(&bytes)?;
     table.segments(from, to)
 }
 
-/// The host knows this zone: `UTC`, or a readable zoneinfo file under a searched folder.
-pub fn known(time_zone: &str) -> bool {
-    if time_zone == "UTC" {
-        return true;
-    }
-    valid_name(time_zone) && folder().is_some_and(|dir| dir.join(time_zone).is_file())
-}
-
-/// Read a regular zoneinfo file, refusing a link, a special file or an oversized one.
-fn read_file(path: &Path) -> Option<Vec<u8>> {
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.file_type().is_file() || meta.len() > MAX_FILE as u64 {
+/// Resolve an approved IANA name to its host tzdata spelling. Use the distribution's
+/// link records when available, including aliases whose files were omitted at install time.
+pub fn canonical_name(name: &str) -> Option<String> {
+    if !valid_name(name) {
         return None;
     }
-    std::fs::read(path).ok()
+    if matches!(name, "UTC" | "GMT" | "Etc/UTC" | "Etc/GMT") {
+        return Some("UTC".into());
+    }
+    let root = folder()?.canonicalize().ok()?;
+    canonical_name_in(&root, name)
+}
+
+fn canonical_name_in(root: &Path, name: &str) -> Option<String> {
+    let data =
+        read_file(root, &root.join("tzdata.zi")).and_then(|bytes| String::from_utf8(bytes).ok());
+    let target = data
+        .as_deref()
+        .and_then(|data| {
+            data.lines().find_map(|line| {
+                let record = line
+                    .strip_prefix("L ")
+                    .or_else(|| line.strip_prefix("Link "))?;
+                let (target, alias) = record.split_once(char::is_whitespace)?;
+                (alias.trim() == name && valid_name(target)).then_some(target)
+            })
+        })
+        .unwrap_or(name);
+    let path = zone_path(root, target)?;
+    let canonical = path.strip_prefix(root).ok()?.to_str()?;
+    if matches!(canonical, "Etc/UTC" | "Etc/GMT") {
+        return Some("UTC".into());
+    }
+    #[cfg(windows)]
+    let canonical = canonical.replace('\\', "/");
+    Some(canonical.to_owned())
+}
+
+/// A host tzdata link may name another file in this root, but never a file outside it.
+fn zone_path(root: &Path, name: &str) -> Option<PathBuf> {
+    let path = root.join(name).canonicalize().ok()?;
+    (path.starts_with(root) && path.is_file()).then_some(path)
+}
+
+/// Read a regular tzdata file under the trusted root within the size cap.
+fn read_file(root: &Path, path: &Path) -> Option<Vec<u8>> {
+    use crate::read::{Ancestors, Read, ReadPolicy};
+
+    let policy = ReadPolicy::capped(MAX_FILE as u64).ancestors(Ancestors::NoLinkBelow(root));
+    match crate::read::read(path, &policy) {
+        Read::Bytes(bytes, _) => Some(bytes),
+        _ => None,
+    }
 }
 
 /// One POSIX TZ rule.
@@ -659,6 +698,30 @@ mod tests {
     fn a_fixed_offset_zone_answers_without_transitions() {
         let table = parse(&tzif(&[], &[], &[0], "JST-9")).expect("tzif");
         assert_eq!(table.segments(0, DAY_MS).expect("seg"), vec![[0, 540]]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_alias_cannot_resolve_outside_the_tzdata_root() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let root = fixture
+            .path()
+            .canonicalize()
+            .expect("fixture path")
+            .join("tzdata");
+        fs::create_dir(&root).expect("tzdata directory");
+        fs::write(root.join("Canonical"), tzif(&[], &[], &[3600], "FIX-1")).expect("zone");
+        fs::write(fixture.path().join("outside"), b"outside").expect("outside file");
+        symlink("Canonical", root.join("Alias")).expect("local alias");
+        symlink("../outside", root.join("Escape")).expect("escaping alias");
+        assert_eq!(
+            canonical_name_in(&root, "Alias").as_deref(),
+            Some("Canonical")
+        );
+        assert!(canonical_name_in(&root, "Escape").is_none());
     }
 
     #[cfg(unix)]
