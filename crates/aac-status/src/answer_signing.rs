@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const ANSWER_SCHEMA: &str = "agent-reports/answer@1";
 
 /// The signing key: the private key, its published SPKI PEM, and the key id.
+#[derive(Clone)]
 pub struct AnswerKey {
     signing: SigningKey,
     pub public_key_pem: String,
