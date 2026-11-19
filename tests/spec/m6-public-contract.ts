@@ -388,9 +388,8 @@ try {
           windowsPreflightReason !== undefined &&
           name === 'GET /api/accounts/registry' &&
           (role === 'session' || role === 'bar');
-        const statusContract = nativeGroupRow(route.method, route.path)
-          ? groupOverrides['contract/' + fixture]
-          : undefined;
+        const mine = nativeGroupRow(route.method, route.path);
+        const statusContract = mine ? groupOverrides['contract/' + fixture] : undefined;
         const nativeStatus = statusContract !== undefined;
         const contract: Contract =
           (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
@@ -456,7 +455,7 @@ try {
                 role,
                 ...(request.body === undefined ? {} : { body: request.body }),
               },
-              response: normalize({ status, headers: selected, body }),
+              response: { status, headers: normalize(selected), body: normalize(body, '', true) },
             } as Contract;
             counts.match++;
             continue;
