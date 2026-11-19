@@ -15,5 +15,6 @@ pub mod decline;
 pub mod home;
 pub mod js;
 pub mod js_json;
+pub mod pricing;
 pub mod registry;
 pub mod spread;
