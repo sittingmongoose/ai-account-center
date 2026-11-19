@@ -38,7 +38,9 @@ type ComposedRecord = {
 };
 const recorded: Record<string, ComposedRecord> = {};
 const savedComposed: Record<string, ComposedRecord> =
-  composed && !recordComposed ? JSON.parse(fs.readFileSync(composedGolden, 'utf8')) : {};
+  composed && (!recordComposed || fs.existsSync(composedGolden))
+    ? JSON.parse(fs.readFileSync(composedGolden, 'utf8'))
+    : {};
 const rustBinary = process.env.AAC_RUST_PUBLIC_BINARY ?? path.join(root, 'dist/native/aac-http');
 if (composed || rustMode !== 'off')
   assert.ok(fs.existsSync(rustBinary), 'contract replay requires an existing Rust binary');
@@ -1057,7 +1059,13 @@ try {
     if (recordComposed) {
       assert.ok(nativeReset, 'record with the reset owner available');
       assert.ok(Object.keys(recorded).length >= (nativePrivate ? 6 : 4), 'composed fixture rows');
-      fs.writeFileSync(composedOutput ?? composedGolden, JSON.stringify(recorded, null, 2) + '\n');
+      const native = Object.fromEntries(
+        Object.entries(savedComposed).filter(([name]) => name.startsWith('native/contract/'))
+      );
+      fs.writeFileSync(
+        composedOutput ?? composedGolden,
+        JSON.stringify({ ...recorded, ...native }, null, 2) + '\n'
+      );
     }
   }
   console.log(

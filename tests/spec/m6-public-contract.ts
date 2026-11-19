@@ -94,9 +94,8 @@ const overrides: Record<string, Contract> =
         )
       )
     : {};
-// W-status-home: the group's own composed rows (the native answers of the fixture home).
-// They are read only for the group's worker-less run; every other row keeps the shared
-// composed contract and the reset rows' own override below.
+// The native owner rows share the platform contract with the earlier composition rows.
+// Select them only when this boot enables the native owner.
 const nativeGroupRow = (method: string, route: string) =>
   method === 'GET' &&
   (route === '/api/status' ||
@@ -110,26 +109,6 @@ const recordNative = process.argv
 assert.notEqual(recordNative, '', '--record-native needs an output path');
 if (recordNative) assert.equal(mode, 'cut', 'record native rows on the shipped listener');
 const recordedNative: Record<string, Contract> = {};
-const groupOverrides: Record<string, Contract> = {};
-if (group !== undefined && mode === 'cut-rust-only') {
-  try {
-    Object.assign(
-      groupOverrides,
-      JSON.parse(
-        await fs.readFile(
-          path.join(
-            spec,
-            'contract',
-            `m0-composed-${process.platform === 'win32' ? 'windows' : 'unix'}-native.json`
-          ),
-          'utf8'
-        )
-      )
-    );
-  } catch {
-    // Not recorded yet: the plain contract answers and the run fails on the difference.
-  }
-}
 
 const lifecycleOverrides: Record<string, Contract> =
   mode !== 'fixture' && process.platform === 'win32' && registryOutput === undefined
@@ -391,7 +370,10 @@ try {
           name === 'GET /api/accounts/registry' &&
           (role === 'session' || role === 'bar');
         const mine = nativeGroupRow(route.method, route.path);
-        const statusContract = mine ? groupOverrides['contract/' + fixture] : undefined;
+        const statusContract =
+          mine && environment.AAC_RUST_CUT_NATIVE_ROUTES === 'on'
+            ? overrides['native/contract/' + fixture]
+            : undefined;
         const nativeStatus = statusContract !== undefined;
         const contract: Contract =
           (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
