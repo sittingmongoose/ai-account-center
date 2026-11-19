@@ -151,6 +151,8 @@ dependencies = [
 name = "aac-store"
 version = "0.1.0"
 dependencies = [
+ "aac-core",
+ "aac-num",
  "crc32fast",
  "napi",
  "napi-build",
