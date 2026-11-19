@@ -261,7 +261,7 @@ impl OwnerHost {
         if !self.embed {
             // A supervisor-owned service may still be starting (the public listener binds
             // first). Wait briefly for its descriptor instead of declining the first request.
-            for _ in 0..30 {
+            for _ in 0..100 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 if let Some(link) = ServiceLink::load(&self.root) {
                     return Some(self.remember(link));

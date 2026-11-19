@@ -523,6 +523,8 @@ try {
       }
     }
   } finally {
+    if (process.env.AAC_M6_SHOW_AUDIT === '1' && rust.audit.length)
+      console.log('listener stderr:\n' + rust.audit.join(''));
     await rust.stop();
   }
 } finally {

@@ -928,7 +928,11 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
 fn fed_bytes(body: Vec<u8>, etag: &str, view: &str, if_none_match: Option<&str>) -> Reply {
     if !matches!(view, "status@1" | "scoreboard@1" | "home@3" | "dashboard@1")
         || !etag.starts_with("W/\"")
-        || etag.len() != 67
+        || !etag.ends_with('"')
+        || etag.len() < 40
+        || !etag[3..etag.len() - 1]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
     {
         eprintln!("aac-http: fed view refused: {view} {etag}");
         return super::decline();
@@ -1360,7 +1364,7 @@ mod tests {
             &Method::POST,
             "/api/status/files/vm.lead/a.png"
         ));
-        assert!(!owns_route(&Method::GET, "/api/scoreboard"));
+        assert!(owns_route(&Method::GET, "/api/scoreboard"));
         assert!(!owns_route(&Method::GET, "/api/views/home"));
     }
 
