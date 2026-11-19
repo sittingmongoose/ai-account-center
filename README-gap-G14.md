@@ -1,8 +1,8 @@
 # Gap G14 — Analytics writers (Rust-owned)
 
 Branch `rust/gap-G14`, stacked on `rust/d-analytics-owned` (base `1be9ae7dfc`), merged with
-`origin/main` wave67 and `rust/e-agent-shipped`. Bundle: `landing/rust-gap-G14.bundle`
-(base `1be9ae7dfc..rust/gap-G14`).
+`origin/main` wave67, `rust/e-agent-shipped` and `rust/gap-G15` (`2ea20c681`, pricing). Bundle:
+`landing/rust-gap-G14.bundle` (base `1be9ae7dfc..rust/gap-G14`).
 
 Closes the CUT-PLAN G14 row: quota-history sampling and activity collection move into the Rust
 service so the Sunday cut can delete the TypeScript writers. Both store write paths are Rust-owned
@@ -34,9 +34,10 @@ Run the ports: `cargo test -p aac-store --no-default-features --test observe --t
   `rowsReport`, and the `ActivityIngestor` day/session digest trimming (`sameDays`). Shaped reports
   are the TS `UsageReport` JSON exactly; `contract_reports` deserializes them for ingest.
 - `collect`: the scanner's compact rows → priced hour/session/route/model cells and session rows.
-  `normalize_provider`, `session_key`/`session_hash`. Pricing is a **fed-facts seam** (`Pricing`
-  trait): resolution stays with the front door, the arithmetic (logged cost wins, list rates,
-  fallback part) matches the collector. Cost floats compare at the nano the store persists
+  `normalize_provider`, `session_key`/`session_hash`. Pricing is a `Pricing` trait seam: the host
+  backs it with G15's `Resolver` (the parity tests pin a fixture map); the arithmetic (logged cost
+  wins, list rates, fallback part) matches the collector. Cost floats compare at the nano the store
+  persists
   (`contract::nano`); sub-nano IEEE ordering noise is not consumer-visible.
 
 ### Service job (`crates/aac-http/src/analytics_writers.rs`)
@@ -47,8 +48,8 @@ feeds `analytics-writers: {enabled: true}`:
 - **Quota sampler** reads the fed `analytics-dashboard` (`{dashboards:[mac,windows]}`), imports the
   JSON history once (archive walk depth ≤3 / ≤2000 files, `.gz` gunzip ≤64 MiB, plus
   `quota-history-v1.json`), and records on the account-refresh cadence (clamped 30s–1h).
-- **Activity scheduler** reads the fed `analytics-plan` (computers/kinds/roots) and
-  `analytics-pricing` (resolved facts), calls lane E's `scan-usage` verb per computer via a new
+- **Activity scheduler** reads the fed `analytics-plan` (computers/kinds/roots), prices with G15's
+  Rust `Resolver` over the registry cache, calls lane E's `scan-usage` verb per computer via a new
   in-process `Agents::scan_usage` (local + configured remotes), validates the v2 answer
   (reader name + kinds set), shapes reports and ingests with the trimmer on the converge cadence
   (10-min window, 60s converge interval). Source states are kept for the owned read.
@@ -61,8 +62,8 @@ supersedes a running pass. Cadence/validation/trim helpers carry unit tests.
 - `rust-service-groups.ts`: `analytics-writers` group + `rustAnalyticsWritersOn()` — requires the
   `analytics` read group on **and** the store hosted (`AAC_RUST_GROUP_ANALYTICS_WRITERS` wins over
   `rustService.groups['analytics-writers']`). Off by default.
-- `analytics-writer-feeds.ts`: background producers push the control switch, coalesced dashboards,
-  the activity plan and resolved pricing facts on the refresh cadence (content-keyed generations).
+- `analytics-writer-feeds.ts`: background producers push the control switch, coalesced dashboards
+  and the activity plan on the refresh cadence (content-keyed generations). Pricing is Rust-resolved.
 - `startAccountAnalyticsSampling(rustService)` stands the TS sampler **and** activity background
   down when the writers own collection; `index.ts` passes the service. With the switch off every TS
   path runs unchanged.
@@ -70,6 +71,19 @@ supersedes a running pass. Cadence/validation/trim helpers carry unit tests.
   with the collector); `toWorkerResult` exported for the parity generator.
 
 `tsc --noEmit` clean.
+
+### G15 pricing integration
+
+- The owned-read bridge (`rust-analytics-owned-input.ts` `pricingFacts`) calls
+  `store.activityPricingFacts()` — a host method answering `Resolver::facts_table` over
+  `activity::models` with the 8000-pair cap. Byte-equal to the TS table by the G15 corpus; the wire
+  shape is unchanged and the TS `defaultAccountAnalyticsPricing` lookup is dropped from the bridge.
+- The activity scheduler prices through `ResolverPricing` (G15 `Resolver`), replacing the fed
+  `analytics-pricing` facts; that TS feed producer is removed.
+- `ModelsDevRefresh::refresh` is scheduled at each activity pass where the TS collection calls
+  `startModelsDevRegistryRefresh` (coalesced, fresh-cache short-circuit, stale fallback; the blocking
+  fetch runs off the runtime thread). Only the gate-active side refreshes, so the cache file has one
+  writer.
 
 ## Gate
 
@@ -81,8 +95,7 @@ all three hold, so nothing is left unwritten and nothing writes twice.
 
 - **Plan worker port**: root discovery (`extraRoots`/`experimentRoots`) and fingerprints are computed
   by TS (`analyticsWriterPlan`) and fed to the scheduler; the scanner discovers its own roots.
-- **Pricing resolution**: the models.dev registry / CCS static / policy overrides stay TS-owned; the
-  facts feed carries resolved rates. Unknown models use the fallback rate (as TS does).
+- **Pricing**: now Rust-owned via G15 (see above), not a residual.
 - **Main history file strict reader**: the job reads `quota-history-v1.json` records via
   `recordsFromText`; the TS `FileAccountAnalyticsHistoryStore` validation is not yet ported.
 - **Cursor account reads, large-codex reads, mirror election / freshness refinements, persisted
@@ -94,7 +107,8 @@ all three hold, so nothing is left unwritten and nothing writes twice.
 
 ## Verification
 
-- Windows-native: the four port suites (12 tests) green; `tsc --noEmit` clean.
+- Windows-native: the four port suites (12 tests) + G15 `pricing_spec` (5 suites, 820 lookups) green;
+  `tsc --noEmit` clean.
 - Linux service build: `cargo check -p aac-http` on Nas1 under
   `flock /home/sittingmongoose/aac-nas1-heavy.lock` + `nice -n 19 -j 2` — **passes (exit 0)**;
   the writers' cadence/validation/ingest unit tests are **5/5 green** (`cargo test -p aac-http --lib analytics_writers`).
