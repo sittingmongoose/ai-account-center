@@ -30,7 +30,8 @@ pub type Meta = fs::Metadata;
 /// The facts every admission check reads, from an `lstat`, an `fstatat` or an `fstat`.
 ///
 /// Owner, mode and identity are Unix facts: Windows has no owner check, no POSIX bits and no
-/// `(dev, ino)` pair to compare, so those checks are not compiled there.
+/// `(dev, ino)` pair to compare, so those checks are not compiled there. Keeping the methods out
+/// of the trait on Windows is what let them stay warning-free under `-D warnings`.
 trait Facts {
     fn link(&self) -> bool;
     fn regular(&self) -> bool;

@@ -37,6 +37,29 @@ function temporary(prefix: string): string {
   return root;
 }
 
+/**
+ * A folder for AF_UNIX sockets. The address limit is about 108 bytes and counts the whole path, so a long
+ * TMPDIR can leave no room for `antigravity-runtime/leftover.sock`; this picks the shortest usable base
+ * instead of failing at `listen`.
+ */
+function shortTemporary(): string {
+  const needed = 'antigravity-runtime/leftover.sock'.length;
+  for (const base of [path.join(os.tmpdir(), 'aac-sock-'), path.join('/tmp', 'aac-sock-')]) {
+    // mkdtemp adds six random characters.
+    if (base.length + 7 + needed > 100) continue;
+    try {
+      const root = fs.mkdtempSync(base);
+      directories.push(root);
+      return root;
+    } catch {
+      /* The next base may exist. */
+    }
+  }
+  throw new Error(
+    'no short folder for a Unix socket: TMPDIR leaves less than 100 bytes for its path'
+  );
+}
+
 function sha(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -134,7 +157,7 @@ process.stdout.write(await m.probeRuntimeSocket(${JSON.stringify(socketPath)}));
 
 describe('runtime socket probe (under Node)', () => {
   test('absent folder or socket is stopped; a listener is listening; a leftover socket file is stopped', async () => {
-    const root = temporary('aac-agy-sock-');
+    const root = shortTemporary();
     const runtime = path.join(root, 'antigravity-runtime');
     const socketPath = path.join(runtime, 'control.sock');
     expect(await probeUnderNode(socketPath)).toBe('stopped');
@@ -165,7 +188,7 @@ describe('runtime socket probe (under Node)', () => {
 
   test('a connect refused for permission (EACCES) is unknown, never stopped', async () => {
     if (process.getuid?.() === 0) return; // root ignores socket permissions
-    const root = temporary('aac-agy-sock-eacces-');
+    const root = shortTemporary();
     const socketPath = path.join(root, 'control.sock');
     const server = net.createServer((socket) => socket.destroy());
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));

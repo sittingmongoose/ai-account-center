@@ -82,10 +82,27 @@ mod tests {
 
     #[test]
     fn declines_are_recorded_where_a_shared_rule_refuses() {
+        // The canonical spelling is the host's: a single root on Unix, a drive root with
+        // backslashes on Windows (a forward-slash or UNC spelling is rewritten there).
+        #[cfg(unix)]
         for raw in ["/home/a", "/", "/tmp/fixture-1"] {
             assert!(crate::proof::scope(|| serde_json::json!(canonical_home(raw))) == true);
         }
-        for raw in ["//home/a", "/tmp//fixture", "/tmp/fixture/", "relative", ""] {
+        #[cfg(windows)]
+        for raw in [r"C:\Users\a", r"C:\", r"C:\tmp\fixture-1"] {
+            assert!(crate::proof::scope(|| serde_json::json!(canonical_home(raw))) == true);
+        }
+        for raw in [
+            "//home/a",
+            "/tmp//fixture",
+            "/tmp/fixture/",
+            "relative",
+            "",
+            // The other host's canonical shape is never proved here either.
+            r"C:\Users\\a",
+            r"C:\Users\a\",
+            "C:relative",
+        ] {
             assert_eq!(
                 crate::proof::scope(|| serde_json::json!(canonical_home(raw))),
                 crate::proof::fallback(),

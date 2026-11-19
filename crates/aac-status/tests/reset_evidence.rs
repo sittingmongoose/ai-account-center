@@ -812,10 +812,20 @@ fn concurrent_read_issuance_is_unique_and_does_not_advance_account_revisions() {
     let inv = store
         .read_inventory("route", &snap("x", "p", "h"), NOW, &nonce(1140))
         .unwrap();
-    let workers: Vec<_> = (0..4)
-        .map(|_| {
-            let path = dir.path().join("claims.sqlite");
-            std::thread::spawn(move || Store::open(&path).unwrap().captured_ticket("route").unwrap())
+    // Open (and migrate) the stores first: on a loaded machine four schema migrations racing on one file can
+    // exceed the 5 s busy timeout and read as `storage-unavailable`. The claim here is about ticket issuance.
+    let stores: Vec<_> = (0..4)
+        .map(|_| Store::open(&dir.path().join("claims.sqlite")).unwrap())
+        .collect();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(stores.len()));
+    let workers: Vec<_> = stores
+        .into_iter()
+        .map(|mut store| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                store.captured_ticket("route").unwrap()
+            })
         })
         .collect();
     let mut orders: Vec<_> = workers

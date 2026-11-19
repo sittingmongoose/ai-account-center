@@ -3138,6 +3138,10 @@ class BackgroundSessionTests(_SessionTables):
         finally:
             for child in children.values():
                 child.kill(); child.wait()
+                # Popen owns the pipe ends it made; closing them leaves the suite no open streams.
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
             os.close(leader)
 
     def test_mac_terminal_check_reads_stdin_and_stdout_per_process(self):
