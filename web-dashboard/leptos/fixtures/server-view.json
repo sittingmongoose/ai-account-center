@@ -2128,6 +2128,17 @@
     "capacity": [
       {
         "platform": "ios",
+        "label": "iPhone",
+        "overall": false,
+        "running": 1,
+        "max": 2,
+        "reserved": 0,
+        "overLimit": false
+      },
+      {
+        "platform": "global",
+        "label": "All phones at once",
+        "overall": true,
         "running": 1,
         "max": 2,
         "reserved": 0,

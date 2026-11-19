@@ -24,10 +24,10 @@ import type {
   MachineSample,
   ReadProblem,
   RegistryThread,
-  SimlockCapacity,
   SimlockLease,
   SimlockStatus,
 } from './status-collectors';
+import type { SimlockCapacityView } from './status-view-words';
 
 // ---------------------------------------------------------------------------------------------
 // Inputs
@@ -538,7 +538,7 @@ export interface StatusView {
   /** `also`: the panel's secondary sources; their failures are shown on the panel and its rows. */
   threads: { source: 'agent-reports'; also: ['pm-mail']; rows: ThreadView[] };
   machines: { source: 'machines'; also: ['browsers']; rows: MachineView[] };
-  simlock: { source: 'simlock'; capacity: SimlockCapacity[]; leases: SimlockLease[] };
+  simlock: { source: 'simlock'; capacity: SimlockCapacityView[]; leases: SimlockLease[] };
   usage: { source: 'usage'; warnings: UsageWarning[]; accounts: UsageAccountView[] };
   /** quota-watch's per-stream estimates (docs/status-tab.md, Spend). */
   spend: SpendView;

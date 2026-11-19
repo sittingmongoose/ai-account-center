@@ -30,7 +30,7 @@ import {
   partProblemText,
   partRef,
 } from './status-view-panels';
-import type { ReadProblem } from './status-collectors';
+import { SIMLOCK_FALLBACK_ITEM, type ReadProblem } from './status-collectors';
 import { buildSpend, quotaSource } from './status-view-quota';
 import { buildStrip, loopOwner, pinnedProblems } from './status-view-strip';
 import type {
@@ -59,6 +59,7 @@ import {
   plural,
   POLL_SECONDS,
   QUIET_DAY_MS,
+  simlockCapacityRows,
   STALE_AFTER_SECONDS,
   STATUS_VIEW_VERSION,
   TASKS_STALE_MS,
@@ -103,6 +104,19 @@ const REGISTRY_PARTIAL: PartialWords = {
 const ITEMS_PARTIAL: PartialWords = {
   state: 'error',
   text: (problems, timeZone) => problems.map((p) => partProblemText(p, timeZone)).join(' '),
+};
+
+/** The gateway's fallback is said in its own words, before any named worker problem. */
+const SIMLOCK_PARTIAL: PartialWords = {
+  state: 'error',
+  text: (problems, timeZone) =>
+    problems
+      .map((p) =>
+        p.item === SIMLOCK_FALLBACK_ITEM
+          ? `${p.reason} (since ${clockText(p.since, timeZone)}).`
+          : partProblemText(p, timeZone)
+      )
+      .join(' '),
 };
 
 function collectedSource<T>(
@@ -720,7 +734,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
       inputs.simlock,
       STALE_AFTER_SECONDS.simlock,
       now,
-      timeZone
+      timeZone,
+      SIMLOCK_PARTIAL
     ),
     usageSrc,
     quotaSrc,
@@ -859,7 +874,7 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     machines: { source: 'machines', also: ['browsers'], rows: machineRows },
     simlock: {
       source: 'simlock',
-      capacity: inputs.simlock.data?.capacity ?? [],
+      capacity: simlockCapacityRows(inputs.simlock.data?.capacity ?? []),
       leases: inputs.simlock.data?.leases ?? [],
     },
     usage,

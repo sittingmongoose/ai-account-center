@@ -627,6 +627,36 @@ pub fn compose_fed_traced(
 pub fn fed_part(data: &V) -> Option<()> {
     (data.is_object() && !crate::read_context::proto_named(data)).then_some(())
 }
+
+/// The page's Simlock object: each capacity row carries its words, the overall cap (`global`) is marked
+/// `overall` and comes last, and "Other" is only for a platform Simlock names that the page does not know.
+fn simlock_view(data: &V) -> V {
+    let mut platforms = Vec::new();
+    let mut overall = Vec::new();
+    for row in rows(&data["capacity"]) {
+        if !row.is_object() {
+            platforms.push(row.clone());
+            continue;
+        }
+        let platform = s(&row["platform"]);
+        let mut labeled = row.clone();
+        labeled["label"] = json!(match platform {
+            "ios" => "iPhone",
+            "android" => "Android",
+            "global" => "All phones at once",
+            _ => "Other",
+        });
+        labeled["overall"] = json!(platform == "global");
+        if platform == "global" {
+            overall.push(labeled);
+        } else {
+            platforms.push(labeled);
+        }
+    }
+    platforms.extend(overall);
+    json!({"source":"simlock","capacity":platforms,"leases":data.get("leases").cloned().unwrap_or(json!([]))})
+}
+
 fn view(i: &Inputs) -> Option<V> {
     for key in ["threads", "tasks", "cards", "problems"] {
         i.data["reports"][key].as_array()?;
@@ -666,10 +696,45 @@ fn view(i: &Inputs) -> Option<V> {
     view["projects"] = json!(projects(i)?);
     view["threads"] = json!({"source":"agent-reports","also":["pm-mail"],"rows":threads(i,&registry)?});
     view["machines"] = json!({"source":"machines","also":["browsers"],"rows":machines});
-    view["simlock"] = json!({"source":"simlock","capacity":i.data["simlock"]["data"].get("capacity").cloned().unwrap_or(json!([])),"leases":i.data["simlock"]["data"].get("leases").cloned().unwrap_or(json!([]))});
+    view["simlock"] = simlock_view(&i.data["simlock"]["data"]);
     view["usage"] = panels::usage(i, &usage_source)?;
     view["spend"] = spend::compose(i)?;
     let mut view = crate::http_views::status_owned(view)?;
     view["headline"]["strip"] = strip::compose(&view)?;
     Some(view)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simlock_rows_label_the_overall_cap_and_put_it_last() {
+        let data = json!({
+            "capacity": [
+                {"platform":"global","running":5,"maxRunning":5,"reserved":0,"overLimit":false},
+                {"platform":"ios","running":2,"maxRunning":4,"reserved":0,"overLimit":false},
+                {"platform":"android","running":3,"maxRunning":3,"reserved":0,"overLimit":false},
+                {"platform":"watch","running":null,"maxRunning":null,"reserved":null,"overLimit":false}
+            ],
+            "leases": []
+        });
+        let view = simlock_view(&data);
+        let rows = view["capacity"].as_array().unwrap();
+        let labels: Vec<&str> = rows.iter().map(|r| r["label"].as_str().unwrap()).collect();
+        assert_eq!(labels, ["iPhone", "Android", "Other", "All phones at once"]);
+        let platforms = rows.iter().filter(|r| (*r)["overall"].as_bool() == Some(false)).count();
+        assert_eq!(platforms, 3, "the overall cap is not counted as a platform");
+        assert_eq!(rows.last().unwrap()["platform"], "global");
+        assert_eq!(rows.last().unwrap()["overall"], true);
+        assert_eq!(view["source"], "simlock");
+        assert!(view["leases"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn simlock_rows_keep_an_unknown_platform_as_other() {
+        let view = simlock_view(&json!({"capacity":[{"platform":"windows","running":0,"maxRunning":1}],"leases":[]}));
+        assert_eq!(view["capacity"][0]["label"], "Other");
+        assert_eq!(view["capacity"][0]["overall"], false);
+    }
 }

@@ -1236,6 +1236,11 @@ pub struct Simlock {
 pub struct Capacity {
     #[serde(deserialize_with = "nullable")]
     pub platform: String,
+    /// The server's words for the row ("iPhone", "Android", "All phones at once", "Other").
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    /// The overall cap across platforms (`global`), never one of the platform rows.
+    pub overall: bool,
     pub running: Option<u32>,
     pub max: Option<u32>,
     pub reserved: Option<u32>,

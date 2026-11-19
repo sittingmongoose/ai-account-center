@@ -546,6 +546,11 @@ export interface SimlockStatus {
   problems: SimlockWorkerProblem[];
 }
 
+/** The panel's name for a reading that fell back to this computer's worker, and the words it says. */
+export const SIMLOCK_FALLBACK_ITEM = 'Simlock';
+export const SIMLOCK_FALLBACK_REASON =
+  "Read this computer's Simlock worker only; the fleet gateway did not answer";
+
 function isoFromMs(value: unknown): string | null {
   const ms = num(value);
   return ms === null || ms <= 0 ? null : new Date(ms).toISOString();
