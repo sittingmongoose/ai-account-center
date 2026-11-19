@@ -10,10 +10,18 @@ mod hub;
 mod native_owners;
 #[cfg(unix)]
 mod native_reads;
+// Merged before its first registering group: the host is exercised by the groups that land
+// on top of it (W-status-home first), so its API is not dead in the composed cut.
+#[cfg(unix)]
+#[allow(dead_code)]
+mod owner_host;
 mod policy;
 mod request_log;
 mod reset_routes;
 mod routes;
+#[cfg(unix)]
+#[allow(dead_code)]
+mod service_link;
 mod sidecar;
 mod static_ui;
 mod storage;
@@ -426,6 +434,11 @@ pub(crate) async fn run_public_at(
     #[cfg(unix)]
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let composed = backend.is_some();
+    // The one owner host (AAC_RUST_CUT_NATIVE_ROUTES=on): the running service's descriptor, or
+    // the same service in-process for a worker-less cut boot. Groups register on top of it.
+    #[cfg(unix)]
+    let owner_host =
+        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let mut api = Router::new();
     if cut || !composed {
         api = api.route(
@@ -482,6 +495,11 @@ pub(crate) async fn run_public_at(
         println!("aac-http public TLS listening on {address}");
     }
     println!("aac-http public listening on {address}");
+    #[cfg(unix)]
+    if let Some(host) = &owner_host {
+        let host = host.clone();
+        tokio::spawn(async move { host.warm().await });
+    }
     if cut {
         record_public_build(&root);
     }
@@ -539,6 +557,10 @@ pub(crate) async fn run_public_at(
     #[cfg(unix)]
     if let Some(jobs) = native_jobs {
         jobs.stop().await;
+    }
+    #[cfg(unix)]
+    if let Some(host) = &owner_host {
+        host.stop().await;
     }
     if let Some(worker) = worker {
         worker.stop().await;
