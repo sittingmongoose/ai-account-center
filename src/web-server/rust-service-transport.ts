@@ -2,6 +2,7 @@
 import fs from 'fs';
 import http from 'http';
 import { NetworkError } from '../errors/error-types';
+import { storeSocketCall, type StoreCallHandle } from '../store/store-socket';
 
 export interface VerifiedRustPrincipal {
   kind: 'session' | 'device' | 'bar' | 'hub';
@@ -15,6 +16,9 @@ export const FRONT_DOOR_PRINCIPAL: VerifiedRustPrincipal = {
   id: 'front-door',
   role: 'service',
 };
+
+/** The front-door principal as the wire header: serialized once, not per store call. */
+const FRONT_DOOR_PRINCIPAL_JSON = JSON.stringify(FRONT_DOOR_PRINCIPAL);
 
 /** Reserved liveness envelope accepted by aac-api's principal validation. */
 export const PUBLIC_HEALTH_PRINCIPAL: VerifiedRustPrincipal = {
@@ -313,12 +317,21 @@ const agentConnections = new Map<
  * cannot be resolved keeps its own spelling and misses, as before.
  */
 export function canonicalRoot(root: string): string {
+  const cached = rootKeys.get(root);
+  if (cached !== undefined) return cached;
   try {
-    return fs.realpathSync(root);
+    const real = fs.realpathSync(root);
+    rootKeys.set(root, real);
+    return real;
   } catch {
+    // An unresolved root keeps its own spelling and is retried next call: it may appear later.
     return root;
   }
 }
+
+/** Resolved root spellings, cached: a store call resolves its root several times, and the
+ * dashboard's roots do not change under it. Only successful resolutions are kept. */
+const rootKeys = new Map<string, string>();
 
 export function registerRustAgentConnection(
   root: string,
@@ -574,11 +587,7 @@ const storeHosts = new Map<
 const storeGaveUpHandlers = new Map<string, Set<() => void>>();
 
 function storeRootKey(root: string): string {
-  try {
-    return fs.realpathSync(root);
-  } catch {
-    return root;
-  }
+  return canonicalRoot(root);
 }
 
 function storeHostState(root: string): {
@@ -685,14 +694,14 @@ const STORE_LONG_JOBS = new Set([
 const storeWatches = new WeakMap<
   RustStoreEntry,
   {
-    requests: Set<http.ClientRequest>;
+    requests: Set<StoreCallHandle>;
     timer: ReturnType<typeof setTimeout> | null;
     probing: boolean;
   }
 >();
 
 /** One independent, bounded health probe per boot while store calls are pending. */
-function watchStore(entry: RustStoreEntry, request: http.ClientRequest): void {
+function watchStore(entry: RustStoreEntry, request: StoreCallHandle): void {
   let state = storeWatches.get(entry);
   if (!state) {
     state = { requests: new Set(), timer: null, probing: false };
@@ -752,76 +761,52 @@ export function requestRustStore(
 ): Promise<string> {
   if (Buffer.byteLength(args) > RUST_STORE_REQUEST_CAP)
     return Promise.reject(new RustStoreError('invalid: store request too large'));
-  return new Promise((resolve, reject) => {
-    const request = http.request({
-      socketPath: entry.connection.socketPath,
-      path: `/internal/store/${method}`,
-      method: 'POST',
-      agent: entry.connection.agent ?? false,
-      headers: {
-        'x-aac-boot-secret': entry.connection.secret,
-        'x-aac-principal': JSON.stringify(FRONT_DOOR_PRINCIPAL),
-        'content-type': 'application/json',
-        'content-length': Buffer.byteLength(args),
-      },
-    });
-    entry.active.add(request);
-    watchStore(entry, request);
-    const timer = !STORE_LONG_JOBS.has(method)
-      ? setTimeout(
-          () => request.destroy(new RustTransportError('deadline', 'Rust store deadline')),
-          RUST_STORE_DEADLINE_MS
-        )
-      : null;
-    request.once('close', () => {
-      if (timer) clearTimeout(timer);
-      entry.active.delete(request);
-    });
-    request.once('error', (error) => {
-      entry.health.failed?.(rustFailureKind(error));
-      reject(
-        error instanceof RustTransportError
-          ? error
-          : new RustTransportError(rustFailureKind(error), 'Rust store transport failed')
-      );
-    });
-    request.once('response', (response) => {
-      const chunks: Buffer[] = [];
-      let size = 0;
-      response.on('data', (chunk: Buffer) => {
-        size += chunk.length;
-        if (size > RUST_STORE_REPLY_CAP)
-          request.destroy(new RustTransportError('cap', 'Rust store response cap'));
-        else chunks.push(chunk);
-      });
-      response.once('error', (error) => {
-        entry.health.failed?.(rustFailureKind(error));
-        reject(error);
-      });
-      response.once('end', () => {
-        if (response.headers['x-aac-service-boot'] !== entry.connection.bootId) {
-          entry.health.failed?.('boot');
-          reject(new RustTransportError('boot', 'Rust service boot mismatch'));
-          return;
-        }
-        entry.health.replied?.();
-        const text = Buffer.concat(chunks).toString('utf8');
-        if (response.statusCode === 200) {
-          resolve(text);
-          return;
-        }
-        try {
-          const parsed = JSON.parse(text) as { error?: unknown };
-          if (typeof parsed?.error === 'string') {
-            reject(new RustStoreError(parsed.error));
-            return;
-          }
-        } catch {
-          /* Not the store's error shape: a transport refusal below. */
-        }
-        reject(new RustTransportError('reply', 'Rust store invalid response'));
-      });
-    });
-    request.end(args);
+  const { connection } = entry;
+  const { promise, handle } = storeSocketCall(
+    connection.socketPath,
+    connection.secret,
+    FRONT_DOOR_PRINCIPAL_JSON,
+    method,
+    args,
+    RUST_STORE_REPLY_CAP
+  );
+  watchStore(entry, handle);
+  // The active set is the front door's shutdown drain: it only ever calls `destroy`, which a
+  // store call implements like an HTTP request, so it joins the same set (and the same tests).
+  const drained = handle as unknown as http.ClientRequest;
+  entry.active.add(drained);
+  const timer = !STORE_LONG_JOBS.has(method)
+    ? setTimeout(
+        () => handle.destroy(new RustTransportError('deadline', 'Rust store deadline')),
+        RUST_STORE_DEADLINE_MS
+      )
+    : undefined;
+  handle.once('close', () => {
+    clearTimeout(timer);
+    entry.active.delete(drained);
   });
+  return promise.then(
+    (reply) => {
+      if (reply.boot !== connection.bootId) {
+        entry.health.failed?.('boot');
+        throw new RustTransportError('boot', 'Rust service boot mismatch');
+      }
+      entry.health.replied?.();
+      if (reply.status === 200) return reply.text;
+      try {
+        const parsed = JSON.parse(reply.text) as { error?: unknown };
+        if (typeof parsed?.error === 'string') throw new RustStoreError(parsed.error);
+      } catch (error) {
+        if (error instanceof RustStoreError) throw error;
+        /* Not the store's error shape: a transport refusal below. */
+      }
+      throw new RustTransportError('reply', 'Rust store invalid response');
+    },
+    (error: unknown) => {
+      entry.health.failed?.(rustFailureKind(error));
+      throw error instanceof RustTransportError
+        ? error
+        : new RustTransportError(rustFailureKind(error), 'Rust store transport failed');
+    }
+  );
 }
