@@ -114,6 +114,11 @@ def main():
     if stage == "probe":
         print(json.dumps({"name":"aac-agent","version":"0.1.0","protocol":1,"target":HOSTS[host][1]}))
     else:
+        if host == "jared-windows" and (ROOT / "hold-windows-connection").exists():
+            trace(host, "connecting", True)
+            until = time.monotonic() + 5
+            while not (ROOT / "release-windows-connection").exists() and time.monotonic() < until:
+                time.sleep(0.01)
         request = json.loads(sys.stdin.buffer.readline())
         assert request["verb"] == "apps" and request["args"]["platform"] == HOSTS[host][0]
         if host == "ubuntu":
@@ -121,6 +126,14 @@ def main():
         else:
             assert "AAC_APP_UPDATE_STATE_DIR" not in os.environ
         start = request["args"]["action"]
+        if start == "prepare-update":
+            print(json.dumps({"type":"progress","protocol":1,"id":request["id"],
+                              "data":{"event":"admission"}}), flush=True)
+            grant = sys.stdin.buffer.readline()
+            if not grant:
+                return
+            assert json.loads(grant) == {"admit": True}, grant
+            start = request["args"]["action"] = "update"
         trace(host, start, True)
         messages(host, request)
         trace(host, start + "-end", True)

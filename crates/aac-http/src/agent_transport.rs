@@ -493,30 +493,24 @@ impl Agents {
 
     pub(crate) async fn app_call(
         &self,
-        platform: &str,
-        alias: Option<&str>,
+        selector: Selector,
         id: String,
         args: Value,
-        budget: Duration,
+        mut options: CallOptions,
+        controls: mpsc::Receiver<Vec<u8>>,
         progress: mpsc::Sender<Event>,
     ) -> Result<Vec<Event>, Failure> {
-        let started = tokio::time::Instant::now();
-        let deadline = started + budget;
+        let deadline = options.deadline;
         let _permit = self
             .slots
             .clone()
             .try_acquire_owned()
             .map_err(|_| Failure::new(Cause::Busy, "agent transport saturated"))?;
-        let client = self
-            .client(
-                &Selector {
-                    platform: platform.into(),
-                    ssh_host: alias.map(str::to_owned),
-                },
-                deadline,
-            )
-            .await
-            .ok_or_else(refused)?;
+        let client = tokio::select! {
+            biased;
+            _ = options.cancel.cancelled() => return Err(Failure::new(Cause::Cancelled, "app call cancelled before dispatch")),
+            ready = self.client(&selector, deadline) => ready.ok_or_else(refused)?,
+        };
         let deadline_ms = aac_protocol::deadline_cap("apps", &args).min(
             u64::try_from(
                 deadline
@@ -532,12 +526,9 @@ impl Agents {
             deadline_ms,
             args,
         };
-        let mut options = CallOptions::new(budget, aac_protocol::MAX_FRAME_BYTES * 2);
-        options.deadline = deadline;
-        if alias.is_none() {
+        if selector.ssh_host.is_none() {
             options.local_app_update_state_dir = Some(self.root.join("app-updates"));
         }
-        let (_input, controls) = mpsc::channel(1);
         let wire = serde_json::to_vec(&request).map_err(|_| refused())?;
         client
             .call_controlled_encoded(&request, &wire, &options, controls, progress)
