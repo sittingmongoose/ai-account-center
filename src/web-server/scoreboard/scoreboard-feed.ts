@@ -31,6 +31,13 @@ interface OwnedFacts {
 
 const groups = new WeakMap<RustService, boolean>();
 
+/**
+ * The facts pushed for each service: one per (generation, catalog, zone, boot). The service
+ * composes with them plus the request's own clock words (the answer header), so a request
+ * reuses them until the service answers `stale` (its runs or catalog moved on).
+ */
+const held = new WeakMap<RustService, OwnedFacts & { zone: string; boot: string }>();
+
 /** The service that answers the Scoreboard from its own store: the group on, under mode on. */
 export function scoreboardOwnedService(res: Response): RustService | null {
   const service: unknown = res.locals.rustService;
@@ -52,12 +59,25 @@ function timeZone(): string {
 }
 
 /**
- * The facts for this request's (generation, catalog, zone, now): fetch the service's
- * unfiltered input, compute the envelope facts over it at the request's clock — the composer
- * formats `now` itself, so the facts must carry it — and push them. Null when the service is
- * absent, the push did not land, or the input cannot be carried.
+ * The facts for this request's (generation, catalog, zone): the held ones, or fetch the
+ * service's unfiltered input, compute the envelope facts over it and push them. The request's
+ * own `now` is not in them: its date words travel in the answer header. Null when the service
+ * is absent, the push did not land, or the input cannot be carried.
  */
 async function ensureFacts(
+  service: RustService,
+  boot: string,
+  zone: string,
+  now: number
+): Promise<OwnedFacts | null> {
+  const kept = held.get(service);
+  if (kept && kept.zone === zone && kept.boot === boot) return kept;
+  const made = await makeFacts(service, boot, zone, now);
+  if (made) held.set(service, { ...made, zone, boot });
+  return made;
+}
+
+async function makeFacts(
   service: RustService,
   boot: string,
   zone: string,
@@ -166,7 +186,10 @@ export async function answerScoreboardOwned(
   };
   const reply = await service.fedView(req, ROUTE, headers, SCOREBOARD_OWNED_VIEW);
   // 'stale': the service moved past this request's inputs; the next request fetches fresh ones.
-  if (typeof reply === 'string') return false;
+  if (typeof reply === 'string') {
+    held.delete(service);
+    return false;
+  }
   if (!reply) return false;
   sendRustView(res, reply);
   return true;

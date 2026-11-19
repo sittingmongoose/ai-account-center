@@ -62,6 +62,8 @@ export interface RustRequestOptions {
   raw?: boolean;
   cap?: number;
   text?: string;
+  /** G16b: a longer total deadline for an internal write that runs to completion (a send). */
+  deadlineMs?: number;
 }
 
 /** One keep-alive agent per boot (L1): the hop costs a request, not a connection. */
@@ -183,7 +185,7 @@ export function requestRust(
   if (payload !== undefined && Buffer.byteLength(payload) > 4 * 1024 * 1024)
     return Promise.reject(new RustTransportError('cap', 'Rust service request cap'));
   const cap = options.cap ?? (payload === undefined ? 64 * 1024 : 2 * 1024 * 1024);
-  const deadline = Date.now() + RUST_DEADLINE_MS;
+  const deadline = Date.now() + (options.deadlineMs ?? RUST_DEADLINE_MS);
   const attempt = () =>
     once(connection, route, principal, active, payload, method, cap, deadline, options);
   return attempt().catch((error: unknown) => {

@@ -11,7 +11,7 @@
 use crate::feed::Feeds;
 use crate::store_host::StoreHost;
 use aac_status::model_identity::{normalize_model, AliasTable, Model};
-use aac_status::read_context::{Envelope, Presentation};
+use aac_status::read_context::{Date, Presentation};
 use aac_status::share::catalog::{self, CatalogReader};
 use aac_files::registry::{Owners, Role};
 use aac_status::share::check::{ReadersCheckWriter, RunRow};
@@ -102,9 +102,8 @@ struct CompletedRead {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Feed {
     now: i64,
-    #[allow(dead_code)] // the protocol carries the clock words; the composer reads facts
+    /// The request's own clock words (its `now` date fact; the facts generation is shared).
     clock: String,
-    #[allow(dead_code)]
     day: String,
     time_zone: String,
     from: Option<String>,
@@ -137,6 +136,8 @@ pub(crate) struct ScoreboardOwned {
     seed_failures: Mutex<Vec<Json>>,
     reads: Mutex<IndexMap<String, CompletedRead>>,
     views: Mutex<IndexMap<String, CachedView>>,
+    /// The last pushed facts generation, parsed once: (its id, its presentation).
+    parsed_facts: Mutex<Option<(String, std::sync::Arc<Presentation>)>>,
     last_full_at: AtomicU64,
     /// The readers-check rows this owner shares with the Status owner (one file per writer).
     check: Arc<Mutex<ReadersCheckWriter>>,
@@ -164,6 +165,7 @@ impl ScoreboardOwned {
             seed_failures: Mutex::new(Vec::new()),
             reads: Mutex::new(IndexMap::new()),
             views: Mutex::new(IndexMap::new()),
+            parsed_facts: Mutex::new(None),
             last_full_at: AtomicU64::new(0),
             check,
             owners,
@@ -664,8 +666,6 @@ impl ScoreboardOwned {
             .feeds
             .current("scoreboard-facts", &feed.facts)
             .map_err(|_| Decline::Stale)?;
-        let presentation: Presentation =
-            serde_json::from_str(facts.facts.get()).map_err(|_| Decline::Shape)?;
         let filtered = feed.from.is_some()
             || feed.to.is_some()
             || feed.source != "all"
@@ -702,6 +702,22 @@ impl ScoreboardOwned {
                 }
             }
         }
+        // The facts generation is pushed once per runs generation and shared by its requests;
+        // parsed once per id. The request's own `now` comes from its header words.
+        let presentation = {
+            let mut held = self.parsed_facts.lock().unwrap_or_else(|p| p.into_inner());
+            match held.as_ref() {
+                Some((id, parsed)) if *id == feed.facts => parsed.clone(),
+                _ => {
+                    let parsed: Presentation =
+                        serde_json::from_str(facts.facts.get()).map_err(|_| Decline::Shape)?;
+                    let parsed = std::sync::Arc::new(parsed);
+                    *held = Some((feed.facts.clone(), parsed.clone()));
+                    parsed
+                }
+            }
+        };
+        let now_date = Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Shape)?;
         let runs = self.runs_state(&query, Some(now)).await?;
         self.record_check(&runs);
         let join_reviews = if filtered {
@@ -784,11 +800,11 @@ impl ScoreboardOwned {
                 "native": true,
             },
         });
-        let view = aac_status::read_scoreboard::compose(Envelope {
-            data,
-            presentation,
-        })
-        .ok_or(Decline::Unsupported)?;
+        // A miss is a facts generation older than the data (the catalog's 30 s scan moves its
+        // `scannedAt` without a new generation): `stale`, so the front door pushes fresh facts
+        // and today's handler answers this one request.
+        let view = aac_status::read_scoreboard::compose_fed(data, presentation, (feed.now, now_date))
+            .ok_or(Decline::Stale)?;
         let mut writer = Writer::with_capacity(64 * 1024);
         writer.value(&view);
         let (bytes, identity_bytes) = writer.finish();
