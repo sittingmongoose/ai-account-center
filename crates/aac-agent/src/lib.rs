@@ -11,6 +11,7 @@ mod proof;
 mod quota;
 mod scan;
 mod signin;
+mod signin_session;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{
     Control, Event, Handshake, MAX_FRAME_BYTES, MAX_SCAN_FRAME_BYTES, PROTOCOL_VERSION, Request,
@@ -107,6 +108,16 @@ pub async fn run(
             let result = match request.validate() {
                 Err(failure) => Err(failure),
                 Ok(()) => {
+                    if request.verb == "signin-session" {
+                        // The interactive session owns the control stream and emits its
+                        // own progress events; one terminal frame still ends the process.
+                        return signin_session::verb::interactive(
+                            request,
+                            &mut reader,
+                            &mut writer,
+                        )
+                        .await;
+                    }
                     let control = async {
                         loop {
                             let Some(line) = read_line(&mut reader, MAX_FRAME_BYTES).await? else {

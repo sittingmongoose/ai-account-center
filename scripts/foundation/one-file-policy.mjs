@@ -37,6 +37,13 @@ export const ALLOWLIST = [
       'moves them as one unit with its own switch.',
   },
   {
+    path: 'crates/aac-agent/src/signin_session/verb.rs',
+    reason:
+      'The sign-in session cancel reads /proc/<relay>/task/<relay>/children to name the CLI ' +
+      'pid before killing the relay group (Linux only, best effort). A kernel process listing, ' +
+      'not an AAC private file; the journal itself writes through the aac-files registry row.',
+  },
+  {
     path: 'native/aac-usage/src/fsx.rs',
     reason:
       "The scanner's walker: one nonblocking open per tool log while it walks very large trees " +

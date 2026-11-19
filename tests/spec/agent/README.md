@@ -390,3 +390,27 @@ too; killed at the data fsync the committed key is whole, killed at the folder f
 is whole; a held folder lease refuses the write; answers, bytes and modes equal
 `key_store.put`, and no lock file joins the folder. `--baseline` expects the base's
 behaviour (no folder fsync, no lease).
+
+## M4c sign-in sessions
+
+`bun tests/spec/agent/signin-session.mjs /path/to/aac-agent` (build host, Linux or Mac: the
+PTY relay is Unix) drives fake-CLI scripts per provider — Claude, Codex, Antigravity, Muse —
+through the real TypeScript `SignInJobRunner` with the real `spawnSignInProcess` relay, and
+through the Rust `signin-session` verb on the same fixtures. The full job event sequences
+must match: states, verification facts, fixed error messages, results, ISO timestamp shape
+and the `expiresAt - startedAt` window. The install commit stays in TypeScript until M5, so
+the harness appends the unchanged `complete` tail to the Rust `installPending` terminal
+exactly as `AgentSignInJobRunner` does.
+
+The drills: cancel through the control frame and from a second verb call (the journal flag
+plus the group kill), each verified by a second call's `get` and by the fake CLI's recorded
+pid being gone; a SIGKILLed agent (the TS-restart shape) whose journaled job recovers as
+`failed/server_restarted` with the stray CLI killed; the install `settle`; the per-provider
+limit conflict; the restarted placeholder for an unknown id; and the scrub — fake tokens,
+emails and the submitted authorization code must appear in no event or log line.
+
+`cargo test -p aac-agent signin_session` runs the parser, state-machine and journal unit
+tests on every platform (the process-layer and dead-owner recovery tests are Unix-only).
+Synthetic credentials and temporary roots only; no provider is contacted. Not covered:
+a supervised live sign-in per provider (the turn-on gate, decision 7), native Mac execution
+of the harness, and the real provider CLIs' screen variants beyond the fixture shapes.

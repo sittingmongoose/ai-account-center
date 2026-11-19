@@ -278,10 +278,11 @@ impl Agents {
                 "failover-inventory",
                 "launch",
                 "claude-host",
+                "signin-session",
             ]
             .contains(&verb)
             || call.deadline_ms == 0
-            || call.deadline_ms > aac_protocol::MAX_DEADLINE_MS
+            || call.deadline_ms > aac_protocol::max_deadline_ms(verb)
             || call.timeout_ms == 0
             || call.timeout_ms > call.deadline_ms + 5000
             || call.max_bytes == 0
