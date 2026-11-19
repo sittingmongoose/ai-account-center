@@ -285,7 +285,7 @@ pub enum SocketState {
 
 #[cfg(unix)]
 pub fn socket_state(socket_path: &Path, timeout_ms: u64) -> SocketState {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let uid = unsafe { libc::getuid() };
     let directory = std::fs::symlink_metadata(socket_path.parent().unwrap_or(Path::new(".")));
     match directory {
