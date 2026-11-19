@@ -117,3 +117,96 @@ pub(super) fn pending(root: &std::path::Path) -> Option<Vec<Value>> {
     }
     Some(profiles.clone())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::collection_cache;
+    use aac_files::registry::{Owners, Role};
+    use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn owners() -> Owners {
+        let rows = aac_files::registry::rows().unwrap();
+        let files = rows
+            .iter()
+            .map(|row| {
+                let owner = if row.moves_with.as_deref() == Some("collection") {
+                    Role::RustService
+                } else {
+                    row.owner
+                };
+                (row.id.clone(), owner.word().to_owned())
+            })
+            .collect();
+        Owners::from_boot(rows, &files).unwrap()
+    }
+
+    fn stamp(now: i64) -> String {
+        aac_num::ecma::to_iso_string(now).unwrap()
+    }
+
+    /// A profile whose Windows launcher the coordinator already has a verified reading for:
+    /// no transport is reachable, so the row can only come from the coordinator's state.
+    #[tokio::test]
+    async fn the_claude_row_is_the_coordinator_projection_of_the_saved_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let producer = Producer::new(root.clone(), owners());
+        let profile = json!({
+            "email":"owner@example.com","id":"livia","canOpen":true,
+            "windows":{"launcherName":"Claude","profilePath":"C:\\Users\\x\\AppData\\Local\\Claude",
+                       "isDefault":true,"sshHost":"jared-windows"}
+        });
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let target = super::super::failover::claude_target(root.as_path(), &profile).unwrap();
+        let key = producer.failover().key(&target);
+        let at = stamp(now - 1_000);
+        let candidate = json!({
+            "locator":"a".repeat(64),"selectors":["claude-desktop-profile:default"],
+            "identity":{"kind":"claude-oauth","key":"b".repeat(64)},"revision":"c".repeat(64),
+            "email":"owner@example.com","plan":"Max"
+        });
+        let reading = json!({
+            "status":"ok","email":"owner@example.com","plan":"Max",
+            "sampledAt":at,"fetchedAt":at,
+            "windows":[{"key":"five_hour","label":"5-hour limit","usedPercent":42.0}]
+        });
+        let observation = json!({
+            "version":1,"key":key,"identity":candidate["identity"].clone(),
+            "primary":candidate,"saved":{"reading":reading,"candidate":candidate,"host":"windows","fallback":false},
+            "nextAttempt":(now + 600_000) as f64,"fresh":true,"freshUntil":(now + 600_000) as f64,
+            "primaryFailure":null,"primarySignIn":[],"observedPlan":null,"observedPlanAt":null,
+            "observedPlanPeer":null
+        });
+        collection_cache::write(
+            &producer.owners.clone(),
+            &root,
+            collection_cache::OBSERVATIONS,
+            &key,
+            &aac_views::js_json::write(&observation),
+        )
+        .unwrap();
+        let rows = producer.claude_rows(&[profile], &[None], false).await;
+        let windows = rows[0][1].as_ref().unwrap();
+        assert_eq!(windows["source"], "Verified quota on Windows");
+        assert_eq!(windows["status"], "ok");
+        assert_eq!(windows["plan"], "Max");
+        assert_eq!(windows["windows"][0]["usedPercent"], 42.0);
+        assert_eq!(windows["platform"], "windows");
+        assert_eq!(
+            windows["capabilities"]["claudePlatforms"],
+            json!(["windows"])
+        );
+        // The Mac view keeps its own platform and names where the reading came from, as the
+        // TS dashboard's mac row did for a Windows-collected profile.
+        let mac = rows[0][0].as_ref().unwrap();
+        assert_eq!(mac["platform"], "mac");
+        assert_eq!(mac["host"], "windows");
+        assert_eq!(mac["source"], "Verified quota on Windows");
+    }
+}
