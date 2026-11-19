@@ -558,12 +558,6 @@ async fn status(
     if raw.is_some() {
         return super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS);
     }
-    let Some(principal) = access.service_principal() else {
-        return decline_because("principal");
-    };
-    if !routes.hosted().await {
-        return decline_because("service");
-    }
     let Some((time_zone, offsets)) = status_zone(routes.root()) else {
         return decline_because("zone");
     };
@@ -583,7 +577,10 @@ async fn status(
                 "status@1",
                 facts.if_none_match.as_deref(),
             ),
-            Err(_) => decline_because("status"),
+            Err(reason) => {
+                eprintln!("aac-http: local Status view declined ({reason:?})");
+                decline_because("status")
+            }
         };
     }
     let now = now_ms().to_string();
@@ -599,6 +596,12 @@ async fn status(
         ("x-aac-now", now.as_str()),
         ("x-aac-zone", zone.as_str()),
     ];
+    let Some(principal) = access.service_principal() else {
+        return decline_because("principal");
+    };
+    if !routes.hosted().await {
+        return decline_because("service");
+    }
     // The first owned Status request can beat the service's first report scan; retry a cold
     // `unsupported`/`stale`/`busy` for a moment instead of declining to nobody.
     for attempt in 0..6 {
