@@ -23,7 +23,8 @@ impl analytics_owned::AnalyticsStore for EmptyStore {
     fn activity_range(&mut self, _query: Value) -> Result<Value, Decline> {
         Ok(json!({
             "tools": [], "routes": [], "models": [], "rows": [],
-            "sessions": { "signatures": [] },
+            "sessions": { "signatures": [], "total": 0, "truncated": false },
+            "quality": [],
         }))
     }
     fn activity_sources(&mut self, _from_ms: u64, _to_ms: u64) -> Result<Value, Decline> {
