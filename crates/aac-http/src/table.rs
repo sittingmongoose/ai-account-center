@@ -298,6 +298,12 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     || row.group != "writes"
                     || roles != [Role::Admin]
                     || row.path != "/api/accounts/preferences"))
+            // The TS route owns the deadline (a Claude source read takes seconds); the work is
+            // one blocking transaction that cannot stop halfway, so the row's budget is 0.
+            || (handler == Handler::ResetClaims
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/reset-claims"
+                    || row.budget_ms != 0))
             || (handler == Handler::WriteVisibility
                 && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
                     || row.group != "writes"

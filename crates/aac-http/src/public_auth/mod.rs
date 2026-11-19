@@ -7,6 +7,7 @@ mod dashboard_events;
 mod devices;
 mod hub;
 mod policy;
+mod request_log;
 mod routes;
 mod static_ui;
 mod storage;
@@ -280,6 +281,7 @@ pub(crate) async fn run_public_at(
             .unwrap_or_else(|| std::io::Error::other("no acceptable dashboard listen address"))
     })?;
     let address = listener.local_addr()?;
+    let log = Arc::new(aac_log::Log::new(root.clone()));
     let auth = DashboardAuth::open(root)?;
     let ui_root = std::env::var_os("AAC_RUST_UI_DIR").map(PathBuf::from);
     let snapshot = std::env::var_os("AAC_RUST_HUB_CACHE").map(PathBuf::from);
@@ -299,6 +301,9 @@ pub(crate) async fn run_public_at(
         snapshot,
         !composed,
         backend,
+    )).layer(middleware::from_fn_with_state(
+        request_log::Audit { dashboard: auth.0.clone(), log },
+        request_log::record,
     ));
     let tls_server = tls::listener(&auth, address.ip()).await;
     println!("aac-http public listening on {address}");

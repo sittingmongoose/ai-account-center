@@ -220,7 +220,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       next();
       return;
     }
-    requestLoggingMiddleware(req, res, next);
+    requestLoggingMiddleware(req, res, next, !!options.compositionProof);
   });
 
   // Session middleware (for dashboard auth)

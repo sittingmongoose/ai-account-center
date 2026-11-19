@@ -82,6 +82,13 @@ export const ALLOWLIST = [
     reason:
       "The service hashes its own executable image at start (L1 build check). That is not a " +
       'private file, and the open must follow the path the kernel ran.',
+  },  {
+    path: 'crates/aac-log/src/lib.rs',
+    reason:
+      "The dashboard's structured log stream (logs/current.jsonl and logs/archive), not a " +
+      'registry row: one O_APPEND write per JSON line, shared with the TS server until the cut, ' +
+      'rotated by rename and pruned by age and total size exactly as log-storage.ts does. Its ' +
+      'config read goes through aac-files.',
   },
   {
     path: 'crates/aac-status/src/share/seed.rs',

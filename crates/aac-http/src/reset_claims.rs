@@ -50,14 +50,37 @@ impl ResetClaims {
         body: &[u8],
     ) -> Result<Value, Decline> {
         let path = self.path(root, owners)?;
-        Ok(match aac_status::reset::service_call(&path, body) {
+        // G11: the account resolution and the provider send run here too; their reads write
+        // this same file through the native capture transactions.
+        #[cfg(unix)]
+        let answer = if source_op(body) {
+            crate::reset_source_route::SourceContext::from_env(root)
+                .and_then(|ctx| crate::reset_source_route::call(&ctx, &path, body))
+        } else {
+            aac_status::reset::service_call(&path, body)
+        };
+        #[cfg(not(unix))]
+        let answer = aac_status::reset::service_call(&path, body);
+        Ok(match answer {
             Ok(value) => json!({"ok": true, "value": sorted(value)}),
             Err(code) => json!({"ok": false, "code": code}),
         })
     }
 }
 
-/// The reset ABI has always serialized object keys in sorted order.
+/// `sourceRead`/`sourceSend` (G11): resolved and sent by the service, not the front door.
+#[cfg(unix)]
+fn source_op(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body).is_ok_and(|v| {
+        matches!(
+            v.get("op").and_then(Value::as_str),
+            Some("sourceRead" | "sourceSend")
+        )
+    })
+}
+
+/// The native module builds without `preserve_order`, so its objects serialize with sorted keys;
+/// this service builds with it. Sorting here keeps the answers byte-equal.
 pub(crate) fn sorted(value: Value) -> Value {
     match value {
         Value::Object(map) => {

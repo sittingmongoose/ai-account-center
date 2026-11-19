@@ -1,5 +1,5 @@
 //! The authenticated, loopback-only hop to the retained TypeScript route adapters.
-use super::{DashboardAccess, DashboardPrincipal, Reply, error};
+use super::{DashboardAccess, DashboardPrincipal, Reply, error, request_log::RequestId};
 use axum::{
     body::Body,
     extract::Request,
@@ -83,7 +83,12 @@ impl Backend {
             return unavailable();
         };
         *request.uri_mut() = uri;
+        let request_id = request.extensions().get::<RequestId>().cloned();
         clean(request.headers_mut());
+        request.headers_mut().remove("x-ccs-request-id");
+        if let Some(RequestId(value)) = request_id {
+            request.headers_mut().insert("x-ccs-request-id", value);
+        }
         request.headers_mut().remove("cookie");
         request.headers_mut().remove("authorization");
         request.headers_mut().insert(PROOF, self.proof);

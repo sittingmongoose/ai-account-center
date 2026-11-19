@@ -18,6 +18,7 @@ workspace = true
 aac-api.workspace = true
 aac-diag.workspace = true
 aac-files.workspace = true
+aac-log.workspace = true
 aac-core.workspace = true
 aac-config.workspace = true
 aac-protocol.workspace = true
@@ -30,6 +31,7 @@ base64 = "0.22"
 indexmap = "2.14.2"
 libc.workspace = true
 serde.workspace = true
+serde_yaml.workspace = true
 serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
 tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "ws"] }
@@ -51,7 +53,6 @@ if-addrs = "0.15"
 ipnet = "2"
 regex = { workspace = true, features = ["unicode-gencat"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-serde_yaml.workspace = true
 url = "2"
 
 [dev-dependencies]

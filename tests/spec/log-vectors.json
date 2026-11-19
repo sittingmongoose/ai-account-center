@@ -1,0 +1,880 @@
+{
+ "mask": [
+  [
+   "plain text",
+   "plain text"
+  ],
+  [
+   "Bearer abcdefghijkl",
+   "Bearer [redacted]"
+  ],
+  [
+   "bearer abcdefghijkl",
+   "bearer abcdefghijkl"
+  ],
+  [
+   "Bearer short",
+   "Bearer short"
+  ],
+  [
+   "Bearer abcdefghijklmnop",
+   "Bearer [redacted]"
+  ],
+  [
+   "call failed: Authorization Token abcdefgh12345678 rejected",
+   "call failed: Authorization Token [redacted] rejected"
+  ],
+  [
+   "sk-ant-api03-abcdefghijklmnopqrstuv",
+   "[redacted]"
+  ],
+  [
+   "key sk-abcdefghijklmnopqrstuvwxyz0123456789 end",
+   "key [redacted] end"
+  ],
+  [
+   "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+   "[redacted]"
+  ],
+  [
+   "glpat-abcdefghijklmnopqrst",
+   "[redacted]"
+  ],
+  [
+   "AIzaSyA-abcdefghijklmnopqrstuvwxyz012345",
+   "[redacted]5"
+  ],
+  [
+   "xoxb-1234567890-abcdef",
+   "[redacted]"
+  ],
+  [
+   "aacd_abcdefghijklmnopqrstu",
+   "[redacted]"
+  ],
+  [
+   "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig_part-1",
+   "jwt [redacted]"
+  ],
+  [
+   "https://user:pass@example.com/path?api_key=abcdefgh123",
+   "https://[redacted]@example.com/path?[redacted]"
+  ],
+  [
+   "HTTPS://u@host.example/x",
+   "HTTPS://[redacted]@host.example/x"
+  ],
+  [
+   "url?access_token%3Dabcdefghijk&refresh_token=zzzzzzzzzzz",
+   "url?[redacted]&[redacted]"
+  ],
+  [
+   "secret=supersecretvalue",
+   "[redacted]"
+  ],
+  [
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé",
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé"
+  ],
+  [
+   "tabs\tand\nnewlines",
+   "tabs\tand\nnewlines"
+  ]
+ ],
+ "context": [
+  [
+   {
+    "method": "GET",
+    "status": 200,
+    "ok": true,
+    "missing": null
+   },
+   {
+    "method": "GET",
+    "status": 200,
+    "ok": true,
+    "missing": null
+   }
+  ],
+  [
+   {
+    "Authorization": "Bearer abcdefghijkl",
+    "cookie": "a=b",
+    "set-cookie": [
+     "x"
+    ],
+    "sid": 12345
+   },
+   {
+    "Authorization": "[redacted]",
+    "cookie": "[redacted]",
+    "set-cookie": "[redacted]",
+    "sid": "[redacted]"
+   }
+  ],
+  [
+   {
+    "refresh_token": "abc",
+    "refreshToken": "abc",
+    "refresh-token": "abc",
+    "tokenCount": 3,
+    "token": {
+     "nested": 1
+    }
+   },
+   {
+    "refresh_token": "[redacted]",
+    "refreshToken": "[redacted]",
+    "refresh-token": "[redacted]",
+    "tokenCount": 3,
+    "token": "[redacted]"
+   }
+  ],
+  [
+   {
+    "mySecretValue": "x",
+    "userPassword": "p",
+    "setup-code": "123",
+    "setupCode": "456",
+    "passwd_hint": "h"
+   },
+   {
+    "mySecretValue": "[redacted]",
+    "userPassword": "[redacted]",
+    "setup-code": "[redacted]",
+    "setupCode": "[redacted]",
+    "passwd_hint": "[redacted]"
+   }
+  ],
+  [
+   {
+    "nested": {
+     "deeper": {
+      "deepest": {
+       "level4": {
+        "level5": {
+         "level6": "gone"
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "nested": {
+     "deeper": {
+      "deepest": {
+       "level4": {
+        "level5": "[max-depth]"
+       }
+      }
+     }
+    }
+   }
+  ],
+  [
+   {
+    "list": [
+     "Bearer abcdefghijkl",
+     1,
+     null,
+     {
+      "api_key": "k"
+     },
+     [
+      "x-api-key"
+     ]
+    ]
+   },
+   {
+    "list": [
+     "Bearer [redacted]",
+     1,
+     null,
+     {
+      "api_key": "[redacted]"
+     },
+     [
+      "x-api-key"
+     ]
+    ]
+   }
+  ],
+  [
+   {
+    "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé",
+    "err": {
+     "name": "Error",
+     "message": "failed with sk-ant-abcdefghijklmnopqrst"
+    }
+   },
+   {
+    "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...[truncated]",
+    "err": {
+     "name": "Error",
+     "message": "failed with [redacted]"
+    }
+   }
+  ],
+  [
+   {
+    "x-goog-api-key": "g",
+    "management_key": "m",
+    "session_id": "s",
+    "sessionId": "s",
+    "device-token": "d"
+   },
+   {
+    "x-goog-api-key": "[redacted]",
+    "management_key": "[redacted]",
+    "session_id": "[redacted]",
+    "sessionId": "[redacted]",
+    "device-token": "[redacted]"
+   }
+  ],
+  [
+   {
+    "url": "https://user:pass@example.com/x",
+    "count": 1.5,
+    "big": 12345678901234
+   },
+   {
+    "url": "https://[redacted]@example.com/x",
+    "count": 1.5,
+    "big": 12345678901234
+   }
+  ],
+  [
+   {},
+   {}
+  ]
+ ],
+ "error": [
+  [
+   {
+    "name": "ProviderError",
+    "message": "token sk-ant-abcdefghijklmnopqrst",
+    "code": "E1",
+    "cause": {
+     "name": "Error",
+     "message": "Bearer abcdefghijkl"
+    }
+   },
+   {
+    "name": "ProviderError",
+    "message": "token [redacted]",
+    "code": "E1",
+    "cause": {
+     "name": "Error",
+     "message": "Bearer [redacted]"
+    }
+   }
+  ]
+ ],
+ "argv": [
+  [
+   [
+    "node",
+    "cli",
+    "--token",
+    "abc",
+    "--other",
+    "x"
+   ],
+   [
+    "node",
+    "cli",
+    "--token",
+    "[redacted]",
+    "--other",
+    "x"
+   ]
+  ],
+  [
+   [
+    "--api-key=secret",
+    "--API_KEY",
+    "y",
+    "-p",
+    "prompt text",
+    "--prompt=hello"
+   ],
+   [
+    "--api-key=[redacted]",
+    "--API_KEY",
+    "[redacted]",
+    "-p",
+    "[redacted]",
+    "--prompt=[redacted]"
+   ]
+  ],
+  [
+   [
+    "--token"
+   ],
+   [
+    "--token"
+   ]
+  ],
+  [
+   [
+    "--client-secret",
+    "s",
+    "--refresh_token=r",
+    "-P",
+    "kept",
+    "--auth",
+    "a"
+   ],
+   [
+    "--client-secret",
+    "[redacted]",
+    "--refresh_token=[redacted]",
+    "-P",
+    "kept",
+    "--auth",
+    "[redacted]"
+   ]
+  ]
+ ],
+ "url": [
+  [
+   "/api/health",
+   "/api/health"
+  ],
+  [
+   "/api/auth/devices/me?token=aacd_abcdefghijk",
+   "/api/auth/devices/me?token=aacd_[redacted]"
+  ],
+  [
+   "/api/auth/devices/me?token=%61acd_abcdefghijk",
+   "/api/auth/devices/me?token=aacd_[redacted]"
+  ],
+  [
+   "/api/auth/devices/me?token=%2561acd_abcdefghijk",
+   "/api/auth/devices/me?token=aacd_[redacted]"
+  ],
+  [
+   "/v0/management/auth-files?key=aacu_12345678abcd",
+   "/v0/management/auth-files?key=aacu_[redacted]"
+  ],
+  [
+   "/v0/management/x?key=aacu_1234567",
+   "/v0/management/x?key=aacu_1234567"
+  ],
+  [
+   "/api/accounts/codex%3Awork/reset-claims",
+   "/api/accounts/[account]/reset-claims"
+  ],
+  [
+   "/api/accounts/codex:work/reset-claims/prepare?x=1",
+   "/api/accounts/[account]/reset-claims"
+  ],
+  [
+   "/api/accounts/a%2Fb/reset-claims%2Fcheck",
+   "/api/accounts/[account]/reset-claims"
+  ],
+  [
+   "/API/ACCOUNTS/x/RESET-CLAIMS",
+   "/api/accounts/[account]/reset-claims"
+  ],
+  [
+   "/api/accounts/x/reset-claimsy",
+   "/api/accounts/x/reset-claimsy"
+  ],
+  [
+   "/api/status?files=%zz",
+   "/api/status?files=%zz"
+  ]
+ ],
+ "entries": [
+  {
+   "redact": true,
+   "configuredLevel": "debug",
+   "source": "web-server",
+   "level": "info",
+   "event": "server.listening",
+   "message": "Dashboard server listening",
+   "context": {
+    "host": "127.0.0.1",
+    "port": 3000
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server\",\"event\":\"server.listening\",\"message\":\"Dashboard server listening\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"host\":\"127.0.0.1\",\"port\":3000}}"
+  },
+  {
+   "redact": true,
+   "configuredLevel": "debug",
+   "source": "rust-service",
+   "level": "warn",
+   "event": "rust.service.fallback",
+   "message": "fell back with Bearer abcdefghijklmn",
+   "context": {
+    "Authorization": "Bearer abcdefghijkl",
+    "cookie": "a=b",
+    "set-cookie": [
+     "x"
+    ],
+    "sid": 12345
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"warn\",\"source\":\"rust-service\",\"event\":\"rust.service.fallback\",\"message\":\"fell back with Bearer [redacted]\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"Authorization\":\"[redacted]\",\"cookie\":\"[redacted]\",\"set-cookie\":\"[redacted]\",\"sid\":\"[redacted]\"}}"
+  },
+  {
+   "redact": true,
+   "configuredLevel": "debug",
+   "source": "codex",
+   "level": "error",
+   "event": "x.failed",
+   "message": "plain",
+   "context": {
+    "nested": {
+     "deeper": {
+      "deepest": {
+       "level4": {
+        "level5": {
+         "level6": "gone"
+        }
+       }
+      }
+     }
+    }
+   },
+   "extra": {
+    "stage": "cleanup",
+    "latencyMs": 42,
+    "error": {
+     "name": "ProviderError",
+     "message": "token sk-ant-abcdefghijklmnopqrst",
+     "code": "E1",
+     "cause": {
+      "name": "Error",
+      "message": "Bearer abcdefghijkl"
+     }
+    }
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"error\",\"source\":\"codex\",\"event\":\"x.failed\",\"message\":\"plain\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"nested\":{\"deeper\":{\"deepest\":{\"level4\":{\"level5\":\"[max-depth]\"}}}}},\"stage\":\"cleanup\",\"latencyMs\":42,\"error\":{\"name\":\"ProviderError\",\"message\":\"token [redacted]\",\"code\":\"E1\",\"cause\":{\"name\":\"Error\",\"message\":\"Bearer [redacted]\"}}}"
+  },
+  {
+   "redact": true,
+   "configuredLevel": "debug",
+   "source": "cli",
+   "level": "debug",
+   "event": "debug.event",
+   "message": "debug only",
+   "context": {
+    "a": 1
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"debug\",\"source\":\"cli\",\"event\":\"debug.event\",\"message\":\"debug only\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"a\":1}}"
+  },
+  {
+   "redact": true,
+   "configuredLevel": "debug",
+   "source": "web",
+   "level": "info",
+   "event": "stage.respond",
+   "message": "done",
+   "context": {
+    "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé",
+    "err": {
+     "name": "Error",
+     "message": "failed with sk-ant-abcdefghijklmnopqrst"
+    }
+   },
+   "extra": {
+    "stage": "respond",
+    "latencyMs": 12.5
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web\",\"event\":\"stage.respond\",\"message\":\"done\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"message\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...[truncated]\",\"err\":{\"name\":\"Error\",\"message\":\"failed with [redacted]\"}},\"stage\":\"respond\",\"latencyMs\":12.5}"
+  },
+  {
+   "redact": true,
+   "configuredLevel": "warn",
+   "source": "web-server",
+   "level": "info",
+   "event": "server.listening",
+   "message": "Dashboard server listening",
+   "context": {
+    "host": "127.0.0.1",
+    "port": 3000
+   },
+   "line": null
+  },
+  {
+   "redact": true,
+   "configuredLevel": "warn",
+   "source": "rust-service",
+   "level": "warn",
+   "event": "rust.service.fallback",
+   "message": "fell back with Bearer abcdefghijklmn",
+   "context": {
+    "Authorization": "Bearer abcdefghijkl",
+    "cookie": "a=b",
+    "set-cookie": [
+     "x"
+    ],
+    "sid": 12345
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"warn\",\"source\":\"rust-service\",\"event\":\"rust.service.fallback\",\"message\":\"fell back with Bearer [redacted]\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"Authorization\":\"[redacted]\",\"cookie\":\"[redacted]\",\"set-cookie\":\"[redacted]\",\"sid\":\"[redacted]\"}}"
+  },
+  {
+   "redact": true,
+   "configuredLevel": "warn",
+   "source": "codex",
+   "level": "error",
+   "event": "x.failed",
+   "message": "plain",
+   "context": {
+    "nested": {
+     "deeper": {
+      "deepest": {
+       "level4": {
+        "level5": {
+         "level6": "gone"
+        }
+       }
+      }
+     }
+    }
+   },
+   "extra": {
+    "stage": "cleanup",
+    "latencyMs": 42,
+    "error": {
+     "name": "ProviderError",
+     "message": "token sk-ant-abcdefghijklmnopqrst",
+     "code": "E1",
+     "cause": {
+      "name": "Error",
+      "message": "Bearer abcdefghijkl"
+     }
+    }
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"error\",\"source\":\"codex\",\"event\":\"x.failed\",\"message\":\"plain\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"nested\":{\"deeper\":{\"deepest\":{\"level4\":{\"level5\":\"[max-depth]\"}}}}},\"stage\":\"cleanup\",\"latencyMs\":42,\"error\":{\"name\":\"ProviderError\",\"message\":\"token [redacted]\",\"code\":\"E1\",\"cause\":{\"name\":\"Error\",\"message\":\"Bearer [redacted]\"}}}"
+  },
+  {
+   "redact": true,
+   "configuredLevel": "warn",
+   "source": "cli",
+   "level": "debug",
+   "event": "debug.event",
+   "message": "debug only",
+   "context": {
+    "a": 1
+   },
+   "line": null
+  },
+  {
+   "redact": true,
+   "configuredLevel": "warn",
+   "source": "web",
+   "level": "info",
+   "event": "stage.respond",
+   "message": "done",
+   "context": {
+    "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé",
+    "err": {
+     "name": "Error",
+     "message": "failed with sk-ant-abcdefghijklmnopqrst"
+    }
+   },
+   "extra": {
+    "stage": "respond",
+    "latencyMs": 12.5
+   },
+   "line": null
+  },
+  {
+   "redact": false,
+   "configuredLevel": "debug",
+   "source": "web-server",
+   "level": "info",
+   "event": "server.listening",
+   "message": "Dashboard server listening",
+   "context": {
+    "host": "127.0.0.1",
+    "port": 3000
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server\",\"event\":\"server.listening\",\"message\":\"Dashboard server listening\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"host\":\"127.0.0.1\",\"port\":3000}}"
+  },
+  {
+   "redact": false,
+   "configuredLevel": "debug",
+   "source": "rust-service",
+   "level": "warn",
+   "event": "rust.service.fallback",
+   "message": "fell back with Bearer abcdefghijklmn",
+   "context": {
+    "Authorization": "Bearer abcdefghijkl",
+    "cookie": "a=b",
+    "set-cookie": [
+     "x"
+    ],
+    "sid": 12345
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"warn\",\"source\":\"rust-service\",\"event\":\"rust.service.fallback\",\"message\":\"fell back with Bearer [redacted]\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"Authorization\":\"Bearer abcdefghijkl\",\"cookie\":\"a=b\",\"set-cookie\":[\"x\"],\"sid\":12345}}"
+  },
+  {
+   "redact": false,
+   "configuredLevel": "debug",
+   "source": "codex",
+   "level": "error",
+   "event": "x.failed",
+   "message": "plain",
+   "context": {
+    "nested": {
+     "deeper": {
+      "deepest": {
+       "level4": {
+        "level5": {
+         "level6": "gone"
+        }
+       }
+      }
+     }
+    }
+   },
+   "extra": {
+    "stage": "cleanup",
+    "latencyMs": 42,
+    "error": {
+     "name": "ProviderError",
+     "message": "token sk-ant-abcdefghijklmnopqrst",
+     "code": "E1",
+     "cause": {
+      "name": "Error",
+      "message": "Bearer abcdefghijkl"
+     }
+    }
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"error\",\"source\":\"codex\",\"event\":\"x.failed\",\"message\":\"plain\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"nested\":{\"deeper\":{\"deepest\":{\"level4\":{\"level5\":{\"level6\":\"gone\"}}}}}},\"stage\":\"cleanup\",\"latencyMs\":42,\"error\":{\"name\":\"ProviderError\",\"message\":\"token [redacted]\",\"code\":\"E1\",\"cause\":{\"name\":\"Error\",\"message\":\"Bearer [redacted]\"}}}"
+  },
+  {
+   "redact": false,
+   "configuredLevel": "debug",
+   "source": "cli",
+   "level": "debug",
+   "event": "debug.event",
+   "message": "debug only",
+   "context": {
+    "a": 1
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"debug\",\"source\":\"cli\",\"event\":\"debug.event\",\"message\":\"debug only\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"a\":1}}"
+  },
+  {
+   "redact": false,
+   "configuredLevel": "debug",
+   "source": "web",
+   "level": "info",
+   "event": "stage.respond",
+   "message": "done",
+   "context": {
+    "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé",
+    "err": {
+     "name": "Error",
+     "message": "failed with sk-ant-abcdefghijklmnopqrst"
+    }
+   },
+   "extra": {
+    "stage": "respond",
+    "latencyMs": 12.5
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web\",\"event\":\"stage.respond\",\"message\":\"done\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"message\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé\",\"err\":{\"name\":\"Error\",\"message\":\"failed with sk-ant-abcdefghijklmnopqrst\"}},\"stage\":\"respond\",\"latencyMs\":12.5}"
+  },
+  {
+   "redact": false,
+   "configuredLevel": "warn",
+   "source": "web-server",
+   "level": "info",
+   "event": "server.listening",
+   "message": "Dashboard server listening",
+   "context": {
+    "host": "127.0.0.1",
+    "port": 3000
+   },
+   "line": null
+  },
+  {
+   "redact": false,
+   "configuredLevel": "warn",
+   "source": "rust-service",
+   "level": "warn",
+   "event": "rust.service.fallback",
+   "message": "fell back with Bearer abcdefghijklmn",
+   "context": {
+    "Authorization": "Bearer abcdefghijkl",
+    "cookie": "a=b",
+    "set-cookie": [
+     "x"
+    ],
+    "sid": 12345
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"warn\",\"source\":\"rust-service\",\"event\":\"rust.service.fallback\",\"message\":\"fell back with Bearer [redacted]\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"Authorization\":\"Bearer abcdefghijkl\",\"cookie\":\"a=b\",\"set-cookie\":[\"x\"],\"sid\":12345}}"
+  },
+  {
+   "redact": false,
+   "configuredLevel": "warn",
+   "source": "codex",
+   "level": "error",
+   "event": "x.failed",
+   "message": "plain",
+   "context": {
+    "nested": {
+     "deeper": {
+      "deepest": {
+       "level4": {
+        "level5": {
+         "level6": "gone"
+        }
+       }
+      }
+     }
+    }
+   },
+   "extra": {
+    "stage": "cleanup",
+    "latencyMs": 42,
+    "error": {
+     "name": "ProviderError",
+     "message": "token sk-ant-abcdefghijklmnopqrst",
+     "code": "E1",
+     "cause": {
+      "name": "Error",
+      "message": "Bearer abcdefghijkl"
+     }
+    }
+   },
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"error\",\"source\":\"codex\",\"event\":\"x.failed\",\"message\":\"plain\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"nested\":{\"deeper\":{\"deepest\":{\"level4\":{\"level5\":{\"level6\":\"gone\"}}}}}},\"stage\":\"cleanup\",\"latencyMs\":42,\"error\":{\"name\":\"ProviderError\",\"message\":\"token [redacted]\",\"code\":\"E1\",\"cause\":{\"name\":\"Error\",\"message\":\"Bearer [redacted]\"}}}"
+  },
+  {
+   "redact": false,
+   "configuredLevel": "warn",
+   "source": "cli",
+   "level": "debug",
+   "event": "debug.event",
+   "message": "debug only",
+   "context": {
+    "a": 1
+   },
+   "line": null
+  },
+  {
+   "redact": false,
+   "configuredLevel": "warn",
+   "source": "web",
+   "level": "info",
+   "event": "stage.respond",
+   "message": "done",
+   "context": {
+    "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéééééééééé",
+    "err": {
+     "name": "Error",
+     "message": "failed with sk-ant-abcdefghijklmnopqrst"
+    }
+   },
+   "extra": {
+    "stage": "respond",
+    "latencyMs": 12.5
+   },
+   "line": null
+  }
+ ],
+ "requests": [
+  {
+   "url": "/api/health",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/health\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/auth/devices/me?token=aacd_abcdefghijk",
+   "userAgent": "fixture-agent/1.0",
+   "status": 401,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/auth/devices/me?token=aacd_[redacted]\",\"statusCode\":401,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/auth/devices/me?token=%61acd_abcdefghijk",
+   "userAgent": "fixture-agent/1.0",
+   "status": 401,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/auth/devices/me?token=aacd_[redacted]\",\"statusCode\":401,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/auth/devices/me?token=%2561acd_abcdefghijk",
+   "userAgent": "fixture-agent/1.0",
+   "status": 401,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/auth/devices/me?token=aacd_[redacted]\",\"statusCode\":401,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/v0/management/auth-files?key=aacu_12345678abcd",
+   "userAgent": "fixture-agent/1.0",
+   "status": 401,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/v0/management/auth-files?key=aacu_[redacted]\",\"statusCode\":401,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/v0/management/x?key=aacu_1234567",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/v0/management/x?key=aacu_1234567\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/accounts/codex%3Awork/reset-claims",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/accounts/[account]/reset-claims\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/accounts/codex:work/reset-claims/prepare?x=1",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/accounts/[account]/reset-claims\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/accounts/a%2Fb/reset-claims%2Fcheck",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/accounts/[account]/reset-claims\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/API/ACCOUNTS/x/RESET-CLAIMS",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/accounts/[account]/reset-claims\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/accounts/x/reset-claimsy",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/accounts/x/reset-claimsy\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/status?files=%zz",
+   "userAgent": "fixture-agent/1.0",
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/status?files=%zz\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":\"fixture-agent/1.0\"},\"requestId\":\"<request>\"}"
+  },
+  {
+   "url": "/api/logs/stream",
+   "userAgent": "x",
+   "status": 200,
+   "remoteAddress": null,
+   "line": null
+  },
+  {
+   "url": "/api/health",
+   "userAgent": null,
+   "status": 200,
+   "remoteAddress": "127.0.0.1",
+   "line": "{\"id\":\"<id>\",\"timestamp\":\"<time>\",\"level\":\"info\",\"source\":\"web-server:http\",\"event\":\"request.completed\",\"message\":\"Dashboard request completed\",\"processId\":0,\"runId\":\"<run>\",\"context\":{\"requestId\":\"<request>\",\"method\":\"GET\",\"path\":\"/api/health\",\"statusCode\":200,\"durationMs\":0,\"remoteAddress\":\"127.0.0.1\",\"userAgent\":null},\"requestId\":\"<request>\"}"
+  }
+ ]
+}

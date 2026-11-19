@@ -65,6 +65,13 @@ for (const [program, args] of [
             ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
           ],
         ],
+        [
+          'bun',
+          [
+            'tests/spec/reset-source-parity.ts',
+            ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+          ],
+        ],
       ]),
   [
     'bun',
@@ -122,6 +129,8 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  // G21: the TS log's outputs that the Rust aac-log crate reproduces.
+  ['bun', ['tests/spec/log-vectors.ts']],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   // M6: the T3 hub, the static/Leptos bundle edges and the CLI entry points, recorded from TS and replayable
   // against another front door (AAC_M6_TARGET_URL / AAC_M6_TARGET_CLI).
