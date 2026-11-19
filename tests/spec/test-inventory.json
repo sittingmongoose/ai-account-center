@@ -548,6 +548,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/tests/scoreboard_reviews.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/tests/spend.rs",
       "kind": "internal",
       "evidence": [],

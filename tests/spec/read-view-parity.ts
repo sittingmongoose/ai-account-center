@@ -74,7 +74,67 @@ try {
   const unknown = structuredClone(scoreBase);
   for (const [n, row] of unknown.runs.runs.entries())
     row.doc.outcome = ['partial', '\uFEFFdone', '\u0085done', 'done\uFEFF', 'timed_out'][n % 5];
-  const scoreCases = [scoreBase, filtered, missing, stale, empty, unknown];
+  // sb-R3: reviews whose own runs are unscored (a model the catalog lacks) count nowhere —
+  // in view, or joining from outside a filtered view — so TS and Rust must agree they move
+  // no blind-review measure.
+  const unscoredReviews = structuredClone(scoreBase);
+  {
+    const reviewed = new Set(
+      unscoredReviews.runs.runs
+        .filter((row: any) => row.doc.review)
+        .map((row: any) => row.doc.review.of)
+    );
+    const target = unscoredReviews.runs.runs.find(
+      (row: any) =>
+        row.doc.task.type === 'build' && row.doc.outcome === 'done' && !reviewed.has(row.doc.id)
+    );
+    assert.ok(target, 'a scored, unreviewed build run to review');
+    const at = (minutes: number) =>
+      new Date(Date.parse(target.doc.endedAt) + minutes * 60_000).toISOString();
+    const UNSCORED_MODEL = { provider: 'mystery', id: 'mystery-9', harness: null, effort: null };
+    const scored = unscoredReviews.runs.runs.find((row: any) => row.doc.task.type === 'review');
+    assert.ok(scored, 'a review run to copy field shapes from');
+    const reviewRow = (local: string, minutes: number, fields: Record<string, unknown>) => ({
+      file: `writers/mac.reviews/runs/2026-11-06/mac.reviews--${local}.json`,
+      firstSeenAt: Date.parse(at(minutes)),
+      sha256: 'r2'.repeat(32),
+      doc: {
+        ...structuredClone(scored.doc),
+        id: `mac.reviews--${local}`,
+        endedAt: at(minutes),
+        writtenAt: at(minutes),
+        task: { id: local, type: 'review', title: `Review ${local}`, size: null },
+        review: {
+          of: target.doc.id,
+          verdict: 'pass',
+          findings: { high: 0, medium: 0, low: 0 },
+          overturned: false,
+          disputed: false,
+          by: null,
+        },
+        ...fields,
+      },
+    });
+    unscoredReviews.runs.runs.push(
+      // An unscored reviewer's later pass, over a scored review's earlier fail with an
+      // overturn: before sb-R3 the pass rescued the item on one side of the parity only.
+      reviewRow('sb3-unscored-pass', 90, { model: UNSCORED_MODEL }),
+      reviewRow('sb3-scored-fail', 60, {
+        review: {
+          of: target.doc.id,
+          verdict: 'fail',
+          findings: { high: 0, medium: 0, low: 0 },
+          overturned: true,
+          disputed: false,
+          by: null,
+        },
+      })
+    );
+    unscoredReviews.joinReviews = [
+      reviewRow('sb3-join-unscored', 120, { model: UNSCORED_MODEL }).doc,
+    ];
+  }
+  const scoreCases = [scoreBase, filtered, missing, stale, empty, unknown, unscoredReviews];
   for (const input of scoreCases)
     for (const zone of ['UTC', 'America/New_York', 'invalid-fixture-zone']) {
       input.timeZone = zone;
