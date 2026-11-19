@@ -195,7 +195,6 @@
     "word": "available",
     "cause": null,
     "sources": [
-      "src/web-server/services/codex-profile-quota-service.ts:status",
       "src/web-server/usage/codex-quota/codex-extra-usage.ts:credit?.status"
     ]
   },
@@ -290,9 +289,7 @@
     "word": "blocked_uncertain",
     "cause": "refused",
     "sources": [
-      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES",
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -525,9 +522,7 @@
     "word": "checking",
     "cause": null,
     "sources": [
-      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES",
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -756,24 +751,7 @@
     "word": "copying",
     "cause": null,
     "sources": [
-      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES",
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
-    ]
-  },
-  {
-    "word": "create_only_transaction_refused",
-    "cause": "refused",
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:result.reason"
-    ]
-  },
-  {
-    "word": "create_only_transaction_unconfirmed",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-desktop-open-service.ts:historySync?.reason",
-      "src/web-server/services/claude-history-sync-service.ts:reason"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -990,8 +968,6 @@
       "src/store/store-service.ts:state",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:state",
-      "src/web-server/services/app-update-service.ts:host.state",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/status/answers.ts:a.state",
       "src/web-server/status/answers.ts:b.state",
       "src/web-server/status/answers.ts:doorbell.state",
@@ -1119,7 +1095,6 @@
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-transport.ts:entry.state",
       "src/web-server/services/analytics-remote-transport.ts:state",
-      "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/usage-failover-antigravity.ts:status",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
@@ -1234,13 +1209,7 @@
       "src/web-server/services/app-update-contract.ts:status",
       "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
       "src/web-server/services/app-update-diagnostics.ts:status",
-      "src/web-server/services/app-update-service.ts:job.state",
-      "src/web-server/services/app-update-service.ts:result.status",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/services/claude-desktop-usage-service.ts:state",
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state",
-      "src/web-server/services/codex-profile-quota-service.ts:renewal?.state",
       "src/web-server/services/codex-renewal-notes.ts:entry.state",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
       "src/web-server/services/signin-job-types.ts:state",
@@ -1509,21 +1478,6 @@
       "src/web-server/services/analytics-remote-sources.ts:lastFailure",
       "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
       "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause"
-    ]
-  },
-  {
-    "word": "helper_invalid",
-    "cause": "damaged",
-    "sources": [
-      "src/web-server/services/app-update-service.ts:error.code"
-    ]
-  },
-  {
-    "word": "history_marker_store_full",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:error.reason",
-      "src/web-server/services/claude-history-sync-service.ts:reason"
     ]
   },
   {
@@ -2132,13 +2086,6 @@
     ]
   },
   {
-    "word": "mac",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:pendingMarkerState"
-    ]
-  },
-  {
     "word": "mac_gui_cleanup_failed",
     "cause": "provider_error",
     "sources": [
@@ -2674,13 +2621,6 @@
     ]
   },
   {
-    "word": "not_connected",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-profile-quota-service.ts:status"
-    ]
-  },
-  {
     "word": "not_found",
     "cause": "not_installed",
     "sources": [
@@ -2928,7 +2868,6 @@
       "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
       "src/web-server/services/codex-account-lifecycle.ts:answer?.status",
       "src/web-server/services/codex-login-file.ts:native?.status",
-      "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
       "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/dashboard-auth-files.ts:state",
       "src/web-server/services/dashboard-auth-state.ts:read.state",
@@ -3015,18 +2954,14 @@
     "word": "opened",
     "cause": null,
     "sources": [
-      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES",
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
     "word": "opening",
     "cause": null,
     "sources": [
-      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES",
-      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
-      "src/web-server/services/claude-open-operations.ts:state"
+      "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES"
     ]
   },
   {
@@ -3128,9 +3063,7 @@
       "src/store/activity-coverage.ts:s.state",
       "src/store/activity-coverage.ts:state",
       "src/store/activity-reports.ts:state",
-      "src/store/usage-report.ts:UsageReportState",
-      "src/web-server/services/claude-history-sync-service.ts:result.status",
-      "src/web-server/services/claude-open-operations.ts:status"
+      "src/store/usage-report.ts:UsageReportState"
     ]
   },
   {
@@ -3341,13 +3274,6 @@
     "cause": null,
     "sources": [
       "scripts/claude-history/history_index_remote_v2.py:state"
-    ]
-  },
-  {
-    "word": "protected-check",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:targetProtectedStateUnchanged"
     ]
   },
   {
@@ -3584,7 +3510,6 @@
     "word": "reauth_required",
     "cause": "auth_required",
     "sources": [
-      "src/web-server/services/codex-profile-quota-service.ts:status",
       "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
       "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
@@ -3718,9 +3643,6 @@
       "src/web-server/rust-service.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:reason",
       "src/web-server/scoreboard/runs-store.ts:row.reason",
-      "src/web-server/services/claude-history-sync-service.ts:result.status",
-      "src/web-server/services/claude-history-sync-service.ts:status",
-      "src/web-server/services/claude-open-operations.ts:status",
       "src/web-server/services/codex-account-lifecycle.ts:answer?.status",
       "src/web-server/services/muse-account-lifecycle.ts:answer?.status"
     ]
@@ -3863,8 +3785,7 @@
       "src/antigravity/managed-updater.ts:status",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
-      "src/web-server/services/app-update-contract.ts:row.status",
-      "src/web-server/services/app-update-service.ts:result.status"
+      "src/web-server/services/app-update-contract.ts:row.status"
     ]
   },
   {
@@ -3965,13 +3886,6 @@
       "src/store/store-service.ts:state",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:state",
-      "src/web-server/services/app-update-service.ts:host.state",
-      "src/web-server/services/app-update-service.ts:host?.state",
-      "src/web-server/services/app-update-service.ts:job.hosts?.[platform].state",
-      "src/web-server/services/app-update-service.ts:job.state",
-      "src/web-server/services/app-update-service.ts:raw.state",
-      "src/web-server/services/app-update-service.ts:state",
-      "src/web-server/services/app-update-service.ts:this.job?.state",
       "src/web-server/services/claude-account-lifecycle.ts:state"
     ]
   },
@@ -4689,9 +4603,6 @@
       "src/web-server/services/app-update-contract.ts:status",
       "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
       "src/web-server/services/app-update-diagnostics.ts:status",
-      "src/web-server/services/app-update-service.ts:result.status",
-      "src/web-server/services/app-update-service.ts:row.status",
-      "src/web-server/services/claude-history-sync-service.ts:status",
       "src/web-server/services/codex-renewal-notes.ts:entry.state",
       "src/web-server/status/answers.ts:doorbell.state",
       "src/web-server/status/answers.ts:entry.doorbell.state",
@@ -4847,7 +4758,6 @@
       "src/web-server/scoreboard/catalog.ts:state",
       "src/web-server/scoreboard/runs-reader.ts:state",
       "src/web-server/scoreboard/runs-store.ts:state",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/services/signin-health-service.ts:state",
       "src/web-server/status/agent-reports-reader.ts:state",
       "src/web-server/status/card-schema.ts:state",
@@ -4985,13 +4895,6 @@
     "sources": [
       "src/web-server/status/card-schema.ts:CARD_STATES",
       "src/web-server/status/card-schema.ts:state"
-    ]
-  },
-  {
-    "word": "synchronized",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-open-operations.ts:status"
     ]
   },
   {
@@ -5403,7 +5306,6 @@
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-sources.ts:state.state",
       "src/web-server/services/claude-desktop-usage-service.ts:status",
-      "src/web-server/services/codex-profile-quota-service.ts:status",
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
       "src/web-server/services/cursor-account-reader.ts:STATES",
       "src/web-server/services/cursor-account-reader.ts:state",
@@ -5472,8 +5374,6 @@
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
       "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
       "src/web-server/services/app-update-diagnostics.ts:status",
-      "src/web-server/services/app-update-service.ts:result.status",
-      "src/web-server/services/app-update-service.ts:row.status",
       "src/web-server/services/claude-account-lifecycle.ts:state",
       "src/web-server/status/status-view-types.ts:askerState"
     ]
@@ -5890,7 +5790,6 @@
     "cause": null,
     "sources": [
       "src/web-server/services/app-update-contract.ts:state",
-      "src/web-server/services/app-update-service.ts:state",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
       "src/web-server/services/signin-session-agent.ts:RUNNING_STATES",
       "src/web-server/status/report-schema.ts:THREAD_STATES",
@@ -5916,13 +5815,6 @@
       "src/web-server/services/signin-health-service.ts:row.state",
       "src/web-server/services/signin-health-service.ts:state",
       "src/web-server/services/signin-health-service.ts:states"
-    ]
-  },
-  {
-    "word": "windows",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/claude-history-sync-service.ts:pendingMarkerState"
     ]
   },
   {
