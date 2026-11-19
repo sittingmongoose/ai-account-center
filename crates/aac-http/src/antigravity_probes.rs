@@ -283,8 +283,8 @@ pub enum SocketState {
     Unknown,
 }
 
-/// Check an owned runtime socket with a bounded connect probe.
-#[cfg(unix)]
+/// Check an owned Linux runtime socket with a bounded connect probe.
+#[cfg(target_os = "linux")]
 pub fn socket_state(socket_path: &Path, timeout_ms: u64) -> SocketState {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let uid = aac_files::path::uid();
@@ -329,8 +329,8 @@ pub fn socket_state(socket_path: &Path, timeout_ms: u64) -> SocketState {
     }
 }
 
-/// [`socket_state`] on a host without Unix sockets: always `unknown`.
-#[cfg(not(unix))]
+/// Return `Unknown` outside the supported Linux runtime.
+#[cfg(not(target_os = "linux"))]
 pub fn socket_state(_socket_path: &Path, _timeout_ms: u64) -> SocketState {
     SocketState::Unknown
 }
@@ -722,7 +722,7 @@ mod tests {
         assert_eq!(calls.get(), 2);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_present_socket_silences_the_reader() {
         let temp = tempfile::tempdir().unwrap();
