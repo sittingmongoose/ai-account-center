@@ -502,9 +502,11 @@ pub(crate) async fn run_public_at(
     let has_external = adopted.is_some();
     #[cfg(not(unix))]
     let has_external = false;
-    let collection_enabled = groups.is_some_and(|groups| groups.collection);
+    // A live adopted producer keeps its lease and serves this boot's reads.
+    // The collection switch can select the worker once that owner is gone.
+    let native_collection = has_external || groups.is_some_and(|groups| groups.collection);
     #[cfg(unix)]
-    let adopted_quotas = adopted.clone().filter(|_| collection_enabled);
+    let adopted_quotas = adopted.clone();
     let groups = groups.map(|mut groups| {
         if has_external {
             groups.collection = false;
@@ -512,7 +514,7 @@ pub(crate) async fn run_public_at(
         groups
     });
     let mut worker = if cut {
-        sidecar::Sidecar::start(&root, address, collection_enabled, !collection_enabled).await?
+        sidecar::Sidecar::start(&root, address, native_collection).await?
     } else {
         None
     };
@@ -549,7 +551,7 @@ pub(crate) async fn run_public_at(
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
         let routes = lifecycle_host::Routes::new(host);
         #[cfg(unix)]
-        let routes = routes.with_private(adopted, collection_enabled);
+        let routes = routes.with_private(adopted);
         host.register("lifecycle", routes.router());
         routes
     });

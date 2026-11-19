@@ -20,6 +20,8 @@ pub(super) struct Sidecar {
     pub backend: Backend,
     pub cache: PathBuf,
     _cache_directory: tempfile::TempDir,
+    #[cfg(unix)]
+    _collection_lease: Option<aac_files::OwnedStore>,
 }
 
 #[derive(Deserialize)]
@@ -44,8 +46,7 @@ impl Sidecar {
     pub async fn start(
         root: &Path,
         public: SocketAddr,
-        collection_selected: bool,
-        worker_collection: bool,
+        native_collection: bool,
     ) -> io::Result<Option<Self>> {
         let explicit = std::env::var_os("AAC_TS_SIDECAR");
         if explicit.as_deref() == Some(std::ffi::OsStr::new("off")) {
@@ -56,6 +57,12 @@ impl Sidecar {
             .or_else(|| package_root().map(|path| path.join("dist/web-server/sidecar.js")))
             .filter(|file| file.is_absolute() && file.is_file())
             .ok_or_else(|| io::Error::other("the packaged dashboard sidecar is missing"))?;
+        let worker_collection = !native_collection;
+        // Reserve the same root lease before enabling the worker sampler.
+        #[cfg(unix)]
+        let collection_lease = worker_collection
+            .then(|| aac_files::OwnedStore::claim_collection(root).map_err(io::Error::other))
+            .transpose()?;
         let proof = storage::hex(&storage::random::<32>().map_err(|_| invalid())?);
         let mut cache_builder = tempfile::Builder::new();
         cache_builder.prefix("aac-sidecar-");
@@ -84,7 +91,7 @@ impl Sidecar {
             .env("AAC_CUT_PRIVATE_LIFECYCLE", "0")
             .env(
                 "AAC_CUT_PUBLIC_COLLECTION",
-                if collection_selected { "1" } else { "0" },
+                if native_collection { "1" } else { "0" },
             )
             .env(
                 "AAC_CUT_WORKER_COLLECTION",
@@ -132,6 +139,8 @@ impl Sidecar {
             backend: Backend::new(address, &proof, worker_collection)?,
             cache,
             _cache_directory: cache_directory,
+            #[cfg(unix)]
+            _collection_lease: collection_lease,
         }))
     }
 

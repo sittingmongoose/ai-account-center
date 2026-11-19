@@ -100,6 +100,8 @@ const claudeHosts = process.argv.includes('--claude-hosts');
 const wallet = process.argv.includes('--wallet-binding');
 const lease = process.argv.includes('--collection-lease');
 const incompatible = process.argv.includes('--incompatible-owner');
+const configOff = process.argv.includes('--collection-off-config');
+const envOff = process.argv.includes('--collection-off-env');
 
 async function prepareClaudeHosts() {
   const bin = path.join(root, 'fixture-bin');
@@ -237,6 +239,7 @@ try {
     path.join(root, 'config.yaml'),
     JSON.stringify({
       ...config,
+      ...(configOff && { rustService: { groups: { collection: 'off' } } }),
       ...(h2 && {
         dashboard_tls: {
           https_listener: {
@@ -361,10 +364,40 @@ try {
     }
     assert.equal(attempt.exitCode, 1, 'a second collection owner must refuse startup');
   }
+  const frontEnv = { ...env };
+  const workerSelection = path.join(root, 'worker-selection.json');
+  if (configOff || envOff) {
+    delete frontEnv.AAC_RUST_GROUP_COLLECTION;
+    if (envOff) frontEnv.AAC_RUST_GROUP_COLLECTION = 'off';
+    const worker = path.join(root, 'worker.cjs');
+    await writeFile(
+      worker,
+      `
+const { writeFileSync } = require('node:fs');
+const input = require('node:readline').createInterface({ input: process.stdin });
+input.once('line', () => {
+  const selection = {
+    native: process.env.AAC_CUT_PUBLIC_COLLECTION,
+    worker: process.env.AAC_CUT_WORKER_COLLECTION,
+  };
+  writeFileSync(${JSON.stringify(workerSelection)}, JSON.stringify(selection), { mode: 0o600 });
+  const server = require('node:http').createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ accounts: [], from: 'worker' }));
+  }).listen(0, '127.0.0.1', () => {
+    console.log(JSON.stringify({ sidecar: 1, port: server.address().port }));
+  });
+  input.once('close', () => server.close());
+});
+`,
+      { mode: 0o600 }
+    );
+    frontEnv.AAC_TS_SIDECAR = worker;
+  }
   const front = spawn(
     launcher,
     ['dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(port)],
-    { env, stdio: ['ignore', 'ignore', incompatible ? 'pipe' : 'inherit'] }
+    { env: frontEnv, stdio: ['ignore', 'ignore', incompatible ? 'pipe' : 'inherit'] }
   );
   children.push(front);
   if (incompatible) {
@@ -462,6 +495,22 @@ try {
       assert.equal(await stat(sourcePath).catch(() => null), null);
       console.log('OpenCode wallet removal regression: 1 scenario passed.');
     } else {
+      if (configOff || envOff) {
+        await ready(service, async () => {
+          const text = await readFile(path.join(share, 'usage.json'), 'utf8').catch(() => '');
+          return text !== '' && label(JSON.parse(text)) === 'Before';
+        });
+        const dashboard = await send(dashboardPath, { headers: { cookie } });
+        assert.equal(dashboard.status, 200);
+        assert.deepEqual(
+          {
+            ...JSON.parse(await readFile(workerSelection, 'utf8')),
+            label: label(await dashboard.json()),
+          },
+          { native: '1', worker: '0', label: 'Before' },
+          'collection off keeps the live native producer and leaves worker collection disabled'
+        );
+      }
       const initial = await send(dashboardPath, { headers: { cookie } });
       const noOrigin = await post(accountPath + '/recheck', {}, { cookie });
       assert.deepEqual(

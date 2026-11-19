@@ -981,8 +981,10 @@ computer. The service uses the same L5 registry and pool.
   The native route preserves validation, session and device authorization,
   no-store and ETag on Unix and Windows. With the compatibility worker
   enabled, setting `rustService.groups.collection` or
-  `AAC_RUST_GROUP_COLLECTION` to `off` routes dashboard and Re-check requests
-  to the TypeScript handlers for that boot.
+  `AAC_RUST_GROUP_COLLECTION` to `off` selects the TypeScript handlers when
+  no native collector owns the root. If boot adopts a running private
+  collector, that collector continues to serve dashboard and Re-check.
+  Stop the private collector and restart the dashboard to select TypeScript.
 - `AccountUsageCache` can be supplied to `serve_with_account_usage_cache` to
   share generations with the native listener. Its `hub_dashboards` returns
   the Mac and Windows neutral snapshots in that order. Its `store_observations`
