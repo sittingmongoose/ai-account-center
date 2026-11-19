@@ -560,27 +560,30 @@ pub struct AppendPayload<'a> {
     pub confirmed_count: usize,
 }
 
-type AdapterFut<T> = Pin<Box<dyn Future<Output = Result<T, ()>> + Send + '_>>;
+type AdapterFut<'a, T> = Pin<Box<dyn Future<Output = Result<T, ()>> + Send + 'a>>;
 
 /// The six adapters the core calls; the service builds them over the fixed helper transport.
 pub trait Adapters: Send + Sync {
     /// Whether the target profile is closed.
-    fn is_target_closed(&self, profile_id: &str, platform: &str) -> AdapterFut<bool>;
+    fn is_target_closed<'a>(&'a self, profile_id: &str, platform: &'a str) -> AdapterFut<'a, bool>;
     /// Read and decode the source snapshot.
-    fn read_source(&self, profile_id: &str, platform: &str) -> AdapterFut<Snapshot>;
+    fn read_source<'a>(&'a self, profile_id: &str, platform: &'a str) -> AdapterFut<'a, Snapshot>;
     /// Read and decode the target snapshot.
-    fn read_target(&self, profile_id: &str, platform: &str) -> AdapterFut<Snapshot>;
+    fn read_target<'a>(&'a self, profile_id: &str, platform: &'a str) -> AdapterFut<'a, Snapshot>;
     /// Stat-only transcript reference verification on the source computer.
-    fn verify_transcript_references(
-        &self,
+    fn verify_transcript_references<'a>(
+        &'a self,
         profile_id: &str,
-        platform: &str,
+        platform: &'a str,
         records: &[Record],
-    ) -> AdapterFut<bool>;
+    ) -> AdapterFut<'a, bool>;
     /// Whether the target's protected state still matches the baseline.
-    fn target_protected_state_unchanged(&self, target: &Snapshot) -> AdapterFut<bool>;
+    fn target_protected_state_unchanged<'a>(
+        &'a self,
+        target: &Snapshot,
+    ) -> AdapterFut<'a, bool>;
     /// One create-only append transaction; a lost receipt is an error, never a retry.
-    fn append_create_only(&self, payload: AppendPayload<'_>) -> AdapterFut<Value>;
+    fn append_create_only<'a>(&'a self, payload: AppendPayload<'a>) -> AdapterFut<'a, Value>;
 }
 
 fn skipped(reason: &str) -> Value {

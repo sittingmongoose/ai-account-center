@@ -260,45 +260,45 @@ impl HelperAdapters<'_> {
 }
 
 impl Adapters for HelperAdapters<'_> {
-    fn is_target_closed(
-        &self,
+    fn is_target_closed<'a>(
+        &'a self,
         _profile_id: &str,
-        platform: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, ()>> + Send + '_>> {
+        platform: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, ()>> + Send + 'a>> {
         Box::pin(async move {
             let response = self.call(platform, "closed-check", Map::new()).await?;
             Ok(response.is_object() && response["closed"] == json!(true))
         })
     }
 
-    fn read_source(
-        &self,
+    fn read_source<'a>(
+        &'a self,
         _profile_id: &str,
-        platform: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Snapshot, ()>> + Send + '_>> {
+        platform: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Snapshot, ()>> + Send + 'a>> {
         Box::pin(async move {
             let response = self.call(platform, "collect", Map::new()).await?;
             decode_snapshot(response)
         })
     }
 
-    fn read_target(
-        &self,
+    fn read_target<'a>(
+        &'a self,
         _profile_id: &str,
-        platform: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Snapshot, ()>> + Send + '_>> {
+        platform: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Snapshot, ()>> + Send + 'a>> {
         Box::pin(async move {
             let response = self.call(platform, "collect", Map::new()).await?;
             decode_snapshot(response)
         })
     }
 
-    fn verify_transcript_references(
-        &self,
+    fn verify_transcript_references<'a>(
+        &'a self,
         _profile_id: &str,
-        platform: &str,
+        platform: &'a str,
         records: &[Record],
-    ) -> Pin<Box<dyn Future<Output = Result<bool, ()>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<bool, ()>> + Send + 'a>> {
         let fields = wire_records(records);
         Box::pin(async move {
             let mut map = Map::new();
@@ -308,10 +308,10 @@ impl Adapters for HelperAdapters<'_> {
         })
     }
 
-    fn target_protected_state_unchanged(
-        &self,
+    fn target_protected_state_unchanged<'a>(
+        &'a self,
         target: &Snapshot,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, ()>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<bool, ()>> + Send + 'a>> {
         let expected_target = target.wire();
         Box::pin(async move {
             let mut map = Map::new();
@@ -321,10 +321,10 @@ impl Adapters for HelperAdapters<'_> {
         })
     }
 
-    fn append_create_only(
-        &self,
-        payload: AppendPayload<'_>,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, ()>> + Send + '_>> {
+    fn append_create_only<'a>(
+        &'a self,
+        payload: AppendPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, ()>> + Send + 'a>> {
         Box::pin(self.append(payload))
     }
 }
