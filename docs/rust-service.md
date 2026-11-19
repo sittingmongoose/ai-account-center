@@ -647,10 +647,9 @@ ownership in its private-socket modes, including `on`.
 To integrate the other public routes, supply the composed public router to
 `DashboardAuth::protect`. Handlers read `DashboardAccess` from the request
 extensions. The public router and the secret-bearing private Unix router have
-separate entry points. Publish WebSocket hints through `DashboardAuth::events`
-and keep account, status, reset-claim and sign-in publishers in their existing
-work owners. The standalone entry point explicitly declines routes still
-outside its ownership.
+separate entry points. Rust owners publish through `DashboardAuth::events()`. The standalone entry
+point explicitly declines routes outside its ownership. See the producer table
+below for the transitions that publish a hint.
 
 The Windows auth fixture uses separate temporary roots, the real TS auth
 routers, and the TCP binary. Run the following commands with a fixture binary.
@@ -667,3 +666,43 @@ into `tests/spec/run.mjs`. The parity fixture compares statuses and serialized
 body order, plus security, cookie and limiter headers. It normalizes generated
 identifiers, timestamps, cookie material and retry timing. It also checks a
 TS-issued cookie and paired token across handoff and a Rust restart.
+
+
+### Public dashboard event producers
+
+| Wire event | Transitional TS producer | Rust owner handoff |
+| --- | --- | --- |
+| `accounts-changed` | Accepted account-usage collection, visibility and lifecycle writes | Publish `DashboardEvent::AccountsChanged {}` after the new snapshot or write is readable. Lane I owns collection. |
+| `status-changed` | The Status service's existing coalesced notification | Lane C publishes `DashboardEvent::StatusChanged {}` on the same invalidation. Scoreboard has no separate TS WebSocket frame. |
+| `analytics-changed` | Completed history sample or published activity snapshot | Lane D publishes `DashboardEvent::AnalyticsChanged {}` after publication. |
+| `app-update-job` | Update all start, host phases and completed rows, cancellation and terminal state | Lane H supplies `AppUpdateProgress` to `DashboardEvent::AppUpdateJob`. The frame has task counts and host phases. HTTP still serves the full result. |
+| `reset-claims-changed` | Existing successful claims and revocations | The owning Rust write calls `DashboardEvents::reset_claims_changed()` after commit. It assigns one id for all recipients. |
+| `signin-job` | The existing sign-in runner's state changes | Lane G supplies the public `DashboardSignInJob` to `DashboardEvent::SigninJob`. Rust applies verification and email redaction per connection. |
+
+The transitional launcher can pass an inherited private pipe to Rust. Start the
+`--public` child with piped stdin and `AAC_RUST_PUBLIC_EVENT_STDIN=1`, then
+attach the child's stdin with `attachDashboardEventFeed` in the producer
+process. `startServer({ dashboardEventFeed: child.stdin, ... })` attaches the
+same adapter for a TS fallback instance using its own private root.
+`DashboardEvents::read_feed` accepts the stream directly in an embedded
+composition. Start only one writer per private root, and detach or replace the
+old pipe when the child is restarted. This pipe carries sign-in verification
+data, so keep it out of logs, disk queues, and public routes.
+
+Frames are newline-delimited JSON with a 64 KiB limit. Rust filters recipients
+when sending. Only account hints reach an auth-disabled localhost socket.
+Malformed frames are skipped. An oversized or incomplete frame ends the feed,
+and a slow or ended pipe can miss hints. Clients can recover current state by
+polling. Analytics and Update all previously relied on polling. Their new
+events carry invalidation or progress only.
+
+```sh
+bun tests/spec/m6-events-parity.ts /absolute/path/to/aac-http
+bun tests/spec/m6-public-contract.ts /absolute/path/to/aac-http --require-complete
+```
+
+The event fixture drives the TS adapter over the inherited pipe, a fake Update
+all runner and the real Rust WebSocket. The public contract replay drives all
+M0 route/role rows directly against Rust. Its strict mode fails while any
+handler is unmounted or any reply differs. Set `AAC_M6_REQUIRE_COMPLETE=1`
+with `AAC_RUST_PUBLIC_BINARY` to enable strict mode from `tests/spec/run.mjs`.

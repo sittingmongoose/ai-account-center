@@ -2,6 +2,7 @@
 // Reply errors are complete Axum responses with headers. Keep them inline like successes
 // so the guard can return a response without a second allocation.
 #![allow(clippy::result_large_err)]
+mod dashboard_events;
 mod devices;
 mod policy;
 mod routes;
@@ -30,7 +31,10 @@ use std::{
 use storage::{Config, DAY, Files, Overrides, Sessions, Setup, StoreError, now};
 use tokio::sync::{Semaphore, broadcast, watch};
 
-pub use websocket::{DashboardEvent, DashboardEvents};
+pub use dashboard_events::{
+    AppUpdateHostProgress, AppUpdateProgress, DashboardEvent, DashboardEvents, DashboardSignInJob,
+    SignInError, SignInResult, SignInVerification,
+};
 
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
@@ -181,6 +185,15 @@ pub async fn run_public() -> std::io::Result<()> {
     println!("aac-http public listening on {}", listener.local_addr()?);
     let shutdown = axum_server::Handle::new();
     let signal = shutdown.clone();
+    let feed_task =
+        (std::env::var("AAC_RUST_PUBLIC_EVENT_STDIN").as_deref() == Ok("1")).then(|| {
+            let events = auth.events();
+            tokio::spawn(async move {
+                if events.read_feed(tokio::io::stdin()).await.is_err() {
+                    tracing::warn!("dashboard.event_feed.closed");
+                }
+            })
+        });
     let signal_task = tokio::spawn(async move {
         shutdown_signal().await;
         signal.graceful_shutdown(Some(Duration::from_secs(3)));
@@ -203,6 +216,9 @@ pub async fn run_public() -> std::io::Result<()> {
         plain.await
     };
     signal_task.abort();
+    if let Some(feed) = feed_task {
+        feed.abort();
+    }
     auth.flush();
     result
 }
@@ -314,8 +330,12 @@ fn set_header(reply: &mut Reply, name: &'static str, value: &str) {
 
 fn response(status: u16, value: Value) -> Reply {
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+    use sha1::{Digest, Sha1};
     let text = value.to_string();
-    let length = text.len().to_string();
+    let length = text.len();
+    let digest = STANDARD_NO_PAD.encode(Sha1::digest(text.as_bytes()));
+    let etag = format!(r#"W/"{length:x}-{digest}""#);
     let mut reply = (
         status,
         [(
@@ -325,7 +345,8 @@ fn response(status: u16, value: Value) -> Reply {
         text,
     )
         .into_response();
-    set_header(&mut reply, "content-length", &length);
+    set_header(&mut reply, "content-length", &length.to_string());
+    set_header(&mut reply, "etag", &etag);
     reply
 }
 
@@ -940,7 +961,7 @@ mod tests {
             .insert("cookie", HeaderValue::from_str(&cookie).unwrap());
         let (mut socket, reply) = connect_async(upgrade).await.unwrap();
         assert_eq!(reply.status().as_u16(), 101);
-        auth.events().publish(DashboardEvent::StatusChanged);
+        auth.events().publish(DashboardEvent::StatusChanged {});
         let event = tokio::time::timeout(Duration::from_secs(3), socket.next())
             .await
             .unwrap()

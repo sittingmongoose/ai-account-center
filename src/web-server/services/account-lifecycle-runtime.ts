@@ -8,7 +8,8 @@ import {
 } from '../../antigravity/signin-sandbox';
 import { sweepAntigravitySignInMarkers } from '../../antigravity/signin-marker';
 import { createLogger } from '../../services/logging';
-import { broadcastDashboardEvent, type DashboardEventClient } from '../dashboard-events';
+import { broadcastDashboardEvent } from '../dashboard-events';
+export { redactSignInJob, signInJobEvent } from '../dashboard-events';
 import { sweepOrphanKeys } from './account-key-sweep';
 import { ClaudeAccountLifecycle } from './claude-account-lifecycle';
 import { SshClaudeHostTransport } from './claude-host-transport';
@@ -52,26 +53,6 @@ const DAY_MS = 24 * 60 * 60_000;
 
 const logger = createLogger('account-lifecycle');
 
-/** A job as a client on a plain transport sees it: no verification URL or code, no email. */
-export function redactSignInJob<
-  T extends { verification: unknown; result: null | { email: string | null } },
->(job: T): T {
-  return { ...job, verification: null, result: job.result ? { ...job.result, email: null } : null };
-}
-
-/**
- * The /ws copy of a job for one client (contract 6.6): browser sessions only,
- * never a device token or an unknown client; redacted unless the socket
- * connected over a secure transport.
- */
-export function signInJobEvent(
-  job: SignInJob,
-  client: DashboardEventClient
-): { type: 'signin-job'; job: SignInJob } | null {
-  if (client.authKind !== 'session') return null;
-  return { type: 'signin-job', job: client.secure ? job : redactSignInJob(job) };
-}
-
 export function auditLifecycle(event: string, data: Record<string, unknown>): void {
   try {
     logger.info(event, 'Account lifecycle event', data);
@@ -113,7 +94,7 @@ export function createSignInJobRunner(
   return new SignInJobRunner({
     ...deps,
     onChange: (job: SignInJob) => {
-      broadcastDashboardEvent((client) => signInJobEvent(job, client));
+      broadcastDashboardEvent({ type: 'signin-job', job });
     },
     onFinish: (job) => {
       // Values never; the account is named by provider and mode only.

@@ -11,7 +11,18 @@ for (const [program, args] of [
   ['node', ['scripts/foundation/one-file-policy.mjs']],
   ['bun', ['test', 'tests/spec/private-files.test.ts']],
   ...(process.env.AAC_RUST_PUBLIC_BINARY
-    ? [['bun', ['tests/spec/m6-auth-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]]]
+    ? [
+        ['bun', ['tests/spec/m6-auth-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        ['bun', ['tests/spec/m6-events-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        [
+          'bun',
+          [
+            'tests/spec/m6-public-contract.ts',
+            process.env.AAC_RUST_PUBLIC_BINARY,
+            ...(process.env.AAC_M6_REQUIRE_COMPLETE === '1' ? ['--require-complete'] : []),
+          ],
+        ],
+      ]
     : []),
   [
     'bun',

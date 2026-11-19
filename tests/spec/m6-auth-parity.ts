@@ -4,12 +4,11 @@
  * Run with: bun tests/spec/m6-auth-parity.ts <absolute-path-to-aac-http>
  */
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
+import { startRustFixture } from './m6-rust-fixture';
 import {
   PASSWORD,
   USERNAME,
@@ -105,57 +104,9 @@ class Target {
   }
 }
 
-async function startRust(
-  root: string,
-  env: NodeJS.ProcessEnv
-): Promise<{ target: Target; audit: string[]; stop(): Promise<void> }> {
-  const child = spawn(binary, ['--public'], {
-    env: { ...env, CCS_DIR: root, AAC_RUST_PUBLIC_LISTEN: '127.0.0.1:0' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  const audit: string[] = [];
-  child.stderr?.on('data', (chunk: Buffer) => {
-    if (audit.length < 1024) audit.push(chunk.toString());
-  });
-  try {
-    const url = await ready(child);
-    return { target: new Target(url, root), audit, stop: () => stop(child) };
-  } catch (error) {
-    await stop(child);
-    throw error;
-  }
-}
-
-async function ready(child: ChildProcess): Promise<string> {
-  assert(child.stdout && child.stderr);
-  const output = createInterface({ input: child.stdout });
-  child.stderr.resume();
-  try {
-    return await new Promise((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new Error('Rust TCP listener did not start')),
-        10_000
-      );
-      child.once('error', reject);
-      child.once('exit', (status) => reject(new Error(`Rust TCP listener exited with ${status}`)));
-      output.on('line', (line) => {
-        const address = /^aac-http public listening on (127\.0\.0\.1:\d+)$/.exec(line)?.[1];
-        if (address) resolve('http://' + address);
-      });
-      // The listener still needs a timeout if it prints no readiness line.
-      output.once('close', () => clearTimeout(timeout));
-    });
-  } finally {
-    output.close();
-  }
-}
-
-async function stop(child: ChildProcess): Promise<void> {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-  const exited = once(child, 'exit');
-  child.kill();
-  await exited;
+async function startRust(root: string, env: NodeJS.ProcessEnv) {
+  const fixture = await startRustFixture(binary, root, env);
+  return { ...fixture, target: new Target(fixture.url, root) };
 }
 
 function normalized(text: string): string {

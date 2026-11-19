@@ -211,13 +211,7 @@ export class StatusService {
       this.hintTimer = null;
       this.lastHint = Date.now();
       try {
-        (
-          this.deps.notify ??
-          (() =>
-            broadcastDashboardEvent((client) =>
-              client.authKind === 'session' ? { type: 'status-changed' } : null
-            ))
-        )();
+        (this.deps.notify ?? (() => broadcastDashboardEvent({ type: 'status-changed' })))();
       } catch {
         /* A hint never fails the collectors. */
       }

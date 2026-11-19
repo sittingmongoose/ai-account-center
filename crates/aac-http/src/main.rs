@@ -20,7 +20,8 @@ fn main() {
             eprintln!("aac-http: {error}");
             std::process::exit(1);
         }
-        return;
+        // The optional event feed uses a blocking stdin reader.
+        std::process::exit(0);
     }
     #[cfg(unix)]
     runtime.block_on(run());
