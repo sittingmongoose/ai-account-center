@@ -119,9 +119,9 @@ impl NativeOwners {
         events: DashboardEvents,
         worker_directory: Option<PathBuf>,
         cache: AccountUsageCache,
+        agents: Arc<Agents>,
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
-        let agents = Arc::new(Agents::with_default(root.clone(), true));
         let cancel = CancellationToken::new();
         let mut jobs = Jobs {
             cancel: cancel.clone(),

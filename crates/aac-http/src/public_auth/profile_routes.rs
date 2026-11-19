@@ -64,8 +64,7 @@ enum HistoryRead {
 
 impl Profiles {
     /// The owner for one boot root. Construction spawns and reads nothing.
-    pub(super) fn start(root: PathBuf, rows: RowsSource) -> Self {
-        let agents = Arc::new(Agents::with_default(root.clone(), true));
+    pub(super) fn start(root: PathBuf, rows: RowsSource, agents: Arc<Agents>) -> Self {
         let package = crate::agent_transport::package_root().unwrap_or_else(|| root.clone());
         let remote = Arc::new(crate::claude_open::remote::AgentRemote::new(
             Arc::clone(&agents),

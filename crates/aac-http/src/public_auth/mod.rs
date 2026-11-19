@@ -446,6 +446,9 @@ pub(crate) async fn run_public_at(
         )
     };
     let hub = HubCache::default();
+    // One L5 pool for every public owner: the Accounts collection, the profile reads and the
+    // app-update fan-out share the boot's clients, exactly as the private service does.
+    let agents = Arc::new(crate::agent_transport::Agents::with_default(root.clone(), true));
     // One collection cache for the boot: the native owners publish the dashboard generations
     // the profile routes read their Codex quota rows from.
     #[cfg(unix)]
@@ -462,6 +465,7 @@ pub(crate) async fn run_public_at(
                 .and_then(std::path::Path::parent)
                 .map(std::path::Path::to_owned),
             account_usage.clone(),
+            Arc::clone(&agents),
         )?;
         (Some(native), Some(jobs))
     } else {
@@ -478,8 +482,16 @@ pub(crate) async fn run_public_at(
         #[cfg(not(unix))]
         let rows: profile_routes::RowsSource = Arc::new(Vec::new);
         (
-            Some(profile_routes::Profiles::start(root.clone(), rows)),
-            Some(app_updates_owner::Owner::start(root.clone(), auth.events())),
+            Some(profile_routes::Profiles::start(
+                root.clone(),
+                rows,
+                Arc::clone(&agents),
+            )),
+            Some(app_updates_owner::Owner::start(
+                root.clone(),
+                auth.events(),
+                Arc::clone(&agents),
+            )),
         )
     } else {
         (None, None)

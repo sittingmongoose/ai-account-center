@@ -10,7 +10,6 @@ import {
   attachDashboardEventFeed,
   broadcastAppUpdateProgress,
   broadcastDashboardEvent,
-  broadcastResetClaimChange,
   type DashboardEvent,
 } from '../../src/web-server/dashboard-events';
 import { fixtureEnvironment, startRustFixture } from './m6-rust-fixture';
@@ -97,7 +96,7 @@ try {
     broadcastDashboardEvent({ type: 'accounts-changed' });
     broadcastDashboardEvent({ type: 'status-changed' });
     broadcastDashboardEvent({ type: 'analytics-changed' });
-    broadcastResetClaimChange();
+    broadcastDashboardEvent({ type: 'reset-claims-changed', id: 'a'.repeat(32) });
     broadcastDashboardEvent({ type: 'signin-job', job });
     const done = {
       ...job,
@@ -163,7 +162,23 @@ try {
       job: { ...done, result: { ...done.result, email: null } },
     });
     assert.deepEqual(secure.events[3], plain.events[3]);
-    assert(fake.cancel().cancelling);
+    // H/J run in the native owner; the cancel and terminal progress frames are the contract.
+    broadcastAppUpdateProgress({
+      id: 'fixture-update',
+      state: 'running',
+      cancelRequested: true,
+      expectedResults: 1,
+      results: [],
+      hosts: { ubuntu: { state: 'running', currentApp: 'codex-cli', phase: 'downloading' } },
+    });
+    broadcastAppUpdateProgress({
+      id: 'fixture-update',
+      state: 'cancelled',
+      cancelRequested: true,
+      expectedResults: 1,
+      results: [{}],
+      hosts: { ubuntu: { state: 'done' } },
+    });
     await until(
       () =>
         secure.events.some(

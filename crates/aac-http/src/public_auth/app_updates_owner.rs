@@ -20,17 +20,17 @@ pub(super) struct Owner {
 
 impl Owner {
     /// The job owner for this boot. `events` publishes job progress to the dashboard.
-    pub(super) fn start(root: PathBuf, events: DashboardEvents) -> Self {
+    pub(super) fn start(
+        root: PathBuf,
+        events: DashboardEvents,
+        agents: Arc<crate::agent_transport::Agents>,
+    ) -> Self {
         #[cfg(feature = "parity-fixtures")]
         if std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
             return Self {
                 jobs: Arc::new(BoundJobs::new(Arc::new(crate::app_update_routes::M0Jobs))),
             };
         }
-        let agents = Arc::new(crate::agent_transport::Agents::with_default(
-            root.clone(),
-            true,
-        ));
         let owner = AppUpdates::with_events(
             root,
             agents,
