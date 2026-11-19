@@ -82,11 +82,11 @@ impl SessionOwner {
         if !Self::proven_dead(&held, &identity) {
             return Err(busy());
         }
-        // A legacy TS listener uses this directory to serialize takeover. Fresh
-        // claims still use no-clobber publication without taking this gate.
-        let lock = parent.join("sessions.owner.lock");
-        fs::create_dir(&lock).map_err(|_| busy())?;
-        let _takeover = SessionTakeover(lock);
+        // New reclaimers serialize on the kernel lease. Keep the old directory
+        // protocol during replacement so pre-cut reclaimers still see it.
+        let lease = crate::open_lock(&parent.join("sessions.owner.takeover.lock"))?;
+        fs2::FileExt::try_lock_exclusive(&lease).map_err(|_| busy())?;
+        let _compatibility_gate = SessionTakeover::take(parent.join("sessions.owner.lock"))?;
         let again = Self::read(root, &path)?.ok_or_else(busy)?;
         if again != held || !Self::proven_dead(&again, &identity) {
             return Err(busy());
@@ -218,6 +218,68 @@ impl Drop for SessionOwner {
 }
 
 struct SessionTakeover(PathBuf);
+
+impl SessionTakeover {
+    fn take(path: PathBuf) -> Result<Self, Failure> {
+        match Self::create(&path) {
+            Ok(()) => return Ok(Self(path)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+
+        // Pre-cut listeners made an empty directory without an owner record.
+        // Keep their one-minute grace period and only remove the observed empty directory.
+        let held = fs::symlink_metadata(&path)?;
+        if !Self::reclaimable(&held) {
+            return Err(busy());
+        }
+        let again = fs::symlink_metadata(&path)?;
+        if !Self::reclaimable(&again)
+            || !crate::same_file(&held, &again)
+            || held.modified()? != again.modified()?
+        {
+            return Err(busy());
+        }
+        fs::remove_dir(&path).map_err(|_| busy())?;
+        Self::create(&path).map_err(|_| busy())?;
+        Ok(Self(path))
+    }
+
+    fn create(path: &Path) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            // The sticky bit distinguishes a gate created under the kernel lease
+            // from an old mkdir-only gate. It carries no state of its own.
+            fs::DirBuilder::new().mode(0o1700).create(path)
+        }
+        #[cfg(not(target_os = "linux"))]
+        fs::create_dir(path)
+    }
+
+    fn reclaimable(metadata: &fs::Metadata) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.uid() != crate::path::uid() {
+                return false;
+            }
+            #[cfg(target_os = "linux")]
+            if metadata.mode() & 0o1000 != 0 {
+                return metadata.is_dir();
+            }
+        }
+        #[cfg(windows)]
+        if crate::windows_reparse_point(metadata) {
+            return false;
+        }
+        metadata.is_dir()
+            && metadata
+                .modified()
+                .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
+                .is_ok_and(|age| age > Duration::from_secs(60))
+    }
+}
 
 impl Drop for SessionTakeover {
     fn drop(&mut self) {

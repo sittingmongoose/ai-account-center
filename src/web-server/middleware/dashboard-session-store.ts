@@ -6,6 +6,7 @@ import path from 'path';
 import session from 'express-session';
 import { AuthError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
+import { claimWriterLease } from '../../shared/private-file-lease';
 import {
   authDirectory,
   ensureAuthDirectory,
@@ -168,25 +169,48 @@ export class DashboardSessionStore extends session.Store {
     const held = await fs.readFile(this.ownerFile, 'utf8').catch(() => null);
     if (held !== null && normalClaim(held) === mine) return allowSameProcess;
     if (held !== null && !(await this.claimIsStale(held))) return false;
+    // On Linux the native and TS reclaimers serialize on a kernel lease. The
+    // short-lived directory still interlocks with older rollback versions.
+    const parent = path.dirname(this.ownerFile);
+    const lease =
+      process.platform === 'linux'
+        ? claimWriterLease(parent, `${this.ownerFile}.takeover.lock`)
+        : undefined;
     const lock = `${this.ownerFile}.lock`;
-    const lockStat = await fs.stat(lock).catch(() => null);
-    // A takeover that crashed half way leaves its lock; it never takes a minute.
-    if (lockStat && Date.now() - lockStat.mtimeMs > OWNER_BEAT_MS) {
-      await fs.rmdir(lock).catch(() => undefined);
-    }
     try {
-      await fs.mkdir(lock);
-    } catch {
-      return false;
-    }
-    try {
-      const again = await fs.readFile(this.ownerFile, 'utf8').catch(() => null);
-      // Another process changed the claim meanwhile: it is theirs.
-      if (again !== held) return again === null ? await this.createClaim(mine) : false;
-      await fs.unlink(this.ownerFile).catch(() => undefined);
-      return await this.createClaim(mine);
+      const stat = await fs.lstat(lock).catch(() => null);
+      if (
+        stat?.isDirectory() &&
+        ((lease && (stat.mode & 0o1000) !== 0) || Date.now() - stat.mtimeMs > OWNER_BEAT_MS) &&
+        (!process.getuid || stat.uid === process.getuid())
+      ) {
+        const again = await fs.lstat(lock).catch(() => null);
+        if (
+          again?.isDirectory() &&
+          again.ino === stat.ino &&
+          again.dev === stat.dev &&
+          again.mtimeMs === stat.mtimeMs &&
+          again.mode === stat.mode
+        ) {
+          await fs.rmdir(lock).catch(() => undefined);
+        }
+      }
+      try {
+        await fs.mkdir(lock, { mode: lease ? 0o1700 : 0o700 });
+      } catch {
+        return false;
+      }
+      try {
+        const again = await fs.readFile(this.ownerFile, 'utf8').catch(() => null);
+        if (again !== held) return again === null ? await this.createClaim(mine) : false;
+        if (again !== null && !(await this.claimIsStale(again))) return false;
+        await fs.unlink(this.ownerFile).catch(() => undefined);
+        return await this.createClaim(mine);
+      } finally {
+        await fs.rmdir(lock).catch(() => undefined);
+      }
     } finally {
-      await fs.rmdir(lock).catch(() => undefined);
+      lease?.close();
     }
   }
 

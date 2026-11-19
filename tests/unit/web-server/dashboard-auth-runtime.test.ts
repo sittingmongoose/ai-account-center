@@ -408,6 +408,63 @@ it.skipIf(!rustPublicBinary)(
   }
 );
 
+it.skipIf(!rustPublicBinary || process.platform !== 'linux')(
+  'reclaims an interrupted session takeover when its kernel lease is free',
+  async () => {
+    await writeConfig('configured');
+    const { rust } = await startRustAuth();
+    rust.kill('SIGKILL');
+    await rust.exited;
+    const auth = path.join(home, '.ccs', 'auth');
+    const gate = path.join(auth, 'sessions.owner.lock');
+    const takeover = path.join(auth, 'sessions.owner.takeover.lock');
+    fs.writeFileSync(takeover, '', { mode: 0o600 });
+    const leaseHolder = Bun.spawn(
+      ['flock', '-x', '-F', takeover, 'sh', '-c', 'echo locked; exec sleep 60'],
+      {
+        stdout: 'pipe',
+      }
+    );
+    const reader = leaseHolder.stdout.getReader();
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('locked');
+      fs.mkdirSync(gate, { mode: 0o1700 });
+      await expect(startRustAuth()).rejects.toThrow('Rust public listener failed to start.');
+    } finally {
+      reader.releaseLock();
+      leaseHolder.kill('SIGKILL');
+      await leaseHolder.exited;
+    }
+    const recovered = await startRustAuth();
+    recovered.rust.kill('SIGTERM');
+    await recovered.rust.exited;
+    expect(fs.existsSync(gate)).toBe(false);
+  }
+);
+
+it.skipIf(!rustPublicBinary || process.platform !== 'linux')(
+  'reclaims only an old empty legacy session takeover directory',
+  async () => {
+    await writeConfig('configured');
+    const { rust } = await startRustAuth();
+    rust.kill('SIGKILL');
+    await rust.exited;
+    const gate = path.join(home, '.ccs', 'auth', 'sessions.owner.lock');
+    fs.mkdirSync(gate);
+    await expect(startRustAuth()).rejects.toThrow('Rust public listener failed to start.');
+    const old = new Date(Date.now() - 61_000);
+    fs.writeFileSync(path.join(gate, 'occupied'), '');
+    fs.utimesSync(gate, old, old);
+    await expect(startRustAuth()).rejects.toThrow('Rust public listener failed to start.');
+    fs.unlinkSync(path.join(gate, 'occupied'));
+    fs.utimesSync(gate, old, old);
+    const recovered = await startRustAuth();
+    recovered.rust.kill('SIGTERM');
+    await recovered.rust.exited;
+    expect(fs.existsSync(gate)).toBe(false);
+  }
+);
+
 describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
   it('serves the same app over TLS, where secureTransport is true', async () => {
     const files = makeCertificate(0o600);
