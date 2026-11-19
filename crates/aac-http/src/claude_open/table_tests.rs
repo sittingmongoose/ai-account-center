@@ -217,7 +217,10 @@ struct TableAdapters {
 }
 
 fn pick<'a>(list: &'a Value, index: usize) -> Option<&'a Value> {
-    list.as_array().and_then(|items| items.get(index))
+    // The generator's pick repeats the last scripted entry past the list's end.
+    list.as_array()
+        .filter(|items| !items.is_empty())
+        .and_then(|items| items.get(index.min(items.len() - 1)))
 }
 
 fn snapshot_from_json(value: &Value) -> Snapshot {
@@ -283,7 +286,7 @@ impl Adapters for TableAdapters {
             let mut state = self.state.lock().map_err(|_| ())?;
             let index = state.target;
             state.target += 1;
-            if let Some(scripted) = pick(&self.case["target"], index) {
+            if let Some(scripted) = self.case["target"].as_array().and_then(|items| items.get(index)) {
                 return Ok(snapshot_from_json(scripted));
             }
             Ok(self.grown_target(&state))
