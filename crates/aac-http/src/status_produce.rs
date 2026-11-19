@@ -484,7 +484,7 @@ impl Produce {
                 .as_ref()
                 .map(|zone| zone.zone.offset_minutes(clamp_i64(now)).unwrap_or(0))
                 .unwrap_or(0);
-            if let Some(panel) = pinned_panel(&inner, clamp_i64(now), offset) {
+            if let Some(panel) = pinned_panel(&inner, clamp_i64(now)) {
                 inner.pinned = panel;
                 inner.pinned_at = now;
                 inner.pinned_offset = Some(offset);
@@ -584,7 +584,7 @@ impl Produce {
             || inner.zone.as_ref().map(|zone| zone.offset_now) != inner.pinned_offset
         {
             let offset = zone.offset_minutes(clamp_i64(now)).unwrap_or(0);
-            if let Some(panel) = pinned_panel(&inner, clamp_i64(now), offset) {
+            if let Some(panel) = pinned_panel(&inner, clamp_i64(now)) {
                 inner.pinned = panel;
                 inner.pinned_at = now;
                 inner.pinned_offset = Some(offset);
@@ -1215,7 +1215,7 @@ fn machines_json(machines: &BTreeMap<String, Collected<Sample>>) -> Json {
 }
 
 /// The pinned panel for these readings, or `None` when the projection refuses a document.
-fn pinned_panel(inner: &Inner, now: i64, offset: i64) -> Option<Json> {
+fn pinned_panel(inner: &Inner, now: i64) -> Option<Json> {
     // Before the first collect there are no pins to compose over; the panel says it has not
     // been read yet, as the collector's view did.
     if !inner.pins.collected {
@@ -1239,7 +1239,6 @@ fn pinned_panel(inner: &Inner, now: i64, offset: i64) -> Option<Json> {
         &inner.pins.merged,
         &inner.pins.problems,
         now,
-        offset,
         &closed,
         &waits,
     )?;

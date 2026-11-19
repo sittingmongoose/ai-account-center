@@ -61,6 +61,35 @@ fn passthrough(row: &Map<String, Json>, keys: &[&str], out: &mut Map<String, Jso
     }
 }
 
+fn opt_day(value: &Json, field: &str) -> Valid<Json> {
+    if value.is_null() {
+        return Ok(Json::Null);
+    }
+    let day = value.as_str().filter(|day| day.len() == 10).ok_or_else(|| fail(field))?;
+    if !validate::real_timestamp(&format!("{day}T00:00:00Z")) {
+        return Err(fail(field));
+    }
+    Ok(value.clone())
+}
+
+/// The optional fields from `reportV3`, projected in the TypeScript order.
+pub(crate) fn report_v3(doc: &Map<String, Json>) -> Valid<Map<String, Json>> {
+    let mut out = Map::new();
+    for key in ["goal", "nextBy", "nextByDay", "nextByNote", "more", "saidAt"] {
+        if let Some(value) = doc.get(key) {
+            let accepted = match key {
+                "nextBy" | "saidAt" => json!(opt_iso(Some(value), key)?),
+                "nextByDay" => opt_day(value, key)?,
+                "nextByNote" => json!(opt_text(Some(value), key, 60)?),
+                "more" => json!(opt_text(Some(value), key, 300)?),
+                _ => json!(opt_text(Some(value), key, 100)?),
+            };
+            out.insert(key.to_owned(), accepted);
+        }
+    }
+    Ok(out)
+}
+
 /// Additive report data (`reportV2`): validated field by field, retained in the document's
 /// own key order; stages and deliverables pass their other members through as written.
 pub fn report_v2(doc: &Map<String, Json>) -> Valid<Map<String, Json>> {
@@ -324,6 +353,7 @@ pub fn thread(doc: &Map<String, Json>, writer: &str) -> Valid<Json> {
     let v2 = report_v2(doc)?;
     let mut out = Map::new();
     spread(&mut out, &head, v2);
+    out.extend(report_v3(doc)?);
     out.insert("ttlSeconds".to_string(), json!(ttl));
     out.insert(
         "agent".to_string(),
@@ -356,6 +386,10 @@ pub fn thread(doc: &Map<String, Json>, writer: &str) -> Valid<Json> {
 
 fn task_item(value: &Json, field: &str) -> Valid<Json> {
     let row = obj(Some(value), field)?;
+    let needs_you = row.get("needsYou");
+    if needs_you.is_some() && !is_card_id(needs_you) {
+        return Err(fail(&format!("{field}.needsYou")));
+    }
     let mut landed = Json::Null;
     if let Some(value) = present(row, "landed") {
         if !value.is_null() {
@@ -366,7 +400,7 @@ fn task_item(value: &Json, field: &str) -> Valid<Json> {
             });
         }
     }
-    Ok(json!({
+    let mut item = json!({
         "id": text(row.get("id"), &format!("{field}.id"), 64)?,
         "title": text(row.get("title"), &format!("{field}.title"), 300)?,
         "state": text(row.get("state"), &format!("{field}.state"), 64)?,
@@ -382,11 +416,28 @@ fn task_item(value: &Json, field: &str) -> Valid<Json> {
             }))
         })?,
         "landed": landed,
-        "blockedOn": blocked_on(row.get("blockedOn"), &format!("{field}.blockedOn"))?,
-        "note": opt_text(row.get("note"), &format!("{field}.note"), 40)?,
-        "why": opt_text(row.get("why"), &format!("{field}.why"), 500)?,
-        "updatedAt": opt_iso(row.get("updatedAt"), &format!("{field}.updatedAt"))?,
-    }))
+    });
+    let out = item.as_object_mut().expect("task projection is an object");
+    if let Some(card) = needs_you {
+        out.insert("needsYou".to_owned(), card.clone());
+    }
+    for key in ["due", "dueDay", "dueNote", "dueWas", "doneAt", "outcome"] {
+        if let Some(value) = row.get(key) {
+            let at = format!("{field}.{key}");
+            let accepted = match key {
+                "dueDay" => opt_day(value, &at)?,
+                "dueNote" => json!(opt_text(Some(value), &at, 60)?),
+                "outcome" => json!(opt_text(Some(value), &at, 90)?),
+                _ => json!(opt_iso(Some(value), &at)?),
+            };
+            out.insert(key.to_owned(), accepted);
+        }
+    }
+    out.insert("blockedOn".into(), blocked_on(row.get("blockedOn"), &format!("{field}.blockedOn"))?);
+    out.insert("note".into(), json!(opt_text(row.get("note"), &format!("{field}.note"), 110)?));
+    out.insert("why".into(), json!(opt_text(row.get("why"), &format!("{field}.why"), 500)?));
+    out.insert("updatedAt".into(), json!(opt_iso(row.get("updatedAt"), &format!("{field}.updatedAt"))?));
+    Ok(item)
 }
 
 /// `tasks@1`: the thread's task list, its project and stream, and its board path.

@@ -194,6 +194,9 @@ async function input(): Promise<StatusInputs> {
       seq: 3,
       writtenAt: ago(60_000, NOW),
       doing: 'Porting the producers',
+      goal: 'Keep pinned deadlines visible.',
+      nextBy: '2026-09-22T04:00:00.000Z',
+      nextByDay: '2026-09-21',
       project: 'aac',
       stream: 'status',
       ttlSeconds: 900,
@@ -201,7 +204,16 @@ async function input(): Promise<StatusInputs> {
   );
   write(
     'tasks.json',
-    tasksDoc('vm.lead', [item('T1', 'landed')], {
+    tasksDoc('vm.lead', [item('T1', 'landed', {
+      why: 'The composer needs the date and the card link.',
+      due: '2026-09-22T04:00:00.000Z',
+      dueDay: '2026-09-21',
+      dueNote: 'Check the pinned view.',
+      dueWas: '2026-09-21T04:00:00.000Z',
+      doneAt: '2026-09-21T14:00:00.000Z',
+      outcome: 'The fixture is ready.',
+      needsYou: 'vm.lead--Q1',
+    })], {
       seq: 2,
       writtenAt: ago(60_000, NOW),
       project: 'aac',
@@ -346,7 +358,6 @@ async function pinnedInput(value: StatusInputs): Promise<{ input: unknown; pins:
     run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
     readRemote: async () => '[]',
     now: () => NOW,
-    timeZone: () => TIME_ZONE,
     reportsRoot: () => value.reports.root,
     readersCheck: null,
   });
@@ -381,7 +392,7 @@ async function main(): Promise<void> {
   const pinned = await pinnedInput(value);
   const out = {
     now: NOW,
-    pinned: { now: NOW, offset: -240, ...pinned },
+    pinned: { now: NOW, ...pinned },
     timeZone: TIME_ZONE,
     zone,
     input: value,

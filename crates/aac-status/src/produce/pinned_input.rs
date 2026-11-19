@@ -338,14 +338,12 @@ fn pin(merged: &MergedPin) -> PinIn {
 /// # Errors
 /// `None` when a report document fails the v2 projection, a required member is missing, or a
 /// thread's `writtenAt` is not text: the reference's composer throw.
-#[allow(clippy::too_many_arguments)]
 pub fn compose_input(
     reports: &AgentReportsState,
     docs: &StatusDocsState,
     pins: &[MergedPin],
     machine_problems: &[MachineProblemIn],
     now_ms: i64,
-    utc_offset_minutes: i64,
     closed: &HashSet<String>,
     reads: &ResolvedWaits,
 ) -> Option<ComposeInput> {
@@ -355,6 +353,7 @@ pub fn compose_input(
         let agent = doc.get("agent").cloned().unwrap_or(Json::Null);
         let model = agent.get("model").and_then(Json::as_str);
         let mut additions = map(report_v2(doc)?)?;
+        additions.extend(crate::share::report::report_v3(doc.as_object()?).ok()?);
         // `progress` is a typed thread member; the reference's spread sets it once and the
         // deserializer reads it there, so the composer's extra members never hold it.
         additions.remove("progress");
@@ -396,6 +395,14 @@ pub fn compose_input(
                 .collect();
             items.push(ItemIn {
                 note: item.get("note").and_then(Json::as_str).map(str::to_owned),
+                why: item.get("why").and_then(Json::as_str).map(str::to_owned),
+                due: item.get("due").and_then(Json::as_str).map(str::to_owned),
+                due_day: item.get("dueDay").and_then(Json::as_str).map(str::to_owned),
+                due_note: item.get("dueNote").and_then(Json::as_str).map(str::to_owned),
+                due_was: item.get("dueWas").and_then(Json::as_str).map(str::to_owned),
+                done_at: item.get("doneAt").and_then(Json::as_str).map(str::to_owned),
+                outcome: item.get("outcome").and_then(Json::as_str).map(str::to_owned),
+                needs_you: item.get("needsYou").and_then(Json::as_str).map(str::to_owned),
                 id: item.get("id")?.as_str()?.to_owned(),
                 title: item.get("title")?.as_str()?.to_owned(),
                 state: item.get("state")?.as_str()?.to_owned(),
@@ -462,8 +469,10 @@ pub fn compose_input(
                 waiting_on: blocker.get("waitingOn")?.as_str()?.to_owned(),
             });
         }
+        let mut additions = map(report_v2(doc)?)?;
+        additions.extend(crate::share::report::report_v3(doc.as_object()?).ok()?);
         statuses.push(StatusIn {
-            additions: map(report_v2(doc)?)?,
+            additions,
             writer,
             written_at: doc.get("writtenAt")?.as_str()?.to_owned(),
             written_at_ms: row.get("writtenAtMs").and_then(Json::as_i64).unwrap_or(0),
@@ -502,7 +511,6 @@ pub fn compose_input(
         .collect();
     Some(ComposeInput {
         now_ms,
-        utc_offset_minutes,
         pins: pins.iter().map(pin).collect(),
         machine_problems: machine_problems.to_vec(),
         threads,

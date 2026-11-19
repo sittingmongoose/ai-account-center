@@ -225,13 +225,15 @@ fn the_pinned_composer_gets_the_input_the_collector_built() {
         &pins,
         &[],
         vectors["pinned"]["now"].as_i64().unwrap(),
-        vectors["pinned"]["offset"].as_i64().unwrap(),
         &closed,
         &reads,
     )
     .expect("the fixture composes");
     let rust = serde_json::to_value(&input).expect("serializes");
-    assert_eq!(canonical(&rust), canonical(&vectors["pinned"]["input"]), "pinned input");
+    let ts: aac_status::pinned::ComposeInput =
+        serde_json::from_value(vectors["pinned"]["input"].clone()).expect("TS pinned input");
+    let ts = serde_json::to_value(ts).expect("TS input serializes with composer defaults");
+    assert_eq!(canonical(&rust), canonical(&ts), "pinned input");
 }
 
 #[test]
