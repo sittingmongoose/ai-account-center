@@ -109,6 +109,9 @@ fn owns_route(method: &Method, path: &str) -> bool {
     if path == "/api/status/deliverable" {
         return true;
     }
+    if path == "/api/status/answers" && method == &Method::POST {
+        return true;
+    }
     if !matches!(*method, Method::GET | Method::HEAD) {
         return false;
     }
@@ -307,7 +310,7 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
             }
             store_route(routes, access, &path, raw).await
         }
-        "/api/status/answers" if req.method() == Method::POST => {
+        "/api/status/answers" if req.method() == &Method::POST => {
             answers_post(routes, access, req, &facts, raw).await
         }
         "/api/status/answers" => answers_read(routes, access, raw).await,
