@@ -377,9 +377,7 @@ fn file_identity(home: &Path) -> Option<String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let Some(uid) = crate::antigravity_probes::current_uid() else {
-                return None;
-            };
+            let uid = crate::antigravity_probes::current_uid()?;
             if meta.uid() != uid {
                 return None;
             }
