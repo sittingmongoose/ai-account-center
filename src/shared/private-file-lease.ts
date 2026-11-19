@@ -249,6 +249,39 @@ export function lifecyclePlan(root: string, request: object): unknown {
   }
 }
 
+/** A native sign-in callback answer: `ok` carries the result, `refused` a provider code. */
+export interface SignInCallbackAnswer {
+  status: 'ok' | 'refused';
+  [key: string]: unknown;
+}
+
+/**
+ * Run a native sign-in prepare/install callback scoped to the opted-in service. Returns
+ * undefined when no writer is registered, the binary cannot launch, or Rust declines; the
+ * TypeScript owner then answers. A `refused` answer is returned for the caller to map.
+ */
+export function signInCallback(root: string, request: object): SignInCallbackAnswer | undefined {
+  const writer = writers.get(canonicalLeaseRoot(root));
+  if (!writer) return undefined;
+  const result = spawnSync(writer.binary, ['--signin-callback'], {
+    input: JSON.stringify(request),
+    stdio: ['pipe', 'pipe', 'ignore'],
+    timeout: 5000,
+    maxBuffer: 256 * 1024,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  if (result.status !== 0 || typeof result.stdout !== 'string') return undefined;
+  try {
+    const answer = JSON.parse(result.stdout) as SignInCallbackAnswer;
+    if (answer.status !== 'ok' && answer.status !== 'refused') return undefined;
+    return answer;
+  } catch {
+    return undefined;
+  }
+}
+
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
 export function rememberFileLeaseBinary(root: string, binary: string, writesOn = false): void {
