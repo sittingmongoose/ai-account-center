@@ -169,6 +169,8 @@ pub struct OwnedStore {
     path: PathBuf,
     max_size: usize,
     parents: Parents,
+    /// The row's permission bits: 0600 private files, 0644 share rows (R4).
+    mode: u32,
     _lock: File,
 }
 
@@ -215,8 +217,18 @@ impl OwnedStore {
             path: file,
             max_size,
             parents,
+            mode: 0o600,
             _lock: lock,
         })
+    }
+
+    /// The row's declared mode for the replacement (R4 share rows write 0644, as their TS
+    /// writer did). Only the registry's two modes are admitted; anything else keeps 0600.
+    pub fn with_mode(mut self, mode: u32) -> Self {
+        if mode == 0o644 {
+            self.mode = mode;
+        }
+        self
     }
 
     /// Read only a regular file and enforce the declared cap during streaming.
@@ -232,10 +244,11 @@ impl OwnedStore {
         self.write_with(|out| out.write_all(bytes))
     }
 
-    /// Stage bytes through a capped writer in a new 0600 file beside the target (`O_EXCL`, a
-    /// random `.<name>.<random>.tmp` name), fsync them, rename on the same filesystem, then
-    /// fsync the folder on Unix. Closure failure or unwinding removes the staging file.
-    /// A post-rename folder-sync failure is reported although the new file is visible.
+    /// Stage bytes through a capped writer in a new file beside the target (`O_EXCL`, a
+    /// random `.<name>.<random>.tmp` name) at the row's mode (0600, or 0644 for a share row),
+    /// fsync them, rename on the same filesystem, then fsync the folder on Unix. Closure
+    /// failure or unwinding removes the staging file. A post-rename folder-sync failure is
+    /// reported although the new file is visible.
     pub fn write_with(
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
@@ -267,7 +280,7 @@ impl OwnedStore {
             .prefix(&format!(".{}.", name.to_string_lossy()))
             .suffix(".tmp")
             .tempfile_in(parent)?;
-        set_private(staged.as_file())?;
+        set_mode(staged.as_file(), self.mode)?;
         step(Step::Staged)?;
         {
             let mut capped = CappedWriter {
@@ -431,6 +444,19 @@ fn set_private(file: &File) -> Result<(), Failure> {
     }
     #[cfg(not(unix))]
     let _ = file;
+    Ok(())
+}
+
+/// The staged file at the row's declared mode (0600 private, 0644 share). Windows keeps its
+/// native ACL inheritance, as the private writer does.
+fn set_mode(file: &File, mode: u32) -> Result<(), Failure> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = (file, mode);
     Ok(())
 }
 

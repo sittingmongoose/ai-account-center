@@ -682,6 +682,68 @@ impl Iterator for Entries {
     }
 }
 
+/// The facts a share scanner's stat-then-read rule needs (R4): what Node's `fs.stat` reports,
+/// without opening the file. A final link is followed here, as `fs.stat` follows it; the
+/// reader's own hardened open ([`read`]) still refuses it. Times are epoch milliseconds with
+/// the platform's sub-millisecond precision, as Node's `mtimeMs` and `ctimeMs` (on Windows
+/// `ctime` is the creation time, which is what Node reports there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stat {
+    /// The file's size in bytes.
+    pub size: u64,
+    /// Last modification, epoch milliseconds.
+    pub mtime_ms: f64,
+    /// Last status change (Windows: creation), epoch milliseconds.
+    pub ctime_ms: f64,
+    /// Device id (0 where the platform does not report one).
+    pub device: u64,
+    /// Inode (0 where the platform does not report one).
+    pub inode: u64,
+    /// A regular file.
+    pub file: bool,
+    /// A folder.
+    pub dir: bool,
+}
+
+/// One `fs.stat`: the path's facts after following links, or the OS error (the scanner tells
+/// `ENOENT` and `ESTALE` apart by its raw code, as the TS readers do).
+pub fn stat(path: &Path) -> io::Result<Stat> {
+    let meta = fs::metadata(path)?;
+    #[cfg(unix)]
+    let (mtime_ms, ctime_ms, device, inode) = {
+        use std::os::unix::fs::MetadataExt;
+        (
+            meta.mtime() as f64 * 1000.0 + meta.mtime_nsec() as f64 / 1e6,
+            meta.ctime() as f64 * 1000.0 + meta.ctime_nsec() as f64 / 1e6,
+            meta.dev(),
+            meta.ino(),
+        )
+    };
+    #[cfg(not(unix))]
+    let (mtime_ms, ctime_ms, device, inode) = {
+        let ms = |time: std::time::SystemTime| {
+            time.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0)
+        };
+        (
+            meta.modified().map(ms).unwrap_or(0.0),
+            meta.created().map(ms).unwrap_or(0.0),
+            0,
+            0,
+        )
+    };
+    Ok(Stat {
+        size: meta.len(),
+        mtime_ms,
+        ctime_ms,
+        device,
+        inode,
+        file: meta.is_file(),
+        dir: meta.is_dir(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     //! One test per rule. Each was also run against a copy of this module with that rule

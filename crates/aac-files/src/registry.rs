@@ -135,13 +135,14 @@ impl Row {
         let relative = self.file(name)?;
         let max_size = usize::try_from(self.max_bytes)
             .map_err(|_| Failure::new(Cause::Refused, "invalid byte cap"))?;
-        OwnedStore::open(
+        Ok(OwnedStore::open(
             root,
             Path::new(&relative),
             max_size,
             self.parents,
             self.lease,
-        )
+        )?
+        .with_mode(self.mode_bits()))
     }
 }
 
