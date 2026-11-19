@@ -1,3 +1,4 @@
+//! Exercise staged Codex removal under the activation lease.
 #![cfg(unix)]
 
 use aac_files::profile_writes::LegacyLease;

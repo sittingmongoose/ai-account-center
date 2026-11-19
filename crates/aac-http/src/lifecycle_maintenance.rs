@@ -114,7 +114,7 @@ mod tests {
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(run(
             move |step| {
-                effects.lock().unwrap().push(step);
+                effects.lock().expect("fixture records effects").push(step);
                 std::future::ready(if step == Step::OrphanKeys {
                     Err(())
                 } else {
@@ -127,11 +127,17 @@ mod tests {
         ));
         time::advance(Duration::from_millis(1)).await;
         tokio::task::yield_now().await;
-        assert_eq!(*observed.lock().unwrap(), Step::ALL);
+        assert_eq!(
+            *observed.lock().expect("fixture records effects"),
+            Step::ALL
+        );
         time::advance(DAILY).await;
         tokio::task::yield_now().await;
-        assert_eq!(*observed.lock().unwrap(), Step::ALL.repeat(2));
-        stop.send(()).unwrap();
-        task.await.unwrap();
+        assert_eq!(
+            *observed.lock().expect("fixture records effects"),
+            Step::ALL.repeat(2)
+        );
+        stop.send(()).expect("dispatcher is running");
+        task.await.expect("dispatcher joined");
     }
 }

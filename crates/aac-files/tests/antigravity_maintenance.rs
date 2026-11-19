@@ -1,3 +1,4 @@
+//! Exercise guarded Antigravity orphan and removal cleanup.
 #![cfg(unix)]
 
 use aac_files::profile_writes::LegacyLease;

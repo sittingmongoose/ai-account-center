@@ -1,3 +1,4 @@
+//! Exercise the Rust provider queue with an occupied workflow lease.
 #![cfg(unix)]
 
 use aac_http::lifecycle_queue::LifecycleQueues;
