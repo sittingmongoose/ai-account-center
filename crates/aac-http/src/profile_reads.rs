@@ -40,6 +40,21 @@ pub(crate) fn compose_manifest(bytes: Option<&[u8]>) -> Option<Value> {
     }
 }
 
+/// The process's one installed Antigravity host (TS keeps the same module-wide runtime).
+fn antigravity_host(root: &Path) -> Option<&'static crate::antigravity_host::Host> {
+    static HOST: std::sync::OnceLock<Option<crate::antigravity_host::Host>> =
+        std::sync::OnceLock::new();
+    HOST.get_or_init(|| crate::antigravity_host::Host::from_root(root))
+        .as_ref()
+}
+
+fn now_ms() -> i64 {
+    aac_core::UtcMs::now()
+        .ok()
+        .and_then(|at| i64::try_from(at.get()).ok())
+        .unwrap_or(0)
+}
+
 fn envelope(bytes: &[u8]) -> Option<Envelope> {
     crate::json_object::from_slice(bytes, &["data", "presentation"]).ok()
 }
@@ -62,7 +77,16 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
             aac_views::codex_profiles::summary(&input).ok()
         }
         "/api/codex/profiles/quotas" => aac_views::codex_profiles::quotas(envelope(bytes)?).ok(),
+        // G6: the installed runtime answers with its own live proof, workers and probes once TS
+        // stops sending its input. A host that cannot resolve its trusted paths declines (TS).
+        "/api/antigravity/profiles" if bytes.is_empty() => {
+            antigravity_host(root).map(|host| host.inventory(now_ms()))
+        }
         "/api/antigravity/profiles" => aac_views::antigravity::inventory(envelope(bytes)?).ok(),
+        // G6: the quota read once TS stops sending its input, from the installed host's worker.
+        "/api/antigravity/profiles/quotas" if bytes.is_empty() => {
+            antigravity_host(root).map(|host| host.quotas(false, now_ms()))
+        }
         "/api/antigravity/profiles/quotas" => aac_views::antigravity::quotas(envelope(bytes)?).ok(),
         _ => None,
     }

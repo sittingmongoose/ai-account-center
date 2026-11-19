@@ -1,0 +1,295 @@
+{
+  "registry": {
+    "now": "2026-10-01T17:00:00.000Z",
+    "profiles": [
+      {
+        "id": "gmail",
+        "email": "gmail@example.com",
+        "plan": "Google AI Pro",
+        "identity": {
+          "email": "gmail@example.com",
+          "subject": "fixture-authoritative-subject-gmail",
+          "plan": "Google AI Pro",
+          "verifiedAt": "2026-10-01T16:40:00.000Z",
+          "source": "provider-userinfo"
+        },
+        "credential": {
+          "format": "fake-native-json",
+          "bytes": "eyJmaXh0dXJlQWNjb3VudCI6ImdtYWlsIiwidmVyc2lvbiI6MSwicHJpdmF0ZSI6IkZJWFJVUkVfT05MWV9QUklWQVRFX05BVElWRV9CWVRFUyJ9"
+        }
+      },
+      {
+        "id": "party",
+        "email": "party@example.com",
+        "plan": null,
+        "identity": {
+          "email": "party@example.com",
+          "subject": "fixture-authoritative-subject-party",
+          "plan": null,
+          "verifiedAt": "2026-10-01T16:59:30.000Z",
+          "source": "native-runtime"
+        },
+        "credential": {
+          "format": "fake-native-json",
+          "bytes": "eyJmaXh0dXJlQWNjb3VudCI6InBhcnR5IiwidmVyc2lvbiI6MSwicHJpdmF0ZSI6IkZJWFJVUkVfT05MWV9QUklWQVRFX05BVElWRV9CWVRFUyJ9"
+        }
+      }
+    ],
+    "active": { "profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z" },
+    "live": {
+      "email": "party@example.com",
+      "subject": "fixture-authoritative-subject-party",
+      "plan": null,
+      "verifiedAt": "2026-10-01T16:59:30.000Z",
+      "source": "native-runtime"
+    }
+  },
+  "cases": [
+    {
+      "name": "fresh-windows",
+      "steps": [
+        {
+          "refresh": true,
+          "at": "2026-10-01T17:00:00.000Z",
+          "samples": {
+            "gmail": {
+              "status": "fresh",
+              "plan": "Google AI Pro",
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080
+                },
+                {
+                  "key": "five_hour",
+                  "label": "5-hour",
+                  "usedPercent": 2,
+                  "resetAt": "2026-10-01T21:00:00.000Z",
+                  "windowMinutes": 300
+                }
+              ]
+            },
+            "party": {
+              "status": "fresh",
+              "plan": null,
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "fresh-throttle-holds-the-second-call",
+      "steps": [
+        {
+          "refresh": true,
+          "at": "2026-10-01T17:00:00.000Z",
+          "samples": {
+            "gmail": {
+              "status": "fresh",
+              "plan": "Google AI Pro",
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "retryAfterSeconds": 120,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            },
+            "party": {
+              "status": "fresh",
+              "plan": null,
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            }
+          }
+        },
+        {
+          "refresh": true,
+          "at": "2026-10-01T17:00:05.000Z",
+          "samples": {}
+        }
+      ]
+    },
+    {
+      "name": "older-sample-keeps-the-last-good",
+      "steps": [
+        {
+          "refresh": true,
+          "at": "2026-10-01T17:00:00.000Z",
+          "samples": {
+            "gmail": {
+              "status": "fresh",
+              "plan": "Google AI Pro",
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            },
+            "party": {
+              "status": "fresh",
+              "plan": null,
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            }
+          }
+        },
+        {
+          "refresh": true,
+          "at": "2026-10-01T17:02:10.000Z",
+          "samples": {
+            "gmail": {
+              "status": "fresh",
+              "plan": "Google AI Pro",
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "sampledAt": "2026-10-01T16:59:00.000Z",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 55,
+                  "resetAt": "2026-10-08T16:59:00.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            },
+            "party": {
+              "status": "fresh",
+              "plan": null,
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "sampledAt": "2026-10-01T17:02:05.000Z",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 61,
+                  "resetAt": "2026-10-08T17:02:05.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "identity-unbound",
+      "steps": [
+        {
+          "refresh": true,
+          "at": "2026-10-01T17:00:00.000Z",
+          "samples": {
+            "gmail": {
+              "status": "fresh",
+              "plan": "Google AI Pro",
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "identityKey": "other",
+              "windows": []
+            },
+            "party": {
+              "status": "fresh",
+              "plan": null,
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "windows": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "needs-sign-in",
+      "steps": [
+        {
+          "refresh": true,
+          "at": "2026-10-01T17:00:00.000Z",
+          "samples": {
+            "gmail": {
+              "status": "needs_sign_in",
+              "plan": "Google AI Pro",
+              "identityVerified": false,
+              "identityValidation": "mismatch",
+              "source": "native-consumer",
+              "windows": []
+            },
+            "party": {
+              "status": "fresh",
+              "plan": null,
+              "identityVerified": true,
+              "identityValidation": "verified",
+              "source": "native-consumer",
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
