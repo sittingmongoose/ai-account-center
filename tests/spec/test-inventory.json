@@ -110,12 +110,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "crates/aac-agent/src/claude_host/permit.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "crates/aac-agent/src/claude_host/windows.rs",
       "kind": "internal",
       "evidence": [],
@@ -252,6 +246,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-core/src/claude_purge.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-core/tests/contracts.rs",
       "kind": "internal",
       "evidence": [],
@@ -315,6 +315,12 @@
     },
     {
       "file": "crates/aac-files/src/share.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/src/zoneinfo.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -613,6 +619,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/analytics_routes.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/compose.rs",
       "kind": "safety",
       "evidence": [
@@ -627,7 +640,71 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/lifecycle.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/mod.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_group.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_codex.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_jobs.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_keys.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_label.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_open.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_trash.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/owner_host.rs",
       "kind": "safety",
       "evidence": [
         "safety"
@@ -694,6 +771,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/status_answers_route.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/status_cache.rs",
       "kind": "internal",
       "evidence": [],
@@ -730,7 +813,19 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/usage_routes.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/view_reply.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/zone_facts.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1610,6 +1705,12 @@
     },
     {
       "file": "crates/aac-views/src/spread.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/tests/analytics_native.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
