@@ -17,6 +17,12 @@ ROOT = Path.cwd()
 MANIFEST = ROOT / "tests/spec/m6-historical-gates.json"
 BOUNDED_TIMEOUT = 120
 RUST_REQUEST = '"message":"request.completed"'
+RESET_EXECUTABLES = {
+    "reset-any-usage-native.test.ts": "any-usage-codex",
+    "reset-capture-native.test.ts": "codex",
+    "reset-refusal-native.test.ts": "refusal-codex",
+    "reset-source-failure-native.test.ts": "codex",
+}
 
 
 def gate_files():
@@ -37,7 +43,7 @@ def command_for(file):
     return None
 
 
-def sandbox(tmp, command, binaries, dependencies):
+def sandbox(tmp, command, binaries, dependencies, reset_executable):
     # The repo and dependencies are read-only. The real home, host sockets and share
     # are masked. The private network namespace has loopback and no outside interfaces.
     cmd = [
@@ -67,6 +73,15 @@ def sandbox(tmp, command, binaries, dependencies):
         "AAC_AGENT_REPORTS_DIR": "/tmp/aac-fixture/reports", "AAC_PM_MAIL_REGISTRY_DIR": "/tmp/aac-fixture/registry",
         "AAC_STORE_SHARE_BACKUP_DIR": "off",
     })
+    if reset_executable:
+        fixture_bin = Path(tmp) / "bin"
+        fixture_bin.mkdir()
+        codex = fixture_bin / "codex"
+        shutil.copyfile(ROOT / "tests/fixtures/reset-source" / reset_executable, codex)
+        codex.chmod(0o700)
+        env["AAC_RESET_TEST_MODULE"] = env["AAC_STATUS_MODULE"]
+        env["AAC_RESET_TEST_CODEX_DIR"] = "/tmp/aac-fixture/bin"
+        env["PATH"] = env["AAC_RESET_TEST_CODEX_DIR"] + ":" + env["PATH"]
     for key, value in env.items():
         cmd += ["--setenv", key, value]
     return cmd + ["--", *command]
@@ -86,7 +101,8 @@ def run_file(name, gates, binaries, dependencies, logs):
     with tempfile.TemporaryDirectory(prefix="aac-m6-gate-") as tmp:
         try:
             run = subprocess.run(
-                sandbox(tmp, command, binaries, dependencies), cwd=ROOT,
+                sandbox(tmp, command, binaries, dependencies, RESET_EXECUTABLES.get(file.name)),
+                cwd=ROOT,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=BOUNDED_TIMEOUT,
                 check=False,
             )
