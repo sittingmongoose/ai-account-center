@@ -13,6 +13,7 @@ import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import { antigravityJobFlow } from '../../../src/web-server/services/account-lifecycle-antigravity';
 import {
   ANTIGRAVITY_FLOW_CACHE_MS,
+  antigravityRenewalDispatch,
   antigravitySignInFlow,
   resetAntigravitySignInFlowCache,
 } from '../../../src/web-server/services/account-lifecycle-runtime';
@@ -72,6 +73,7 @@ function identityOf(value: NativeCredential): VerifiedIdentity {
 function lifecycle(): AntigravityAccountLifecycle {
   return new AntigravityAccountLifecycle({
     ccsDir: () => ccsDir,
+    dispatchLiveRenewal: antigravityRenewalDispatch(() => ccsDir),
     home: () => home,
     validateCredential: async (value) => identityOf(value),
     readNativeCredential: async () => {
@@ -225,6 +227,7 @@ describe('antigravityJobFlow on the live login (switching is gone)', () => {
   function liveLifecycle(onInstall?: () => void): AntigravityAccountLifecycle {
     return new AntigravityAccountLifecycle({
       ccsDir: () => ccsDir,
+      dispatchLiveRenewal: antigravityRenewalDispatch(() => ccsDir),
       home: () => home,
       validateCredential: async (value) => identityOf(value),
       readNativeCredential: async () => ({

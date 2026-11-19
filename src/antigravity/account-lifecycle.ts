@@ -15,6 +15,7 @@ import {
   liveLoginFileExists,
   liveLoginToRenew,
   renewLiveLogin,
+  type DispatchLiveRenewal,
   type LiveLoginAccess,
 } from './live-login-renewal';
 import type { NativeCredential, ProfileDto, VerifiedIdentity } from './types';
@@ -72,6 +73,7 @@ export interface AntigravityLifecycleDeps {
   readNativeCredential?: () => Promise<NativeCredential>;
   /** Installs the live native login only while it still has `expected`; the guarded store by default. */
   installNativeCredential?: (credential: NativeCredential, expected: string) => Promise<unknown>;
+  dispatchLiveRenewal?: DispatchLiveRenewal;
   now?: () => number;
 }
 
@@ -376,7 +378,7 @@ export class AntigravityAccountLifecycle {
             credential,
             liveFingerprint,
             save,
-            this.ccsDir()
+            this.deps.dispatchLiveRenewal
           );
           if (outcome !== 'renewed') throw new AntigravityLifecycleError(outcome);
         } else {
