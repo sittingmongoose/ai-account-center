@@ -3,6 +3,7 @@
 // so the guard can return a response without a second allocation.
 #![allow(clippy::result_large_err)]
 mod analytics_routes;
+mod app_updates_owner;
 mod compose;
 mod dashboard_events;
 mod devices;
@@ -18,6 +19,7 @@ mod native_settings;
 #[allow(dead_code)]
 mod owner_host;
 mod policy;
+mod profile_routes;
 mod request_log;
 mod reset_routes;
 mod routes;
@@ -70,6 +72,28 @@ pub fn publish_native_hub(
     hub::publish_native_snapshot(directory, cache.hub_dashboards(&timestamp, now));
 }
 
+/// The latest native Accounts rows that carry a saved Codex profile, one per name. The public
+/// Codex quota route reads these same collector rows the Accounts dashboard shows.
+fn codex_dashboard_rows(cache: &crate::account_usage::AccountUsageCache) -> Vec<Value> {
+    let at = now();
+    let Some(timestamp) = storage::iso(at) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    for dashboard in cache.hub_dashboards(&timestamp, at) {
+        for row in dashboard["accounts"].as_array().into_iter().flatten() {
+            let Some(name) = row["capabilities"]["codexProfile"].as_str() else {
+                continue;
+            };
+            if seen.insert(name.to_owned()) {
+                rows.push(row.clone());
+            }
+        }
+    }
+    rows
+}
+
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
 pub struct DashboardAccess {
@@ -106,6 +130,22 @@ impl DashboardAccess {
             })
             .unwrap_or("session")
             .to_owned()
+    }
+
+    /// The verified principal the private service's route table adjudicates. The host hop
+    /// carries this exactly as the TypeScript front door carried its own.
+    #[cfg(unix)]
+    pub(super) fn host_principal(&self) -> String {
+        let (kind, role, id) = match &self.principal {
+            DashboardPrincipal::Browser { .. } => (
+                "session",
+                "admin",
+                self.session_id.as_deref().unwrap_or("dashboard"),
+            ),
+            DashboardPrincipal::Device { id, .. } => ("device", "device", id.as_str()),
+            DashboardPrincipal::Anonymous => ("session", "admin", "dashboard"),
+        };
+        json!({"kind":kind,"id":id,"role":role}).to_string()
     }
 }
 
@@ -217,7 +257,7 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream, cache, ui_root, None, false, None, None, None, None, None, None,
+            downstream, cache, ui_root, None, false, None, None, None, None, None, None, None, None,
         )
     }
 
@@ -238,6 +278,8 @@ impl DashboardAuth {
         native_settings: Option<native_settings::Settings>,
         lifecycle_routes: Option<lifecycle_host::Routes>,
         analytics_hop: Option<analytics_routes::Hop>,
+        profiles: Option<profile_routes::Profiles>,
+        app_updates: Option<app_updates_owner::Owner>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
@@ -292,6 +334,16 @@ impl DashboardAuth {
                 && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 return native.handle(request).await;
+            }
+            if let Some(profiles) = &profiles
+                && profile_routes::Profiles::owns(request.method(), request.uri().path())
+            {
+                return profiles.handle(request).await;
+            }
+            if let Some(app_updates) = &app_updates
+                && app_updates_owner::Owner::owns(request.method(), request.uri().path())
+            {
+                return app_updates.handle(request).await;
             }
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
@@ -385,7 +437,7 @@ pub(crate) async fn run_public_at(
     browser: bool,
     cut: bool,
 ) -> std::io::Result<()> {
-    #[cfg(all(unix, not(feature = "parity-fixtures")))]
+    #[cfg(not(feature = "parity-fixtures"))]
     if cut && std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
         return Err(std::io::Error::other(
             "the M0 app-update fixture requires a parity-fixtures build",
@@ -501,6 +553,41 @@ pub(crate) async fn run_public_at(
             });
     #[cfg(not(unix))]
     let analytics_hop: Option<analytics_routes::Hop> = None;
+    let (profiles, app_updates) = if let Some(native) = native.as_ref() {
+        let (agents, cache) = native.profile_inputs();
+        let rows: profile_routes::RowsSource =
+            Arc::new(move || cache.as_ref().map(codex_dashboard_rows).unwrap_or_default());
+        #[cfg(unix)]
+        let (profiles, app_updates) = if let Some(host) = owner_host.as_ref().filter(|_| enabled) {
+            (
+                profile_routes::Profiles::start_with_host(
+                    root.clone(),
+                    rows,
+                    agents.clone(),
+                    host.clone(),
+                ),
+                app_updates_owner::Owner::start_with_host(
+                    root.clone(),
+                    auth.events(),
+                    agents,
+                    host.clone(),
+                ),
+            )
+        } else {
+            (
+                profile_routes::Profiles::start(root.clone(), rows, agents.clone()),
+                app_updates_owner::Owner::start(root.clone(), auth.events(), agents),
+            )
+        };
+        #[cfg(not(unix))]
+        let (profiles, app_updates) = (
+            profile_routes::Profiles::start(root.clone(), rows, agents.clone()),
+            app_updates_owner::Owner::start(root.clone(), auth.events(), agents),
+        );
+        (Some(profiles), Some(app_updates))
+    } else {
+        (None, None)
+    };
     let mut api = Router::new();
     if let Some(host) = &owner_host {
         api = host.mount(api);
@@ -526,6 +613,8 @@ pub(crate) async fn run_public_at(
         native_settings,
         lifecycle_routes,
         analytics_hop,
+        profiles,
+        app_updates,
     );
     let router = auth
         .protect(reset_routes::mount(
@@ -570,6 +659,38 @@ pub(crate) async fn run_public_at(
     }
     if browser {
         crate::cli::open_browser(address);
+    }
+    // G10: Windows has no private service, so the public process runs the saved-login timer.
+    // Unix keeps the one timer the private service starts (two would renew the same logins).
+    #[cfg(not(unix))]
+    if cut {
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let service = aac_renewal::service::CodexProfileRenewalService::new(
+            aac_renewal::service::CodexProfileRenewalServiceDeps {
+                ccs_dir: root.clone(),
+                renewal: aac_renewal::renewal::CodexProfileRenewalOptions {
+                    env: aac_renewal::planner::CodexRenewalEnvironment {
+                        ccs_dir: root.clone(),
+                        codex_home: Some(home.join(".codex")),
+                        home_dir: Some(home),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let (keep, stop) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            let _keep = keep;
+            std::future::pending::<()>().await;
+        });
+        tokio::spawn(async move {
+            service.run_until(stop).await;
+        });
     }
     let shutdown = axum_server::Handle::new();
     let signal = shutdown.clone();
@@ -622,6 +743,10 @@ pub(crate) async fn run_public_at(
     if let Some(host) = &owner_host {
         host.stop_public().await;
     }
+    if let Some(host) = &owner_host {
+        host.stop().await;
+    }
+    #[cfg(unix)]
     if let Some(host) = &owner_host {
         host.stop().await;
     }
@@ -1731,6 +1856,8 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
+            None,
+            None,
             None,
             None,
         ));

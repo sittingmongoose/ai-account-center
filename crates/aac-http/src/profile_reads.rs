@@ -55,6 +55,32 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// The empty Ubuntu answers the reference runtime returns when it is not installed. The
+/// Antigravity runtime only exists on Linux; every other host answers these without a runtime.
+fn empty_inventory() -> Value {
+    json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []})
+}
+
+fn empty_quotas(at: i64) -> Value {
+    crate::antigravity_quota::public_quotas(&[], at, at).unwrap_or(Value::Null)
+}
+
+/// The public listener's Antigravity inventory (the same installed host, one per process).
+pub(crate) fn antigravity_inventory(root: &Path) -> Option<Value> {
+    if !cfg!(target_os = "linux") || crate::antigravity_runtime::read_state(root).is_none() {
+        return Some(empty_inventory());
+    }
+    antigravity_host(root).map(|host| host.inventory(now_ms()))
+}
+
+/// The public listener's Antigravity quotas, with the route's own refresh selection.
+pub(crate) fn antigravity_quotas(root: &Path, refresh: bool, at: i64) -> Option<Value> {
+    if !cfg!(target_os = "linux") || crate::antigravity_runtime::read_state(root).is_none() {
+        return Some(empty_quotas(at));
+    }
+    antigravity_host(root).map(|host| host.quotas(refresh, at))
+}
+
 fn envelope(bytes: &[u8]) -> Option<Envelope> {
     crate::json_object::from_slice(bytes, &["data", "presentation"]).ok()
 }

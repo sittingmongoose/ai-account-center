@@ -91,7 +91,7 @@ impl BoundJobs {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Operation {
     Status,
     Start,
@@ -215,6 +215,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_bound_job_owner_is_reached_only_after_socket_admission()
     -> Result<(), Box<dyn std::error::Error>> {

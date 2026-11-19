@@ -185,7 +185,7 @@ fn failure() -> io::Error {
     )
 }
 
-fn private_dir(path: &Path, uid: u32) -> io::Result<()> {
+pub(crate) fn private_dir(path: &Path, uid: u32) -> io::Result<()> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.is_dir() || meta.permissions().mode() & 0o777 != 0o700 || meta.uid() != uid {
         return Err(failure());

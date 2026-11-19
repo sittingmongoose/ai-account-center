@@ -2,10 +2,9 @@
 mod rows;
 mod storage;
 
-use crate::{
-    feed::Feeds,
-    public_auth::{AppUpdateHostProgress, AppUpdateProgress, DashboardEvent},
-};
+#[cfg(unix)]
+use crate::feed::Feeds;
+use crate::public_auth::{AppUpdateHostProgress, AppUpdateProgress, DashboardEvent};
 use aac_protocol::{APP_UPDATE_HOST_TIMEOUT_MS, Event};
 use aac_transport::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -305,9 +304,10 @@ impl AppUpdates {
     /// for the service lifetime so status and cancel see the same job owner.
     pub fn new(root: PathBuf) -> Arc<Self> {
         let agents = Arc::new(crate::agent_transport::Agents::new(root.clone()));
-        Self::with_pool(root, agents, None)
+        Self::with_events(root, agents, None)
     }
 
+    #[cfg(unix)]
     pub(crate) fn with_pool(
         root: PathBuf,
         agents: Arc<crate::agent_transport::Agents>,
