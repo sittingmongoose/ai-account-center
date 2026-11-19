@@ -68,6 +68,23 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
     let code = row["messageCode"].as_str()?;
     let label = CONTRACT["labels"][app].as_str()?;
     let base_message = CONTRACT["messages"][code].as_str()?;
+    let quota_reset = match row.get("quotaReset") {
+        None => None,
+        Some(value)
+            if app == "muse-code"
+                && matches!(code, "muse_quota_exhausted" | "muse_quota_current") =>
+        {
+            let reset = value.as_str()?;
+            if reset.is_empty()
+                || reset.encode_utf16().count() > 64
+                || reset.chars().any(|character| character.is_ascii_control())
+            {
+                return None;
+            }
+            Some(reset)
+        }
+        Some(_) => return None,
+    };
     if ![
         "updated",
         "current",
@@ -239,6 +256,17 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
         "updated" if app == "antigravity-cli" && restarted == 0 => {
             "Updated Antigravity. Copies already open keep the old version until restarted.".into()
         }
+        "muse_quota_exhausted" | "muse_quota_current" if quota_reset.is_some() => {
+            let lead = if code == "muse_quota_current" {
+                "Muse is current."
+            } else {
+                "Updated Muse."
+            };
+            format!(
+                "{lead} Its quota is used up until {}, so the new models appear after its next session.",
+                quota_reset?
+            )
+        }
         _ => base_message.to_owned(),
     };
     if let Some(note) = older_copy(label, &strays, current.or(previous)) {
@@ -257,6 +285,9 @@ pub(super) fn normalize(host: Host, app: &str, row: &Value) -> Option<Value> {
         && let Some(held) = version(&row["heldVersion"])
     {
         public["heldVersion"] = json!(held);
+    }
+    if let Some(reset) = quota_reset {
+        public["quotaReset"] = json!(reset);
     }
     if let Some(parts) = parts {
         public["parts"] = json!(parts);

@@ -1,4 +1,4 @@
-import { rustComposeSelected, rustGroupOn } from './rust-service-groups';
+import { rustAnalyticsWritersOn, rustComposeSelected, rustGroupOn } from './rust-service-groups';
 /** Starts or attaches to one private Rust boot. No PID from disk is ever signalled. */
 import fs from 'fs';
 import net from 'net';
@@ -45,6 +45,8 @@ export interface RustBoot extends RustConnection {
   renewal: RustRenewalBoot | null;
   /** The same private service owns lifecycle and its collection generation. */
   nativeLifecycle?: true;
+  /** The private collection producer also triggers the native usage publisher. */
+  nativeUsageSnapshot?: true;
 }
 
 /**
@@ -349,6 +351,7 @@ async function readBoot(
       owned: boot.owned ?? null,
       renewal: boot.renewal ?? null,
       ...(boot.nativeLifecycle === true ? { nativeLifecycle: true } : {}),
+      ...(boot.nativeUsageSnapshot === true ? { nativeUsageSnapshot: true } : {}),
     };
   } catch {
     return null;
@@ -560,6 +563,9 @@ async function acquireWithinBudget(
     process.env.AAC_RUST_CUT_WORKER === '1' &&
     rustGroupOn('collection');
   const files = privateFileOwners();
+  const nativeLifecycle = nativeCollection && files['opencode-wallet-source'] === 'rust-service';
+  const nativeUsageSnapshot =
+    nativeLifecycle && rustGroupOn('usageSnapshot') && rustAnalyticsWritersOn();
   const boot: RustBoot = {
     ccsDir,
     binary,
@@ -572,9 +578,8 @@ async function acquireWithinBudget(
     store,
     owned,
     renewal,
-    ...(nativeCollection && files['opencode-wallet-source'] === 'rust-service'
-      ? { nativeLifecycle: true }
-      : {}),
+    ...(nativeLifecycle ? { nativeLifecycle: true } : {}),
+    ...(nativeUsageSnapshot ? { nativeUsageSnapshot: true } : {}),
     agent,
   };
   let child: ChildProcess | undefined;
@@ -691,6 +696,7 @@ async function acquireWithinBudget(
         owned: boot.owned,
         renewal: boot.renewal,
         nativeLifecycle: boot.nativeLifecycle,
+        nativeUsageSnapshot: boot.nativeUsageSnapshot,
       }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.

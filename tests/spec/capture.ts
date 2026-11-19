@@ -24,6 +24,7 @@ assert.ok(!composedOutput || recordComposed, 'a composed output requires --regen
 const differences: string[] = [];
 let matched = 0;
 let declines = 0;
+let retained = 0;
 const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
 const nativePrivate = composed && process.platform !== 'win32';
 const nativeReset = composed;
@@ -78,7 +79,6 @@ Object.assign(process.env, {
         AAC_AGENT_VERBS: 'off',
         // W-status-home: the native front door answers the worker-removal routes itself; the
         // composed recording is their source of truth.
-        AAC_RUST_CUT_NATIVE_ROUTES: 'on',
       }
     : {}),
 });
@@ -279,8 +279,6 @@ await stub('src/web-server/agent-usage/agent-usage-snapshot.ts', { startAgentUsa
 await stub('src/antigravity/production-runtime.ts', {
   getInstalledAntigravityRuntimeFactory: () => null,
 });
-const renewal = await import('../../src/web-server/services/codex-profile-renewal-service');
-spyOn(renewal.CodexProfileRenewalService.prototype, 'start').mockImplementation(noop);
 await stub('src/store/store-service.ts', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),
   getAacStore: () => ({
@@ -328,13 +326,6 @@ spyOn(routerModule, 'createApiRouter').mockImplementation(() => {
 });
 await stub('src/codex-auth/codex-activation-lock.ts', {
   getActivationCodexHome: () => path.join(home, '.codex'),
-});
-await stub('src/web-server/services/app-update-service.ts', {
-  getAppUpdateService: () => ({
-    getStatus: () => ({ job: null }),
-    start: () => ({ job: { id: 'fixture-update', state: 'running', hosts: {}, results: [] } }),
-    cancel: () => ({ job: null }),
-  }),
 });
 const { createEmptyUnifiedConfig } = await import('../../src/config/unified-config-types');
 const { saveUnifiedConfig } = await import('../../src/config/unified-config-loader');
@@ -386,7 +377,6 @@ const instance = composed
 const base =
   'http://127.0.0.1:' +
   (instance.publicAddress ?? (instance.server.address() as import('net').AddressInfo)).port;
-const codexSummary = await import('../../src/codex-auth/codex-auth-dashboard-service');
 const { pairDevice } = await import('../../src/web-server/services/dashboard-device-store');
 
 const hubModule = await import('../../src/web-server/usage-hub/usage-hub-key-store');
@@ -465,6 +455,31 @@ for (const r of inventory) {
   if (r.path.startsWith('/v0/management')) r.writes = false;
 }
 inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
+// G13/G6/G10 and H/J moved their public admission to the Rust listener. Their M0 rows and
+// contracts stay the replay corpus (`routes.json`); the TypeScript router no longer registers
+// them, so this recorder keeps the committed rows instead of re-recording a 404.
+const MOVED_TO_RUST = new Set([
+  'GET /api/antigravity/profiles',
+  'GET /api/antigravity/profiles/quotas',
+  'POST /api/app-updates/cancel',
+  'POST /api/app-updates/start',
+  'GET /api/app-updates/status',
+  'POST /api/claude/desktop-profiles/:id/open',
+  'GET /api/claude/desktop-profiles/usage',
+  'GET /api/claude/desktop-profiles',
+  'POST /api/claude/history-snapshots/cleanup',
+  'GET /api/codex/profiles',
+  'GET /api/codex/profiles/quotas',
+]);
+{
+  const key = (row: any) => `${row.method} ${row.path}`;
+  const known = new Set(inventory.map(key));
+  const previous = JSON.parse(fs.readFileSync(path.join(spec, 'routes.json'), 'utf8')) as any[];
+  for (const row of previous) {
+    if (MOVED_TO_RUST.has(key(row)) && !known.has(key(row))) inventory.push(row);
+  }
+  inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
+}
 // These rows differ from the historical TS fixture by contract. Select by request and boot
 // mode so an unexpected response, including a fallback or decline, still fails comparison.
 function composedOwner({ method, path, role }: ComposedRecord['request']) {
@@ -755,6 +770,11 @@ try {
     await direct.arrayBuffer();
   }
   for (const [index, route] of inventory.entries()) {
+    if (MOVED_TO_RUST.has(`${route.method} ${route.path}`)) {
+      // The Rust-only public replay verifies these rows. The legacy recorder preserves them.
+      retained += roles.length;
+      continue;
+    }
     for (const role of roles) {
       const auth = await import('../../src/web-server/middleware/auth-middleware');
       for (const ip of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) auth.loginRateLimiter.resetKey(ip);
@@ -847,9 +867,6 @@ try {
         continue;
       }
       const method = route.method === 'ALL' ? 'POST' : route.method;
-      // The Codex summary's 5-second memo would otherwise answer /api/codex/profiles from the
-      // quota route's read, making the Rust reply count depend on timing.
-      codexSummary.invalidateCodexAuthProfilesCache();
       const response = await fetch(base + url, {
         method,
         headers,
@@ -915,36 +932,23 @@ try {
   if (!composed && rustMode === 'on')
     assert.equal(
       instance.rustService.stats.served,
-      27,
-      'must actually serve health/settings/diag, the session/bar visibility, preferences and registry reads, and the session/bar (and device-scoped) profile reads from Rust after TS role guards'
+      15,
+      'must serve health/settings/diag, visibility, preferences and registry through the private service'
     );
   if (!composed && rustMode === 'shadow') {
     // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
     // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
     // compared; the Analytics stub stops at its query check before any Rust composition.
-    // Pair-2 M1 keeps standalone profiles in TS until a minimal shadow DTO exists. These twelve
-    // authenticated profile calls must decline before building or sending a private input.
+    // Profiles now replay at the native public listener. The legacy recorder never sends
+    // private requests for those routes.
     for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)
       await new Promise((r) => setTimeout(r, 10));
     assert.equal(instance.rustService.stats.shadowed, 18);
     assert.equal(instance.rustService.stats.served, 0);
     assert.equal(instance.rustService.stats.differences, 0);
-    const counters = instance.rustService.diagnostics().routes as Record<
-      string,
-      { unavailable?: Record<string, number>; equal?: number; different?: number; served?: number }
-    >;
-    for (const [route, declined] of [
-      ['/api/claude/desktop-profiles', 3],
-      ['/api/codex/profiles', 2],
-      ['/api/codex/profiles/quotas', 2],
-      ['/api/antigravity/profiles', 3],
-      ['/api/antigravity/profiles/quotas', 2],
-    ] as const) {
-      assert.deepEqual(counters[route]?.unavailable, { private_input: declined }, route);
-      assert.equal(counters[route]?.equal ?? 0, 0, route);
-      assert.equal(counters[route]?.different ?? 0, 0, route);
-      assert.equal(counters[route]?.served ?? 0, 0, route);
-    }
+    const counters = instance.rustService.diagnostics().routes as Record<string, unknown>;
+    for (const route of MOVED_TO_RUST)
+      assert.equal(counters[route.slice(route.indexOf(' ') + 1)], undefined, route);
   }
   if (!composed && rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
   // Caller headers cannot create a principal or bypass the TS session/query/origin guards.
@@ -1048,7 +1052,9 @@ try {
         declines +
         ' awaiting-composition declines, ' +
         differences.length +
-        ' differing. Rust private counters: ' +
+        ' differing, ' +
+        retained +
+        ' retained for native replay. Rust private counters: ' +
         JSON.stringify(instance.rustService.stats)
     );
     console.log(
@@ -1069,7 +1075,7 @@ try {
     }
   }
   console.log(
-    `${inventory.length} routes x ${roles.length} roles captured; rustService=${rustMode}, routing and boundary checks passed`
+    `${inventory.length} routes x ${roles.length} roles in the inventory, ${retained} retained for native replay; rustService=${rustMode}, routing and boundary checks passed`
   );
 } finally {
   instance.cleanup();

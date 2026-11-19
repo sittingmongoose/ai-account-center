@@ -7,12 +7,15 @@
 //! The service runs on the Linux dashboard host; the ownership rules are the core's POSIX
 //! rules. On a non-POSIX host the core refuses to arm (`ownedPrivate` is false there), so the
 //! TypeScript path keeps that behaviour until the cut.
+use super::fsrules::{
+    ctime_ms, file_identity, mtime_ms, open_create_new, owned_private, same_file,
+    set_private_directory, sync_directory,
+};
 use super::js::{sha, stringify};
 use super::sync::PROFILES;
 use serde_json::{Value, json};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// The core's `MARKER_LIMIT`.
@@ -56,39 +59,6 @@ fn marker_name(name: &str) -> Option<(&str, &str, &str)> {
     .then_some((profile, platform, nonce))
 }
 
-/// The core's `ownedPrivate` for files and directories: real, private, owned, exact mode.
-fn owned_private(meta: &fs::Metadata, directory: bool) -> bool {
-    let file_type = meta.file_type();
-    let right_kind = if directory {
-        file_type.is_dir()
-    } else {
-        file_type.is_file()
-    };
-    right_kind
-        && !file_type.is_symlink()
-        && meta.uid() == process_uid()
-        && meta.permissions().mode() & 0o777 == if directory { 0o700 } else { 0o600 }
-        && (directory || meta.nlink() == 1)
-}
-
-/// The process real uid, the core's `process.getuid()`: read once from `/proc/self/status`
-/// (the service runs on Linux; no unsafe call).
-pub(crate) fn process_uid() -> u32 {
-    static UID: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| {
-        fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|status| {
-                status.lines().find_map(|line| {
-                    line.strip_prefix("Uid:")
-                        .and_then(|rest| rest.split_whitespace().next())
-                        .and_then(|real| real.parse().ok())
-                })
-            })
-            .unwrap_or(u32::MAX)
-    });
-    *UID
-}
-
 /// The core's `rootIsPrivate`: the CCS root itself is private and canonically spelled.
 fn root_is_private(directory: &Path) -> bool {
     let Ok(meta) = fs::symlink_metadata(directory) else {
@@ -103,21 +73,11 @@ fn root_is_private(directory: &Path) -> bool {
     }
 }
 
-/// The core's `syncDirectory`: fsync the directory inode itself.
-fn sync_directory(directory: &Path) -> io::Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(directory)?;
-    file.sync_all()
-}
-
 /// One read marker: its parsed record, exact bytes and opened inode identity.
 struct ReadMarker {
     record: Value,
     bytes: Vec<u8>,
-    dev: u64,
-    ino: u64,
+    identity: (u64, u64),
 }
 
 /// The core's `readMarker`: every check fails closed as `history_append_pending`.
@@ -127,20 +87,18 @@ fn read_marker(filename: &Path) -> Checked<ReadMarker> {
     if !owned_private(&before, false) || before.len() > 2048 {
         return Err(pending());
     }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(filename)
-        .map_err(|_| pending())?;
+    let mut file = super::fsrules::open_read_no_follow(filename).map_err(|_| pending())?;
     let opened = file.metadata().map_err(|_| pending())?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(|_| pending())?;
     let after = fs::symlink_metadata(filename).map_err(|_| pending())?;
+    let opened_identity = file_identity(&opened);
+    let before_identity = file_identity(&before);
+    let after_identity = file_identity(&after);
     if !owned_private(&opened, false)
-        || opened.dev() != before.dev()
-        || opened.ino() != before.ino()
-        || opened.dev() != after.dev()
-        || opened.ino() != after.ino()
+        || opened_identity != before_identity
+        || after_identity != before_identity
+        || !same_file(&opened, &after)
         || bytes.len() > 2048
         || opened.len() != after.len()
         || mtime_ms(&opened) != mtime_ms(&after)
@@ -207,21 +165,11 @@ fn read_marker(filename: &Path) -> Checked<ReadMarker> {
     Ok(ReadMarker {
         record,
         bytes,
-        dev: opened.dev(),
-        ino: opened.ino(),
+        identity: file_identity(&opened),
     })
 }
 
 /// Node's `stat.mtimeMs` as the comparison uses it: float milliseconds.
-fn mtime_ms(meta: &fs::Metadata) -> f64 {
-    meta.mtime() as f64 * 1000.0 + meta.mtime_nsec() as f64 / 1_000_000.0
-}
-
-/// Node's `stat.ctimeMs`.
-fn ctime_ms(meta: &fs::Metadata) -> f64 {
-    meta.ctime() as f64 * 1000.0 + meta.ctime_nsec() as f64 / 1_000_000.0
-}
-
 /// `Number.isFinite(Date.parse(value))` for the ISO forms the marker protocol writes and the
 /// fixtures pin: date-time with optional fraction and `Z`/offset, or a plain date.
 fn iso_date(value: &str) -> bool {
@@ -474,8 +422,7 @@ impl PendingMarker {
         let root = marker_directory(directory);
         match fs::create_dir(&root) {
             Ok(()) => {
-                fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-                    .map_err(|_| MarkerRefused::Unavailable)?;
+                set_private_directory(&root).map_err(|_| MarkerRefused::Unavailable)?;
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(_) => return Err(MarkerRefused::Unavailable),
@@ -495,14 +442,7 @@ impl PendingMarker {
             "nonce": nonce, "state": "pending", "createdAt": iso_now()
         });
         let bytes = stringify(&record).into_bytes();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
-            .open(&filename)
-            .map_err(|_| MarkerRefused::Unavailable)?;
+        let file = open_create_new(&filename).map_err(|_| MarkerRefused::Unavailable)?;
         let marker = Self {
             directory: directory.to_path_buf(),
             filename,
@@ -543,8 +483,7 @@ impl PendingMarker {
         let root_meta = fs::symlink_metadata(&root).map_err(|_| MarkerRefused::AppendPending)?;
         if !root_is_private(&self.directory)
             || !owned_private(&root_meta, true)
-            || current.dev != original.dev()
-            || current.ino != original.ino()
+            || current.identity != file_identity(&original)
             || current.bytes != self.bytes
         {
             return Err(MarkerRefused::AppendPending);
@@ -588,10 +527,7 @@ impl PendingMarker {
             .file()?
             .metadata()
             .map_err(|_| MarkerRefused::AppendPending)?;
-        if current.dev != original.dev()
-            || current.ino != original.ino()
-            || current.bytes != finished
-        {
+        if current.identity != file_identity(&original) || current.bytes != finished {
             return Err(MarkerRefused::AppendPending);
         }
         self.finished_bytes = Some(finished);
@@ -616,8 +552,7 @@ impl PendingMarker {
         let root_meta = fs::symlink_metadata(&root).map_err(|_| MarkerRefused::AppendPending)?;
         if !root_is_private(&self.directory)
             || !owned_private(&root_meta, true)
-            || current.dev != original.dev()
-            || current.ino != original.ino()
+            || current.identity != file_identity(&original)
             || current.bytes != finished_bytes
         {
             return Err(MarkerRefused::AppendPending);

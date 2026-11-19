@@ -119,7 +119,10 @@ impl ServiceLink {
         }
         let body = body.unwrap_or_default().to_vec();
         let request = builder.body(Body::from(body)).ok()?;
-        let deadline = if uri == super::lifecycle_host::ENDPOINT {
+        let deadline = if matches!(
+            uri,
+            super::lifecycle_host::ENDPOINT | super::lifecycle_host::COLLECTION_ENDPOINT
+        ) {
             Duration::from_secs(150)
         } else {
             DEADLINE

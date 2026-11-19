@@ -30,6 +30,78 @@ fn helper_rows_match_typescript_bytes() {
 }
 
 #[test]
+fn muse_quota_rows_complete_and_restore_with_the_helper_reset_time() {
+    let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    let reset = "2026-11-20 05:00 UTC";
+    for (code, status, lead, version) in [
+        ("muse_quota_exhausted", "updated", "Updated Muse.", "1.5.0"),
+        ("muse_quota_current", "current", "Muse is current.", "1.4.2"),
+    ] {
+        let mut input = json!({
+            "appId": "muse-code", "platform": host.os, "status": status, "messageCode": code,
+            "previousVersion": "1.4.2", "version": version, "manager": "native",
+            "updateAttempted": true,
+        });
+        let no_reset =
+            rows::normalize(host, "muse-code", &input).expect("quota row without a time");
+        assert!(no_reset.get("quotaReset").is_none());
+        assert_eq!(
+            no_reset["message"],
+            format!(
+                "{lead} Its quota is used up, so the new models appear after its next session."
+            )
+        );
+        assert_eq!(rows::restore(host, "muse-code", &no_reset), no_reset);
+
+        input["quotaReset"] = json!(reset);
+        let mut job = Job::new("muse-quota-fixture".into(), clock());
+        job.event(host, &json!({"event":"result","result":input}));
+        job.finish();
+        assert_eq!(job.state, "completed");
+        let result = &job.results[0];
+        assert_eq!(result["status"], status);
+        assert_eq!(result["quotaReset"], reset);
+        assert_eq!(
+            result["message"],
+            format!(
+                "{lead} Its quota is used up until {reset}, so the new models appear after its next session."
+            )
+        );
+        assert_eq!(rows::restore(host, "muse-code", result), *result);
+    }
+}
+
+#[test]
+fn muse_quota_notes_decline_outside_their_app_status_and_reset_shapes() {
+    let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    let mut input = json!({
+        "appId": "muse-code", "platform": host.os, "status": "updated",
+        "messageCode": "muse_quota_exhausted", "version": "1.5.0", "manager": "native",
+    });
+    for invalid in [
+        Value::Null,
+        json!(8),
+        json!(""),
+        json!("5 pm\nquota"),
+        json!("5 pm\u{7f}"),
+        json!("x".repeat(65)),
+        json!("\u{10000}".repeat(33)),
+    ] {
+        input["quotaReset"] = invalid;
+        assert!(rows::normalize(host, "muse-code", &input).is_none());
+    }
+    input["quotaReset"] = json!("\u{10000}".repeat(32));
+    assert!(rows::normalize(host, "muse-code", &input).is_some());
+    input["messageCode"] = json!("updated");
+    assert!(rows::normalize(host, "muse-code", &input).is_none());
+    input["messageCode"] = json!("muse_quota_current");
+    assert!(rows::normalize(host, "muse-code", &input).is_none());
+    input["appId"] = json!("omp");
+    input["status"] = json!("current");
+    assert!(rows::normalize(host, "omp", &input).is_none());
+}
+
+#[test]
 fn completed_rows_survive_connection_loss_and_malformed_terminal_replacements() {
     let host = hosts().find(|h| h.id == "windows").expect("Windows");
     let mut job = Job::new("abcdefgh".into(), clock());

@@ -1,4 +1,4 @@
-//! Quota collection and app updates share the public service's boot and L5 pool.
+//! Quota collection and lifecycle share the public service's boot and L5 pool.
 use super::{
     DashboardAccess, DashboardEvent, DashboardEvents, DashboardPrincipal, HubCache, Reply,
 };
@@ -11,11 +11,6 @@ use crate::{
     collection::Collection,
     limits::Limits,
     table::Pool,
-};
-#[cfg(unix)]
-use crate::{
-    app_update_routes::{BoundJobs, LaneHJobs, Operation},
-    app_updates::AppUpdates,
 };
 use aac_files::registry::{self, Owners, Role};
 use aac_providers::ProviderId;
@@ -44,19 +39,20 @@ mod lifecycle_open;
 mod lifecycle_registry;
 mod lifecycle_remove;
 mod lifecycle_trash;
-mod recheck;
+pub(super) mod recheck;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Groups {
     pub(super) collection: bool,
     pub(super) lifecycle: bool,
     writes: bool,
-    app_updates: bool,
     home: bool,
+    #[cfg(unix)]
     analytics_writers: bool,
     /// G18: the service owns the aac-usage share writer this boot.
     #[cfg(unix)]
     usage_snapshot: bool,
+    #[cfg(unix)]
     store: bool,
 }
 
@@ -69,6 +65,7 @@ impl Groups {
                 groups.get(name).is_none() || groups[name] == "on"
             }
         };
+        #[cfg(unix)]
         let store = match std::env::var_os("AAC_RUST_STORE") {
             Some(value) => value == "on",
             None => {
@@ -78,12 +75,13 @@ impl Groups {
         };
         Self {
             lifecycle: false,
+            #[cfg(unix)]
             store,
+            #[cfg(unix)]
             analytics_writers: on("analytics-writers", "AAC_RUST_GROUP_ANALYTICS_WRITERS")
                 && on("analytics", "AAC_RUST_GROUP_ANALYTICS"),
             collection: on("collection", "AAC_RUST_GROUP_COLLECTION"),
             writes: on("writes", "AAC_RUST_GROUP_WRITES"),
-            app_updates: on("app-updates", "AAC_RUST_GROUP_APP_UPDATES"),
             home: on("home", "AAC_RUST_GROUP_HOME")
                 || std::env::var("AAC_RUST_HOME_VIEW").as_deref() == Ok("on"),
             #[cfg(unix)]
@@ -101,9 +99,6 @@ pub(crate) struct NativeOwners {
     trash: Option<Arc<lifecycle_trash::Trash>>,
     events: DashboardEvents,
     usage: Option<Arc<Usage>>,
-    lifecycle_usage: Option<LifecycleUsage>,
-    #[cfg(unix)]
-    apps: Option<Arc<BoundJobs>>,
     writes: bool,
     limits: Limits,
 }
@@ -135,17 +130,11 @@ struct Usage {
     root: PathBuf,
     producer: Arc<Producer>,
     cache: AccountUsageCache,
-    hub: HubCache,
+    publication: Publication,
     events: DashboardEvents,
-    lifecycle: Mutex<crate::account_usage::dashboard::Lifecycle>,
+    jobs: Option<Arc<lifecycle_jobs::Jobs>>,
     recheck_limit: Mutex<recheck::Limit>,
-    signins: ClaudeSignInRenewalReader,
     antigravity: Option<Arc<crate::antigravity_host::Host>>,
-    server: Value,
-    store: bool,
-    analytics_writers: bool,
-    #[cfg(unix)]
-    usage_snapshot: bool,
     owners: Owners,
     agents: Arc<Agents>,
     /// The sign-in expiry rows and when they were read (the TS health cache's five minutes).
@@ -153,11 +142,24 @@ struct Usage {
     signin_cache: Mutex<Option<(i64, Value)>>,
 }
 
-#[derive(Clone)]
-struct LifecycleUsage {
-    cache: AccountUsageCache,
-    producer: Option<Arc<Producer>>,
-    antigravity: Option<Arc<crate::antigravity_host::Host>>,
+#[cfg(unix)]
+type Published = Arc<dyn Fn(&AccountUsageCache) + Send + Sync>;
+
+enum Publication {
+    Public(HubCache),
+    #[cfg(unix)]
+    Private(Published),
+}
+
+struct PublicSampling {
+    signins: ClaudeSignInRenewalReader,
+    server: Value,
+    #[cfg(unix)]
+    store: bool,
+    #[cfg(unix)]
+    analytics_writers: bool,
+    #[cfg(unix)]
+    usage_snapshot: bool,
 }
 
 fn lifecycle_facts() -> crate::account_usage::dashboard::Lifecycle {
@@ -192,22 +194,6 @@ impl NativeOwners {
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
         let agents = Arc::new(Agents::with_default(root.clone(), true));
-        #[cfg(unix)]
-        let apps = groups.app_updates.then(|| {
-            #[cfg(feature = "parity-fixtures")]
-            if std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
-                return Arc::new(BoundJobs::new(Arc::new(crate::app_update_routes::M0Jobs)));
-            }
-            let events = events.clone();
-            let owner = AppUpdates::with_events(
-                root.clone(),
-                agents.clone(),
-                Some(Box::new(move |event| {
-                    events.publish(event);
-                })),
-            );
-            Arc::new(BoundJobs::new(Arc::new(LaneHJobs(owner))))
-        });
         let cancel = CancellationToken::new();
         let mut jobs = Jobs {
             cancel: cancel.clone(),
@@ -279,27 +265,30 @@ impl NativeOwners {
                     Arc::default(),
                 )),
                 cache: AccountUsageCache::default(),
-                hub,
+                publication: Publication::Public(hub),
                 events: events.clone(),
-                lifecycle: Mutex::new(lifecycle_facts()),
+                jobs: lifecycle_jobs.clone(),
                 recheck_limit: Mutex::default(),
-                signins: ClaudeSignInRenewalReader::new(root.clone(), Default::default()),
                 antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
+                owners: owners.clone(),
+                agents: agents.clone(),
+                root: root.clone(),
+                #[cfg(unix)]
+                signin_cache: Mutex::default(),
+            });
+            let sampling = PublicSampling {
+                signins: ClaudeSignInRenewalReader::new(root, Default::default()),
                 server,
+                #[cfg(unix)]
                 store: groups.store && worker_directory.is_some(),
+                #[cfg(unix)]
                 analytics_writers: groups.analytics_writers,
                 #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
-                owners: owners.clone(),
-                agents: agents.clone(),
-                #[cfg(unix)]
-                signin_cache: Mutex::new(None),
-                root,
-            });
-            // Subscribe before the HTTP listener can admit a sign-in.
-            let receiver = events.0.subscribe();
-            jobs.signins = Some(tokio::spawn(usage.clone().watch_signins(receiver)));
-            jobs.sampling = Some(tokio::spawn(usage.clone().sample(cancel)));
+            };
+            jobs.sampling = Some(tokio::spawn(
+                usage.clone().sample(cancel, Arc::new(sampling)),
+            ));
             Some(usage)
         } else {
             None
@@ -312,14 +301,7 @@ impl NativeOwners {
                 lifecycle_jobs,
                 trash,
                 events,
-                lifecycle_usage: usage.as_ref().map(|usage| LifecycleUsage {
-                    cache: usage.cache.clone(),
-                    producer: Some(usage.producer.clone()),
-                    antigravity: usage.antigravity.clone(),
-                }),
                 usage,
-                #[cfg(unix)]
-                apps,
                 writes: groups.writes,
                 limits: Limits::new(),
             },
@@ -346,13 +328,23 @@ impl NativeOwners {
     }
 
     #[cfg(unix)]
+    pub(crate) async fn private_share_sample(
+        &self,
+        cache: &AccountUsageCache,
+        signins: &ClaudeSignInRenewalReader,
+    ) -> Option<Value> {
+        self.usage.as_ref()?.share_sample(cache, signins).await
+    }
+
+    #[cfg(unix)]
     pub(crate) fn for_private_lifecycle(
         agents: Arc<Agents>,
         owners: Owners,
         cache: AccountUsageCache,
-        producer: Option<Arc<Producer>>,
+        producer: Arc<Producer>,
         approvals: Arc<crate::account_approvals::Approvals>,
         feeds: crate::feed::Feeds,
+        published: Published,
     ) -> (Self, Jobs) {
         let root = agents.root().to_owned();
         let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
@@ -385,21 +377,29 @@ impl NativeOwners {
             trash.clone(),
             cancel.clone(),
         );
+        let lifecycle_jobs = Arc::new(lifecycle_jobs::Jobs::default());
+        let usage = Usage {
+            producer,
+            cache,
+            publication: Publication::Private(published),
+            events: events.clone(),
+            jobs: Some(lifecycle_jobs.clone()),
+            recheck_limit: Mutex::default(),
+            antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
+            owners: owners.clone(),
+            agents: agents.clone(),
+            root,
+            signin_cache: Mutex::default(),
+        };
         (
             Self {
                 agents,
                 owners,
                 queues,
-                lifecycle_jobs: Some(Arc::new(lifecycle_jobs::Jobs::default())),
+                lifecycle_jobs: Some(lifecycle_jobs),
                 trash: Some(trash),
                 events,
-                usage: None,
-                lifecycle_usage: Some(LifecycleUsage {
-                    cache,
-                    producer,
-                    antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
-                }),
-                apps: None,
+                usage: Some(Arc::new(usage)),
                 writes: true,
                 limits: Limits::new(),
             },
@@ -418,36 +418,14 @@ impl NativeOwners {
         mut facts: CompanionInputs,
         refresh: bool,
     ) -> CompanionInputs {
-        facts.lifecycle = lifecycle_facts();
-        if let Some(jobs) = &self.lifecycle_jobs {
-            for job in jobs.running(false) {
-                if let Some(id) = job.account_id {
-                    let state = if job.state == "verifying" {
-                        "verifying"
-                    } else {
-                        "signing_in"
-                    };
-                    facts
-                        .lifecycle
-                        .jobs
-                        .insert(id, json!({"state":state,"jobId":job.id}));
-                }
-            }
-        }
-        if let Some(host) = self
-            .lifecycle_usage
-            .as_ref()
-            .and_then(|usage| usage.antigravity.clone())
-        {
-            let root = self.root().to_owned();
-            facts.antigravity = tokio::task::spawn_blocking(move || {
-                crate::antigravity_runtime::has_profiles(&root)
-                    .then(|| host.accounts(refresh, super::now()))
-                    .flatten()
-            })
-            .await
-            .ok()
-            .flatten();
+        if let Some(usage) = &self.usage {
+            facts.lifecycle = usage.lifecycle();
+            let usage = usage.clone();
+            facts.antigravity =
+                tokio::task::spawn_blocking(move || usage.antigravity_accounts(refresh))
+                    .await
+                    .ok()
+                    .flatten();
         }
         facts
     }
@@ -458,33 +436,28 @@ impl NativeOwners {
             || lifecycle_open::route(method, path).is_some()
             || lifecycle_label::route(method, path).is_some()
             || (self.lifecycle_jobs.is_some() && Self::owns_lifecycle(method, path))
-            || Self::app_operation(method, path).is_some()
     }
 
     fn changed(&self) {
-        if let Some(usage) = &self.lifecycle_usage {
+        if let Some(usage) = &self.usage {
             usage.cache.request_refresh();
         }
         self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
-    fn dashboard_route(method: &Method, path: &str) -> bool {
+    #[cfg(unix)]
+    pub(super) fn owns_collection(method: &Method, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        Self::dashboard_route(method, path) || recheck::route(method, path).is_some()
+    }
+
+    pub(super) fn dashboard_route(method: &Method, path: &str) -> bool {
         matches!(*method, Method::GET | Method::HEAD) && path == "/api/accounts/dashboard"
     }
 
-    #[cfg(unix)]
-    fn app_operation(method: &Method, path: &str) -> Option<Operation> {
-        let method = if method == Method::HEAD {
-            &Method::GET
-        } else {
-            method
-        };
-        Operation::from_route(method, path)
-    }
-
-    #[cfg(not(unix))]
-    fn app_operation(_method: &Method, _path: &str) -> Option<()> {
-        None
+    pub(super) fn profile_inputs(&self) -> (Arc<Agents>, Option<AccountUsageCache>) {
+        let cache = self.usage.as_ref().map(|usage| usage.cache.clone());
+        (self.agents.clone(), cache)
     }
 
     pub(crate) async fn handle(&self, request: Request) -> Reply {
@@ -547,15 +520,6 @@ impl NativeOwners {
             };
             return no_store(reply);
         }
-        if let Some(operation) = Self::app_operation(request.method(), path) {
-            #[cfg(unix)]
-            return no_store(self.app_update(&access, operation, request).await);
-            #[cfg(not(unix))]
-            return {
-                let _ = operation;
-                super::plain(404, "API endpoint was not found.")
-            };
-        }
         super::plain(404, "API endpoint was not found.")
     }
 
@@ -599,68 +563,52 @@ impl NativeOwners {
         }
         read(cache, uri, headers).await
     }
-
-    #[cfg(unix)]
-    async fn app_update(&self, access: &DashboardAccess, op: Operation, request: Request) -> Reply {
-        if !matches!(access.principal, DashboardPrincipal::Browser { .. }) {
-            return super::plain(401, "Authentication required");
-        }
-        if !matches!(op, Operation::Status) {
-            if !access.origin_present || !access.same_origin {
-                return super::plain(403, "App updates require the dashboard origin.");
-            }
-            if !json_content(&request) {
-                return super::plain(415, "App updates require application/json.");
-            }
-            if request.uri().query().is_some_and(|q| !q.is_empty())
-                || !object_body(request, 100 * 1024)
-                    .await
-                    .is_some_and(|body| body.is_empty())
-            {
-                return super::plain(400, "Provide an empty JSON object.");
-            }
-        }
-        let Some(apps) = &self.apps else {
-            return unavailable();
-        };
-        match apps.call(op).await {
-            Ok(reply) => super::response(reply.status, reply.body),
-            Err(_) => match op {
-                Operation::Status => {
-                    super::plain(503, "App update status could not be read safely.")
-                }
-                Operation::Start => super::plain(500, "App updates could not start safely."),
-                Operation::Cancel => {
-                    super::plain(503, "App update cancellation could not be confirmed.")
-                }
-            },
-        }
-    }
 }
 
 impl Usage {
+    fn lifecycle(&self) -> crate::account_usage::dashboard::Lifecycle {
+        let mut facts = lifecycle_facts();
+        if let Some(jobs) = &self.jobs {
+            for job in jobs.running(false) {
+                if let Some(id) = job.account_id {
+                    let state = if job.state == "verifying" {
+                        "verifying"
+                    } else {
+                        "signing_in"
+                    };
+                    facts.jobs.insert(id, json!({"state":state,"jobId":job.id}));
+                }
+            }
+        }
+        facts
+    }
+
     fn companions(&self) -> CompanionInputs {
         CompanionInputs {
-            lifecycle: self
-                .lifecycle
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .clone(),
-            server: Some(self.server.clone()),
+            lifecycle: self.lifecycle(),
             ..Default::default()
         }
     }
 
-    async fn collect_companions(self: Arc<Self>, refresh: bool) -> CompanionInputs {
-        let fallback = self.companions();
+    fn antigravity_accounts(&self, refresh: bool) -> Option<Vec<Value>> {
+        self.antigravity.as_ref().and_then(|host| {
+            crate::antigravity_runtime::has_profiles(&self.root)
+                .then(|| host.accounts(refresh, super::now()))
+                .flatten()
+        })
+    }
+
+    async fn collect_companions(
+        self: Arc<Self>,
+        sampling: Arc<PublicSampling>,
+        refresh: bool,
+    ) -> CompanionInputs {
+        let mut facts = self.companions();
+        facts.server = Some(sampling.server.clone());
+        let fallback = facts.clone();
         tokio::task::spawn_blocking(move || {
-            let mut facts = self.companions();
-            facts.signins = self.signins.read().map(|report| report.to_json());
-            facts.antigravity = self.antigravity.as_ref().and_then(|host| {
-                crate::antigravity_runtime::has_profiles(&self.root)
-                    .then(|| host.accounts(refresh, super::now()))
-                    .flatten()
-            });
+            facts.signins = sampling.signins.read().map(|report| report.to_json());
+            facts.antigravity = self.antigravity_accounts(refresh);
             facts
         })
         .await
@@ -668,70 +616,81 @@ impl Usage {
     }
 
     fn publish(&self) {
-        let now = super::now();
-        if let Some(timestamp) = super::storage::iso(now) {
-            self.hub
-                .publish_dashboard_cache(&self.cache.hub_dashboards(&timestamp, now));
-            self.events.publish(DashboardEvent::AccountsChanged {});
+        match &self.publication {
+            Publication::Public(hub) => {
+                let now = super::now();
+                let Some(timestamp) = super::storage::iso(now) else {
+                    return;
+                };
+                hub.publish_dashboard_cache(&self.cache.hub_dashboards(&timestamp, now));
+            }
+            #[cfg(unix)]
+            Publication::Private(published) => published(&self.cache),
         }
+        self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
-    async fn sample(self: Arc<Self>, cancel: CancellationToken) {
+    async fn sample(self: Arc<Self>, cancel: CancellationToken, sampling: Arc<PublicSampling>) {
         self.producer
             .run(
                 self.cache.clone(),
                 cancel,
-                |refresh| self.clone().collect_companions(refresh),
+                |refresh| self.clone().collect_companions(sampling.clone(), refresh),
                 |cache| {
                     let owner = self.clone();
+                    let sampling = sampling.clone();
                     async move {
                         owner.publish();
                         #[cfg(unix)]
-                        if owner.store {
+                        if sampling.store {
                             super::native_reads::publish_usage(
                                 owner.root.clone(),
                                 &cache,
                                 super::now(),
-                                owner.analytics_writers,
+                                sampling.analytics_writers,
                             )
                             .await;
                         }
                         #[cfg(not(unix))]
-                        let _ = &cache;
+                        let _ = (&sampling, &cache);
                         // G18: the native sample triggers the share writer itself: the store's
                         // history, long burn and rollups are added by the service, and the
-                        // sign-in facts are collected here (only while a folder is set).
+                        // sign-in facts are collected here (only while a folder is set). The
+                        // publisher and its facts are the Unix service's; Windows keeps the TS
+                        // writer.
                         #[cfg(unix)]
-                        if owner.usage_snapshot && owner.analytics_writers {
-                            owner.push_usage_sample(&cache).await;
+                        if sampling.usage_snapshot
+                            && sampling.analytics_writers
+                            && let Some(payload) =
+                                owner.share_sample(&cache, &sampling.signins).await
+                        {
+                            super::native_reads::usage_sample(owner.root.clone(), payload).await;
                         }
                     }
                 },
             )
             .await;
     }
-
+    #[cfg(unix)]
     /// G18: push this sample to the service's share writer. Every sample's readings count, even
     /// one whose write the service skips, so the reading ring sees the same cadence; the sign-in
     /// probes and the store facts run only while a folder is set and there are accounts.
-    #[cfg(unix)]
-    async fn push_usage_sample(self: &Arc<Self>, cache: &AccountUsageCache) {
-        let timestamp = super::storage::iso(super::now());
-        let Some(timestamp) = timestamp else {
-            return;
-        };
+    async fn share_sample(
+        self: &Arc<Self>,
+        cache: &AccountUsageCache,
+        signins: &ClaudeSignInRenewalReader,
+    ) -> Option<Value> {
         let now = super::now();
-        let Ok(accounts) = cache.merged_accounts(&timestamp, now) else {
-            return;
-        };
+        let timestamp = super::storage::iso(now)?;
+        let accounts = cache.merged_accounts(&timestamp, now).ok()?;
         let active = crate::usage_snapshot::sample_active(&self.root, accounts.len());
         let sign_in = if active {
-            self.sign_in_facts().await
+            self.sign_in_facts(signins).await
         } else {
             json!({ "rows": [], "failed": false, "since": now })
         };
         let renewal = if active {
-            self.signins.read().map(|report| {
+            signins.read().map(|report| {
                 let full = report.to_json();
                 json!({
                     "runner": full["runner"],
@@ -743,19 +702,18 @@ impl Usage {
         } else {
             None
         };
-        let payload = json!({
+        Some(json!({
             "event": { "accounts": accounts, "history": null, "sampledAt": now },
             "signIn": sign_in,
             "signInRenewal": renewal,
             "rollups": null,
-        });
-        super::native_reads::usage_sample(self.root.clone(), payload).await;
+        }))
     }
 
+    #[cfg(unix)]
     /// The sign-in expiry rows of every configured computer, under the publisher's 60 s limit; a
     /// failed or timed-out pass is named (`failed`), never sent as an empty success.
-    #[cfg(unix)]
-    async fn sign_in_facts(self: &Arc<Self>) -> Value {
+    async fn sign_in_facts(self: &Arc<Self>, signins: &ClaudeSignInRenewalReader) -> Value {
         let since = super::now();
         // Five minutes, like the TypeScript health cache, so one page cannot make every
         // computer run the expiry collector on every sample.
@@ -781,7 +739,7 @@ impl Usage {
         let Ok(Ok(batch)) = read else {
             return json!({ "rows": [], "failed": true, "since": since });
         };
-        let rows = match self.signins.read() {
+        let rows = match signins.read() {
             Some(renewal) => {
                 let merged =
                     crate::signins::merge_renewal(batch.machines, &renewal.to_json(), super::now());
@@ -799,58 +757,12 @@ impl Usage {
         *self.signin_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((since, facts.clone()));
         facts
     }
-
-    async fn watch_signins(
-        self: Arc<Self>,
-        mut receiver: tokio::sync::broadcast::Receiver<DashboardEvent>,
-    ) {
-        loop {
-            let event = match receiver.recv().await {
-                Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    if let Ok(mut lifecycle) = self.lifecycle.lock() {
-                        lifecycle.jobs.clear();
-                    }
-                    continue;
-                }
-                Err(_) => break,
-            };
-            let DashboardEvent::SigninJob { job } = event else {
-                continue;
-            };
-            let Some(id) = job.account_id else { continue };
-            let Ok(mut lifecycle) = self.lifecycle.lock() else {
-                continue;
-            };
-            match job.state.as_str() {
-                "starting" | "waiting" | "awaiting_code" => {
-                    lifecycle
-                        .jobs
-                        .insert(id, json!({"state":"signing_in","jobId":job.id}));
-                }
-                "verifying" => {
-                    lifecycle
-                        .jobs
-                        .insert(id, json!({"state":"verifying","jobId":job.id}));
-                }
-                _ => {
-                    if lifecycle
-                        .jobs
-                        .get(&id)
-                        .is_some_and(|value| value["jobId"] == job.id)
-                    {
-                        lifecycle.jobs.remove(&id);
-                    }
-                }
-            }
-        }
-    }
 }
 
+#[cfg(unix)]
 /// The computers a sign-in poll reads, in the account collectors' order: this one, then every
 /// remote whose packaged alias is set (`configuredUsageHosts`). The same packaged registry
 /// (`web-dashboard/public/computers.json`) the collectors and the coordinator read.
-#[cfg(unix)]
 fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
     static COMPUTERS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
         serde_json::from_str(include_str!(

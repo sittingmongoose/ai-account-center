@@ -212,7 +212,11 @@ impl OwnerHost {
         body: Option<&[u8]>,
     ) -> Option<ServiceReply> {
         let link = self.link().await?;
-        if uri == super::lifecycle_host::ENDPOINT && !link.owns_lifecycle() {
+        if matches!(
+            uri,
+            super::lifecycle_host::ENDPOINT | super::lifecycle_host::COLLECTION_ENDPOINT
+        ) && !link.owns_lifecycle()
+        {
             return None;
         }
         let reply = link.request(method, uri, principal, headers, body).await;
@@ -285,8 +289,19 @@ impl OwnerHost {
 
     #[cfg(unix)]
     async fn start_embedded(&self) -> Option<Embedded> {
+        use std::os::unix::fs::DirBuilderExt;
         let config = self.boot_config()?;
         let socket = PathBuf::from(config.get("socketPath")?.as_str()?);
+        let parent = socket.parent()?;
+        // An embedded boot prepares the same private directories as the supervisor.
+        for directory in [parent.parent()?, parent] {
+            match std::fs::DirBuilder::new().mode(0o700).create(directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => return None,
+            }
+            crate::unix::private_dir(directory, aac_files::path::uid()).ok()?;
+        }
         let ccs = PathBuf::from(config.get("ccsDir")?.as_str()?);
         let secret = config.get("secret")?.as_str()?.to_owned();
         let boot_id = config.get("bootId")?.as_str()?.to_owned();

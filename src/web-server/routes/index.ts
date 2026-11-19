@@ -29,11 +29,7 @@ import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
 import accountAnalyticsRoutes from './account-analytics-routes';
 import accountVisibilityRoutes from './account-visibility-routes';
 import accountLifecycleRoutes from './account-lifecycle-routes';
-import appUpdateRoutes from './app-update-routes';
-import codexRoutes from './codex-routes';
-import antigravityRoutes from './antigravity-routes';
 import authRoutes from './auth-routes';
-import claudeDesktopRoutes from './claude-desktop-routes';
 import homeViewRoutes from './home-view-routes';
 import barRoutes from './bar-routes';
 import { storeRoutes, usageRoutes } from './store-routes';
@@ -105,12 +101,8 @@ apiRoutes.use('/accounts', accountVisibilityRoutes);
 if (process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1') {
   apiRoutes.use('/accounts', accountLifecycleRoutes);
 }
-apiRoutes.use('/app-updates', appUpdateRoutes);
 apiRoutes.use('/auth', authRoutes);
-apiRoutes.use('/claude', claudeDesktopRoutes);
 apiRoutes.use('/views', homeViewRoutes);
-apiRoutes.use('/codex', codexRoutes);
-apiRoutes.use('/antigravity', antigravityRoutes);
 apiRoutes.use('/bar', barRoutes);
 // The history store (docs/store.md 8.1): read-only, sessions and paired devices.
 apiRoutes.use('/store', storeRoutes);

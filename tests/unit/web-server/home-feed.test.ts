@@ -14,7 +14,6 @@ import { createHomeViewRouter } from '../../../src/web-server/routes/home-view-r
 import { RustService } from '../../../src/web-server/rust-service';
 import type { RustHomeInputs } from '../../../src/web-server/rust-service-transport';
 import { withPassedResetsAt } from '../../../src/web-server/services/account-dashboard-service';
-import { ClaudeOpenOperations } from '../../../src/web-server/services/claude-open-operations';
 import type { AccountDashboard } from '../../../src/web-server/services/account-dashboard-types';
 import { passFaithful, resetEpochs } from '../../../src/web-server/views/home-feed';
 import {
@@ -544,23 +543,6 @@ describe('fed facts', () => {
       '2026-11-14T10:00:00.000Z': Date.parse('2026-11-14T10:00:00.000Z'),
       never: null,
     });
-  });
-
-  it('forScope is forProfile for every profile of the scope that has an Open', async () => {
-    let clock = 1000;
-    const operations = new ClaudeOpenOperations({ now: () => clock });
-    let finish: () => void = () => {};
-    operations.start('/s', 'p1', 'mac', () => new Promise<void>((resolve) => (finish = resolve)));
-    operations.start('/s', 'p2', 'windows', async () => {});
-    operations.start('/other', 'p3', 'mac', async () => {});
-    await new Promise((r) => setTimeout(r, 0));
-    clock = 2000;
-    expect(operations.forScope('/s')).toEqual([
-      ['p1', operations.forProfile('/s', 'p1')!],
-      ['p2', operations.forProfile('/s', 'p2')!],
-    ]);
-    expect(operations.forScope('/none')).toEqual([]);
-    finish();
   });
 
   it("the server's zone facts are the page's own algorithm and window (view-model.mjs homeZoneFacts)", async () => {

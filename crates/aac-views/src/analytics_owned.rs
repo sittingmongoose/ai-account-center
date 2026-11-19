@@ -361,6 +361,7 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
             oldest,
             quota_oldest,
             guard_coverage: input.get("guardCoverage").cloned(),
+            clock: None,
             provisional,
         },
         store,
@@ -423,6 +424,7 @@ pub fn compose_native(input: NativeInput, store: &mut dyn AnalyticsStore) -> R<V
             oldest,
             quota_oldest,
             guard_coverage: None,
+            clock: Some(now),
             provisional,
         },
         store,
@@ -469,6 +471,9 @@ struct Owned {
     quota_oldest: Option<u64>,
     /// The guarded selection's coverage the envelope carried; `None` reads it from the store.
     guard_coverage: Option<Value>,
+    /// The request clock, for an activity answer whose store has no read yet (the native read
+    /// is the only reader; the envelope path has none, as it cannot prove the clock equal).
+    clock: Option<f64>,
     provisional: Range,
 }
 
@@ -488,6 +493,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
         oldest,
         quota_oldest,
         guard_coverage,
+        clock,
         provisional,
     } = owned;
     let retained_from = oldest;
@@ -530,6 +536,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
                 &live,
                 zone.as_ref(),
                 &pricing,
+                clock,
             )?;
             let mut answered = answered;
             // Before this run's first pass the grid comes from the store's last reads.
@@ -582,6 +589,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
                         &live,
                         zone.as_ref(),
                         &pricing,
+                        clock,
                     )?;
                     (answered.oldest_hour_at, answered.providers_with_activity)
                 }

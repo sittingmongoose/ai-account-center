@@ -17,6 +17,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const SETTINGS_CAP: usize = 4096;
 const VISIBILITY_CAP: usize = 8 * 1024;
@@ -66,6 +67,18 @@ impl Settings {
             owners: owners(),
             limits: crate::limits::Limits::new(),
         }
+    }
+
+    /// The group's own router for the owner host: the six routes, their admission and the
+    /// exact encoding, registered instead of copying an owner. The host merges it before the
+    /// dashboard guard, so the handler sees the verified `DashboardAccess`.
+    pub(super) fn router(&self, router: axum::Router) -> axum::Router {
+        let settings = Arc::new(self.clone());
+        router
+            .route("/api/accounts/settings", axum::routing::any(owner_route))
+            .route("/api/accounts/preferences", axum::routing::any(owner_route))
+            .route("/api/accounts/visibility", axum::routing::any(owner_route))
+            .layer(axum::Extension(settings))
     }
 
     pub(super) async fn handle(
@@ -414,4 +427,19 @@ fn truncate(mut reply: Reply, head: bool) -> Reply {
 fn no_store(mut reply: Reply) -> Reply {
     set_header(&mut reply, "cache-control", "no-store");
     reply
+}
+
+/// One request the host routed to this group. The method filter is the group's own; anything
+/// else answers the cut's API 404 the way the unregistered path did.
+async fn owner_route(
+    axum::extract::Extension(settings): axum::extract::Extension<Arc<Settings>>,
+    request: Request,
+) -> Reply {
+    let Some(family) = route(request.method(), request.uri().path()) else {
+        return super::plain(404, "API endpoint was not found.");
+    };
+    let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
+        return super::service_error();
+    };
+    settings.handle(&access, family, request).await
 }

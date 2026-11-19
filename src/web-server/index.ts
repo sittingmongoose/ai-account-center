@@ -27,19 +27,11 @@ import {
 import { requestLoggingMiddleware } from './middleware/request-logging-middleware';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
-import { getCodexProfileRenewalService } from './services/codex-profile-renewal-service';
 import {
   startAccountAnalyticsSampling,
   stopAccountAnalyticsSampling,
 } from './services/account-analytics-service';
 import { ConfigError } from '../errors/error-types';
-import {
-  configureAntigravityRuntimeFactory,
-  startAntigravityRuntime,
-  stopAntigravityRuntime,
-  type AntigravityRuntimeFactory,
-} from '../antigravity/runtime-service';
-import { getInstalledAntigravityRuntimeFactory } from '../antigravity/production-runtime';
 import {
   isStaticUiFileRequest,
   loadStaticUi,
@@ -101,7 +93,6 @@ export interface ServerOptions {
   staticDir?: string;
   dev?: boolean;
   /** Explicit verified Ubuntu driver composition; omission keeps the legacy usage-only source. */
-  antigravityRuntimeFactory?: AntigravityRuntimeFactory;
 }
 
 export interface ServerInstance {
@@ -353,7 +344,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const stopEventLoopMonitor = startEventLoopMonitor(logger);
   let cleaned = false;
 
-  const codexRenewal = getCodexProfileRenewalService();
   // Account changes and sign-in jobs reach /ws clients as hints. A job goes only
   // to browser sessions, and its code only to those that connected over a
   // secure transport. The upgrade request carries the session (see above).
@@ -378,8 +368,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     detachDashboardEvents();
     detachRustEvents?.();
     stopAccountLifecycleMaintenance();
-    codexRenewal.stop();
-    stopAntigravityRuntime();
     stopAccountAnalyticsSampling();
     stopAgentUsageSnapshot?.();
     stopAgentUsageSnapshot = null;
@@ -435,27 +423,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // Only a build that is actually serving becomes the one installers must keep.
       if (!options.sidecar && recordRunningBuild(getCcsDir(), packagedBuild) > 0)
         logger.warn('web.deployed_build.unrecorded', 'Running build could not be recorded');
-      const antigravityFactory =
-        options.antigravityRuntimeFactory ?? getInstalledAntigravityRuntimeFactory();
-      if (antigravityFactory) {
-        try {
-          configureAntigravityRuntimeFactory(antigravityFactory);
-          startAntigravityRuntime();
-        } catch {
-          logger.error(
-            'antigravity.runtime_unavailable',
-            'Antigravity usage could not initialize safely'
-          );
-        }
-      }
-      try {
-        codexRenewal.start();
-      } catch {
-        logger.error(
-          'codex.renewal_unavailable',
-          'Saved Codex login renewal could not start safely'
-        );
-      }
       // Agent usage snapshot (off until a folder is set): written after every analytics sample.
       // G18: with the service on, groups.usageSnapshot on and the native writers owning the
       // sample, the service triggers its own publication (the native owner's sample carries the

@@ -97,6 +97,9 @@ pub struct Boot {
     /// The private service owns lifecycle when it already owns the collection generation.
     #[serde(default)]
     pub native_lifecycle: bool,
+    /// The private collection producer triggers the existing G18 writer.
+    #[serde(default)]
+    pub native_usage_snapshot: bool,
 }
 
 /// R4 (DESIGN-M3-COMPLETE 1.2/1.4): which owners this boot runs, and the share roots they
@@ -185,7 +188,7 @@ fn failure() -> io::Error {
     )
 }
 
-fn private_dir(path: &Path, uid: u32) -> io::Result<()> {
+pub(crate) fn private_dir(path: &Path, uid: u32) -> io::Result<()> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.is_dir() || meta.permissions().mode() & 0o777 != 0o700 || meta.uid() != uid {
         return Err(failure());
@@ -213,7 +216,14 @@ impl Boot {
         crate::json_object::from_slice_with_optional(
             bytes,
             &["ccsDir", "socketPath", "secret", "bootId"],
-            &["files", "store", "owned", "renewal", "nativeLifecycle"],
+            &[
+                "files",
+                "store",
+                "owned",
+                "renewal",
+                "nativeLifecycle",
+                "nativeUsageSnapshot",
+            ],
         )
     }
 
@@ -467,7 +477,13 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let Ok(bytes) = to_bytes(req.into_body(), PACKET_CAP).await else {
                 return decline(row.handler, Decline::Shape);
             };
-            lifecycle_host::receive(owner, &principal, &bytes).await
+            lifecycle_host::receive(
+                owner,
+                &principal,
+                &bytes,
+                row.path == lifecycle_host::COLLECTION_ENDPOINT,
+            )
+            .await
         }
         Handler::ResetClaims => {
             if req.uri().query().is_some() {
@@ -1717,6 +1733,9 @@ async fn serve_inner(
 ) -> io::Result<()> {
     boot.validate()?;
     let owners = boot.owners()?;
+    if boot.native_usage_snapshot && !boot.native_lifecycle {
+        return Err(failure());
+    }
     if boot.native_lifecycle
         && (native.is_none()
             || owners.owner("account-registry") != Some(registry::Role::RustService)
@@ -1861,16 +1880,21 @@ async fn serve_inner(
         ))
     });
     let approvals = Arc::new(crate::account_approvals::Approvals::default());
-    let lifecycle = boot.native_lifecycle.then(|| {
-        crate::public_auth::native_owners::NativeOwners::for_private_lifecycle(
-            agents.clone(),
-            owners.clone(),
-            cache.clone(),
-            producer.clone(),
-            approvals.clone(),
-            feeds.clone(),
-        )
-    });
+    let lifecycle = producer
+        .as_ref()
+        .zip(native.as_ref())
+        .filter(|_| boot.native_lifecycle)
+        .map(|(producer, native)| {
+            crate::public_auth::native_owners::NativeOwners::for_private_lifecycle(
+                agents.clone(),
+                owners.clone(),
+                cache.clone(),
+                Arc::clone(producer),
+                approvals.clone(),
+                feeds.clone(),
+                Arc::clone(&native.published),
+            )
+        });
     let (lifecycle, lifecycle_jobs) = lifecycle.unzip();
     let state = AppState(Arc::new(Shared {
         owners,
@@ -2046,6 +2070,15 @@ async fn serve_inner(
     }
     let cancel = aac_transport::CancellationToken::new();
     let lifecycle_owner = state.0.lifecycle.clone();
+    let share = state.0.boot.native_usage_snapshot.then(|| {
+        (
+            Arc::clone(&state.0.usage),
+            aac_renewal::claude::ClaudeSignInRenewalReader::new(
+                state.0.boot.ccs_dir.clone(),
+                Default::default(),
+            ),
+        )
+    });
     let task = producer.zip(native).map(|(producer, native)| {
         let stop = cancel.clone();
         let store = store.clone();
@@ -2067,12 +2100,23 @@ async fn serve_inner(
                     |cache| {
                         (native.published)(&cache);
                         let store = store.clone();
+                        let owner = lifecycle_owner.as_ref();
+                        let share = share.as_ref();
                         async move {
                             if let Some(store) = store {
+                                let cache = cache.clone();
                                 let _ = tokio::task::spawn_blocking(move || {
                                     store.record_native_account_usage(&cache)
                                 })
                                 .await;
+                            }
+                            if let (Some(owner), Some((writer, signins))) = (owner, share)
+                                && let Some(payload) =
+                                    owner.private_share_sample(&cache, signins).await
+                                && let Ok(bytes) = serde_json::to_vec(&payload)
+                                && bytes.len() <= crate::usage_snapshot::USAGE_SAMPLE_CAP
+                            {
+                                let _ = writer.accept(axum::body::Bytes::from(bytes));
                             }
                         }
                     },

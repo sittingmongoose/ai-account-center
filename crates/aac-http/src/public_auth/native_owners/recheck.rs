@@ -67,6 +67,48 @@ fn internal() -> Reply {
     )
 }
 
+pub(in crate::public_auth) fn admission(
+    access: &DashboardAccess,
+    request: &Request,
+) -> Result<(), Reply> {
+    use super::super::error;
+    match access.principal {
+        DashboardPrincipal::Anonymous => {
+            return Err(error(401, "auth_required", "Authentication required"));
+        }
+        DashboardPrincipal::Device { .. } => {
+            return Err(error(
+                403,
+                "device_scope",
+                "This action needs a signed-in dashboard session.",
+            ));
+        }
+        DashboardPrincipal::Browser { .. } => {}
+    }
+    if request.uri().query().is_some() {
+        return Err(error(
+            400,
+            "unexpected_query",
+            "This request does not take a query string.",
+        ));
+    }
+    if !access.origin_present || !access.same_origin {
+        return Err(error(
+            403,
+            "origin_required",
+            "This change requires the dashboard origin.",
+        ));
+    }
+    if !json_content(request) {
+        return Err(error(
+            415,
+            "json_required",
+            "This change requires application/json.",
+        ));
+    }
+    Ok(())
+}
+
 impl Usage {
     pub(super) async fn recheck(
         &self,
@@ -75,39 +117,8 @@ impl Usage {
         request: Request,
     ) -> Reply {
         use super::super::{error, invalid_body};
-        match access.principal {
-            DashboardPrincipal::Anonymous => {
-                return error(401, "auth_required", "Authentication required");
-            }
-            DashboardPrincipal::Device { .. } => {
-                return error(
-                    403,
-                    "device_scope",
-                    "This action needs a signed-in dashboard session.",
-                );
-            }
-            DashboardPrincipal::Browser { .. } => {}
-        }
-        if request.uri().query().is_some() {
-            return error(
-                400,
-                "unexpected_query",
-                "This request does not take a query string.",
-            );
-        }
-        if !access.origin_present || !access.same_origin {
-            return error(
-                403,
-                "origin_required",
-                "This change requires the dashboard origin.",
-            );
-        }
-        if !json_content(&request) {
-            return error(
-                415,
-                "json_required",
-                "This change requires application/json.",
-            );
+        if let Err(reply) = admission(access, &request) {
+            return reply;
         }
         let Some(body) = object_body(request, BODY_CAP).await else {
             return invalid_body();

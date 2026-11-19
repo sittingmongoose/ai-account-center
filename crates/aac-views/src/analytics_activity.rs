@@ -2543,6 +2543,7 @@ pub(crate) fn store_activity_answer(
     live: &LiveState,
     zone: Option<&intl::Zone>,
     pricing: &Pricing,
+    clock: Option<f64>,
 ) -> R<StoreAnswer> {
     let daily = to - from > HOURLY_RANGE_MS;
     let day_starts = if daily {
@@ -2569,11 +2570,14 @@ pub(crate) fn store_activity_answer(
             oldest = Some(oldest.map_or(ms, |min: f64| min.min(ms)));
         }
     }
-    // The store's last read stamps the answer; without one TS reads its own clock, which this
-    // request cannot prove equal, so the TS computation answers.
-    if last_read == 0.0 {
-        return Err(Decline::Stale);
-    }
+    // The store's last read stamps the answer; without one TS read its own clock. The native
+    // read passes the request clock (it is the only reader); the envelope path passes none,
+    // because it cannot prove its clock equal to the TS computation's.
+    let last_read = if last_read == 0.0 {
+        clock.ok_or(Decline::Stale)?
+    } else {
+        last_read
+    };
     let fetched_at = iso(last_read)?;
     let sources = range_to_sources(range, daily, &fetched_at, pricing)?;
     let status = if !sources.is_empty() {
