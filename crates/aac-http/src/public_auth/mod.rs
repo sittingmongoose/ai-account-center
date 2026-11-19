@@ -350,7 +350,15 @@ impl DashboardAuth {
                     return reply;
                 }
             }
+            let worker_collection = backend.as_ref().is_some_and(|worker| {
+                worker.collection_fallback
+                    && native_owners::NativeOwners::owns_collection(
+                        request.method(),
+                        request.uri().path(),
+                    )
+            });
             if let Some(native) = &native_owners
+                && !worker_collection
                 && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 return native.handle(request).await;
@@ -376,7 +384,10 @@ impl DashboardAuth {
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
             {
-                if !cut || compose::cut_route(request.method(), request.uri().path()) {
+                if !cut
+                    || worker_collection
+                    || compose::cut_route(request.method(), request.uri().path())
+                {
                     return backend.forward(request).await;
                 }
                 return plain(404, "API endpoint was not found.");
@@ -507,10 +518,16 @@ pub(crate) async fn run_public_at(
     };
     let enabled = owner_host::enabled();
     #[cfg(unix)]
-    let has_external =
-        cut && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
+    let adopted = if cut {
+        service_link::ServiceLink::acquire_lifecycle(&root).await?
+    } else {
+        None
+    };
+    #[cfg(unix)]
+    let has_external = adopted.is_some();
     #[cfg(not(unix))]
     let has_external = false;
+    let collection_enabled = groups.is_some_and(|groups| groups.collection);
     let groups = groups.map(|mut groups| {
         if has_external {
             groups.collection = false;
@@ -518,13 +535,7 @@ pub(crate) async fn run_public_at(
         groups
     });
     let mut worker = if cut {
-        sidecar::Sidecar::start(
-            &root,
-            address,
-            groups.is_some_and(|groups| groups.collection),
-            has_external,
-        )
-        .await?
+        sidecar::Sidecar::start(&root, address, collection_enabled, !collection_enabled).await?
     } else {
         None
     };
@@ -563,7 +574,9 @@ pub(crate) async fn run_public_at(
         .filter(|_| enabled)
         .map(|host| Arc::new(native_group::Routes::new(host.clone())));
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
-        let routes = lifecycle_host::Routes::new(host, has_external);
+        let routes = lifecycle_host::Routes::new(host);
+        #[cfg(unix)]
+        let routes = routes.with_private(adopted, collection_enabled);
         host.register("lifecycle", routes.router());
         routes
     });

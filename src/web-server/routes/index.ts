@@ -28,7 +28,7 @@ import accountPreferencesRoutes from './account-preferences-routes';
 import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
 import accountAnalyticsRoutes from './account-analytics-routes';
 import accountVisibilityRoutes from './account-visibility-routes';
-import accountLifecycleRoutes from './account-lifecycle-routes';
+import accountLifecycleRoutes, { createAccountLifecycleRouter } from './account-lifecycle-routes';
 import authRoutes from './auth-routes';
 import homeViewRoutes from './home-view-routes';
 import barRoutes from './bar-routes';
@@ -100,6 +100,8 @@ apiRoutes.use('/accounts', accountAnalyticsRoutes);
 apiRoutes.use('/accounts', accountVisibilityRoutes);
 if (process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1') {
   apiRoutes.use('/accounts', accountLifecycleRoutes);
+} else if (process.env.AAC_CUT_WORKER_COLLECTION === '1') {
+  apiRoutes.use('/accounts', createAccountLifecycleRouter({ recheckOnly: true }));
 }
 apiRoutes.use('/auth', authRoutes);
 apiRoutes.use('/views', homeViewRoutes);

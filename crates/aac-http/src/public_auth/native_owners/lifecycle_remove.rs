@@ -8,7 +8,7 @@ use super::{
 use crate::{
     account_reads::public_account_id,
     account_usage::{
-        producer,
+        producer, provider_caches,
         sources::{self, Source},
     },
     key_lifecycle::{self, Effect, Workflow},
@@ -16,7 +16,7 @@ use crate::{
         self, DashboardAccess, Method, Reply, Request, error, lifecycle, response, storage,
     },
 };
-use aac_files::{OwnedStore, read, registry};
+use aac_files::{read, registry};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
@@ -311,8 +311,33 @@ async fn wallet(native: &NativeOwners, id: &str, session: &str, token: Option<&s
             .map_err(|_| Refusal::Failed)?;
         let position = entries.iter().position(|entry| entry.id == id);
         let entry = position.and_then(|i| entries.get(i));
+        let absent = if token.is_some() {
+            Refusal::Stale
+        } else {
+            Refusal::Missing
+        };
+        let _pointer = native
+            .owners
+            .claim(rows, provider_caches::WALLET_ACCOUNT, root, None)
+            .map_err(|_| Refusal::Failed)?;
+        let binding = provider_caches::wallet_source(root)
+            .map_err(|_| Refusal::Failed)?
+            .ok_or(absent)?;
+        let binding_hash = aac_core::sha256_hex(aac_views::js_json::write(&binding));
+        let account = provider_caches::wallet_account(root, &binding_hash)
+            .map_err(|_| Refusal::Failed)?
+            .filter(|account| *account == id)
+            .ok_or(absent)?;
+        let policy = read::ReadPolicy::capped(4096)
+            .owner(read::Owner::Mine)
+            .mode(read::Mode::Private)
+            .ancestors(read::Ancestors::NoLinkBelow(root));
+        let read::Read::Bytes(source_bytes, _) = read::read(source.path(), &policy) else {
+            return Err(Refusal::Failed);
+        };
+        let source_version = aac_core::sha256_hex(source_bytes);
         let fingerprint =
-            storage::sha(&json!([&id, wallet_source(root, &source)?, entry]).to_string());
+            storage::sha(&json!([account, binding_hash, source_version, entry]).to_string());
         if let Some(reply) = approve(
             &native,
             Review {
@@ -350,18 +375,6 @@ async fn wallet(native: &NativeOwners, id: &str, session: &str, token: Option<&s
         Ok(Ok(reply)) => reply,
         Ok(Err(refusal)) => refusal.reply(),
         Err(_) => Refusal::Failed.reply(),
-    }
-}
-
-fn wallet_source(root: &std::path::Path, source: &OwnedStore) -> Result<Option<String>, Refusal> {
-    let policy = read::ReadPolicy::capped(4096)
-        .owner(read::Owner::Mine)
-        .mode(read::Mode::Private)
-        .ancestors(read::Ancestors::NoLinkBelow(root));
-    match read::read(source.path(), &policy) {
-        read::Read::Bytes(bytes, _) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-        read::Read::Absent => Ok(None),
-        _ => Err(Refusal::Failed),
     }
 }
 

@@ -212,6 +212,7 @@ interface Fixture {
 async function fixture(
   options: {
     claudeEnabled?: boolean;
+    recheckOnly?: boolean;
     antigravityFlow?: 'preflight_failed' | 'tool_missing' | null;
     museEnabled?: boolean;
     approvalBinary?: string;
@@ -401,7 +402,10 @@ async function fixture(
     if (req.headers['x-test-device'] === 'true') Object.assign(req, { auth: { kind: 'device' } });
     next();
   });
-  app.use('/api/accounts', createAccountLifecycleRouter({ env: () => env }));
+  app.use(
+    '/api/accounts',
+    createAccountLifecycleRouter({ env: () => env, recheckOnly: options.recheckOnly })
+  );
   app.use((_req, res) => res.status(404).json({ error: 'API endpoint was not found.' }));
   const server: Server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -1555,6 +1559,17 @@ describe('registry, re-check, open, label and trash', () => {
       'secure_transport_required'
     );
     expect((plain.body.jobs as Array<{ verification: unknown }>)[0].verification).toBeNull();
+  });
+
+  it('serves only Re-check in the collection fallback worker', async () => {
+    const f = await fixture({ recheckOnly: true });
+    const recheck = await f.request('POST', '/zai:usage/recheck', {});
+    expect(recheck.status).toBe(200);
+    expect(recheck.body.account).toMatchObject({ id: 'zai:usage', status: 'cached' });
+    expect((await f.request('GET', '/registry')).status).toBe(404);
+    expect(
+      (await f.request('POST', '/zai:usage/recheck', {}, { 'x-test-session': '' })).status
+    ).toBe(401);
   });
 
   it('re-checks one account at most once per 10 s', async () => {
