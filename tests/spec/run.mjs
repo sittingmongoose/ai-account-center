@@ -45,6 +45,13 @@ for (const [program, args] of [
       ...(process.env.AAC_SPEC_APP_UPDATES_UNBOUND === '1' ? ['--rust-unbound'] : []),
     ],
   ],
+  [
+    'bun',
+    [
+      'tests/spec/preferences-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   ...[
     'read-view-parity',
