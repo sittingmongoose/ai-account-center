@@ -111,7 +111,11 @@ all three hold, so nothing is left unwritten and nothing writes twice.
   `tsc --noEmit` clean.
 - Linux service build: `cargo check -p aac-http` on Nas1 under
   `flock /home/sittingmongoose/aac-nas1-heavy.lock` + `nice -n 19 -j 2` — **passes (exit 0)**;
-  the writers' cadence/validation/ingest unit tests are **5/5 green** (`cargo test -p aac-http --lib analytics_writers`).
+  the full `cargo test -p aac-http --lib` suite is green (writers cadence/validation/ingest, models.dev
+  fetch, store host). Build with a real commit (`AAC_BUILD_COMMIT=<head>` or a git checkout): a tar
+  build without `.git` stamps `commit=unknown`, which the boot-identity test
+  `store_binding_identity_is_checked_before_any_open` deliberately rejects — environmental, not a
+  regression (the lead's gate builds from git).
 - Pre-existing Windows failures (not G14 regressions; these files are untouched by this gap):
   aac-files has 5 Unix-centric unit-test failures (identical on the lane E base), and aac-store's
   `store_runs` secret-policy tests `a_refusal_reason_never_quotes_the_writer_folder` /
