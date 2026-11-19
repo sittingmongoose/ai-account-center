@@ -161,8 +161,12 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
     // stopped them for the service) and answers from a fresh local read.
     const fed = statusFedService(res);
     if (fed) {
-      if (await answerStatusOwned(req, res, fed, input)) return;
-      if (typeof current.handBackProducers === 'function') current.handBackProducers();
+      const owned =
+        typeof current.producingOwned !== 'function' || current.producingOwned();
+      if (owned && (await answerStatusOwned(req, res, fed, input))) return;
+      if (owned) {
+        if (typeof current.handBackProducers === 'function') current.handBackProducers();
+      }
       const local = current.readInputs();
       // R2: the same answer from fed generations this side now produces.
       if (await answerStatusFed(req, res, fed, local, getCcsDir())) return;

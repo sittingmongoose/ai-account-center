@@ -5,7 +5,7 @@
 //! order is oldest first; a stable sort by `Date.parse(answeredAt)` matches the reference (a
 //! NaN epoch sorts as 0, as the comparator does).
 
-use crate::answers_engine::{closing_card_versions, HistoryEntry, SendRecord};
+use crate::answers_engine::{HistoryEntry, SendRecord, closing_card_versions};
 use aac_num::ecma;
 
 /// `mergeSharedAnswers(local, shared)`.
@@ -31,11 +31,7 @@ pub fn merge_shared(local: &[HistoryEntry], shared: &[HistoryEntry]) -> Vec<Hist
     if recovered.is_empty() {
         return local.to_vec();
     }
-    let mut out: Vec<HistoryEntry> = local
-        .iter()
-        .cloned()
-        .chain(recovered.into_iter().cloned())
-        .collect();
+    let mut out: Vec<HistoryEntry> = local.iter().cloned().chain(recovered.into_iter().cloned()).collect();
     out.sort_by_key(answered_at);
     out
 }
@@ -101,7 +97,15 @@ mod tests {
 
     #[test]
     fn a_shared_copy_fills_a_version_the_journal_has_not_closed() {
-        let local = vec![entry("a", "answer", "vm.lead--Q1", 1, "s1", "2026-11-19T06:00:00.000Z", false)];
+        let local = vec![entry(
+            "a",
+            "answer",
+            "vm.lead--Q1",
+            1,
+            "s1",
+            "2026-11-19T06:00:00.000Z",
+            false,
+        )];
         let shared = vec![
             entry("b", "answer", "vm.lead--Q1", 1, "s1", "2026-11-19T06:00:00.000Z", true),
             entry("c", "answer", "vm.lead--Q2", 1, "s2", "2026-11-19T05:00:00.000Z", true),
@@ -115,7 +119,15 @@ mod tests {
 
     #[test]
     fn no_shared_copy_returns_the_journal_as_it_is() {
-        let local = vec![entry("a", "note", "vm.lead--Q1", 1, "s1", "2026-11-19T06:00:00.000Z", false)];
+        let local = vec![entry(
+            "a",
+            "note",
+            "vm.lead--Q1",
+            1,
+            "s1",
+            "2026-11-19T06:00:00.000Z",
+            false,
+        )];
         assert_eq!(merge_shared(&local, &[]).len(), 1);
     }
 

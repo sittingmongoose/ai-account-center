@@ -305,6 +305,11 @@ export class StatusService {
     this.hintTimer.unref?.();
   }
 
+  /** G16c: whether the service's producers answer this process's `/api/status` requests. */
+  producingOwned(): boolean {
+    return this.owned && this.produceOwned;
+  }
+
   /** G16c: the service's hint, at most one per window, put on the dashboard's socket. */
   private broadcastOwnedHint(): void {
     const now = Date.now();

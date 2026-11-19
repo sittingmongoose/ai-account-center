@@ -10,11 +10,11 @@
 //! A document the projection refuses declines the whole composition (`None`), as the
 //! TypeScript `reportV2` throwing kept the previous panel.
 
-use super::answered::{active_blocker, ResolvedWaits};
+use super::answered::{ResolvedWaits, active_blocker};
 use crate::answers_engine::card_version;
 use crate::pinned::{
-    BlockedIn, CardIn, ComposeInput, ItemIn, ItemLiteIn, LandedIn, LoopingIn, MachineProblemIn,
-    PinIn, ProgressIn, ReviewIn, StatusIn, StatusProblemIn, TasksIn, ThreadIn,
+    BlockedIn, CardIn, ComposeInput, ItemIn, ItemLiteIn, LandedIn, LoopingIn, MachineProblemIn, PinIn, ProgressIn,
+    ReviewIn, StatusIn, StatusProblemIn, TasksIn, ThreadIn,
 };
 use crate::pins::MergedPin;
 use crate::share::reports::AgentReportsState;
@@ -28,9 +28,7 @@ use std::collections::{BTreeMap, HashSet};
 fn packaged_models() -> &'static Vec<(String, String)> {
     use std::sync::LazyLock;
     static MODELS: LazyLock<Vec<(String, String)>> = LazyLock::new(|| {
-        let Ok(text) = std::str::from_utf8(
-            crate::share::seed::embedded_seed("models.json").unwrap_or_default(),
-        ) else {
+        let Ok(text) = std::str::from_utf8(crate::share::seed::embedded_seed("models.json").unwrap_or_default()) else {
             return Vec::new();
         };
         let Ok(raw) = serde_json::from_str::<Json>(text) else {
@@ -126,10 +124,7 @@ fn report_v2(doc: &Json) -> Option<Json> {
         }
     }
     if let Some(value) = doc.get("readmeQuestions") {
-        out.insert(
-            "readmeQuestions".to_owned(),
-            Json::Bool(value.as_bool()?),
-        );
+        out.insert("readmeQuestions".to_owned(), Json::Bool(value.as_bool()?));
     }
     if let Some(value) = doc.get("progress") {
         if value.is_null() {
@@ -158,10 +153,7 @@ fn report_v2(doc: &Json) -> Option<Json> {
             text(row.get("label"), 24)?;
             one_of(row.get("state"), &["done", "now", "waiting", "next", "skipped"])?;
             if row.contains_key("by") {
-                one_of(
-                    row.get("by"),
-                    &["thread", "owner", "reviewer", "other"],
-                )?;
+                one_of(row.get("by"), &["thread", "owner", "reviewer", "other"])?;
             }
             for key in ["round", "of"] {
                 if row.get(key).is_some_and(|v| !v.is_null()) {
@@ -175,10 +167,7 @@ fn report_v2(doc: &Json) -> Option<Json> {
                 text(row.get("note"), 40)?;
             }
             if row.get("waitingOn").is_some_and(|v| !v.is_null()) {
-                one_of(
-                    row.get("waitingOn"),
-                    &["agent", "review", "lock", "resource", "quota"],
-                )?;
+                one_of(row.get("waitingOn"), &["agent", "review", "lock", "resource", "quota"])?;
             }
             let mut stage = Map::new();
             for key in ["label", "state", "by", "waitingOn", "round", "of", "note"] {
@@ -188,13 +177,7 @@ fn report_v2(doc: &Json) -> Option<Json> {
             }
             stages.push(Json::Object(stage));
         }
-        if stages.len() < 2
-            || stages
-                .iter()
-                .filter(|row| row["state"] == Json::from("now"))
-                .count()
-                > 1
-        {
+        if stages.len() < 2 || stages.iter().filter(|row| row["state"] == Json::from("now")).count() > 1 {
             return None;
         }
         out.insert("stages".to_owned(), Json::Array(stages));
@@ -257,9 +240,7 @@ fn report_v2(doc: &Json) -> Option<Json> {
                 for item in media {
                     let item = item.as_object()?;
                     one_of(item.get("kind"), &["image", "video"])?;
-                    if item.get("path").is_none_or(Json::is_null)
-                        && item.get("url").is_none_or(Json::is_null)
-                    {
+                    if item.get("path").is_none_or(Json::is_null) && item.get("url").is_none_or(Json::is_null) {
                         return None;
                     }
                     for (key, cap) in [("path", 400), ("url", 400), ("poster", 400)] {
@@ -418,12 +399,9 @@ pub fn compose_input(
                 title: item.get("title")?.as_str()?.to_owned(),
                 state: item.get("state")?.as_str()?.to_owned(),
                 reviews,
-                landed: item
-                    .get("landed")
-                    .filter(|v| !v.is_null())
-                    .map(|landed| LandedIn {
-                        at_ms: epoch(landed.get("at")),
-                    }),
+                landed: item.get("landed").filter(|v| !v.is_null()).map(|landed| LandedIn {
+                    at_ms: epoch(landed.get("at")),
+                }),
                 blocked_on: blocked_on(reads, &row.writer, item.get("blockedOn")),
                 updated_at_ms: epoch(item.get("updatedAt")),
             });
@@ -456,11 +434,7 @@ pub fn compose_input(
             id: id.to_owned(),
             seq: seq.as_u64()?,
             title: doc.get("title")?.as_str()?.to_owned(),
-            kind: doc
-                .get("kind")
-                .and_then(Json::as_str)
-                .unwrap_or("question")
-                .to_owned(),
+            kind: doc.get("kind").and_then(Json::as_str).unwrap_or("question").to_owned(),
             asked_at_ms: epoch(doc.get("askedAt")),
         });
     }
@@ -471,11 +445,7 @@ pub fn compose_input(
         let mut blockers = Vec::new();
         for blocker in array(doc.get("blockers")) {
             if blocker.get("waitingOn").and_then(Json::as_str) == Some("owner")
-                && reads.answered(
-                    &writer,
-                    blocker.get("card"),
-                    blocker.get("text"),
-                )
+                && reads.answered(&writer, blocker.get("card"), blocker.get("text"))
             {
                 continue;
             }
@@ -517,10 +487,7 @@ pub fn compose_input(
                 .and_then(|p| p.get("reason"))
                 .and_then(Json::as_str)
                 .map(str::to_owned),
-            problem_since_ms: row
-                .get("problem")
-                .and_then(|p| p.get("since"))
-                .and_then(Json::as_i64),
+            problem_since_ms: row.get("problem").and_then(|p| p.get("since")).and_then(Json::as_i64),
         });
     }
     let status_problems = docs
@@ -547,12 +514,7 @@ pub fn compose_input(
 
 fn map(value: Json) -> Option<BTreeMap<String, Json>> {
     let object = value.as_object()?;
-    Some(
-        object
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
-    )
+    Some(object.iter().map(|(key, value)| (key.clone(), value.clone())).collect())
 }
 
 fn progress(value: Option<&Json>) -> Option<Option<ProgressIn>> {

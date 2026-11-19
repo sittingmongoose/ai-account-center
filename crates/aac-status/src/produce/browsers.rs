@@ -6,7 +6,7 @@
 //! problem, and a session's URL reduced to host and path (no query, no fragment, file URLs
 //! show their path). The one secret filter runs on every shown tool text.
 
-use super::{next_problem, ReadProblem};
+use super::{ReadProblem, next_problem};
 use serde::Serialize;
 use serde_json::Value as Json;
 use std::collections::HashMap;
@@ -74,9 +74,7 @@ pub struct BrowserMachine {
 }
 
 fn num(value: Option<&Json>) -> Option<f64> {
-    value
-        .and_then(Json::as_f64)
-        .filter(|n| n.is_finite())
+    value.and_then(Json::as_f64).filter(|n| n.is_finite())
 }
 
 fn int(value: Option<&Json>) -> Option<i64> {
@@ -92,16 +90,7 @@ fn int(value: Option<&Json>) -> Option<i64> {
 #[must_use]
 pub fn short_text(value: Option<&Json>, max: usize) -> Option<String> {
     let text = value?.as_str()?;
-    let clean: String = text
-        .chars()
-        .map(|c| {
-            if c.is_control() {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect();
+    let clean: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let clean = clean.trim();
     if clean.is_empty() || crate::secret_policy::find_secret(clean).is_some() {
         return None;
@@ -159,9 +148,7 @@ pub fn session_url(value: Option<&Json>) -> Option<String> {
 
 fn scheme_is(scheme: &str) -> bool {
     let mut bytes = scheme.bytes();
-    bytes
-        .next()
-        .is_some_and(|b| b.is_ascii_alphabetic())
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
         && bytes.all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
 }
 
@@ -210,10 +197,7 @@ fn phones(value: Option<&Json>) -> Option<Option<Phones>> {
 /// # Errors
 /// The answer is not an object with a `rows` array (`UNKNOWN_SHAPE`).
 pub fn parse_slots(raw: &Json) -> Result<Vec<BrowserMachine>, &'static str> {
-    let rows = raw
-        .get("rows")
-        .and_then(Json::as_array)
-        .ok_or(UNKNOWN_SHAPE)?;
+    let rows = raw.get("rows").and_then(Json::as_array).ok_or(UNKNOWN_SHAPE)?;
     let mut result = Vec::new();
     for row in rows {
         let machine = row.get("machine").cloned().unwrap_or(Json::Null);
@@ -262,12 +246,8 @@ pub fn parse_slots(raw: &Json) -> Result<Vec<BrowserMachine>, &'static str> {
         if let Some(snapshot) = short_text(state.get("snapshot"), 200) {
             notes.push(snapshot);
         }
-        if phone_rows.as_ref().is_some_and(|phones| phones.is_none())
-            && SIMLOCK_MACHINES.contains(&name)
-        {
-            notes.push(
-                "reported no phone count (phones: null), so phones here are unknown".to_owned(),
-            );
+        if phone_rows.as_ref().is_some_and(|phones| phones.is_none()) && SIMLOCK_MACHINES.contains(&name) {
+            notes.push("reported no phone count (phones: null), so phones here are unknown".to_owned());
         }
         let mem = num(state.get("mem_gb")).map(|gb| aac_num::ecma::math_round(gb * 10.0) / 10.0);
         result.push(BrowserMachine {
@@ -291,9 +271,7 @@ pub fn parse_slots(raw: &Json) -> Result<Vec<BrowserMachine>, &'static str> {
                         .and_then(Json::as_str)
                         .filter(|id| {
                             (1..=64).contains(&id.len())
-                                && id
-                                    .bytes()
-                                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
                         })
                         .map(str::to_owned),
                     url: session_url(session.get("url")),
@@ -316,17 +294,9 @@ pub fn parse_slots(raw: &Json) -> Result<Vec<BrowserMachine>, &'static str> {
 /// failed keeps its last good counts with their time and the failure, or has unknown counts
 /// and no read time when it never answered.
 #[must_use]
-pub fn merge_rows(
-    before: Option<&[BrowserMachine]>,
-    rows: Vec<BrowserMachine>,
-    now: i64,
-) -> Vec<BrowserMachine> {
+pub fn merge_rows(before: Option<&[BrowserMachine]>, rows: Vec<BrowserMachine>, now: i64) -> Vec<BrowserMachine> {
     let index: HashMap<&str, &BrowserMachine> = before
-        .map(|rows| {
-            rows.iter()
-                .map(|row| (row.machine.as_str(), row))
-                .collect()
-        })
+        .map(|rows| rows.iter().map(|row| (row.machine.as_str(), row)).collect())
         .unwrap_or_default();
     rows.into_iter()
         .map(|row| {
@@ -427,8 +397,14 @@ mod tests {
         assert_eq!(
             by["mac"].phones,
             Some(Some(Phones {
-                ios: Some(Counts { running: Some(0), max: Some(2) }),
-                android: Some(Counts { running: Some(1), max: None }),
+                ios: Some(Counts {
+                    running: Some(0),
+                    max: Some(2)
+                }),
+                android: Some(Counts {
+                    running: Some(1),
+                    max: None
+                }),
             }))
         );
         assert_eq!(by["mac"].notes.as_deref(), Some(&[][..]));
@@ -466,11 +442,27 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].browsers, Counts { running: Some(2), max: Some(12) });
-        assert_eq!(rows[0].recordings, Counts { running: Some(1), max: Some(5) });
+        assert_eq!(
+            rows[0].browsers,
+            Counts {
+                running: Some(2),
+                max: Some(12)
+            }
+        );
+        assert_eq!(
+            rows[0].recordings,
+            Counts {
+                running: Some(1),
+                max: Some(5)
+            }
+        );
         assert_eq!(rows[0].mem_gb, Some(15.4));
         assert_eq!(
-            rows[0].sessions.iter().map(|s| s.url.as_deref().unwrap()).collect::<Vec<_>>(),
+            rows[0]
+                .sessions
+                .iter()
+                .map(|s| s.url.as_deref().unwrap())
+                .collect::<Vec<_>>(),
             ["10.0.0.5:8963/head.html", "/tmp/run/page one.html"]
         );
         assert_eq!(session_url(Some(&json!("javascript:alert(1)"))), None);
@@ -488,8 +480,20 @@ mod tests {
             ]
         }))
         .unwrap();
-        assert_eq!(rows[0].browsers, Counts { running: None, max: None });
-        assert_eq!(rows[0].recordings, Counts { running: None, max: None });
+        assert_eq!(
+            rows[0].browsers,
+            Counts {
+                running: None,
+                max: None
+            }
+        );
+        assert_eq!(
+            rows[0].recordings,
+            Counts {
+                running: None,
+                max: None
+            }
+        );
         assert_eq!(rows[0].gpu_pct, None);
         assert!(rows[0].sessions.is_empty());
         assert_eq!(

@@ -129,8 +129,7 @@ impl Facts {
     pub fn build(acc: &Acc, zone: Option<&Zone>) -> Facts {
         let mut dates = IndexMap::new();
         for ms in &acc.times {
-            let (Some(iso), Some((clock, day))) = (ecma::to_iso_string(*ms), zone.and_then(|z| z.words(*ms)))
-            else {
+            let (Some(iso), Some((clock, day))) = (ecma::to_iso_string(*ms), zone.and_then(|z| z.words(*ms))) else {
                 continue;
             };
             dates.insert(*ms, DateWords { iso, clock, day });
@@ -149,12 +148,7 @@ impl Facts {
         let dates: serde_json::Map<String, Json> = self
             .dates
             .iter()
-            .map(|(ms, date)| {
-                (
-                    ms.to_string(),
-                    json_date(date),
-                )
-            })
+            .map(|(ms, date)| (ms.to_string(), json_date(date)))
             .collect();
         let epochs: serde_json::Map<String, Json> = self
             .epochs
@@ -235,9 +229,7 @@ pub fn ranks<'a>(words: impl IntoIterator<Item = &'a String>) -> IndexMap<String
             provable.push(word);
         }
     }
-    provable.sort_by(|a, b| {
-        aac_num::intl::ascii_compare(a, b).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    provable.sort_by(|a, b| aac_num::intl::ascii_compare(a, b).unwrap_or(std::cmp::Ordering::Equal));
     provable
         .into_iter()
         .enumerate()
@@ -280,10 +272,7 @@ mod tests {
             "skip": 1.5,
         });
         let facts = Facts::of(&[&data], Some(&zone()));
-        assert_eq!(
-            facts.epochs.get("2026-11-14T12:00:00.000Z"),
-            Some(&1_794_657_600_000)
-        );
+        assert_eq!(facts.epochs.get("2026-11-14T12:00:00.000Z"), Some(&1_794_657_600_000));
         // The epoch and the safe-integer instant both become date facts.
         assert!(facts.dates.contains_key(&1_794_657_600_000));
         assert!(facts.dates.contains_key(&1_790_000_000_000));
@@ -318,9 +307,7 @@ mod tests {
         let text = facts.to_text();
         assert!(text.starts_with("{\"dates\":{\"1794657600000\":{\"iso\":\"2026-11-14T12:00:00.000Z\",\"clock\":\"12:00 PM\",\"day\":\"Nov 14\"}},"));
         // The ISO word's part after its first dot is a word too, and sorts before it.
-        assert!(text.ends_with(
-            "\"order\":{\"000Z\":0,\"2026-11-14T12:00:00.000Z\":1,\"a\":2,\"b\":3}}"
-        ));
+        assert!(text.ends_with("\"order\":{\"000Z\":0,\"2026-11-14T12:00:00.000Z\":1,\"a\":2,\"b\":3}}"));
         // The parsed value is the same facts.
         let parsed: Facts = Facts {
             dates: facts.dates.clone(),

@@ -75,9 +75,7 @@ pub struct Status {
 }
 
 fn num(value: Option<&Json>) -> Option<f64> {
-    value
-        .and_then(Json::as_f64)
-        .filter(|n| n.is_finite())
+    value.and_then(Json::as_f64).filter(|n| n.is_finite())
 }
 
 fn int(value: Option<&Json>) -> Option<i64> {
@@ -113,9 +111,7 @@ pub fn parse_status(raw: &Json) -> Result<Status, SimlockError> {
     if health == Some("failed") {
         return Err(SimlockError::Failed);
     }
-    if rec.contains_key("daemon")
-        && (!rec.contains_key("capacity") || !raw.get("leases").is_some_and(Json::is_array))
-    {
+    if rec.contains_key("daemon") && (!rec.contains_key("capacity") || !raw.get("leases").is_some_and(Json::is_array)) {
         return Err(SimlockError::Shape);
     }
     let capacity_raw = raw.get("capacity").cloned().unwrap_or(Json::Null);
@@ -197,10 +193,7 @@ pub fn parse_status(raw: &Json) -> Result<Status, SimlockError> {
         let Some(device) = short_text(lease.get("deviceId"), 80) else {
             continue;
         };
-        let (device_label, platform) = devices
-            .get(&device)
-            .cloned()
-            .unwrap_or((None, None));
+        let (device_label, platform) = devices.get(&device).cloned().unwrap_or((None, None));
         leases.push(Lease {
             device: device.clone(),
             device_label,
@@ -250,8 +243,20 @@ mod tests {
         assert_eq!(
             capacity,
             vec![
-                Capacity { platform: "android".into(), running: Some(0), max: Some(1), reserved: Some(1), over_limit: true },
-                Capacity { platform: "ios".into(), running: Some(1), max: Some(1), reserved: Some(0), over_limit: false },
+                Capacity {
+                    platform: "android".into(),
+                    running: Some(0),
+                    max: Some(1),
+                    reserved: Some(1),
+                    over_limit: true
+                },
+                Capacity {
+                    platform: "ios".into(),
+                    running: Some(1),
+                    max: Some(1),
+                    reserved: Some(0),
+                    over_limit: false
+                },
             ]
         );
         assert_eq!(
@@ -277,7 +282,9 @@ mod tests {
             Err(SimlockError::Starting)
         );
         assert_eq!(
-            parse_status(&json!({ "daemon": { "health": "failed", "mode": "worker" }, "capacity": {}, "devices": [], "leases": [] })),
+            parse_status(
+                &json!({ "daemon": { "health": "failed", "mode": "worker" }, "capacity": {}, "devices": [], "leases": [] })
+            ),
             Err(SimlockError::Failed)
         );
         assert_eq!(
@@ -314,7 +321,11 @@ mod tests {
             }]
         );
         assert_eq!(
-            status.leases.iter().map(|l| (l.device.as_str(), l.last_known)).collect::<Vec<_>>(),
+            status
+                .leases
+                .iter()
+                .map(|l| (l.device.as_str(), l.last_known))
+                .collect::<Vec<_>>(),
             [("dev_1", true), ("dev_2", false)]
         );
     }

@@ -187,12 +187,7 @@ fn probe_cores(stdout: &str, cores: Option<f64>) -> Option<i64> {
     cores.filter(|n| *n > 0.0).map(|n| n as i64)
 }
 
-fn remote_busy_pct(
-    host: HostOs,
-    stdout: &str,
-    cpu_pct: Option<f64>,
-    cores: Option<i64>,
-) -> Option<i64> {
+fn remote_busy_pct(host: HostOs, stdout: &str, cpu_pct: Option<f64>, cores: Option<i64>) -> Option<i64> {
     if host == HostOs::Windows {
         let loads: Vec<&str> = stdout
             .split(['\r', '\n'])
@@ -300,11 +295,8 @@ pub fn parse_probe(host: HostOs, stdout: &str) -> Option<Sample> {
     let disk_read = disk_total.is_some() && disk_free.is_some() && disk_total.unwrap_or(0.0) > 0.0;
     let disk = if disk_read {
         Some(Disk {
-            mount: short_text(
-                values.get("mount").map(|v| Json::String(v.clone())).as_ref(),
-                80,
-            )
-            .unwrap_or_else(|| "/".to_owned()),
+            mount: short_text(values.get("mount").map(|v| Json::String(v.clone())).as_ref(), 80)
+                .unwrap_or_else(|| "/".to_owned()),
             free_bytes: disk_free.unwrap_or(0.0),
             total_bytes: disk_total.unwrap_or(0.0),
         })
@@ -539,12 +531,17 @@ mod tests {
         assert_eq!(no_disk.disk, None);
         assert_eq!(no_disk.disk_error.as_deref(), Some(DISK_ERROR));
         assert_eq!(no_disk.memory_error, None);
-        let no_memory = parse_probe(HostOs::Windows, "cores=32\r\ndiskTotalB=100\r\ndiskFreeB=50\r\nmount=C:\r\n").unwrap();
+        let no_memory = parse_probe(
+            HostOs::Windows,
+            "cores=32\r\ndiskTotalB=100\r\ndiskFreeB=50\r\nmount=C:\r\n",
+        )
+        .unwrap();
         assert_eq!(no_memory.mem_available_bytes, None);
         assert_eq!(no_memory.memory_error.as_deref(), Some(MEMORY_ERROR));
         assert_eq!(no_memory.disk_error, None);
-        assert!(probe_command(HostOs::Windows)
-            .starts_with("powershell.exe -NoProfile -NonInteractive -EncodedCommand "));
+        assert!(
+            probe_command(HostOs::Windows).starts_with("powershell.exe -NoProfile -NonInteractive -EncodedCommand ")
+        );
     }
 
     #[test]
@@ -568,25 +565,13 @@ mod tests {
     #[test]
     fn mac_totals_reject_malformed_and_keep_the_rest() {
         assert!(parse_probe(HostOs::Mac, "memTotalB=1e308\nmemAvailPct=100\n").is_none());
-        let malformed = parse_probe(
-            HostOs::Mac,
-            "cores=8\nmemTotalB=1e308\nmemAvailPct=100\n",
-        )
-        .unwrap();
+        let malformed = parse_probe(HostOs::Mac, "cores=8\nmemTotalB=1e308\nmemAvailPct=100\n").unwrap();
         assert_eq!(malformed.cores, Some(8));
         assert_eq!(malformed.mem_total_bytes, None);
         assert_eq!(malformed.memory_error.as_deref(), Some(MEMORY_ERROR));
-        let oversized = parse_probe(
-            HostOs::Mac,
-            "cores=8\nmemTotalB=18446744073709551615\nmemAvailPct=67\n",
-        )
-        .unwrap();
+        let oversized = parse_probe(HostOs::Mac, "cores=8\nmemTotalB=18446744073709551615\nmemAvailPct=67\n").unwrap();
         assert_eq!(oversized.mem_available_bytes, None);
-        let limit = parse_probe(
-            HostOs::Mac,
-            "memTotalB=9007199254740985\nmemAvailPct=100\n",
-        )
-        .unwrap();
+        let limit = parse_probe(HostOs::Mac, "memTotalB=9007199254740985\nmemAvailPct=100\n").unwrap();
         assert_eq!(limit.mem_available_bytes, Some(9_007_199_254_740_985.0));
         assert_eq!(limit.memory_error, None);
         let whole = parse_probe(HostOs::Mac, "memTotalB=17179869184\nmemAvailPct=100\n").unwrap();
@@ -619,7 +604,10 @@ mod tests {
             mac_memory: None,
         });
         assert_eq!(no_disk.disk, None);
-        assert_eq!(no_disk.disk_error.as_deref(), Some("The system disk could not be read."));
+        assert_eq!(
+            no_disk.disk_error.as_deref(),
+            Some("The system disk could not be read.")
+        );
         assert_eq!(no_disk.mem_available_bytes, Some(1024.0 * 1024.0 * 1024.0));
         assert_eq!(no_disk.cores, Some(8));
         assert_eq!(no_disk.load1, Some(1.2));
@@ -659,9 +647,6 @@ mod tests {
             Some(1_073_741_824.0)
         );
         assert_eq!(mem_available_from("MemTotal: 1 kB\n"), None);
-        assert_eq!(
-            mem_available_from("MemAvailable: 12 MB\n"),
-            None
-        );
+        assert_eq!(mem_available_from("MemAvailable: 12 MB\n"), None);
     }
 }

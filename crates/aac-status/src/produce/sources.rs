@@ -16,7 +16,7 @@ use super::answers_feed::AnswersFeed;
 use super::facts::Facts;
 use super::usage::UsageInput;
 use aac_num::intl::Zone;
-use serde_json::{json, Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 
 /// The service's readings for one set of generations.
 pub struct Readings<'a> {
@@ -74,24 +74,14 @@ pub fn build(readings: &Readings<'_>) -> Result<Sources, &'static str> {
         ),
     });
     let partial_facts = Facts::of(
-        &[
-            readings.reports,
-            readings.quota,
-            readings.pinned,
-            &collected,
-            &answers,
-        ],
+        &[readings.reports, readings.quota, readings.pinned, &collected, &answers],
         Some(readings.zone),
     );
     let presentation: crate::read_context::Presentation =
         serde_json::from_value(partial_facts.to_json()).map_err(|_| "facts")?;
     let now_date = crate::read_context::Date::of_now(
         readings.now,
-        readings
-            .zone
-            .words(readings.now)
-            .ok_or("zone")?
-            .0,
+        readings.zone.words(readings.now).ok_or("zone")?.0,
         readings.zone.words(readings.now).ok_or("zone")?.1,
     )
     .ok_or("date")?;
@@ -107,10 +97,7 @@ pub fn build(readings: &Readings<'_>) -> Result<Sources, &'static str> {
         std::sync::Arc::new(presentation),
         (readings.now, now_date),
         readings.offset_minutes,
-        readings
-            .usage
-            .map(UsageInput::account_order)
-            .unwrap_or_default(),
+        readings.usage.map(UsageInput::account_order).unwrap_or_default(),
     )
     .ok_or("spend")?;
     let quota = json!({"quota": readings.quota, "spendByStream": panel});
@@ -202,13 +189,17 @@ mod tests {
             zone: &zone(),
         })
         .unwrap();
-        assert!(sources.collected.starts_with(
-            "{\"registry\":{\"data\":null,\"asOf\":null,\"error\":null},\"machines\":{},"
-        ));
+        assert!(
+            sources
+                .collected
+                .starts_with("{\"registry\":{\"data\":null,\"asOf\":null,\"error\":null},\"machines\":{},")
+        );
         assert!(sources.answers.starts_with("{\"answers\":[],\"sends\":[]"));
-        assert!(sources
-            .facts_data
-            .starts_with("{\"timeZone\":\"America/New_York\",\"hiddenThreadNames\":[\"aac-answers\"]"));
+        assert!(
+            sources
+                .facts_data
+                .starts_with("{\"timeZone\":\"America/New_York\",\"hiddenThreadNames\":[\"aac-answers\"]")
+        );
         assert!(sources.facts.starts_with("{\"dates\":{"));
     }
 }

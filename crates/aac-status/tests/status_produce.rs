@@ -8,21 +8,19 @@
 //! keeps Node's key order. The facts' key order follows first-seen order on both sides; their
 //! values are compared.
 
-use aac_status::produce::answers_feed::{merge_shared, AnswersFeed};
+use aac_status::answers_engine::{HistoryEntry, StepState};
+use aac_status::produce::answers_feed::{AnswersFeed, merge_shared};
 use aac_status::produce::browsers::{self, BrowserMachine};
 use aac_status::produce::facts::ZoneFacts;
 use aac_status::produce::machines::{self, HostOs};
 use aac_status::produce::simlock;
 use aac_status::produce::sources::{self, Readings};
 use aac_status::produce::usage::UsageInput;
-use aac_status::answers_engine::{HistoryEntry, StepState};
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 
 fn vectors() -> Json {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/spec/status-produce-vectors.json");
-    serde_json::from_str(&std::fs::read_to_string(path).expect("status-produce-vectors.json"))
-        .expect("vectors parse")
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/spec/status-produce-vectors.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("status-produce-vectors.json")).expect("vectors parse")
 }
 
 /// Both sides as `JSON.stringify` writes them: a JSON number that is a whole value writes the
@@ -150,23 +148,13 @@ fn the_six_sources_carry_the_same_content_as_the_front_door() {
             .as_array()
             .unwrap()
             .iter()
-            .map(|row| {
-                [
-                    row[0].as_i64().unwrap(),
-                    row[1].as_i64().unwrap(),
-                ]
-            })
+            .map(|row| [row[0].as_i64().unwrap(), row[1].as_i64().unwrap()])
             .collect(),
     };
     let zone = facts.zone().expect("the fixture zone proves");
     let now = vectors["now"].as_i64().unwrap();
     let answers = AnswersFeed {
-        answers: input["answers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(entry)
-            .collect(),
+        answers: input["answers"].as_array().unwrap().iter().map(entry).collect(),
         sends: Vec::new(),
         problem: input["answerHistoryProblem"].as_str().map(str::to_owned),
     };
@@ -201,8 +189,7 @@ fn the_six_sources_carry_the_same_content_as_the_front_door() {
         assert_same(source, rust, &ts);
     }
     let rust_facts: Json = serde_json::from_str(&built.facts).unwrap();
-    let ts_facts: Json =
-        serde_json::from_str(recorded["status-facts"]["facts"].as_str().unwrap()).unwrap();
+    let ts_facts: Json = serde_json::from_str(recorded["status-facts"]["facts"].as_str().unwrap()).unwrap();
     // The epochs and ranks are the whole set. Dates are a subset: an instant outside the
     // display zone's proved window keeps no word here (the reference's `Intl` writes one for
     // any instant).

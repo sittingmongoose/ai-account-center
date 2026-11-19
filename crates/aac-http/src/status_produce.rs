@@ -24,25 +24,25 @@
 //! cannot read, a pinned composition whose documents fail their projection. The front door then
 //! answers with its own producers, which it restarts on the first decline.
 
-use aac_status::answers_engine::{closing_card_versions, HistoryEntry, SendRecord};
-use aac_status::produce::answered::{closed_versions, resolved_card_waits, ResolvedWaits};
-use aac_status::produce::answers_feed::{merge_shared, AnswersFeed};
+use crate::answers_owned::AnswersOwned;
+use crate::feed::Feeds;
+use crate::status_owned::Scan;
+use crate::status_run::{find_executable, run, ssh_argv};
+use aac_num::intl::Zone;
+use aac_status::answers_engine::closing_card_versions;
+use aac_status::produce::answered::{ResolvedWaits, resolved_card_waits};
+use aac_status::produce::answers_feed::AnswersFeed;
 use aac_status::produce::browsers::{self, BrowserMachine};
 use aac_status::produce::facts::ZoneFacts;
 use aac_status::produce::machines::{self as machines_produce, HostOs, Platform, Sample};
 use aac_status::produce::pinned_input;
 use aac_status::produce::simlock::{self, SimlockError, Status as SimlockStatus};
 pub(crate) use aac_status::produce::usage::UsageInput;
-use aac_status::produce::{next_problem, Collected, ReadProblem};
+use aac_status::produce::{Collected, ReadProblem, next_problem};
 use aac_status::share::reports::AgentReportsState;
 use aac_status::share::status_docs::StatusDocsState;
-use crate::answers_owned::AnswersOwned;
-use crate::feed::Feeds;
-use crate::status_owned::Scan;
-use crate::status_run::{find_executable, run, ssh_argv};
-use aac_num::intl::Zone;
 use aac_views::decline::Decline;
-use serde_json::{json, Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,8 +55,6 @@ const COLLECT_EVERY_MS: u64 = 60_000;
 const DEMAND_WINDOW_MS: u64 = 15 * 60_000;
 /// The hint throttle (`HINT_GAP_MS`): one `status-changed` per window.
 const HINT_GAP_MS: u64 = 5_000;
-/// The pinned panel's recomposition cadence: the reports scan's.
-const PINNED_EVERY_MS: u64 = 10_000;
 
 const REPORTS: &str = "status-reports";
 const QUOTA: &str = "status-quota";
@@ -193,7 +191,6 @@ fn empty_reports() -> AgentReportsState {
 
 pub(crate) struct Produce {
     ccs: PathBuf,
-    root: PathBuf,
     feeds: Feeds,
     answers: Arc<AnswersOwned>,
     inner: Mutex<Inner>,
@@ -201,10 +198,14 @@ pub(crate) struct Produce {
 }
 
 impl Produce {
-    pub(crate) fn new(ccs: PathBuf, root: PathBuf, feeds: Feeds, answers: Arc<AnswersOwned>) -> Arc<Self> {
+    pub(crate) fn new(
+        ccs: PathBuf,
+        _root: PathBuf,
+        feeds: Feeds,
+        answers: Arc<AnswersOwned>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             ccs,
-            root,
             feeds,
             answers,
             inner: Mutex::new(Inner::new()),
@@ -220,7 +221,10 @@ impl Produce {
         let mut last = self.clock.load(Ordering::Relaxed);
         loop {
             let next = (last + 1).max(now.saturating_mul(1000));
-            match self.clock.compare_exchange(last, next, Ordering::Relaxed, Ordering::Relaxed) {
+            match self
+                .clock
+                .compare_exchange(last, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
                 Ok(_) => return next,
                 Err(held) => last = held,
             }
@@ -324,11 +328,17 @@ impl Produce {
                     .unwrap_or_else(|_| Err("The machine did not answer.".to_owned()))
             } else {
                 let Some(host) = host else {
-                    results.insert(machine, Err("No ssh host is configured for this machine.".to_owned()));
+                    results.insert(
+                        machine,
+                        Err("No ssh host is configured for this machine.".to_owned()),
+                    );
                     continue;
                 };
                 let Some(alias) = alias else {
-                    results.insert(machine, Err("No ssh host is configured for this machine.".to_owned()));
+                    results.insert(
+                        machine,
+                        Err("No ssh host is configured for this machine.".to_owned()),
+                    );
                     continue;
                 };
                 read_remote(host, &alias).await
@@ -343,7 +353,11 @@ impl Produce {
             inner.machines.insert(
                 machine.clone(),
                 apply_machine(
-                    inner.machines.get(&machine).cloned().unwrap_or_else(Collected::empty),
+                    inner
+                        .machines
+                        .get(&machine)
+                        .cloned()
+                        .unwrap_or_else(Collected::empty),
                     result,
                     now_i64,
                 ),
@@ -377,7 +391,9 @@ impl Produce {
         inner.collecting = false;
         drop(inner);
         let owner = Arc::clone(self);
-        tokio::task::spawn_blocking(move || owner.publish(None)).await.ok();
+        tokio::task::spawn_blocking(move || owner.publish(None))
+            .await
+            .ok();
         self.hint();
     }
 
@@ -407,7 +423,9 @@ impl Produce {
             inner.sources_dirty = true;
         }
         let owner = Arc::clone(self);
-        tokio::task::spawn_blocking(move || owner.publish(None)).await.ok();
+        tokio::task::spawn_blocking(move || owner.publish(None))
+            .await
+            .ok();
         self.hint();
     }
 
@@ -431,7 +449,7 @@ impl Produce {
             self.refresh_answers(&mut inner);
         }
         let zone = match zone_override {
-            Some((name, facts, zone)) => {
+            Some((name, _facts, zone)) => {
                 if inner
                     .zone
                     .as_ref()
@@ -487,21 +505,22 @@ impl Produce {
             return;
         };
         let machines = machines_json(&inner.machines);
-        let sources = aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
-            reports: &inner.reports,
-            quota: &inner.quota,
-            pinned: &inner.pinned,
-            registry: &inner.registry,
-            machines: &machines,
-            browsers: &json!(inner.browsers),
-            simlock: &json!(inner.simlock),
-            usage: inner.usage.as_ref(),
-            answers: &inner.answers,
-            time_zone: &zone.name,
-            now: clamp_i64(now),
-            offset_minutes: zone.offset_now,
-            zone: &zone.zone,
-        });
+        let sources =
+            aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
+                reports: &inner.reports,
+                quota: &inner.quota,
+                pinned: &inner.pinned,
+                registry: &inner.registry,
+                machines: &machines,
+                browsers: &json!(inner.browsers),
+                simlock: &json!(inner.simlock),
+                usage: inner.usage.as_ref(),
+                answers: &inner.answers,
+                time_zone: &zone.name,
+                now: clamp_i64(now),
+                offset_minutes: zone.offset_now,
+                zone: &zone.zone,
+            });
         let Ok(sources) = sources else {
             return;
         };
@@ -544,7 +563,7 @@ impl Produce {
     ) -> Result<String, Decline> {
         self.touch();
         self.maybe_collect();
-        let zone = zone_facts.zone().ok_or(Decline::Facts)?;
+        let zone = zone_facts.zone().ok_or(Decline::Locale)?;
         let mut inner = self.lock();
         if inner.answers_dirty {
             self.refresh_answers(&mut inner);
@@ -563,11 +582,7 @@ impl Produce {
             inner.sources_dirty = true;
         }
         if inner.pinned_dirty
-            || inner
-                .zone
-                .as_ref()
-                .map(|zone| zone.offset_now)
-                != inner.pinned_offset
+            || inner.zone.as_ref().map(|zone| zone.offset_now) != inner.pinned_offset
         {
             let offset = zone.offset_minutes(clamp_i64(now)).unwrap_or(0);
             if let Some(panel) = pinned_panel(&inner, clamp_i64(now), offset) {
@@ -598,7 +613,7 @@ impl Produce {
                     .ok_or(Decline::Unsupported)?,
             );
         }
-        let now_words = zone.words(clamp_i64(now)).ok_or(Decline::Facts)?;
+        let now_words = zone.words(clamp_i64(now)).ok_or(Decline::Locale)?;
         let header = json!({
             "now": clamp_i64(now),
             "clock": now_words.0,
@@ -677,7 +692,7 @@ fn read_file(path: &str) -> Option<String> {
 }
 
 /// `statfs('/')`: `(free bytes, total bytes)` as Node's `bavail*bsize` and `blocks*bsize`.
-fn statfs_root() -> Option<(f64, f64)> {
+fn statfs_root(_path: &str) -> Option<(f64, f64)> {
     let path = std::ffi::CString::new("/").ok()?;
     // SAFETY: `statvfs` fills the struct we pass; its return value is checked.
     let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
@@ -713,7 +728,11 @@ fn linux_total_memory() -> (Option<f64>, Option<f64>) {
             let Some(rest) = line.strip_prefix(name) else {
                 continue;
             };
-            let digits: String = rest.trim_start().chars().take_while(char::is_ascii_digit).collect();
+            let digits: String = rest
+                .trim_start()
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
             if digits.is_empty() {
                 return None;
             }
@@ -721,7 +740,10 @@ fn linux_total_memory() -> (Option<f64>, Option<f64>) {
         }
         None
     };
-    (field("MemTotal:"), machines_produce::mem_available_from(&text))
+    (
+        field("MemTotal:"),
+        machines_produce::mem_available_from(&text),
+    )
 }
 
 /// A synchronous Mac probe with the same 5 s deadline the reference gives it.
@@ -767,30 +789,34 @@ fn local_sample() -> Result<Sample, String> {
         .and_then(|out| machines_produce::parse_probe(HostOs::Mac, &out));
         let cpus = probe.as_ref().and_then(|sample| sample.cores).unwrap_or(0);
         let load1 = probe.as_ref().and_then(|sample| sample.load1);
-        return Ok(machines_produce::local_sample(&machines_produce::LocalReads {
-            platform,
-            cpus: usize::try_from(cpus).unwrap_or(0),
-            total_mem: None,
-            free_mem: None,
-            load1,
-            read_file: &read_file,
-            statfs: &statfs_root,
-            mac_memory: probe,
-        }));
+        return Ok(machines_produce::local_sample(
+            &machines_produce::LocalReads {
+                platform,
+                cpus: usize::try_from(cpus).unwrap_or(0),
+                total_mem: None,
+                free_mem: None,
+                load1,
+                read_file: &read_file,
+                statfs: &statfs_root,
+                mac_memory: probe,
+            },
+        ));
     }
     let (total, available) = linux_total_memory();
     let load1 = read_file("/proc/loadavg")
         .and_then(|text| text.split_whitespace().next()?.parse::<f64>().ok());
-    Ok(machines_produce::local_sample(&machines_produce::LocalReads {
-        platform,
-        cpus: linux_cpus(),
-        total_mem: total,
-        free_mem: available,
-        load1,
-        read_file: &read_file,
-        statfs: &statfs_root,
-        mac_memory: None,
-    }))
+    Ok(machines_produce::local_sample(
+        &machines_produce::LocalReads {
+            platform,
+            cpus: linux_cpus(),
+            total_mem: total,
+            free_mem: available,
+            load1,
+            read_file: &read_file,
+            statfs: &statfs_root,
+            mac_memory: None,
+        },
+    ))
 }
 
 /// `commandFailure`: the fixed words for a failed read.
@@ -806,11 +832,7 @@ fn command_failure(tool: &str, result: &crate::status_run::Run) -> String {
 
 /// One remote machine over the dashboard's ssh alias.
 async fn read_remote(host: HostOs, alias: &str) -> Result<Sample, String> {
-    let args = ssh_argv(
-        alias,
-        &machines_produce::probe_command(host),
-        Some((5, 2)),
-    );
+    let args = ssh_argv(alias, &machines_produce::probe_command(host), Some((5, 2)));
     let result = run(Path::new("ssh"), &args, 20_000, 64 * 1024).await;
     if result.code != Some(0) {
         return Err(command_failure("ssh", &result));
@@ -821,7 +843,11 @@ async fn read_remote(host: HostOs, alias: &str) -> Result<Sample, String> {
 
 /// `collectMachines`' per-machine step: the sample with its read times, a failed part named and
 /// its earlier reading kept.
-fn apply_machine(before: Collected<Sample>, result: Result<Sample, String>, now: i64) -> Collected<Sample> {
+fn apply_machine(
+    before: Collected<Sample>,
+    result: Result<Sample, String>,
+    now: i64,
+) -> Collected<Sample> {
     let sample = match result {
         Ok(sample) => sample,
         Err(reason) => return before.failed(&reason, now, false),
@@ -852,7 +878,10 @@ fn apply_machine(before: Collected<Sample>, result: Result<Sample, String>, now:
             };
         }
         problems.push(next_problem(
-            before.problems.as_ref().and_then(|list| list.iter().find(|p| p.item == "disk")),
+            before
+                .problems
+                .as_ref()
+                .and_then(|list| list.iter().find(|p| p.item == "disk")),
             "disk",
             sample.disk_error.as_deref().unwrap_or(""),
             now,
@@ -865,7 +894,10 @@ fn apply_machine(before: Collected<Sample>, result: Result<Sample, String>, now:
             data.cpu_read_at = held.cpu_read_at;
         }
         problems.push(next_problem(
-            before.problems.as_ref().and_then(|list| list.iter().find(|p| p.item == "cpu")),
+            before
+                .problems
+                .as_ref()
+                .and_then(|list| list.iter().find(|p| p.item == "cpu")),
             "cpu",
             sample.cpu_error.as_deref().unwrap_or(""),
             now,
@@ -878,7 +910,10 @@ fn apply_machine(before: Collected<Sample>, result: Result<Sample, String>, now:
             data.memory_read_at = held.memory_read_at;
         }
         problems.push(next_problem(
-            before.problems.as_ref().and_then(|list| list.iter().find(|p| p.item == "memory")),
+            before
+                .problems
+                .as_ref()
+                .and_then(|list| list.iter().find(|p| p.item == "memory")),
             "memory",
             sample.memory_error.as_deref().unwrap_or(""),
             now,
@@ -903,10 +938,13 @@ async fn read_browsers() -> Result<Vec<BrowserMachine>, (String, bool)> {
     if result.code != Some(0) {
         return Err((command_failure("browser-check", &result), result.missing));
     }
-    let raw: Json = serde_json::from_str(&result.stdout)
-        .map_err(|_| ("browser-check answered in an unknown shape.".to_owned(), false))?;
-    browsers::parse_slots(&raw)
-        .map_err(|reason| (reason.to_owned(), false))
+    let raw: Json = serde_json::from_str(&result.stdout).map_err(|_| {
+        (
+            "browser-check answered in an unknown shape.".to_owned(),
+            false,
+        )
+    })?;
+    browsers::parse_slots(&raw).map_err(|reason| (reason.to_owned(), false))
 }
 
 async fn read_simlock() -> Result<SimlockStatus, String> {
@@ -1007,10 +1045,11 @@ async fn read_pins(rows: &[(String, String, Option<String>)], local: String) -> 
         }
     }
     pins.merged = aac_status::pins::merge_pins(&lists);
-    pins.problems = pins
-        .machines
+    // The panel names its machines in the registry's order (`PINS_MACHINES`), not this map's.
+    pins.problems = rows
         .iter()
-        .filter_map(|(machine, state)| {
+        .filter_map(|(machine, _, _)| {
+            let state = pins.machines.get(machine)?;
             if let Some((code, _)) = &state.problem {
                 return Some(aac_status::pinned::MachineProblemIn {
                     machine: machine.clone(),
@@ -1051,8 +1090,7 @@ async fn remote_pins(
     if result.code != Some(0) {
         return Err("did_not_answer".to_owned());
     }
-    aac_status::pins::parse_remote_pins(machine, &result.stdout)
-        .map_err(|_| "shape".to_owned())
+    aac_status::pins::parse_remote_pins(machine, &result.stdout).map_err(|_| "shape".to_owned())
 }
 
 /// `PINNED_THREADS_QUERY`, the same predicate and order the local reader uses.
@@ -1106,12 +1144,14 @@ fn resolved_reports(reports: &AgentReportsState, answers: &AnswersFeed) -> Json 
         let Some(doc) = thread.get_mut("doc").and_then(Json::as_object_mut) else {
             continue;
         };
-        let blocker = doc.get("blockedOn").cloned();
-        if let Some(active) = aac_status::produce::answered::active_blocker(&waits, &writer, blocker) {
-            doc.insert("blockedOn".to_owned(), active);
-        } else if doc.contains_key("blockedOn") {
-            doc.insert("blockedOn".to_owned(), Json::Null);
-        }
+        // The reference always writes the resolved member: a doc without `blockedOn` gains
+        // `blockedOn: null`, and a resolved owner wait becomes null.
+        let active = aac_status::produce::answered::active_blocker(
+            &waits,
+            &writer,
+            doc.get("blockedOn").cloned(),
+        );
+        doc.insert("blockedOn".to_owned(), active.unwrap_or(Json::Null));
     }
     value
 }
@@ -1131,13 +1171,16 @@ fn machines_json(machines: &BTreeMap<String, Collected<Sample>>) -> Json {
                 .as_ref()
                 .map_or(Json::Null, Sample::to_collected_json),
         );
-        value.insert("asOf".into(), collected.as_of.map_or(Json::Null, Json::from));
+        value.insert(
+            "asOf".into(),
+            collected.as_of.map_or(Json::Null, Json::from),
+        );
         value.insert(
             "error".into(),
-            collected
-                .error
-                .as_ref()
-                .map_or(Json::Null, |error| json!({"reason": error.reason, "since": error.since})),
+            collected.error.as_ref().map_or(
+                Json::Null,
+                |error| json!({"reason": error.reason, "since": error.since}),
+            ),
         );
         if let Some(missing) = collected.missing {
             value.insert("missing".into(), Json::Bool(missing));
@@ -1177,5 +1220,3 @@ fn pinned_panel(inner: &Inner, now: i64, offset: i64) -> Option<Json> {
     let output = aac_status::pinned::compose(&input);
     serde_json::to_value(output).ok()
 }
-
-

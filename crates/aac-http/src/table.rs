@@ -255,7 +255,10 @@ mod tests {
         let rows = rows(ROUTES)?;
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
         assert!(rows.iter().all(|r| r.budget_ms > 0
-            || matches!(r.handler, Handler::Events | Handler::Agent | Handler::Store | Handler::StatusAnswers)));
+            || matches!(
+                r.handler,
+                Handler::Events | Handler::Agent | Handler::Store | Handler::StatusAnswers
+            )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         Ok(())
     }

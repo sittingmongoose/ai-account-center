@@ -25,14 +25,7 @@ pub(crate) struct Run {
 /// The allowlist of the environment a child sees; `CLAUDE_*`/`T3*` session variables never
 /// reach it.
 fn child_env() -> Vec<(String, String)> {
-    let allowed = [
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "LANG",
-        "SSH_AUTH_SOCK",
-    ];
+    let allowed = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"];
     let mut env: Vec<(String, String)> = std::env::vars()
         .filter(|(name, _)| allowed.contains(&name.as_str()))
         .collect();
@@ -180,7 +173,13 @@ mod tests {
     async fn a_missing_program_is_named_and_a_slow_one_times_out() {
         let missing = run(Path::new("/definitely/not/a/program"), &[], 1_000, 1024).await;
         assert!(missing.missing);
-        let slow = run(Path::new("/bin/sh"), &["-c".to_owned(), "sleep 5".to_owned()], 100, 1024).await;
+        let slow = run(
+            Path::new("/bin/sh"),
+            &["-c".to_owned(), "sleep 5".to_owned()],
+            100,
+            1024,
+        )
+        .await;
         assert!(slow.timed_out);
     }
 

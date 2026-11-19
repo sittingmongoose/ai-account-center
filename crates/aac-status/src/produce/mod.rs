@@ -50,12 +50,7 @@ pub struct ReadProblem {
 
 /// `nextProblem`: the same item's problem keeps its `since` while the reason stays the same.
 #[must_use]
-pub fn next_problem(
-    before: Option<&ReadProblem>,
-    item: &str,
-    reason: &str,
-    now: i64,
-) -> ReadProblem {
+pub fn next_problem(before: Option<&ReadProblem>, item: &str, reason: &str, now: i64) -> ReadProblem {
     ReadProblem {
         item: item.to_owned(),
         reason: reason.to_owned(),
@@ -144,4 +139,3 @@ impl<T> Collected<T> {
         self
     }
 }
-

@@ -572,7 +572,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             };
             match shared
                 .limits
-                .blocking_status(move || produce.view(now, &zone.time_zone, &zone.facts))
+                .blocking_status(move || produce.view(now, &zone.time_zone, &zone.facts()))
                 .await
             {
                 Ok((bytes, etag)) => crate::view_reply::respond_tagged(

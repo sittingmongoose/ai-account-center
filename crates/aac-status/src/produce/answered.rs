@@ -4,7 +4,7 @@
 //! over the readers' rows: an owner wait explicitly linked to a resolved card stops being a
 //! wait once that card is closed (answered, judged, objected to or sampled).
 
-use crate::answers_engine::{card_version, closing_card_versions, HistoryEntry};
+use crate::answers_engine::{HistoryEntry, card_version, closing_card_versions};
 use serde_json::Value as Json;
 use std::collections::{HashMap, HashSet};
 
@@ -32,23 +32,10 @@ impl ResolvedWaits {
     /// explained by a resolved card.
     #[must_use]
     pub fn answered(&self, writer: &str, reference: Option<&Json>, words: Option<&Json>) -> bool {
-        let named = reference
-            .and_then(Json::as_str)
-            .map(str::trim)
-            .unwrap_or("");
+        let named = reference.and_then(Json::as_str).map(str::trim).unwrap_or("");
         let prefix = words.and_then(Json::as_str).and_then(card_prefix);
-        let reference = if named.is_empty() {
-            prefix.unwrap_or("")
-        } else {
-            named
-        };
-        !reference.is_empty()
-            && self
-                .writers
-                .get(writer)
-                .and_then(|refs| refs.get(reference))
-                .copied()
-                == Some(true)
+        let reference = if named.is_empty() { prefix.unwrap_or("") } else { named };
+        !reference.is_empty() && self.writers.get(writer).and_then(|refs| refs.get(reference)).copied() == Some(true)
     }
 }
 
@@ -65,16 +52,14 @@ pub fn resolved_card_waits(cards: &[CardRow<'_>], closed: &HashSet<String>) -> R
     for row in cards {
         let id = row.doc.get("id").and_then(Json::as_str).unwrap_or("");
         let resolved = row.doc.get("state").and_then(Json::as_str) != Some("open")
-            || closed.contains(&card_version(
-                id,
-                row.doc.get("seq").unwrap_or(&Json::Null),
-                row.sha256,
-            ));
+            || closed.contains(&card_version(id, row.doc.get("seq").unwrap_or(&Json::Null), row.sha256));
         let label = row.doc.get("label").and_then(Json::as_str);
         let refs = writers.entry(row.writer.to_owned()).or_default();
         for reference in [
             Some(id),
-            id.find("--").map(|at| &id[at + 2..]).or_else(|| Some(&id[1.min(id.len())..])),
+            id.find("--")
+                .map(|at| &id[at + 2..])
+                .or_else(|| Some(&id[1.min(id.len())..])),
             label,
         ] {
             let Some(reference) = reference.filter(|r| !r.is_empty()) else {
@@ -90,11 +75,7 @@ pub fn resolved_card_waits(cards: &[CardRow<'_>], closed: &HashSet<String>) -> R
 
 /// `activeBlocker`: an owner wait explained by a resolved card is no longer a wait.
 #[must_use]
-pub fn active_blocker(
-    answered: &ResolvedWaits,
-    writer: &str,
-    blocker: Option<Json>,
-) -> Option<Json> {
+pub fn active_blocker(answered: &ResolvedWaits, writer: &str, blocker: Option<Json>) -> Option<Json> {
     let blocker = blocker?;
     if blocker.get("kind").and_then(Json::as_str) == Some("owner")
         && answered.answered(writer, blocker.get("card"), blocker.get("what"))
