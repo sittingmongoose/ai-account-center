@@ -83,24 +83,26 @@ pub fn decode_snapshot(value: Value) -> Result<Snapshot, ()> {
 /// The service's canonical base64 shape check.
 fn base64_shape(text: &str) -> bool {
     let bytes = text.as_bytes();
-    let mut index = 0;
-    while index + 4 <= bytes.len() {
-        if !bytes[index..index + 4]
-            .iter()
+    let data = |part: &[u8]| {
+        part.iter()
             .all(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/')
-        {
+    };
+    // The reference regex splits the padding tail off before the four-char groups.
+    let (prefix, tail) = if bytes.ends_with(b"==") || bytes.ends_with(b"=") {
+        let n = bytes.len();
+        if n < 4 {
             return false;
         }
-        index += 4;
+        (&bytes[..n - 4], &bytes[n - 4..])
+    } else {
+        (bytes, &[][..])
+    };
+    if prefix.len() % 4 != 0 || !data(prefix) {
+        return false;
     }
-    let tail = &bytes[index..];
     match tail.len() {
         0 => true,
         4 => {
-            let data = |part: &[u8]| {
-                part.iter()
-                    .all(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/')
-            };
             (data(&tail[..2]) && tail[2] == b'=' && tail[3] == b'=')
                 || (data(&tail[..3]) && tail[3] == b'=')
         }
@@ -523,4 +525,28 @@ async fn run_sync(
         }
     }
     Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base64_shape;
+
+    #[test]
+    fn base64_shape_matches_the_reference_regex() {
+        assert!(base64_shape(""));
+        assert!(base64_shape("QUJD"));
+        assert!(base64_shape("QUI="));
+        assert!(base64_shape("QQ=="));
+        assert!(base64_shape("QUJDRA=="));
+        assert!(base64_shape("QUJDREU="));
+        assert!(base64_shape("+/+/"));
+        assert!(!base64_shape("A"));
+        assert!(!base64_shape("AB"));
+        assert!(!base64_shape("ABC"));
+        assert!(!base64_shape("===="));
+        assert!(!base64_shape("QUJD="));
+        assert!(!base64_shape("QU*="));
+        assert!(!base64_shape("QQ==="));
+        assert!(!base64_shape("QUJDRA==="));
+    }
 }

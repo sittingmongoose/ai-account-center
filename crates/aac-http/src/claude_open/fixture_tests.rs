@@ -441,7 +441,17 @@ async fn managed_copy_alone_synchronizes_one_record() {
         true,
     )
     .await;
-    assert_eq!(result["status"], json!("synchronized"), "copy result: {result}");
+    let modes: Vec<String> = remote
+        .state()
+        .helper_calls
+        .iter()
+        .map(|call| call["mode"].as_str().unwrap_or("?").to_string())
+        .collect();
+    assert_eq!(
+        result["status"],
+        json!("synchronized"),
+        "copy result: {result}; helper calls: {modes:?}"
+    );
     assert_eq!(result["createdCount"], json!(1), "copy result: {result}");
     assert!(!super::markers::open_held(root.path(), "gmail", "mac"));
 }
