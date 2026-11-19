@@ -17,7 +17,7 @@ const CODEX_PASSED_ENV: [&str; 15] = [
 ];
 
 #[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "action", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
 enum Request {
     /// Build the Codex device-auth command after creating its private staging folder.
     CodexPrepare {
@@ -44,7 +44,7 @@ enum Request {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct IdentityInput {
     email: String,
     account_id: Option<String>,
@@ -53,7 +53,7 @@ struct IdentityInput {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BindingInput {
     account_id: String,
     email: String,
@@ -86,17 +86,26 @@ impl From<IdentityInput> for aac_files::codex_identity::Identity {
 }
 
 fn identity_json(identity: &aac_files::codex_identity::Identity) -> Value {
+    let binding = identity.binding.as_ref().map(|binding| {
+        let mut map = serde_json::Map::new();
+        map.insert("accountId".to_owned(), json!(binding.account_id));
+        map.insert("email".to_owned(), json!(binding.email));
+        if let Some(user) = &binding.user_id {
+            map.insert("userId".to_owned(), json!(user));
+        }
+        if let Some(subject) = &binding.subject {
+            map.insert("subject".to_owned(), json!(subject));
+        }
+        if let Some(issuer) = &binding.issuer {
+            map.insert("issuer".to_owned(), json!(issuer));
+        }
+        Value::Object(map)
+    });
     json!({
         "email": identity.email,
         "accountId": identity.account_id,
         "plan": identity.plan,
-        "binding": identity.binding.as_ref().map(|binding| json!({
-            "accountId": binding.account_id,
-            "email": binding.email,
-            "userId": binding.user_id,
-            "subject": binding.subject,
-            "issuer": binding.issuer,
-        })),
+        "binding": binding,
     })
 }
 
@@ -117,7 +126,6 @@ pub(crate) fn run() -> i32 {
     println!("{answer}");
     0
 }
-
 fn decline() -> Option<Value> {
     Some(json!({"status": "decline"}))
 }
@@ -134,10 +142,13 @@ fn evaluate(request: Request) -> Option<Value> {
             let sha256: String = digest.iter().map(|b| format!("{b:02x}")).collect();
             Some(json!({"status": "ok", "identity": identity_json(&identity), "sha256": sha256}))
         }
-        Request::CodexSavedLive { native, profile } => Some(json!({
-            "status": "ok",
-            "live": aac_files::codex_identity::saved_login_is_live(Path::new(&native), Path::new(&profile)),
-        })),
+        Request::CodexSavedLive { native, profile } => {
+            let live = aac_files::codex_identity::saved_login_is_live_checked(
+                Path::new(&native),
+                Path::new(&profile),
+            )?;
+            Some(json!({"status": "ok", "live": live}))
+        }
         Request::CodexSameIdentity { saved, meta_email, meta_account, fresh } => {
             let saved: Option<aac_files::codex_identity::Identity> = saved.map(Into::into);
             let fresh: aac_files::codex_identity::Identity = fresh.into();

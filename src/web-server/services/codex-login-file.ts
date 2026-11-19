@@ -1,5 +1,8 @@
 import { constants } from 'fs';
 import fs from 'fs/promises';
+import { createHash } from 'crypto';
+import { getCcsDir } from '../../utils/config-manager';
+import { signInCallback } from '../../shared/private-file-lease';
 import {
   decodeCodexActivationIdentity,
   matchesCodexActivationIdentity,
@@ -72,6 +75,18 @@ async function readLogin(
 ): Promise<{ identity: CodexLoginIdentity; bytes: Buffer } | null> {
   try {
     const bytes = await readAuthFile(authPath);
+    const native = signInCallback(getCcsDir(), { action: 'codex-login', path: authPath, complete });
+    if (
+      native?.status === 'ok' &&
+      typeof native.sha256 === 'string' &&
+      native.identity &&
+      typeof native.identity === 'object'
+    ) {
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      if (digest === native.sha256) {
+        return { identity: native.identity as CodexLoginIdentity, bytes };
+      }
+    }
     const parsed = JSON.parse(bytes.toString('utf8')) as AuthTokens | null;
     const token = parsed?.tokens?.id_token;
     if (typeof token !== 'string' || !hasStructurallyValidIdToken(token)) return null;
@@ -119,6 +134,14 @@ export function sameCodexIdentity(
   meta: Pick<CodexProfileMetadata, 'email' | 'account_id'>,
   fresh: CodexLoginIdentity
 ): boolean {
+  const native = signInCallback(getCcsDir(), {
+    action: 'codex-same-identity',
+    saved,
+    metaEmail: meta.email ?? null,
+    metaAccount: meta.account_id ?? null,
+    fresh,
+  });
+  if (native?.status === 'ok' && typeof native.same === 'boolean') return native.same;
   const binding = fresh.binding;
   if (!binding) return false;
   const knownEmail = saved?.email ?? meta.email ?? null;

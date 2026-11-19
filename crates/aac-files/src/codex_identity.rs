@@ -307,20 +307,36 @@ pub fn read_login(path: &Path, complete: bool) -> Option<(Identity, Vec<u8>)> {
     ))
 }
 
-/// A fresh read of one login's email and binding (`freshLogin`); `None` when it cannot be verified.
-fn fresh_login(path: &Path) -> Option<(String, Option<Binding>)> {
-    let bytes = crate::read_bounded(path, MAX_AUTH_BYTES).ok()?;
+/// A fresh read for the live-login check: `Ok(Some)` verified, `Ok(None)` absent or unverifiable,
+/// `Err` when the hardened read refuses a path TypeScript might still read (a link, foreign owner
+/// or oversized file), so the caller declines and TypeScript answers.
+fn read_for_live(path: &Path) -> Result<Option<(String, Option<Binding>)>, ()> {
+    let bytes = match crate::read_bounded(path, MAX_AUTH_BYTES) {
+        Ok(bytes) => bytes,
+        Err(error) if error.cause == aac_core::Cause::NotInstalled => return Ok(None),
+        Err(_) => return Err(()),
+    };
     let text = String::from_utf8_lossy(&bytes);
-    let parsed: Value = serde_json::from_str(&text).ok()?;
-    let tokens = parsed.get("tokens")?;
-    let token = tokens.get("id_token")?.as_str()?;
+    let Ok(parsed) = serde_json::from_str::<Value>(&text) else {
+        return Ok(None);
+    };
+    let Some(token) = parsed
+        .get("tokens")
+        .and_then(|tokens| tokens.get("id_token"))
+        .and_then(|token| token.as_str())
+    else {
+        return Ok(None);
+    };
     if !has_structurally_valid_id_token(token) {
-        return None;
+        return Ok(None);
     }
-    let email = decode_id_token(token).email?;
+    let Some(email) = decode_id_token(token).email else {
+        return Ok(None);
+    };
     let null = Value::Null;
-    let binding = decode_activation_identity(token, tokens.get("account_id").unwrap_or(&null));
-    Some((email, binding))
+    let binding =
+        decode_activation_identity(token, parsed["tokens"].get("account_id").unwrap_or(&null));
+    Ok(Some((email, binding)))
 }
 
 fn is_live_login(live: &(String, Option<Binding>), saved: &(String, Option<Binding>)) -> bool {
@@ -331,18 +347,25 @@ fn is_live_login(live: &(String, Option<Binding>), saved: &(String, Option<Bindi
         _ => live.0 == saved.0,
     }
 }
-
 /// Whether a saved profile holds the live native login (`savedLoginIsLive`): the workspace and
 /// principal match in either direction, the email alone only when a binding cannot be read.
-/// False when there is no live login or either login cannot be verified.
+/// `None` when a read refuses a path TypeScript may still read, so the caller declines.
+pub fn saved_login_is_live_checked(native_auth: &Path, profile_auth: &Path) -> Option<bool> {
+    let live = read_for_live(native_auth).ok()?;
+    let Some(live) = live else {
+        return Some(false);
+    };
+    let saved = read_for_live(profile_auth).ok()?;
+    let Some(saved) = saved else {
+        return Some(false);
+    };
+    Some(is_live_login(&live, &saved))
+}
+
+/// `savedLoginIsLive` as a boolean; a refused read answers false. Callers that must match
+/// TypeScript use [`saved_login_is_live_checked`] and decline instead.
 pub fn saved_login_is_live(native_auth: &Path, profile_auth: &Path) -> bool {
-    let Some(live) = fresh_login(native_auth) else {
-        return false;
-    };
-    let Some(saved) = fresh_login(profile_auth) else {
-        return false;
-    };
-    is_live_login(&live, &saved)
+    saved_login_is_live_checked(native_auth, profile_auth).unwrap_or(false)
 }
 
 #[cfg(test)]

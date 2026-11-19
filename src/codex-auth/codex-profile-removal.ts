@@ -11,6 +11,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { getCcsDir } from '../utils/config-manager';
+import { signInCallback } from '../shared/private-file-lease';
 import { ExitCode } from '../errors/exit-codes';
 import { resolveCodexProfileDir } from './codex-profile-paths';
 import { decodeIdToken, hasStructurallyValidIdToken } from './decode-id-token';
@@ -301,6 +303,12 @@ function isLiveLogin(live: FreshLogin, saved: FreshLogin): boolean {
  * login or a login cannot be verified.
  */
 export function savedLoginIsLive(nativeAuthPath: string, profileAuthPath: string): boolean {
+  const native = signInCallback(getCcsDir(), {
+    action: 'codex-saved-live',
+    native: nativeAuthPath,
+    profile: profileAuthPath,
+  });
+  if (native?.status === 'ok' && typeof native.live === 'boolean') return native.live;
   try {
     const live = freshLogin(nativeAuthPath, 'the current native');
     if (!live) return false;
