@@ -886,7 +886,7 @@ pub fn link_count(path: &Path) -> Option<u32> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Some(fs::symlink_metadata(path).ok()?.nlink())
+        Some(u32::try_from(fs::symlink_metadata(path).ok()?.nlink()).unwrap_or(u32::MAX))
     }
     #[cfg(not(unix))]
     {
