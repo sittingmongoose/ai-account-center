@@ -64,18 +64,6 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/claude/history-snapshots/cleanup", &["POST"]),
     ("/api/codex/profiles", &["GET"]),
     ("/api/codex/profiles/quotas", &["GET"]),
-    ("/api/scoreboard", &["GET"]),
-    ("/api/status", &["GET"]),
-    ("/api/status/answers", &["GET", "POST"]),
-    (
-        "/api/status/deliverable",
-        &["GET", "POST", "PUT", "PATCH", "DELETE"],
-    ),
-    ("/api/status/files/:owner/*relative", &["GET"]),
-    ("/api/store/status", &["GET"]),
-    ("/api/usage/history", &["GET"]),
-    ("/api/usage/at", &["GET"]),
-    ("/api/usage/burn", &["GET"]),
     ("/api/views/home", &["GET"]),
 ];
 
@@ -145,11 +133,20 @@ mod tests {
             &Method::POST,
             "/api/accounts/example/reset-claims/prepare"
         ));
-        assert!(cut_route(
-            &Method::GET,
-            "/api/status/files/example/nested/file.md"
-        ));
-        assert!(!cut_route(&Method::GET, "/api/status/files/example"));
+        // The Status/Store/usage group is native on both platforms: no worker fallback.
+        for path in [
+            "/api/status",
+            "/api/status/files/example/nested/file.md",
+            "/api/status/answers",
+            "/api/scoreboard",
+            "/api/store/status",
+            "/api/usage/history",
+            "/api/usage/at",
+            "/api/usage/burn",
+        ] {
+            assert!(!cut_route(&Method::GET, path), "{path}");
+        }
+        assert!(cut_route(&Method::GET, "/api/views/home"));
         assert!(!cut_route(&Method::POST, "/api/accounts//recheck"));
         assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));
         assert!(!cut_route(&Method::GET, "/api/auth/session"));

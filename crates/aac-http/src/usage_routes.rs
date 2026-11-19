@@ -419,7 +419,7 @@ mod tests {
         }
         assert!(valid_history(
             Some("from=2026-11-01T00:00:00Z"),
-            1_767_225_600_000
+            1_798_761_600_000
         ));
         assert!(valid_at(None));
         assert!(valid_at(Some("t=2026-11-01T00:00:00Z")));

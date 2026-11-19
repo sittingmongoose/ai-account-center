@@ -1195,7 +1195,10 @@ fn raw_reply(status: u16, body: Vec<u8>) -> Reply {
 /// The shipped reader's envelope, handed to the same reply check the service's answer gets.
 fn local_file_reply(value: &Json, head: bool, media: bool) -> Reply {
     let mut headers = axum::http::HeaderMap::new();
-    headers.insert("content-type", "application/json".parse().expect("static header"));
+    headers.insert(
+        "content-type",
+        "application/json".parse().expect("static header"),
+    );
     file_reply(
         &ServiceReply {
             status: 200,
