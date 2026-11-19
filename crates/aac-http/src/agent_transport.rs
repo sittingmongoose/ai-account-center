@@ -546,6 +546,7 @@ impl Agents {
 
     pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
         let started = tokio::time::Instant::now();
+        #[allow(unused_mut)]
         let Some(mut call) = Call::parse(bytes) else {
             return unavailable("", "shape");
         };

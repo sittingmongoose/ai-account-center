@@ -27,12 +27,18 @@ impl Owner {
         events: DashboardEvents,
         agents: Arc<crate::agent_transport::Agents>,
     ) -> Self {
+        // A parity-fixtures build is the M0 recorder/fixture binary: it must never launch a real
+        // updater. The production features omit this arm entirely; no env can select it there.
         #[cfg(feature = "parity-fixtures")]
-        if std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
+        {
             return Self {
                 jobs: Arc::new(BoundJobs::new(Arc::new(crate::app_update_routes::M0Jobs))),
+                #[cfg(unix)]
+                host: None,
             };
         }
+        #[cfg(not(feature = "parity-fixtures"))]
+        let _ = &events;
         let owner = AppUpdates::with_events(
             root,
             agents,
@@ -88,6 +94,7 @@ impl Owner {
         if !matches!(access.principal, DashboardPrincipal::Browser { .. }) {
             return super::plain(401, "Authentication required");
         }
+        #[cfg(unix)]
         let requested = request.uri().clone();
         if !matches!(operation, Operation::Status) {
             if !access.origin_present || !access.same_origin {
