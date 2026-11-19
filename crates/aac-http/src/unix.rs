@@ -535,9 +535,17 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(read, Decline::Shape);
             };
             let root = shared.boot.ccs_dir.clone();
+            let store = shared.store.clone();
             match shared
                 .limits
                 .blocking(row.pool, move || {
+                    // R5/A2: the owned Analytics envelope reads the hosted store itself.
+                    if path == "/api/accounts/analytics"
+                        && let Some(answer) =
+                            crate::account_reads::owned_analytics(store.as_ref(), &bytes)
+                    {
+                        return answer;
+                    }
                     crate::read_routes::answer(read, &path, query, &root, &bytes)
                 })
                 .await

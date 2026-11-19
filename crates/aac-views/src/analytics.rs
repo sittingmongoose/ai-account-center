@@ -35,7 +35,7 @@ fn nullable_num(object: &Object, key: &str) -> Admit<Option<f64>> {
 }
 
 /// `Math.max` / `Math.min` for non-NaN doubles, including the signed-zero rules.
-fn js_max(a: f64, b: f64) -> f64 {
+pub(crate) fn js_max(a: f64, b: f64) -> f64 {
     if a == b {
         if a.is_sign_positive() { a } else { b }
     } else if a > b {
@@ -44,7 +44,7 @@ fn js_max(a: f64, b: f64) -> f64 {
         b
     }
 }
-fn js_min(a: f64, b: f64) -> f64 {
+pub(crate) fn js_min(a: f64, b: f64) -> f64 {
     if a == b {
         if a.is_sign_negative() { a } else { b }
     } else if a < b {
@@ -83,7 +83,7 @@ fn parse_time(ctx: &Context, value: Option<&Value>) -> Admit<Option<f64>> {
     }
 }
 
-fn bucket_minutes(span: f64) -> i64 {
+pub(crate) fn bucket_minutes(span: f64) -> i64 {
     if span <= DAY_MS + 2.0 * HOUR_MS {
         10
     } else if span <= 7.0 * DAY_MS + 2.0 * HOUR_MS {
@@ -97,16 +97,16 @@ fn bucket_minutes(span: f64) -> i64 {
 
 /// One resolved range: `ResolvedAccountAnalyticsRange`.
 #[derive(Clone, Debug, PartialEq)]
-struct Range {
-    preset: String,
-    from: f64,
-    to: f64,
-    tz: String,
-    bucket_minutes: f64,
+pub(crate) struct Range {
+    pub(crate) preset: String,
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) tz: String,
+    pub(crate) bucket_minutes: f64,
 }
 
 impl Range {
-    fn decode(value: Option<&Value>) -> Admit<Self> {
+    pub(crate) fn decode(value: Option<&Value>) -> Admit<Self> {
         let object = req(value.and_then(Value::as_object))?;
         Ok(Self {
             preset: text(object, "preset")?.to_owned(),
@@ -503,7 +503,7 @@ pub fn compose(envelope: Envelope) -> Admit<Value> {
     if ctx.valid() { Ok(answer) } else { Err(Refuse) }
 }
 
-fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
+pub(crate) fn compose_data(ctx: &Context, input: &Object) -> Admit<Value> {
     let query = req(input.get("query").and_then(Value::as_object))?;
     let range_preset = text(query, "range")?;
     let now = num(input, "now")?;

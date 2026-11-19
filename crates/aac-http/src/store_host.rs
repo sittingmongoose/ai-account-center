@@ -185,6 +185,11 @@ impl StoreHost {
         }
     }
 
+    /// R5/A2: the owned Analytics read composes from this Engine in process.
+    pub(crate) fn analytics_engine(&self) -> Option<Arc<Engine>> {
+        self.engine()
+    }
+
     fn engine(&self) -> Option<Arc<Engine>> {
         self.slot
             .lock()
