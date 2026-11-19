@@ -17,7 +17,7 @@ fn sweeps_only_owned_unnamed_antigravity_credentials() -> std::io::Result<()> {
         fs::create_dir_all(dir)?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
-    for id in ["orphan", "saved", "unproved"] {
+    for id in ["orphan", "saved", "un_proved"] {
         let profile = instances.join(id);
         let host = profile.join("ubuntu");
         fs::create_dir_all(&host)?;
@@ -25,7 +25,7 @@ fn sweeps_only_owned_unnamed_antigravity_credentials() -> std::io::Result<()> {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
         }
         let key = host.join(&name);
-        if id == "unproved" {
+        if id == "un_proved" {
             symlink(instances.join("saved/ubuntu").join(&name), key)?;
         } else {
             fs::File::create(&key)?;
@@ -37,8 +37,8 @@ fn sweeps_only_owned_unnamed_antigravity_credentials() -> std::io::Result<()> {
     let (removed, left_in_place) = lease.antigravity_sweep(&root, &["saved".into()])?;
     assert_eq!((removed, left_in_place), (1, 1));
     assert!(!instances.join("orphan").exists());
-    assert!(instances.join("unproved/ubuntu").join(&name).is_symlink());
+    assert!(instances.join("un_proved/ubuntu").join(&name).is_symlink());
     assert!(instances.join("saved/ubuntu").join(&name).is_file());
-    assert_eq!(lease.antigravity_discard(&root, "unproved")?, 1);
+    assert_eq!(lease.antigravity_discard(&root, "un_proved")?, 1);
     Ok(())
 }

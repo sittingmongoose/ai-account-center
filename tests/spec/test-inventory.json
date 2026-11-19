@@ -204,6 +204,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-files/tests/antigravity_maintenance.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/tests/codex_preservation.rs",
       "kind": "internal",
       "evidence": [],

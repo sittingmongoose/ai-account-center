@@ -158,6 +158,39 @@ export async function writeProviderDirectory(
   }
 }
 
+/** Run only against the validated Antigravity registry under its transaction lock. */
+export function maintainAntigravityProfiles(
+  root: string,
+  marker: string,
+  action: { action: 'discard'; profile: string } | { action: 'sweep'; saved: string[] }
+): { removed: number; leftInPlace: number } | undefined {
+  const canonical = canonicalLeaseRoot(root);
+  const writer = writers.get(canonical);
+  if (!writer) return undefined;
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  const descriptor = fs.openSync(marker, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  try {
+    const result = spawnSync(writer.binary, ['--antigravity-maintenance', canonical], {
+      input: JSON.stringify(action),
+      stdio: ['pipe', 'pipe', descriptor],
+      timeout: 5000,
+      maxBuffer: 64,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    const counts = /^(\d+) (\d+)$/.exec(result.stdout?.trim());
+    const removed = Number(counts?.[1]);
+    const leftInPlace = Number(counts?.[2]);
+    if (result.status !== 0 || !Number.isSafeInteger(removed) || !Number.isSafeInteger(leftInPlace))
+      throw new ConfigError('Antigravity cleanup could not be confirmed.');
+    writer.committed();
+    return { removed, leftInPlace };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 export function signInStaging(
   root: string,
   provider: 'codex' | 'antigravity',

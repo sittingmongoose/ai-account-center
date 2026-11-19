@@ -148,6 +148,46 @@ impl LegacyLease {
         install_login(&profile, live.as_deref(), bytes, replace)
     }
 
+    /// Delete only the credential files belonging to an unpublished profile.
+    /// Returns the count of entries that could not be proved or removed.
+    pub fn antigravity_discard(&self, root: &Path, profile: &str) -> io::Result<usize> {
+        self.check(&root.join("antigravity-profiles/.transaction-lock"))?;
+        if !antigravity_profile(profile) {
+            return Err(refused());
+        }
+        let instances = root.join("antigravity-instances");
+        private_profile_directory(&instances)?;
+        Ok(discard_antigravity_files(&instances.join(profile)))
+    }
+
+    /// Retry cleanup of Antigravity profiles absent from the validated registry.
+    /// Returns the number removed and the number of unproved entries retained.
+    pub fn antigravity_sweep(&self, root: &Path, saved: &[String]) -> io::Result<(usize, usize)> {
+        self.check(&root.join("antigravity-profiles/.transaction-lock"))?;
+        if saved.iter().any(|id| !antigravity_profile(id)) {
+            return Err(refused());
+        }
+        let instances = root.join("antigravity-instances");
+        private_profile_directory(&instances)?;
+        let mut removed = 0;
+        let mut left = 0;
+        for entry in fs::read_dir(&instances)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .is_some_and(|id| antigravity_profile(id) && !saved.iter().any(|saved| saved == id))
+            {
+                let profile = entry.path();
+                left += discard_antigravity_files(&profile);
+                if !profile.exists() {
+                    removed += 1;
+                }
+            }
+        }
+        Ok((removed, left))
+    }
+
     /// Save a new immutable Antigravity credential generation under its transaction lock.
     pub fn antigravity_credential(
         &self,
@@ -270,7 +310,56 @@ fn antigravity_profile(name: &str) -> bool {
         && name.len() <= 48
         && name
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
+}
+
+fn private_profile_directory(directory: &Path) -> io::Result<()> {
+    owned_directory(directory)?;
+    if fs::symlink_metadata(directory)?.mode() & 0o077 != 0 {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+fn discard_antigravity_files(profile: &Path) -> usize {
+    let host = profile.join("ubuntu");
+    let entries = private_profile_directory(profile)
+        .and_then(|()| private_profile_directory(&host))
+        .and_then(|()| fs::read_dir(&host));
+    let entries = match entries {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return 0,
+        Err(_) => return 1,
+    };
+    let mut left = 0;
+    for entry in entries {
+        let delete = (|| {
+            let entry = entry?;
+            let name = entry.file_name();
+            let fingerprint = name
+                .to_str()
+                .and_then(|name| name.strip_prefix("credential-"))
+                .and_then(|name| name.strip_suffix(".bin"));
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path)?;
+            if !fingerprint.is_some_and(|id| id.len() == 64 && id.bytes().all(lower_hex))
+                || !meta.is_file()
+                || meta.mode() & 0o777 != 0o600
+                || meta.uid() != crate::path::uid()
+                || meta.len() > MAX_PROFILE_BYTES as u64
+            {
+                return Err(refused());
+            }
+            fs::remove_file(path)
+        })();
+        if delete.is_err() {
+            left += 1;
+        }
+    }
+    for directory in [host.as_path(), profile] {
+        let _ = fs::remove_dir(directory);
+    }
+    left
 }
 
 fn stage(parent: &Path, bytes: &[u8]) -> io::Result<NamedTempFile> {
