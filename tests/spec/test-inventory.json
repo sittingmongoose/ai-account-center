@@ -3691,6 +3691,15 @@
       ]
     },
     {
+      "file": "tests/unit/web-server/api-auth-hardening.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP",
+        "table"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/api-compression.test.ts",
       "kind": "HTTP",
       "evidence": [
@@ -3911,6 +3920,13 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-devices.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
       ]
     },
     {
