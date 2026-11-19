@@ -41,9 +41,13 @@ mod registered;
 #[cfg(any(unix, test))]
 mod reset_claims;
 #[cfg(unix)]
+mod scoreboard_owned;
+#[cfg(unix)]
 mod status_cache;
 #[cfg(unix)]
 mod status_fed;
+#[cfg(unix)]
+mod status_owned;
 #[cfg(unix)]
 mod store_host;
 #[cfg(unix)]

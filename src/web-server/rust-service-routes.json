@@ -39,5 +39,7 @@
   { "method": "POST", "path": "/internal/account-confirmations", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "account-approvals" },
   { "method": "POST", "path": "/internal/reset-claims", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "reset-claims" },
   { "method": "POST", "path": "/internal/store/{method}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "store" },
+  { "method": "GET", "path": "/internal/status/inputs", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "status-inputs" },
+  { "method": "GET", "path": "/internal/scoreboard/inputs", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "scoreboard-inputs" },
   { "method": "*", "path": "*", "owner": "ts-fallback" }
 ]
