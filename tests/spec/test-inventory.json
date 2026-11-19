@@ -314,6 +314,21 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/antigravity_quota.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/antigravity_runtime.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/app_update_routes.rs",
       "kind": "internal",
       "evidence": [],
@@ -354,6 +369,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/models_dev.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "crates/aac-http/src/public_auth/dashboard_events.rs",
@@ -961,6 +983,19 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-views/src/pricing/models_dev.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "crates/aac-views/src/pricing/resolver.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-views/src/spread.rs",
       "kind": "internal",
       "evidence": [],
@@ -968,6 +1003,13 @@
     },
     {
       "file": "crates/aac-views/tests/home_spec.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "crates/aac-views/tests/pricing_spec.rs",
       "kind": "table",
       "evidence": [
         "table"
