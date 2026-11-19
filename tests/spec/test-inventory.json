@@ -122,6 +122,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/src/cursor_open.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-agent/src/failover.rs",
       "kind": "internal",
       "evidence": [],
@@ -407,6 +413,19 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/lifecycle_recheck.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/lifecycle_signin.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-http/src/limits.rs",

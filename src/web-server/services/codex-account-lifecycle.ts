@@ -35,7 +35,7 @@ import {
   SignInJobStopped,
   type SignInCompleteControl,
   type SignInFlowSpec,
-} from './signin-jobs';
+} from './signin-job-types';
 import {
   readCodexLogin,
   readCodexLoginIdentity,

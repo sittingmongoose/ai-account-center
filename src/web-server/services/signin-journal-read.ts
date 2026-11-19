@@ -46,7 +46,7 @@ function timestamp(value: unknown): value is string {
   );
 }
 
-function parseJournalReply(input: string, id: string): SignInJob | null | undefined {
+export function parseJournalReply(input: string, id: string): SignInJob | null | undefined {
   const payload = record(JSON.parse(input) as unknown);
   if (payload?.job === null) return null;
   const job = record(payload?.job);

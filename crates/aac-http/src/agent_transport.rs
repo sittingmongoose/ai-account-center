@@ -259,6 +259,7 @@ impl Call {
     pub(crate) fn valid(&self, verb: &str) -> bool {
         [
             "health",
+            "cursor-open",
             "inventory",
             "signin-expiry",
             "quota-read",
@@ -267,6 +268,7 @@ impl Call {
             "key-store",
             "claude-history",
             "failover-inventory",
+            "signin-session",
         ]
         .contains(&verb)
             && self.bounded(verb)
@@ -276,6 +278,7 @@ impl Call {
         word(&self.call_id)
             && [
                 "health",
+                "cursor-open",
                 "inventory",
                 "apps",
                 "signin-expiry",
@@ -427,8 +430,30 @@ impl Agents {
 
     pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
         let started = tokio::time::Instant::now();
-        let Some(call) = Call::parse(bytes) else {
+        let Some(mut call) = Call::parse(bytes) else {
             return unavailable("", "shape");
+        };
+        let verb = if verb == "lifecycle-signin" {
+            let Some((deadline, args)) =
+                crate::lifecycle_signin::agent_start(&self.root, call.args.get())
+            else {
+                return unavailable(&call.call_id, "shape");
+            };
+            if args["jobId"].as_str() != Some(&call.call_id) {
+                return unavailable(&call.call_id, "shape");
+            }
+            let Ok(args) = serde_json::value::to_raw_value(&args) else {
+                return unavailable(&call.call_id, "shape");
+            };
+            call.computer = Selector {
+                platform: "ubuntu".into(),
+                ssh_host: None,
+            };
+            call.args = args;
+            call.deadline_ms = deadline;
+            "signin-session"
+        } else {
+            verb
         };
         if !call.valid(verb) {
             return unavailable(&call.call_id, "shape");

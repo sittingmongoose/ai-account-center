@@ -47,6 +47,10 @@ pub mod key_lifecycle;
 #[cfg(unix)]
 pub mod lifecycle_queue;
 #[cfg(unix)]
+pub mod lifecycle_recheck;
+#[cfg(unix)]
+pub mod lifecycle_signin;
+#[cfg(unix)]
 mod preferences_write;
 #[cfg(unix)]
 mod profile_reads;

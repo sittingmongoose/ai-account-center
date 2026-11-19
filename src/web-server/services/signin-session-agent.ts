@@ -164,12 +164,13 @@ export class AgentSignInJobRunner extends SignInJobRunner {
   }
 
   override start(spec: SignInFlowSpec): SignInJob {
-    if (!signInSessionAgentEnabled(spec.platform)) return super.start(spec);
-    this.pruneAgent();
-    const running = this.runningAgent();
-    const sameProvider = running.find((record) => record.job.provider === spec.provider);
-    if (sameProvider) throw new SignInJobConflict('job_running', sameProvider.job.id);
+    const running = this.list();
+    const sameProvider = running.find((job) => job.provider === spec.provider);
+    if (sameProvider) throw new SignInJobConflict('job_running', sameProvider.id);
     if (running.length >= MAX_RUNNING) throw new SignInJobConflict('too_many_jobs', null);
+    if (this.agentDeps.nativeSession?.(spec) || !signInSessionAgentEnabled(spec.platform)) {
+      return super.start(spec);
+    }
     const id = `job_${randomBytes(8).toString('hex')}`;
     const now = this.nowMs();
     const job: SignInJob = {
@@ -291,7 +292,7 @@ export class AgentSignInJobRunner extends SignInJobRunner {
       this.finishAgent(record, state, value.job.error?.code ?? null);
       return;
     }
-    await this.install(record, spec);
+    await this.installAgent(record, spec);
   }
 
   private progress(record: AgentJobRecord, data: unknown): void {
@@ -308,7 +309,7 @@ export class AgentSignInJobRunner extends SignInJobRunner {
   }
 
   /** The unchanged install commit: `complete` under its guards, then settle the journal. */
-  private async install(record: AgentJobRecord, spec: SignInFlowSpec): Promise<void> {
+  private async installAgent(record: AgentJobRecord, spec: SignInFlowSpec): Promise<void> {
     record.installing = true;
     record.job = {
       ...record.job,

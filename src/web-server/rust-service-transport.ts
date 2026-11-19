@@ -557,7 +557,8 @@ export async function requestRustAgent(
   },
   onProgress?: (data: unknown) => void,
   singleShot = false,
-  collect = false
+  collect = false,
+  signal?: AbortSignal
 ): Promise<string | null | undefined> {
   const held = rustAgentConnection(root);
   if (!held) return undefined;
@@ -565,13 +566,15 @@ export async function requestRustAgent(
   if (Buffer.byteLength(bytes) > 8 * 1024 * 1024 + 8192) return null;
   return new Promise((resolve, reject) => {
     const uncertain = () => {
-      if (collect && ['quota-read', 'failover-collect'].includes(verb)) reject(new CollectionReadIndeterminate());
+      if (collect && ['quota-read', 'failover-collect'].includes(verb))
+        reject(new CollectionReadIndeterminate());
       else if (singleShot)
         reject(new RustTransportError('reply', 'Agent write outcome unconfirmed'));
       else resolve(null);
     };
     const request = http.request({
       socketPath: held.connection.socketPath,
+      signal,
       path: `/internal/${collect ? 'collect' : 'agent'}/${encodeURIComponent(verb)}`,
       method: 'POST',
       agent: held.connection.agent ?? false,
@@ -592,7 +595,7 @@ export async function requestRustAgent(
       held.active.delete(request);
     });
     request.once('error', (error: NodeJS.ErrnoException) => {
-      held.health.failed?.(rustFailureKind(error));
+      if (!signal?.aborted) held.health.failed?.(rustFailureKind(error));
       if (['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '')) resolve(undefined);
       else uncertain();
     });
@@ -652,7 +655,8 @@ export async function requestRustAgent(
               result = fallbackProven ? null : value;
             } else if (event.type === 'fallback') {
               fallbackProven =
-                collect && ['shape', 'unavailable', 'busy', 'unsupported'].includes(event.reason);
+                (collect || verb === 'cursor-open' || verb === 'lifecycle-signin') &&
+                ['shape', 'unavailable', 'busy', 'unsupported'].includes(event.reason);
             } else if (event.type !== 'failure') {
               throw new RustTransportError('reply', 'Invalid agent stream');
             }

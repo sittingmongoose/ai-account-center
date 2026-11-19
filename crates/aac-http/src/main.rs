@@ -24,6 +24,7 @@ fn main() {
         Some("--antigravity-staging") => std::process::exit(provider_write::staging(true)),
         Some("--claude-workflow") => std::process::exit(provider_workflow(false)),
         Some("--key-workflow") => std::process::exit(provider_workflow(true)),
+        Some("--additional-recheck") => std::process::exit(additional_recheck()),
         Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
         Some("--lifecycle-queue") => std::process::exit(lifecycle_queue()),
         Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
@@ -75,6 +76,14 @@ fn provider_workflow(key: bool) -> i32 {
             runtime.block_on(aac_http::claude_lifecycle::compatibility_pipe(&mode))
         }
     });
+    if result.is_ok() { 0 } else { 74 }
+}
+
+#[cfg(unix)]
+fn additional_recheck() -> i32 {
+    let runtime = tokio::runtime::Builder::new_current_thread().build();
+    let result = runtime
+        .and_then(|runtime| runtime.block_on(aac_http::lifecycle_recheck::compatibility_pipe()));
     if result.is_ok() { 0 } else { 74 }
 }
 

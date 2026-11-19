@@ -252,40 +252,10 @@ async function removeWallet(
   } catch {
     entry = null;
   }
-  let position = -1;
-  if (entry) {
-    const removed = entry;
-    await updateAccountRegistry(env.ccsDir(), (current) => {
-      const edit = editRegistry(env.ccsDir(), current, { kind: 'remove', id });
-      if ('refusal' in edit || edit.position === null)
-        throw new LifecycleHttpError(409, 'confirmation_stale');
-      position = edit.position;
-      return edit.registry;
-    }).catch((error) => {
-      throw error instanceof LifecycleHttpError
-        ? error
-        : new LifecycleHttpError(500, 'remove_failed');
-    });
-    try {
-      await deleteOpencodeWalletSource(env.ccsDir());
-    } catch {
-      await updateAccountRegistry(env.ccsDir(), (current) => {
-        const edit = editRegistry(env.ccsDir(), current, {
-          kind: 'restore',
-          entry: removed,
-          index: position,
-        });
-        return 'refusal' in edit ? current : edit.registry;
-      }).catch(() => undefined);
-      throw new LifecycleHttpError(500, 'remove_failed');
-    }
-    return { trashId: null, purgeAfter: null };
-  }
-  try {
-    await deleteOpencodeWalletSource(env.ccsDir());
-  } catch {
-    throw new LifecycleHttpError(500, 'remove_failed');
-  }
+  const root = env.ccsDir();
+  await dropEntryAndCredential(root, entry, async () => {
+    await deleteOpencodeWalletSource(root);
+  });
   return { trashId: null, purgeAfter: null };
 }
 
@@ -318,14 +288,27 @@ async function removeAdditional(
   const keyed = credential.kind === 'aac-key' && isKeyProvider(entry.provider);
   const store = keyed ? env.keyStore({ platform: entry.platform, sshHost: entry.sshHost }) : null;
   if (keyed && !store) throw new LifecycleHttpError(500, 'remove_failed');
+  await dropEntryAndCredential(env.ccsDir(), entry, async () => {
+    if (store && credential.kind === 'aac-key' && isKeyProvider(entry.provider))
+      await store.delete(entry.provider, credential.keyId);
+  });
+  return { trashId: null, purgeAfter: null };
+}
+
+/** Account removal settles the credential/source after unpublishing the reviewed entry. */
+async function dropEntryAndCredential(
+  root: string,
+  entry: RegistryAccount | null,
+  discard: () => Promise<void>
+): Promise<void> {
   let position = -1;
-  const root = env.ccsDir();
   await runKeyWorkflow(root, 'remove', async (effect) => {
     switch (effect) {
       case 'unpublish':
+        if (!entry) return;
         await updateAccountRegistry(root, (current) => {
-          const stored = current.accounts.find((candidate) => candidate.id === reviewed.id);
-          if (!stored || reviewedEntry(stored) !== reviewedEntry(reviewed))
+          const stored = current.accounts.find((candidate) => candidate.id === entry.id);
+          if (!stored || reviewedEntry(stored) !== reviewedEntry(entry))
             throw new LifecycleHttpError(409, 'confirmation_stale');
           const edit = editRegistry(root, current, { kind: 'remove', id: entry.id });
           if ('refusal' in edit || edit.position === null)
@@ -339,13 +322,12 @@ async function removeAdditional(
         });
         return;
       case 'discard':
-        if (store && credential.kind === 'aac-key' && isKeyProvider(entry.provider)) {
-          await store.delete(entry.provider, credential.keyId).catch(() => {
-            throw new LifecycleHttpError(500, 'remove_failed');
-          });
-        }
+        await discard().catch(() => {
+          throw new LifecycleHttpError(500, 'remove_failed');
+        });
         return;
       case 'publish':
+        if (!entry) return;
         await updateAccountRegistry(root, (current) => {
           const edit = editRegistry(root, current, { kind: 'restore', entry, index: position });
           return 'refusal' in edit ? current : edit.registry;
@@ -355,7 +337,6 @@ async function removeAdditional(
         throw new LifecycleHttpError(500, 'remove_failed');
     }
   });
-  return { trashId: null, purgeAfter: null };
 }
 
 function mapError(error: unknown): LifecycleHttpError {

@@ -1,4 +1,6 @@
 import os from 'os';
+import { agentTransport, agentVerbs } from './agent-verbs';
+import { nativeSignInSession } from './lifecycle-signin-session';
 import { activeFileWriterBinary } from '../../shared/private-file-lease';
 import { startLifecycleMaintenance, type MaintenanceStep } from './account-maintenance';
 import { getCcsDir } from '../../utils/config-manager';
@@ -94,6 +96,23 @@ export function createSignInJobRunner(
   deps: Omit<SignInJobRunnerDeps, 'onChange' | 'onFinish'> = {}
 ): SignInJobRunner {
   return new AgentSignInJobRunner({
+    nativeSession: (flow) => {
+      const root = getCcsDir();
+      return nativeSignInSession(
+        root,
+        ((flow.provider === 'codex' && flow.kind === 'device-code' && flow.platform === 'ubuntu') ||
+          (flow.provider === 'antigravity' &&
+            flow.kind === 'supervised-cli' &&
+            flow.platform === 'ubuntu') ||
+          (flow.provider === 'muse' &&
+            flow.kind === 'device-code' &&
+            flow.platform === 'mac' &&
+            flow.mode === 'signin-again')) &&
+          activeFileWriterBinary(root) !== undefined &&
+          agentTransport() === 'on' &&
+          agentVerbs() === 'on'
+      );
+    },
     ...deps,
     onChange: (job: SignInJob) => {
       broadcastDashboardEvent({ type: 'signin-job', job });
