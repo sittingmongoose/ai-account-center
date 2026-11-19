@@ -87,6 +87,8 @@ fn decline_reason(reply: &ServiceReply) -> Option<&str> {
 /// answered from the same read; a worker-less boot has nobody else).
 fn decline_because(reason: &'static str) -> Reply {
     tracing::warn!(reason, "native group route declined");
+    // The CLI dashboard has no tracing subscriber; its stderr is the operator's log.
+    eprintln!("aac-http: native group route declined ({reason})");
     super::decline()
 }
 
@@ -532,6 +534,7 @@ async fn status(
             Some(reply) if declined(&reply) => {
                 let reason = decline_reason(&reply).unwrap_or("");
                 tracing::warn!(reason, "the owned Status read declined");
+                eprintln!("aac-http: owned Status read declined ({reason})");
                 if !matches!(reason, "unsupported" | "stale" | "busy") {
                     return decline_because("status");
                 }
