@@ -30,6 +30,8 @@ mod identity;
 mod json_object;
 #[cfg(unix)]
 mod limits;
+/// Cross-platform: the models.dev fetch job G14's scheduling will run from the service.
+pub mod models_dev;
 #[cfg(unix)]
 pub mod lifecycle_maintenance;
 #[cfg(unix)]
