@@ -1,6 +1,9 @@
 /** M3 strangler: existing endpoint guards run before any verified principal is constructed. */
 import type { Request, Response } from 'express';
 import { performance } from 'perf_hooks';
+import { NetworkError } from '../errors/error-types';
+import { getCcsDir } from '../utils/config-manager';
+import { rustGroupOn } from './rust-service-groups';
 import routes from './rust-service-routes.json';
 import type { RustLease } from './rust-service-lifecycle';
 import {
@@ -34,6 +37,15 @@ function routeRoles(route: string): readonly string[] {
 const now = () => performance.now();
 
 export class RustService extends RustSupervisor {
+  /** G13: the Claude Open group gate — mode on, a non-Windows host, the group on. */
+  private readonly claudeOpenOn =
+    this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('claude-open');
+
+  /** Whether the Open route and its progress composition delegate to the Rust job owner. */
+  get claudeOpenEnabled(): boolean {
+    return this.claudeOpenOn;
+  }
+
   /**
    * The shared forwarding gate of every read method: an owned GET/HEAD route, a running service,
    * a verified principal the table admits, a closed breaker and a free in-flight slot. Anything
@@ -97,7 +109,8 @@ export class RustService extends RustSupervisor {
     verified: VerifiedRustPrincipal,
     input?: unknown,
     query = '',
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET'
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -115,7 +128,7 @@ export class RustService extends RustSupervisor {
         verified,
         this.active,
         input,
-        'GET',
+        method,
         // R1: a fed view carries its ids in headers and comes back as bytes, never parsed here.
         headers ? { headers, raw: true, cap: RUST_VIEW_CAP } : {}
       );
@@ -573,6 +586,88 @@ export class RustService extends RustSupervisor {
       this.failed(route, error);
     }
     res.json(tsAnswer());
+  }
+
+  /**
+   * G13: the Open route calls this after its auth, origin, content-type and body guards.
+   * Null is the unbound handoff before any Open ran; a lost or malformed reply might follow
+   * a started Open, so it throws and the route answers 500 without replaying the click.
+   */
+  async claudeOpen(
+    id: string,
+    platform: 'mac' | 'windows',
+    respondAsync: boolean
+  ): Promise<{ status: number; body: unknown } | null> {
+    if (!this.claudeOpenOn) return null;
+    const route = '/internal/claude-open';
+    if (
+      this.stopped ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
+      this.inFlight >= IN_FLIGHT
+    )
+      return null;
+    const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
+    let reply: RustReply;
+    try {
+      reply = await this.forward(
+        route,
+        verified,
+        { id, platform, respondAsync },
+        '',
+        undefined,
+        'POST'
+      );
+    } catch (error) {
+      this.failed(route, error);
+      throw error;
+    }
+    return this.claudeOpenReply(route, reply);
+  }
+
+  /** G13: "Clean up now" through the same bound owner; the same handoff and lost-ack rules. */
+  async claudeHistoryCleanup(): Promise<{ status: number; body: unknown } | null> {
+    if (!this.claudeOpenOn) return null;
+    const route = '/internal/claude-history-cleanup';
+    if (
+      this.stopped ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
+      this.inFlight >= IN_FLIGHT
+    )
+      return null;
+    const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
+    let reply: RustReply;
+    try {
+      reply = await this.forward(route, verified, {}, '', undefined, 'POST');
+    } catch (error) {
+      this.failed(route, error);
+      throw error;
+    }
+    return this.claudeOpenReply(route, reply);
+  }
+
+  /** The shared reply admission: the exact unbound handoff, or a status the route can send. */
+  private claudeOpenReply(
+    route: string,
+    reply: RustReply
+  ): { status: number; body: unknown } | null {
+    if (
+      reply.status === 503 &&
+      reply.decline === 'unsupported' &&
+      reply.bytes?.toString('utf8') === '{"error":"Claude Open jobs are unbound"}'
+    ) {
+      this.declined(route, reply);
+      return null;
+    }
+    if (
+      ![200, 202, 404, 409, 500, 502, 504].includes(reply.status) ||
+      !reply.body ||
+      typeof reply.body !== 'object' ||
+      Array.isArray(reply.body)
+    )
+      throw new NetworkError('Rust Claude Open reply refused');
+    this.stats.served++;
+    this.record(route, { kind: 'served' });
+    return { status: reply.status, body: reply.body };
   }
 }
 

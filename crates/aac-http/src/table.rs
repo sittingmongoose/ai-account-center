@@ -28,6 +28,8 @@ pub(crate) enum Handler {
     Agent,
     AgentControl,
     Store,
+    ClaudeOpen,
+    ClaudeHistoryCleanup,
 }
 
 impl Handler {
@@ -49,6 +51,8 @@ impl Handler {
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "store" => Handler::Store,
+            "claude-open" => Handler::ClaudeOpen,
+            "claude-history-cleanup" => Handler::ClaudeHistoryCleanup,
             _ => return None,
         })
     }
@@ -194,7 +198,14 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
+                && !matches!(
+                    handler,
+                    Handler::Events
+                        | Handler::Agent
+                        | Handler::Store
+                        | Handler::ClaudeOpen
+                        | Handler::ClaudeHistoryCleanup
+                ))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
@@ -202,9 +213,15 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (method == axum::http::Method::POST
                 && !matches!(
                     handler,
-                    Handler::Agent | Handler::AgentControl | Handler::Store
+                    Handler::Agent
+                        | Handler::AgentControl
+                        | Handler::Store
+                        | Handler::ClaudeOpen
+                        | Handler::ClaudeHistoryCleanup
                 ))
             || (method == axum::http::Method::PUT && handler != Handler::Feed)
+            || (matches!(handler, Handler::ClaudeOpen | Handler::ClaudeHistoryCleanup)
+                && (method != axum::http::Method::POST || !internal))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)

@@ -11,7 +11,7 @@ use super::manifest::{
 use super::markers;
 use super::operations::{self, OpenErrorKind, Operation, Operations};
 use super::policy::{ExpectedLauncher, load_policy};
-use super::sync_service::{self, HelperCall, NoObserver, SyncObserver};
+use super::sync_service::{self, HelperCall, SyncObserver};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::future::Future;
@@ -134,7 +134,7 @@ fn check_host(host: Option<&str>) -> Result<&str, OpenErrorKind> {
 }
 
 /// `checkPath`: bounded, control-free, platform-absolute.
-fn check_path(value: Option<&str>, platform: &str) -> Result<&str, OpenErrorKind> {
+fn check_path<'a>(value: Option<&'a str>, platform: &str) -> Result<&'a str, OpenErrorKind> {
     let Some(value) = value else {
         return Err(OpenErrorKind::Other);
     };
@@ -373,7 +373,7 @@ impl ClaudeOpen {
         Ok(Target { profile, launcher })
     }
 
-    fn expected(&self, profile: &Profile, platform: &str) -> Option<ExpectedLauncher<'_>> {
+    fn expected<'a>(&self, profile: &'a Profile, platform: &str) -> Option<ExpectedLauncher<'a>> {
         let launcher = match platform {
             "mac" => profile.mac.as_ref()?,
             _ => profile.windows.as_ref()?,
@@ -632,9 +632,11 @@ impl ClaudeOpen {
                 let this = Arc::clone(self);
                 let id = id.to_string();
                 let platform = platform.to_string();
+                let run_id = id.clone();
+                let run_platform = platform.clone();
                 Some(self.operations.start(&scope, &id, &platform, move |observer| {
                     let this = Arc::clone(&this);
-                    async move { this.open_profile(&id, &platform, &observer).await }
+                    async move { this.open_profile(&run_id, &run_platform, &observer).await }
                 }))
             }))
         };
@@ -692,6 +694,43 @@ impl ClaudeOpen {
     pub fn operation_for(&self, scope: &str, profile_id: &str) -> Option<Operation> {
         self.operations.for_profile(scope, profile_id)
     }
+}
+
+/// The GET /desktop-profiles composition: add each Open's progress as `openOperation` to the
+/// manifest rows that carry a nonempty string id, exactly as the TS `withOperations` does.
+pub fn with_open_operations(mut value: Value, open: &ClaudeOpen, scope: &Path) -> Value {
+    let scope = scope.to_string_lossy().to_string();
+    if let Some(profiles) = value.get_mut("profiles").and_then(Value::as_array_mut) {
+        for profile in profiles {
+            let Some(id) = profile
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+            else {
+                continue;
+            };
+            let operation = open
+                .operation_for(&scope, id)
+                .map(|operation| operation.to_json())
+                .unwrap_or(Value::Null);
+            if let Some(map) = profile.as_object_mut() {
+                map.insert("openOperation".into(), operation);
+            }
+        }
+    }
+    value
+}
+
+/// `readDashboardPreferences().snapshotCleanup.auto !== false` with the TS default-on-error
+/// rule: a missing, unreadable or malformed preferences file keeps automatic retention on.
+pub fn snapshot_cleanup_auto(ccs_dir: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(ccs_dir.join("dashboard-preferences.json")) else {
+        return true;
+    };
+    let Some(value) = super::js::parse(&bytes) else {
+        return true;
+    };
+    value["snapshotCleanup"]["auto"] != json!(false)
 }
 
 /// The wall clock in milliseconds.

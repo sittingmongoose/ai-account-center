@@ -38,4 +38,4 @@ pub mod view_reply;
 #[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, short_name};
+pub use unix::{Boot, serve, serve_with_claude_open, short_name};

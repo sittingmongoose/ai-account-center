@@ -6,7 +6,7 @@
  */
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 
-export type RustGroup = 'home' | 'status';
+export type RustGroup = 'home' | 'status' | 'claude-open';
 
 export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {
   let value: unknown = env[`AAC_RUST_GROUP_${group.toUpperCase()}`];

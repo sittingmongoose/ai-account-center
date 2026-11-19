@@ -46,7 +46,15 @@ async fn run() {
         };
         tokio::select! { _ = input.read(&mut byte) => {}, _ = signal => {}, _ = tokio::signal::ctrl_c() => {} }
     };
-    if aac_http::serve(boot, shutdown).await.is_err() {
+    // G13: the claude-open group binds the Open job owner; the package root supplies the
+    // pinned reference helpers. Absent either, the internal routes decline and TS answers.
+    let package_root = std::env::var_os("AAC_AGENT_PACKAGE_ROOT").map(std::path::PathBuf::from);
+    let open_on = std::env::var("AAC_RUST_GROUP_CLAUDE_OPEN").is_ok_and(|value| value == "on");
+    let served = match (open_on, package_root) {
+        (true, Some(package)) => aac_http::serve_with_claude_open(boot, shutdown, package).await,
+        _ => aac_http::serve(boot, shutdown).await,
+    };
+    if served.is_err() {
         eprintln!("aac-http: private service failed");
         std::process::exit(1);
     }

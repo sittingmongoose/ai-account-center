@@ -546,10 +546,7 @@ impl Agents {
         let permit = self.slots.clone().try_acquire_owned().ok()?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(budget);
         let registry = self.loaded_registry(deadline).await?;
-        let client = registry
-            .as_deref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.client(&computer))?;
+        let client = registry.as_ref().as_ref().ok()?.client(&computer)?;
         let call_id = random_call_id()?;
         let args_text = serde_json::to_string(&args).ok()?;
         let wire = format!(
@@ -561,7 +558,7 @@ impl Agents {
         let events = client.call(&request, &options).await.ok()?;
         drop(permit);
         match events.last() {
-            Some(Event::Result { value, .. }) if value != &json!({"fallback":"python"}) => {
+            Some(Event::Result { value, .. }) if *value != json!({"fallback":"python"}) => {
                 Some(value.clone())
             }
             _ => None,
@@ -582,9 +579,11 @@ impl Agents {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         let registry = self.loaded_registry(deadline).await.ok_or(Cause::Refused)?;
         let handle = registry
-            .as_deref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.computer(&computer))
+            .as_ref()
+            .as_ref()
+            .ok()
+            .ok_or(Cause::Refused)?
+            .computer(&computer)
             .ok_or(Cause::Refused)?;
         let permit = self
             .slots
