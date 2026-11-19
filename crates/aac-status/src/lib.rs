@@ -16,6 +16,7 @@
 //! still receives only reports TypeScript accepted, and the check is idempotent there.
 
 pub mod computers;
+pub mod answer_signing;
 pub mod error;
 pub mod http_views;
 pub mod model_identity;

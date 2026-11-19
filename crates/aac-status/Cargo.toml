@@ -39,6 +39,12 @@ regex.workspace = true
 sha2.workspace = true
 # Insertion-ordered maps for the share readers' state (serde_json's Map holds JSON values only).
 indexmap = "2.14.2"
+# R4: Ed25519 answer signing, interoperable with Node's crypto (PKCS#8 private, SPKI public, PEM).
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+spki = { version = "0.7", features = ["pem"] }
+pem-rfc7468 = { version = "0.7", features = ["alloc"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [build-dependencies]
 napi-build = "2"

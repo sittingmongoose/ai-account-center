@@ -736,6 +736,7 @@ pub async fn serve(
         }
         _ => None,
     };
+    let owned_reports_root = boot.owned.as_ref().map(|owned| owned.reports_root.clone());
     let state = AppState(Arc::new(Shared {
         boot,
         limits: Limits::new(),
@@ -794,7 +795,7 @@ pub async fn serve(
     }
     if let Some(owner) = &scoreboard_owned {
         let seeder = Arc::clone(owner);
-        let root = state.0.boot.owned.as_ref().expect("scoreboard owner").reports_root.clone();
+        let root = owned_reports_root.clone().expect("scoreboard owner");
         let _ = tokio::task::spawn_blocking(move || {
             let mut failures = Vec::new();
             aac_status::share::seed::seed_catalog(
