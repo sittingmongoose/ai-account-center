@@ -526,6 +526,8 @@ pub(crate) async fn run_public_at(
     } else {
         None
     };
+    // The settings group registers its own routes when the owner host is on; without the host
+    // the `edges` fallback answers them, so the shipped worker keeps its cutover switch.
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
@@ -590,8 +592,15 @@ pub(crate) async fn run_public_at(
     };
     let mut api = Router::new();
     if let Some(host) = &owner_host {
+        if let Some(settings) = &native_settings {
+            host.register("settings", settings.router(Router::new()));
+        }
         api = host.mount(api);
     }
+    let native_settings = match &owner_host {
+        Some(_) => None,
+        None => native_settings,
+    };
     if cut || !composed {
         api = api.route(
             "/api/health",
