@@ -60,6 +60,7 @@ export type ClaudeLifecycleCode =
   | 'trash_cross_volume'
   | 'remove_failed'
   | 'unknown_trash'
+  | 'confirmation_stale'
   | 'restore_failed'
   | 'purge_failed'
   | 'write_failed';
@@ -353,11 +354,14 @@ export class ClaudeAccountLifecycle {
     return stateFingerprint({ trashId: entry.trashId, state: entry.state, entry: entry.entry });
   }
 
-  async restore(trashId: string): Promise<{ accountId: string }> {
+  async restore(trashId: string, reviewed?: string): Promise<{ accountId: string }> {
     this.assertEnabled();
     return updateTrash(this.ccsDir(), async (entries) => {
       const entry = entries.find((candidate) => candidate.trashId === trashId);
       if (!entry || entry.state !== 'trashed') throw new ClaudeLifecycleError('unknown_trash');
+      if (reviewed !== undefined && this.restoreFingerprint(entry) !== reviewed) {
+        throw new ClaudeLifecycleError('confirmation_stale');
+      }
       const id = entry.accountId.slice('claude:'.length);
       const ids = new Set<string>();
       for (const item of await readInventoryEntries(this.ccsDir())) {
@@ -417,11 +421,14 @@ export class ClaudeAccountLifecycle {
    * `host_unreachable`. A default profile is never in the trash; one found
    * there is refused with `account_protected`.
    */
-  async purgeOne(trashId: string): Promise<{ trashId: string }> {
+  async purgeOne(trashId: string, reviewed?: string): Promise<{ trashId: string }> {
     this.assertEnabled();
     const entry = await this.findTrash(trashId).catch(() => null);
     if (!entry || (entry.state !== 'trashed' && entry.state !== 'deleting')) {
       throw new ClaudeLifecycleError('unknown_trash');
+    }
+    if (reviewed !== undefined && this.purgeFingerprint(entry) !== reviewed) {
+      throw new ClaudeLifecycleError('confirmation_stale');
     }
     if (trashEntryIsDefault(entry)) throw new ClaudeLifecycleError('account_protected');
     let failedHost: ClaudeHost | null = null;
@@ -489,8 +496,9 @@ export class ClaudeAccountLifecycle {
     await updateTrash(this.ccsDir(), async (entries) => ({
       next: entries
         .filter((entry) => !purged.has(entry.trashId))
-        .map((entry): ClaudeTrashEntry =>
-          pending.has(entry.trashId) ? { ...entry, state: 'deleting' } : entry
+        .map(
+          (entry): ClaudeTrashEntry =>
+            pending.has(entry.trashId) ? { ...entry, state: 'deleting' } : entry
         ),
       result: undefined,
     })).catch(() => undefined);

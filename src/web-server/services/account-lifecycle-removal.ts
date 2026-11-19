@@ -434,6 +434,9 @@ export async function removeAccount(
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   await refused();
+  if (context.approvals && (await plan.fingerprint()) !== binding.stateFingerprint) {
+    throw new LifecycleHttpError(409, 'confirmation_stale');
+  }
   let outcome: { trashId: string | null; purgeAfter: string | null };
   try {
     outcome = await plan.commit();
@@ -508,7 +511,10 @@ export async function restoreTrash(
   }
   let restored: { accountId: string };
   try {
-    restored = await claude.restore(trashId);
+    restored = await claude.restore(
+      trashId,
+      context.approvals ? binding.stateFingerprint : undefined
+    );
   } catch (error) {
     throw mapError(error);
   }
@@ -591,7 +597,7 @@ export async function purgeTrash(
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   try {
-    await claude.purgeOne(trashId);
+    await claude.purgeOne(trashId, context.approvals ? binding.stateFingerprint : undefined);
   } catch (error) {
     throw mapError(error);
   }

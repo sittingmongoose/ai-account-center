@@ -13,6 +13,7 @@ import os from 'os';
 import path from 'path';
 import { CodexProfileRegistry } from '../../../src/codex-auth/codex-profile-registry';
 import { invalidateCodexAuthProfilesCache } from '../../../src/codex-auth/codex-auth-dashboard-service';
+import { RustService } from '../../../src/web-server/rust-service';
 import { createAccountLifecycleRouter } from '../../../src/web-server/routes/account-lifecycle-routes';
 import { relabel } from '../../../src/web-server/services/account-lifecycle-extras';
 import { AccountConfirmationStore } from '../../../src/web-server/services/account-confirmations';
@@ -190,6 +191,7 @@ function row(id: string, extra: Partial<DashboardAccount> = {}): DashboardAccoun
 
 interface Fixture {
   base: string;
+  rustService?: RustService;
   env: LifecycleEnv;
   audits: Array<[string, Record<string, unknown>]>;
   probes: AdditionalUsageSource[];
@@ -212,6 +214,7 @@ async function fixture(
     claudeEnabled?: boolean;
     antigravityFlow?: 'preflight_failed' | 'tool_missing' | null;
     museEnabled?: boolean;
+    approvalBinary?: string;
   } = {}
 ): Promise<Fixture> {
   const audits: Array<[string, Record<string, unknown>]> = [];
@@ -361,6 +364,18 @@ async function fixture(
   };
   const app = express();
   app.use(express.json());
+  const rustService = options.approvalBinary ? new RustService('on') : undefined;
+  if (rustService) {
+    const service = rustService;
+    closers.push(async () => service.stop());
+    await service.start(options.approvalBinary);
+    expect(service.stats.fallbacks).toBe(0);
+    expect(service.accountConfirmations()).toBeDefined();
+    app.use((_req, res, next) => {
+      res.locals.rustService = service;
+      next();
+    });
+  }
   app.use((req, _res, next) => {
     // The peer the route sees: `x-test-peer`, or the real loopback peer. Set on every
     // request, because a kept-alive socket carries the last value to the next one.
@@ -384,6 +399,7 @@ async function fixture(
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
     base,
+    rustService,
     env,
     audits,
     probes,
@@ -697,6 +713,47 @@ describe('trusted local network (CONTRACT-auth-devices 2a rule 4)', () => {
 });
 
 describe('remove with a confirmation token', () => {
+  const approvalBinary = process.env.AAC_SPEC_APPROVAL_BINARY;
+  it.skipIf(!approvalBinary)(
+    'uses the Rust issuer behind the actual session, origin and target guards',
+    async () => {
+      const f = await fixture({ approvalBinary });
+      const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+      expect(added.status).toBe(201);
+      const id = String((added.body.account as { id: string }).id);
+      const route = `/${id}/remove`;
+      const prepare = async () => {
+        const result = await f.request('POST', route, {});
+        expect(result.status).toBe(200);
+        return (result.body.confirmation as { token: string }).token;
+      };
+      const confirmationToken = await prepare();
+      expect(
+        (
+          await f.request(
+            'POST',
+            route,
+            { confirmationToken },
+            { origin: 'https://untrusted.example' }
+          )
+        ).status
+      ).toBe(403);
+      const foreign = await f.request(
+        'POST',
+        route,
+        { confirmationToken },
+        { 'x-test-session': 'b' }
+      );
+      expect([foreign.status, foreign.body.code]).toEqual([409, 'confirmation_stale']);
+      const spent = await f.request('POST', route, { confirmationToken });
+      expect([spent.status, spent.body.code]).toEqual([409, 'confirmation_stale']);
+      expect((await f.request('POST', route, { confirmationToken: await prepare() })).body).toEqual(
+        { removed: true, trashId: null, purgeAfter: null }
+      );
+      expect(f.rustService?.stats.served).toBe(5);
+    }
+  );
+
   it('prepares, commits once, and refuses a reused, foreign or stale token', async () => {
     const f = await fixture();
     const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
