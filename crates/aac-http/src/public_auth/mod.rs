@@ -317,6 +317,7 @@ impl DashboardAuth {
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
+        let capture_writes = Arc::new(tokio::sync::Mutex::new(()));
         downstream.fallback(move |request: Request| async move {
             if let Some(settings) = &native_settings
                 && let Some(family) = native_settings::route(request.method(), request.uri().path())
@@ -337,7 +338,12 @@ impl DashboardAuth {
                 && analytics_routes::owns(request.method(), request.uri().path())
             {
                 if analytics_routes::is_capture(request.uri().path()) {
-                    return analytics_routes::capture(request, root.to_owned()).await;
+                    return analytics_routes::capture(
+                        request,
+                        root.to_owned(),
+                        Arc::clone(&capture_writes),
+                    )
+                    .await;
                 }
                 // The request itself stays here: a declined composed read still reaches the
                 // worker with its headers and body untouched.
@@ -1515,21 +1521,48 @@ mod tests {
         tungstenite::{Error as WsError, Message, client::IntoClientRequest},
     };
 
-    async fn server() -> (
+    mod analytics;
+
+    type TestServer = (
         tempfile::TempDir,
         DashboardAuth,
         SocketAddr,
         tokio::task::JoinHandle<()>,
-    ) {
+    );
+
+    async fn server() -> TestServer {
+        server_with_analytics(false, None).await
+    }
+
+    async fn server_with_analytics(cut: bool, hop: Option<analytics_routes::Hop>) -> TestServer {
         let home = tempfile::tempdir().unwrap();
-        let root = home.path().to_path_buf();
+        let root = home.path().canonicalize().unwrap();
         let hash = bcrypt::hash("fixture-password", 4).unwrap();
         Files::save_config(&aac_files::OwnedStore::claim_dashboard_config(&root).unwrap(),
             &json!({"dashboard_auth":{"enabled":true,"username":"fixture-admin","password_hash":hash}})).unwrap();
-        let auth = DashboardAuth::open_with(root, Overrides::default(), 4, false).unwrap();
+        let auth = DashboardAuth::open_with(root.clone(), Overrides::default(), 4, false).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let router = auth.protect(Router::new().fallback(|| async { decline() }));
+        let router = if cut {
+            auth.edges(
+                Router::new(),
+                HubCache::default(),
+                None,
+                None,
+                true,
+                None,
+                Some(root),
+                None,
+                None,
+                None,
+                hop,
+                None,
+                None,
+            )
+        } else {
+            Router::new().fallback(|| async { decline() })
+        };
+        let router = auth.protect(router);
         let handle = tokio::spawn(async move {
             axum::serve(
                 listener,

@@ -329,7 +329,7 @@ fn body_refusal(family: Family) -> Reply {
 }
 
 /// The writes group's writers: every row that moves with it belongs to the Rust service.
-fn owners() -> Owners {
+pub(super) fn owners() -> Owners {
     let Ok(rows) = registry::rows() else {
         return Owners::defaults(&[]);
     };
