@@ -33,11 +33,23 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+mod lifecycle_antigravity;
+mod lifecycle_codex;
+mod lifecycle_jobs;
+mod lifecycle_keys;
+mod lifecycle_label;
+mod lifecycle_login;
+mod lifecycle_maintenance;
+mod lifecycle_open;
+mod lifecycle_registry;
+mod lifecycle_remove;
+mod lifecycle_trash;
 mod recheck;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Groups {
     pub(super) collection: bool,
+    pub(super) lifecycle: bool,
     writes: bool,
     app_updates: bool,
     home: bool,
@@ -49,6 +61,10 @@ pub(super) struct Groups {
 }
 
 impl Groups {
+    pub(super) fn lifecycle_available(self) -> bool {
+        self.collection && self.writes
+    }
+
     pub(super) fn from_config(config: &Value) -> Self {
         let on = |name: &str, env: &str| match std::env::var_os(env) {
             Some(value) => value == "on",
@@ -65,6 +81,7 @@ impl Groups {
             }
         };
         Self {
+            lifecycle: false,
             store,
             analytics_writers: on("analytics-writers", "AAC_RUST_GROUP_ANALYTICS_WRITERS")
                 && on("analytics", "AAC_RUST_GROUP_ANALYTICS"),
@@ -80,22 +97,30 @@ impl Groups {
 }
 
 #[derive(Clone)]
-pub(super) struct NativeOwners {
+pub(crate) struct NativeOwners {
+    agents: Arc<Agents>,
+    owners: Owners,
+    queues: Arc<crate::lifecycle_queue::LifecycleQueues>,
+    lifecycle_jobs: Option<Arc<lifecycle_jobs::Jobs>>,
+    trash: Option<Arc<lifecycle_trash::Trash>>,
+    events: DashboardEvents,
     usage: Option<Arc<Usage>>,
+    lifecycle_usage: Option<LifecycleUsage>,
     #[cfg(unix)]
     apps: Option<Arc<BoundJobs>>,
     writes: bool,
     limits: Limits,
 }
 
-pub(super) struct Jobs {
+pub(crate) struct Jobs {
     cancel: CancellationToken,
     sampling: Option<JoinHandle<()>>,
     signins: Option<JoinHandle<()>>,
+    maintenance: Option<JoinHandle<()>>,
 }
 
 impl Jobs {
-    pub(super) async fn stop(self) {
+    pub(crate) async fn stop(self) {
         self.cancel.cancel();
         if let Some(task) = self.signins {
             task.abort();
@@ -104,21 +129,25 @@ impl Jobs {
         if let Some(task) = self.sampling {
             let _ = task.await;
         }
+        if let Some(task) = self.maintenance {
+            let _ = task.await;
+        }
     }
 }
 
 struct Usage {
     root: PathBuf,
-    producer: Producer,
+    producer: Arc<Producer>,
     cache: AccountUsageCache,
     hub: HubCache,
     events: DashboardEvents,
     lifecycle: Mutex<crate::account_usage::dashboard::Lifecycle>,
     recheck_limit: Mutex<recheck::Limit>,
     signins: ClaudeSignInRenewalReader,
-    antigravity: Option<crate::antigravity_host::Host>,
+    antigravity: Option<Arc<crate::antigravity_host::Host>>,
     server: Value,
     worker_directory: Option<PathBuf>,
+    native_lifecycle: bool,
     store: bool,
     analytics_writers: bool,
     #[cfg(unix)]
@@ -128,6 +157,13 @@ struct Usage {
     /// The sign-in expiry rows and when they were read (the TS health cache's five minutes).
     #[cfg(unix)]
     signin_cache: Mutex<Option<(i64, Value)>>,
+}
+
+#[derive(Clone)]
+struct LifecycleUsage {
+    cache: AccountUsageCache,
+    producer: Option<Arc<Producer>>,
+    antigravity: Option<Arc<crate::antigravity_host::Host>>,
 }
 
 impl NativeOwners {
@@ -161,23 +197,48 @@ impl NativeOwners {
             cancel: cancel.clone(),
             sampling: None,
             signins: None,
+            maintenance: None,
         };
+        let rows = registry::rows().map_err(io::Error::other)?;
+        let files = rows
+            .iter()
+            .map(|row| {
+                let owner = if (groups.collection
+                    && row.moves_with.as_deref() == Some("collection"))
+                    || (groups.writes && row.moves_with.as_deref() == Some("writes"))
+                    || (groups.lifecycle && row.moves_with.as_deref() == Some("lifecycle"))
+                {
+                    Role::RustService
+                } else {
+                    row.owner
+                };
+                (row.id.clone(), owner.word().to_owned())
+            })
+            .collect();
+        let owners = Owners::from_boot(rows, &files).map_err(io::Error::other)?;
+        let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
+        let lifecycle_jobs = groups
+            .lifecycle
+            .then(|| Arc::new(lifecycle_jobs::Jobs::default()));
+        let trash = groups.lifecycle.then(|| {
+            Arc::new(lifecycle_trash::Trash::new(
+                root.clone(),
+                owners.clone(),
+                agents.clone(),
+                queues.clone(),
+            ))
+        });
+        if groups.writes
+            && let Some(trash) = trash.clone()
+        {
+            jobs.maintenance = Some(lifecycle_maintenance::start(
+                root.clone(),
+                owners.clone(),
+                trash,
+                cancel.clone(),
+            ));
+        }
         let usage = if groups.collection {
-            let rows = registry::rows().map_err(io::Error::other)?;
-            let files = rows
-                .iter()
-                .map(|row| {
-                    let owner = if row.moves_with.as_deref() == Some("collection")
-                        || (groups.writes && row.moves_with.as_deref() == Some("writes"))
-                    {
-                        Role::RustService
-                    } else {
-                        row.owner
-                    };
-                    (row.id.clone(), owner.word().to_owned())
-                })
-                .collect();
-            let owners = Owners::from_boot(rows, &files).map_err(io::Error::other)?;
             let build = env!("AAC_BUILD_COMMIT");
             let commit = build.get(..8).filter(|_| {
                 build.len() == 40 && build.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -206,28 +267,29 @@ impl NativeOwners {
             }
             let collection = Arc::new(Collection::default());
             let usage = Arc::new(Usage {
-                producer: Producer::shared(
+                producer: Arc::new(Producer::shared(
                     root.clone(),
                     owners.clone(),
                     agents.clone(),
                     collection,
                     Arc::default(),
-                ),
+                )),
                 cache: AccountUsageCache::default(),
                 hub,
                 events: events.clone(),
                 lifecycle: Mutex::new(lifecycle),
                 recheck_limit: Mutex::default(),
                 signins: ClaudeSignInRenewalReader::new(root.clone(), Default::default()),
-                antigravity: crate::antigravity_host::Host::from_root(&root),
+                antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
                 server,
                 store: groups.store && worker_directory.is_some(),
                 worker_directory,
+                native_lifecycle: groups.lifecycle,
                 analytics_writers: groups.analytics_writers,
                 #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
-                owners,
-                agents,
+                owners: owners.clone(),
+                agents: agents.clone(),
                 #[cfg(unix)]
                 signin_cache: Mutex::new(None),
                 root,
@@ -242,6 +304,17 @@ impl NativeOwners {
         };
         Ok((
             Self {
+                agents,
+                owners,
+                queues,
+                lifecycle_jobs,
+                trash,
+                events,
+                lifecycle_usage: usage.as_ref().map(|usage| LifecycleUsage {
+                    cache: usage.cache.clone(),
+                    producer: Some(usage.producer.clone()),
+                    antigravity: usage.antigravity.clone(),
+                }),
                 usage,
                 #[cfg(unix)]
                 apps,
@@ -252,10 +325,105 @@ impl NativeOwners {
         ))
     }
 
-    pub(super) fn owns(method: &Method, path: &str) -> bool {
+    pub(crate) fn owns_lifecycle(method: &Method, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        super::lifecycle::Route::of(method, path).is_some()
+            || lifecycle_open::route(method, path).is_some()
+            || lifecycle_label::route(method, path).is_some()
+            || lifecycle_jobs::route(method, path).is_some()
+            || lifecycle_registry::route(method, path)
+            || lifecycle_keys::route(method, path).is_some()
+            || lifecycle_remove::route(method, path).is_some()
+            || lifecycle_login::route(method, path).is_some()
+            || lifecycle_trash::route(method, path).is_some()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn root(&self) -> &std::path::Path {
+        self.agents.root()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn for_private_lifecycle(
+        agents: Arc<Agents>,
+        owners: Owners,
+        cache: AccountUsageCache,
+        producer: Option<Arc<Producer>>,
+        approvals: Arc<crate::account_approvals::Approvals>,
+        feeds: crate::feed::Feeds,
+    ) -> (Self, Jobs) {
+        let root = agents.root().to_owned();
+        let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
+        let trash = Arc::new(lifecycle_trash::Trash::with_approvals(
+            root.clone(),
+            owners.clone(),
+            agents.clone(),
+            queues.clone(),
+            approvals,
+        ));
+        let cancel = CancellationToken::new();
+        let events = DashboardEvents(tokio::sync::broadcast::channel(64).0);
+        let mut receiver = events.0.subscribe();
+        let signins = tokio::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        if let Ok(event) = serde_json::to_value(event) {
+                            feeds.publish_event(event);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        let maintenance = lifecycle_maintenance::start(
+            root.clone(),
+            owners.clone(),
+            trash.clone(),
+            cancel.clone(),
+        );
+        (
+            Self {
+                agents,
+                owners,
+                queues,
+                lifecycle_jobs: Some(Arc::new(lifecycle_jobs::Jobs::default())),
+                trash: Some(trash),
+                events,
+                usage: None,
+                lifecycle_usage: Some(LifecycleUsage {
+                    cache,
+                    producer,
+                    antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
+                }),
+                apps: None,
+                writes: true,
+                limits: Limits::new(),
+            },
+            Jobs {
+                cancel,
+                sampling: None,
+                signins: Some(signins),
+                maintenance: Some(maintenance),
+            },
+        )
+    }
+
+    pub(super) fn owns(&self, method: &Method, path: &str) -> bool {
         Self::dashboard_route(method, path)
             || recheck::route(method, path).is_some()
+            || lifecycle_open::route(method, path).is_some()
+            || lifecycle_label::route(method, path).is_some()
+            || (self.lifecycle_jobs.is_some() && Self::owns_lifecycle(method, path))
             || Self::app_operation(method, path).is_some()
+    }
+
+    fn changed(&self) {
+        if let Some(usage) = &self.lifecycle_usage {
+            usage.cache.request_refresh();
+        }
+        self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
     fn dashboard_route(method: &Method, path: &str) -> bool {
@@ -277,7 +445,7 @@ impl NativeOwners {
         None
     }
 
-    pub(super) async fn handle(&self, request: Request) -> Reply {
+    pub(crate) async fn handle(&self, request: Request) -> Reply {
         let path = request.uri().path().trim_end_matches('/');
         let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
             return super::service_error();
@@ -285,6 +453,50 @@ impl NativeOwners {
         if Self::dashboard_route(request.method(), path) {
             let (parts, _) = request.into_parts();
             return self.dashboard(&access, parts.uri, parts.headers).await;
+        }
+        if let Some(id) = lifecycle_open::route(request.method(), path).map(str::to_owned) {
+            return lifecycle_open::handle(&self.agents, &id, request).await;
+        }
+        if self.lifecycle_jobs.is_some()
+            && let Some(id) = lifecycle_login::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return lifecycle_login::handle(self, &id, request).await;
+        }
+        if self.trash.is_some()
+            && let Some(id) = lifecycle_remove::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return lifecycle_remove::handle(self, &id, request).await;
+        }
+        if self.lifecycle_jobs.is_some()
+            && let Some((action, id)) = lifecycle_keys::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return lifecycle_keys::handle(self, action, &id, request).await;
+        }
+        if let Some(jobs) = &self.lifecycle_jobs
+            && lifecycle_registry::route(request.method(), path)
+        {
+            return lifecycle_registry::handle(self, jobs, request).await;
+        }
+        if let Some(jobs) = &self.lifecycle_jobs
+            && let Some((action, id)) = lifecycle_jobs::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return jobs.clone().handle(self, action, &id, request).await;
+        }
+        if let Some(trash) = &self.trash
+            && let Some((action, id)) = lifecycle_trash::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return trash
+                .clone()
+                .handle(action, &id, request, self.events.clone())
+                .await;
+        }
+        if let Some(id) = lifecycle_label::route(request.method(), path) {
+            return lifecycle_label::handle(self, &id, request).await;
         }
         if let Some(id) = recheck::route(request.method(), path).map(str::to_owned) {
             let reply = match self.usage.as_ref().filter(|_| self.writes) {
@@ -403,7 +615,9 @@ impl Usage {
             let mut facts = self.companions();
             // The remaining lifecycle adapters may supply capability preflight. Collection
             // and Re-check still run with the Rust facts if that worker is absent.
-            if let Some(directory) = &self.worker_directory {
+            if let Some(directory) = &self.worker_directory
+                && !self.native_lifecycle
+            {
                 let active = facts.lifecycle.jobs.clone();
                 facts.load_lifecycle(directory);
                 facts.lifecycle.jobs.extend(active);
@@ -682,7 +896,7 @@ fn instance_platform() -> String {
     }
 }
 
-fn json_content(request: &Request) -> bool {
+pub(super) fn json_content(request: &Request) -> bool {
     super::header(request.headers(), "content-type")
         .and_then(|value| value.split(';').next())
         .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))

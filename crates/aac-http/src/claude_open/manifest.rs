@@ -2,12 +2,13 @@
 //! parse and the can-open rules), `claude-account-stores.ts` (the pending registry) and
 //! `claude-account-records.ts` (the default-folder rule). The orchestrator resolves membership
 //! and launchers from these exactly as `resolveOpenTarget` does; client paths never enter.
-use super::js::utf16_len;
+pub use crate::claude_account_store::Launcher;
+use crate::claude_account_store::{
+    is_js_space, parse_pending_launcher, pending_id, read_text, timestamp_shape,
+};
+use aac_files::read::Read;
 use serde_json::{Map, Value};
-use std::fs::{self, OpenOptions};
-use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::fs;
 use std::path::Path;
 
 /// `CLAUDE_PROFILE_ID_PATTERN`: the safe-ID shape every Claude desktop path checks first.
@@ -18,60 +19,6 @@ pub fn profile_id_pattern(id: &str) -> bool {
         && bytes[1..]
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
-}
-
-/// The pending registry's tighter `CLAUDE_PROFILE_ID` (`^[a-z][a-z0-9-]{1,31}$`).
-fn pending_id(id: &str) -> bool {
-    let bytes = id.as_bytes();
-    (2..=32).contains(&bytes.len())
-        && bytes[0].is_ascii_lowercase()
-        && bytes[1..]
-            .iter()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
-}
-
-/// JavaScript `\s` for the email and trim rules.
-fn is_js_space(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{feff}'
-    )
-}
-
-/// The manifest reader's `readText`: nonempty after JS trim, bounded UTF-16 length, no C0/DEL.
-fn read_text(value: &Value, max: usize) -> Option<&str> {
-    let text = value.as_str()?;
-    if text.trim_matches(is_js_space).is_empty()
-        || utf16_len(text) > max
-        || text.bytes().any(|b| b < 0x20 || b == 0x7f)
-    {
-        return None;
-    }
-    Some(text)
-}
-
-/// One launcher as the Open path reads it. Absent optional fields stay absent.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Launcher {
-    /// The wrapper's display name.
-    pub launcher_name: String,
-    /// The configured wrapper path, when present.
-    pub launcher_path: Option<String>,
-    /// The profile data folder, when present.
-    pub profile_path: Option<String>,
-    /// The Windows Start Menu shortcut, when present.
-    pub start_menu_path: Option<String>,
-    /// The inventory's default marker, when present.
-    pub is_default: Option<bool>,
-    /// The SSH alias, when present.
-    pub ssh_host: Option<String>,
 }
 
 /// A manifest profile (`ClaudeDesktopProfile`).
@@ -205,7 +152,7 @@ pub fn list_profiles(ccs_dir: &Path) -> Result<Vec<Profile>, ()> {
         Err(_) => return Err(()),
     };
     let contents = String::from_utf8_lossy(&bytes);
-    if utf16_len(&contents) > 1024 * 1024 {
+    if contents.encode_utf16().count() > 1024 * 1024 {
         return Err(());
     }
     let manifest = super::js::parse(contents.as_bytes()).ok_or(())?;
@@ -246,75 +193,6 @@ pub struct PendingProfile {
     pub created_at: String,
     /// The expected email, when asserted.
     pub expected_email: Option<String>,
-}
-
-/// The pending registry's `parseLauncher`: exact key allowlist, required name/path/alias.
-fn parse_pending_launcher(value: &Value) -> Option<Launcher> {
-    let map = value.as_object()?;
-    const ALLOWED: [&str; 5] = [
-        "launcherName",
-        "launcherPath",
-        "profilePath",
-        "startMenuPath",
-        "sshHost",
-    ];
-    if map.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
-        return None;
-    }
-    let launcher_name = read_text(map.get("launcherName")?, 255)?.to_string();
-    let profile_path = read_text(map.get("profilePath")?, 4096)?.to_string();
-    let ssh_host = map.get("sshHost")?.as_str()?;
-    let bytes = ssh_host.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > 128
-        || !bytes[0].is_ascii_alphanumeric()
-        || !bytes[1..]
-            .iter()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(b))
-    {
-        return None;
-    }
-    let mut launcher = Launcher {
-        launcher_name,
-        profile_path: Some(profile_path),
-        ssh_host: Some(ssh_host.to_string()),
-        ..Launcher::default()
-    };
-    for (field, slot) in [
-        ("launcherPath", &mut launcher.launcher_path),
-        ("startMenuPath", &mut launcher.start_menu_path),
-    ] {
-        if let Some(value) = map.get(field) {
-            *slot = Some(read_text(value, 4096)?.to_string());
-        }
-    }
-    Some(launcher)
-}
-
-/// The pending registry's `TIMESTAMP` shape.
-fn timestamp_shape(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let digits = |range: std::ops::Range<usize>| {
-        bytes
-            .get(range)
-            .is_some_and(|part| part.iter().all(u8::is_ascii_digit))
-    };
-    if !(bytes.len() == 20 || bytes.len() == 24) {
-        return false;
-    }
-    digits(0..4)
-        && bytes[4] == b'-'
-        && digits(5..7)
-        && bytes[7] == b'-'
-        && digits(8..10)
-        && bytes[10] == b'T'
-        && digits(11..13)
-        && bytes[13] == b':'
-        && digits(14..16)
-        && bytes[16] == b':'
-        && digits(17..19)
-        && (bytes.len() == 20 || (bytes[19] == b'.' && digits(20..23)))
-        && bytes[bytes.len() - 1] == b'Z'
 }
 
 /// The pending registry's `parsePending`.
@@ -361,112 +239,16 @@ pub(crate) fn parse_pending(value: &Value) -> Option<Vec<PendingProfile>> {
     Some(profiles)
 }
 
-/// The private JSON store's read result.
-enum PrivateRead {
-    Absent,
-    Invalid,
-    Ok(Value),
-}
-
-/// `checkStoreFolder`: others-writable is unsafe; group-writable and symlink folders are
-/// accepted (the one-time warning belongs to the TS reader's log until the cut).
-/// Windows reports synthetic permission bits and owns the folder by its profile ACL, as the
-/// TS `checkStoreFolder` treats it.
-#[cfg(unix)]
-fn store_folder_ok(directory: &Path) -> bool {
-    let meta = match fs::symlink_metadata(directory) {
-        Ok(meta) => meta,
-        Err(error) => return error.kind() == std::io::ErrorKind::NotFound,
-    };
-    let meta = if meta.file_type().is_symlink() {
-        match fs::metadata(directory) {
-            Ok(meta) => meta,
-            Err(error) => return error.kind() == std::io::ErrorKind::NotFound,
-        }
-    } else {
-        meta
-    };
-    meta.is_dir() && meta.permissions().mode() & 0o002 == 0
-}
-
-#[cfg(not(unix))]
-fn store_folder_ok(directory: &Path) -> bool {
-    matches!(fs::symlink_metadata(directory), Ok(meta) if meta.is_dir())
-}
-
-/// `readPrivateJsonFile` with the store's caps and privacy rules.
-fn read_private_json(file: &Path, max_bytes: u64) -> PrivateRead {
-    if !file.parent().is_some_and(store_folder_ok) {
-        return PrivateRead::Invalid;
-    }
-    let link = match fs::symlink_metadata(file) {
-        Ok(link) => link,
-        Err(error) => {
-            return if error.kind() == std::io::ErrorKind::NotFound {
-                PrivateRead::Absent
-            } else {
-                PrivateRead::Invalid
-            };
-        }
-    };
-    if link.file_type().is_symlink() || !link.is_file() {
-        return PrivateRead::Invalid;
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    // A symlink or FIFO swapped in after the lstat is refused below; Windows has no such flags.
-    #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    let mut handle = match options.open(file) {
-        Ok(handle) => handle,
-        Err(error) => {
-            return if error.kind() == std::io::ErrorKind::NotFound {
-                PrivateRead::Absent
-            } else {
-                PrivateRead::Invalid
-            };
-        }
-    };
-    let stat = match handle.metadata() {
-        Ok(stat) => stat,
-        Err(_) => return PrivateRead::Invalid,
-    };
-    if !stat.is_file() || stat.len() > max_bytes || !private_mode(&stat) {
-        return PrivateRead::Invalid;
-    }
-    let mut buffer = vec![0u8; max_bytes as usize + 1];
-    let read = match handle.read(&mut buffer) {
-        Ok(read) => read,
-        Err(_) => return PrivateRead::Invalid,
-    };
-    if read as u64 > max_bytes {
-        return PrivateRead::Invalid;
-    }
-    let contents = String::from_utf8_lossy(&buffer[..read]);
-    match super::js::parse(contents.as_bytes()) {
-        Some(value) => PrivateRead::Ok(value),
-        None => PrivateRead::Invalid,
-    }
-}
-
-/// The TS `isPrivate` mode rule: no group or other bits on Unix; the Windows ACL decides.
-#[cfg(unix)]
-fn private_mode(meta: &fs::Metadata) -> bool {
-    meta.permissions().mode() & 0o077 == 0
-}
-
-#[cfg(not(unix))]
-fn private_mode(_meta: &fs::Metadata) -> bool {
-    true
-}
-
 /// `readPendingProfiles`: absent is empty; an unreadable or malformed store is an error.
 pub fn read_pending_profiles(ccs_dir: &Path) -> Result<Vec<PendingProfile>, ()> {
     let file = ccs_dir.join("accounts").join("claude-pending.json");
-    match read_private_json(&file, 256 * 1024) {
-        PrivateRead::Absent => Ok(Vec::new()),
-        PrivateRead::Ok(value) => parse_pending(&value).ok_or(()),
-        PrivateRead::Invalid => Err(()),
+    match aac_files::read::private_store(&file, 256 * 1024) {
+        Read::Absent => Ok(Vec::new()),
+        Read::Bytes(bytes, _) => {
+            let value = super::js::parse(String::from_utf8_lossy(&bytes).as_bytes()).ok_or(())?;
+            parse_pending(&value).ok_or(())
+        }
+        _ => Err(()),
     }
 }
 

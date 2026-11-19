@@ -48,7 +48,10 @@ async function main(): Promise<void> {
   process.env.AAC_CUT_OFFER_HOME =
     rustGroupOn('home') || process.env.AAC_RUST_HOME_VIEW === 'on' ? '1' : '0';
   const cache = path.join(directory, 'hub.json');
-  const collection = process.platform !== 'win32' && rustGroupOn('collection');
+  const collection =
+    process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1' &&
+    process.platform !== 'win32' &&
+    rustGroupOn('collection');
   const saveLifecycle = () => (collection ? publishLifecycleFacts(directory) : Promise.resolve());
   await saveLifecycle().catch(() => {});
   const native = new Map<ClaudeDashboardPlatform, RenderedHubRows>();

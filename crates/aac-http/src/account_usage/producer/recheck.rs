@@ -40,6 +40,40 @@ fn same_binding(current: &Source, expected: &Source) -> bool {
         && current.credential == expected.credential
 }
 
+pub(crate) async fn lookup(
+    root: std::path::PathBuf,
+    id: &str,
+) -> Result<Option<Resolved>, Decline> {
+    let id = id.to_owned();
+    tokio::task::spawn_blocking(move || match sources::read_registry(&root) {
+        Ok(sources::Sources::V2(rows)) => {
+            Ok(rows
+                .into_iter()
+                .find(|source| source.id == id)
+                .map(|source| Resolved {
+                    source,
+                    legacy: false,
+                }))
+        }
+        Ok(sources::Sources::Legacy) => {
+            let (rows, valid) = sources::legacy(Some(&root));
+            if !valid {
+                return Err(Decline::Shape);
+            }
+            Ok(rows
+                .into_iter()
+                .find(|source| source.id == id)
+                .map(|source| Resolved {
+                    source,
+                    legacy: true,
+                }))
+        }
+        Err(reason) => Err(reason),
+    })
+    .await
+    .map_err(|_| Decline::Internal)?
+}
+
 impl Producer {
     /// The account's current source binding, or None when the list is unreadable,
     /// invalid, or does not name the account (the TS refreshAdditional lookup).
@@ -48,33 +82,7 @@ impl Producer {
     }
 
     pub(crate) async fn lookup_recheck(&self, id: &str) -> Result<Option<Resolved>, Decline> {
-        let root = self.root.clone();
-        let id = id.to_owned();
-        tokio::task::spawn_blocking(move || match sources::read_registry(&root) {
-            Ok(sources::Sources::V2(rows)) => Ok(rows
-                .into_iter()
-                .find(|source| source.id == id)
-                .map(|source| Resolved {
-                    source,
-                    legacy: false,
-                })),
-            Ok(sources::Sources::Legacy) => {
-                let (rows, valid) = sources::legacy(Some(&root));
-                if !valid {
-                    return Err(Decline::Shape);
-                }
-                Ok(rows
-                    .into_iter()
-                    .find(|source| source.id == id)
-                    .map(|source| Resolved {
-                        source,
-                        legacy: true,
-                    }))
-            }
-            Err(reason) => Err(reason),
-        })
-        .await
-        .map_err(|_| Decline::Internal)?
+        lookup(self.root.clone(), id).await
     }
 
     /// Collect exactly one source now: the reading caches' TTL is skipped while
@@ -90,6 +98,11 @@ impl Producer {
         };
         self.additional_row(&resolved.source, resolved.legacy, now, force)
             .await
+    }
+
+    /// Probe a tentative key through the same provider collector as a dashboard re-check.
+    pub(crate) async fn probe_key(&self, source: &Source, now: i64) -> Value {
+        self.additional_row(source, false, now, true).await
     }
 
     /// Lane J's PublishIfCurrent: re-resolve the account and, only when the

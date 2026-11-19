@@ -142,7 +142,7 @@ export function prepareSignInStaging(ccsDir: string, dashboard = false): SignInS
       privateFolder(folder);
     }
     for (const name of BROWSER_STUBS) {
-      fs.writeFileSync(path.join(stubs, name), '#!/bin/sh\\nexit 0\\n', {
+      fs.writeFileSync(path.join(stubs, name), '#!/bin/sh\nexit 0\n', {
         mode: 0o700,
         flag: 'wx',
       });

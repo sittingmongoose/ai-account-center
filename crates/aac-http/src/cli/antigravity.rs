@@ -941,6 +941,14 @@ fn refresh_runtime_descriptor(ccs: &Path, home: &Path, release: &NativeRelease) 
     Refresh::Failed
 }
 
+/// Repin an installed runtime after the dashboard saves a provider-verified login.
+pub(crate) fn refresh_after_signin(ccs: &Path, home: &Path) {
+    if owns_state(ccs) {
+        let release = probes::read_native_release(&default_release_file());
+        let _ = refresh_runtime_descriptor(ccs, home, &release);
+    }
+}
+
 fn refresh(ccs: &Path, home: &Path) -> i32 {
     let fail = |line: &str| -> i32 {
         out(&format!("[X] {line}\n"));

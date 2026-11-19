@@ -140,7 +140,8 @@ fn identity_json(identity: &aac_files::codex_identity::Identity) -> Value {
 }
 
 /// Run one callback request from stdin and print its JSON answer.
-pub(crate) fn run() -> i32 {
+#[doc(hidden)]
+pub fn run() -> i32 {
     let mut bytes = Vec::new();
     if io::stdin()
         .take(INPUT_MAX + 1)
@@ -236,7 +237,7 @@ fn evaluate(request: Request) -> Option<Value> {
     }
 }
 
-fn codex_prepare(
+pub(crate) fn codex_prepare(
     root: &Path,
     staging: &str,
     shared: &Path,
@@ -288,7 +289,7 @@ fn muse_home_id(home_id: Option<&str>) -> Option<&str> {
 }
 
 /// The fixed Muse remote login and email commands (`remoteLoginCommand`/`remoteEmailCommand`).
-fn muse_commands(home_id: Option<&str>) -> Option<Value> {
+pub(crate) fn muse_commands(home_id: Option<&str>) -> Option<Value> {
     let id = muse_home_id(home_id)?;
     let prefix = if id.is_empty() {
         String::new()
@@ -307,7 +308,7 @@ fn muse_commands(home_id: Option<&str>) -> Option<Value> {
 
 /// The Muse login email rule: one `@`, non-empty whitespace-free local and domain, a dot inside
 /// the domain, at most 254 characters (`complete`'s regex and length cap).
-fn muse_email_valid(email: &str) -> bool {
+pub(crate) fn muse_email_valid(email: &str) -> bool {
     if email.chars().count() > 254 {
         return false;
     }
@@ -355,7 +356,7 @@ const AGY_DBUS_RUN_SESSION: &str = "/usr/bin/dbus-run-session";
 /// The exact bubblewrap argv and allowlisted environment (`sandboxArgs`/`sandboxEnvironment`).
 /// Declines when the real home is not absolute, so TypeScript answers.
 #[allow(clippy::too_many_arguments)]
-fn antigravity_sandbox(
+pub(crate) fn antigravity_sandbox(
     bus_config: &str,
     mask: &str,
     stubs: &str,
@@ -443,6 +444,7 @@ fn antigravity_sandbox(
 }
 
 /// One registry mutation under the caller-held directory lease.
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(
     tag = "edit",
@@ -465,6 +467,7 @@ enum RegistryEdit {
 }
 
 /// A metadata field value: a string or null.
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum FieldValue {
@@ -474,6 +477,7 @@ enum FieldValue {
     Null,
 }
 
+#[cfg(unix)]
 impl From<FieldValue> for aac_files::codex_registry::Field {
     fn from(value: FieldValue) -> Self {
         match value {
@@ -483,6 +487,7 @@ impl From<FieldValue> for aac_files::codex_registry::Field {
     }
 }
 
+#[cfg(unix)]
 fn apply_edit(
     registry: &mut aac_files::codex_registry::Registry,
     edit: RegistryEdit,
@@ -511,7 +516,8 @@ fn apply_edit(
 
 /// Apply a registry mutation while the caller holds the registry directory lease (inherited on
 /// stderr). Prints `committed` or `refused`; exit 74 declines so TypeScript answers.
-pub(crate) fn registry_edit() -> i32 {
+#[cfg(unix)]
+pub fn registry_edit() -> i32 {
     use std::os::fd::AsFd;
     let Some(root) = std::env::args_os()
         .nth(2)

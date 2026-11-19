@@ -7,9 +7,11 @@ mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
+mod lifecycle;
+pub(crate) mod lifecycle_host;
 #[cfg(unix)]
 mod native_group;
-mod native_owners;
+pub(crate) mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
@@ -20,7 +22,6 @@ mod request_log;
 mod reset_routes;
 mod routes;
 #[cfg(unix)]
-#[allow(dead_code)]
 mod service_link;
 mod sidecar;
 mod static_ui;
@@ -243,6 +244,7 @@ impl DashboardAuth {
             None,
             None,
             None,
+            None,
             #[cfg(unix)]
             None,
         )
@@ -264,6 +266,7 @@ impl DashboardAuth {
         native_owners: Option<native_owners::NativeOwners>,
         native_settings: Option<native_settings::Settings>,
         analytics_hop: Option<analytics_routes::Hop>,
+        lifecycle_routes: Option<lifecycle_host::Routes>,
         #[cfg(unix)] native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
@@ -317,11 +320,20 @@ impl DashboardAuth {
                 };
                 return native_group::handle(group.as_ref(), &access, request).await;
             }
+            // The account-id PATCH route shares this path depth with the settings literals.
+            // Let those routes keep precedence and accept trailing slashes as the TS router did.
+            if let Some(routes) = &lifecycle_routes
+                && lifecycle_host::Routes::owns(&request)
+            {
+                return routes.handle(request).await;
+            }
+            if let Some(root) = cut_root.as_deref()
+                && let Some(route) = lifecycle::Route::of(request.method(), request.uri().path())
+            {
+                return lifecycle::handle(root, route, request).await;
+            }
             if let Some(native) = &native_owners
-                && native_owners::NativeOwners::owns(
-                    request.method(),
-                    request.uri().path().trim_end_matches('/'),
-                )
+                && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 return native.handle(request).await;
             }
@@ -457,11 +469,28 @@ pub(crate) async fn run_public_at(
     } else {
         None
     };
+    let enabled = owner_host::enabled();
+    #[cfg(unix)]
+    let has_external = cut
+        && enabled
+        && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
+    #[cfg(not(unix))]
+    let has_external = false;
+    let lifecycle_available = groups.is_some_and(native_owners::Groups::lifecycle_available);
+    let native_lifecycle = cut && enabled && (has_external || lifecycle_available);
+    let groups = groups.map(|mut groups| {
+        if has_external {
+            groups.collection = false;
+        }
+        groups
+    });
     let mut worker = if cut {
         sidecar::Sidecar::start(
             &root,
             address,
             groups.is_some_and(|groups| groups.collection),
+            native_lifecycle,
+            has_external,
         )
         .await?
     } else {
@@ -480,12 +509,11 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    // The one owner host: it starts this boot's public owners (the same `NativeOwners` the cut
-    // used) and, on Unix, reaches the private service for the service-owned groups. Windows
-    // hosts the widened owners in-process.
-    let owner_host =
-        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
-    let (native, native_jobs) = if let Some(groups) = groups {
+    let native_lifecycle = native_lifecycle || (cut && !composed && lifecycle_available);
+    let owner_host = (enabled || native_lifecycle)
+        .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
+    let (native, native_jobs) = if let Some(mut groups) = groups {
+        groups.lifecycle = native_lifecycle && !has_external;
         let worker_directory = snapshot
             .as_deref()
             .and_then(std::path::Path::parent)
@@ -512,23 +540,35 @@ pub(crate) async fn run_public_at(
     // in-process service a worker-less boot starts. No second link.
     #[cfg(unix)]
     let analytics_hop: Option<analytics_routes::Hop> =
-        owner_host.as_ref().map(|host| -> analytics_routes::Hop {
-            let host = std::sync::Arc::clone(host);
-            std::sync::Arc::new(move |uri: String, principal: String| {
-                let host = std::sync::Arc::clone(&host);
-                Box::pin(async move {
-                    host.request("GET", &uri, &principal, &[], None)
-                        .await
-                        .map(|reply| (reply.status, reply.body))
-                }) as analytics_routes::HopFuture
-            })
-        });
+        owner_host
+            .as_ref()
+            .filter(|_| enabled)
+            .map(|host| -> analytics_routes::Hop {
+                let host = std::sync::Arc::clone(host);
+                std::sync::Arc::new(move |uri: String, principal: String| {
+                    let host = std::sync::Arc::clone(&host);
+                    Box::pin(async move {
+                        host.request("GET", &uri, &principal, &[], None)
+                            .await
+                            .map(|reply| (reply.status, reply.body))
+                    }) as analytics_routes::HopFuture
+                })
+            });
     #[cfg(not(unix))]
     let analytics_hop: Option<analytics_routes::Hop> = None;
     #[cfg(unix)]
     let group_routes = owner_host
         .as_ref()
+        .filter(|_| enabled)
         .map(|host| Arc::new(native_group::Routes::new(host.clone())));
+    let lifecycle_routes = owner_host
+        .as_ref()
+        .filter(|_| native_lifecycle)
+        .map(|host| {
+            let routes = lifecycle_host::Routes::new(host, has_external);
+            host.register("lifecycle", routes.router());
+            routes
+        });
     let mut api = Router::new();
     if let Some(host) = &owner_host {
         api = host.mount(api);
@@ -553,6 +593,7 @@ pub(crate) async fn run_public_at(
         native,
         native_settings,
         analytics_hop,
+        lifecycle_routes,
         #[cfg(unix)]
         group_routes,
     );
@@ -1763,6 +1804,7 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
+            None,
             None,
             #[cfg(unix)]
             None,

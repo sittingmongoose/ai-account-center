@@ -257,19 +257,11 @@ fn parse_error(value: &Value) -> Result<Option<ErrorCode>, Failure> {
     if value.is_null() {
         return Ok(None);
     }
-    let code = match value.as_str() {
-        Some("tool_missing") => ErrorCode::ToolMissing,
-        Some("unexpected_output") => ErrorCode::UnexpectedOutput,
-        Some("identity_mismatch") => ErrorCode::IdentityMismatch,
-        Some("duplicate_identity") => ErrorCode::DuplicateIdentity,
-        Some("timeout") => ErrorCode::Timeout,
-        Some("provider_denied") => ErrorCode::ProviderDenied,
-        Some("write_failed") => ErrorCode::WriteFailed,
-        Some("live_login_not_updated") => ErrorCode::LiveLoginNotUpdated,
-        Some("server_restarted") => ErrorCode::ServerRestarted,
-        _ => return Err(refused("invalid sign-in error")),
-    };
-    Ok(Some(code))
+    value
+        .as_str()
+        .and_then(ErrorCode::from_word)
+        .map(Some)
+        .ok_or_else(|| refused("invalid sign-in error"))
 }
 
 fn parse_result(value: &Value) -> Result<Option<Value>, Failure> {

@@ -181,6 +181,7 @@ dependencies = [
 name = "aac-renewal"
 version = "0.1.0"
 dependencies = [
+ "aac-files",
  "base64 0.22.1",
  "chrono",
  "libc",

@@ -673,7 +673,7 @@ impl Agents {
                     Some(Event::Failure { failure, .. })
                         if matches!(
                             request.verb.as_str(),
-                            "cursor-open" | "muse-login-identity" | "signin-session"
+                            "cursor-open" | "key-store" | "muse-login-identity" | "signin-session"
                         ) && failure.cause == Cause::Refused
                             && failure.detail.as_str() == "unsupported agent verb" =>
                     {
@@ -722,8 +722,10 @@ impl Agents {
         timeout_ms: u64,
         max_bytes: usize,
     ) -> Option<Value> {
-        if !matches!(verb, "claude-host" | "claude-history")
-            || deadline_ms == 0
+        if !matches!(
+            verb,
+            "claude-host" | "claude-history" | "signin-session" | "muse-login-identity"
+        ) || deadline_ms == 0
             || deadline_ms > aac_protocol::MAX_DEADLINE_MS
             || timeout_ms == 0
             || timeout_ms > deadline_ms + 5000
@@ -755,6 +757,20 @@ impl Agents {
             }
             _ => None,
         }
+    }
+
+    pub(crate) async fn interactive_command(
+        &self,
+        selector: &Selector,
+        argv: &[std::ffi::OsString],
+    ) -> Option<aac_transport::InteractiveCommand> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let registry = self.registered(deadline).await?;
+        let computer = registry.as_ref().as_ref().ok()?.computer(selector)?;
+        tokio::time::timeout_at(deadline, computer.interactive_command(argv, deadline))
+            .await
+            .ok()?
+            .ok()
     }
 
     /// One fixed reference command over the identical SSH policy, without the agent: the
@@ -884,6 +900,53 @@ impl Agents {
             Json(json!({"cancelled":acknowledged})).into_response()
         } else {
             Json(json!({"accepted":true})).into_response()
+        }
+    }
+}
+
+pub(crate) enum MutationReply {
+    Result(Value),
+    NotDispatched,
+    Uncertain,
+}
+
+impl Agents {
+    /// Decide whether the caller can run a reference mutation without repeating an uncertain write.
+    pub(crate) async fn call_mutation(
+        self: &Arc<Self>,
+        verb: &str,
+        computer: &Selector,
+        args: Value,
+        deadline_ms: u64,
+    ) -> MutationReply {
+        let Some(id) = random_call_id() else {
+            return MutationReply::Uncertain;
+        };
+        let call = json!({
+            "computer":computer,"args":args,"deadlineMs":deadline_ms,"timeoutMs":deadline_ms+2000,
+            "maxBytes":4096,"callId":id
+        });
+        let response = self.call(verb, call.to_string().as_bytes()).await;
+        let Ok(bytes) = axum::body::to_bytes(response.into_body(), 4096).await else {
+            return MutationReply::Uncertain;
+        };
+        let Ok(mut frame) = serde_json::from_slice::<Value>(&bytes) else {
+            return MutationReply::Uncertain;
+        };
+        if frame["protocol"] != 1 || frame["id"] != id {
+            return MutationReply::Uncertain;
+        }
+        match frame["type"].as_str() {
+            Some("result") => MutationReply::Result(frame["value"].take()),
+            Some("fallback")
+                if matches!(
+                    frame["reason"].as_str(),
+                    Some("shape" | "unavailable" | "busy" | "unsupported")
+                ) =>
+            {
+                MutationReply::NotDispatched
+            }
+            _ => MutationReply::Uncertain,
         }
     }
 }

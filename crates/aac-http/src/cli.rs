@@ -7,7 +7,7 @@ use std::{
 };
 
 mod admin;
-mod antigravity;
+pub(crate) mod antigravity;
 mod bar;
 mod codex_auth;
 mod config_write;

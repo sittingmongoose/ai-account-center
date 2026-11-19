@@ -37,15 +37,15 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/analytics", &["GET"]),
     ("/api/accounts/registry", &["GET"]),
     ("/api/accounts/add", &["POST"]),
-    ("/api/accounts/signin-command", &["GET"]),
     ("/api/accounts/signin-jobs/:id", &["GET"]),
     ("/api/accounts/signin-jobs/:id/cancel", &["POST"]),
     ("/api/accounts/signin-jobs/:id/code", &["POST"]),
-    ("/api/accounts/trash", &["GET"]),
     ("/api/accounts/trash/:id/purge", &["POST"]),
     ("/api/accounts/trash/:id/restore", &["POST"]),
+    #[cfg(not(unix))]
     ("/api/accounts/:id", &["PATCH"]),
     ("/api/accounts/:id/key", &["PUT"]),
+    #[cfg(not(unix))]
     ("/api/accounts/:id/open", &["POST"]),
     ("/api/accounts/:id/remove", &["POST"]),
     ("/api/accounts/:id/signin-again", &["POST"]),
@@ -151,6 +151,8 @@ mod tests {
         assert!(!cut_route(&Method::GET, "/api/status/files/example"));
         assert!(!cut_route(&Method::POST, "/api/accounts//recheck"));
         assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/signin-command"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/trash"));
         assert!(!cut_route(&Method::GET, "/api/auth/session"));
         assert!(!cut_route(&Method::GET, "/internal/collection/recheck"));
     }

@@ -189,8 +189,24 @@ impl Host {
                 return Some(cached.identity.clone());
             }
         }
+        let (credential, _) = self.read_native_credential()?;
+        let identity = self.validate_credential(&credential)?;
+        if file_identity(&self.home)? != key {
+            return None;
+        }
+        let mut state = self.state.lock().ok()?;
+        state.identity = Some(IdentityCache {
+            key,
+            identity: identity.clone(),
+            expires: now + 2000,
+        });
+        Some(identity)
+    }
+
+    /// Read and verify the native credential for a lifecycle operation without cache reuse.
+    pub(crate) fn read_native_credential(&self) -> Option<(Vec<u8>, String)> {
         let read = self.native.invoke_with(
-            &["--home", &self.home.to_string_lossy()],
+            &["--home", self.home.to_str()?],
             &json!({"operation": "read"}),
         )?;
         if read.get("format").and_then(Value::as_str) != Some("antigravity-consumer-json") {
@@ -202,17 +218,27 @@ impl Host {
         {
             return None;
         }
-        let identity = self.quota.validate_credential(&credential)?;
-        if file_identity(&self.home)? != key {
-            return None;
-        }
-        let mut state = self.state.lock().ok()?;
-        state.identity = Some(IdentityCache {
-            key,
-            identity: identity.clone(),
-            expires: now + 2000,
-        });
-        Some(identity)
+        Some((credential, revision.to_owned()))
+    }
+
+    pub(crate) fn validate_credential(&self, credential: &[u8]) -> Option<LiveIdentity> {
+        self.quota.validate_credential(credential)
+    }
+
+    pub(crate) fn install_native_credential(&self, credential: &[u8], expected: &str) -> bool {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        self.home
+            .to_str()
+            .and_then(|home| {
+                self.native.invoke_with(
+                    &["--home", home],
+                    &json!({"operation":"install","credentialBase64":STANDARD.encode(credential),
+                "expectedFingerprint":expected}),
+                )
+            })
+            .is_some_and(|receipt| {
+                receipt["installedFingerprint"].as_str() == Some(&sha256_hex(credential))
+            })
     }
 
     /// The public inventory, with the paused and runtime-service probes attached.

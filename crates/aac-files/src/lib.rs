@@ -16,17 +16,13 @@ pub mod codex_registry;
 pub mod deployed_build;
 #[cfg(unix)]
 pub mod history_snapshots;
-#[cfg(unix)]
 pub mod key_sweep;
-#[cfg(unix)]
 pub mod lifecycle_queue;
 pub mod path;
 #[cfg(unix)]
 pub mod presence;
 pub mod process;
-#[cfg(unix)]
 pub mod profile_staging;
-#[cfg(unix)]
 pub mod profile_writes;
 pub mod read;
 pub mod registry;

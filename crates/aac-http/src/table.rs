@@ -52,6 +52,7 @@ pub(crate) enum Handler {
     CollectionCache,
     AgentControl,
     Approvals,
+    Lifecycle,
     AppUpdates,
     /// M5 lane K: the reset claims file (ledger and ticketed source reads).
     ResetClaims,
@@ -105,6 +106,7 @@ impl Handler {
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "account-approvals" => Handler::Approvals,
+            "account-lifecycle" => Handler::Lifecycle,
             "app-updates" => Handler::AppUpdates,
             "reset-claims" => Handler::ResetClaims,
             "collection-signins" => Handler::SignInHealth,
@@ -300,6 +302,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::StatusAnswers
                         | Handler::StatusAnswersPost
                         | Handler::SignInPoll
+                        | Handler::Lifecycle
                 ))
             || (row.group == "internal" && !internal)
             || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
@@ -315,7 +318,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::CursorAccount
                         | Handler::Collect
                 ))
-            || internal != roles.iter().all(|r| *r == Role::Service)
+            || (handler != Handler::Lifecycle && internal != roles.iter().all(|r| *r == Role::Service))
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
             || (method == axum::http::Method::POST
@@ -327,6 +330,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::Collect
                         | Handler::AppUpdates
                         | Handler::Approvals
+                        | Handler::Lifecycle
                         | Handler::ResetClaims
                         | Handler::Store
                         | Handler::UsageSample
@@ -372,6 +376,11 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (handler == Handler::Approvals
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/account-confirmations"))
+            || (handler == Handler::Lifecycle
+                && (method != axum::http::Method::POST
+                    || row.path != crate::public_auth::lifecycle_host::ENDPOINT
+                    || row.budget_ms != 0
+                    || roles != [Role::Admin]))
             // The TS route owns the deadline (a Claude source read takes seconds); the work is
             // one blocking transaction that cannot stop halfway, so the row's budget is 0.
             || (handler == Handler::ResetClaims

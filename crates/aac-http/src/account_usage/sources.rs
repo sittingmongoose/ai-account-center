@@ -109,6 +109,19 @@ pub(crate) fn is_additional_account_id(id: &str) -> bool {
         && (selector == "usage" || selector.strip_prefix("acct:").is_some_and(hex8))
 }
 
+pub(crate) fn valid_label(label: &str) -> bool {
+    use std::sync::LazyLock;
+    static UNPRINTABLE: LazyLock<Option<regex::Regex>> =
+        LazyLock::new(|| regex::Regex::new(r"[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]").ok());
+    (1..=48).contains(&label.chars().count())
+        && label
+            .chars()
+            .any(|c| !crate::claude_account_store::is_js_space(c))
+        && UNPRINTABLE
+            .as_ref()
+            .is_some_and(|pattern| !pattern.is_match(label))
+}
+
 impl Source {
     fn check(&self, provider: ProviderId) -> Result<Option<(&'static str, &str)>, Decline> {
         let discover = format!("{}:usage", self.provider);
@@ -116,12 +129,7 @@ impl Source {
         if (self.id != discover && !self.id.strip_prefix(&prefix).is_some_and(hex8))
             || !["mac", "windows", "ubuntu"].contains(&self.platform.as_str())
             || self.ssh_host.as_deref().is_some_and(|s| !alias(s))
-            || self.label.as_deref().is_some_and(|s| {
-                !s.is_ascii()
-                    || s.len() > 48
-                    || s.trim().is_empty()
-                    || s.bytes().any(|b| b.is_ascii_control())
-            })
+            || self.label.as_deref().is_some_and(|s| !valid_label(s))
             || self
                 .created_by
                 .as_deref()
@@ -173,7 +181,7 @@ impl Source {
     }
 }
 
-/// Parse the bounded v2 file. Unsupported labels or date spellings leave its TS reader in charge.
+/// Parse the bounded v2 file before any registry-backed action.
 pub fn parse_registry(bytes: &[u8]) -> Result<Vec<Source>, Decline> {
     let registry: Registry = crate::json_object::from_slice(bytes, &["version", "accounts"])
         .map_err(|_| Decline::Shape)?;
@@ -216,7 +224,7 @@ pub fn read_registry(root: &Path) -> Result<Sources, Decline> {
 }
 
 /// Legacy providers use the same identifiers and default source as the TS manifest.
-pub(super) fn legacy(root: Option<&Path>) -> (Vec<Source>, bool) {
+pub(crate) fn legacy(root: Option<&Path>) -> (Vec<Source>, bool) {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Override {

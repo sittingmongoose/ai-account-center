@@ -838,7 +838,7 @@ pub(crate) fn has_codex_profile(root: &Path, name: &str) -> bool {
     codex_names(root).is_ok_and(|profiles| profiles.iter().any(|profile| profile.name == name))
 }
 
-fn source_host(platform: &str, alias: Option<&str>) -> (String, String) {
+pub(crate) fn source_host(platform: &str, alias: Option<&str>) -> (String, String) {
     let table: Value =
         serde_json::from_str(crate::account_reads::COMPUTERS).expect("bundled computers");
     let known = table.as_object().and_then(|entries| {
