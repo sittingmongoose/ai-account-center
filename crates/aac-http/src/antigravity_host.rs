@@ -530,6 +530,13 @@ else:
         let ccs = temp.path().join(".ccs");
         let home = temp.path().join("home");
         std::fs::create_dir_all(&ccs).unwrap();
+        // The home folder itself is one of the identity's four paths: owner-only, like a real one.
+        std::fs::create_dir_all(&home).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         // The saved profile the registry holds, and its credential file.
         let identity_value = json!({
             "email": "gmail@example.com",

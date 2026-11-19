@@ -806,6 +806,8 @@ mod tests {
         );
         let unmatched = |_: &Path, _: &str| false;
         let mut version = || Some("1.5.0".to_owned());
+        // A different pin matcher is a different call: the cache belongs to the matched one.
+        let mut cache = PausedCache::default();
         assert_eq!(
             native_update_paused(home, &release, &unmatched, &mut version, &mut cache)
                 .unwrap()
