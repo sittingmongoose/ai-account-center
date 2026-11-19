@@ -39,7 +39,7 @@ impl Registry {
 
     /// Whether a profile name is present (`hasProfile`), after the name rule.
     pub fn has(&self, name: &str) -> bool {
-        profile_name_error(name).is_none() && self.profiles.iter().any(|(n, _)| n == name)
+        profile_name_error(name).is_ok() && self.profiles.iter().any(|(n, _)| n == name)
     }
 
     /// The profile names in insertion order (`listProfiles`).
@@ -59,7 +59,7 @@ impl Registry {
     /// Insert a new profile (`createProfile`); `Err` when the name is invalid or already present.
     /// `meta` is spread over the base `{type, created, last_used}` in TypeScript's order.
     pub fn create(&mut self, name: &str, created: &str, meta: Meta) -> Result<(), ()> {
-        if profile_name_error(name).is_some() || self.profiles.iter().any(|(n, _)| n == name) {
+        if profile_name_error(name).is_err() || self.profiles.iter().any(|(n, _)| n == name) {
             return Err(());
         }
         let mut fields: Meta = vec![
@@ -80,7 +80,7 @@ impl Registry {
 
     /// Merge a partial update into a profile (`updateProfile`); `Err` when absent or invalid.
     pub fn update(&mut self, name: &str, partial: Meta) -> Result<(), ()> {
-        if profile_name_error(name).is_some() {
+        if profile_name_error(name).is_err() {
             return Err(());
         }
         let fields = self.get_mut(name).ok_or(())?;
@@ -96,7 +96,7 @@ impl Registry {
 
     /// Remove a profile (`removeProfile`); `Err` on the default-with-others guard or absence.
     pub fn remove(&mut self, name: &str, force_default: bool) -> Result<(), ()> {
-        if profile_name_error(name).is_some() {
+        if profile_name_error(name).is_err() {
             return Err(());
         }
         let index = self.profiles.iter().position(|(n, _)| n == name).ok_or(())?;
@@ -268,12 +268,12 @@ fn resolve_float(s: &str) -> bool {
         return !sign;
     }
     let digit_underscore = |c: char| c.is_ascii_digit() || c == '_';
-    let split_exp = |text: &str| -> (&str, &str) {
+    fn split_exp(text: &str) -> (&str, &str) {
         match text.find(['e', 'E']) {
             Some(at) => (&text[..at], &text[at..]),
             None => (text, ""),
         }
-    };
+    }
     let exp_ok = |rest: &str| -> bool {
         if rest.is_empty() {
             return true;
