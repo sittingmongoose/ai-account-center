@@ -286,10 +286,12 @@ pub fn share_local_path(given: &str, root: &Path) -> Option<PathBuf> {
         return None;
     };
     // path.resolve on an absolute candidate is the candidate itself (normalized); the TS
-    // check is a prefix of the share root plus a separator.
+    // check is a prefix of the share root plus a separator. Compare with one separator
+    // spelling so a POSIX root reads the same on every host the readers run on.
     let normalized = normalize_absolute(&candidate)?;
-    let prefix = format!("{}{}", share_root.display(), std::path::MAIN_SEPARATOR);
-    if normalized.to_string_lossy().starts_with(&prefix) {
+    let text = normalized.to_string_lossy().replace('\\', "/");
+    let prefix = format!("{}/", share_root.to_string_lossy().replace('\\', "/"));
+    if text.starts_with(&prefix) {
         Some(normalized)
     } else {
         None
