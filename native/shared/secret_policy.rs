@@ -176,7 +176,10 @@ pub fn find_secret(text: &str) -> Option<&'static str> {
                 let end = if ascii {
                     domain.len().min(window)
                 } else {
-                    domain.char_indices().nth(window).map_or(domain.len(), |(index, _)| index)
+                    domain
+                        .char_indices()
+                        .nth(window)
+                        .map_or(domain.len(), |(index, _)| index)
                 };
                 rules.email_domain.is_match(&domain[..end])
             })
