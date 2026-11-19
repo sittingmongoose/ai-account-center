@@ -336,6 +336,9 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | --- | --- |
 | `ai-account-center dashboard` | Run the dashboard (`--host`, `--port`, `--no-open`) |
 | `ai-account-center dashboard proxy set --address <ip> --origin <url>` | Trust your HTTPS reverse proxy (`status`, `off`) |
+| `ai-account-center dashboard usage-hub` | Manage the T3 hub key |
+| `ai-account-center dashboard usage-snapshot` | Manage the shared usage snapshot |
+| `ai-account-center dashboard cursor-key` | Manage the Cursor account key |
 | `ai-account-center codex-auth show` | List saved Codex logins (`create`, `login`, `import-default`, `remove`) |
 | `ai-account-center antigravity signin <profile>` | Add or re-sign an Antigravity profile on Ubuntu |
 | `ai-account-center antigravity status` | Read-only check of what the Antigravity runtime needs |
@@ -343,9 +346,8 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 
 `ai-account-center help <command>` has every option. The older `ccs` command runs the same commands, and **`ccs config` still opens the dashboard**.
 
-Use the dashboard's setup page and Settings for its login. Saved usage hub keys,
-snapshot destinations and Cursor keys remain in effect. Their setup and maintenance
-controls are open migration work.
+Use the dashboard's setup page and Settings for its login. The native commands
+above manage usage hub keys, snapshot destinations and Cursor keys.
 
 ---
 

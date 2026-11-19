@@ -905,7 +905,7 @@ poll an absolute `AAC_RUST_HUB_CACHE` path at most once per five seconds.
 Write a single dashboard or an array of dashboards atomically as owner-only
 JSON with an `accounts` array on each dashboard. An unavailable or invalid
 read retains the last published answer. The Rust listener reads the existing
-hub key. The former dashboard usage-hub command is retired.
+hub key. Use the native `dashboard usage-hub` command to manage it.
 
 Set `AAC_RUST_UI_DIR` to a packaged `dist/ui` for development, or set
 `AAC_UI_EMBED_DIR` when building the binary for a self-contained install.
@@ -919,8 +919,9 @@ preserve rolling browser cookies.
 The native `ai-account-center` and `ccs` binaries share the same command parser.
 Both supervise the private compatibility worker for the remaining dashboard
 adapters. Settings covers dashboard sign-in, network and session controls.
-Replacement controls for hub keys, snapshot destinations and Cursor keys
-remain open. The five retired executable names print migration guidance.
+The native CLI handles `usage-hub`, `usage-snapshot` and `cursor-key` under
+`dashboard` and the `ccs config` alias. The five retired executable names
+print migration guidance.
 
 ### Private worker and reference fixtures
 

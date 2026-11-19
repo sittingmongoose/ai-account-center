@@ -9,13 +9,14 @@ The publisher is in `crates/aac-snapshot/`, with its compatibility sample
 adapter in `src/web-server/agent-usage/`. The reader and folder guide live in
 `scripts/agent-usage/`.
 
-## Existing snapshot configuration
+## Snapshot configuration
 
 The existing folder is saved in `~/.ccs/agent-usage-snapshot.json` (0600).
 The dashboard reads it after each refresh. Saved mount locations appear in
 `locations.json` and in the rules block printed by `aac-usage rules`.
-The former snapshot commands are retired. Setup, destination changes and
-disabling the snapshot through Settings are open migration work.
+Run `ai-account-center dashboard usage-snapshot status` to view the destination.
+Use `set <folder> [--location <where>=<path>]` under `dashboard usage-snapshot`
+to configure it, and `off` to stop publishing.
 
 ## What it writes
 

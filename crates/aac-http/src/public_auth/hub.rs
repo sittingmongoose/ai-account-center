@@ -342,7 +342,7 @@ impl Hub {
                 return error(
                     404,
                     "usage_hub_off",
-                    "The usage hub is off. Turn it on with: ai-account-center dashboard usage-hub generate --stdout",
+                    "The usage hub is off.",
                 );
             }
             Err(_) => return unreadable(),
