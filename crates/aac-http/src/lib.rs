@@ -64,6 +64,8 @@ mod reset_source_route;
 mod runs_ingest_gate;
 #[cfg(unix)]
 mod scoreboard_owned;
+#[cfg(unix)]
+pub mod signin_callbacks;
 mod signins;
 mod status_cache;
 mod status_fed;

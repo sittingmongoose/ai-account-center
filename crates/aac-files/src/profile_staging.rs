@@ -120,6 +120,20 @@ fn private_folder(target: &Path) -> io::Result<()> {
     fs::set_permissions(target, fs::Permissions::from_mode(0o700))
 }
 
+/// Prepare the common terminal and dashboard sign-in directory.
+pub fn antigravity_root(root: &Path) -> io::Result<()> {
+    owned_directory(root)?;
+    let parent = root.join("antigravity-signin");
+    match private_folder(&parent) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => owned_directory(&parent)?,
+        other => other?,
+    }
+    if fs::symlink_metadata(parent)?.mode() & 0o077 != 0 {
+        return Err(io::Error::other("sign-in directory is not private"));
+    }
+    Ok(())
+}
+
 fn create_file(path: &Path, content: &[u8], mode: u32) -> io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .create_new(true)

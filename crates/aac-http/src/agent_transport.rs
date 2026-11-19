@@ -722,8 +722,10 @@ impl Agents {
         timeout_ms: u64,
         max_bytes: usize,
     ) -> Option<Value> {
-        if !matches!(verb, "claude-host" | "claude-history" | "signin-session")
-            || deadline_ms == 0
+        if !matches!(
+            verb,
+            "claude-host" | "claude-history" | "signin-session" | "muse-login-identity"
+        ) || deadline_ms == 0
             || deadline_ms > aac_protocol::MAX_DEADLINE_MS
             || timeout_ms == 0
             || timeout_ms > deadline_ms + 5000
@@ -755,6 +757,20 @@ impl Agents {
             }
             _ => None,
         }
+    }
+
+    pub(crate) async fn interactive_command(
+        &self,
+        selector: &Selector,
+        argv: &[std::ffi::OsString],
+    ) -> Option<aac_transport::InteractiveCommand> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let registry = self.registered(deadline).await?;
+        let computer = registry.as_ref().as_ref().ok()?.computer(selector)?;
+        tokio::time::timeout_at(deadline, computer.interactive_command(argv, deadline))
+            .await
+            .ok()?
+            .ok()
     }
 
     /// One fixed reference command over the identical SSH policy, without the agent: the

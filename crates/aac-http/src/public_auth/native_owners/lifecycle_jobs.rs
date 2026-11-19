@@ -1,5 +1,5 @@
 //! Public sign-in job polling and controls for the worker-free boot.
-use super::NativeOwners;
+use super::{NativeOwners, lifecycle_login::Flow};
 use crate::{
     agent_transport::{Agents, Selector},
     public_auth::{
@@ -39,6 +39,7 @@ pub(super) fn route<'a>(method: &Method, path: &'a str) -> Option<(Action, &'a s
 struct Record {
     job: DashboardSignInJob,
     code_sent: bool,
+    stop_requested: bool,
     finished_at: Option<i64>,
 }
 
@@ -73,15 +74,18 @@ impl Jobs {
         let finish =
             finished(&job.state).then(|| storage::timestamp(&job.updated_at).unwrap_or_else(now));
         let id = job.id.clone();
-        let code_sent = jobs
-            .get(&id)
-            .and_then(Option::as_ref)
-            .is_some_and(|record| record.code_sent);
+        let previous = jobs.get(&id).and_then(Option::as_ref);
+        let code_sent = previous.is_some_and(|record| record.code_sent);
+        let stop_requested = previous.is_some_and(|record| record.stop_requested);
+        if previous.is_some_and(|record| record.finished_at.is_some()) && finish.is_none() {
+            return;
+        }
         jobs.insert(
             id,
             Some(Record {
                 job,
                 code_sent,
+                stop_requested,
                 finished_at: finish,
             }),
         );
@@ -194,6 +198,7 @@ impl Jobs {
         if finished(&record.job.state) {
             return answer(record.job.clone(), secure);
         }
+        record.stop_requested = true;
         let agents = native.agents.clone();
         tokio::spawn(async move {
             if !control(&agents, &id, json!({"cancel":true}), "cancelled").await {
@@ -344,4 +349,269 @@ fn recovered_job(value: &Value, id: &str) -> Option<DashboardSignInJob> {
         error.message = code.message().into();
     }
     Some(job)
+}
+
+impl Jobs {
+    pub(super) fn stopped(&self, id: &str) -> bool {
+        self.0.lock().ok().is_none_or(|jobs| {
+            jobs.get(id).and_then(Option::as_ref).is_none_or(|record| {
+                record.stop_requested
+                    || record.finished_at.is_some()
+                    || storage::timestamp(&record.job.expires_at).is_none_or(|end| end <= now())
+            })
+        })
+    }
+
+    pub(super) fn start(self: Arc<Self>, native: NativeOwners, flow: Flow) -> Reply {
+        let Ok(random) = storage::random::<8>() else {
+            return start_error();
+        };
+        let id = format!("job_{}", storage::hex(&random));
+        let Some(job) = flow.initial(id.clone()) else {
+            return start_error();
+        };
+        {
+            let Ok(mut jobs) = self.0.lock() else {
+                return start_error();
+            };
+            let running = jobs
+                .values()
+                .filter_map(Option::as_ref)
+                .filter(|job| job.finished_at.is_none());
+            if let Some(record) = running
+                .clone()
+                .find(|record| record.job.provider == job.provider)
+            {
+                return super::no_store(response(
+                    409,
+                    json!({
+                        "error":"A sign-in for this provider is already running.","code":"job_running",
+                        "jobId":record.job.id
+                    }),
+                ));
+            }
+            if running.count() >= 3 {
+                return error(
+                    409,
+                    "too_many_jobs",
+                    "Too many sign-ins are running. Finish one first.",
+                );
+            }
+            while jobs.len() >= ISSUED_LIMIT {
+                let Some(index) = jobs
+                    .values()
+                    .position(|row| row.as_ref().is_none_or(|row| row.finished_at.is_some()))
+                else {
+                    return start_error();
+                };
+                jobs.shift_remove_index(index);
+            }
+            jobs.insert(
+                id,
+                Some(Record {
+                    job: job.clone(),
+                    code_sent: false,
+                    stop_requested: false,
+                    finished_at: None,
+                }),
+            );
+        }
+        let initial = job.clone();
+        native.events.publish(DashboardEvent::SigninJob {
+            job: Box::new(job.clone()),
+        });
+        tokio::spawn(async move {
+            self.run_flow(&native, flow, job).await;
+        });
+        super::no_store(response(202, json!({"job":initial})))
+    }
+
+    fn publish(&self, native: &NativeOwners, job: DashboardSignInJob) {
+        self.observe(job.clone());
+        native
+            .events
+            .publish(DashboardEvent::SigninJob { job: Box::new(job) });
+    }
+
+    async fn run_flow(
+        self: Arc<Self>,
+        native: &NativeOwners,
+        flow: Flow,
+        initial: DashboardSignInJob,
+    ) {
+        let id = initial.id.clone();
+        let root = native.agents.root().to_owned();
+        let command = flow.prepare(&native.agents, &id).await;
+        let (mut job, install) = match command {
+            Ok(command) if !self.stopped(&id) => {
+                self.dispatch(native, &flow, initial, command).await
+            }
+            Ok(_) => (failure(initial, ErrorCode::Timeout), false),
+            Err(err) => (failure(initial, err), false),
+        };
+        if install && !self.stopped(&id) {
+            self.publish(native, job.clone());
+            job = match flow.install(&native.agents, self.clone(), &id).await {
+                Ok(result) => {
+                    job.result = serde_json::from_value(result).ok();
+                    job.state = "succeeded".into();
+                    job.verification = None;
+                    job
+                }
+                Err(err) => failure(job, err),
+            };
+        }
+        let cancelled = self
+            .0
+            .lock()
+            .ok()
+            .and_then(|jobs| {
+                jobs.get(&id)
+                    .and_then(Option::as_ref)
+                    .map(|record| record.stop_requested)
+            })
+            .unwrap_or(false);
+        if job.state != "succeeded" && cancelled {
+            job.state = "cancelled".into();
+            job.error = None;
+            job.verification = None;
+        } else if install && job.state == "verifying" {
+            job = failure(job, ErrorCode::Timeout);
+        }
+        if let Some(at) = storage::iso(now()) {
+            job.updated_at = at;
+        }
+        if install {
+            let recovery = job
+                .result
+                .as_ref()
+                .map(|result| json!({"accountId":result.account_id,"email":null,"plan":null}));
+            let _ = journal(
+                &native.agents,
+                json!({
+                    "action":"settle","jobId":id,"state":job.state,"result":recovery,
+                    "error":job.error.as_ref().map(|err|err.code.as_str())
+                }),
+            )
+            .await;
+        }
+        flow.cleanup(root, id).await;
+        let succeeded = job.state == "succeeded";
+        self.publish(native, job);
+        if succeeded {
+            native.changed();
+        }
+    }
+
+    async fn dispatch(
+        &self,
+        native: &NativeOwners,
+        flow: &Flow,
+        initial: DashboardSignInJob,
+        command: Value,
+    ) -> (DashboardSignInJob, bool) {
+        use futures_util::StreamExt;
+        let request = json!({
+            "computer":{"platform":"ubuntu","sshHost":null},
+            "args":{"jobId":initial.id,"frontDoorPid":std::process::id(),"provider":initial.provider,
+                "kind":initial.kind,"mode":initial.mode,"accountId":initial.account_id,
+                "profileName":initial.profile_name,"platform":initial.platform,
+                "allowedOrigins":flow.origins(),"timeoutMs":900000,"command":command},
+            "deadlineMs":960000,"timeoutMs":965000,"maxBytes":1048576,"callId":initial.id
+        });
+        let reply = native
+            .agents
+            .call("lifecycle-signin", request.to_string().as_bytes())
+            .await;
+        let mut stream = reply.into_body().into_data_stream();
+        let mut count = 0;
+        while let Some(Ok(frame)) = stream.next().await {
+            count += frame.len();
+            if count > 1_048_576 {
+                break;
+            }
+            let Ok(frame) = serde_json::from_slice::<Value>(&frame) else {
+                break;
+            };
+            if frame["protocol"] != 1 || frame["id"] != initial.id {
+                break;
+            }
+            if self.stopped(&initial.id) {
+                break;
+            }
+            match frame["type"].as_str() {
+                Some("progress") => {
+                    if let Some(job) = incoming(frame["data"].clone(), &initial)
+                        && matches!(job.state.as_str(), "waiting" | "awaiting_code")
+                    {
+                        if self
+                            .live(&job.id)
+                            .flatten()
+                            .is_some_and(|current| current.state == "verifying")
+                        {
+                            continue;
+                        }
+                        self.publish(native, job);
+                    }
+                }
+                Some("result") => {
+                    let mut value = frame["value"].clone();
+                    let install = value
+                        .as_object_mut()
+                        .and_then(|value| value.shift_remove("installPending"))
+                        .is_some_and(|value| value == true);
+                    if let Some(job) = incoming(value, &initial)
+                        && (if install {
+                            job.state == "verifying"
+                        } else {
+                            finished(&job.state)
+                        })
+                    {
+                        return (job, install);
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
+        (failure(initial, ErrorCode::WriteFailed), false)
+    }
+}
+
+fn start_error() -> Reply {
+    error(500, "write_failed", "The change could not be saved safely.")
+}
+
+fn incoming(value: Value, expected: &DashboardSignInJob) -> Option<DashboardSignInJob> {
+    let mut job: DashboardSignInJob = serde_json::from_value(value).ok()?;
+    if job.id != expected.id
+        || job.provider != expected.provider
+        || job.kind != expected.kind
+        || job.mode != expected.mode
+        || job.account_id != expected.account_id
+        || job.profile_name != expected.profile_name
+        || job.platform != expected.platform
+    {
+        return None;
+    }
+    // The launch reply timestamp remains the route's authoritative start and expiry.
+    job.started_at = expected.started_at.clone();
+    job.expires_at = expected.expires_at.clone();
+    Some(job)
+}
+
+fn failure(mut job: DashboardSignInJob, code: ErrorCode) -> DashboardSignInJob {
+    job.state = if code == ErrorCode::Timeout {
+        "expired"
+    } else {
+        "failed"
+    }
+    .into();
+    job.verification = None;
+    job.result = None;
+    job.error = Some(crate::public_auth::SignInError {
+        code: code.word().into(),
+        message: code.message().into(),
+    });
+    job
 }

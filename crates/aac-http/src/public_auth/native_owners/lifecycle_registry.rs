@@ -179,7 +179,7 @@ fn apply_preflight(providers: &mut [Value], id: &str, reason: Option<&str>) {
     }
 }
 
-fn codex_cli() -> Option<PathBuf> {
+pub(super) fn codex_cli() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("CCS_CODEX_PATH").filter(|value| !value.is_empty()) {
         let path = PathBuf::from(path);
         let path = if let Ok(relative) = path.strip_prefix("~") {
@@ -194,7 +194,7 @@ fn codex_cli() -> Option<PathBuf> {
     read::stat(&path).ok()?.file.then_some(path)
 }
 
-fn antigravity_preflight(home: Option<&Path>) -> Option<&'static str> {
+pub(super) fn antigravity_preflight(home: Option<&Path>) -> Option<&'static str> {
     use crate::antigravity_probes::{bounded_run, current_uid, native_binary_problem_public};
     if !cfg!(target_os = "linux") {
         return Some("preflight_failed");

@@ -187,23 +187,13 @@ fn read_private(base: &Path, path: &Path, cap: u64) -> Option<Vec<u8>> {
 
 /// The newest `registry-<12 digits>.json` by name, checked as `validateState` checks it.
 pub(crate) fn read_state(ccs: &Path) -> Option<RegistryState> {
+    read_document(ccs).map(|(_, state, _)| state)
+}
+
+pub(crate) fn read_document(ccs: &Path) -> Option<(Value, RegistryState, i64)> {
     let profiles_directory = ccs.join("antigravity-profiles");
-    let entries = std::fs::read_dir(&profiles_directory).ok()?;
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| {
-            name.len() == "registry-000000000000.json".len()
-                && name.starts_with("registry-")
-                && name.ends_with(".json")
-                && name["registry-".len().."registry-".len() + 12]
-                    .bytes()
-                    .all(|c| c.is_ascii_digit())
-        })
-        .collect();
-    names.sort();
-    let name = names.last()?;
-    let bytes = read_private(ccs, &profiles_directory.join(name), MAX_REGISTRY_BYTES)?;
+    let name = newest_generation(&profiles_directory).ok()??;
+    let bytes = read_private(ccs, &profiles_directory.join(&name), MAX_REGISTRY_BYTES)?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
     let state = validate_state(&value)?;
     if name["registry-".len().."registry-".len() + 12]
@@ -213,14 +203,35 @@ pub(crate) fn read_state(ccs: &Path) -> Option<RegistryState> {
     {
         return None;
     }
-    Some(state.0)
+    Some((value, state.0, state.1))
+}
+
+pub(crate) fn newest_generation(directory: &Path) -> std::io::Result<Option<String>> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut newest = None;
+    for entry in entries {
+        if let Ok(name) = entry?.file_name().into_string()
+            && name.len() == "registry-000000000000.json".len()
+            && name.starts_with("registry-")
+            && name.ends_with(".json")
+            && name.as_bytes()[9..21].iter().all(u8::is_ascii_digit)
+            && newest.as_ref().is_none_or(|previous| &name > previous)
+        {
+            newest = Some(name);
+        }
+    }
+    Ok(newest)
 }
 
 fn checked_identity(value: Option<&Value>) -> Option<LiveIdentity> {
     LiveIdentity::from_value(value?)
 }
 
-fn validate_state(value: &Value) -> Option<(RegistryState, i64)> {
+pub(crate) fn validate_state(value: &Value) -> Option<(RegistryState, i64)> {
     let state = value.as_object()?;
     if state.get("version").and_then(Value::as_u64) != Some(1) {
         return None;
@@ -371,6 +382,11 @@ pub(crate) fn read_inventory(
 }
 
 pub(crate) fn read_credential(ccs: &Path, profile: &ProfileRecord) -> Option<LiveIdentity> {
+    read_credential_bytes(ccs, profile)?;
+    Some(profile.credential.identity.clone())
+}
+
+pub(crate) fn read_credential_bytes(ccs: &Path, profile: &ProfileRecord) -> Option<Vec<u8>> {
     let directory = ccs
         .join("antigravity-instances")
         .join(&profile.id)
@@ -383,7 +399,7 @@ pub(crate) fn read_credential(ccs: &Path, profile: &ProfileRecord) -> Option<Liv
     if profile.identity_key != profile.credential.identity.identity_key() {
         return None;
     }
-    Some(profile.credential.identity.clone())
+    Some(bytes)
 }
 
 /// `runtime-composition.ts` `mapProfiles`: the runtime rows the usage service consumes. A saved

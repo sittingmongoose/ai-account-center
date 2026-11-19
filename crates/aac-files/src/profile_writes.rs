@@ -2,7 +2,7 @@
 use super::{read_bounded, require_absolute, set_private, sync_directory};
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
@@ -29,6 +29,53 @@ pub(crate) fn owned_directory(dir: &Path) -> io::Result<()> {
 /// An inherited descriptor of the exact marker created by the existing lock protocol.
 pub struct LegacyLease(File);
 
+/// Exclusively hold an existing Codex lock name through a short native write.
+pub struct CodexLease {
+    marker: PathBuf,
+    lease: LegacyLease,
+}
+
+impl CodexLease {
+    /// The activation lock shared by dashboard and CLI login writes.
+    pub fn activation(home: &Path) -> io::Result<Self> {
+        match fs::DirBuilder::new().mode(0o700).create(home) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        owned_directory(home)?;
+        Self::claim(home.join(".ccs-activation.lock"))
+    }
+
+    /// The proper-lockfile path used for codex-profiles.yaml.
+    pub fn registry(root: &Path) -> io::Result<Self> {
+        owned_directory(root)?;
+        let mut marker = root.as_os_str().to_os_string();
+        marker.push(".lock");
+        Self::claim(marker.into())
+    }
+
+    fn claim(marker: PathBuf) -> io::Result<Self> {
+        fs::DirBuilder::new().mode(0o700).create(&marker)?;
+        let directory = File::open(&marker)?;
+        let lease = LegacyLease::verify(&marker, directory)?;
+        Ok(Self { marker, lease })
+    }
+
+    /// The descriptor checked by each write while this hold lasts.
+    pub fn writer(&self) -> &LegacyLease {
+        &self.lease
+    }
+}
+
+impl Drop for CodexLease {
+    fn drop(&mut self) {
+        if self.lease.check(&self.marker).is_ok() {
+            let _ = fs::remove_dir(&self.marker);
+        }
+    }
+}
+
 /// A short maintenance transaction using the provider's existing directory lock.
 pub struct AntigravityMaintenanceLease {
     marker: PathBuf,
@@ -37,11 +84,17 @@ pub struct AntigravityMaintenanceLease {
 }
 
 impl AntigravityMaintenanceLease {
+    /// Create the private registry directory for a first dashboard sign-in.
+    pub fn initialize(root: &Path) -> io::Result<()> {
+        owned_directory(root)?;
+        ensure_profile_directory(&root.join("antigravity-profiles"))
+    }
+
     /// Reserve the same name as the compatibility registry. A present marker
     /// belongs to that transaction and must be left for its recovery path.
     pub fn claim(root: &Path, holder_record: &[u8]) -> io::Result<Self> {
         let parent = root.join("antigravity-profiles");
-        owned_directory(&parent)?;
+        private_profile_directory(&parent)?;
         if holder_record.is_empty() || holder_record.len() > 512 {
             return Err(refused());
         }
@@ -283,11 +336,23 @@ impl LegacyLease {
         {
             return Err(refused());
         }
-        let parent = root
-            .join("antigravity-instances")
-            .join(profile)
-            .join("ubuntu");
+        let instances = root.join("antigravity-instances");
+        let profile = instances.join(profile);
+        let parent = profile.join("ubuntu");
+        for directory in [&instances, &profile, &parent] {
+            ensure_profile_directory(directory)?;
+        }
         let file = parent.join(format!("credential-{fingerprint}.bin"));
+        match fs::symlink_metadata(&file) {
+            Ok(meta) if meta.is_file() && meta.uid() == super::path::uid()
+                && meta.mode() & 0o077 == 0 && meta.nlink() == 1 =>
+            {
+                let existing = read_bounded(&file, MAX_PROFILE_BYTES).map_err(|_| refused())?;
+                return if existing == bytes { Ok(()) } else { Err(refused()) };
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            _ => return Err(refused()),
+        }
         publish(&parent, &file, bytes)
     }
 
@@ -399,6 +464,14 @@ fn private_profile_directory(directory: &Path) -> io::Result<()> {
         return Err(refused());
     }
     Ok(())
+}
+
+fn ensure_profile_directory(directory: &Path) -> io::Result<()> {
+    match super::private_builder().create(directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => private_profile_directory(directory),
+        Err(error) => Err(error),
+    }
 }
 
 fn discard_antigravity_files(profile: &Path) -> usize {

@@ -3,8 +3,6 @@
 mod provider_write;
 #[cfg(unix)]
 mod registered_write;
-#[cfg(unix)]
-mod signin_callbacks;
 
 fn main() {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--build-commit")) {
@@ -21,8 +19,10 @@ fn main() {
         Some("--sweep-orphan-keys") => std::process::exit(registered_write::sweep_orphan_keys()),
         Some("--registered-write") => std::process::exit(registered_write::commit()),
         Some("--provider-write") => std::process::exit(provider_write::commit()),
-        Some("--signin-callback") => std::process::exit(signin_callbacks::run()),
-        Some("--codex-registry-edit") => std::process::exit(signin_callbacks::registry_edit()),
+        Some("--signin-callback") => std::process::exit(aac_http::signin_callbacks::run()),
+        Some("--codex-registry-edit") => {
+            std::process::exit(aac_http::signin_callbacks::registry_edit())
+        }
         Some("--codex-staging") => std::process::exit(provider_write::staging(false)),
         Some("--antigravity-maintenance") => {
             std::process::exit(provider_write::antigravity_maintenance())

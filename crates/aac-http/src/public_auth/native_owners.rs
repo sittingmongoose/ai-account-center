@@ -33,11 +33,16 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+mod lifecycle_antigravity;
+mod lifecycle_codex;
 mod lifecycle_jobs;
+mod lifecycle_keys;
 mod lifecycle_label;
+mod lifecycle_login;
 mod lifecycle_maintenance;
 mod lifecycle_open;
 mod lifecycle_registry;
+mod lifecycle_remove;
 mod lifecycle_trash;
 mod recheck;
 
@@ -84,6 +89,7 @@ impl Groups {
 pub(super) struct NativeOwners {
     agents: Arc<Agents>,
     owners: Owners,
+    queues: Arc<crate::lifecycle_queue::LifecycleQueues>,
     lifecycle_jobs: Option<Arc<lifecycle_jobs::Jobs>>,
     trash: Option<Arc<lifecycle_trash::Trash>>,
     events: DashboardEvents,
@@ -175,6 +181,8 @@ impl NativeOwners {
                 let owner = if (groups.collection
                     && row.moves_with.as_deref() == Some("collection"))
                     || (groups.writes && row.moves_with.as_deref() == Some("writes"))
+                    || (worker_directory.is_none()
+                        && row.moves_with.as_deref() == Some("lifecycle"))
                 {
                     Role::RustService
                 } else {
@@ -184,6 +192,7 @@ impl NativeOwners {
             })
             .collect();
         let owners = Owners::from_boot(rows, &files).map_err(io::Error::other)?;
+        let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
         let lifecycle_jobs = worker_directory
             .is_none()
             .then(|| Arc::new(lifecycle_jobs::Jobs::default()));
@@ -257,11 +266,7 @@ impl NativeOwners {
             });
             // Subscribe before the HTTP listener can admit a sign-in.
             let receiver = events.0.subscribe();
-            jobs.signins = Some(tokio::spawn(
-                usage
-                    .clone()
-                    .watch_signins(receiver, lifecycle_jobs.clone()),
-            ));
+            jobs.signins = Some(tokio::spawn(usage.clone().watch_signins(receiver)));
             jobs.sampling = Some(tokio::spawn(usage.clone().sample(cancel)));
             Some(usage)
         } else {
@@ -271,6 +276,7 @@ impl NativeOwners {
             Self {
                 agents,
                 owners,
+                queues,
                 lifecycle_jobs,
                 trash,
                 events,
@@ -291,9 +297,19 @@ impl NativeOwners {
             || lifecycle_label::route(method, path).is_some()
             || (self.lifecycle_jobs.is_some()
                 && (lifecycle_jobs::route(method, path).is_some()
-                    || lifecycle_registry::route(method, path)))
+                    || lifecycle_registry::route(method, path)
+                    || lifecycle_keys::route(method, path).is_some()
+                    || lifecycle_remove::route(method, path).is_some()
+                    || lifecycle_login::route(method, path).is_some()))
             || (self.trash.is_some() && lifecycle_trash::route(method, path).is_some())
             || Self::app_operation(method, path).is_some()
+    }
+
+    fn changed(&self) {
+        if let Some(usage) = &self.usage {
+            usage.cache.request_refresh();
+        }
+        self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
     fn dashboard_route(method: &Method, path: &str) -> bool {
@@ -326,6 +342,24 @@ impl NativeOwners {
         }
         if let Some(id) = lifecycle_open::route(request.method(), path).map(str::to_owned) {
             return lifecycle_open::handle(&self.agents, &id, request).await;
+        }
+        if self.lifecycle_jobs.is_some()
+            && let Some(id) = lifecycle_login::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return lifecycle_login::handle(self, &id, request).await;
+        }
+        if self.trash.is_some()
+            && let Some(id) = lifecycle_remove::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return lifecycle_remove::handle(self, &id, request).await;
+        }
+        if self.lifecycle_jobs.is_some()
+            && let Some((action, id)) = lifecycle_keys::route(request.method(), path)
+        {
+            let id = id.to_owned();
+            return lifecycle_keys::handle(self, action, &id, request).await;
         }
         if let Some(jobs) = &self.lifecycle_jobs
             && lifecycle_registry::route(request.method(), path)
@@ -524,7 +558,6 @@ impl Usage {
     async fn watch_signins(
         self: Arc<Self>,
         mut receiver: tokio::sync::broadcast::Receiver<DashboardEvent>,
-        jobs: Option<Arc<lifecycle_jobs::Jobs>>,
     ) {
         loop {
             let event = match receiver.recv().await {
@@ -540,9 +573,6 @@ impl Usage {
             let DashboardEvent::SigninJob { job } = event else {
                 continue;
             };
-            if let Some(jobs) = &jobs {
-                jobs.observe(job.as_ref().clone());
-            }
             let Some(id) = job.account_id else { continue };
             let Ok(mut lifecycle) = self.lifecycle.lock() else {
                 continue;

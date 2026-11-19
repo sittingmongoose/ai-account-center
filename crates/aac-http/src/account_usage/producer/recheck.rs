@@ -100,6 +100,11 @@ impl Producer {
             .await
     }
 
+    /// Probe a tentative key through the same provider collector as a dashboard re-check.
+    pub(crate) async fn probe_key(&self, source: &Source, now: i64) -> Value {
+        self.additional_row(source, false, now, true).await
+    }
+
     /// Lane J's PublishIfCurrent: re-resolve the account and, only when the
     /// provider, platform, SSH alias and credential are unchanged, replace the
     /// row in every held dashboard generation. Unrelated rows of a concurrent

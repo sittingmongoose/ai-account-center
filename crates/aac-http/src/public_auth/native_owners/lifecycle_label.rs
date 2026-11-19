@@ -108,7 +108,7 @@ fn unknown_account() -> Reply {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum SaveError {
+pub(super) enum SaveError {
     Missing,
     Write,
 }
@@ -119,26 +119,7 @@ fn commit(
     id: &str,
     label: Option<String>,
 ) -> Result<sources::Source, SaveError> {
-    let rows = registry::rows().map_err(|_| SaveError::Write)?;
-    let writer = owners
-        .claim(rows, "account-registry", root, None)
-        .map_err(|_| SaveError::Write)?;
-    // Re-resolve under the same registered lock the compatibility writer takes.
-    let accounts = match sources::read_registry(root).map_err(|_| SaveError::Write)? {
-        sources::Sources::V2(accounts) => accounts,
-        sources::Sources::Legacy => {
-            let (mut accounts, valid) = sources::legacy(Some(root));
-            if !valid {
-                return Err(SaveError::Write);
-            }
-            let now = super::super::storage::iso(super::super::now()).ok_or(SaveError::Write)?;
-            for entry in &mut accounts {
-                entry.created_by = Some("migration".into());
-                entry.created_at = Some(now.clone());
-            }
-            accounts
-        }
-    };
+    let (writer, accounts) = claim_registry(root, owners)?;
     let edited = edit_registry(
         json!({"version":2,"accounts":accounts}),
         Edit::Label {
@@ -163,18 +144,67 @@ fn commit(
     Ok(source)
 }
 
+pub(super) fn claim_registry(
+    root: &Path,
+    owners: &Owners,
+) -> Result<(aac_files::OwnedStore, Vec<sources::Source>), SaveError> {
+    let rows = registry::rows().map_err(|_| SaveError::Write)?;
+    let writer = owners
+        .claim(rows, "account-registry", root, None)
+        .map_err(|_| SaveError::Write)?;
+    // Re-resolve under the same registered lock the compatibility writer takes.
+    let accounts = match sources::read_registry(root).map_err(|_| SaveError::Write)? {
+        sources::Sources::V2(accounts) => accounts,
+        sources::Sources::Legacy => {
+            let (mut accounts, valid) = sources::legacy(Some(root));
+            if !valid {
+                return Err(SaveError::Write);
+            }
+            let now = super::super::storage::iso(super::super::now()).ok_or(SaveError::Write)?;
+            for entry in &mut accounts {
+                entry.created_by = Some("migration".into());
+                entry.created_at = Some(now.clone());
+            }
+            accounts
+        }
+    };
+    Ok((writer, accounts))
+}
+
+pub(super) fn save_registry(
+    writer: &aac_files::OwnedStore,
+    entries: &[sources::Source],
+) -> Result<(), SaveError> {
+    let mut bytes = serde_json::to_vec_pretty(&json!({"version":2,"accounts":entries}))
+        .map_err(|_| SaveError::Write)?;
+    bytes.push(b'\n');
+    sources::parse_registry(&bytes).map_err(|_| SaveError::Write)?;
+    writer
+        .replace_settings(&bytes)
+        .map_err(|_| SaveError::Write)
+}
+
 fn account_view(root: &Path, source: &sources::Source, secure: bool) -> Option<Value> {
-    let entry = serde_json::to_value(source).ok()?;
-    let credential_kind = entry["credential"]["kind"].as_str()?;
     let key = match &source.credential {
         sources::Credential::AacKey { key_id } => local_key_info(root, source, key_id),
         _ => None,
     };
     let replace_key =
         secure && aac_providers::provider(&source.provider).is_some_and(|row| row.key_store);
+    entry_view(source, key, replace_key, None)
+}
+
+pub(super) fn entry_view(
+    source: &sources::Source,
+    key: Option<Value>,
+    replace_key: bool,
+    email: Option<&str>,
+) -> Option<Value> {
+    let entry = serde_json::to_value(source).ok()?;
+    let credential_kind = entry["credential"]["kind"].as_str()?;
     let view = aac_views::registry::compose(&json!({
         "providers":[{"id":source.provider,"capabilities":{"replaceKey":replace_key}}],
-        "rows":[{"kind":"entry","row":{},"entry":entry,"credentialKind":credential_kind,
+        "rows":[{"kind":"entry","row":{"email":email},"entry":entry,"credentialKind":credential_kind,
             "key":key,"museSignIn":false,"running":false}],
         "trash":[],"jobs":[]
     }))

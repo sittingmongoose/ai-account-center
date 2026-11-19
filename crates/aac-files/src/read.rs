@@ -683,6 +683,15 @@ pub enum Listed {
     Entry(io::Error),
 }
 
+/// Whether the named entry exists, including a dangling link.
+pub fn entry_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// A folder listing that yields at most `cap` entries, then [`Listed::TooMany`] once if there
 /// are more. Entry errors are passed through in place, so each caller keeps its reference's
 /// order of checks (a count bound on the raw listing, before any filtering).

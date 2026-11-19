@@ -118,12 +118,25 @@ fn clock() -> u64 {
     u64::try_from(now()).unwrap_or_default()
 }
 
+pub(super) fn antigravity_signin_running(root: &Path, profile: &str) -> bool {
+    let file = root
+        .join("antigravity-signin")
+        .join(format!("{profile}.running"));
+    let Ok(stat) = aac_files::read::stat(&file) else {
+        return aac_files::read::entry_exists(&file).unwrap_or(true);
+    };
+    let mtime = stat.mtime_ms as u64;
+    let now = clock();
+    let stale = aac_files::read_bounded(&file, 512)
+        .ok()
+        .and_then(|bytes| holder_stale(&bytes, mtime, now, boot_id().as_deref()))
+        .unwrap_or_else(|| now.saturating_sub(mtime) > 30 * 60_000);
+    !stale
+}
+
 fn sweep_antigravity_orphans(root: &Path) -> Option<(usize, usize)> {
-    let pid = std::process::id();
-    let marker = json!({
-        "pid":pid,"startedAt":storage::iso(now())?,"processStart":process_start(pid),"bootId":boot_id()
-    });
-    let lease = AntigravityMaintenanceLease::claim(root, marker.to_string().as_bytes()).ok()?;
+    let marker = holder_record()?;
+    let lease = AntigravityMaintenanceLease::claim(root, marker.as_bytes()).ok()?;
     let state = crate::antigravity_runtime::read_state(root)?;
     let saved = state
         .profiles
@@ -131,6 +144,14 @@ fn sweep_antigravity_orphans(root: &Path) -> Option<(usize, usize)> {
         .map(|profile| profile.id)
         .collect::<Vec<_>>();
     lease.writer().antigravity_sweep(root, &saved).ok()
+}
+
+pub(super) fn holder_record() -> Option<String> {
+    let pid = std::process::id();
+    let marker = json!({
+        "pid":pid,"startedAt":storage::iso(now())?,"processStart":process_start(pid),"bootId":boot_id()
+    });
+    Some(marker.to_string())
 }
 
 fn process_start(pid: u32) -> Option<String> {
