@@ -37,12 +37,16 @@ impl Desktop {
 #[derive(Clone)]
 pub struct AccountUsageCache {
     pub(crate) feeds: Feeds,
+    refresh: Arc<tokio::sync::Notify>,
+    last_refresh: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Default for AccountUsageCache {
     fn default() -> Self {
         Self {
             feeds: Feeds::new(),
+            refresh: Arc::default(),
+            last_refresh: Arc::default(),
         }
     }
 }
@@ -75,6 +79,27 @@ impl AccountUsageCache {
         }));
         let held = self.feeds.put_dashboard(&source, &body)?;
         Ok(held["generation"] == generation)
+    }
+
+    /// Ask the native sampler to start a fresh generation, with the dashboard's
+    /// five-second debounce. Provider cooldowns still apply.
+    pub fn request_refresh(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let Ok(now) = aac_core::UtcMs::now() else {
+            return false;
+        };
+        let now = now.get();
+        if self
+            .last_refresh
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |last| {
+                (now.saturating_sub(last) >= 5000).then_some(now)
+            })
+            .is_err()
+        {
+            return false;
+        }
+        self.refresh.notify_one();
+        true
     }
 
     /// Generation to send to the private Home renderer. Both listeners share

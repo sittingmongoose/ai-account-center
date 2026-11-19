@@ -1,4 +1,8 @@
 //! Read the installed account sources and publish a complete Accounts generation.
+mod claude;
+mod peers;
+mod selection;
+
 use super::{AccountUsageCache, Desktop, dashboard, rows, sampler, sources};
 use crate::{agent_transport::Agents, collection::Collection};
 use aac_core::UtcMs;
@@ -10,8 +14,9 @@ use aac_transport::CancellationToken;
 use aac_views::decline::Decline;
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::Duration,
 };
 use tokio::sync::{Mutex, watch};
@@ -37,14 +42,16 @@ pub struct Producer {
     agents: Arc<Agents>,
     collection: Arc<Collection>,
     owners: Owners,
+    cursor: Arc<super::cursor::Reader>,
     visibility: Arc<Mutex<Value>>,
+    active_identities: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
 }
 
 impl Producer {
     /// Open the production readers for the given canonical service root and file owners.
     pub fn new(root: PathBuf, owners: Owners) -> Self {
         let agents = Arc::new(Agents::new(root.clone()));
-        Self::shared(root, owners, agents, Arc::default())
+        Self::shared(root, owners, agents, Arc::default(), Arc::default())
     }
 
     pub(crate) fn shared(
@@ -52,13 +59,16 @@ impl Producer {
         owners: Owners,
         agents: Arc<Agents>,
         collection: Arc<Collection>,
+        cursor: Arc<super::cursor::Reader>,
     ) -> Self {
         Self {
             root,
             agents,
             collection,
             owners,
+            cursor,
             visibility: Arc::new(Mutex::new(dashboard::empty_visibility())),
+            active_identities: Arc::default(),
         }
     }
 
@@ -80,6 +90,14 @@ impl Producer {
         &self,
         companions: CompanionInputs,
     ) -> Result<Vec<sampler::DashboardSample>, Decline> {
+        self.collect_with_refresh(companions, false).await
+    }
+
+    async fn collect_with_refresh(
+        &self,
+        companions: CompanionInputs,
+        force: bool,
+    ) -> Result<Vec<sampler::DashboardSample>, Decline> {
         let root = self.root.clone();
         let disk = tokio::task::spawn_blocking(move || Disk::load(&root))
             .await
@@ -94,9 +112,16 @@ impl Producer {
             current.clone()
         };
 
-        let additional = self.additional(disk.sources, companions.antigravity.is_some());
+        let additional = self.additional(
+            disk.sources,
+            disk.legacy,
+            disk.source_problem,
+            companions.antigravity.is_some(),
+            now,
+            force,
+        );
         let codex = self.codex_rows(disk.codex, now);
-        let claude = self.claude_rows(&disk.claude, now);
+        let claude = self.claude_rows(&disk.claude_private, disk.refresh, now);
         let (additional, codex, claude) = tokio::join!(additional, codex, claude);
 
         let mut samples = Vec::with_capacity(4);
@@ -108,6 +133,12 @@ impl Producer {
                     .zip(&claude)
                     .filter_map(|(profile, raw)| rows::claude(profile, desktop, raw.as_ref())),
             );
+            for profile in &disk.claude_pending {
+                let pending = rows::pending_claude(profile, desktop);
+                if !rows.iter().any(|row| row["id"] == pending["id"]) {
+                    rows.push(pending);
+                }
+            }
             rows.extend(additional.iter().cloned());
             if let Some(antigravity) = &companions.antigravity {
                 rows.extend(antigravity.iter().cloned());
@@ -165,9 +196,13 @@ impl Producer {
             cache,
             interval,
             cancel,
-            || {
+            |force| {
                 let inputs = companions();
-                async move { self.collect(inputs).await.unwrap_or_default() }
+                async move {
+                    self.collect_with_refresh(inputs, force)
+                        .await
+                        .unwrap_or_default()
+                }
             },
             published,
         );
@@ -238,16 +273,68 @@ impl Producer {
         candidate: &Value,
         now: i64,
     ) -> Option<Value> {
-        let key = aac_core::sha256_hex(aac_views::js_json::write(&json!([
-            self.root,
-            provider,
-            candidate["identity"]
-        ])));
-        let held = super::failover::persisted(&self.root, &key, now as f64)
-            .ok()?
-            .unwrap_or_default();
-        if held.until > now as f64 {
-            return None;
+        let reply = self
+            .attempt(platform, alias, provider, candidate, None, now)
+            .await?;
+        if confirmed(&reply, candidate) {
+            reply
+                .get("sample")
+                .filter(|sample| sample.is_object())
+                .cloned()
+        } else {
+            None
+        }
+    }
+
+    async fn lock_identities(
+        &self,
+        key: &str,
+        peer: Option<&str>,
+    ) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+        let mut keys = std::iter::once(key).chain(peer).collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys.dedup();
+        let locks = {
+            let mut active = self.active_identities.lock().await;
+            active.retain(|_, lock| lock.strong_count() > 0);
+            keys.into_iter()
+                .map(|key| {
+                    let slot = active.entry(key.to_owned()).or_default();
+                    slot.upgrade().unwrap_or_else(|| {
+                        let lock = Arc::new(Mutex::new(()));
+                        *slot = Arc::downgrade(&lock);
+                        lock
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        // Consistent order also covers two linked accounts used as one another's fallback.
+        let mut held = Vec::with_capacity(locks.len());
+        for lock in locks {
+            held.push(lock.lock_owned().await);
+        }
+        held
+    }
+
+    async fn attempt(
+        &self,
+        platform: &str,
+        alias: Option<&str>,
+        provider: &str,
+        candidate: &Value,
+        anchor: Option<&str>,
+        now: i64,
+    ) -> Option<Value> {
+        let key = identity_key(&self.root, provider, &candidate["identity"]);
+        let _active = self.lock_identities(&key, anchor).await;
+        let now = now_at_least(now);
+        for key in std::iter::once(key.as_str()).chain(anchor) {
+            let held = super::failover::persisted(&self.root, key, now as f64)
+                .ok()?
+                .unwrap_or_default();
+            if held.until > now as f64 {
+                return None;
+            }
         }
         let mut args =
             json!({"version":1,"action":"collect","provider":provider,"candidate":candidate});
@@ -258,132 +345,57 @@ impl Producer {
             .ask(platform, alias, "failover-collect", &args)
             .await
             .ok()?;
-        if reply["failureCode"] == "rate_limited" || reply["rateLimited"] == true {
+        if limited(&reply) {
+            let now = now_at_least(now);
             let seconds = reply["retryAfterSeconds"]
                 .as_f64()
                 .unwrap_or(60.0)
                 .clamp(60.0, 86_400.0);
-            let hold = json!({"now":now,"until":now as f64 + seconds * 1000.0});
-            let _ = super::failover::save(
-                &self.owners,
-                &self.root,
-                &key,
-                &aac_views::js_json::write(&hold),
-            );
+            let hold = super::failover::Cooldown {
+                until: now as f64 + seconds * 1000.0,
+                claude_429_streak: None,
+            };
+            save_hold(&self.owners, &self.root, &key, now as f64, hold);
+            if let Some(anchor) = anchor {
+                save_hold(&self.owners, &self.root, anchor, now as f64, hold);
+            }
         }
-        let final_candidate = &reply["candidate"];
-        if ["identity", "revision", "locator"]
+        Some(reply)
+    }
+}
+
+fn now_at_least(started: i64) -> i64 {
+    UtcMs::now()
+        .ok()
+        .map_or(started, |now| started.max(now.get() as i64))
+}
+
+fn identity_key(root: &Path, provider: &str, identity: &Value) -> String {
+    aac_core::sha256_hex(aac_views::js_json::write(&json!([
+        root, provider, {"kind":identity["kind"],"key":identity["key"]}
+    ])))
+}
+
+fn limited(reply: &Value) -> bool {
+    reply["failureCode"] == "rate_limited"
+        || (reply["failureCode"] == "source_changed" && reply["rateLimited"] == true)
+}
+
+fn confirmed(reply: &Value, candidate: &Value) -> bool {
+    let final_candidate = &reply["candidate"];
+    reply["version"] == 1
+        && reply["action"] == "collect"
+        && ["identity", "revision", "locator"]
             .iter()
-            .any(|field| final_candidate[*field] != candidate[*field])
-        {
-            return None;
-        }
-        reply
-            .get("sample")
-            .filter(|sample| sample.is_object())
-            .cloned()
-    }
+            .all(|field| final_candidate[*field] == candidate[*field])
+}
 
-    async fn claude_rows(&self, profiles: &[Value], now: i64) -> Vec<Option<Value>> {
-        let root = self.root.clone();
-        let profiles = profiles.to_vec();
-        let count = profiles.len();
-        tokio::task::spawn_blocking(move || {
-            let raw = crate::profile_reads::desktop_manifest(&root)
-                .flatten()
-                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                .unwrap_or_default();
-            profiles
-                .iter()
-                .map(|profile| {
-                    let id = profile["id"].as_str()?;
-                    let original = raw["profiles"]
-                        .as_array()?
-                        .iter()
-                        .find(|entry| entry["id"] == id)?;
-                    let hash = aac_core::sha256_hex(aac_views::js_json::write(original));
-                    let mut sample =
-                        super::provider_caches::claude_snapshot(&root, id, &hash).ok()??;
-                    let stamp = rows::stamp(&sample["fetchedAt"])?;
-                    let sampled = aac_views::js::parse_date(&stamp).ok()??;
-                    if sampled > now
-                        || sample["profileId"] != id
-                        || sample["email"] != profile["email"]
-                    {
-                        return None;
-                    }
-                    sample["status"] = json!("cached");
-                    Some(sample)
-                })
-                .collect()
-        })
-        .await
-        .unwrap_or_else(|_| vec![None; count])
+fn save_hold(owners: &Owners, root: &Path, key: &str, now: f64, hold: super::failover::Cooldown) {
+    let mut record = json!({"now":now,"until":hold.until});
+    if let Some(streak) = hold.claude_429_streak {
+        record["claude429Streak"] = json!(streak);
     }
-
-    async fn additional(&self, sources: Vec<sources::Source>, antigravity: bool) -> Vec<Value> {
-        // Keep stable account order and cap simultaneous local and remote dispatch.
-        use futures_util::{StreamExt, stream};
-        let mut sources = sources;
-        let order = [
-            "antigravity",
-            "muse",
-            "cursor",
-            "kimi-code",
-            "qwen",
-            "zai",
-            "opencode-go",
-        ];
-        sources.sort_by_key(|source| {
-            order
-                .iter()
-                .position(|id| *id == source.provider)
-                .unwrap_or(order.len())
-        });
-        stream::iter(sources)
-            .filter(|source| std::future::ready(!antigravity || source.provider != "antigravity"))
-            .map(|source| async move {
-                let (host, name) = source_host(&source.platform, source.ssh_host.as_deref());
-                let raw = if aac_providers::provider(&source.provider).is_some_and(|row| row.quota)
-                    && matches!(
-                        source.credential,
-                        sources::Credential::Discover
-                            | sources::Credential::AacKey { .. }
-                            | sources::Credential::BrowserCapsule { .. }
-                    ) {
-                    let mut args = json!({"provider":source.provider,"platform":source.platform});
-                    let explicit = !matches!(source.credential, sources::Credential::Discover);
-                    if explicit {
-                        args["account"] = json!(source.id);
-                        args["credential"] = json!(source.credential);
-                    }
-                    let expected = if explicit {
-                        source.id.clone()
-                    } else {
-                        format!("plan-{}-{}", source.provider, source.platform)
-                    };
-                    self.ask(
-                        &source.platform,
-                        source.ssh_host.as_deref(),
-                        "quota-read",
-                        &args,
-                    )
-                    .await
-                    .ok()
-                    .filter(|raw| {
-                        raw["id"] == expected
-                            && raw["provider"] == source.provider
-                            && raw["platform"] == source.platform
-                    })
-                } else {
-                    None
-                };
-                rows::additional(&source, &host, &name, raw.as_ref())
-            })
-            .buffered(3)
-            .collect()
-            .await
-    }
+    let _ = super::failover::save(owners, root, key, &aac_views::js_json::write(&record));
 }
 
 fn inventory_complete(inventory: &Option<Value>, selector: &str) -> bool {
@@ -407,7 +419,6 @@ fn pick<'a>(inventory: &'a Option<Value>, provider: &str, selector: &str) -> Opt
     if !inventory_complete(inventory, selector) {
         return None;
     }
-    let kinds = aac_providers::provider(provider)?.failover.kinds;
     let mut matches = inventory.as_ref()?["candidates"]
         .as_array()?
         .iter()
@@ -415,31 +426,45 @@ fn pick<'a>(inventory: &'a Option<Value>, provider: &str, selector: &str) -> Opt
             row["selectors"]
                 .as_array()
                 .is_some_and(|items| items.iter().any(|item| item == selector))
-                && row["identity"]["kind"]
-                    .as_str()
-                    .is_some_and(|kind| kinds.contains(&kind))
-                && ["locator", "revision"]
-                    .iter()
-                    .map(|key| &row[*key])
-                    .chain([&row["identity"]["key"]])
-                    .all(|value| {
-                        value.as_str().is_some_and(|text| {
-                            text.len() == 64
-                                && text
-                                    .bytes()
-                                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                        })
-                    })
+                && valid_candidate(row, provider)
         });
     let first = matches.next()?;
     matches.next().is_none().then_some(first)
+}
+
+fn valid_candidate(row: &Value, provider: &str) -> bool {
+    let Some(kinds) = aac_providers::provider(provider).map(|config| config.failover.kinds) else {
+        return false;
+    };
+    row["identity"]
+        .as_object()
+        .is_some_and(|identity| identity.len() == 2)
+        && row["identity"]["kind"]
+            .as_str()
+            .is_some_and(|kind| kinds.contains(&kind))
+        && ["locator", "revision"]
+            .iter()
+            .map(|key| &row[*key])
+            .chain([&row["identity"]["key"]])
+            .all(|value| {
+                value.as_str().is_some_and(|text| {
+                    text.len() == 64
+                        && text
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+            })
 }
 
 struct Disk {
     visibility: Option<Value>,
     refresh: u64,
     sources: Vec<sources::Source>,
+    legacy: bool,
+    source_problem: Option<(&'static str, &'static str)>,
     claude: Vec<Value>,
+    claude_private: Vec<Value>,
+    claude_pending: Vec<Value>,
     codex: Vec<String>,
 }
 
@@ -447,16 +472,39 @@ impl Disk {
     fn load(root: &Path) -> Result<Self, Decline> {
         let visibility =
             crate::account_reads::visibility(root).map(|mut result| result["visibility"].take());
-        let sources = match sources::read_registry(root)? {
-            sources::Sources::Legacy => sources::legacy(root),
-            sources::Sources::V2(rows) => rows,
+        let (sources, legacy, source_problem) = match sources::read_registry(root) {
+            Ok(sources::Sources::Legacy) => {
+                let (sources, valid) = sources::legacy(Some(root));
+                (
+                    sources,
+                    true,
+                    (!valid).then_some(("error", "Account usage source configuration is invalid.")),
+                )
+            }
+            Ok(sources::Sources::V2(rows)) => (rows, false, None),
+            Err(_) => (
+                sources::legacy(None).0,
+                false,
+                Some(("unavailable", "Account list could not be read safely.")),
+            ),
         };
-        let claude = crate::profile_reads::desktop_profiles(root).ok_or(Decline::Unsupported)?;
+        let manifest = crate::profile_reads::desktop_manifest(root).ok_or(Decline::Unsupported)?;
+        let claude = crate::profile_reads::compose_manifest(manifest.as_deref())
+            .ok_or(Decline::Unsupported)?;
+        let claude_private = manifest
+            .as_deref()
+            .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+            .and_then(|mut value| value["profiles"].take().as_array().cloned())
+            .unwrap_or_default();
         Ok(Self {
             visibility,
             refresh: read_refresh(root),
             sources,
+            legacy,
+            source_problem,
             claude: claude["profiles"].as_array().ok_or(Decline::Shape)?.clone(),
+            claude_private,
+            claude_pending: claude::pending(root).unwrap_or_default(),
             codex: codex_names(root)?,
         })
     }

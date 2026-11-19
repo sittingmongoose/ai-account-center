@@ -167,21 +167,64 @@ pub(super) fn additional(
         row["host"] = json!(host);
     }
     row["source"] = json!(format!("Account on {host_label}"));
+    if let Some(computer) = raw["verifiedSource"]["host"].as_str() {
+        apply_verified_source(&mut row, computer, &raw["verifiedSource"]);
+    }
     row["status"] = json!(status);
     if status == "cached" {
-        row["cacheReason"] = json!(if raw["failureCode"] == "rate_limited" {
-            "rate_limited"
-        } else {
-            "outcome_unknown"
-        });
+        row["cacheReason"] = json!(raw["cacheReason"].as_str().unwrap_or("outcome_unknown"));
     }
-    row["message"] = json!(message);
+    row["message"] = json!(if status == "cached" && raw["verifiedSource"].is_object() {
+        Some(match row["cacheReason"].as_str() {
+            Some("rate_limited") => {
+                "Usage refresh is rate limited; showing the last successful reading."
+            }
+            Some("read_failed") => {
+                "The usage read failed or was skipped; showing the last successful reading."
+            }
+            _ => "The previous usage read outcome was not recorded; showing the saved reading.",
+        })
+    } else {
+        message
+    });
     row["fetchedAt"] = json!(stamp(&raw["fetchedAt"]));
     row["sampledAt"] = json!(stamp(&raw["sampledAt"]));
     row["isActive"] = json!(false);
     row["windows"] = json!(windows);
     row["capabilities"] = capabilities();
     row
+}
+
+fn apply_verified_source(row: &mut Value, host: &str, verified: &Value) {
+    let computers: Value =
+        serde_json::from_str(crate::account_reads::COMPUTERS).expect("bundled computers");
+    let computer = &computers[host];
+    let Some(label) = computer["label"].as_str() else {
+        return;
+    };
+    let Some(os) = computer["os"].as_str() else {
+        return;
+    };
+    let platform = if os == "linux" { "ubuntu" } else { os };
+    let quota = if verified["linked"] == true {
+        "native subscription quota"
+    } else {
+        "quota"
+    };
+    let fallback = if verified["fallback"] == true {
+        " (fallback)"
+    } else {
+        ""
+    };
+    row["source"] = json!(format!("Verified {quota} on {label}{fallback}"));
+    if row["provider"] != "claude" {
+        row["platform"] = json!(platform);
+    }
+    if row["platform"] != host {
+        row["host"] = json!(host);
+    } else if let Some(fields) = row.as_object_mut() {
+        fields.remove("host");
+    }
 }
 
 pub(super) fn claude(profile: &Value, desktop: Desktop, raw: Option<&Value>) -> Option<Value> {
@@ -224,6 +267,24 @@ pub(super) fn claude(profile: &Value, desktop: Desktop, raw: Option<&Value>) -> 
     row["capabilities"] =
         json!({"codexProfile":null,"claudeProfileId":id,"claudePlatforms":launchers});
     Some(row)
+}
+
+pub(super) fn pending_claude(profile: &Value, desktop: Desktop) -> Value {
+    let id = profile["id"].as_str().unwrap_or_default();
+    let name = if desktop == Desktop::Mac {
+        "Mac"
+    } else {
+        "Windows"
+    };
+    json!({
+        "id":format!("claude:{id}"),"provider":"claude","providerLabel":"Claude",
+        "label":profile["label"].as_str().unwrap_or(id),"email":null,"plan":null,
+        "platform":desktop.word(),"source":format!("Claude desktop on {name}"),
+        "status":"needs_sign_in","message":"Open Claude on Mac or Windows and sign in to finish setting up this profile.",
+        "fetchedAt":null,"sampledAt":null,"isActive":false,"windows":[],
+        "capabilities":{"codexProfile":null,"claudeProfileId":id,"claudePlatforms":[]},
+        "lifecycle":{"state":"pending_sign_in","jobId":null}
+    })
 }
 
 pub(super) fn codex(

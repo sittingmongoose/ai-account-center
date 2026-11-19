@@ -56,6 +56,12 @@ struct Entry {
     config: aac_config::ComputerConfig,
     client: Option<AgentClient>,
 }
+pub(crate) struct UsageHost {
+    pub(crate) id: String,
+    pub(crate) platform: &'static str,
+    pub(crate) alias: Option<String>,
+}
+
 struct Registry {
     entries: Vec<Entry>,
 }
@@ -313,11 +319,10 @@ impl Agents {
         self.slots.clone().try_acquire_owned().ok()
     }
 
-    pub(crate) async fn client(
+    async fn registered(
         &self,
-        selector: &Selector,
         deadline: tokio::time::Instant,
-    ) -> Option<AgentClient> {
+    ) -> Option<Arc<Result<Registry, Failure>>> {
         let mut loaded = self.registry.subscribe();
         if !self.loading.swap(true, Ordering::AcqRel) {
             let root = self.root.clone();
@@ -333,7 +338,7 @@ impl Agents {
                 ready.send_replace(Some(Arc::new(result)));
             });
         }
-        let registry = tokio::time::timeout_at(deadline, async {
+        tokio::time::timeout_at(deadline, async {
             loop {
                 if let Some(registry) = loaded.borrow_and_update().clone() {
                     break Some(registry);
@@ -345,11 +350,48 @@ impl Agents {
         })
         .await
         .ok()
-        .flatten();
+        .flatten()
+    }
+
+    pub(crate) async fn client(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Option<AgentClient> {
+        self.registered(deadline)
+            .await?
+            .as_ref()
+            .as_ref()
+            .ok()?
+            .client(selector)
+    }
+
+    pub(crate) async fn usage_hosts(&self) -> Vec<UsageHost> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let Some(registered) = self.registered(deadline).await else {
+            return Vec::new();
+        };
+        let Ok(registry) = registered.as_ref() else {
+            return Vec::new();
+        };
         registry
-            .as_deref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.client(selector))
+            .entries
+            .iter()
+            .filter(|entry| entry.client.is_some())
+            .map(|entry| {
+                let platform = match entry.config.os {
+                    OperatingSystem::Linux => "ubuntu",
+                    OperatingSystem::Mac => "mac",
+                    OperatingSystem::Windows => "windows",
+                };
+                let remote = matches!(entry.config.transport, TransportConfig::Ssh { .. });
+                UsageHost {
+                    id: entry.config.id.as_str().to_owned(),
+                    platform,
+                    alias: remote.then(|| entry.config.id.as_str().to_owned()),
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn new(root: PathBuf) -> Self {

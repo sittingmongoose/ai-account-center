@@ -74,6 +74,7 @@ struct Shared {
     cache_writes: Arc<tokio::sync::Mutex<()>>,
     identity: Identity,
     feeds: Feeds,
+    native_usage: bool,
     agents: Arc<crate::agent_transport::Agents>,
     collection: Arc<crate::collection::Collection>,
     cursor: Arc<crate::account_usage::cursor::Reader>,
@@ -598,6 +599,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     Err(reason) => decline(row.handler, reason),
                 };
             }
+            if shared.native_usage && source.starts_with(crate::feed::HOME_DASHBOARD) {
+                return decline(row.handler, Decline::Unsupported);
+            }
             let Ok(bytes) = to_bytes(req.into_body(), INPUT_CAP).await else {
                 return decline(row.handler, Decline::Shape);
             };
@@ -846,12 +850,14 @@ async fn serve_inner(
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
     let collection = Arc::new(crate::collection::Collection::default());
+    let cursor = Arc::<crate::account_usage::cursor::Reader>::default();
     let producer = native.as_ref().map(|_| {
         crate::account_usage::producer::Producer::shared(
             boot.ccs_dir.clone(),
             owners.clone(),
             agents.clone(),
             collection.clone(),
+            cursor.clone(),
         )
     });
     let state = AppState(Arc::new(Shared {
@@ -861,9 +867,10 @@ async fn serve_inner(
         limits: Limits::new(),
         identity,
         feeds: cache.feeds.clone(),
+        native_usage: native.is_some(),
         agents,
         collection: collection.clone(),
-        cursor: Arc::default(),
+        cursor,
         store: store.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.

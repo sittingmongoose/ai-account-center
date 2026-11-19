@@ -209,7 +209,7 @@ pub fn read_registry(root: &Path) -> Result<Sources, Decline> {
 }
 
 /// Legacy providers use the same identifiers and default source as the TS manifest.
-pub(super) fn legacy(root: &Path) -> Vec<Source> {
+pub(super) fn legacy(root: Option<&Path>) -> (Vec<Source>, bool) {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Override {
@@ -223,10 +223,12 @@ pub(super) fn legacy(root: &Path) -> Vec<Source> {
         version: u32,
         sources: Vec<Override>,
     }
-    let file = root.join("account-usage-sources.json");
-    let config: Option<Manifest> = aac_files::read_bounded(&file, 32 * 1024)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let read = root.map(|root| {
+        let file = root.join("account-usage-sources.json");
+        let policy =
+            aac_files::read::ReadPolicy::capped(32 * 1024).ancestors(Ancestors::NoLinkBelow(root));
+        aac_files::read::read(&file, &policy)
+    });
     let order = [
         "antigravity",
         "muse",
@@ -236,8 +238,14 @@ pub(super) fn legacy(root: &Path) -> Vec<Source> {
         "zai",
         "opencode-go",
     ];
+    let mut valid = matches!(&read, None | Some(Read::Absent));
     let mut overrides = BTreeMap::new();
+    let config = match read {
+        Some(Read::Bytes(bytes, _)) => serde_json::from_slice::<Manifest>(&bytes).ok(),
+        _ => None,
+    };
     if let Some(config) = config.filter(|c| c.version == 1 && c.sources.len() <= order.len()) {
+        valid = true;
         for row in config.sources {
             if !order.contains(&row.provider.as_str())
                 || !["mac", "windows", "ubuntu"].contains(&row.platform.as_str())
@@ -245,11 +253,12 @@ pub(super) fn legacy(root: &Path) -> Vec<Source> {
                 || overrides.insert(row.provider.clone(), row).is_some()
             {
                 overrides.clear();
+                valid = false;
                 break;
             }
         }
     }
-    order
+    let sources = order
         .into_iter()
         .map(|provider| {
             let entry = overrides.remove(provider);
@@ -266,7 +275,8 @@ pub(super) fn legacy(root: &Path) -> Vec<Source> {
                 created_by: None,
             }
         })
-        .collect()
+        .collect();
+    (sources, valid)
 }
 
 #[cfg(test)]

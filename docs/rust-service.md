@@ -673,8 +673,22 @@ computer. The service uses the same L5 registry and pool.
   The release bundles the existing Python source, including OpenCode wallet inventory. A refusal before launch
   allows the TypeScript fallback. An indeterminate reply ends the attempt.
 
-The TypeScript collector still selects sources, applies identity-bound failover
-and publishes complete dashboard inputs. The standalone Rust sampler takes a
-source producer and publication callback. The full native source producer is a separate step. The TS peer and identity
-coordinator applies the original wave 67 retry rules and Rust persists its holds
-when the collection group owns the cache.
+The standalone listener can run the collector through
+`serve_with_native_account_usage(boot, shutdown, cache, callbacks)`. Supply
+one `AccountUsageCache` to both listeners. `NativeAccountUsage::companions`
+supplies the current Rust lifecycle, sign-in, Antigravity and listener facts.
+The producer reads account registry, visibility and refresh settings itself,
+and normalizes quota inputs for both desktop selectors and both transport
+scopes. Native boot declines incoming dashboard feed writes. The caller
+can render with `cache.render`, pass `cache.generation` to the Home renderer,
+and queue a debounced pass with `cache.request_refresh`.
+`NativeAccountUsage::published` receives the cache for the hub when a pass
+publishes, and the hosted store records observations from that cache.
+`serve_with_account_usage_cache` keeps the transitional feed path available.
+
+The Cursor account event cache exposes `eventCounts` when the reader can
+classify the pages. `fetched` counts all returned events, including repeated
+events across pages. `kept`, `droppedOutOfWindow`, `droppedNoTokenUsage` and
+`droppedDuplicate` partition that count. `pages` counts valid upstream pages.
+A legacy cache may have no counters. If a refresh fails, retained counters
+describe the dated reading carried forward with the retained rows.
