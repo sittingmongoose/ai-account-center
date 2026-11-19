@@ -496,49 +496,44 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
         clock,
         provisional,
     } = owned;
+    let mut read_activity = || {
+        let from = ms_u64(provisional.from)?;
+        let to = ms_u64(provisional.to)?;
+        let daily = provisional.to - provisional.from > activity::HOURLY_RANGE_MS;
+        let mut range_query = json!({
+            "fromMs": from,
+            "toMs": to,
+            "resolution": if daily { "day" } else { "hour" },
+            "sessionSample": 200,
+        });
+        if daily {
+            let starts =
+                activity::local_day_starts(provisional.from, provisional.to, &tz, zone.as_ref())?;
+            let starts_ms = starts.into_iter().map(ms_u64).collect::<R<Vec<_>>>()?;
+            range_query
+                .as_object_mut()
+                .ok_or(Decline::Shape)?
+                .insert("dayStarts".into(), json!(starts_ms));
+        }
+        let range = store.activity_range(range_query)?;
+        let sources_state = store.activity_sources(from, to)?;
+        activity::store_activity_answer(
+            &range,
+            &sources_state,
+            &query,
+            provisional.from,
+            provisional.to,
+            &live,
+            zone.as_ref(),
+            &pricing,
+            clock,
+        )
+    };
     let retained_from = oldest;
     // The activity block: the guarded selection's fixed projection, or the store's own range.
     let (activity_block, coverage_oldest, providers_with_activity, resolution) =
         if activity::activity_selection(&query)? {
-            let from = ms_u64(provisional.from)?;
-            let to = ms_u64(provisional.to)?;
-            let daily = provisional.to - provisional.from > activity::HOURLY_RANGE_MS;
-            let mut range_query = json!({
-                "fromMs": from,
-                "toMs": to,
-                "resolution": if daily { "day" } else { "hour" },
-                "sessionSample": 200,
-            });
-            if daily {
-                let starts = activity::local_day_starts(
-                    provisional.from,
-                    provisional.to,
-                    &tz,
-                    zone.as_ref(),
-                )?;
-                let mut starts_ms: Vec<u64> = Vec::new();
-                for start in starts {
-                    starts_ms.push(ms_u64(start)?);
-                }
-                range_query
-                    .as_object_mut()
-                    .ok_or(Decline::Shape)?
-                    .insert("dayStarts".into(), json!(starts_ms));
-            }
-            let range = store.activity_range(range_query)?;
-            let sources_state = store.activity_sources(from, to)?;
-            let answered = activity::store_activity_answer(
-                &range,
-                &sources_state,
-                &query,
-                provisional.from,
-                provisional.to,
-                &live,
-                zone.as_ref(),
-                &pricing,
-                clock,
-            )?;
-            let mut answered = answered;
+            let mut answered = read_activity()?;
             // Before this run's first pass the grid comes from the store's last reads.
             if live.sources.as_array().is_some_and(Vec::is_empty) {
                 let history = answered.activity.get("history").ok_or(Decline::Shape)?;
@@ -570,27 +565,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
                 }
                 // The native read: the store's own range and attribution answer the coverage.
                 None => {
-                    let from = ms_u64(provisional.from)?;
-                    let to = ms_u64(provisional.to)?;
-                    let daily = provisional.to - provisional.from > activity::HOURLY_RANGE_MS;
-                    let range = store.activity_range(json!({
-                        "fromMs": from,
-                        "toMs": to,
-                        "resolution": if daily { "day" } else { "hour" },
-                        "sessionSample": 200,
-                    }))?;
-                    let sources_state = store.activity_sources(from, to)?;
-                    let answered = activity::store_activity_answer(
-                        &range,
-                        &sources_state,
-                        &query,
-                        provisional.from,
-                        provisional.to,
-                        &live,
-                        zone.as_ref(),
-                        &pricing,
-                        clock,
-                    )?;
+                    let answered = read_activity()?;
                     (answered.oldest_hour_at, answered.providers_with_activity)
                 }
             };
