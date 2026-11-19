@@ -85,6 +85,15 @@ export const ALLOWLIST = [
       'share catalog is not a private file; the readers-check writer uses the leased aac-files ' +
       'writer, not these mechanics.',
   },
+  {
+    path: 'crates/aac-status/src/answer_signing.rs',
+    reason:
+      'The R4 answer-key lifecycle keeps the TypeScript mechanics byte for byte: exclusive ' +
+      '0600 creation, hard-link admission (a racing process uses the first key), fsync of file ' +
+      'and folder, and the broken-key repair rename. The key is a credential the signer owns; ' +
+      'the answers store writer lock is held by the caller. Follow-up: a leased aac-files ' +
+      'writer for the key row once the registry lists it.',
+  },
 ];
 
 const OWNER = 'crates/aac-files/src/';

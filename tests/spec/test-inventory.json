@@ -435,10 +435,35 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/src/share/check.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/src/share/mod.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/src/spend.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/answer_signing.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/model_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
     },
     {
       "file": "crates/aac-status/tests/ops.rs",
@@ -546,6 +571,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/share_parity.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "crates/aac-status/tests/spend.rs",
