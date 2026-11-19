@@ -23,7 +23,7 @@
   "src/web-server/routes/codex-routes.ts": "c49b0a4a3cbd76165423140a9abfda25876ead87b7884c5cdae8791934c9b4de",
   "src/web-server/routes/home-view-routes.ts": "72c6d6a020d089ae71c041990de6d3a71a02ff73ba4619585ac2a8e1c37eefa9",
   "src/web-server/routes/index.ts": "0e5af7ae2b8922270575f49135248e3987e428f79b303bbc1fc1361de84d16e0",
-  "src/web-server/routes/reset-claim-routes.ts": "32c85cd9a11df4686dd041583bb45b98b8e406fd52eb0adc7df53b07ece30981",
+  "src/web-server/routes/reset-claim-routes.ts": "2a8ae19f4492c28d7f6b95579c46b3439b5d62a96606709d1ca0467630db9bfd",
   "src/web-server/routes/revalidated-view.ts": "58d7382a0314411bb4e6b5cb079b0a8c73de2d9026521679b270e98b21b7923a",
   "src/web-server/routes/scoreboard-routes.ts": "ce5a57c3a5d52911b4dd77710574ff7c0d562a8a055f890814810c7ee7cadea9",
   "src/web-server/routes/share-route.ts": "6d83030ba0ae887724623a21256852902d3d8ab3eda7d5c84d93e24ac42d2025",
@@ -34,6 +34,6 @@
   "src/web-server/rust-service-routes.json": "7bb1727ac694216f0b97d95a86b12a9c5e4d397454355d07a93d5ceab224e1a8",
   "src/web-server/rust-service-supervisor.ts": "abf108d18faae236b1294216ae268f6eadec098371f195f9d05ad056ce1a7f17",
   "src/web-server/rust-service-transport.ts": "fcc66d650688a3248da389e132a15f895852cddda2e87ab724e5fef19f0cb643",
-  "src/web-server/rust-service.ts": "0632e09e00de89a99af6dc1a79f5e80da692b238b2b41e37810b21229213bc55",
+  "src/web-server/rust-service.ts": "21ebcd81dad385cdaf1258a1620689ceabf1bf8ee658901a847e88c7c5c136bc",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
 }
