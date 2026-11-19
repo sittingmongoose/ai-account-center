@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import bcrypt from 'bcrypt';
 import { WebSocket } from 'ws';
+import { createEmptyUnifiedConfig } from '../../src/config/unified-config-types';
 import { fixtureEnvironment, startRustFixture } from './m6-rust-fixture';
 
 type Contract = {
@@ -37,6 +38,27 @@ const credentials = { username, password };
 const nonce = 'f'.repeat(32);
 const hub = 'aacu_' + 'f'.repeat(43);
 const environment = fixtureEnvironment();
+if (mode === 'cut') {
+  const preload = path.join(spec, 'm6-cut-worker-fixture.cjs').split(path.sep).join('/');
+  Object.assign(environment, {
+    NODE_OPTIONS: [environment.NODE_OPTIONS, '--require=' + JSON.stringify(preload)]
+      .filter(Boolean)
+      .join(' '),
+    CODEX_HOME: path.join(root, '.codex'),
+    CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
+    AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+    AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+    AAC_RUST_STORE: 'off',
+    AAC_RUST_GROUP_HOME: 'off',
+    AAC_RUST_HOME_VIEW: 'off',
+    AAC_RUST_GROUP_APP_UPDATES: 'off',
+    AAC_RUST_GROUP_COLLECTION: 'off',
+    AAC_AGENT_VERBS: 'off',
+    AAC_AGENT_TRANSPORT: 'off',
+    AAC_STATUS_DOORBELL: 'off',
+    AAC_STORE_SHARE_BACKUP_DIR: 'off',
+  });
+}
 
 function normalize(value: unknown, key = ''): unknown {
   if (value === undefined) return value;
@@ -53,10 +75,13 @@ function normalize(value: unknown, key = ''): unknown {
       .replace(/Expires=[^;]+/i, 'Expires=<http-date>');
   }
   if (typeof value === 'string') {
-    return value
+    let text = value
+      .replaceAll(root, '<fixture-home>')
       .replace(/dev_[0-9a-f]{16}/g, '<device-id>')
       .replace(/aacd_[A-Za-z0-9_-]{43}/g, '<device-token>')
       .replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g, '<timestamp>');
+    if (path.sep === '\\' && text.startsWith('<fixture-home>')) text = text.replaceAll('\\', '/');
+    return text;
   }
   if (Array.isArray(value)) return value.map((entry) => normalize(entry));
   if (value && typeof value === 'object')
@@ -164,6 +189,7 @@ try {
   await fs.writeFile(
     path.join(root, 'config.yaml'),
     JSON.stringify({
+      ...createEmptyUnifiedConfig(),
       dashboard_auth: {
         enabled: true,
         username,
@@ -245,6 +271,17 @@ try {
             ),
           ].filter(Boolean);
           different.push(name + ' [' + role + '] ' + fields.join(', '));
+          if (process.argv.includes('--show-fixture-diff') && fields.includes('body')) {
+            console.log(
+              'M0 fixture body ' +
+                fixture +
+                ' ' +
+                JSON.stringify({
+                  actual: normalize(body),
+                  expected: expected.body,
+                })
+            );
+          }
           counts.different++;
           if (owns(route.path)) owned.failed++;
         }

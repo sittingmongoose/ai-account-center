@@ -616,6 +616,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/native_reads.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/policy.rs",
       "kind": "safety",
       "evidence": [

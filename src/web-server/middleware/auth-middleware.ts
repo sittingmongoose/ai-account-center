@@ -368,7 +368,7 @@ export function requireDashboardSession(
   res: Response,
   localAccessError?: string
 ): boolean {
-  if (!isDashboardAuthEnabled()) {
+  if (!(compositionAccess(req)?.authEnabled ?? isDashboardAuthEnabled())) {
     return requireLocalAccessWhenAuthDisabled(req, res, localAccessError);
   }
 
@@ -413,6 +413,8 @@ function isHttpOrigin(origin: URL): boolean {
 }
 
 export function isDashboardWebSocketOriginAllowed(req: IncomingMessage): boolean {
+  const forwarded = compositionAccess(req);
+  if (forwarded) return forwarded.sameOrigin;
   const originHeader = getSingleHeader(req.headers.origin);
   if (!originHeader) return true;
 
@@ -478,11 +480,11 @@ export function requireLocalAccessWhenAuthDisabled(
   res: Response,
   error = 'This endpoint requires localhost access when dashboard auth is disabled.'
 ): boolean {
-  if (isDashboardAuthEnabled()) {
+  const forwarded = compositionAccess(req);
+  if (forwarded?.authEnabled ?? isDashboardAuthEnabled()) {
     return true;
   }
 
-  const forwarded = compositionAccess(req);
   if (forwarded) {
     if (!forwarded.local) res.status(403).json({ error });
     return forwarded.local;

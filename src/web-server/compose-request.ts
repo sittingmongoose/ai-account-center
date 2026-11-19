@@ -10,7 +10,9 @@ type Principal =
 
 interface CompositionAccess {
   principal: Principal;
+  authEnabled: boolean;
   secure: boolean;
+  sameOrigin: boolean;
   transport: 'encrypted' | 'loopback' | 'plain';
   local: boolean;
   directLoopback: boolean;
@@ -88,7 +90,9 @@ function valid(context: CompositionAccess | null): context is CompositionAccess 
       (p.kind === 'device' &&
         typeof p.id === 'string' &&
         (p.platform === 'mac' || p.platform === 'windows'))) &&
+    typeof context.authEnabled === 'boolean' &&
     typeof context.secure === 'boolean' &&
+    typeof context.sameOrigin === 'boolean' &&
     ['encrypted', 'loopback', 'plain'].includes(context.transport) &&
     typeof context.local === 'boolean' &&
     typeof context.directLoopback === 'boolean' &&

@@ -186,7 +186,9 @@ impl Backend {
         };
         let context = json!({
             "principal": principal,
+            "authEnabled": access.auth_enabled,
             "secure": access.secure_transport,
+            "sameOrigin": access.same_origin,
             "transport": access.credential_transport,
             "local": access.local_access,
             "directLoopback": access.direct_loopback,
