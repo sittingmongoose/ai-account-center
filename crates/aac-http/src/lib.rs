@@ -3,6 +3,7 @@
 mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
+pub mod antigravity_quota;
 pub mod antigravity_runtime;
 #[cfg(unix)]
 mod feed;

@@ -1,0 +1,1397 @@
+{
+  "clock": 1795058783598,
+  "cases": [
+    {
+      "name": "fresh-windows",
+      "steps": [
+        {
+          "at": "2026-10-01T17:00:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "remainingPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                },
+                {
+                  "key": "five_hour",
+                  "label": "5-hour",
+                  "usedPercent": 2,
+                  "remainingPercent": 98,
+                  "resetAt": "2026-10-01T21:00:00.000Z",
+                  "windowMinutes": 300,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "models": [
+                  "Gemini 3.8 Flash",
+                  "Gemini 3.7 Flash",
+                  "Gemini 3.6 Flash",
+                  "Gemini 3.1 Pro",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              }
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": true,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "remainingPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "models": [
+                    "Gemini 3.8 Flash",
+                    "Gemini 3.7 Flash",
+                    "Gemini 3.6 Flash",
+                    "Gemini 3.1 Pro",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 40,
+                    "remainingPercent": 60,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  },
+                  {
+                    "key": "five_hour",
+                    "label": "5-hour",
+                    "usedPercent": 2,
+                    "remainingPercent": 98,
+                    "resetAt": "2026-10-01T21:00:00.000Z",
+                    "windowMinutes": 300,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": true,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 60,
+                    "remainingPercent": 40,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "fresh-throttle-holds-the-second-call",
+      "steps": [
+        {
+          "at": "2026-10-01T17:00:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "remainingPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "models": [
+                  "Gemini 3.8 Flash",
+                  "Gemini 3.7 Flash",
+                  "Gemini 3.6 Flash",
+                  "Gemini 3.1 Pro",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              }
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": true,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "remainingPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "models": [
+                    "Gemini 3.8 Flash",
+                    "Gemini 3.7 Flash",
+                    "Gemini 3.6 Flash",
+                    "Gemini 3.1 Pro",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 40,
+                    "remainingPercent": 60,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": true,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 60,
+                    "remainingPercent": 40,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": "2026-10-01T17:00:05.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "cached",
+              "message": "Live Antigravity usage is temporarily unavailable; showing the last saved sample.",
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "remainingPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "models": [
+                  "Gemini 3.8 Flash",
+                  "Gemini 3.7 Flash",
+                  "Gemini 3.6 Flash",
+                  "Gemini 3.1 Pro",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              },
+              "cacheReason": "rate_limited"
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "cached",
+              "message": "Live Antigravity usage is temporarily unavailable; showing the last saved sample.",
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": true,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "remainingPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "cacheReason": "read_failed"
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "models": [
+                    "Gemini 3.8 Flash",
+                    "Gemini 3.7 Flash",
+                    "Gemini 3.6 Flash",
+                    "Gemini 3.1 Pro",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "cached",
+                "cacheReason": "rate_limited",
+                "message": "Antigravity refresh is rate limited; showing the last successful reading.",
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 40,
+                    "remainingPercent": 60,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "cached",
+                "cacheReason": "read_failed",
+                "message": "The Antigravity usage read failed; showing the last successful reading.",
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": true,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 60,
+                    "remainingPercent": 40,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "older-sample-keeps-the-last-good",
+      "steps": [
+        {
+          "at": "2026-10-01T17:00:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "remainingPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "models": [
+                  "Gemini 3.8 Flash",
+                  "Gemini 3.7 Flash",
+                  "Gemini 3.6 Flash",
+                  "Gemini 3.1 Pro",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              }
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": true,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "remainingPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "models": [
+                    "Gemini 3.8 Flash",
+                    "Gemini 3.7 Flash",
+                    "Gemini 3.6 Flash",
+                    "Gemini 3.1 Pro",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 40,
+                    "remainingPercent": 60,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": true,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 60,
+                    "remainingPercent": 40,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": "2026-10-01T17:02:10.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "cached",
+              "message": "The latest read returned an older sample; showing the last successful Antigravity usage reading.",
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": false,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 40,
+                  "remainingPercent": 60,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "models": [
+                  "Gemini 3.8 Flash",
+                  "Gemini 3.7 Flash",
+                  "Gemini 3.6 Flash",
+                  "Gemini 3.1 Pro",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              },
+              "cacheReason": "read_failed"
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:02:05.000Z",
+              "sampledAt": "2026-10-01T17:02:05.000Z",
+              "isActive": true,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 61,
+                  "remainingPercent": 39,
+                  "resetAt": "2026-10-08T17:02:05.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "models": [
+                    "Gemini 3.8 Flash",
+                    "Gemini 3.7 Flash",
+                    "Gemini 3.6 Flash",
+                    "Gemini 3.1 Pro",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "cached",
+                "cacheReason": "read_failed",
+                "message": "The Antigravity usage read failed; showing the last successful reading.",
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": false,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 40,
+                    "remainingPercent": 60,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:02:05.000Z",
+                "sampledAt": "2026-10-01T17:02:05.000Z",
+                "isActive": true,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 61,
+                    "remainingPercent": 39,
+                    "resetAt": "2026-10-08T17:02:05.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "identity-unbound",
+      "steps": [
+        {
+          "at": "2026-10-01T17:00:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "needs_sign_in",
+              "message": "This Antigravity profile needs to sign in again.",
+              "fetchedAt": null,
+              "sampledAt": null,
+              "isActive": false,
+              "windows": [],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "models": [
+                  "Gemini 3.8 Flash",
+                  "Gemini 3.7 Flash",
+                  "Gemini 3.6 Flash",
+                  "Gemini 3.1 Pro",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              }
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "error",
+              "message": "Antigravity usage is temporarily unavailable.",
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": true,
+              "windows": [],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "models": [
+                    "Gemini 3.8 Flash",
+                    "Gemini 3.7 Flash",
+                    "Gemini 3.6 Flash",
+                    "Gemini 3.1 Pro",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "needs_sign_in",
+                "message": "This Antigravity profile needs to sign in again.",
+                "fetchedAt": null,
+                "sampledAt": null,
+                "isActive": false,
+                "windows": [],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "error",
+                "message": "Antigravity usage is temporarily unavailable.",
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": true,
+                "windows": [],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "needs-sign-in",
+      "steps": [
+        {
+          "at": "2026-10-01T17:00:00.000Z",
+          "accounts": [
+            {
+              "id": "antigravity:profile:gmail",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "gmail@example.com",
+              "email": "gmail@example.com",
+              "plan": "Google AI Pro",
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "needs_sign_in",
+              "message": "This Antigravity profile needs to sign in again.",
+              "fetchedAt": null,
+              "sampledAt": null,
+              "isActive": false,
+              "windows": [],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "gmail",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              },
+              "antigravityPlan": {
+                "class": "pro",
+                "quotaPolicy": "five-hour-weekly",
+                "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                "models": [
+                  "Gemini 3.8 Flash",
+                  "Gemini 3.7 Flash",
+                  "Gemini 3.6 Flash",
+                  "Gemini 3.1 Pro",
+                  "Gemini 4 Argon",
+                  "Gemini 4 Hydrogen",
+                  "Claude Sonnet 5.5",
+                  "Claude Opus 5.5",
+                  "Claude Sonnet 4.6",
+                  "Claude Opus 4.6",
+                  "GPT-OSS-120B"
+                ],
+                "thirdPartyModels": true,
+                "creditsOverage": true
+              }
+            },
+            {
+              "id": "antigravity:profile:party",
+              "provider": "antigravity",
+              "providerLabel": "Antigravity",
+              "label": "party@example.com",
+              "email": "party@example.com",
+              "plan": null,
+              "platform": "ubuntu",
+              "source": "Antigravity saved login on Ubuntu",
+              "status": "ok",
+              "message": null,
+              "fetchedAt": "2026-10-01T17:00:00.000Z",
+              "sampledAt": "2026-10-01T17:00:00.000Z",
+              "isActive": true,
+              "windows": [
+                {
+                  "key": "seven_day",
+                  "label": "Weekly",
+                  "usedPercent": 60,
+                  "remainingPercent": 40,
+                  "resetAt": "2026-10-08T17:00:00.000Z",
+                  "windowMinutes": 10080,
+                  "used": null,
+                  "limit": null,
+                  "unit": null,
+                  "kind": "rate_limit"
+                }
+              ],
+              "capabilities": {
+                "codexProfile": null,
+                "claudeProfileId": null,
+                "claudePlatforms": [],
+                "antigravityProfileId": "party",
+                "antigravityHostIds": [
+                  "ubuntu"
+                ]
+              }
+            }
+          ],
+          "quotas": {
+            "schemaVersion": 1,
+            "hostId": "ubuntu",
+            "accounts": [
+              {
+                "id": "antigravity:profile:gmail",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "gmail@example.com",
+                "email": "gmail@example.com",
+                "plan": "Google AI Pro",
+                "antigravityPlan": {
+                  "class": "pro",
+                  "quotaPolicy": "five-hour-weekly",
+                  "summary": "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+                  "models": [
+                    "Gemini 3.8 Flash",
+                    "Gemini 3.7 Flash",
+                    "Gemini 3.6 Flash",
+                    "Gemini 3.1 Pro",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5"
+                  ],
+                  "thirdPartyModels": true,
+                  "creditsOverage": true
+                },
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "needs_sign_in",
+                "message": "This Antigravity profile needs to sign in again.",
+                "fetchedAt": null,
+                "sampledAt": null,
+                "isActive": false,
+                "windows": [],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "gmail",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              },
+              {
+                "id": "antigravity:profile:party",
+                "provider": "antigravity",
+                "providerLabel": "Antigravity",
+                "label": "party@example.com",
+                "email": "party@example.com",
+                "plan": null,
+                "platform": "ubuntu",
+                "source": "Antigravity saved login on Ubuntu",
+                "status": "ok",
+                "message": null,
+                "fetchedAt": "2026-10-01T17:00:00.000Z",
+                "sampledAt": "2026-10-01T17:00:00.000Z",
+                "isActive": true,
+                "windows": [
+                  {
+                    "key": "seven_day",
+                    "label": "Weekly",
+                    "usedPercent": 60,
+                    "remainingPercent": 40,
+                    "resetAt": "2026-10-08T17:00:00.000Z",
+                    "windowMinutes": 10080,
+                    "used": null,
+                    "limit": null,
+                    "unit": null,
+                    "kind": "rate_limit"
+                  }
+                ],
+                "capabilities": {
+                  "codexProfile": null,
+                  "claudeProfileId": null,
+                  "claudePlatforms": [],
+                  "antigravityProfileId": "party",
+                  "antigravityHostIds": [
+                    "ubuntu"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
