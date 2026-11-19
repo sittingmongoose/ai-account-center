@@ -553,7 +553,12 @@ export class RustService extends RustSupervisor {
 
   /** The lifecycle router calls this after its session, origin and body guards. */
   accountConfirmations(): AccountApprovals | undefined {
-    if (!this.writesOn) return undefined;
+    if (
+      !this.writesOn ||
+      this.stopped ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir())
+    )
+      return undefined;
     const route = '/internal/account-confirmations';
     const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
     const call = async (operation: string, token: string, binding: ConfirmationBinding) => {

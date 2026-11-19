@@ -544,6 +544,16 @@ it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
     else expect(writes).toBe(0);
     f.rustService?.stop();
     expect((await f.request('PATCH', '/zai:usage', { label: 'Fallback' })).status).toBe(200);
+    const addedOnFallback = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    expect(addedOnFallback.status).toBe(201);
+    const fallbackAccount = (addedOnFallback.body.account as { id: string }).id;
+    const fallbackRoute = '/' + fallbackAccount + '/remove';
+    const fallbackPrepare = await f.request('POST', fallbackRoute, {});
+    const fallbackToken = (fallbackPrepare.body.confirmation as { token: string }).token;
+    const fallbackCommit = await f.request('POST', fallbackRoute, {
+      confirmationToken: fallbackToken,
+    });
+    expect(fallbackCommit.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
     expect(f.rustService?.registeredWrites).toBe(writes);
   }
 );
