@@ -491,7 +491,6 @@ impl OwnedStore {
     }
 
     /// Replace an owner-only cache, refusing hard links and loose existing modes.
-    #[cfg(unix)]
     pub fn write_private_cache(&self, bytes: &[u8]) -> Result<(), Failure> {
         let parent = self
             .path
@@ -514,7 +513,6 @@ impl OwnedStore {
     }
 
     /// Clear a single owner-only cache while holding its writer lease.
-    #[cfg(unix)]
     pub fn clear_private_cache(&self) -> Result<(), Failure> {
         let parent = self
             .path
@@ -540,24 +538,22 @@ impl OwnedStore {
 
     /// Keep at most `count` validated cache records, including the file just written.
     /// The writer holds its folder lease. Unknown or changed entries are left in place.
-    #[cfg(unix)]
     pub fn prune_private_cache(
         &self,
         count: usize,
         matches_name: impl Fn(&str) -> bool,
         matches_record: impl Fn(&str, &[u8]) -> bool,
     ) {
-        use std::os::unix::fs::MetadataExt;
         let Some(parent) = self.path.parent() else {
             return;
         };
         let StoreLock::Kernel { _file: lock } = &self._lock else {
             return;
         };
-        let Ok(folder) = lock.metadata() else {
+        let Some(folder) = lease_folder(lock, parent) else {
             return;
         };
-        let same = |a: &fs::Metadata, b: &fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+        let same = |a: &fs::Metadata, b: &fs::Metadata| same_file(a, b);
         let unchanged = || {
             fs::symlink_metadata(parent)
                 .is_ok_and(|meta| private_cache_metadata(&meta, true) && same(&meta, &folder))
@@ -870,6 +866,47 @@ fn private_cache_metadata(meta: &fs::Metadata, directory: bool) -> bool {
         }
 }
 
+/// Windows reports synthetic permission bits; the profile ACL owns privacy there, exactly as
+/// the TS cache reader treats it. Rust's stable metadata exposes no link count there, so the
+/// hard-link refusal is a Linux guarantee (the TS reader sees Node's `nlink` on both).
+#[cfg(not(unix))]
+fn private_cache_metadata(meta: &fs::Metadata, directory: bool) -> bool {
+    !meta.file_type().is_symlink()
+        && if directory {
+            meta.is_dir()
+        } else {
+            meta.is_file()
+        }
+}
+
+/// The folder the writer leased: its own handle on Unix, its recorded identity on Windows.
+#[cfg(unix)]
+fn lease_folder(lock: &File, _parent: &Path) -> Option<fs::Metadata> {
+    lock.metadata().ok()
+}
+
+#[cfg(not(unix))]
+fn lease_folder(_lock: &File, parent: &Path) -> Option<fs::Metadata> {
+    fs::symlink_metadata(parent).ok()
+}
+
+/// Two observations of one file: dev/ino on Unix; on Windows Rust's stable metadata exposes
+/// no file id, so the creation stamp, size and last-write stamp together stand in. Any
+/// difference refuses the deletion, which is the fail-safe direction.
+#[cfg(unix)]
+fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.creation_time() == b.creation_time()
+        && a.file_size() == b.file_size()
+        && a.last_write_time() == b.last_write_time()
+}
+
 fn reject_special(path: &Path, missing_ok: bool) -> Result<(), Failure> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(()),
@@ -918,8 +955,13 @@ fn open_folder(path: &Path) -> Result<File, Failure> {
     }
     #[cfg(not(unix))]
     {
-        let _ = path;
-        Err(Failure::new(Cause::Refused, "folder leases need Unix"))
+        // Windows has no lockable folder handle: the lease is one lock file inside the folder,
+        // so every Rust writer of that folder still meets the same exclusion.
+        let meta = fs::symlink_metadata(path)?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(Failure::new(Cause::Refused, "not a folder"));
+        }
+        open_lock(&path.join(".writer.lock"))
     }
 }
 

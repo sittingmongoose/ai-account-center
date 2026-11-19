@@ -402,6 +402,8 @@ impl Producer {
         }
         let platform = if cfg!(target_os = "macos") {
             "mac"
+        } else if cfg!(windows) {
+            "windows"
         } else {
             "ubuntu"
         };
@@ -855,15 +857,23 @@ mod tests {
     use aac_renewal::renewal::CodexProfileRenewalProfileStatus;
     use aac_renewal::{CodexRenewalReason, CodexRenewalState};
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    fn set_mode(path: &Path, mode: u32) {
+        #[cfg(unix)]
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("fixture mode");
+        #[cfg(not(unix))]
+        let _ = (path, mode);
+    }
 
     fn private_bytes(file: &Path, bytes: &[u8]) {
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent).expect("fixture folder");
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).expect("folder mode");
+            set_mode(parent, 0o700);
         }
         fs::write(file, bytes).expect("fixture file");
-        fs::set_permissions(file, fs::Permissions::from_mode(0o600)).expect("file mode");
+        set_mode(file, 0o600);
     }
 
     fn state(word: &str) -> CodexRenewalState {

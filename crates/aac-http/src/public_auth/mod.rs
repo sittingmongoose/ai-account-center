@@ -6,10 +6,10 @@ mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
-#[cfg(unix)]
 mod native_owners;
 #[cfg(unix)]
 mod native_reads;
+mod native_settings;
 mod policy;
 mod request_log;
 mod reset_routes;
@@ -198,7 +198,7 @@ impl DashboardAuth {
             false,
             None,
             None,
-            #[cfg(unix)]
+            None,
             None,
         )
     }
@@ -216,32 +216,24 @@ impl DashboardAuth {
         partial_api: bool,
         backend: Option<compose::Backend>,
         cut_root: Option<PathBuf>,
-        #[cfg(unix)] native_owners: Option<native_owners::NativeOwners>,
+        native_owners: Option<native_owners::NativeOwners>,
+        native_settings: Option<native_settings::Settings>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
-            #[cfg(unix)]
-            if let Some(root) = cut_root
-                && matches!(*request.method(), Method::GET | Method::HEAD)
-                && matches!(
-                    request.uri().path(),
-                    "/api/accounts/settings" | "/api/accounts/settings/"
-                )
+            if let Some(settings) = &native_settings
+                && let Some(family) =
+                    native_settings::route(request.method(), request.uri().path())
             {
-                let session = request
-                    .extensions()
-                    .get::<DashboardAccess>()
-                    .is_some_and(|access| {
-                        matches!(access.principal, DashboardPrincipal::Browser { .. })
-                    });
-                let head = request.method() == Method::HEAD;
-                return native_reads::settings(root, session, request.uri().clone(), head).await;
+                let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
+                    return service_error();
+                };
+                return settings.handle(&access, family, request).await;
             }
-            #[cfg(unix)]
-            if let Some(native) = native_owners
+            if let Some(native) = &native_owners
                 && native_owners::NativeOwners::owns(
                     request.method(),
                     request.uri().path().trim_end_matches('/'),
@@ -368,7 +360,6 @@ pub(crate) async fn run_public_at(
     let interactive = std::io::stdout().is_terminal()
         || (!cut && std::env::var("AAC_RUST_COMPOSE_STDOUT_TTY").as_deref() == Ok("1"));
     let auth = DashboardAuth::open_public(root.clone(), interactive)?;
-    #[cfg(unix)]
     let groups = if cut {
         let config = auth
             .0
@@ -386,10 +377,7 @@ pub(crate) async fn run_public_at(
         sidecar::Sidecar::start(
             &root,
             address,
-            #[cfg(unix)]
             groups.is_some_and(|groups| groups.collection),
-            #[cfg(not(unix))]
-            false,
         )
         .await?
     } else {
@@ -407,7 +395,6 @@ pub(crate) async fn run_public_at(
         )
     };
     let hub = HubCache::default();
-    #[cfg(unix)]
     let (native, native_jobs) = if let Some(groups) = groups {
         let (native, jobs) = native_owners::NativeOwners::start(
             root.clone(),
@@ -423,7 +410,7 @@ pub(crate) async fn run_public_at(
     } else {
         (None, None)
     };
-    #[cfg(unix)]
+    let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let composed = backend.is_some();
     let mut api = Router::new();
@@ -444,8 +431,8 @@ pub(crate) async fn run_public_at(
         !composed,
         backend,
         cut.then(|| root.clone()),
-        #[cfg(unix)]
         native,
+        native_settings,
     );
     let router = auth
         .protect(reset_routes::mount(
@@ -461,7 +448,6 @@ pub(crate) async fn run_public_at(
             },
             request_log::record,
         ));
-    #[cfg(unix)]
     let router = if cut {
         router.layer(middleware::from_fn(
             |request: Request, next: Next| async move {
@@ -540,6 +526,8 @@ pub(crate) async fn run_public_at(
     if let Some(jobs) = native_jobs {
         jobs.stop().await;
     }
+    #[cfg(not(unix))]
+    let _ = native_jobs;
     if let Some(worker) = worker {
         worker.stop().await;
     }

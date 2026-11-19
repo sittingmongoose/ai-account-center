@@ -8,11 +8,14 @@ use crate::{
         producer::{CompanionInputs, Producer},
     },
     agent_transport::Agents,
-    app_update_routes::{BoundJobs, LaneHJobs, Operation},
-    app_updates::AppUpdates,
     collection::Collection,
     limits::Limits,
     table::Pool,
+};
+#[cfg(unix)]
+use crate::{
+    app_update_routes::{BoundJobs, LaneHJobs, Operation},
+    app_updates::AppUpdates,
 };
 use aac_files::registry::{self, Owners, Role};
 use aac_providers::ProviderId;
@@ -74,6 +77,7 @@ impl Groups {
 #[derive(Clone)]
 pub(super) struct NativeOwners {
     usage: Option<Arc<Usage>>,
+    #[cfg(unix)]
     apps: Option<Arc<BoundJobs>>,
     writes: bool,
     limits: Limits,
@@ -126,6 +130,7 @@ impl NativeOwners {
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
         let agents = Arc::new(Agents::with_default(root.clone(), true));
+        #[cfg(unix)]
         let apps = groups.app_updates.then(|| {
             #[cfg(feature = "parity-fixtures")]
             if std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
@@ -224,6 +229,7 @@ impl NativeOwners {
         Ok((
             Self {
                 usage,
+                #[cfg(unix)]
                 apps,
                 writes: groups.writes,
                 limits: Limits::new(),
@@ -242,6 +248,7 @@ impl NativeOwners {
         matches!(*method, Method::GET | Method::HEAD) && path == "/api/accounts/dashboard"
     }
 
+    #[cfg(unix)]
     fn app_operation(method: &Method, path: &str) -> Option<Operation> {
         let method = if method == Method::HEAD {
             &Method::GET
@@ -249,6 +256,11 @@ impl NativeOwners {
             method
         };
         Operation::from_route(method, path)
+    }
+
+    #[cfg(not(unix))]
+    fn app_operation(_method: &Method, _path: &str) -> Option<()> {
+        None
     }
 
     pub(super) async fn handle(&self, request: Request) -> Reply {
@@ -268,7 +280,13 @@ impl NativeOwners {
             return no_store(reply);
         }
         if let Some(operation) = Self::app_operation(request.method(), path) {
+            #[cfg(unix)]
             return no_store(self.app_update(&access, operation, request).await);
+            #[cfg(not(unix))]
+            return {
+                let _ = operation;
+                super::plain(404, "API endpoint was not found.")
+            };
         }
         super::plain(404, "API endpoint was not found.")
     }
@@ -295,6 +313,7 @@ impl NativeOwners {
             .unwrap_or_else(|_| unavailable())
     }
 
+    #[cfg(unix)]
     async fn app_update(&self, access: &DashboardAccess, op: Operation, request: Request) -> Reply {
         if !matches!(access.principal, DashboardPrincipal::Browser { .. }) {
             return super::plain(401, "Authentication required");
@@ -387,6 +406,7 @@ impl Usage {
                     let owner = self.clone();
                     async move {
                         owner.publish();
+                        #[cfg(unix)]
                         if owner.store {
                             super::native_reads::publish_usage(
                                 owner.root.clone(),
@@ -396,6 +416,8 @@ impl Usage {
                             )
                             .await;
                         }
+                        #[cfg(not(unix))]
+                        let _ = &cache;
                     }
                 },
             )

@@ -509,14 +509,24 @@ mod tests {
 
     #[test]
     fn muse_grant_is_read_for_each_attempt_and_removal_rejects_the_peer() {
-        use std::{fs, os::unix::fs::PermissionsExt};
+        use std::fs;
+        fn private(path: &std::path::Path) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+                    .expect("private fixture");
+            }
+            #[cfg(not(unix))]
+            let _ = path;
+        }
         let dir = tempfile::tempdir().expect("fixture root");
         let root = dir.path();
-        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).expect("private fixture");
+        private(root);
         let target = "b".repeat(64);
         let folder = root.join("account-usage-failover");
         fs::create_dir(&folder).expect("cache folder");
-        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).expect("private cache");
+        private(&folder);
         let file = folder.join(format!("{target}.muse-peers.json"));
         let primary = json!({"kind":"muse-team","key":"b".repeat(64)});
         let peer = json!({"kind":"muse-native-credential","key":"c".repeat(64)});
@@ -537,7 +547,7 @@ mod tests {
         fs::write(&file, json!({
             "version":1,"key":target,"identity":primary,"peers":[{"host":"windows","identity":peer}]
         }).to_string()).expect("grant fixture");
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("private grant");
+        private(&file);
         assert!(linked(
             root, &source, &target, &primary, &candidate, "windows"
         ));

@@ -173,8 +173,17 @@ mod tests {
     use aac_files::registry::Owners;
     use serde_json::json;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+
+    fn set_mode(path: &Path, mode: u32) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("fixture mode");
+        }
+        #[cfg(not(unix))]
+        let _ = (path, mode);
+    }
 
     fn registry(root: &Path, accounts: Value) {
         let file = root.join("account-usage-accounts.json");
@@ -183,7 +192,7 @@ mod tests {
             serde_json::to_vec(&json!({"version":2,"accounts":accounts})).expect("registry"),
         )
         .expect("write registry");
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("registry mode");
+        set_mode(&file, 0o600);
     }
 
     fn row(id: &str, provider: &str) -> Value {
@@ -286,7 +295,7 @@ mod tests {
     async fn a_legacy_manifest_resolves_only_its_valid_defaults() {
         let dir = tempfile::tempdir().expect("fixture root");
         let root = fs::canonicalize(dir.path()).expect("canonical root");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("root mode");
+        set_mode(&root, 0o700);
         let producer = Producer::new(
             root.clone(),
             Owners::defaults(aac_files::registry::rows().expect("bundled private files")),
@@ -309,11 +318,7 @@ mod tests {
             br#"{"version":1,"sources":[{"provider":"bogus","platform":"ubuntu"}]}"#,
         )
         .expect("manifest");
-        fs::set_permissions(
-            root.join("account-usage-sources.json"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .expect("manifest mode");
+        set_mode(&root.join("account-usage-sources.json"), 0o600);
         assert!(producer.resolve_recheck("cursor:usage").await.is_none());
     }
 
@@ -324,7 +329,7 @@ mod tests {
     async fn a_recheck_replaces_one_row_only_while_its_binding_holds() {
         let dir = tempfile::tempdir().expect("fixture root");
         let root = fs::canonicalize(dir.path()).expect("canonical root");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("root mode");
+        set_mode(&root, 0o700);
         registry(
             &root,
             json!([

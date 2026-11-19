@@ -203,6 +203,18 @@ fn word(text: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// The app-update route surface: it stays with the private Unix front door until Windows'
+/// worker routes are retired, so only Unix validates the row.
+#[cfg(unix)]
+fn app_update_route(method: &axum::http::Method, path: &str) -> Option<crate::app_update_routes::Operation> {
+    crate::app_update_routes::Operation::from_route(method, path)
+}
+
+#[cfg(not(unix))]
+fn app_update_route(_method: &axum::http::Method, _path: &str) -> Option<()> {
+    None
+}
+
 /// Parse and check the table: every `rust` row has all seven keys, a known handler, known
 /// roles, a word group and a budget of at most 10 s; the one `ts-fallback` wildcard row has
 /// exactly its three keys and comes last.
@@ -329,8 +341,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (handler == Handler::AppUpdates
                 && (row.group != "app-updates"
                     || roles != [Role::Admin]
-                    || crate::app_update_routes::Operation::from_route(&method, &row.path)
-                        .is_none()))
+                    || app_update_route(&method, &row.path).is_none()))
             || (handler == Handler::Approvals
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/account-confirmations"))

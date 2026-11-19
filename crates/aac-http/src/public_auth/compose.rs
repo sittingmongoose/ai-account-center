@@ -18,18 +18,6 @@ const ACCESS: &str = "x-aac-compose-access";
 // Only the cut uses this list. The composition fixture remains a reference for
 // the complete legacy router, including its handling of unknown methods.
 const CUT_ROUTES: &[(&str, &[&str])] = &[
-    #[cfg(not(unix))]
-    ("/api/accounts/dashboard", &["GET"]),
-    (
-        "/api/accounts/settings",
-        if cfg!(unix) {
-            &["PUT"]
-        } else {
-            &["GET", "PUT"]
-        },
-    ),
-    ("/api/accounts/preferences", &["GET", "PUT", "PATCH"]),
-    ("/api/accounts/visibility", &["GET", "PUT", "PATCH"]),
     ("/api/accounts/analytics", &["GET"]),
     ("/api/accounts/analytics/capture", &["GET", "PUT"]),
     ("/api/accounts/registry", &["GET"]),
@@ -44,8 +32,6 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/:id", &["PATCH"]),
     ("/api/accounts/:id/key", &["PUT"]),
     ("/api/accounts/:id/open", &["POST"]),
-    #[cfg(not(unix))]
-    ("/api/accounts/:id/recheck", &["POST"]),
     ("/api/accounts/:id/remove", &["POST"]),
     ("/api/accounts/:id/signin-again", &["POST"]),
     ("/api/antigravity/profiles", &["GET"]),
@@ -112,14 +98,23 @@ mod tests {
 
     #[test]
     fn cut_forwards_only_the_adapter_contract() {
-        assert_eq!(
-            cut_route(&Method::HEAD, "/api/accounts/dashboard"),
-            cfg!(not(unix))
-        );
-        assert_eq!(
-            cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"),
-            cfg!(not(unix))
-        );
+        // The settings group is native on both platforms; the Windows-only worker groups keep
+        // forwarding there and are already native on Unix.
+        assert!(!cut_route(&Method::GET, "/api/accounts/dashboard"));
+        assert!(!cut_route(&Method::HEAD, "/api/accounts/dashboard"));
+        assert!(!cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"));
+        assert!(!cut_route(
+            &Method::POST,
+            "/api/accounts/example/recheck"
+        ));
+        assert!(!cut_route(&Method::GET, "/api/accounts/settings"));
+        assert!(cut_route(&Method::PUT, "/api/accounts/settings"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/preferences"));
+        assert!(!cut_route(&Method::PUT, "/api/accounts/preferences"));
+        assert!(!cut_route(&Method::PATCH, "/api/accounts/preferences"));
+        assert!(!cut_route(&Method::GET, "/api/accounts/visibility"));
+        assert!(!cut_route(&Method::PUT, "/api/accounts/visibility"));
+        assert!(!cut_route(&Method::PATCH, "/api/accounts/visibility"));
         assert_eq!(
             cut_route(&Method::GET, "/api/app-updates/status"),
             cfg!(not(unix))
@@ -132,8 +127,7 @@ mod tests {
             cut_route(&Method::POST, "/api/app-updates/cancel"),
             cfg!(not(unix))
         );
-        assert!(cut_route(&Method::PATCH, "/api/accounts/preferences"));
-        assert!(!cut_route(
+        assert!(cut_route(
             &Method::POST,
             "/api/accounts/example/reset-claims/prepare"
         ));
@@ -142,7 +136,6 @@ mod tests {
             "/api/status/files/example/nested/file.md"
         ));
         assert!(!cut_route(&Method::GET, "/api/status/files/example"));
-        assert!(!cut_route(&Method::POST, "/api/accounts/dashboard"));
         assert!(!cut_route(&Method::POST, "/api/accounts//recheck"));
         assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));
         assert!(!cut_route(&Method::GET, "/api/auth/session"));

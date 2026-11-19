@@ -8,7 +8,9 @@ use serde_json::{Map, Value, json};
 
 type Object = Map<String, Value>;
 use aac_files::read::{Leaf, Mode, Read};
-use std::{fs, os::unix::fs::MetadataExt, path::Path};
+#[cfg(unix)]
+use std::fs;
+use std::path::Path;
 // The dashboard providers, usage-log tools, field-mapping keys and the frozen legacy storage
 // hosts are the shared tables' (config/tables, `aac-providers`), which TS reads too.
 use aac_providers::{LEGACY_STORAGE_HOSTS, USAGE_LOG_FIELD_MAPPING, is_dashboard_provider};
@@ -80,6 +82,9 @@ pub(crate) const ADMITTED_TIME_ZONES: &[&str] = &[
 /// Whether the private-store folder logs its group-writable line, or refuses (`None`).
 /// The boot root is canonical, so it is never the symlinked-folder case (the bridge sends a
 /// symlinked or other folder to TS before forwarding).
+/// Windows reports synthetic permission bits and owns the folder by its profile ACL, so the
+/// TS reader treats every folder as private there; so does this one.
+#[cfg(unix)]
 pub(crate) fn store_folder(root: &Path) -> Option<Vec<Value>> {
     let meta = fs::symlink_metadata(root).ok()?;
     if !meta.is_dir() || meta.file_type().is_symlink() || meta.mode() & 0o002 != 0 {
@@ -90,6 +95,11 @@ pub(crate) fn store_folder(root: &Path) -> Option<Vec<Value>> {
     } else {
         Vec::new()
     })
+}
+
+#[cfg(not(unix))]
+pub(crate) fn store_folder(_root: &Path) -> Option<Vec<Value>> {
+    Some(Vec::new())
 }
 
 fn record(value: &Value) -> Option<&Object> {
@@ -241,7 +251,7 @@ pub(crate) fn machine_ids_in(table: &str) -> Option<Vec<String>> {
 }
 
 /// The computers an extra usage-log folder can sit on, and each one's OS.
-fn hosts() -> Option<Vec<(String, String)>> {
+pub(crate) fn usage_hosts() -> Option<Vec<(String, String)>> {
     let table: Value = serde_json::from_str(COMPUTERS).ok()?;
     table
         .as_object()?
@@ -255,7 +265,7 @@ fn hosts() -> Option<Vec<(String, String)>> {
 
 /// `isAccountAnalyticsTimeZone`: `Some(false)` where TS decides without zone data, `None`
 /// where only the engine's zone data could decide.
-fn time_zone(value: Option<&Value>) -> Option<bool> {
+pub(crate) fn time_zone(value: Option<&Value>) -> Option<bool> {
     let Some(Value::String(zone)) = value else {
         return Some(false);
     };
@@ -279,7 +289,7 @@ fn time_zone(value: Option<&Value>) -> Option<bool> {
     ADMITTED_TIME_ZONES.contains(&zone.as_str()).then_some(true)
 }
 
-fn source_id(id: &str) -> bool {
+pub(crate) fn public_source_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 32
@@ -299,7 +309,11 @@ fn field_path(path: &str) -> bool {
 }
 
 /// `isUsageLogSource(value, allowRemoteJsonl)`.
-fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, String)]) -> bool {
+pub(crate) fn usage_log_source(
+    value: &Value,
+    allow_remote_jsonl: bool,
+    hosts: &[(String, String)],
+) -> bool {
     let Some(source) = record(value) else {
         return false;
     };
@@ -331,7 +345,7 @@ fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, S
             && b[1] == b':'
             && (b[2] == b'\\' || b[2] == b'/')
     };
-    if !source_id(id)
+    if !public_source_id(id)
         || !aac_providers::is_usage_log_tool(tool)
         || length == 0
         || length > 1024
@@ -369,7 +383,7 @@ fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, S
 }
 
 /// `isDashboardPreferences`; `None` when the zone needs the engine's zone data.
-fn preferences_valid(prefs: &Object, hosts: &[(String, String)]) -> Option<bool> {
+pub(crate) fn preferences_valid(prefs: &Object, hosts: &[(String, String)]) -> Option<bool> {
     let keys = ["timeZone", "snapshotCleanup", "usageLogSources"];
     if !prefs.keys().all(|key| keys.contains(&key.as_str())) {
         return Some(false);
@@ -405,7 +419,7 @@ fn preferences_valid(prefs: &Object, hosts: &[(String, String)]) -> Option<bool>
     Some(true)
 }
 
-fn defaults() -> Object {
+pub(crate) fn defaults() -> Object {
     let mut defaults = Object::new();
     defaults.insert("timeZone".into(), json!("America/New_York"));
     defaults.insert("snapshotCleanup".into(), json!({ "auto": true }));
@@ -463,7 +477,7 @@ fn primary(root: &Path, hosts: &[(String, String)]) -> Option<Object> {
 
 /// Recompose the persisted reply for a write already validated by the TS route.
 pub(crate) fn prepared_preferences(primary: Value, companion: &mut Vec<Value>) -> Option<Value> {
-    let hosts = hosts()?;
+    let hosts = usage_hosts()?;
     let mut proof = primary.as_object()?.clone();
     let zone = proof.get("timeZone")?.as_str()?;
     if zone.is_empty() || zone.len() > 128 {
@@ -505,7 +519,7 @@ pub(crate) fn preferences(root: &Path) -> Option<Value> {
     if !matches!(aac_files::read::read(&transaction, &policy), Read::Absent) {
         return None;
     }
-    let hosts = hosts()?;
+    let hosts = usage_hosts()?;
     let primary = primary(root, &hosts)?;
     // TS keeps the primary for an absent, symlinked or oversized companion; a non-file or an
     // unexpected open error is left to the TS reader.

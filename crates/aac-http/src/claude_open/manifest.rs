@@ -6,6 +6,7 @@ use super::js::utf16_len;
 use serde_json::{Map, Value};
 use std::fs::{self, OpenOptions};
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
@@ -369,6 +370,9 @@ enum PrivateRead {
 
 /// `checkStoreFolder`: others-writable is unsafe; group-writable and symlink folders are
 /// accepted (the one-time warning belongs to the TS reader's log until the cut).
+/// Windows reports synthetic permission bits and owns the folder by its profile ACL, as the
+/// TS `checkStoreFolder` treats it.
+#[cfg(unix)]
 fn store_folder_ok(directory: &Path) -> bool {
     let meta = match fs::symlink_metadata(directory) {
         Ok(meta) => meta,
@@ -383,6 +387,11 @@ fn store_folder_ok(directory: &Path) -> bool {
         meta
     };
     meta.is_dir() && meta.permissions().mode() & 0o002 == 0
+}
+
+#[cfg(not(unix))]
+fn store_folder_ok(directory: &Path) -> bool {
+    matches!(fs::symlink_metadata(directory), Ok(meta) if meta.is_dir())
 }
 
 /// `readPrivateJsonFile` with the store's caps and privacy rules.
@@ -403,11 +412,12 @@ fn read_private_json(file: &Path, max_bytes: u64) -> PrivateRead {
     if link.file_type().is_symlink() || !link.is_file() {
         return PrivateRead::Invalid;
     }
-    let mut handle = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(file)
-    {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    // A symlink or FIFO swapped in after the lstat is refused below; Windows has no such flags.
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let mut handle = match options.open(file) {
         Ok(handle) => handle,
         Err(error) => {
             return if error.kind() == std::io::ErrorKind::NotFound {
@@ -421,7 +431,7 @@ fn read_private_json(file: &Path, max_bytes: u64) -> PrivateRead {
         Ok(stat) => stat,
         Err(_) => return PrivateRead::Invalid,
     };
-    if !stat.is_file() || stat.len() > max_bytes || stat.permissions().mode() & 0o077 != 0 {
+    if !stat.is_file() || stat.len() > max_bytes || !private_mode(&stat) {
         return PrivateRead::Invalid;
     }
     let mut buffer = vec![0u8; max_bytes as usize + 1];
@@ -437,6 +447,17 @@ fn read_private_json(file: &Path, max_bytes: u64) -> PrivateRead {
         Some(value) => PrivateRead::Ok(value),
         None => PrivateRead::Invalid,
     }
+}
+
+/// The TS `isPrivate` mode rule: no group or other bits on Unix; the Windows ACL decides.
+#[cfg(unix)]
+fn private_mode(meta: &fs::Metadata) -> bool {
+    meta.permissions().mode() & 0o077 == 0
+}
+
+#[cfg(not(unix))]
+fn private_mode(_meta: &fs::Metadata) -> bool {
+    true
 }
 
 /// `readPendingProfiles`: absent is empty; an unreadable or malformed store is an error.

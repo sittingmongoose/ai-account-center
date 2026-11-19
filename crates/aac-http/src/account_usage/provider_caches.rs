@@ -5,7 +5,20 @@ use aac_files::{
 };
 use aac_views::decline::Decline;
 use serde_json::{Value, json};
-use std::{os::unix::fs::MetadataExt, path::Path};
+use std::path::Path;
+
+/// The TS reader's `nlink === 1`. Rust's stable Windows metadata exposes no link count, so the
+/// single-link refusal stays a Linux guarantee, as in `aac-renewal`'s file identity.
+#[cfg(unix)]
+fn one_link(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn one_link(_meta: &std::fs::Metadata) -> bool {
+    true
+}
 
 pub(crate) const WALLET_ACCOUNT: &str = "opencode-wallet-account";
 pub(crate) const CURSOR_QUOTA: &str = "cursor-quota-observation";
@@ -30,7 +43,7 @@ pub(super) fn load(
         .ancestors(Ancestors::NoLinkBelow(root));
     match aac_files::read::read(&file, &policy) {
         Read::Absent => Ok(None),
-        Read::Bytes(bytes, stat) if !single_link || stat.nlink() == 1 => {
+        Read::Bytes(bytes, stat) if !single_link || one_link(&stat) => {
             serde_json::from_slice(&bytes)
                 .map(Some)
                 .map_err(|_| Decline::Shape)
