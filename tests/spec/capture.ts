@@ -26,6 +26,7 @@ Object.assign(process.env, {
   CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
   CCS_SESSION_SECRET: 'fixture-session-secret-for-contract-only',
   AAC_NO_LOCAL_RUST_BUILD: '1',
+  AAC_RUST_SERVICE_BINARY: rustBinary,
 });
 spyOn(os, 'homedir').mockReturnValue(home);
 // A few legacy readers use process.env.HOME directly. Reject private paths
@@ -87,6 +88,7 @@ assert.throws(() => awaitFsRead('/home/fixture-forbidden/.codex/auth.json'), /Ou
 // Fail closed at process boundaries: helpers, SSH and provider programs cannot run.
 const cp = await import('node:child_process');
 const realSpawn = cp.spawn.bind(cp);
+const realSpawnSync = cp.spawnSync.bind(cp);
 const fixtureSpawn = (...args: any[]) => {
   if (
     rustMode !== 'off' &&
@@ -97,6 +99,40 @@ const fixtureSpawn = (...args: any[]) => {
     return realSpawn(...(args as Parameters<typeof realSpawn>));
   throw new Error('Fixture process boundary');
 };
+const rejectSpawn = () => {
+  throw new Error('Fixture process boundary');
+};
+const fixtureSpawnSync = (
+  command: string,
+  args: string[],
+  options: Parameters<typeof cp.spawnSync>[2]
+) => {
+  // These commands can only flock the inherited descriptor. They cannot open new paths.
+  const stdio = options?.stdio;
+  if (
+    Array.isArray(stdio) &&
+    stdio.length === 3 &&
+    typeof stdio[0] === 'number' &&
+    stdio[1] === 'ignore' &&
+    stdio[2] === 'ignore' &&
+    Array.isArray(args) &&
+    ((command === rustBinary && args.length === 1 && args[0] === '--file-lease') ||
+      (process.platform === 'linux' &&
+        ['/usr/bin/flock', '/bin/flock'].includes(command) &&
+        args.length === 2 &&
+        args[0] === '-n' &&
+        args[1] === '0'))
+  ) {
+    if (process.platform === 'linux') {
+      const fdPath = fs.readlinkSync('/proc/self/fd/' + stdio[0]);
+      assert.ok(fdPath.startsWith(ccs + '/'), 'lease belongs to the fixture');
+    }
+    return realSpawnSync(command, args, options);
+  }
+  return rejectSpawn();
+};
+const allowed = { spawn: fixtureSpawn, spawnSync: fixtureSpawnSync };
+const blockedProcesses = { ...cp };
 for (const name of [
   'spawn',
   'spawnSync',
@@ -105,22 +141,11 @@ for (const name of [
   'execFile',
   'execFileSync',
   'fork',
-] as const)
-  spyOn(cp, name).mockImplementation(
-    (name === 'spawn'
-      ? fixtureSpawn
-      : () => {
-          throw new Error('Fixture process boundary');
-        }) as never
-  );
-const blockedProcesses = { ...cp };
-for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'])
-  (blockedProcesses as any)[name] =
-    name === 'spawn'
-      ? fixtureSpawn
-      : () => {
-          throw new Error('Fixture process boundary');
-        };
+] as const) {
+  const handler = name === 'spawn' || name === 'spawnSync' ? allowed[name] : rejectSpawn;
+  spyOn(cp, name).mockImplementation(handler as never);
+  (blockedProcesses as any)[name] = handler;
+}
 for (const module of ['child_process', 'node:child_process'])
   mock.module(module, () => ({ ...blockedProcesses, default: blockedProcesses }));
 const tls = await import('node:https');

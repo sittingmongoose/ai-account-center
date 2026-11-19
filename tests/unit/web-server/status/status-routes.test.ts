@@ -8,6 +8,7 @@ import { AgentReportsReader } from '../../../../src/web-server/status/agent-repo
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
 import { StatusService } from '../../../../src/web-server/status/status-service';
 import { PmMailRegistryReader } from '../../../../src/web-server/status/status-collectors';
+import { PinnedThreadsCollector } from '../../../../src/web-server/status/pinned-threads';
 import { openCardFile, parseByteRange } from '../../../../src/web-server/status/status-files';
 import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
 import { RustService } from '../../../../src/web-server/rust-service';
@@ -57,11 +58,18 @@ async function start(options: { ringOk?: boolean } = {}) {
         : { ok: true, detail: 'Rang.' };
     },
   });
+  const run = async () => ({ code: null, stdout: '', timedOut: false, missing: true });
   const service = new StatusService({
     reader,
     answers,
+    pinned: new PinnedThreadsCollector({
+      dbPath: null,
+      run,
+      reportsRoot: () => root,
+      readersCheck: null,
+    }),
     registryReader: new PmMailRegistryReader(() => path.join(root, 'none')),
-    run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+    run,
     readLocalMachine: async () => {
       throw new Error('not in tests');
     },
