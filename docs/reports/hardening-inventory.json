@@ -786,12 +786,12 @@
           "loc": 993
         },
         {
-          "file": "src/web-server/services/account-analytics-service.ts",
-          "loc": 887
+          "file": "src/web-server/status/status-view.ts",
+          "loc": 888
         },
         {
-          "file": "src/web-server/status/status-view.ts",
-          "loc": 871
+          "file": "src/web-server/services/account-analytics-service.ts",
+          "loc": 887
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",

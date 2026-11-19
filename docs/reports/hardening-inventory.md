@@ -93,8 +93,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/usage-failover-service.ts` | 1084 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/account-dashboard-service.ts` | 993 |
+| `src/web-server/status/status-view.ts` | 888 |
 | `src/web-server/services/account-analytics-service.ts` | 887 |
-| `src/web-server/status/status-view.ts` | 871 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
 | `src/web-server/services/app-update-service.ts` | 807 |
 

@@ -3693,6 +3693,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/status/card-section-contract.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/status/readers-check.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -3742,7 +3748,8 @@
       "file": "tests/unit/web-server/status/status-end-to-end.test.ts",
       "kind": "HTTP",
       "evidence": [
-        "HTTP"
+        "HTTP",
+        "helper"
       ]
     },
     {
