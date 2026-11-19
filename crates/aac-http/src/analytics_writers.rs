@@ -33,8 +33,6 @@ const DASHBOARD: &str = "analytics-dashboard";
 /// The fed activity plan: `{computers: [{platform, sshHost?, kinds, fingerprints?, extraRoots?,
 /// experimentRoots?}], windowDays?}`.
 const PLAN: &str = "analytics-plan";
-/// The fed pricing facts: `{facts: {"model\u0000provider": {rates, source}}}`.
-const PRICING: &str = "analytics-pricing";
 /// The job's tick: the activity background's every-15s cadence; each writer checks its own deadline.
 const TICK_MS: u64 = 15_000;
 /// The first pass waits for the front door to feed its inputs.
@@ -63,53 +61,41 @@ struct WriterState {
     last_quota_ms: i64,
 }
 
-/// The fed pricing facts as the collection aggregation's [`Pricing`] seam.
-struct FedPricing {
-    facts: HashMap<String, PricingResolution>,
+/// The collection aggregation's [`Pricing`] seam over the G15 Rust resolver: the same
+/// `getModelPricingWithSource` lookup the TS collector uses, reading the registry cache the
+/// scheduled `ModelsDevRefresh` keeps fresh. Interior mutability carries the resolver's memo.
+struct ResolverPricing {
+    resolver: Mutex<aac_views::pricing::Resolver>,
 }
 
-impl Pricing for FedPricing {
+impl ResolverPricing {
+    fn new(ccs_dir: &Path) -> Self {
+        ResolverPricing {
+            resolver: Mutex::new(aac_views::pricing::Resolver::new(ccs_dir)),
+        }
+    }
+}
+
+impl Pricing for ResolverPricing {
     fn resolve(&self, model: &str, provider: Option<&str>) -> PricingResolution {
-        let key = format!("{model}\u{0}{}", provider.unwrap_or(""));
-        self.facts.get(&key).cloned().unwrap_or(PricingResolution {
+        let mut resolver = self.resolver.lock().unwrap_or_else(|p| p.into_inner());
+        let resolution = resolver.get_model_pricing_with_source(model, provider, None);
+        let rates = resolution.pricing.rates;
+        PricingResolution {
             rates: Rates {
-                input: 0.0,
-                output: 0.0,
-                cache_creation: 0.0,
-                cache_read: 0.0,
+                input: rates.input_per_million,
+                output: rates.output_per_million,
+                cache_creation: rates.cache_creation_per_million,
+                cache_read: rates.cache_read_per_million,
             },
-            source: "fallback".into(),
-        })
+            source: resolution.source.as_str().to_string(),
+        }
     }
 }
 
 fn fed_json(feeds: &Feeds, source: &str) -> Option<Value> {
     let generation = feeds.latest(source)?;
     serde_json::from_str(generation.data.get()).ok()
-}
-
-fn fed_pricing(feeds: &Feeds) -> FedPricing {
-    let mut facts = HashMap::new();
-    if let Some(doc) = fed_json(feeds, PRICING) {
-        if let Some(map) = doc["facts"].as_object() {
-            for (key, value) in map {
-                let rates = &value["rates"];
-                facts.insert(
-                    key.clone(),
-                    PricingResolution {
-                        rates: Rates {
-                            input: rates["input"].as_f64().unwrap_or(0.0),
-                            output: rates["output"].as_f64().unwrap_or(0.0),
-                            cache_creation: rates["cacheCreation"].as_f64().unwrap_or(0.0),
-                            cache_read: rates["cacheRead"].as_f64().unwrap_or(0.0),
-                        },
-                        source: value["source"].as_str().unwrap_or("fallback").to_string(),
-                    },
-                );
-            }
-        }
-    }
-    FedPricing { facts }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -288,6 +274,8 @@ async fn activity_pass(
     feeds: &Feeds,
     agents: &Arc<crate::agent_transport::Agents>,
     state: &Mutex<WriterState>,
+    ccs_dir: &Path,
+    models_dev: &Arc<crate::models_dev::ModelsDevRefresh>,
     now: i64,
     refresh_interval_ms: i64,
 ) {
@@ -309,7 +297,16 @@ async fn activity_pass(
         guard.scanning_since = Some(now);
         (guard.generation, computers, now - window_days * DAY, now - 31 * DAY)
     };
-    let pricing = fed_pricing(feeds);
+    // Refresh the models.dev registry where the TS collection calls startModelsDevRegistryRefresh:
+    // coalesced, fresh-cache short-circuit, stale fallback. The blocking fetch runs off-thread.
+    {
+        let refresh = Arc::clone(models_dev);
+        let now_ms = now as f64;
+        tokio::task::spawn_blocking(move || {
+            refresh.refresh(false, now_ms);
+        });
+    }
+    let pricing = ResolverPricing::new(ccs_dir);
     let mut remote: Vec<Value> = Vec::new();
     let mut states: Vec<Value> = Vec::new();
     for computer in &computers {
@@ -473,6 +470,7 @@ pub(crate) async fn analytics_jobs(
 ) {
     tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
     let state = Arc::new(Mutex::new(WriterState::default()));
+    let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&ccs_dir));
     loop {
         if stop.load(Ordering::Acquire) {
             return;
@@ -491,7 +489,8 @@ pub(crate) async fn analytics_jobs(
                         quota_pass(&engine, &feeds, &ccs_dir, &mut guard, now);
                     }
                 }
-                activity_pass(&engine, &feeds, &agents, &state, now, interval).await;
+                activity_pass(&engine, &feeds, &agents, &state, &ccs_dir, &models_dev, now, interval)
+                    .await;
             }
         }
         tokio::time::sleep(Duration::from_millis(TICK_MS)).await;

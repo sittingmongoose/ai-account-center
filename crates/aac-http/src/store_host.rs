@@ -229,10 +229,42 @@ impl StoreHost {
                 "open" => self.open_idempotent(args),
                 "hostJobs" => Ok(self.jobs_json()),
                 "hostIdentity" => Ok(aac_store::build_identity().to_string()),
+                "activityPricingFacts" => self.pricing_facts_json(),
                 _ => ops::dispatch(&self.slot, method, args).map_err(|e| e.to_string()),
             }
         }));
         outcome.unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
+    }
+
+    /// G14/G15: the owned read's pricing facts, resolved in Rust over the store dictionary
+    /// (`Resolver::facts_table`, byte-equal to the TS bridge's table). Null when the dictionary
+    /// exceeds the pair cap, as the TS bridge declines. The resolver reads the same
+    /// `<ccsDir>/models-dev-registry-cache.json` the TS refresh writes.
+    fn pricing_facts_json(&self) -> Result<String, String> {
+        let engine = self
+            .engine()
+            .ok_or_else(|| "invalid: the store is not open".to_string())?;
+        let dict = aac_store::activity::models(&engine).map_err(|e| e.to_string())?;
+        let strings = |key: &str| -> Vec<String> {
+            dict[key]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let models = strings("models");
+        let routes = strings("routes");
+        // The bridge's MAX_PRICING_PAIRS cap, counting the empty route facts_table adds.
+        if models.len() * (routes.len() + 1) > 8_000 {
+            return Ok("null".to_string());
+        }
+        let ccs_dir = self.boot.dir.parent().unwrap_or(&self.boot.dir);
+        let mut resolver = aac_views::pricing::Resolver::new(ccs_dir);
+        let table = resolver.facts_table(&models, &routes);
+        Ok(Value::Object(table).to_string())
     }
 
     /// TS's `open` once per boot: the engine the boot opened is the answer (its status, as
