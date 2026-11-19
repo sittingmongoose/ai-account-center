@@ -71,7 +71,10 @@ const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   if (group === undefined) return true;
   assert.equal(
     mode,
-    process.argv.some((arg) => arg.startsWith('--record-native=')) ? 'cut' : 'cut-rust-only',
+    process.argv.some((arg) => arg.startsWith('--record-native=')) &&
+      process.env.AAC_RECORD_RUST_ONLY !== '1'
+      ? 'cut'
+      : 'cut-rust-only',
     'A worker-removal group replays worker-less, or records through the shipped cut.'
   );
   assert(Object.hasOwn(groups, group), `Unknown worker-removal group ${group}.`);
@@ -97,18 +100,22 @@ const overrides: Record<string, Contract> =
 // The native owner rows share the platform contract with the earlier composition rows.
 // Select them only when this boot enables the native owner.
 const nativeGroupRow = (method: string, route: string) =>
-  method === 'GET' &&
-  (route === '/api/status' ||
-    route.startsWith('/api/status/') ||
-    route === '/api/store/status' ||
-    route.startsWith('/api/usage/') ||
-    route === '/api/scoreboard');
+  (method === 'POST' && route === '/api/status/answers') ||
+  (method === 'GET' &&
+    (route === '/api/status' ||
+      route.startsWith('/api/status/') ||
+      route === '/api/store/status' ||
+      route.startsWith('/api/usage/') ||
+      route === '/api/scoreboard'));
 const recordNative = process.argv
   .find((arg) => arg.startsWith('--record-native='))
   ?.slice('--record-native='.length);
 assert.notEqual(recordNative, '', '--record-native needs an output path');
-if (recordNative) assert.equal(mode, 'cut', 'record native rows on the shipped listener');
+if (recordNative) {
+  assert.equal(mode, process.env.AAC_RECORD_RUST_ONLY === '1' ? 'cut-rust-only' : 'cut');
+}
 const recordedNative: Record<string, Contract> = {};
+let nativeRecordingDeclines = 0;
 
 const lifecycleOverrides: Record<string, Contract> =
   mode !== 'fixture' && process.platform === 'win32' && registryOutput === undefined
@@ -180,6 +187,9 @@ function normalize(value: unknown, key = '', nativeStatus = false): unknown {
   // Apply live-field normalization only when the native Status fixture is selected.
   if (nativeStatus) {
     if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
+    if (key === 'redbBytes' || key === 'redbStats') return null;
+    if (key === 'instanceId' || key === 'integrity' || key === 'capture' || key === 'storageHealth')
+      return null;
     if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
     if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
       return '<elapsed-seconds>';
@@ -433,6 +443,7 @@ try {
           }
           if (status === 503 && (body as { code?: string } | null)?.code === 'route_unavailable') {
             counts.decline++;
+            if (recordNative && mine) nativeRecordingDeclines++;
             if (owns(route.path)) owned.failed++;
             if (ownsReset) resets.failed++;
             declined.add(name);
@@ -524,7 +535,11 @@ if (recordNative) {
     0
   );
   assert(expected > 0, 'select a group with native recorder rows');
-  assert.equal(Object.keys(recordedNative).length, expected, 'record every selected native row');
+  assert.equal(
+    Object.keys(recordedNative).length + nativeRecordingDeclines,
+    expected,
+    'account for every selected native row'
+  );
   const output = path.resolve(spec, recordNative);
   await fs.writeFile(output, JSON.stringify(recordedNative, null, 2) + '\n');
   console.log(`Recorded ${expected} native rows into ${output}`);

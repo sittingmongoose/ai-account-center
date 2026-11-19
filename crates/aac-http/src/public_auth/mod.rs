@@ -10,15 +10,11 @@ mod devices;
 mod hub;
 mod lifecycle;
 pub(crate) mod lifecycle_host;
-#[cfg(unix)]
 mod native_group;
 pub(crate) mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
-// Merged before its first registering group: the host is exercised by the groups that land
-// on top of it (W-status-home first), so its API is not dead in the composed cut.
-#[allow(dead_code)]
 mod owner_host;
 mod policy;
 mod profile_routes;
@@ -274,21 +270,8 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream,
-            cache,
-            ui_root,
-            None,
-            false,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            #[cfg(unix)]
-            None,
+            downstream, cache, ui_root, None, false, None, None, None, None, None, None, None,
+            None, None,
         )
     }
 
@@ -311,7 +294,7 @@ impl DashboardAuth {
         analytics_hop: Option<analytics_routes::Hop>,
         profiles: Option<profile_routes::Profiles>,
         app_updates: Option<app_updates_owner::Owner>,
-        #[cfg(unix)] native_group: Option<Arc<native_group::Routes>>,
+        native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
@@ -383,7 +366,6 @@ impl DashboardAuth {
             {
                 return app_updates.handle(request).await;
             }
-            #[cfg(unix)]
             if let Some(group) = &native_group
                 && group.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
@@ -577,7 +559,6 @@ pub(crate) async fn run_public_at(
     // the `edges` fallback answers them, so the shipped worker keeps its cutover switch.
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
-    #[cfg(unix)]
     let group_routes = owner_host
         .as_ref()
         .filter(|_| enabled)
@@ -672,7 +653,6 @@ pub(crate) async fn run_public_at(
         analytics_hop,
         profiles,
         app_updates,
-        #[cfg(unix)]
         group_routes,
     );
     let router = auth
@@ -1946,7 +1926,6 @@ mod tests {
             None,
             None,
             None,
-            #[cfg(unix)]
             None,
         ));
         let handle = tokio::spawn(async move {

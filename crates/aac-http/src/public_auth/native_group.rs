@@ -13,7 +13,7 @@
 //! `cache-control`, `vary`, the feed views' ETag and 304, and the file envelope's validated
 //! headers and lengths.
 
-use super::{DashboardAccess, DashboardPrincipal, Reply, service_link::ServiceReply, set_header};
+use super::{DashboardAccess, DashboardPrincipal, Reply, owner_host::ServiceReply, set_header};
 use axum::{
     body::to_bytes,
     extract::Request,
@@ -46,6 +46,11 @@ impl Routes {
 
     async fn hosted(&self) -> bool {
         self.host.ready().await
+    }
+
+    /// The in-process owners on a platform without the private service (Windows).
+    async fn local(&self) -> Option<std::sync::Arc<crate::owners::Owners>> {
+        self.host.local().await
     }
 
     async fn request(
@@ -145,6 +150,7 @@ struct Facts {
     range: Option<String>,
     if_none_match: Option<String>,
     sec_fetch_site: Option<String>,
+    user_agent: Option<String>,
 }
 
 impl Facts {
@@ -164,6 +170,7 @@ impl Facts {
             range: text("range"),
             if_none_match: text("if-none-match"),
             sec_fetch_site: text("sec-fetch-site"),
+            user_agent: text("user-agent"),
         }
     }
 }
@@ -269,6 +276,21 @@ async fn store_route(
     path: &str,
     raw: Option<&str>,
 ) -> Reply {
+    if let Some(owners) = routes.local().await {
+        let Some(store) = owners.store.clone() else {
+            return store_unavailable();
+        };
+        let now = now_ms();
+        let answer = match path {
+            "/api/usage/history" => crate::usage_routes::history(&store, raw, now).await,
+            "/api/usage/at" => crate::usage_routes::at(&store, raw, now).await,
+            _ => crate::usage_routes::burn(&store, raw, now).await,
+        };
+        return match answer {
+            Ok(value) => no_store(json_reply(200, &value)),
+            Err(_) => store_failed(),
+        };
+    }
     let Some(principal) = access.service_principal() else {
         return store_unavailable();
     };
@@ -334,6 +356,15 @@ async fn store_status(routes: &Routes, access: &DashboardAccess, facts: &Facts) 
     if let Some(reply) = store_read(access, facts) {
         return reply;
     }
+    if let Some(owners) = routes.local().await {
+        let Some(store) = owners.store.as_ref() else {
+            return unavailable_status();
+        };
+        return match store.status_value() {
+            Ok(value) => no_store(json_reply(200, &value)),
+            Err(_) => store_failed(),
+        };
+    }
     let Some(principal) = access.service_principal() else {
         return unavailable_status();
     };
@@ -383,6 +414,12 @@ async fn answers_read(routes: &Routes, access: &DashboardAccess, raw: Option<&st
             super::error(400, "unexpected_query", "Only limit is accepted here.")
         });
     };
+    if let Some(owners) = routes.local().await {
+        let Some(produce) = owners.status_produce.as_ref() else {
+            return no_store(super::error(503, "answers_unavailable", UNAVAILABLE));
+        };
+        return no_store(json_reply(200, &produce.answers_view(limit)));
+    }
     let Some(principal) = access.service_principal() else {
         return no_store(super::error(503, "answers_unavailable", UNAVAILABLE));
     };
@@ -447,6 +484,24 @@ async fn answers_post(
     if !crate::status_answers_route::valid_send_body(&value) {
         return invalid();
     }
+    if let Some(owners) = routes.local().await {
+        let Some(answer_store) = owners.answers_owned.as_ref() else {
+            return super::decline();
+        };
+        let device = crate::status_answers_route::device_of(facts.user_agent.as_deref());
+        let Ok(submit) = crate::status_answers_route::submit_body(&value, device) else {
+            return invalid();
+        };
+        return match answer_store.submit(submit.to_string().as_bytes()).await {
+            Ok(reply) => no_store(json_reply(200, &reply)),
+            Err("shape") => invalid(),
+            Err(_) => no_store(super::error(
+                500,
+                "answers_failed",
+                "The answers could not be finished. Some may have been recorded; reload before sending again.",
+            )),
+        };
+    }
     let Some(principal) = access.service_principal() else {
         return super::decline();
     };
@@ -508,15 +563,28 @@ async fn status(
     if raw.is_some() {
         return super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS);
     }
-    let Some(principal) = access.service_principal() else {
-        return decline_because("principal");
-    };
-    if !routes.hosted().await {
-        return decline_because("service");
-    }
     let Some((time_zone, offsets)) = status_zone(routes.root()) else {
         return decline_because("zone");
     };
+    if let Some(owners) = routes.local().await {
+        let Some(produce) = owners.status_produce.as_ref() else {
+            return decline_because("status");
+        };
+        let zone = aac_status::produce::facts::ZoneFacts {
+            from: offsets.from,
+            to: offsets.to,
+            offsets: offsets.offsets.clone(),
+        };
+        return match produce.view(now_ms(), &time_zone, &zone) {
+            Ok((bytes, etag)) => {
+                fed_bytes(bytes, &etag, "status@1", facts.if_none_match.as_deref())
+            }
+            Err(reason) => {
+                eprintln!("aac-http: local Status view declined ({reason:?})");
+                decline_because("status")
+            }
+        };
+    }
     let now = now_ms().to_string();
     let zone = json!({
         "timeZone": time_zone,
@@ -530,6 +598,12 @@ async fn status(
         ("x-aac-now", now.as_str()),
         ("x-aac-zone", zone.as_str()),
     ];
+    let Some(principal) = access.service_principal() else {
+        return decline_because("principal");
+    };
+    if !routes.hosted().await {
+        return decline_because("service");
+    }
     // The first owned Status request can beat the service's first report scan; retry a cold
     // `unsupported`/`stale`/`busy` for a moment instead of declining to nobody.
     for attempt in 0..6 {
@@ -847,23 +921,26 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
         eprintln!("aac-http: fed view missing its etag or view header");
         return super::decline();
     };
-    if !matches!(
-        view.as_str(),
-        "status@1" | "scoreboard@1" | "home@3" | "dashboard@1"
-    ) || !etag.starts_with("W/\"")
+    fed_bytes(reply.body.clone(), &etag, &view, if_none_match)
+}
+
+/// A fed view whose bytes and ETag a local owner wrote.
+fn fed_bytes(body: Vec<u8>, etag: &str, view: &str, if_none_match: Option<&str>) -> Reply {
+    if !matches!(view, "status@1" | "scoreboard@1" | "home@3" | "dashboard@1")
+        || !etag.starts_with("W/\"")
         || etag.len() != 67
     {
         eprintln!("aac-http: fed view refused: {view} {etag}");
         return super::decline();
     }
-    let mut out = if not_modified(if_none_match, &etag) {
+    let mut out = if not_modified(if_none_match, etag) {
         super::empty(304)
     } else {
-        super::json_bytes(200, reply.body.clone())
+        super::json_bytes(200, body)
     };
     set_header(&mut out, "cache-control", "private, no-cache");
-    set_header(&mut out, "etag", &etag);
-    set_header(&mut out, "x-aac-view", &view);
+    set_header(&mut out, "etag", etag);
+    set_header(&mut out, "x-aac-view", view);
     set_header(&mut out, "vary", "Cookie");
     out
 }
@@ -908,10 +985,11 @@ async fn card_media(
         ));
     }
     let Some(principal) = access.service_principal() else {
-        return super::service_error();
+        return super::decline();
     };
     if !routes.hosted().await {
-        return super::service_error();
+        // No private service on this platform and no in-process file reader: fail closed.
+        return super::decline();
     }
     let input = json!({
         "kind": "media",
@@ -975,10 +1053,10 @@ async fn deliverable(
         ));
     };
     let Some(principal) = access.service_principal() else {
-        return share_headers(super::service_error());
+        return share_headers(super::decline());
     };
     if !routes.hosted().await {
-        return share_headers(super::service_error());
+        return share_headers(super::decline());
     }
     let input = json!({
         "kind": "deliverable",
