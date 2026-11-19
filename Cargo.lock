@@ -18,14 +18,17 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "libc",
+ "nix",
  "regex",
  "reqwest",
  "security-framework",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
  "unicode-normalization",
+ "url",
 ]
 
 [[package]]

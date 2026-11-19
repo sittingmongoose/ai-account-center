@@ -565,6 +565,49 @@ ranges), the Rust table tests, `launch_exec.rs`'s recorder runs, and
 trees (trash then restore included), the fixture-safe Windows steps, and the permit
 refusals. No real app, shell folder, scheduled task or provider is touched by the suites.
 
+## Sign-in sessions (M4c, off by default)
+
+`agentVerbs: on` with `agentTransport: on` and a live service connection moves the interactive
+sign-in CLI session into the `signin-session` agent verb (`crates/aac-agent/src/signin_session/`).
+The TypeScript runner stays the fallback and keeps the install commit until M5.
+
+- **One session per agent process.** `start` runs the ported `SignInJobRunner` state machine
+  (`signin-jobs.ts`) with the ported output parser (`signin-output.ts`) and the ported process
+  layer (`signin-process.ts`): the same fixed Python PTY relay byte for byte, the complete
+  environment and nothing else, a new process group, SIGTERM then SIGKILL after the two-second
+  grace (the relay's own one-second grace is inside the fixed program). Plain-pipe commands
+  (the Antigravity driver shape, Muse over SSH) skip the relay. Every job state change is a
+  `progress` event carrying the same job DTO; `{"input":"<code>"}` submits the one supervised
+  authorization code; `{"cancel":true}` ends the job cancelled and kills the CLI group. The
+  terminal frame is the final job, or the cancelled failure the transport acknowledges.
+- **The install boundary.** On CLI exit 0 the session reports `verifying` with
+  `installPending` and exits; the front door's `AgentSignInJobRunner`
+  (`src/web-server/services/signin-session-agent.ts`) runs the unchanged flow `complete`
+  under its identity guards and registry lock, emits the remaining events exactly as the TS
+  runner does, and settles the journal. Origin, session and confirmation guards never moved.
+- **The journal.** Every state change is written atomically through the one-file registry's
+  `signin-jobs` row (0600, `<ccs>/signin-jobs/`). One-shot actions read it: `get` (the journaled
+  job, null past the ten-minute retention, or the restarted placeholder for an unknown id),
+  `list`, `cancel` (the second call sets the flag the owner polls, kills the relay group and
+  the CLI's own session, and verifies the child is gone), and `settle`. A running entry whose
+  owner died recovers as `failed/server_restarted` and its stray CLI group is killed; an
+  installing entry is owned by the front door's pid, not the exited agent. The runner's limits
+  (one running job per provider, three in all) are enforced against the journal at start.
+- **Scrub.** Raw CLI output is parsed in memory and discarded; only the allowlisted URL and
+  the device user code enter events. The submitted authorization code, credential bytes,
+  tokens and emails never enter events, the journal or logs.
+- **Deadline.** The verb keeps the CLI's own 15-minute window: `max_deadline_ms("signin-session")`
+  is 960 s (the other verbs keep 600 s). The adapter sizes the request deadline past the job
+  timeout plus the install margin.
+
+The checks: `cargo test -p aac-agent signin_session` (parser, state machine, journal), and on
+the build host `bun tests/spec/agent/signin-session.mjs /path/to/aac-agent`: fake-CLI PTY
+scripts per provider (Claude, Codex, Antigravity, Muse) drive the real TS runner and the verb
+on the same fixtures and compare the full job event sequences, plus the cancel-kill verified
+by a second call, the scrub, the killed-agent journal recovery, the settle, the limits and the
+restarted placeholder. Synthetic credentials and temporary roots only; no provider is
+contacted. A supervised live sign-in per provider remains the turn-on gate (decision 7).
+
 ## Home, fed (R1)
 
 R1 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 1.1): Home and the accounts dashboard at the
