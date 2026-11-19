@@ -377,9 +377,7 @@ fn file_identity(home: &Path) -> Option<String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let Some(uid) = crate::antigravity_probes::current_uid() else {
-                return None;
-            };
+            let uid = crate::antigravity_probes::current_uid()?;
             if meta.uid() != uid {
                 return None;
             }
@@ -399,7 +397,9 @@ fn file_identity(home: &Path) -> Option<String> {
                     meta.nlink()
                 ));
             } else {
-                if meta.mode() & 0o777 != 0o700 {
+                // native-credential-transport.ts: the parent folders must only not be
+                // world-writable (mode & 2); they are not required to be exactly 0700.
+                if meta.mode() & 0o002 != 0 {
                     return None;
                 }
                 identities.push(format!(

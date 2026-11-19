@@ -498,6 +498,11 @@ fn native_binary_problem(home: &Path, uid: Option<u32>) -> bool {
     false
 }
 
+/// The CLI status report's owned-binary check (the same rule the probe uses).
+pub(crate) fn native_binary_problem_public(home: &Path, uid: Option<u32>) -> bool {
+    native_binary_problem(home, uid)
+}
+
 fn binary_stat_key(binary: &Path) -> Option<String> {
     let meta = std::fs::symlink_metadata(binary).ok()?;
     #[cfg(unix)]
@@ -824,6 +829,8 @@ mod tests {
         );
         let unmatched = |_: &Path, _: &str| false;
         let mut version = || Some("1.5.0".to_owned());
+        // A fresh cache: the matched verdict above is cached for this binary identity and set.
+        let mut cache = PausedCache::default();
         assert_eq!(
             native_update_paused(home, &release, &unmatched, &mut version, &mut cache)
                 .unwrap()
