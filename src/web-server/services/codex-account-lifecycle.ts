@@ -356,13 +356,18 @@ export class CodexAccountLifecycle {
   addFlow(name: string): SignInFlowSpec {
     return this.flow('add', name, async (jobId, control) => {
       const staging = this.stagingDir(jobId);
-      const login = await readCodexLogin(path.join(staging, 'auth.json'));
-      if (!login) throw new SignInJobError('write_failed');
+      const stagedAuth = path.join(staging, 'auth.json');
+      const snapshot = await readCodexLoginSnapshot(stagedAuth);
+      if (!snapshot) throw new SignInJobError('write_failed');
+      const login = snapshot.identity;
       return this.commitUnderLock(control, async () => {
         if (await this.otherProfileWithEmail(login.email, null)) {
           throw new SignInJobError('duplicate_identity');
         }
         if (await this.nameInUse(name)) throw new SignInJobError('write_failed');
+        const checked = await readCodexLoginSnapshot(stagedAuth);
+        if (!checked?.bytes.equals(snapshot.bytes)) throw new SignInJobError('write_failed');
+        if (control.stopped()) throw new SignInJobStopped();
         const target = this.profileDir(name);
         if (!this.moveProfile(staging, target)) await fs.rename(staging, target);
         try {
@@ -407,6 +412,7 @@ export class CodexAccountLifecycle {
           throw new SignInJobError('duplicate_identity');
         }
         const liveAuth = await this.liveLoginToRenew(name, authPath, login);
+        if (control.stopped()) throw new SignInJobStopped();
         await this.installLogin(`${process.pid}.${jobId}`, content, authPath, liveAuth);
         try {
           registry.updateProfile(name, {
