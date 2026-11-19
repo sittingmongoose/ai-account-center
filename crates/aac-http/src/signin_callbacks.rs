@@ -41,6 +41,10 @@ enum Request {
         meta_account: Option<String>,
         fresh: IdentityInput,
     },
+    /// The fixed Muse remote login and email commands for a config home.
+    MuseCommands { home_id: Option<String> },
+    /// Validate the Muse login email and map it to the job result.
+    MuseValidateEmail { account_id: String, email: String },
 }
 
 #[derive(Deserialize)]
@@ -160,6 +164,17 @@ fn evaluate(request: Request) -> Option<Value> {
             );
             Some(json!({"status": "ok", "same": same}))
         }
+        Request::MuseCommands { home_id } => muse_commands(home_id.as_deref()),
+        Request::MuseValidateEmail { account_id, email } => {
+            let trimmed = email.trim();
+            if !muse_email_valid(trimmed) {
+                return Some(json!({"status": "refused", "code": "write_failed"}));
+            }
+            Some(json!({
+                "status": "ok",
+                "result": {"accountId": account_id, "email": trimmed, "plan": null},
+            }))
+        }
     }
 }
 
@@ -190,6 +205,60 @@ fn codex_prepare(root: &Path, staging: &str, shared: &Path, cli: &str, env: &Val
             "pty": true,
         }
     }))
+}
+
+/// The fixed remote Python that prints only the Muse login email (`EMAIL_PROGRAM`).
+const MUSE_EMAIL_PROGRAM: &str = r#"import json,os,sys; p=os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"), "muse", "auth.json"); v=json.load(open(p)); m=(v.get("providers") or {}).get("meta") or {}; e=m.get("user_email"); sys.stdout.write(e if isinstance(e, str) and e else "")"#;
+
+fn muse_home_id(home_id: Option<&str>) -> Option<&str> {
+    match home_id {
+        None => Some(""),
+        Some(id) => {
+            let valid = id.len() == 8
+                && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            valid.then_some(id)
+        }
+    }
+}
+
+/// The fixed Muse remote login and email commands (`remoteLoginCommand`/`remoteEmailCommand`).
+fn muse_commands(home_id: Option<&str>) -> Option<Value> {
+    let id = muse_home_id(home_id)?;
+    let prefix = if id.is_empty() {
+        String::new()
+    } else {
+        format!("env XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/{id}\" ")
+    };
+    let remote_login = format!("{prefix}PATH=\"$HOME/.local/bin:$PATH\" muse login");
+    let email_prefix = if id.is_empty() {
+        String::new()
+    } else {
+        format!("XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/{id}\" ")
+    };
+    let remote_email = format!("{email_prefix}/usr/bin/python3 -c '{MUSE_EMAIL_PROGRAM}'");
+    Some(json!({"status": "ok", "remoteLogin": remote_login, "remoteEmail": remote_email}))
+}
+
+/// The Muse login email rule: one `@`, non-empty whitespace-free local and domain, a dot inside
+/// the domain, at most 254 characters (`complete`'s regex and length cap).
+fn muse_email_valid(email: &str) -> bool {
+    if email.chars().count() > 254 {
+        return false;
+    }
+    let mut parts = email.split('@');
+    let local = parts.next().unwrap_or("");
+    let domain = parts.next().unwrap_or("");
+    if parts.next().is_some() || local.is_empty() || domain.is_empty() {
+        return false;
+    }
+    if local.chars().any(char::is_whitespace) || domain.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let chars: Vec<char> = domain.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .any(|(i, c)| *c == '.' && i > 0 && i < chars.len() - 1)
 }
 
 /// One registry mutation under the caller-held directory lease.
@@ -324,5 +393,35 @@ mod tests {
         let answer = codex_prepare(dir.path(), ".staging-job_0123456789abcdef", Path::new("/none"), "", &json!({})).unwrap();
         assert_eq!(answer["status"], "refused");
         assert_eq!(answer["code"], "tool_missing");
+    }
+
+    #[test]
+    fn muse_commands_match_the_fixed_remote_strings() {
+        let answer = muse_commands(None).unwrap();
+        assert_eq!(answer["remoteLogin"], "PATH=\"$HOME/.local/bin:$PATH\" muse login");
+        let email = answer["remoteEmail"].as_str().unwrap();
+        assert!(email.starts_with("/usr/bin/python3 -c '"));
+        assert!(email.contains("user_email"));
+        let home = muse_commands(Some("9f2c41d0")).unwrap();
+        assert_eq!(
+            home["remoteLogin"],
+            "env XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/9f2c41d0\" PATH=\"$HOME/.local/bin:$PATH\" muse login"
+        );
+        assert!(home["remoteEmail"]
+            .as_str()
+            .unwrap()
+            .starts_with("XDG_CONFIG_HOME=\"$HOME/.ccs/muse-homes/9f2c41d0\" /usr/bin/python3"));
+        assert!(muse_commands(Some("BAD")).is_none());
+    }
+
+    #[test]
+    fn muse_email_rule() {
+        assert!(muse_email_valid("muse-user@example.test"));
+        assert!(!muse_email_valid(""));
+        assert!(!muse_email_valid("not-an-email"));
+        assert!(!muse_email_valid(&"x".repeat(300)));
+        assert!(!muse_email_valid("a@b"));
+        assert!(!muse_email_valid("a@@b.c"));
+        assert!(!muse_email_valid("a b@c.d"));
     }
 }

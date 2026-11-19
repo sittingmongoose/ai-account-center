@@ -1,4 +1,6 @@
 import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { getCcsDir } from '../../utils/config-manager';
+import { signInCallback } from '../../shared/private-file-lease';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { RegistryAccount } from './account-registry-v2';
 import { runClaudeHostOverSsh } from './claude-host-transport';
@@ -139,8 +141,15 @@ export class MuseAccountLifecycle {
     const sshHost = entry.sshHost;
     const homeId = this.homeId(entry);
     const accountId = entry.id;
-    const remoteLogin = remoteLoginCommand(homeId);
-    const remoteEmail = remoteEmailCommand(homeId);
+    const commands = signInCallback(getCcsDir(), { action: 'muse-commands', homeId });
+    const remoteLogin =
+      commands?.status === 'ok' && typeof commands.remoteLogin === 'string'
+        ? commands.remoteLogin
+        : remoteLoginCommand(homeId);
+    const remoteEmail =
+      commands?.status === 'ok' && typeof commands.remoteEmail === 'string'
+        ? commands.remoteEmail
+        : remoteEmailCommand(homeId);
     const ssh = this.ssh();
     return {
       provider: 'muse',
@@ -167,15 +176,23 @@ export class MuseAccountLifecycle {
       },
       complete: async (_jobId, control: SignInCompleteControl) => {
         if (control.stopped()) throw new SignInJobStopped();
-        let email = '';
+        let raw = '';
         try {
-          const native = await this.deps.identity?.(sshHost, homeId);
-          email = (
-            native === undefined ? await ssh(sshHost, remoteEmail, '') : (native ?? '')
-          ).trim();
+          const identity = await this.deps.identity?.(sshHost, homeId);
+          raw = identity === undefined ? await ssh(sshHost, remoteEmail, '') : (identity ?? '');
         } catch {
           throw new SignInJobError('write_failed');
         }
+        const answer = signInCallback(getCcsDir(), {
+          action: 'muse-validate-email',
+          accountId,
+          email: raw,
+        });
+        if (answer?.status === 'ok') {
+          return answer.result as { accountId: string; email: string; plan: null };
+        }
+        if (answer?.status === 'refused') throw new SignInJobError('write_failed');
+        const email = raw.trim();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
           throw new SignInJobError('write_failed');
         }
