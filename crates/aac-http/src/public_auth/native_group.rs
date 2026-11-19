@@ -83,6 +83,13 @@ fn decline_reason(reply: &ServiceReply) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
+/// A named decline: the M0 contract's answer, with the reason in the log (the TypeScript path
+/// answered from the same read; a worker-less boot has nobody else).
+fn decline_because(reason: &'static str) -> Reply {
+    tracing::warn!(reason, "native group route declined");
+    super::decline()
+}
+
 /// `MAX_STATUS_BODY_BYTES`, the answer set's own limit.
 const ANSWER_BODY_CAP: usize = 64 * 1024;
 /// The file envelope's largest base64 body (`rust-file-response.ts`).
@@ -704,33 +711,33 @@ async fn scoreboard(
         Err((code, error)) => return no_store(super::error(400, code, error)),
     };
     let Some(principal) = access.service_principal() else {
-        return super::decline();
+        return decline_because("principal");
     };
     if !routes.hosted().await {
-        return super::decline();
+        return decline_because("service");
     }
     let Some((time_zone, offsets)) = status_zone(routes.root()) else {
-        return super::decline();
+        return decline_because("zone");
     };
     let now = now_ms();
     let Some((clock, day)) = offsets.zone.words(i64::try_from(now).unwrap_or(0)) else {
-        return super::decline();
+        return decline_because("words");
     };
     let from_ms = match query.from.as_deref() {
         Some(day) => match crate::zone_facts::local_midnight(day, &time_zone) {
             Some(ms) => Json::from(ms),
-            None => return super::decline(),
+            None => return decline_because("from"),
         },
         None => Json::Null,
     };
     let to_ms = match query.to.as_deref() {
         Some(day) => {
             let Some(next) = crate::zone_facts::next_day(day) else {
-                return super::decline();
+                return decline_because("to");
             };
             match crate::zone_facts::local_midnight(&next, &time_zone) {
                 Some(ms) => Json::from(ms - 1000),
-                None => return super::decline(),
+                None => return decline_because("to"),
             }
         }
         None => Json::Null,
@@ -742,7 +749,7 @@ async fn scoreboard(
         let Some((generation, catalog_hash, held)) =
             scoreboard_facts(routes, &time_zone, now).await
         else {
-            return super::decline();
+            return decline_because("facts");
         };
         let feed = json!({
             "now": now,
