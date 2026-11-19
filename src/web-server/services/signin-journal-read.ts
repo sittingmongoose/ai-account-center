@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { requestRustAgent } from '../rust-service-transport';
+import { canonicalRoot, requestRustAgent } from '../rust-service-transport';
 import { agentTransport, agentVerbs } from './agent-verbs';
 import {
   JOB_ID_PATTERN,
@@ -152,7 +152,7 @@ export async function readSignInJournal(
   try {
     const reply = await requestRustAgent(ccs, 'signin-session', {
       computer: { platform: 'ubuntu', sshHost: null },
-      args: { action: 'get', jobId: id, ccs },
+      args: { action: 'get', jobId: id, ccs: canonicalRoot(ccs) },
       deadlineMs: 5000,
       timeoutMs: 7000,
       maxBytes: 32 * 1024,

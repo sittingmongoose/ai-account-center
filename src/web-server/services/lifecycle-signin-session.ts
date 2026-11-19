@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { ConfigError } from '../../errors/error-types';
-import { controlLifecycleAgent, requestRustAgent } from '../rust-service-transport';
+import { canonicalRoot, controlLifecycleAgent, requestRustAgent } from '../rust-service-transport';
 import { parseJournalReply } from './signin-journal-read';
 import type { SignInFlowSpec, SignInJob } from './signin-job-types';
 import type { SignInCommand } from './signin-process';
@@ -25,11 +25,12 @@ export function nativeSignInSession(
   enabled: boolean
 ): NativeSignInSession | undefined {
   if (!enabled) return undefined;
+  const ccs = canonicalRoot(root);
   const active = new Map<string, AbortController>();
   const journal = (args: Record<string, unknown>) =>
     requestRustAgent(root, 'signin-session', {
       computer: local,
-      args: { ...args, ccs: root },
+      args: { ...args, ccs },
       deadlineMs: 5000,
       timeoutMs: 7000,
       maxBytes: MAX_REPLY_BYTES,

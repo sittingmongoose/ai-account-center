@@ -56,9 +56,9 @@ where
     let Some(mut row) = collect(source.clone()).await? else {
         return Ok(None);
     };
-    if row["id"].as_str() != Some(&source.id)
-        || row["provider"].as_str() != Some(&source.provider)
-        || row["platform"].as_str() != Some(&source.platform)
+    if row["id"].as_str() != Some(source.id.as_str())
+        || row["provider"].as_str() != Some(source.provider.as_str())
+        || row["platform"].as_str() != Some(source.platform.as_str())
         || !publish_if_current(source, row.clone()).await?
     {
         return Ok(None);
