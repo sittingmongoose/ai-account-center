@@ -1,9 +1,9 @@
 //! Private Unix-socket HTTP service and opt-in M6 dashboard front door.
-pub mod public_auth;
 #[cfg(unix)]
 mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
+pub mod cli;
 #[cfg(unix)]
 mod feed;
 #[cfg(unix)]
@@ -16,6 +16,7 @@ mod json_object;
 mod limits;
 #[cfg(unix)]
 mod profile_reads;
+pub mod public_auth;
 #[cfg(unix)]
 mod read_files;
 #[cfg(unix)]

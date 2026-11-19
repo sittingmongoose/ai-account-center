@@ -395,6 +395,22 @@ AAC_M6_TARGET_URL=http://127.0.0.1:PORT bun tests/spec/m6-edge-parity.ts   # HTT
 AAC_M6_TARGET_CLI=/path/to/other-cli bun tests/spec/m6-edge-parity.ts       # CLI cases as well
 ```
 
-The target run discovers the build id from the frame page (`/pkg/<12 hex>/`), sends the same requests and compares
-byte for byte; it refuses to regenerate. The legacy bin case is TS-only because the compat bin names are package
-entry points.
+The target run discovers the build id from the frame page, then compares the same
+cases. Set both variables in the same invocation to check HTTP and CLI together.
+It verifies the version output's installation path before normalizing it. It
+invokes the native executable under a temporary retired alias for the legacy bin
+case.
+
+For an isolated Rust run, let the fixture build the same UI and seed the same
+management key and account rows:
+
+```sh
+cargo build -p aac-http --locked
+AAC_RUST_PUBLIC_BINARY="$PWD/target/debug/aac-http" \
+  AAC_M6_TARGET_CLI="$PWD/target/debug/ai-account-center" \
+  bun tests/spec/m6-edge-parity.ts --rust-fixture
+```
+
+On Windows use the corresponding .exe paths. The full spec runner selects the
+isolated Rust HTTP fixture when AAC_RUST_PUBLIC_BINARY is set. The
+--regenerate option only records from the TS target.

@@ -4,8 +4,10 @@
 #![allow(clippy::result_large_err)]
 mod dashboard_events;
 mod devices;
+mod hub;
 mod policy;
 mod routes;
+mod static_ui;
 mod storage;
 mod tls;
 mod websocket;
@@ -35,6 +37,7 @@ pub use dashboard_events::{
     AppUpdateHostProgress, AppUpdateProgress, DashboardEvent, DashboardEvents, DashboardSignInJob,
     SignInError, SignInResult, SignInVerification,
 };
+pub use hub::HubCache;
 
 /// Trust facts for downstream public routes, produced exclusively from the accepted request.
 #[derive(Clone)]
@@ -143,6 +146,76 @@ impl DashboardAuth {
         downstream.layer(middleware::from_fn_with_state(self.0.clone(), front_door))
     }
 
+    /// Adds the hub and static assets as the public router's terminal handlers.
+    /// Merge other lanes' API routers before applying the authentication guard.
+    pub fn mount_edges(
+        &self,
+        downstream: Router,
+        cache: HubCache,
+        ui_root: Option<PathBuf>,
+    ) -> Router {
+        self.edges(downstream, cache, ui_root, None, false)
+    }
+
+    fn edges(
+        &self,
+        downstream: Router,
+        cache: HubCache,
+        ui_root: Option<PathBuf>,
+        snapshot: Option<PathBuf>,
+        partial_api: bool,
+    ) -> Router {
+        let hub = hub::Hub::new(self.0.clone(), cache, snapshot);
+        let ui = static_ui::StaticUi::load(ui_root, partial_api);
+        let dashboard = self.0.clone();
+        downstream.fallback(move |request: Request| async move {
+            let headers = request.headers();
+            let session = (!api_path(&request.uri().path().to_ascii_lowercase()))
+                .then(|| {
+                    Some((
+                        peer(request.extensions())?,
+                        headers.clone(),
+                        header(headers, "cookie")?.to_owned(),
+                    ))
+                })
+                .flatten();
+            let mut reply = if hub::Hub::owns(request.uri().path()) {
+                hub.handle(request).await
+            } else {
+                ui.handle(request).await
+            };
+            if reply
+                .extensions()
+                .get::<static_ui::AssetResponse>()
+                .is_none()
+                && let Some((peer, headers, cookie)) = session
+                && let Ok(permit) = dashboard.permits.clone().try_acquire_owned()
+                && let Some(cookie) = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    let mut state = dashboard.runtime.lock().ok()?;
+                    let config = state.load_config().ok()?;
+                    let connection =
+                        config
+                            .network
+                            .connection(&headers, peer.address.ip(), peer.tls);
+                    let at = now();
+                    let (id, mut session) = state.sessions.read(&cookie, &connection, at)?;
+                    let AuthRuntime {
+                        files, sessions, ..
+                    } = &mut *state;
+                    sessions.touch(files, &id, &mut session, at, config.days * DAY);
+                    sessions.cookie(&id, &session, &connection)
+                })
+                .await
+                .ok()
+                .flatten()
+            {
+                set_header(&mut reply, "set-cookie", &cookie);
+            }
+            reply
+        })
+    }
+
     /// Returns a publisher for dashboard WebSocket hints.
     pub fn events(&self) -> DashboardEvents {
         self.0.events.clone()
@@ -171,18 +244,43 @@ pub async fn run_public() -> std::io::Result<()> {
         .and_then(|value| value.parse().ok())
         .ok_or_else(refused)?;
     let root = storage::root_from_env().ok_or_else(refused)?;
-    let listener = tokio::net::TcpListener::bind(address).await?;
+    run_public_at(&[address], root, false).await
+}
+
+pub(crate) async fn run_public_at(
+    addresses: &[SocketAddr],
+    root: PathBuf,
+    browser: bool,
+) -> std::io::Result<()> {
+    let mut listener = None;
+    let mut last_error = None;
+    for address in addresses {
+        match tokio::net::TcpListener::bind(address).await {
+            Ok(bound) => {
+                listener = Some(bound);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let listener = listener.ok_or_else(|| {
+        last_error
+            .unwrap_or_else(|| std::io::Error::other("no acceptable dashboard listen address"))
+    })?;
+    let address = listener.local_addr()?;
     let auth = DashboardAuth::open(root)?;
-    let router = auth.protect(
-        Router::new()
-            .route(
-                "/api/health",
-                axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
-            )
-            .fallback(decline),
+    let ui_root = std::env::var_os("AAC_RUST_UI_DIR").map(PathBuf::from);
+    let snapshot = std::env::var_os("AAC_RUST_HUB_CACHE").map(PathBuf::from);
+    let api = Router::new().route(
+        "/api/health",
+        axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
     );
+    let router = auth.protect(auth.edges(api, HubCache::default(), ui_root, snapshot, true));
     let tls_server = tls::listener(&auth, address.ip()).await;
-    println!("aac-http public listening on {}", listener.local_addr()?);
+    println!("aac-http public listening on {address}");
+    if browser {
+        crate::cli::open_browser(address);
+    }
     let shutdown = axum_server::Handle::new();
     let signal = shutdown.clone();
     let feed_task =
@@ -239,7 +337,7 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-async fn decline() -> Reply {
+fn decline() -> Reply {
     error(
         503,
         "route_unavailable",
@@ -709,6 +807,17 @@ fn authorize(state: &mut AuthRuntime, facts: Facts, ws: bool) -> Decision {
     )
 }
 
+fn peer(extensions: &axum::http::Extensions) -> Option<PublicPeer> {
+    extensions.get::<PublicPeer>().copied().or_else(|| {
+        extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|info| PublicPeer {
+                address: info.0,
+                tls: false,
+            })
+    })
+}
+
 async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: Next) -> Reply {
     let (mut parts, original_body) = request.into_parts();
     let upgrade = header(&parts.headers, "upgrade")
@@ -717,15 +826,7 @@ async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: 
     if !upgrade && !api_path(&lower) {
         return next.run(Request::from_parts(parts, original_body)).await;
     }
-    let Some(peer) = parts.extensions.get::<PublicPeer>().copied().or_else(|| {
-        parts
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|info| PublicPeer {
-                address: info.0,
-                tls: false,
-            })
-    }) else {
+    let Some(peer) = peer(&parts.extensions) else {
         return service_error();
     };
     let auth_path = lower == "/api/auth" || lower.starts_with("/api/auth/");
@@ -859,7 +960,7 @@ mod tests {
         let auth = DashboardAuth::open_with(root, Overrides::default(), 4).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let router = auth.protect(Router::new().fallback(decline));
+        let router = auth.protect(Router::new().fallback(|| async { decline() }));
         let handle = tokio::spawn(async move {
             axum::serve(
                 listener,

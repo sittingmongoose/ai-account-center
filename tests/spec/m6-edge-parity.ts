@@ -22,6 +22,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
+import { startRustFixture } from './m6-rust-fixture';
 import { fakeRun, writeLeptosFixture } from '../shared/fixtures/leptos-ui-fixture';
 import type {
   AccountDashboard,
@@ -43,6 +44,7 @@ const KEY = 'aacu_' + 'f'.repeat(43);
 const KEY_ALT = 'aacu_' + 'b'.repeat(43);
 const WORKER = process.argv.indexOf('--worker');
 const REGENERATE = process.argv.includes('--regenerate');
+const RUST_FIXTURE = process.argv.includes('--rust-fixture');
 const SELECTED_HEADERS = [
   'content-type',
   'cache-control',
@@ -67,8 +69,8 @@ interface HttpCase {
 interface CliCase {
   name: string;
   argv: string[];
-  /** The legacy bin names only exist in the TS package. */
-  tsOnly?: boolean;
+  /** Invoke a retired bin through the target’s compatibility name. */
+  legacyBin?: boolean;
 }
 
 interface Recorded {
@@ -114,23 +116,108 @@ const usageCall = (authIndex: string, url: string) =>
 
 const HTTP_CASES: HttpCase[] = [
   // The hub guards, in the order usage-hub-router names them.
-  { name: 'hub auth-files with a bearer key', method: 'GET', path: '/v0/management/auth-files', headers: auth },
-  { name: 'hub auth-files with X-Management-Key', method: 'GET', path: '/v0/management/auth-files', headers: { 'x-management-key': KEY } },
-  { name: 'hub api-call: Codex usage', method: 'POST', path: '/v0/management/api-call', headers: json, body: usageCall(codex, CODEX_USAGE_URL) },
-  { name: 'hub api-call: Claude usage', method: 'POST', path: '/v0/management/api-call', headers: json, body: usageCall(claude, CLAUDE_USAGE_URL) },
-  { name: 'hub api-call: an account with no reading answers 503 upstream', method: 'POST', path: '/v0/management/api-call', headers: json, body: usageCall(gamma, CODEX_USAGE_URL) },
-  { name: 'hub api-call: an unknown auth_index', method: 'POST', path: '/v0/management/api-call', headers: json, body: usageCall('fixture-missing', CODEX_USAGE_URL) },
-  { name: 'hub api-call: a provider mismatch', method: 'POST', path: '/v0/management/api-call', headers: json, body: usageCall(codex, CLAUDE_USAGE_URL) },
-  { name: 'hub api-call: a foreign URL is not proxied', method: 'POST', path: '/v0/management/api-call', headers: json, body: usageCall(codex, 'https://example.com/usage') },
-  { name: 'hub api-call: reset credits are refused', method: 'POST', path: '/v0/management/api-call', headers: json, body: usageCall(codex, CODEX_CREDITS_URL) },
-  { name: 'hub api-call: a write is refused', method: 'POST', path: '/v0/management/api-call', headers: json, body: JSON.stringify({ auth_index: codex, method: 'POST', url: CODEX_USAGE_URL, data: {} }) },
-  { name: 'hub api-call: invalid JSON', method: 'POST', path: '/v0/management/api-call', headers: json, body: '{' },
-  { name: 'hub reset-quota is refused', method: 'POST', path: '/v0/management/reset-quota', headers: json, body: '{}' },
+  {
+    name: 'hub auth-files with a bearer key',
+    method: 'GET',
+    path: '/v0/management/auth-files',
+    headers: auth,
+  },
+  {
+    name: 'hub auth-files with X-Management-Key',
+    method: 'GET',
+    path: '/v0/management/auth-files',
+    headers: { 'x-management-key': KEY },
+  },
+  {
+    name: 'hub api-call: Codex usage',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: usageCall(codex, CODEX_USAGE_URL),
+  },
+  {
+    name: 'hub api-call: Claude usage',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: usageCall(claude, CLAUDE_USAGE_URL),
+  },
+  {
+    name: 'hub api-call: an account with no reading answers 503 upstream',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: usageCall(gamma, CODEX_USAGE_URL),
+  },
+  {
+    name: 'hub api-call: an unknown auth_index',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: usageCall('fixture-missing', CODEX_USAGE_URL),
+  },
+  {
+    name: 'hub api-call: a provider mismatch',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: usageCall(codex, CLAUDE_USAGE_URL),
+  },
+  {
+    name: 'hub api-call: a foreign URL is not proxied',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: usageCall(codex, 'https://example.com/usage'),
+  },
+  {
+    name: 'hub api-call: reset credits are refused',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: usageCall(codex, CODEX_CREDITS_URL),
+  },
+  {
+    name: 'hub api-call: a write is refused',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: JSON.stringify({ auth_index: codex, method: 'POST', url: CODEX_USAGE_URL, data: {} }),
+  },
+  {
+    name: 'hub api-call: invalid JSON',
+    method: 'POST',
+    path: '/v0/management/api-call',
+    headers: json,
+    body: '{',
+  },
+  {
+    name: 'hub reset-quota is refused',
+    method: 'POST',
+    path: '/v0/management/reset-quota',
+    headers: json,
+    body: '{}',
+  },
   { name: 'hub: no key', method: 'GET', path: '/v0/management/auth-files' },
-  { name: 'hub: a wrong key', method: 'GET', path: '/v0/management/auth-files', headers: { authorization: `Bearer ${KEY_ALT}` } },
-  { name: 'hub: a key in the query string is refused', method: 'GET', path: `/v0/management/auth-files?key=${KEY}` },
+  {
+    name: 'hub: a wrong key',
+    method: 'GET',
+    path: '/v0/management/auth-files',
+    headers: { authorization: `Bearer ${KEY_ALT}` },
+  },
+  {
+    name: 'hub: a key in the query string is refused',
+    method: 'GET',
+    path: `/v0/management/auth-files?key=${KEY}`,
+  },
   { name: 'hub: any other path', method: 'GET', path: '/v0/management/other', headers: auth },
-  { name: 'hub: a method it does not serve', method: 'PUT', path: '/v0/management/auth-files', headers: auth, body: '{}' },
+  {
+    name: 'hub: a method it does not serve',
+    method: 'PUT',
+    path: '/v0/management/auth-files',
+    headers: auth,
+    body: '{}',
+  },
 
   // Static files and the Leptos bundle: pages, cache policy, encodings and the PWA.
   { name: 'page: /', method: 'GET', path: '/' },
@@ -139,22 +226,60 @@ const HTTP_CASES: HttpCase[] = [
   { name: 'page: HEAD', method: 'HEAD', path: '/app/home' },
   { name: 'frame stylesheet revalidates', method: 'GET', path: '/app/app.css' },
   { name: 'classic upgrade module is a script', method: 'GET', path: '/bridge.js' },
-  { name: 'pkg: identity', method: 'GET', path: '/pkg/<build-id>/aac_web.js' },
-  { name: 'pkg: brotli variant', method: 'GET', path: '/pkg/<build-id>/aac_web.js', headers: { 'accept-encoding': 'br' } },
-  { name: 'pkg: gzip variant', method: 'GET', path: '/pkg/<build-id>/aac_web.js', headers: { 'accept-encoding': 'gzip' } },
-  { name: 'pkg: wasm', method: 'GET', path: '/pkg/<build-id>/aac_web_bg.wasm', headers: { 'accept-encoding': 'br' } },
-  { name: 'pkg: a matching ETag revalidates', method: 'GET', path: '/pkg/<build-id>/aac_web.js', headers: { 'accept-encoding': 'gzip' }, revalidate: true },
-  { name: 'pkg: a precompressed file is never served directly', method: 'GET', path: '/pkg/<build-id>/aac_web.js.br' },
+  {
+    name: 'pkg: identity',
+    method: 'GET',
+    path: '/pkg/<build-id>/aac_web.js',
+    headers: { 'accept-encoding': 'identity' },
+  },
+  {
+    name: 'pkg: brotli variant',
+    method: 'GET',
+    path: '/pkg/<build-id>/aac_web.js',
+    headers: { 'accept-encoding': 'br' },
+  },
+  {
+    name: 'pkg: gzip variant',
+    method: 'GET',
+    path: '/pkg/<build-id>/aac_web.js',
+    headers: { 'accept-encoding': 'gzip' },
+  },
+  {
+    name: 'pkg: wasm',
+    method: 'GET',
+    path: '/pkg/<build-id>/aac_web_bg.wasm',
+    headers: { 'accept-encoding': 'br' },
+  },
+  {
+    name: 'pkg: a matching ETag revalidates',
+    method: 'GET',
+    path: '/pkg/<build-id>/aac_web.js',
+    headers: { 'accept-encoding': 'gzip' },
+    revalidate: true,
+  },
+  {
+    name: 'pkg: a precompressed file is never served directly',
+    method: 'GET',
+    path: '/pkg/<build-id>/aac_web.js.br',
+  },
   { name: 'the build manifest is never served', method: 'GET', path: '/ui-build-manifest.json' },
   { name: 'service worker', method: 'GET', path: '/sw.js' },
   { name: 'service worker routing module', method: 'GET', path: '/sw-route.js' },
   { name: 'PWA manifest', method: 'GET', path: '/manifest.webmanifest' },
   { name: 'PWA icon', method: 'GET', path: '/icons/aac-192.png' },
   { name: 'root icon alias', method: 'GET', path: '/favicon.ico' },
-  { name: 'an unknown API path answers JSON 404', method: 'GET', path: '/api/definitely-not-a-route' },
+  {
+    name: 'an unknown API path answers JSON 404',
+    method: 'GET',
+    path: '/api/definitely-not-a-route',
+  },
   { name: 'an unknown page goes back to /', method: 'GET', path: '/definitely-not-a-page' },
   { name: 'an unknown asset goes back to /', method: 'GET', path: '/app/definitely-not-there.js' },
-  { name: 'dot segments never escape the static folder', method: 'GET', path: '/app/%2e%2e/%2e%2e/package.json' },
+  {
+    name: 'dot segments never escape the static folder',
+    method: 'GET',
+    path: '/app/%2e%2e/%2e%2e/package.json',
+  },
 ];
 
 const CLI_CASES: CliCase[] = [
@@ -164,12 +289,14 @@ const CLI_CASES: CliCase[] = [
   { name: 'cli: config is the dashboard alias', argv: ['config', '--help'] },
   { name: 'cli: retired self-update', argv: ['update'] },
   { name: 'cli: retired profile workflow', argv: ['launch', 'work'] },
-  { name: 'cli: retired legacy bin', argv: [], tsOnly: true },
+  { name: 'cli: retired legacy bin', argv: [], legacyBin: true },
 ];
 
 function readDashboard(): DashboardAccount[] {
   // Committed synthetic fixture owned by this suite: the parsed shape is the input, so a direct cast is enough.
-  const parsed = JSON.parse(fs.readFileSync(dashboardFile, 'utf8')) as { accounts: DashboardAccount[] };
+  const parsed = JSON.parse(fs.readFileSync(dashboardFile, 'utf8')) as {
+    accounts: DashboardAccount[];
+  };
   return parsed.accounts;
 }
 
@@ -197,7 +324,7 @@ function text(value: string, ctx: NormalizeContext): string {
     out = out.split(ctx.home).join('<fixture-home>');
     out = out.split(ctx.home.split(path.sep).join('/')).join('<fixture-home>');
   }
-  out = out.split(ctx.buildId).join('<build-id>');
+  if (ctx.buildId) out = out.split(ctx.buildId).join('<build-id>');
   out = out.split(KEY).join('<management-key>');
   return out.split(repo).join('<repo>');
 }
@@ -260,10 +387,7 @@ function bodyOf(bytes: Buffer, contentType: string | null): unknown {
   return { sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length };
 }
 
-async function runHttp(
-  base: string,
-  ctx: { home: string; buildId: string }
-): Promise<Recorded[]> {
+async function runHttp(base: string, ctx: { home: string; buildId: string }): Promise<Recorded[]> {
   const normalizeContext: NormalizeContext = { base, home: ctx.home, buildId: ctx.buildId };
   const out: Recorded[] = [];
   for (const testCase of HTTP_CASES) {
@@ -288,7 +412,11 @@ async function runHttp(
       normalizeRecord(
         {
           case: testCase.name,
-          request: { method: testCase.method, path: testCase.path, headers: testCase.headers ?? {} },
+          request: {
+            method: testCase.method,
+            path: testCase.path,
+            headers: testCase.headers ?? {},
+          },
           response: {
             status: response.status,
             headers: selectedHeaders(response.headers),
@@ -299,7 +427,9 @@ async function runHttp(
       )
     );
     const shape = typeof body === 'object' && body !== null && 'bytes' in body ? 'binary' : 'text';
-    process.stdout.write(`[m6] ${response.status} ${testCase.method} ${testCase.path} (${shape})\n`);
+    process.stdout.write(
+      `[m6] ${response.status} ${testCase.method} ${testCase.path} (${shape})\n`
+    );
   }
   return out;
 }
@@ -320,6 +450,7 @@ function runCli(target: CliTarget, argv: string[], home: string): CliRecorded {
     env,
     encoding: 'utf8',
     timeout: 30_000,
+    windowsHide: true,
   });
   assert.ok(!result.error, `${argv.join(' ')} failed to start: ${result.error?.message}`);
   // Keys in the corpus order (sorted).
@@ -342,14 +473,38 @@ function compatWrapper(home: string): CliTarget {
   return { command: process.execPath, prefix: [wrapper], typescript: true };
 }
 
+function rustCompatBin(target: CliTarget, home: string): CliTarget {
+  const executable = path.join(home, process.platform === 'win32' ? 'ccs-droid.exe' : 'ccs-droid');
+  try {
+    fs.linkSync(target.command, executable);
+  } catch {
+    fs.copyFileSync(target.command, executable);
+  }
+  return { command: executable, prefix: [], typescript: false };
+}
+
+function normalizeInstallation(stdout: string, target: CliTarget): string {
+  const expected = target.typescript ? target.prefix[0] : target.command;
+  return stdout.replace(/^Installation: ([^\r\n]+)$/m, (_line, actual: string) => {
+    assert.equal(fs.realpathSync(actual), fs.realpathSync(expected));
+    return 'Installation: <executable>';
+  });
+}
+
 async function runCliCases(target: CliTarget, home: string): Promise<CliRecorded[]> {
   const ctx: NormalizeContext = { base: '', home, buildId: '' };
   const out: CliRecorded[] = [];
   for (const testCase of CLI_CASES) {
-    if (testCase.tsOnly && !target.typescript) continue;
-    const recorded = runCli(testCase.tsOnly ? compatWrapper(home) : target, testCase.argv, home);
+    const executable = testCase.legacyBin
+      ? target.typescript
+        ? compatWrapper(home)
+        : rustCompatBin(target, home)
+      : target;
+    const recorded = runCli(executable, testCase.argv, home);
     recorded.case = testCase.name;
-    recorded.stdout = text(recorded.stdout, ctx);
+    recorded.stdout = text(normalizeInstallation(recorded.stdout, executable), ctx)
+      .replaceAll('<fixture-home>' + path.sep, '<fixture-home>/')
+      .replaceAll(path.join('.ccs', 'config.json'), '.ccs/config.json');
     recorded.stderr = text(recorded.stderr, ctx);
     out.push(recorded);
     process.stdout.write(`[m6] cli ${testCase.name} → ${recorded.status}\n`);
@@ -379,26 +534,43 @@ async function worker(reportPath: string): Promise<void> {
   writeLeptosFixture(skeleton);
   const require = createRequire(import.meta.url);
   const ui = require('../../scripts/build-ui.js') as {
-    buildUi: (options: {
-      repoRoot: string;
-      run: typeof fakeRun;
-      readCommit: () => string;
-    }) => { buildId: string };
+    buildUi: (options: { repoRoot: string; run: typeof fakeRun; readCommit: () => string }) => {
+      buildId: string;
+    };
   };
   const built = ui.buildUi({ repoRoot: skeleton, run: fakeRun, readCommit: () => '8fb5e3de' });
   const staticDir = path.join(skeleton, 'dist/ui');
 
-  const keyStore = await import('../../src/web-server/usage-hub/usage-hub-key-store');
   fs.mkdirSync(path.join(ccs, 'auth'), { recursive: true, mode: 0o700 });
   fs.writeFileSync(
-    keyStore.usageHubKeyPath(),
+    path.join(ccs, 'auth/usage-hub-key.json'),
     JSON.stringify({
       version: 1,
-      keySha256: keyStore.hashUsageHubKey(KEY),
+      keySha256: createHash('sha256').update(KEY).digest('hex'),
       createdAt: '2026-01-01T00:00:00.000Z',
     }),
     { mode: 0o600 }
   );
+
+  if (RUST_FIXTURE) {
+    const binary = process.env.AAC_RUST_PUBLIC_BINARY;
+    assert.ok(binary, '--rust-fixture requires AAC_RUST_PUBLIC_BINARY');
+    const cache = path.join(home, 'dashboard-cache.json');
+    fs.writeFileSync(cache, JSON.stringify({ accounts: readDashboard() }), { mode: 0o600 });
+    const rust = await startRustFixture(path.resolve(binary), ccs, {
+      ...process.env,
+      AAC_RUST_UI_DIR: staticDir,
+      AAC_RUST_HUB_CACHE: cache,
+    });
+    try {
+      const http = await runHttp(rust.url, { home, buildId: built.buildId });
+      fs.writeFileSync(reportPath, JSON.stringify({ http }));
+    } finally {
+      await rust.stop();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+    return;
+  }
 
   const { spyOn } = await import('bun:test');
   const dashboardService = await import('../../src/web-server/services/account-dashboard-service');
@@ -416,7 +588,10 @@ async function worker(reportPath: string): Promise<void> {
   try {
     const http = await runHttp(base, { home, buildId: built.buildId });
     const distCli = path.join(repo, 'dist/ccs.js');
-    assert.ok(fs.existsSync(distCli), 'the CLI goldens need the server build: run bun run build:server');
+    assert.ok(
+      fs.existsSync(distCli),
+      'the CLI goldens need the server build: run bun run build:server'
+    );
     const cliHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-m6-cli-'));
     let cli: CliRecorded[];
     try {
@@ -447,7 +622,10 @@ async function main(): Promise<void> {
   const targetUrl = process.env.AAC_M6_TARGET_URL;
   const targetCli = process.env.AAC_M6_TARGET_CLI;
   const golden = readGolden();
-  assert.ok(!(REGENERATE && (targetUrl || targetCli)), '--regenerate records from the TS target only');
+  assert.ok(
+    !(REGENERATE && (targetUrl || targetCli || RUST_FIXTURE)),
+    '--regenerate records from the TS target only'
+  );
 
   if (targetUrl) {
     const index = await fetch(targetUrl + '/', { redirect: 'manual' });
@@ -455,24 +633,37 @@ async function main(): Promise<void> {
     const match = /\/pkg\/([a-f0-9]{12})\//.exec(html);
     assert.ok(match, `${targetUrl}: the frame page names no pkg/<build-id> path`);
     const rows = await runHttp(targetUrl, { home: '', buildId: match[1] });
-    assert.deepEqual(rows, golden.http, `${targetUrl}: the M6 HTTP contract differs from the goldens`);
+    assert.deepEqual(
+      rows,
+      golden.http,
+      `${targetUrl}: the M6 HTTP contract differs from the goldens`
+    );
     process.stdout.write(`[OK] M6 HTTP contract matches at ${targetUrl} (${rows.length} cases).\n`);
   } else {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-m6-report-'));
     try {
       const reportPath = path.join(scratch, 'report.json');
-      const result = spawnSync('bun', [fileURLToPath(import.meta.url), '--worker', reportPath], {
-        cwd: repo,
-        env: { ...process.env, AAC_NO_LOCAL_RUST_BUILD: '1' },
-        encoding: 'utf8',
-        maxBuffer: 32 * 1024 * 1024,
-      });
+      const result = spawnSync(
+        'bun',
+        [
+          fileURLToPath(import.meta.url),
+          '--worker',
+          reportPath,
+          ...(RUST_FIXTURE ? ['--rust-fixture'] : []),
+        ],
+        {
+          cwd: repo,
+          env: { ...process.env, AAC_NO_LOCAL_RUST_BUILD: '1' },
+          encoding: 'utf8',
+          maxBuffer: 32 * 1024 * 1024,
+        }
+      );
       if (result.status !== 0)
         throw new Error(result.stderr || result.stdout || 'the M6 fixture worker failed');
       process.stdout.write(result.stdout);
       const report = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as {
         http: Recorded[];
-        cli: CliRecorded[];
+        cli?: CliRecorded[];
       };
       if (REGENERATE) {
         fs.writeFileSync(
@@ -482,30 +673,36 @@ async function main(): Promise<void> {
         process.stdout.write(`[OK] recorded ${contractFile}\n`);
         return;
       }
-      assert.deepEqual(report.http, golden.http, 'M6 HTTP contract changed; review and regenerate explicitly');
-      if (targetCli) {
-        const cliHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-m6-cli-'));
-        try {
-          const rows = await runCliCases(
-            { command: targetCli, prefix: [], typescript: false },
-            cliHome
-          );
-          assert.deepEqual(
-            rows,
-            golden.cli.filter((row) => !CLI_CASES.find((c) => c.name === row.case)?.tsOnly),
-            `${targetCli}: the M6 CLI contract differs from the goldens`
-          );
-        } finally {
-          fs.rmSync(cliHome, { recursive: true, force: true });
-        }
-      } else {
-        assert.deepEqual(report.cli, golden.cli, 'M6 CLI contract changed; review and regenerate explicitly');
+      assert.deepEqual(
+        report.http,
+        golden.http,
+        'M6 HTTP contract changed; review and regenerate explicitly'
+      );
+      if (report.cli) {
+        assert.deepEqual(
+          report.cli,
+          golden.cli,
+          'M6 TS CLI contract changed; review and regenerate explicitly'
+        );
       }
       process.stdout.write(
-        `[OK] M6 edge contract matches (${report.http.length} HTTP, ${report.cli.length} CLI cases).\n`
+        `[OK] M6 ${RUST_FIXTURE ? 'Rust' : 'TS'} edge contract matches (${report.http.length} HTTP${report.cli ? ', ' + report.cli.length + ' CLI' : ''} cases).\n`
       );
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+  if (targetCli) {
+    const cliHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-m6-cli-'));
+    try {
+      const rows = await runCliCases(
+        { command: path.resolve(targetCli), prefix: [], typescript: false },
+        cliHome
+      );
+      assert.deepEqual(rows, golden.cli, 'The M6 target CLI differs from the goldens');
+      process.stdout.write(`[OK] M6 target CLI contract matches (${rows.length} cases).\n`);
+    } finally {
+      fs.rmSync(cliHome, { recursive: true, force: true });
     }
   }
 }
