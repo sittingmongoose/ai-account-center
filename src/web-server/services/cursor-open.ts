@@ -25,7 +25,7 @@ export async function openCursorThroughAgent(
     undefined,
     true
   );
-  if (reply == null) return false;
+  if (reply === null || reply === undefined) return false;
   if (JSON.parse(reply).opened === true) return true;
   throw new ConfigError('The Cursor console session could not be opened.');
 }

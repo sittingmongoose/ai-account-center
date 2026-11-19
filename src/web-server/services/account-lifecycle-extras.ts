@@ -1,3 +1,5 @@
+import { runLifecycleEffects } from './lifecycle-effect-pipe';
+import type { DashboardAccount } from './account-dashboard-types';
 import { lifecyclePlan } from '../../shared/private-file-lease';
 import { LifecycleHttpError } from './account-lifecycle-accounts';
 import { ClaudeLifecycleError, isClaudeEmail } from './claude-account-lifecycle';
@@ -102,14 +104,42 @@ export async function recheck(
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
   keys(body, []);
   checkRecheckLimit(env, id);
-  const row = await env.refreshAdditional(id);
-  if (!row) throw new LifecycleHttpError(404, 'unknown_account');
-  env.replaceRow(row);
+  const { entry } = account;
+  const binding = JSON.stringify([entry.provider, entry.platform, entry.sshHost, entry.credential]);
+  const reading: { row: DashboardAccount | null } = { row: null };
+  const completed = await runLifecycleEffects(
+    env.ccsDir(),
+    ['--additional-recheck'],
+    ['collect', 'publish-if-current'] as const,
+    async (effect) => {
+      if (effect === 'collect') {
+        const row = await env.refreshAdditional(id);
+        reading.row = row;
+        return row?.id === id && row.provider === entry.provider && row.platform === entry.platform;
+      }
+      const { row } = reading;
+      if (!row) return false;
+      const current = await resolveIn(env, id);
+      if (current.kind !== 'additional') return false;
+      const source = current.entry;
+      if (
+        JSON.stringify([source.provider, source.platform, source.sshHost, source.credential]) !==
+        binding
+      )
+        return false;
+      env.replaceRow(row);
+      return true;
+    },
+    async (perform) =>
+      (await perform('collect')) === true && (await perform('publish-if-current')) === true
+  );
+  const refreshed = reading.row;
+  if (!completed || !refreshed) throw new LifecycleHttpError(404, 'unknown_account');
   return {
     status: 200,
     body: {
       account: {
-        ...row,
+        ...refreshed,
         lifecycle: { state: 'ready', jobId: null },
       },
     },

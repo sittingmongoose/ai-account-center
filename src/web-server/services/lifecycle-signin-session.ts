@@ -84,9 +84,10 @@ export function nativeSignInSession(
         true,
         controller.signal
       ).finally(() => active.delete(id));
-      if (answer == null && !seenProgress) return undefined;
-      if (answer == null)
+      if (answer === null || answer === undefined) {
+        if (!seenProgress) return undefined;
         throw new ConfigError('The sign-in dispatch outcome could not be confirmed.');
+      }
       const job = boundJob(answer);
       const installPending = JSON.parse(answer).installPending === true;
       if (
