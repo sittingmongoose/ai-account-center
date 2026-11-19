@@ -779,7 +779,7 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_with_account_usage_cache(boot, shutdown, Default::default()).await
+    serve_inner(boot, shutdown, Default::default(), None).await
 }
 
 /// Run the private service with the cache a standalone Rust collector and its public listener share.
@@ -788,7 +788,43 @@ pub async fn serve_with_account_usage_cache(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     cache: crate::account_usage::AccountUsageCache,
 ) -> io::Result<()> {
+    serve_inner(boot, shutdown, cache, None).await
+}
+
+/// Native owner callbacks share the dashboard with the public listener, hub and store.
+pub struct NativeAccountUsage {
+    /// Read the current facts published by the adjacent Rust owners.
+    pub companions: Arc<dyn Fn() -> crate::account_usage::producer::CompanionInputs + Send + Sync>,
+    /// Observe each completed cache generation, for example in the usage hub.
+    pub published: Arc<dyn Fn(&crate::account_usage::AccountUsageCache) + Send + Sync>,
+}
+
+/// Boot account collection with the private server's L5 pool and the public listener's cache.
+pub async fn serve_with_native_account_usage(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    cache: crate::account_usage::AccountUsageCache,
+    native: NativeAccountUsage,
+) -> io::Result<()> {
+    serve_inner(boot, shutdown, cache, Some(native)).await
+}
+
+async fn serve_inner(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    cache: crate::account_usage::AccountUsageCache,
+    native: Option<NativeAccountUsage>,
+) -> io::Result<()> {
     boot.validate()?;
+    let owners = boot.owners()?;
+    if native.is_some()
+        && owners.owner(crate::collection_cache::OBSERVATIONS) != Some(registry::Role::RustService)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "native collection requires its registry owner",
+        ));
+    }
     let rows = crate::table::rows(crate::table::ROUTES)?;
     let identity = Identity::current()?;
     let listener = StdListener::bind(&boot.socket_path)?;
@@ -810,13 +846,21 @@ pub async fn serve_with_account_usage_cache(
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
     let collection = Arc::new(crate::collection::Collection::default());
+    let producer = native.as_ref().map(|_| {
+        crate::account_usage::producer::Producer::shared(
+            boot.ccs_dir.clone(),
+            owners.clone(),
+            agents.clone(),
+            collection.clone(),
+        )
+    });
     let state = AppState(Arc::new(Shared {
-        owners: boot.owners()?,
+        owners,
         cache_writes: Arc::default(),
         boot,
         limits: Limits::new(),
         identity,
-        feeds: cache.feeds,
+        feeds: cache.feeds.clone(),
         agents,
         collection: collection.clone(),
         cursor: Arc::default(),
@@ -862,12 +906,44 @@ pub async fn serve_with_account_usage_cache(
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { store_jobs(jobs, stop).await });
     }
+    let cancel = aac_transport::CancellationToken::new();
+    let task = producer.zip(native).map(|(producer, native)| {
+        let stop = cancel.clone();
+        let store = store.clone();
+        tokio::spawn(async move {
+            producer
+                .run(
+                    cache,
+                    stop,
+                    || (native.companions)(),
+                    |cache| {
+                        (native.published)(&cache);
+                        let store = store.clone();
+                        async move {
+                            if let Some(store) = store {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    store.record_native_account_usage(&cache)
+                                })
+                                .await;
+                            }
+                        }
+                    },
+                )
+                .await;
+        })
+    });
+    let stopping = cancel.clone();
     let served = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             shutdown.await;
+            stopping.cancel();
             collection.stop();
         })
         .await;
+    cancel.cancel();
+    if let Some(task) = task {
+        let _ = task.await;
+    }
     jobs_stop.store(true, Ordering::Release);
     if let Some(host) = store {
         let _ = tokio::task::spawn_blocking(move || host.close_engine()).await;

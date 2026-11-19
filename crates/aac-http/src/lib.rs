@@ -46,4 +46,7 @@ pub mod view_reply;
 #[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, serve_with_account_usage_cache, short_name};
+pub use unix::{
+    Boot, NativeAccountUsage, serve, serve_with_account_usage_cache,
+    serve_with_native_account_usage, short_name,
+};

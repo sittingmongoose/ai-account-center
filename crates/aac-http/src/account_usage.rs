@@ -1,8 +1,11 @@
 //! Dashboard snapshot publication shared by Accounts, Home, the usage hub and store sampling.
 pub(crate) mod cursor;
+pub mod dashboard;
 pub mod failover;
 pub(crate) mod helper;
+pub mod producer;
 pub mod provider_caches;
+mod rows;
 pub mod sampler;
 pub mod sources;
 
@@ -72,6 +75,18 @@ impl AccountUsageCache {
         }));
         let held = self.feeds.put_dashboard(&source, &body)?;
         Ok(held["generation"] == generation)
+    }
+
+    /// Generation to send to the private Home renderer. Both listeners share
+    /// the same cache, so this needs no intermediate TypeScript feed.
+    pub fn generation(&self, desktop: Desktop, secure: bool) -> Option<String> {
+        Some(
+            self.feeds
+                .latest(&source(desktop.word(), secure))
+                .ok()?
+                .id
+                .clone(),
+        )
     }
 
     /// Render the latest prepared dashboard. A missing selector declines so the caller can

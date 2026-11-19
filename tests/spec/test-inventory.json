@@ -332,6 +332,12 @@
       ]
     },
     {
+      "file": "crates/aac-http/tests/native_collection.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/tests/profile_reads.rs",
       "kind": "internal",
       "evidence": [],

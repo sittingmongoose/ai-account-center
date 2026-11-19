@@ -217,6 +217,19 @@ impl StoreHost {
         .unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }
 
+    pub(crate) fn record_native_account_usage(
+        &self,
+        cache: &crate::account_usage::AccountUsageCache,
+    ) {
+        self.wait_ready();
+        let now = aac_store::engine::now_ms() as i64;
+        if let (Some(engine), Some(updated_at)) = (self.engine(), aac_num::ecma::to_iso_string(now))
+            && let Ok(observations) = cache.store_observations(&updated_at, now, i64::MIN)
+        {
+            let _ = aac_store::usage::record(&engine, observations);
+        }
+    }
+
     fn record_dashboard(&self, args: &str) -> Result<String, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
