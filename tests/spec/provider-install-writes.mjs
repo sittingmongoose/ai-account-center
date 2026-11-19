@@ -8,6 +8,7 @@ for (const mode of modes) {
   if (process.platform !== 'win32')
     files.push(
       'tests/unit/web-server/antigravity-signin-flow.test.ts',
+      'tests/unit/web-server/muse-account-lifecycle.test.ts',
       'tests/unit/web-server/account-key-sweep.test.ts',
       'tests/unit/web-server/claude-account-lifecycle.test.ts'
     );

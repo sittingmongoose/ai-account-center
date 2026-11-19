@@ -249,6 +249,88 @@ export function lifecyclePlan(root: string, request: object): unknown {
   }
 }
 
+/** A native sign-in callback answer: `ok` carries the result, `refused` a provider code. */
+export interface SignInCallbackAnswer {
+  status: 'ok' | 'refused';
+  [key: string]: unknown;
+}
+
+/**
+ * Run a native sign-in prepare/install callback scoped to the opted-in service. Returns
+ * undefined when no writer is registered, the binary cannot launch, or Rust declines; the
+ * TypeScript owner then answers. A `refused` answer is returned for the caller to map.
+ */
+export function signInCallback(root: string, request: object): SignInCallbackAnswer | undefined {
+  const writer = writers.get(canonicalLeaseRoot(root));
+  if (!writer) return undefined;
+  const result = spawnSync(writer.binary, ['--signin-callback'], {
+    input: JSON.stringify(request),
+    stdio: ['pipe', 'pipe', 'ignore'],
+    timeout: 5000,
+    maxBuffer: 256 * 1024,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  if (result.status !== 0 || typeof result.stdout !== 'string') return undefined;
+  try {
+    const answer = JSON.parse(result.stdout) as SignInCallbackAnswer;
+    if (answer.status !== 'ok' && answer.status !== 'refused') return undefined;
+    return answer;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A native registry mutation result: committed, or refused with a provider code. */
+export interface CodexRegistryEditResult {
+  status: 'committed' | 'refused';
+  code?: string;
+}
+
+/**
+ * Apply a Codex registry mutation in Rust while the caller holds the registry directory lease
+ * (inherited on stderr). Undefined when no writer is registered or Rust declines; the TypeScript
+ * read-modify-write then answers. A refused edit is returned for the caller to map to its error.
+ */
+export function editCodexRegistry(dir: string, edit: object): CodexRegistryEditResult | undefined {
+  const canonical = canonicalLeaseRoot(dir);
+  const writer = writers.get(canonical);
+  if (!writer) return undefined;
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  let descriptor: number;
+  try {
+    descriptor = fs.openSync(canonical + '.lock', O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  } catch {
+    return undefined;
+  }
+  try {
+    const result = spawnSync(writer.binary, ['--codex-registry-edit', canonical], {
+      input: JSON.stringify(edit),
+      stdio: ['pipe', 'pipe', descriptor],
+      timeout: 5000,
+      maxBuffer: 256 * 1024,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (result.status !== 0 || typeof result.stdout !== 'string') return undefined;
+    try {
+      const answer = JSON.parse(result.stdout) as CodexRegistryEditResult;
+      if (answer.status === 'committed') {
+        writer.committed();
+        return answer;
+      }
+      if (answer.status === 'refused') return answer;
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
 export function rememberFileLeaseBinary(root: string, binary: string, writesOn = false): void {

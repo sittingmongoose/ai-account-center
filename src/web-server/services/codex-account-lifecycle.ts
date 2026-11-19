@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   canonicalLeaseRoot,
+  signInCallback,
   signInStaging,
   writeProviderDirectory,
   writeProviderFile,
@@ -33,6 +34,7 @@ import { stateFingerprint } from './account-confirmations';
 import {
   SignInJobError,
   SignInJobStopped,
+  type SignInCommand,
   type SignInCompleteControl,
   type SignInFlowSpec,
 } from './signin-job-types';
@@ -247,6 +249,22 @@ export class CodexAccountLifecycle {
     const staging = this.stagingDir(jobId);
     const shared = path.resolve(this.deps.sharedConfigPath ?? getSharedCodexConfigPath());
     const root = this.nativeStagingRoot();
+    if (root) {
+      const source = this.deps.env ?? process.env;
+      const sourceEnv: Record<string, unknown> = {};
+      for (const key of PASSED_ENV) sourceEnv[key] = source[key];
+      const answer = signInCallback(root, {
+        action: 'codex-prepare',
+        root,
+        staging: path.basename(staging),
+        shared,
+        cli,
+        env: sourceEnv,
+      });
+      if (answer?.status === 'ok') return answer.command as SignInCommand;
+      if (answer?.status === 'refused' && answer.code === 'tool_missing')
+        throw new SignInJobError('tool_missing');
+    }
     if (
       !root ||
       signInStaging(root, 'codex', ['prepare', path.basename(staging), shared]) === undefined

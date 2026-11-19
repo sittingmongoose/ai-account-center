@@ -5,7 +5,12 @@ import * as lockfile from 'proper-lockfile';
 import { createLogger } from '../services/logging';
 import { getCodexAuthRegistryPath } from './codex-profile-paths';
 import { getCcsDirSource } from '../utils/config-manager';
-import { canonicalLeaseRoot, writeProviderFile } from '../shared/private-file-lease';
+import {
+  canonicalLeaseRoot,
+  editCodexRegistry,
+  writeProviderFile,
+  type CodexRegistryEditResult,
+} from '../shared/private-file-lease';
 import { CODEX_PROFILE_SCHEMA_VERSION, getCodexProfileNameError } from './types';
 import type { CodexProfileData, CodexProfileMetadata } from './types';
 
@@ -280,9 +285,27 @@ export class CodexProfileRegistry {
 
   // ── CRUD ────────────────────────────────────────────────────────────────
 
+  /** The native registry mutation, only for the opted-in lifecycle writer; undefined to fall back. */
+  private nativeRegistryEdit(edit: object): CodexRegistryEditResult | undefined {
+    if (!this.lifecycleWrites || path.basename(this.registryPath) !== 'codex-profiles.yaml') {
+      return undefined;
+    }
+    return editCodexRegistry(path.dirname(this.registryPath), edit);
+  }
+
   createProfile(name: string, meta: Partial<CodexProfileMetadata> = {}): void {
     assertValidProfileName(name);
     this._withRegistryWriteLock(() => {
+      const native = this.nativeRegistryEdit({
+        edit: 'create',
+        name,
+        created: new Date().toISOString(),
+        meta: Object.entries(meta).filter(([, value]) => value !== undefined),
+      });
+      if (native?.status === 'committed') {
+        logger.stage('route', 'codex-auth.profile.created', 'Codex profile created', { name });
+        return;
+      }
       const data = this._read();
       if (Object.prototype.hasOwnProperty.call(data.profiles, name)) {
         throw new Error(`Profile already exists: ${name}`);
@@ -311,6 +334,12 @@ export class CodexProfileRegistry {
   updateProfile(name: string, partial: Partial<CodexProfileMetadata>): void {
     assertValidProfileName(name);
     this._withRegistryWriteLock(() => {
+      const native = this.nativeRegistryEdit({
+        edit: 'update',
+        name,
+        partial: Object.entries(partial).filter(([, value]) => value !== undefined),
+      });
+      if (native?.status === 'committed') return;
       const data = this._read();
       if (!Object.prototype.hasOwnProperty.call(data.profiles, name)) {
         throw new Error(`Profile not found: ${name}`);

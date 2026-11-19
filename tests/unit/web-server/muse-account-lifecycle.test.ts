@@ -5,7 +5,11 @@ import { sshOptions } from '../../../src/web-server/services/ssh-policy';
  * --help, docs and the binary's strings; never logged in). No live login, no
  * ssh to a real host: the ssh transport is faked.
  */
-import { describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import { SignInJobStopped } from '../../../src/web-server/services/signin-jobs';
 import {
   MUSE_DEVICE_AUTH_ORIGINS,
@@ -28,6 +32,34 @@ function entry(over: Partial<RegistryAccount> = {}): RegistryAccount {
     ...over,
   };
 }
+
+const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
+const nativeMode = process.env.AAC_SPEC_PROVIDER_WRITE_MODE === 'on';
+let root: string;
+let stopWriter: (() => void) | undefined;
+
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-muse-lifecycle-'));
+  process.env.CCS_HOME = path.join(root, 'home');
+  fs.mkdirSync(path.join(root, 'home', '.ccs'), { recursive: true });
+  if (nativeMode) {
+    const binary = process.env.AAC_RUST_SERVICE_BINARY;
+    if (!binary) throw new Error('Native writer binary missing');
+    stopWriter = registerFileWriter(
+      fs.realpathSync(path.join(root, 'home', '.ccs')),
+      binary,
+      () => undefined
+    );
+  }
+});
+
+afterEach(() => {
+  stopWriter?.();
+  stopWriter = undefined;
+  if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 describe('muse sign-in flag', () => {
   it('is off by default and on with CCS_MUSE_SIGNIN=on only', () => {

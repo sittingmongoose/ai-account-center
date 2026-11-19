@@ -17,6 +17,8 @@ pub mod history_snapshots;
 pub mod key_sweep;
 #[cfg(unix)]
 pub mod lifecycle_queue;
+pub mod codex_identity;
+pub mod codex_registry;
 pub mod path;
 #[cfg(unix)]
 pub mod presence;
