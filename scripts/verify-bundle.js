@@ -101,8 +101,15 @@ function verifyPrecompressed(uiDir, manifest) {
     listed.add(entry.file);
     const variant = fs.readFileSync(path.join(uiDir, entry.file));
     const original = fs.readFileSync(path.join(uiDir, entry.path));
-    const decoded =
-      entry.encoding === 'br' ? zlib.brotliDecompressSync(variant) : zlib.gunzipSync(variant);
+    let decoded;
+    try {
+      decoded =
+        entry.encoding === 'br' ? zlib.brotliDecompressSync(variant) : zlib.gunzipSync(variant);
+    } catch {
+      // A truncated or corrupt copy is exactly a precompressed file that does not match its manifest row; the
+      // decoder's own error names neither the file nor the rule.
+      throw new Error(mismatch);
+    }
     if (
       variant.length !== entry.bytes ||
       sha256(variant) !== entry.sha256 ||
