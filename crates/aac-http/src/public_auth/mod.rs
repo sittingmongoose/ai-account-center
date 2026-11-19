@@ -1358,6 +1358,52 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn reclaims_only_proven_dead_legacy_session_owners() {
+        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let open = || DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false);
+        drop(open().unwrap());
+        let marker = root.join("auth/sessions.owner");
+        let (host, boot) = aac_files::process::host_boot().unwrap();
+        let mut old_dashboard = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let dead = old_dashboard.id();
+        assert!(old_dashboard.wait().unwrap().success());
+        let live = std::process::id();
+        for (pid, hostname, boot_minute, can_reclaim) in [
+            (live, host.as_str(), boot, false),
+            (dead, "another-host.invalid", boot, false),
+            (dead, host.as_str(), boot + 3, false),
+            (dead, host.as_str(), boot, true),
+            (live, host.as_str(), boot - 3, true),
+        ] {
+            let mut owner = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&marker)
+                .unwrap();
+            let claim = json!({"pid": pid, "host": hostname, "boot": boot_minute}).to_string();
+            owner.write_all(claim.as_bytes()).unwrap();
+            drop(owner);
+            let result = open();
+            assert_eq!(result.is_ok(), can_reclaim, "claim: {claim}");
+            if can_reclaim {
+                assert_ne!(std::fs::read_to_string(&marker).unwrap(), claim);
+                drop(result);
+                assert!(!marker.exists());
+            } else {
+                assert_eq!(std::fs::read_to_string(&marker).unwrap(), claim);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn websocket_checks_origin_and_principal_and_closes_the_revoked_epoch() {
         let (_home, auth, addr, handle) = server().await;
@@ -1423,6 +1469,71 @@ mod tests {
         };
         assert_eq!(u16::from(frame.code), 4001);
         assert_eq!(frame.reason, "Signed out");
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[test]
+    fn retired_recursive_launcher_block_survives_auth_start_and_settings_save() {
+        for original in [
+            "  # Root indentation is valid YAML.\n  dashboard:\n    port: 3000\n  'channels': &channels\n    self: *channels\n    text: |\n      ---\n      ...\n  active_literal: 'retired: not a root key'\n",
+            "{ dashboard: {port: 3000}, 'channels': &channels {self: *channels, unicode: 'λ'}, active_literal: 'retired: not a root key' }\n",
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let root = home.path();
+            std::fs::write(root.join("config.yaml"), original).unwrap();
+            let auth = DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false)
+                .unwrap();
+            let mut runtime = auth.0.runtime.lock().unwrap();
+            let mut config = runtime.load_config().unwrap();
+            runtime
+                .update_config(&mut config, |config| {
+                    config.doc["dashboard_auth"] = json!({"session_lifetime_days": 30});
+                    Ok(())
+                })
+                .unwrap();
+            let saved = std::fs::read_to_string(root.join("config.yaml")).unwrap();
+            let (active, retired) = aac_config::split_active(&saved).unwrap();
+            let (_, before) = aac_config::split_active(original).unwrap();
+            assert_eq!(active["dashboard"]["port"], 3000);
+            assert_eq!(active["dashboard_auth"]["session_lifetime_days"], 30);
+            assert_eq!(active["active_literal"], "retired: not a root key");
+            assert!(retired["channels"].contains("self: *channels"));
+            assert!(saved.contains(&before["channels"]));
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn session_lifetime_can_be_saved_after_a_config_writer_crashes() {
+        let (home, _auth, addr, handle) = server().await;
+        let cookie = login(addr).await;
+        let mut writer = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let pid = writer.id();
+        assert!(writer.wait().unwrap().success());
+        let marker = home.path().join("config.yaml.lock");
+        std::fs::write(
+            &marker,
+            format!("{pid}\n{}\ncrashed-writer", storage::now()),
+        )
+        .unwrap();
+
+        let reply = request(
+            addr,
+            "/api/auth/session-lifetime",
+            "PUT",
+            &format!(
+                "Content-Type: application/json\r\nOrigin: http://{addr}\r\nCookie: {cookie}\r\n"
+            ),
+            r#"{"days":30}"#,
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.contains(r#""days":30"#));
+        assert!(!marker.exists());
         handle.abort();
         let _ = handle.await;
     }

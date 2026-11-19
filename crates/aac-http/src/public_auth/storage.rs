@@ -1,7 +1,7 @@
 use super::policy::{Connection, Network};
 use aac_core::Failure;
 use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
-use aac_files::{OwnedStore, registry};
+use aac_files::{OwnedStore, auth_owner::SessionOwner, registry};
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD},
@@ -99,6 +99,7 @@ pub(super) fn same(left: &str, right: &str) -> bool {
 pub(super) struct Files {
     root: PathBuf,
     entries: BTreeMap<&'static str, OwnedStore>,
+    _session_owner: SessionOwner,
 }
 
 impl Files {
@@ -131,13 +132,12 @@ impl Files {
         for (id, path) in names {
             entries.insert(path, owners.claim(rows, id, &root, None)?);
         }
-        let files = Self { root, entries };
-        // The TS store keeps an exclusive process marker while it owns persisted sessions.
-        // A public start over the same root must follow a clean TS shutdown.
-        if files.bytes("auth/sessions.owner", 4096, true)?.is_some() {
-            return Err(StoreError);
-        }
-        Ok(files)
+        let session_owner = SessionOwner::take(&root)?;
+        Ok(Self {
+            root,
+            entries,
+            _session_owner: session_owner,
+        })
     }
 
     fn bytes(&self, name: &str, cap: u64, private: bool) -> Result<Option<Vec<u8>>, StoreError> {
@@ -198,12 +198,18 @@ impl Files {
         let Some(bytes) = self.bytes(CONFIG, 4 * 1024 * 1024, false)? else {
             return Ok(json!({}));
         };
-        let value: Value = serde_yaml::from_slice(&bytes).map_err(|_| StoreError)?;
-        match value {
-            Value::Null => Ok(json!({})),
-            Value::Object(_) => Ok(value),
-            _ => Err(StoreError),
-        }
+        let source = std::str::from_utf8(&bytes).map_err(|_| StoreError)?;
+        let (value, _) = aac_config::split_active(source).or_else(|error| {
+            // A null document was accepted by the old auth reader as empty.
+            if serde_yaml::from_str::<Option<serde::de::IgnoredAny>>(source)
+                .is_ok_and(|value| value.is_none())
+            {
+                Ok((json!({}), BTreeMap::new()))
+            } else {
+                Err(error)
+            }
+        })?;
+        value.is_object().then_some(value).ok_or(StoreError)
     }
 
     pub(super) fn config_writer(&self) -> Result<OwnedStore, StoreError> {
@@ -211,7 +217,12 @@ impl Files {
     }
 
     pub(super) fn save_config(writer: &OwnedStore, value: &Value) -> Result<(), StoreError> {
-        let text = serde_yaml::to_string(value).map_err(|_| StoreError)?;
+        let original = match writer.read() {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|_| StoreError)?,
+            Err(error) if error.cause == aac_core::Cause::NotInstalled => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let text = aac_config::render_active(&original, value)?;
         writer.write(text.as_bytes())?;
         Ok(())
     }

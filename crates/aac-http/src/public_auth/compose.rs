@@ -113,6 +113,60 @@ pub(super) fn cut_route(method: &Method, path: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn reset_claim_post_receives_receipt_after_three_bounded_source_phases() {
+        use axum::body::to_bytes;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backend = Backend::new(listener.local_addr().unwrap(), &"a".repeat(64)).unwrap();
+        let adapter = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(stream.read_u8().await.unwrap());
+            }
+            assert!(headers.starts_with(b"POST /api/accounts/codex:work/reset-claims HTTP/1.1"));
+            tokio::time::pause();
+            // Preflight read, one provider send after durable reservation, then verification.
+            for _ in 0..3 {
+                tokio::time::sleep(Duration::from_secs(16)).await;
+            }
+            tokio::time::resume();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nreceipt",
+                )
+                .await
+                .unwrap();
+        });
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/accounts/codex:work/reset-claims")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(DashboardAccess {
+            auth_enabled: true,
+            principal: DashboardPrincipal::Browser {
+                username: "fixture".into(),
+            },
+            secure_transport: true,
+            same_origin: true,
+            origin_present: true,
+            local_access: true,
+            session_id: Some("fixture-session".into()),
+            credential_transport: "cookie",
+            direct_loopback: true,
+            lan_proxy: false,
+            client_address: None,
+        });
+        let reply = backend.forward(request).await;
+        assert_eq!(reply.status(), 200);
+        assert_eq!(to_bytes(reply.into_body(), 64).await.unwrap(), "receipt");
+        adapter.await.unwrap();
+    }
+
     #[test]
     fn cut_forwards_only_the_adapter_contract() {
         assert_eq!(
@@ -244,7 +298,23 @@ impl Backend {
         let Ok(permit) = self.slots.try_acquire_owned() else {
             return unavailable();
         };
-        let reply = tokio::time::timeout(Duration::from_secs(45), async {
+        // The adapter allows 24s for each of three source calls and 10s per ledger call,
+        // including the pending read on error. Leave time both for its reply and the browser.
+        let segments: Vec<_> = request
+            .uri()
+            .path()
+            .trim_end_matches('/')
+            .split('/')
+            .collect();
+        let claim_post = request.method() == Method::POST
+            && matches!(
+                segments.as_slice(),
+                ["", "api", "accounts", account, "reset-claims"]
+                    | ["", "api", "accounts", account, "reset-claims", "prepare" | "check"]
+                    if !account.is_empty()
+            );
+        let deadline = Duration::from_secs(if claim_post { 116 } else { 45 });
+        let reply = tokio::time::timeout(deadline, async {
             let stream = TcpStream::connect(self.address).await.ok()?;
             let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.ok()?;
             let task = tokio::spawn(async move {

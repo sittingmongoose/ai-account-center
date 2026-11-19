@@ -284,12 +284,23 @@ impl Config {
 /// config writer changes one section through this view and keeps every other section's value.
 pub fn split_active(original: &str) -> Result<(Value, BTreeMap<String, String>), Failure> {
     let (active_yaml, retired) = yaml::separate_retired(original)?;
-    let value: Value = if active_yaml.trim().is_empty() {
+    let mut value: Value = if active_yaml.trim().is_empty() {
         json!({})
     } else {
         serde_yaml::from_str(&active_yaml).map_err(|_| yaml::damaged())?
     };
+    if let Some(map) = value.as_object_mut() {
+        for key in retired.keys() {
+            map.remove(key);
+        }
+    }
     Ok((value, retired))
+}
+
+/// Serialize updated active settings while retaining opaque retired entries from the source.
+/// The source's root style and indentation are kept when needed by retained entries.
+pub fn render_active(original: &str, value: &Value) -> Result<String, Failure> {
+    yaml::render_active(original, value)
 }
 
 fn optional_read(path: &Path, max: usize) -> Result<Option<Vec<u8>>, Failure> {

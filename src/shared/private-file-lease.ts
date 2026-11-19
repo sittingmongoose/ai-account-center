@@ -420,3 +420,10 @@ export function claimFileLease(root: string, file: string, folder = false): File
     if (!locked) fs.closeSync(fd);
   }
 }
+
+/** Shared with aac-files WriterLease for short config and log operations. */
+export function claimWriterLease(root: string, file: string): FileLease {
+  if (process.platform === 'linux') return claimFileLease(root, file);
+  fs.mkdirSync(file, { mode: 0o700 });
+  return { close: () => fs.rmdirSync(file) };
+}

@@ -11,6 +11,7 @@ import {
 } from './services/account-confirmations';
 import routes from '../../config/rust-service-routes.json';
 import { rustGroupOn } from './rust-service-groups';
+import { compositionAccess } from './compose-request';
 import { tsWritesRow, withTsPrivateFileLeases } from '../shared/private-files';
 import { getCcsDir } from '../utils/config-manager';
 import type { RustLease } from './rust-service-lifecycle';
@@ -45,6 +46,8 @@ const IN_FLIGHT = 16;
 const RESET_LEDGER_DEADLINE_MS = 10_000;
 /** A ticketed source read: the Claude helper's 4 s capture and 12 s read over SSH, or the Codex CLI. */
 const RESET_SOURCE_DEADLINE_MS = 30_000;
+// The public proxy budgets for three source phases and up to four ledger calls on a claim.
+const COMPOSED_RESET_SOURCE_DEADLINE_MS = 24_000;
 /** Shadow comparisons in flight per route (L1); the rest are skipped and counted. */
 export const SHADOW_IN_FLIGHT = 2;
 
@@ -637,7 +640,7 @@ export class RustService extends RustSupervisor {
    * reads), so the route and the source keep one code path. The path never crosses the socket.
    * A lost or refused reply is an error, never a second attempt: it may follow a commit.
    */
-  resetClaimsFile(): NativeStatusHandle | null {
+  resetClaimsFile(sourceDeadlineMs = RESET_SOURCE_DEADLINE_MS): NativeStatusHandle | null {
     if (!this.writesOn || tsWritesRow('reset-claims')) return null;
     const route = '/internal/reset-claims';
     const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
@@ -656,16 +659,16 @@ export class RustService extends RustSupervisor {
           delete input.write;
           body = { op: 'sourceCodexRead', ...input };
           refusal = 'Reset source unavailable.';
-          deadlineMs = RESET_SOURCE_DEADLINE_MS;
+          deadlineMs = sourceDeadlineMs;
         } else if (method === 'resetClaudeSource') {
           body = { op: 'sourceClaudeRead', ...input };
           refusal = 'Reset source unavailable.';
-          deadlineMs = RESET_SOURCE_DEADLINE_MS;
+          deadlineMs = sourceDeadlineMs;
         } else if (method === 'resetSourceRead' || method === 'resetSourceSend') {
           // G11: the service resolves the account and runs the read or the one send itself.
           body = { op: method === 'resetSourceRead' ? 'sourceRead' : 'sourceSend', ...input };
           refusal = 'Reset source unavailable.';
-          deadlineMs = RESET_SOURCE_DEADLINE_MS;
+          deadlineMs = sourceDeadlineMs;
         } else {
           throw new ProviderError('Rust reset method refused', 'reset-claims');
         }
@@ -1196,7 +1199,11 @@ export function rustWritesEnabled(res: Response): boolean {
 export function rustResetClaimsFile(res: Response): NativeStatusHandle | null {
   if (tsWritesRow('reset-claims')) return null;
   const service: unknown = res.locals.rustService;
-  const handle = service instanceof RustService ? service.resetClaimsFile() : null;
+  const composedPost = res.req?.method === 'POST' && compositionAccess(res.req);
+  const handle =
+    service instanceof RustService
+      ? service.resetClaimsFile(composedPost ? COMPOSED_RESET_SOURCE_DEADLINE_MS : undefined)
+      : null;
   if (!handle) throw new ProviderError('Rust reset claims unavailable', 'reset-claims');
   return handle;
 }

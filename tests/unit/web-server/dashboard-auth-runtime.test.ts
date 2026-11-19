@@ -186,6 +186,67 @@ function httpsGet(
   });
 }
 
+const rustPublicBinary = process.env.AAC_REVIEW_RUST_HTTP;
+it.skipIf(!rustPublicBinary)(
+  'refuses TS rollback while the Rust listener holds a signed-in session',
+  async () => {
+    await writeConfig('configured');
+    const rust = Bun.spawn([rustPublicBinary!, '--public'], {
+      env: {
+        ...process.env,
+        AAC_RUST_PUBLIC_LISTEN: '127.0.0.1:0',
+        AAC_RUST_COMPOSE_UPSTREAM: '127.0.0.1:1',
+        AAC_RUST_COMPOSE_PROOF: 'a'.repeat(64),
+      },
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+    try {
+      const reader = rust.stdout.pipeThrough(new TextDecoderStream()).getReader();
+      let base: string | undefined;
+      let stdout = '';
+      while (!base) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error('Rust public listener failed to start.');
+        stdout += value;
+        base = /aac-http public listening on (127\.0\.0\.1:\d+)/.exec(stdout)?.[1];
+      }
+      reader.releaseLock();
+      const origin = 'http://' + base;
+      const login = await fetch(origin + '/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin },
+        body: JSON.stringify({ username: USERNAME, password: PASSWORD }),
+      });
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      expect(cookie).toStartWith('connect.sid=');
+
+      const rollback = startServer({
+        port: 0,
+        host: '127.0.0.1',
+        staticDir: path.join(home, 'ui'),
+        rustService: 'off',
+      }).then((started) => {
+        instance = started;
+      });
+      await expect(rollback).rejects.toThrow('Another dashboard holds the saved sign-ins.');
+
+      const logout = await fetch(origin + '/api/auth/logout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin, cookie },
+        body: '{}',
+      });
+      expect(logout.status).toBe(200);
+      const persisted = fs.readFileSync(path.join(home, '.ccs', 'auth', 'sessions.json'), 'utf8');
+      expect(JSON.parse(persisted).sessions).toEqual([]);
+    } finally {
+      rust.kill('SIGTERM');
+      await rust.exited;
+    }
+  }
+);
+
 describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
   it('serves the same app over TLS, where secureTransport is true', async () => {
     const files = makeCertificate(0o600);

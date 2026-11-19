@@ -19,11 +19,11 @@ const MAX_ISSUED_IDS: usize = 512;
 /// The journal's listing bound: the ledger plus room for running and retained jobs.
 const LIST_CAP: usize = 2048;
 
-/// One journaled job: the public DTO plus the process facts recovery needs.
+/// One journaled job and the process facts recovery needs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Entry {
-    /// The job DTO, exactly as the runner emits it.
+    /// The job DTO in memory, projected to recovery fields before persistence.
     pub job: Value,
     /// The relay (or plain-pipe child) process id; the group leader the kill signals target.
     pub relay_pid: Option<u32>,
@@ -49,6 +49,30 @@ impl Entry {
     pub fn finished(&self) -> bool {
         self.finished_at.is_some()
     }
+}
+
+// Preserve the DTO shape for recovery callers. The live event stream and front door
+// keep the complete verification and result separately in memory.
+fn recovery_job(job: &Value) -> Value {
+    let result = job["result"]["accountId"].as_str().map(
+        |account_id| json!({"accountId": account_id, "email": Value::Null, "plan": Value::Null}),
+    );
+    json!({
+        "id": job["id"],
+        "provider": job["provider"],
+        "kind": job["kind"],
+        "mode": job["mode"],
+        "accountId": job["accountId"],
+        "profileName": job["profileName"],
+        "platform": job["platform"],
+        "state": job["state"],
+        "startedAt": job["startedAt"],
+        "updatedAt": job["updatedAt"],
+        "expiresAt": job["expiresAt"],
+        "error": job["error"],
+        "verification": Value::Null,
+        "result": result,
+    })
 }
 
 /// The journal under one CCS root.
@@ -88,6 +112,7 @@ impl Journal {
             return Err(Failure::new(Cause::Refused, "invalid journal job id"));
         }
         let mut merged = entry.clone();
+        merged.job = recovery_job(&entry.job);
         if let Some(existing) = self.read(id) {
             merged.cancel_requested |= existing.cancel_requested;
             merged.relay_pid = merged.relay_pid.or(existing.relay_pid);
@@ -113,7 +138,9 @@ impl Journal {
             return None;
         }
         let bytes = self.store(job_id).ok()?.read().ok()?;
-        serde_json::from_slice(&bytes).ok()
+        let mut entry: Entry = serde_json::from_slice(&bytes).ok()?;
+        entry.job = recovery_job(&entry.job);
+        Some(entry)
     }
 
     /// Every readable entry, bounded; damaged files are skipped.
@@ -444,6 +471,42 @@ mod tests {
                 .settle(id, State::Succeeded, None, None, now)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn device_code_and_settled_email_stay_in_the_live_job_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Journal::open(dir.path()).unwrap();
+        let id = "job_0123456789abcdef";
+        let mut waiting = entry(id, "waiting", std::process::id(), None);
+        waiting.job["verification"] = json!({
+            "url": "https://auth.openai.com/codex/device",
+            "userCode": "ABCD-EFGH",
+            "expiresAt": waiting.job["expiresAt"],
+        });
+        journal.record(&waiting).unwrap();
+        let file = dir.path().join(format!("signin-jobs/{id}.json"));
+        let persisted: Entry = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(persisted.job["state"], "waiting");
+        assert_eq!(persisted.job["verification"], Value::Null);
+        assert_eq!(waiting.job["verification"]["userCode"], "ABCD-EFGH");
+
+        waiting.install_pending = true;
+        journal.record(&waiting).unwrap();
+        let settled = journal
+            .settle(
+                id,
+                State::Succeeded,
+                Some(json!({"accountId": "codex:work", "email": "person@example.test", "plan": "plus"})),
+                None,
+                1_763_424_000_000,
+            )
+            .unwrap();
+        assert_eq!(settled["job"]["result"]["email"], "person@example.test");
+        let persisted: Entry = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+        assert_eq!(persisted.job["state"], "succeeded");
+        assert_eq!(persisted.job["result"]["accountId"], "codex:work");
+        assert_eq!(persisted.job["result"]["email"], Value::Null);
     }
 
     #[test]

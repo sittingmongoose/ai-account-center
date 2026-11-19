@@ -10,6 +10,9 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+pub mod auth_owner;
+pub mod codex_identity;
+pub mod codex_registry;
 pub mod deployed_build;
 #[cfg(unix)]
 pub mod history_snapshots;
@@ -17,11 +20,10 @@ pub mod history_snapshots;
 pub mod key_sweep;
 #[cfg(unix)]
 pub mod lifecycle_queue;
-pub mod codex_identity;
-pub mod codex_registry;
 pub mod path;
 #[cfg(unix)]
 pub mod presence;
+pub mod process;
 #[cfg(unix)]
 pub mod profile_staging;
 #[cfg(unix)]
@@ -196,14 +198,17 @@ enum StoreLock {
     Config { _guard: ConfigLock },
 }
 
+/// The exclusive, legacy-compatible marker for a configuration write.
 #[derive(Debug)]
-struct ConfigLock {
+pub struct ConfigLock {
     file: PathBuf,
     claim: Vec<u8>,
 }
 
 impl ConfigLock {
-    fn take(parent: &Path) -> Result<Self, Failure> {
+    /// Take the config marker, reclaiming only an unchanged, proven-dead owner.
+    pub fn take(parent: &Path) -> Result<Self, Failure> {
+        ensure_directory(parent)?;
         let file = parent.join("config.yaml.lock");
         // The TypeScript config writer checks the PID and owner token in this exact format.
         // Publish complete contents atomically, so it never mistakes a new claim for a stale one.
@@ -223,10 +228,32 @@ impl ConfigLock {
             format!("{}\n{now}\n{}", std::process::id(), token.to_string_lossy()).into_bytes();
         pending.as_file_mut().write_all(&claim)?;
         pending.as_file().sync_all()?;
-        pending
-            .persist_noclobber(&file)
-            .map_err(|_| Failure::new(Cause::Busy, "config writer already active"))?;
+        match pending.persist_noclobber(&file) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
+                let held = read_bounded(&file, 1024)?;
+                let busy = || Failure::new(Cause::Busy, "config writer already active");
+                if !Self::proven_dead(&held) {
+                    return Err(busy());
+                }
+                let _takeover = WriterLease::try_take(&parent.join("config.yaml.reclaim.lock"))?;
+                let again = read_bounded(&file, 1024)?;
+                if again != held || !Self::proven_dead(&again) {
+                    return Err(busy());
+                }
+                error.file.persist(&file).map_err(|error| error.error)?;
+            }
+            Err(error) => return Err(error.error.into()),
+        }
         Ok(Self { file, claim })
+    }
+
+    fn proven_dead(claim: &[u8]) -> bool {
+        std::str::from_utf8(claim)
+            .ok()
+            .and_then(|text| text.trim().lines().next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_some_and(process::is_dead)
     }
 }
 
@@ -235,6 +262,61 @@ impl Drop for ConfigLock {
         if read_bounded(&self.file, 1024).is_ok_and(|bytes| bytes == self.claim) {
             let _ = fs::remove_file(&self.file);
         }
+    }
+}
+
+/// Cross-process lease shared with the TypeScript writer for short filesystem operations.
+#[derive(Debug)]
+pub struct WriterLease {
+    #[cfg(target_os = "linux")]
+    _file: File,
+    #[cfg(not(target_os = "linux"))]
+    directory: PathBuf,
+}
+
+impl WriterLease {
+    /// Wait briefly for another writer, without retrying filesystem or policy errors.
+    pub fn take(path: &Path, wait: std::time::Duration) -> Result<Self, Failure> {
+        let start = std::time::Instant::now();
+        loop {
+            match Self::try_take(path) {
+                Err(error) if error.cause == Cause::Busy && start.elapsed() < wait => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    /// Acquire the lease without blocking. The parent must already exist.
+    pub fn try_take(path: &Path) -> Result<Self, Failure> {
+        #[cfg(target_os = "linux")]
+        {
+            let file = open_lock(path)?;
+            FileExt::try_lock_exclusive(&file)
+                .map_err(|_| Failure::new(Cause::Busy, "writer lease busy"))?;
+            Ok(Self { _file: file })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            private_builder().create(path).map_err(|error| {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    Failure::new(Cause::Busy, "writer lease busy")
+                } else {
+                    error.into()
+                }
+            })?;
+            Ok(Self {
+                directory: path.to_path_buf(),
+            })
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Drop for WriterLease {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.directory);
     }
 }
 
@@ -250,7 +332,6 @@ pub enum AnswerAppendError {
 
 impl OwnedStore {
     /// Acquire the existing cross-language config writer lock for one read-modify-write.
-    /// A pre-existing claim is left for the TypeScript lock's existing recovery path.
     pub fn claim_dashboard_config(root: &Path) -> Result<Self, Failure> {
         require_absolute(root)?;
         ensure_directory(root)?;

@@ -14,15 +14,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const LOCK_STALE_MS: u64 = 5000;
 const LOCK_RETRIES: usize = 10;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(100);
-
-/// The config.yaml.lock hold, released on drop exactly as the TS writer's finally block does.
-pub struct ConfigLock {
-    path: PathBuf,
-    token: String,
-}
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -31,88 +24,15 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[allow(unsafe_code)] // libc::kill with signal 0 is the POSIX liveness probe; no memory is touched.
-fn owner_alive(pid: u32, timestamp: u64) -> bool {
-    #[cfg(unix)]
-    {
-        let _ = timestamp;
-        // kill(pid, 0): success or EPERM means the process exists.
-        let rc = unsafe { libc::kill(pid as i32, 0) };
-        rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        // No cheap liveness probe without a Windows process handle: a fresh timestamp holds,
-        // so a live writer is never displaced; a dead owner's lock expires after the stale window.
-        now_ms().saturating_sub(timestamp) <= LOCK_STALE_MS
-    }
-}
-
-fn try_acquire(dir: &Path) -> Option<ConfigLock> {
-    let path = dir.join("config.yaml.lock");
-    if !dir.exists() {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(dir).ok()?;
-    }
-    if path.exists() {
-        let content = fs::read_to_string(&path).ok()?;
-        let mut lines = content.trim().split('\n');
-        let pid = lines
-            .next()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
-        let timestamp = lines.next().and_then(|v| v.parse::<u64>().ok());
-        let live = pid > 0 && owner_alive(pid, timestamp.unwrap_or(0));
-        if live {
-            return None;
-        }
-        let stale = timestamp.is_none_or(|ts| now_ms().saturating_sub(ts) > LOCK_STALE_MS);
-        if stale || !live {
-            fs::remove_file(&path).ok()?;
-        }
-    }
-    let mut bytes = [0u8; 8];
-    let _ = getrandom::fill(&mut bytes);
-    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    let data = format!("{}\n{}\n{}", std::process::id(), now_ms(), token);
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&path).ok()?;
-    file.write_all(data.as_bytes()).ok()?;
-    Some(ConfigLock { path, token })
-}
-
-/// Up to one second of retries, then the writer reports the lock (the TS withConfigWriteLock).
-pub fn acquire(dir: &Path) -> Option<ConfigLock> {
+/// Up to one second of retries, then the writer reports the lock (TS withConfigWriteLock).
+fn acquire(dir: &Path) -> Option<aac_files::ConfigLock> {
     for _ in 0..LOCK_RETRIES {
-        if let Some(lock) = try_acquire(dir) {
+        if let Ok(lock) = aac_files::ConfigLock::take(dir) {
             return Some(lock);
         }
         std::thread::sleep(LOCK_RETRY_DELAY);
     }
     None
-}
-
-impl Drop for ConfigLock {
-    fn drop(&mut self) {
-        if let Ok(content) = fs::read_to_string(&self.path)
-            && content.trim().split('\n').nth(2) == Some(self.token.as_str())
-        {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
 }
 
 /// The previous config.yaml bytes beside it (0600, never overwriting), named by the UTC stamp

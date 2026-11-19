@@ -185,3 +185,35 @@ fn the_current_file_rotates_by_size_and_archives_are_pruned() {
     );
     assert!(archive.join("ccs-big-b.jsonl").exists() && archive.join("ccs-big-c.jsonl").exists());
 }
+
+#[test]
+fn rotation_and_append_wait_for_another_log_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.yaml"),
+        "version: 10\nlogging:\n  rotate_mb: 1\n",
+    )
+    .unwrap();
+    let logs = dir.path().join("logs");
+    let archives = logs.join("archive");
+    fs::create_dir_all(&archives).unwrap();
+    let current = logs.join("current.jsonl");
+    fs::write(&current, vec![b'x'; 1024 * 1024]).unwrap();
+    let lease = aac_files::WriterLease::try_take(&logs.join("current.jsonl.writer.lock")).unwrap();
+    let log = Log::new(dir.path().to_path_buf());
+    std::thread::scope(|scope| {
+        let (begun, waiting) = std::sync::mpsc::channel();
+        let job = scope.spawn(move || {
+            begun.send(()).unwrap();
+            write(&log, Level::Info, "after other writer");
+        });
+        waiting.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(fs::read_dir(&archives).unwrap().next().is_none());
+        assert_eq!(fs::metadata(&current).unwrap().len(), 1024 * 1024);
+        drop(lease);
+        job.join().unwrap();
+    });
+    assert_eq!(fs::read_dir(&archives).unwrap().count(), 1);
+    assert_eq!(lines(&current)[0]["message"], "after other writer");
+}

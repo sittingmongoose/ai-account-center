@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -88,6 +88,35 @@ describe('log storage', () => {
     const currentContent = fs.readFileSync(currentLogPath, 'utf8');
     expect(currentContent).toContain('"id":"new-entry"');
     expect(currentContent).not.toContain('"id":"old-entry"');
+  });
+
+  it('keeps both audit archives when an over-limit log rotates at the same millisecond', () => {
+    const config = createEmptyUnifiedConfig();
+    config.logging.rotate_mb = 1;
+    saveUnifiedConfig(config);
+    invalidateLoggingConfigCache();
+
+    const current = getCurrentLogPath();
+    const archives = getLogArchiveDir();
+    fs.mkdirSync(archives, { recursive: true, mode: 0o700 });
+    const timestamp = '2026-11-19T14:00:00.001Z';
+    const old = path.join(archives, 'ccs-2026-11-19T14-00-00-001Z.jsonl');
+    fs.writeFileSync(old, 'first archive\n');
+    fs.writeFileSync(current, 'at rotation threshold\n');
+    fs.truncateSync(current, 1024 * 1024);
+    const clock = spyOn(Date.prototype, 'toISOString').mockReturnValue(timestamp);
+    try {
+      appendStructuredLogEntry(createEntry({ id: 'next entry' }));
+    } finally {
+      clock.mockRestore();
+    }
+    expect(fs.readFileSync(old, 'utf8')).toBe('first archive\n');
+    const rotated = fs.readdirSync(archives).filter((name) => name !== path.basename(old));
+    expect(rotated).toHaveLength(1);
+    expect(fs.readFileSync(path.join(archives, rotated[0]), 'utf8')).toStartWith(
+      'at rotation threshold\n'
+    );
+    expect(fs.readFileSync(current, 'utf8')).toContain('next entry');
   });
 
   it('caps aggregate archive bytes including uncompressed rotation files', () => {

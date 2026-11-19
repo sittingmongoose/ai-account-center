@@ -86,8 +86,8 @@ export const ALLOWLIST = [
     path: 'crates/aac-log/src/lib.rs',
     reason:
       "The dashboard's structured log stream (logs/current.jsonl and logs/archive), not a " +
-      'registry row: one O_APPEND write per JSON line, shared with the TS server until the cut, ' +
-      'rotated by rename and pruned by age and total size exactly as log-storage.ts does. Its ' +
+      'registry row: one O_APPEND write per JSON line under the lease shared with log-storage.ts. ' +
+      'Rotation publishes archives without overwrite and pruning uses age and total size. Its ' +
       'config read goes through aac-files.',
   },
   {

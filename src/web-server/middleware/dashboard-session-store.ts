@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import fs from 'fs/promises';
 import os from 'os';
@@ -84,7 +85,9 @@ export interface DashboardSessionStoreOptions {
    */
   idleMs: number | (() => number);
   /** Settles first (the startup credential check), so no request reads a session before it. */
-  after?: Promise<unknown>;
+  after?: Promise<unknown> | (() => Promise<unknown>);
+  /** A public listener must hold the shared auth claim before settling credentials. */
+  requireWriter?: boolean;
 }
 
 export class DashboardSessionStore extends session.Store {
@@ -112,22 +115,30 @@ export class DashboardSessionStore extends session.Store {
     this.now = options.now ?? Date.now;
     const idle = options.idleMs;
     this.idleMs = typeof idle === 'function' ? idle : () => idle;
-    this.ready = (options.after ?? Promise.resolve())
-      .then(
-        () => true,
-        (error: unknown) => {
-          this.warn('load', error);
-          return false;
-        }
-      )
-      .then(async (trusted) => {
-        this.trusted = trusted;
-        this.writer = await this.claim().catch(() => false);
-        if (this.writer && this.trusted) await this.loadFile();
-        if (this.closed) return;
-        this.beat = setInterval(() => void this.heartbeat(), OWNER_BEAT_MS);
-        this.beat.unref?.();
-      });
+    this.ready = this.initialize(options);
+  }
+
+  private async initialize(options: DashboardSessionStoreOptions): Promise<void> {
+    // A caller may have started its prerequisite before constructing the store.
+    if (options.after && typeof options.after !== 'function')
+      void options.after.catch(() => undefined);
+    this.writer = await this.claim(!options.requireWriter).catch(() => false);
+    if (!this.writer && options.requireWriter)
+      throw new AuthError('Another dashboard holds the saved sign-ins.');
+    try {
+      await (typeof options.after === 'function' ? options.after() : options.after);
+      this.trusted = true;
+    } catch (error) {
+      this.warn('load', error);
+    }
+    if (this.writer && this.trusted) await this.loadFile();
+    if (this.closed) return;
+    this.beat = setInterval(() => void this.heartbeat(), OWNER_BEAT_MS);
+    this.beat.unref?.();
+  }
+
+  whenReady(): Promise<void> {
+    return this.ready;
   }
 
   /** Whether this process writes the file (another dashboard on the same home may). */
@@ -149,13 +160,13 @@ export class DashboardSessionStore extends session.Store {
    * together only one wins. A claim held by a gone process, or not refreshed for OWNER_STALE_MS, is
    * taken over by one process at a time (an atomic mkdir guards the takeover).
    */
-  private async claim(): Promise<boolean> {
+  private async claim(allowSameProcess = true): Promise<boolean> {
     if (!this.homeExists()) return false;
     const mine = this.claimText();
     await ensureAuthDirectory(path.dirname(this.ownerFile));
     if (await this.createClaim(mine)) return true;
     const held = await fs.readFile(this.ownerFile, 'utf8').catch(() => null);
-    if (held !== null && normalClaim(held) === mine) return true;
+    if (held !== null && normalClaim(held) === mine) return allowSameProcess;
     if (held !== null && !(await this.claimIsStale(held))) return false;
     const lock = `${this.ownerFile}.lock`;
     const lockStat = await fs.stat(lock).catch(() => null);
@@ -179,24 +190,44 @@ export class DashboardSessionStore extends session.Store {
     }
   }
 
-  /** Creates the claim only if no claim exists (O_EXCL). */
+  /** Publishes a complete claim only if no claim already exists. */
   private async createClaim(text: string): Promise<boolean> {
+    const pending = this.ownerFile + '.' + randomUUID() + '.tmp';
+    await fs.writeFile(pending, text, { flag: 'wx', mode: 0o600 });
     try {
-      await fs.writeFile(this.ownerFile, text, { flag: 'wx', mode: 0o600 });
+      await fs.link(pending, this.ownerFile);
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
       throw error;
+    } finally {
+      await fs.unlink(pending).catch(() => undefined);
     }
   }
 
   private async claimIsStale(held: string): Promise<boolean> {
     const stat = await fs.stat(this.ownerFile).catch(() => null);
-    let owner: { pid?: unknown; host?: unknown; boot?: unknown } = {};
+    let owner: { pid?: unknown; host?: unknown; boot?: unknown; writer?: unknown } = {};
     try {
-      owner = JSON.parse(held) as typeof owner;
+      owner = (JSON.parse(held) as typeof owner | null) ?? {};
     } catch {
       /* An unreadable claim is free. */
+    }
+    // The native claim is held for the lifetime of the listener, without a TS heartbeat.
+    if (owner.writer === 'rust') {
+      if (
+        owner.host !== os.hostname() ||
+        typeof owner.boot !== 'number' ||
+        !Number.isSafeInteger(owner.boot) ||
+        owner.boot <= 0 ||
+        typeof owner.pid !== 'number' ||
+        !Number.isInteger(owner.pid) ||
+        owner.pid <= 0 ||
+        owner.pid > 0x7fffffff
+      )
+        return false;
+      const elapsed = bootMinute() - owner.boot;
+      return elapsed > 2 || (Math.abs(elapsed) <= 2 && pidGone(owner.pid));
     }
     const fresh = stat !== null && Date.now() - stat.mtimeMs < OWNER_STALE_MS;
     // A claim from before this computer last started belongs to a process that is gone, whatever
@@ -466,7 +497,8 @@ export class DashboardSessionStore extends session.Store {
 /** A claim's text in one canonical form, so a rewritten claim compares equal. */
 function normalClaim(text: string): string {
   try {
-    const value = JSON.parse(text) as { pid?: unknown; host?: unknown; boot?: unknown };
+    const value = JSON.parse(text) as { pid?: unknown; host?: unknown; boot?: unknown; writer?: unknown };
+    if (value.writer === 'rust') return text;
     return JSON.stringify({ pid: value.pid, host: value.host, boot: value.boot });
   } catch {
     return text;
@@ -492,5 +524,14 @@ function pidAlive(pid: number): boolean {
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function pidGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
   }
 }

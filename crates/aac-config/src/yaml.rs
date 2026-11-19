@@ -213,3 +213,62 @@ pub(super) fn separate_retired(
     active.push_str(source.get(copied..).ok_or_else(damaged)?);
     Ok((active, retired))
 }
+
+pub(super) fn render_active(original: &str, value: &serde_json::Value) -> Result<String, Failure> {
+    let block = || serde_yaml::to_string(value).map_err(|_| damaged());
+    let source = original.strip_prefix('\u{feff}').unwrap_or(original);
+    if source.trim().is_empty() {
+        return block();
+    }
+    let root = match root_entries(source) {
+        Ok(root) => root,
+        Err(_)
+            if serde_yaml::from_str::<Option<serde::de::IgnoredAny>>(source)
+                .is_ok_and(|value| value.is_none()) =>
+        {
+            return block();
+        }
+        Err(error) => return Err(error),
+    };
+    let entries: Vec<_> = root
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| RETIRED_SECTIONS.contains(&entry.key.as_str()))
+        .collect();
+    if entries.is_empty() {
+        return block();
+    }
+    let active = value.as_object().ok_or_else(damaged)?;
+    let mut out = String::new();
+    let column = root.entries[0].column;
+    if root.flow {
+        let json = serde_json::to_string(active).map_err(|_| damaged())?;
+        out.push_str(json.strip_suffix('}').ok_or_else(damaged)?);
+        if !active.is_empty() {
+            out.push_str(", ");
+        }
+    } else if !active.is_empty() {
+        for line in block()?.split_inclusive('\n') {
+            out.push_str(&" ".repeat(column));
+            out.push_str(line);
+        }
+    }
+    for (index, entry) in entries {
+        let end = root
+            .entries
+            .get(index + 1)
+            .map_or(root.end, |next| next.start);
+        if !root.flow && (out.is_empty() || out.ends_with('\n')) {
+            out.push_str(&" ".repeat(column));
+        }
+        out.push_str(source.get(entry.start..end).ok_or_else(damaged)?);
+    }
+    if root.flow {
+        out.push('}');
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}

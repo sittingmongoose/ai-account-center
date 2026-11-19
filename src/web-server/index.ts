@@ -19,10 +19,10 @@ import { WebSocketServer } from 'ws';
 import {
   authMiddleware,
   closeDashboardSessions,
-  createSessionMiddleware,
   getDashboardWebSocketRejectionStatus,
   isApiRequestPath,
   isDashboardWebSocketUpgradeAllowed,
+  openDashboardSessionMiddleware,
 } from './middleware/auth-middleware';
 import { requestLoggingMiddleware } from './middleware/request-logging-middleware';
 import { createLogger } from '../services/logging';
@@ -232,7 +232,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // Session middleware (for dashboard auth)
   const sessionMiddleware = options.compositionProof
     ? (_req: express.Request, _res: express.Response, next: express.NextFunction) => next()
-    : createSessionMiddleware();
+    : await openDashboardSessionMiddleware();
   app.use((req, res, next) => {
     if (res.locals.staticAssetRequest === true) {
       next();

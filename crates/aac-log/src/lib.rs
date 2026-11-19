@@ -388,6 +388,9 @@ impl Log {
         if self.ensure_directories().is_err() {
             return;
         }
+        let Some(_lease) = self.writer_lease() else {
+            return;
+        };
         self.rotate_if_needed(&config);
         if append(&self.current(), line.as_bytes()).is_err() {
             return;
@@ -396,7 +399,7 @@ impl Log {
             .pruned_at
             .is_none_or(|t| t.elapsed() >= PRUNE_INTERVAL)
         {
-            self.prune(&config);
+            self.prune_locked(&config);
             state.pruned_at = Some(Instant::now());
         }
     }
@@ -441,9 +444,17 @@ impl Log {
         private_dir(&self.archive_dir())
     }
 
+    fn writer_lease(&self) -> Option<aac_files::WriterLease> {
+        aac_files::WriterLease::take(
+            &self.logs_dir().join("current.jsonl.writer.lock"),
+            Duration::from_millis(500),
+        )
+        .ok()
+    }
+
     fn rotate_if_needed(&self, config: &LogConfig) {
         let current = self.current();
-        let Ok(meta) = fs::metadata(&current) else {
+        let Ok(meta) = fs::symlink_metadata(&current) else {
             return;
         };
         let age = meta
@@ -453,18 +464,39 @@ impl Log {
             .unwrap_or_default();
         let rotate_bytes = config.rotate_mb.max(1.0) * 1024.0 * 1024.0;
         let exceeds_size = (meta.len() as f64) >= rotate_bytes;
-        if (!exceeds_size && age < ONE_DAY) || meta.len() == 0 {
+        if !meta.is_file() || (!exceeds_size && age < ONE_DAY) || meta.len() == 0 {
             return;
         }
         let compact = iso_now().replace([':', '.'], "-");
-        let archive = self.archive_dir().join(format!("ccs-{compact}.jsonl"));
-        if fs::rename(&current, &archive).is_ok() {
-            self.prune(config);
+        let archive_dir = self.archive_dir();
+        for sequence in 0..100 {
+            let name = if sequence == 0 {
+                format!("ccs-{compact}.jsonl")
+            } else {
+                format!("ccs-{compact}-{sequence}.jsonl")
+            };
+            match fs::hard_link(&current, archive_dir.join(name)) {
+                Ok(()) => {
+                    if fs::remove_file(&current).is_ok() {
+                        self.prune_locked(config);
+                    }
+                    return;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return,
+            }
         }
     }
 
     /// `pruneExpiredLogArchives`: past `retain_days`, then the oldest beyond the byte cap.
     pub fn prune(&self, config: &LogConfig) {
+        let Some(_lease) = self.writer_lease() else {
+            return;
+        };
+        self.prune_locked(config);
+    }
+
+    fn prune_locked(&self, config: &LogConfig) {
         let Ok(entries) = fs::read_dir(self.archive_dir()) else {
             return;
         };
@@ -521,6 +553,6 @@ fn append(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    // One write call per line: concurrent appenders (the TS server until the cut) never interleave.
+    // The shared writer lease also covers rotation and pruning.
     options.open(path)?.write_all(bytes)
 }
