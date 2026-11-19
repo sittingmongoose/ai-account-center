@@ -31,6 +31,7 @@ impl Owner {
         // updater. The production features omit this arm entirely; no env can select it there.
         #[cfg(feature = "parity-fixtures")]
         {
+            let _ = &agents;
             return Self {
                 jobs: Arc::new(BoundJobs::new(Arc::new(crate::app_update_routes::M0Jobs))),
                 #[cfg(unix)]
@@ -118,7 +119,7 @@ impl Owner {
                 Operation::Status => "GET",
                 Operation::Start | Operation::Cancel => "POST",
             };
-            let body = matches!(operation, Operation::Status).then_some(&b"{}"[..]);
+            let body = (!matches!(operation, Operation::Status)).then_some(&b"{}"[..]);
             if let Some(host) = self.host.as_ref()
                 && let Some(reply) = host
                     .request(
