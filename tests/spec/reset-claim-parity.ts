@@ -75,6 +75,9 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
     // The production adapter's ticketed Codex read, through the route's claims-file writer.
     async read(account, claimsFile) {
       assert.ok(claimsFile, 'the route passes its claims-file writer to the source');
+      // As the production adapter does before a ticketed read.
+      const dir = path.join(root, 'account-usage', 'reset-claims');
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       return JSON.parse(
         await claimsFile.call(
           'resetCodexSource',
@@ -84,7 +87,7 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
             profile: 'fixture',
             host: 'fixture-host',
             write: null,
-            dbPath: path.join(root, 'account-usage', 'reset-claims', 'claims.sqlite'),
+            dbPath: path.join(dir, 'claims.sqlite'),
             routeAccount: account,
           })
         )
