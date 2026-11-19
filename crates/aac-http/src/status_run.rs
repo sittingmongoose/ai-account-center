@@ -87,9 +87,9 @@ fn is_executable(path: &Path) -> bool {
             .to_ascii_lowercase();
         let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
         std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
-            && extensions
-                .split(';')
-                .any(|extension| !extension.is_empty() && name.ends_with(&extension.to_ascii_lowercase()))
+            && extensions.split(';').any(|extension| {
+                !extension.is_empty() && name.ends_with(&extension.to_ascii_lowercase())
+            })
     }
 }
 

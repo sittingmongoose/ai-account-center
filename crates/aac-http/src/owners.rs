@@ -19,10 +19,7 @@ use std::{
     collections::BTreeMap,
     io,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::AtomicBool,
-    },
+    sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
 /// R4: which owners this boot runs, and the share roots they read. The supervisor resolves the
@@ -114,10 +111,9 @@ impl Owners {
         // G16c: the producers of the fed Status generations (the owned Status group).
         let scoreboard_feeds = feeds.clone();
         let status_produce = match (&config.owned, &answers_owned) {
-            (Some(owned), Some(answers)) if owned.status => Some(Produce::new(
-                feeds,
-                Arc::clone(answers),
-            )),
+            (Some(owned), Some(answers)) if owned.status => {
+                Some(Produce::new(feeds, Arc::clone(answers)))
+            }
             _ => None,
         };
         let scoreboard_owned = match (&config.owned, &store) {

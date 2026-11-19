@@ -6,11 +6,11 @@ mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
+mod native_group;
 mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
-mod native_group;
 mod owner_host;
 mod policy;
 mod request_log;
@@ -94,12 +94,13 @@ impl DashboardAccess {
     /// its private socket (the boot secret). A device principal stays a device principal.
     pub(crate) fn service_principal(&self) -> Option<String> {
         match &self.principal {
-            DashboardPrincipal::Browser { .. } => self.session_id.as_ref().map(|id| {
-                json!({"kind": "session", "id": id, "role": "admin"}).to_string()
-            }),
-            DashboardPrincipal::Device { id, .. } => Some(
-                json!({"kind": "device", "id": id, "role": "device"}).to_string(),
-            ),
+            DashboardPrincipal::Browser { .. } => self
+                .session_id
+                .as_ref()
+                .map(|id| json!({"kind": "session", "id": id, "role": "admin"}).to_string()),
+            DashboardPrincipal::Device { id, .. } => {
+                Some(json!({"kind": "device", "id": id, "role": "device"}).to_string())
+            }
             DashboardPrincipal::Anonymous => None,
         }
     }
@@ -213,16 +214,7 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream,
-            cache,
-            ui_root,
-            None,
-            false,
-            None,
-            None,
-            None,
-            None,
-            None,
+            downstream, cache, ui_root, None, false, None, None, None, None, None,
         )
     }
 
@@ -257,10 +249,7 @@ impl DashboardAuth {
                 return settings.handle(&access, family, request).await;
             }
             if let Some(group) = &native_group
-                && group.owns(
-                    request.method(),
-                    request.uri().path().trim_end_matches('/'),
-                )
+                && group.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
                     return service_error();

@@ -39,7 +39,6 @@ struct CollectionEndpoint {
     boot_id: String,
 }
 
-
 #[derive(Clone)]
 pub(super) struct ServiceLink {
     socket: PathBuf,

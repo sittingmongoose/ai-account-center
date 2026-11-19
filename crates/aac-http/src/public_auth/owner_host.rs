@@ -14,19 +14,19 @@
 //! second copy of an owner. `AAC_RUST_CUT_NATIVE_ROUTES=off` makes the host absent, so the cut's
 //! shipped worker keeps answering.
 
-use super::{native_owners, HubCache};
+#[cfg(unix)]
+use super::service_link::ServiceLink;
+use super::{HubCache, native_owners};
 use crate::public_auth::DashboardEvents;
+use axum::http::HeaderMap;
+#[cfg(unix)]
+use serde_json::Value as Json;
 #[cfg(unix)]
 use serde_json::json;
 use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use axum::http::HeaderMap;
-#[cfg(unix)]
-use super::service_link::ServiceLink;
-#[cfg(unix)]
-use serde_json::Value as Json;
 
 /// Set to `on` to let this boot answer its groups itself (the cutover switch).
 pub(super) const SWITCH: &str = "AAC_RUST_CUT_NATIVE_ROUTES";
@@ -216,7 +216,8 @@ impl OwnerHost {
             events,
             worker_directory,
         )?;
-        *self.public.lock().unwrap_or_else(|p| p.into_inner()) = Some(PublicOwners { native, jobs });
+        *self.public.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(PublicOwners { native, jobs });
         Ok(())
     }
 

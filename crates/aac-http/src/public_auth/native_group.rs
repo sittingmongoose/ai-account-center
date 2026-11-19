@@ -13,11 +13,7 @@
 //! `cache-control`, `vary`, the feed views' ETag and 304, and the file envelope's validated
 //! headers and lengths.
 
-use super::{
-    DashboardAccess, DashboardPrincipal, Reply,
-    owner_host::ServiceReply,
-    set_header,
-};
+use super::{DashboardAccess, DashboardPrincipal, Reply, owner_host::ServiceReply, set_header};
 use axum::{
     body::to_bytes,
     extract::Request,
@@ -65,7 +61,9 @@ impl Routes {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Option<ServiceReply> {
-        self.host.request(method, uri, principal, headers, body).await
+        self.host
+            .request(method, uri, principal, headers, body)
+            .await
     }
 }
 
@@ -138,7 +136,8 @@ fn owns_route(method: &Method, path: &str) -> bool {
 fn media(path: &str) -> Option<(&str, &str)> {
     let rest = path.strip_prefix("/api/status/files/")?;
     let (writer, relative) = rest.split_once('/')?;
-    (!writer.is_empty() && !relative.is_empty() && !writer.contains('/')).then_some((writer, relative))
+    (!writer.is_empty() && !relative.is_empty() && !writer.contains('/'))
+        .then_some((writer, relative))
 }
 
 /// The few request facts the routes read, taken before the request is consumed.
@@ -194,9 +193,11 @@ fn browser_only(access: &DashboardAccess) -> Option<Reply> {
             "device_scope",
             "This page needs a signed-in dashboard session.",
         ))),
-        DashboardPrincipal::Anonymous if access.auth_enabled => {
-            Some(no_store(super::error(401, "auth_required", "Authentication required")))
-        }
+        DashboardPrincipal::Anonymous if access.auth_enabled => Some(no_store(super::error(
+            401,
+            "auth_required",
+            "Authentication required",
+        ))),
         DashboardPrincipal::Anonymous => Some(no_store(super::error(
             403,
             "signin_required",
@@ -448,7 +449,11 @@ async fn answers_post(
         return reply;
     }
     if raw.is_some() {
-        return no_store(super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS));
+        return no_store(super::error(
+            400,
+            "unexpected_query",
+            UNEXPECTED_QUERY_STATUS,
+        ));
     }
     if !facts.origin_present || !facts.same_origin {
         return no_store(super::error(403, "origin_required", ORIGIN_REQUIRED));
@@ -571,12 +576,9 @@ async fn status(
             offsets: offsets.offsets.clone(),
         };
         return match produce.view(now_ms(), &time_zone, &zone) {
-            Ok((bytes, etag)) => fed_bytes(
-                bytes,
-                &etag,
-                "status@1",
-                facts.if_none_match.as_deref(),
-            ),
+            Ok((bytes, etag)) => {
+                fed_bytes(bytes, &etag, "status@1", facts.if_none_match.as_deref())
+            }
             Err(reason) => {
                 eprintln!("aac-http: local Status view declined ({reason:?})");
                 decline_because("status")
@@ -655,7 +657,11 @@ fn query_decode(value: &str) -> Option<String> {
 /// The route's own filter contract (`parseScoreboardQuery`).
 fn scoreboard_query(raw: Option<&str>) -> Result<ScoreboardQuery, (&'static str, &'static str)> {
     let mut pairs: Vec<(String, String)> = Vec::new();
-    for part in raw.unwrap_or_default().split('&').filter(|part| !part.is_empty()) {
+    for part in raw
+        .unwrap_or_default()
+        .split('&')
+        .filter(|part| !part.is_empty())
+    {
         let (key, value) = part.split_once('=').unwrap_or((part, ""));
         let key = query_decode(key).ok_or(("unexpected_query", FILTER_UNEXPECTED))?;
         if !FILTER_KEYS.contains(&key.as_str()) {
@@ -716,13 +722,7 @@ async fn scoreboard_facts(
     now: u64,
 ) -> Option<(u64, String, String)> {
     let reply = routes
-        .request(
-            "GET",
-            "/internal/scoreboard/inputs",
-            SERVICE,
-            &[],
-            None,
-        )
+        .request("GET", "/internal/scoreboard/inputs", SERVICE, &[], None)
         .await?;
     if reply.status != 200 {
         return None;
@@ -926,13 +926,13 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
 
 /// A fed view whose bytes and ETag a local owner wrote.
 fn fed_bytes(body: Vec<u8>, etag: &str, view: &str, if_none_match: Option<&str>) -> Reply {
-    if !matches!(
-        view,
-        "status@1" | "scoreboard@1" | "home@3" | "dashboard@1"
-    ) || !etag.starts_with("W/\"")
+    if !matches!(view, "status@1" | "scoreboard@1" | "home@3" | "dashboard@1")
+        || !etag.starts_with("W/\"")
         || !etag.ends_with('"')
         || etag.len() < 40
-        || !etag[3..etag.len() - 1].bytes().all(|b| b.is_ascii_hexdigit())
+        || !etag[3..etag.len() - 1]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
     {
         eprintln!("aac-http: fed view refused: {view} {etag}");
         return super::decline();
@@ -982,15 +982,15 @@ async fn card_media(
         return reply;
     }
     if raw.is_some() {
-        return no_store(super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS));
+        return no_store(super::error(
+            400,
+            "unexpected_query",
+            UNEXPECTED_QUERY_STATUS,
+        ));
     }
     let Some(principal) = access.service_principal() else {
         return super::decline();
     };
-    if !routes.hosted().await {
-        // No private service on this platform and no in-process file reader: fail closed.
-        return super::decline();
-    }
     let input = json!({
         "kind": "media",
         "root": reports_root(),
@@ -1000,6 +1000,14 @@ async fn card_media(
         "head": facts.head,
     });
     let body = input.to_string();
+    if !routes.hosted().await {
+        // No private service here: the shipped reader answers in this process, with the same
+        // descriptor proof it uses behind the service.
+        return match crate::read_files::answer("/api/status/files/{*path}", body.as_bytes()) {
+            Some(refusal) => file_reply(&refusal, facts.head, true),
+            None => super::decline(),
+        };
+    }
     match routes
         .request(
             "GET",
@@ -1055,9 +1063,6 @@ async fn deliverable(
     let Some(principal) = access.service_principal() else {
         return share_headers(super::decline());
     };
-    if !routes.hosted().await {
-        return share_headers(super::decline());
-    }
     let input = json!({
         "kind": "deliverable",
         "root": machine_share_root(),
@@ -1067,6 +1072,12 @@ async fn deliverable(
         "head": facts.head,
     });
     let body = input.to_string();
+    if !routes.hosted().await {
+        return match crate::read_files::answer("/api/status/deliverable", body.as_bytes()) {
+            Some(reply) => share_headers(file_reply(&reply, facts.head, false)),
+            None => share_headers(super::decline()),
+        };
+    }
     match routes
         .request(
             "GET",
@@ -1093,9 +1104,9 @@ fn deliverable_path(raw: Option<&str>) -> Option<String> {
     let decoded = percent_decode(value)?;
     let safe = !decoded.is_empty()
         && decoded.encode_utf16().count() <= 2048
-        && !decoded.bytes().any(|byte| {
-            byte == b'\\' || byte == b':' || byte == b'%' || byte < 32 || byte == 127
-        })
+        && !decoded
+            .bytes()
+            .any(|byte| byte == b'\\' || byte == b':' || byte == b'%' || byte < 32 || byte == 127)
         && decoded
             .split('/')
             .all(|part| !part.is_empty() && !part.starts_with('.'));
@@ -1243,8 +1254,11 @@ fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
             && (!matches!(
                 kind,
                 Some("image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "video/webm")
-            ) || headers.get("x-content-type-options").and_then(Json::as_str) != Some("nosniff")
-                || headers.get("content-security-policy").and_then(Json::as_str)
+            ) || headers.get("x-content-type-options").and_then(Json::as_str)
+                != Some("nosniff")
+                || headers
+                    .get("content-security-policy")
+                    .and_then(Json::as_str)
                     != Some("default-src 'none'; sandbox")
                 || headers.get("accept-ranges").and_then(Json::as_str) != Some("bytes")
                 || headers.get("cache-control").and_then(Json::as_str)
@@ -1293,9 +1307,7 @@ fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
                 415,
                 "This file is not a PNG, JPEG or WebP image or an MP4 or WebM video.",
             ),
-            (true, "range_not_satisfiable") => {
-                (416, "The requested range is outside this file.")
-            }
+            (true, "range_not_satisfiable") => (416, "The requested range is outside this file."),
             (false, "invalid_path") => (400, "Use a share-relative file path."),
             (false, "not_found") => (404, "This file is not available."),
             (false, "too_large") => (413, "This file exceeds the 100 MB limit."),
@@ -1347,11 +1359,7 @@ mod tests {
         assert!(owns_route(&Method::GET, "/api/status/answers"));
         assert!(owns_route(&Method::POST, "/api/status/answers"));
         assert!(owns_route(&Method::GET, "/api/store/status"));
-        for path in [
-            "/api/usage/history",
-            "/api/usage/at",
-            "/api/usage/burn",
-        ] {
+        for path in ["/api/usage/history", "/api/usage/at", "/api/usage/burn"] {
             assert!(owns_route(&Method::GET, path), "{path}");
         }
         assert!(owns_route(
@@ -1359,7 +1367,10 @@ mod tests {
             "/api/status/files/vm.lead/cards/Q1/one.png"
         ));
         assert!(!owns_route(&Method::GET, "/api/status/files/vm.lead"));
-        assert!(!owns_route(&Method::POST, "/api/status/files/vm.lead/a.png"));
+        assert!(!owns_route(
+            &Method::POST,
+            "/api/status/files/vm.lead/a.png"
+        ));
         assert!(owns_route(&Method::GET, "/api/scoreboard"));
         assert!(!owns_route(&Method::GET, "/api/views/home"));
     }

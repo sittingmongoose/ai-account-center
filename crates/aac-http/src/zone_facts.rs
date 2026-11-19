@@ -76,7 +76,11 @@ pub(crate) fn is_calendar_date(value: &str) -> bool {
     {
         return false;
     }
-    let parsed = (value[..4].parse::<i32>(), value[5..7].parse::<u32>(), value[8..10].parse::<u32>());
+    let parsed = (
+        value[..4].parse::<i32>(),
+        value[5..7].parse::<u32>(),
+        value[8..10].parse::<u32>(),
+    );
     let (Ok(year), Ok(month), Ok(day)) = parsed else {
         return false;
     };
@@ -149,10 +153,7 @@ mod tests {
 
     #[test]
     fn local_midnight_is_the_zones_own_day_start() {
-        assert_eq!(
-            local_midnight("2026-01-01", "UTC"),
-            Some(1_767_225_600_000)
-        );
+        assert_eq!(local_midnight("2026-01-01", "UTC"), Some(1_767_225_600_000));
         assert_eq!(
             local_midnight("2026-01-01", "America/New_York"),
             Some(1_767_225_600_000 + 5 * 3_600_000)
@@ -173,7 +174,13 @@ mod tests {
     fn the_window_is_the_references() {
         let now = 1_767_225_600_000 + 3_600_000;
         let facts = server_zone_facts("Europe/Berlin", now).unwrap();
-        assert_eq!(facts.from, now.div_euclid(ZONE_DAY) * ZONE_DAY - PAST_DAYS * ZONE_DAY);
-        assert_eq!(facts.to, now.div_euclid(ZONE_DAY) * ZONE_DAY + FUTURE_DAYS * ZONE_DAY);
+        assert_eq!(
+            facts.from,
+            now.div_euclid(ZONE_DAY) * ZONE_DAY - PAST_DAYS * ZONE_DAY
+        );
+        assert_eq!(
+            facts.to,
+            now.div_euclid(ZONE_DAY) * ZONE_DAY + FUTURE_DAYS * ZONE_DAY
+        );
     }
 }
