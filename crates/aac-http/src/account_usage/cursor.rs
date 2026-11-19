@@ -181,10 +181,10 @@ impl Reader {
         let started = Instant::now();
         let mut memory = self.latest.lock().await;
         let now = UtcMs::now().map_err(|_| Decline::Date)?.get() as i64;
-        if let Some((collected, existing)) = &*memory {
-            if *collected >= started || (!request.force && fresh(existing, now)) {
-                return Ok(existing.clone());
-            }
+        if let Some((collected, existing)) = &*memory
+            && (*collected >= started || (!request.force && fresh(existing, now)))
+        {
+            return Ok(existing.clone());
         }
         let read_root = root.clone();
         let last = memory.as_ref().map(|(_, value)| value.clone());

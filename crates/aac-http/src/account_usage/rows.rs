@@ -134,10 +134,15 @@ pub(super) fn additional(
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b" ._+-".contains(&b))
     });
-    let mut status = match raw["status"].as_str() {
-        Some(status @ ("ok" | "cached" | "needs_sign_in" | "error" | "unavailable")) => status,
-        _ => "unavailable",
-    };
+    let mut status = raw["status"]
+        .as_str()
+        .filter(|status| {
+            matches!(
+                *status,
+                "ok" | "cached" | "needs_sign_in" | "error" | "unavailable"
+            )
+        })
+        .unwrap_or("unavailable");
     let mut windows = if matches!(status, "ok" | "cached") {
         windows(&raw["windows"], 256)
     } else {

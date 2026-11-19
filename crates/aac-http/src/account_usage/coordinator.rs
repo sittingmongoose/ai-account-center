@@ -214,12 +214,14 @@ fn wallet_matches(target: &UsageFailoverTarget, candidate: &UsageCandidate) -> b
 
 fn candidate_matches_target(target: &UsageFailoverTarget, candidate: &UsageCandidate) -> bool {
     wallet_matches(target, candidate)
-        && target.expected_identity.as_ref().map_or(true, |expected| {
-            same_identity(Some(expected), Some(&candidate.identity))
-        })
-        && candidate.email.as_deref().map_or(true, |email| {
-            email_matches(target.expected_email.as_deref(), Some(email))
-        })
+        && target
+            .expected_identity
+            .as_ref()
+            .is_none_or(|expected| same_identity(Some(expected), Some(&candidate.identity)))
+        && candidate
+            .email
+            .as_deref()
+            .is_none_or(|email| email_matches(target.expected_email.as_deref(), Some(email)))
 }
 
 fn response_is_rate_limited(response: &Value) -> bool {
@@ -302,8 +304,8 @@ impl FailoverCoordinator {
     }
 
     fn validate_saved(&self, target: &UsageFailoverTarget, state: &mut State) {
-        if let Some(peer) = state.observed_plan_peer.clone() {
-            if !self.matches_identity(
+        if let Some(peer) = state.observed_plan_peer.clone()
+            && !self.matches_identity(
                 target,
                 state.identity.as_ref(),
                 &UsageCandidate {
@@ -315,21 +317,21 @@ impl FailoverCoordinator {
                     plan: None,
                 },
                 &peer.host,
-            ) {
-                state.observed_plan = None;
-                state.observed_plan_at = None;
-                state.observed_plan_peer = None;
-            }
+            )
+        {
+            state.observed_plan = None;
+            state.observed_plan_at = None;
+            state.observed_plan_peer = None;
         }
-        if let Some(saved) = state.saved.clone() {
-            if !self.matches_identity(
+        if let Some(saved) = state.saved.clone()
+            && !self.matches_identity(
                 target,
                 state.identity.as_ref(),
                 &saved.candidate,
                 &saved.host,
-            ) {
-                state.saved = None;
-            }
+            )
+        {
+            state.saved = None;
         }
     }
 
@@ -345,115 +347,109 @@ impl FailoverCoordinator {
             ..Default::default()
         };
         let value = contract::read_private_cache(&self.file(target));
-        if let Some(obj) = value.as_object() {
-            if obj.get("version").and_then(Value::as_f64) == Some(1.0)
-                && obj.get("key").and_then(Value::as_str) == Some(key.as_str())
+        if let Some(obj) = value.as_object()
+            && obj.get("version").and_then(Value::as_f64) == Some(1.0)
+            && obj.get("key").and_then(Value::as_str) == Some(key.as_str())
+        {
+            if let Some(sign_in) = obj.get("primarySignIn").and_then(Value::as_array)
+                && sign_in.len() <= 2
+                && sign_in
+                    .iter()
+                    .all(|h| matches!(h.as_str(), Some("mac") | Some("windows")))
             {
-                if let Some(sign_in) = obj.get("primarySignIn").and_then(Value::as_array) {
-                    if sign_in.len() <= 2
-                        && sign_in
-                            .iter()
-                            .all(|h| matches!(h.as_str(), Some("mac") | Some("windows")))
-                    {
-                        state.primary_sign_in = sign_in
-                            .iter()
-                            .filter_map(|h| h.as_str().map(str::to_owned))
-                            .collect();
-                    }
+                state.primary_sign_in = sign_in
+                    .iter()
+                    .filter_map(|h| h.as_str().map(str::to_owned))
+                    .collect();
+            }
+            if let Some(failure) = obj.get("primaryFailure").and_then(Value::as_str)
+                && is_failure_code(failure)
+            {
+                state.primary_failure = Some(failure.to_owned());
+            }
+            let identity = parse_identity(obj.get("identity").unwrap_or(&Value::Null));
+            let identity_matches_target = identity.as_ref().is_some_and(|id| {
+                target
+                    .expected_identity
+                    .as_ref()
+                    .is_none_or(|expected| same_identity(Some(expected), Some(id)))
+            });
+            if identity_matches_target {
+                state.identity = identity;
+                state.observed_plan = if tracks_verified_plan(target) {
+                    safe_usage_text(obj.get("observedPlan").unwrap_or(&Value::Null), 160)
+                } else {
+                    None
+                };
+                state.observed_plan_at = usage_timestamp(
+                    obj.get("observedPlanAt").unwrap_or(&Value::Null),
+                    self.now(),
+                );
+                if state.observed_plan_at.is_none() {
+                    state.observed_plan = None;
                 }
-                if let Some(failure) = obj.get("primaryFailure").and_then(Value::as_str) {
-                    if is_failure_code(failure) {
-                        state.primary_failure = Some(failure.to_owned());
-                    }
-                }
-                let identity = parse_identity(obj.get("identity").unwrap_or(&Value::Null));
-                let identity_matches_target = identity.as_ref().is_some_and(|id| {
-                    target
-                        .expected_identity
-                        .as_ref()
-                        .map_or(true, |expected| same_identity(Some(expected), Some(id)))
-                });
-                if identity_matches_target {
-                    state.identity = identity;
-                    state.observed_plan = if tracks_verified_plan(target) {
-                        safe_usage_text(obj.get("observedPlan").unwrap_or(&Value::Null), 160)
+                if let Some(peer) = obj.get("observedPlanPeer")
+                    && !peer.is_null()
+                {
+                    state.observed_plan_peer = if target.provider == "muse" {
+                        contract::parse_muse_peer(peer, &self.dashboard_hosts)
                     } else {
                         None
                     };
-                    state.observed_plan_at = usage_timestamp(
-                        obj.get("observedPlanAt").unwrap_or(&Value::Null),
-                        self.now(),
-                    );
-                    if state.observed_plan_at.is_none() {
+                    if state.observed_plan_peer.is_none() {
                         state.observed_plan = None;
+                        state.observed_plan_at = None;
                     }
-                    if let Some(peer) = obj.get("observedPlanPeer") {
-                        if !peer.is_null() {
-                            state.observed_plan_peer = if target.provider == "muse" {
-                                contract::parse_muse_peer(peer, &self.dashboard_hosts)
-                            } else {
-                                None
-                            };
-                            if state.observed_plan_peer.is_none() {
-                                state.observed_plan = None;
-                                state.observed_plan_at = None;
-                            }
-                        }
-                    }
-                    state.primary = parse_candidate(obj.get("primary").unwrap_or(&Value::Null));
-                    if let Some(saved) = obj.get("saved").and_then(Value::as_object) {
-                        let host = saved.get("host").and_then(Value::as_str).unwrap_or("");
-                        if self.dashboard_hosts.iter().any(|h| *h == host) {
-                            let reading = parse_reading(
-                                saved.get("reading").unwrap_or(&Value::Null),
-                                self.now(),
-                            );
-                            let candidate =
-                                parse_candidate(saved.get("candidate").unwrap_or(&Value::Null));
-                            if let (Some(candidate), Some(reading)) = (candidate, reading) {
-                                if reading.has_usage()
-                                    && email_matches(
-                                        target.expected_email.as_deref(),
-                                        reading.email.as_deref(),
-                                    )
-                                {
-                                    state.saved = Some(SavedReading {
-                                        reading,
-                                        candidate,
-                                        host: host.to_owned(),
-                                        fallback: saved.get("fallback") == Some(&json!(true)),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    state.fresh = match obj.get("fresh") {
-                        Some(&json!(true))
-                            if state
-                                .saved
-                                .as_ref()
-                                .is_some_and(|s| s.reading.status == "ok") =>
+                }
+                state.primary = parse_candidate(obj.get("primary").unwrap_or(&Value::Null));
+                if let Some(saved) = obj.get("saved").and_then(Value::as_object) {
+                    let host = saved.get("host").and_then(Value::as_str).unwrap_or("");
+                    if self.dashboard_hosts.contains(&host) {
+                        let reading =
+                            parse_reading(saved.get("reading").unwrap_or(&Value::Null), self.now());
+                        let candidate =
+                            parse_candidate(saved.get("candidate").unwrap_or(&Value::Null));
+                        if let (Some(candidate), Some(reading)) = (candidate, reading)
+                            && reading.has_usage()
+                            && email_matches(
+                                target.expected_email.as_deref(),
+                                reading.email.as_deref(),
+                            )
                         {
-                            Some(true)
-                        }
-                        Some(&json!(false)) => Some(false),
-                        _ => None,
-                    };
-                    if let Some(until) = obj.get("freshUntil").and_then(Value::as_f64) {
-                        if until.is_finite() {
-                            state.fresh_until = until.min(self.now() + DAY_MS);
+                            state.saved = Some(SavedReading {
+                                reading,
+                                candidate,
+                                host: host.to_owned(),
+                                fallback: saved.get("fallback") == Some(&json!(true)),
+                            });
                         }
                     }
                 }
-                if (identity_matches_target
-                    || (target.claude_desktop_cadence
-                        && state.primary_failure.as_deref() == Some("source_changed")))
-                    && let Some(next) = obj.get("nextAttempt").and_then(Value::as_f64)
+                state.fresh = match obj.get("fresh") {
+                    Some(&json!(true))
+                        if state
+                            .saved
+                            .as_ref()
+                            .is_some_and(|s| s.reading.status == "ok") =>
+                    {
+                        Some(true)
+                    }
+                    Some(&json!(false)) => Some(false),
+                    _ => None,
+                };
+                if let Some(until) = obj.get("freshUntil").and_then(Value::as_f64)
+                    && until.is_finite()
                 {
-                    if next.is_finite() {
-                        state.next_attempt = next.min(self.now() + DAY_MS);
-                    }
+                    state.fresh_until = until.min(self.now() + DAY_MS);
                 }
+            }
+            if (identity_matches_target
+                || (target.claude_desktop_cadence
+                    && state.primary_failure.as_deref() == Some("source_changed")))
+                && let Some(next) = obj.get("nextAttempt").and_then(Value::as_f64)
+                && next.is_finite()
+            {
+                state.next_attempt = next.min(self.now() + DAY_MS);
             }
         }
         self.validate_saved(target, &mut state);
@@ -686,10 +682,9 @@ impl FailoverCoordinator {
             .primary_sources
             .iter()
             .any(|s| s.host.key() == host.key() && selectors.contains(&s.selector))
+            && !state.primary_sign_in.contains(&host.host)
         {
-            if !state.primary_sign_in.contains(&host.host) {
-                state.primary_sign_in.push(host.host.clone());
-            }
+            state.primary_sign_in.push(host.host.clone());
         }
     }
 
@@ -701,10 +696,10 @@ impl FailoverCoordinator {
         let key = self.inventory_key(target, host);
         {
             let cached = self.inventories.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((expires, candidates)) = cached.get(&key) {
-                if *expires > self.now() {
-                    return Some(candidates.clone());
-                }
+            if let Some((expires, candidates)) = cached.get(&key)
+                && *expires > self.now()
+            {
+                return Some(candidates.clone());
             }
         }
         let mut request = json!({"version":1,"action":"inventory","provider":target.provider});
@@ -861,12 +856,8 @@ impl FailoverCoordinator {
         if by_identity.len() > 1 {
             return (None, true, configured_unreadable);
         }
-        if by_identity.len() == 1 {
-            return (
-                Some(by_identity.into_iter().next().unwrap().1),
-                false,
-                configured_unreadable,
-            );
+        if let [(_, chosen)] = by_identity.as_slice() {
+            return (Some(chosen.clone()), false, configured_unreadable);
         }
         (None, false, configured_unreadable)
     }
@@ -1073,24 +1064,24 @@ impl FailoverCoordinator {
                 }
                 continue;
             };
-            if state.identity.as_ref().map_or(true, |id| {
-                !same_identity(Some(id), Some(&candidate.identity))
-            }) {
+            if state
+                .identity
+                .as_ref()
+                .is_none_or(|id| !same_identity(Some(id), Some(&candidate.identity)))
+            {
                 state.identity = Some(candidate.identity.clone());
                 state.saved = None;
                 state.observed_plan = None;
                 state.observed_plan_at = None;
                 state.observed_plan_peer = None;
                 state.primary = Some(candidate.clone());
-            } else if let Some(primary) = &state.primary {
-                if primary.locator == candidate.locator
-                    && primary.revision != candidate.revision
-                    && target.provider == "claude"
-                {
-                    if let Some(saved) = &mut state.saved {
-                        saved.reading = contract::strip_claude_extras(&saved.reading);
-                    }
-                }
+            } else if let Some(primary) = &state.primary
+                && primary.locator == candidate.locator
+                && primary.revision != candidate.revision
+                && target.provider == "claude"
+                && let Some(saved) = &mut state.saved
+            {
+                saved.reading = contract::strip_claude_extras(&saved.reading);
             }
             state.primary = Some(candidate.clone());
             primaries.push((source.host.clone(), candidate));
@@ -1138,51 +1129,46 @@ impl FailoverCoordinator {
             state.observed_plan_peer = None;
             return Ok(());
         }
-        if state.identity.is_none() {
+        let Some(identity) = state.identity.as_ref() else {
             return Ok(());
-        }
-        let cooldown_key = identity_cooldown_key(
-            &target.ccs_dir,
-            &target.provider,
-            state.identity.as_ref().unwrap(),
-        );
-        if primary_already_read && has_usage_value(template) && !primaries.is_empty() {
-            if let Some(reading) = parse_reading(template, self.now()) {
-                if reading.has_usage()
-                    && email_matches(target.expected_email.as_deref(), reading.email.as_deref())
-                {
-                    let newer = state.saved.as_ref().map_or(true, |s| {
-                        parse_opt(reading.sampled_at.as_deref())
-                            >= parse_opt(s.reading.sampled_at.as_deref())
-                    });
-                    if newer {
-                        let retained = self.retain_extras(
-                            target,
-                            state,
-                            reading,
-                            &primaries[0].1,
-                            &primaries[0].0.host,
-                        );
-                        state.saved = Some(SavedReading {
-                            reading: retained,
-                            candidate: primaries[0].1.clone(),
-                            host: primaries[0].0.host.clone(),
-                            fallback: false,
-                        });
-                        state.fresh =
-                            Some(template.get("status").and_then(Value::as_str) == Some("ok"));
-                        if state.fresh == Some(true) {
-                            state.fresh_until = self.fresh_until(target, 0.0);
-                        }
-                    }
-                    if template.get("status").and_then(Value::as_str) == Some("ok") {
-                        state.primary_failure = None;
-                        if primaries[0].0.host == "mac" || primaries[0].0.host == "windows" {
-                            state.primary_sign_in.retain(|h| h != &primaries[0].0.host);
-                        }
-                        return Ok(());
-                    }
+        };
+        let cooldown_key = identity_cooldown_key(&target.ccs_dir, &target.provider, identity);
+        if primary_already_read
+            && has_usage_value(template)
+            && !primaries.is_empty()
+            && let Some(reading) = parse_reading(template, self.now())
+            && reading.has_usage()
+            && email_matches(target.expected_email.as_deref(), reading.email.as_deref())
+        {
+            let newer = state.saved.as_ref().is_none_or(|s| {
+                parse_opt(reading.sampled_at.as_deref())
+                    >= parse_opt(s.reading.sampled_at.as_deref())
+            });
+            if newer {
+                let retained = self.retain_extras(
+                    target,
+                    state,
+                    reading,
+                    &primaries[0].1,
+                    &primaries[0].0.host,
+                );
+                state.saved = Some(SavedReading {
+                    reading: retained,
+                    candidate: primaries[0].1.clone(),
+                    host: primaries[0].0.host.clone(),
+                    fallback: false,
+                });
+                state.fresh = Some(template.get("status").and_then(Value::as_str) == Some("ok"));
+                if state.fresh == Some(true) {
+                    state.fresh_until = self.fresh_until(target, 0.0);
                 }
+            }
+            if template.get("status").and_then(Value::as_str) == Some("ok") {
+                state.primary_failure = None;
+                if primaries[0].0.host == "mac" || primaries[0].0.host == "windows" {
+                    state.primary_sign_in.retain(|h| h != &primaries[0].0.host);
+                }
+                return Ok(());
             }
         }
         if self.apply_cooldown(target, state, &cooldown_key) {
@@ -1310,32 +1296,30 @@ impl FailoverCoordinator {
             request["ccsDir"] = json!(target.ccs_dir.to_string_lossy());
         }
         let response = self.request(host, &request).await;
-        if let Ok(value) = &response {
-            if response_is_rate_limited(value) {
-                let now = self.now();
-                let retry_after = value.get("retryAfterSeconds").and_then(Value::as_f64);
-                let provider_until =
-                    now + retry_after.unwrap_or(60.0).clamp(60.0, 86_400.0) * 1000.0;
-                let mut until = provider_until;
-                let mut streak: Option<u8> = None;
-                if target.claude_desktop_cadence {
-                    let previous = self.cooldown_state(&target.ccs_dir, cooldown_key);
-                    let s =
-                        (previous.claude_429_streak.unwrap_or(0) + 1).min(MAX_CLAUDE_429_STREAK);
-                    streak = Some(s);
-                    let floor = (provider_until - now) / 1000.0;
-                    if let Ok(delay) = failover::claude_delay_ms(&self.key(target), floor, s) {
-                        until = now + delay;
-                    }
-                    state.primary_failure = Some("rate_limited".into());
+        if let Ok(value) = &response
+            && response_is_rate_limited(value)
+        {
+            let now = self.now();
+            let retry_after = value.get("retryAfterSeconds").and_then(Value::as_f64);
+            let provider_until = now + retry_after.unwrap_or(60.0).clamp(60.0, 86_400.0) * 1000.0;
+            let mut until = provider_until;
+            let mut streak: Option<u8> = None;
+            if target.claude_desktop_cadence {
+                let previous = self.cooldown_state(&target.ccs_dir, cooldown_key);
+                let s = (previous.claude_429_streak.unwrap_or(0) + 1).min(MAX_CLAUDE_429_STREAK);
+                streak = Some(s);
+                let floor = (provider_until - now) / 1000.0;
+                if let Ok(delay) = failover::claude_delay_ms(&self.key(target), floor, s) {
+                    until = now + delay;
                 }
-                state.next_attempt =
-                    self.hold_cooldown_inner(&target.ccs_dir, cooldown_key, until, streak);
-                self.set_cooldown(&target.ccs_dir, cooldown_key, state.next_attempt, streak);
-                if let Some(peer) = &peer_key {
-                    let peer_until = self.hold_cooldown_inner(&target.ccs_dir, peer, until, None);
-                    self.set_cooldown(&target.ccs_dir, peer, peer_until, None);
-                }
+                state.primary_failure = Some("rate_limited".into());
+            }
+            state.next_attempt =
+                self.hold_cooldown_inner(&target.ccs_dir, cooldown_key, until, streak);
+            self.set_cooldown(&target.ccs_dir, cooldown_key, state.next_attempt, streak);
+            if let Some(peer) = &peer_key {
+                let peer_until = self.hold_cooldown_inner(&target.ccs_dir, peer, until, None);
+                self.set_cooldown(&target.ccs_dir, peer, peer_until, None);
             }
         }
         let response = match response {
@@ -1367,10 +1351,9 @@ impl FailoverCoordinator {
             && primary_source
             && failure_code.as_deref() == Some("needs_sign_in")
             && (host.host == "mac" || host.host == "windows")
+            && !state.primary_sign_in.contains(&host.host)
         {
-            if !state.primary_sign_in.contains(&host.host) {
-                state.primary_sign_in.push(host.host.clone());
-            }
+            state.primary_sign_in.push(host.host.clone());
         }
         if matches!(
             failure_code.as_deref(),
@@ -1425,33 +1408,33 @@ impl FailoverCoordinator {
         let observed_plan_at = response
             .get("observedPlanAt")
             .and_then(|v| usage_timestamp(v, self.now()));
-        if tracks_verified_plan(target) {
-            if let (Some(plan), Some(at)) = (&observed_plan, &observed_plan_at) {
-                let bound = parse_zero(state.observed_plan_at.as_deref()).max(parse_zero(
-                    state
-                        .saved
-                        .as_ref()
-                        .and_then(|s| s.reading.sampled_at.as_deref()),
-                ));
-                if parse_opt(Some(at)) >= bound {
-                    state.observed_plan = Some(plan.clone());
-                    state.observed_plan_at = Some(at.clone());
-                    state.observed_plan_peer =
-                        if same_identity(state.identity.as_ref(), Some(&candidate.identity)) {
-                            None
-                        } else {
-                            Some(contract::MuseUsagePeer {
-                                host: host.host.clone(),
-                                identity: candidate.identity.clone(),
-                            })
-                        };
-                    if state
-                        .saved
-                        .as_ref()
-                        .is_some_and(|s| s.reading.plan.as_deref() != Some(plan))
-                    {
-                        state.saved = None;
-                    }
+        if tracks_verified_plan(target)
+            && let (Some(plan), Some(at)) = (&observed_plan, &observed_plan_at)
+        {
+            let bound = parse_zero(state.observed_plan_at.as_deref()).max(parse_zero(
+                state
+                    .saved
+                    .as_ref()
+                    .and_then(|s| s.reading.sampled_at.as_deref()),
+            ));
+            if parse_opt(Some(at)) >= bound {
+                state.observed_plan = Some(plan.clone());
+                state.observed_plan_at = Some(at.clone());
+                state.observed_plan_peer =
+                    if same_identity(state.identity.as_ref(), Some(&candidate.identity)) {
+                        None
+                    } else {
+                        Some(contract::MuseUsagePeer {
+                            host: host.host.clone(),
+                            identity: candidate.identity.clone(),
+                        })
+                    };
+                if state
+                    .saved
+                    .as_ref()
+                    .is_some_and(|s| s.reading.plan.as_deref() != Some(plan))
+                {
+                    state.saved = None;
                 }
             }
         }
@@ -1501,7 +1484,7 @@ impl FailoverCoordinator {
         {
             state.primary_sign_in.retain(|h| h != &host.host);
         }
-        let newer = state.saved.as_ref().map_or(true, |s| {
+        let newer = state.saved.as_ref().is_none_or(|s| {
             parse_opt(reading.sampled_at.as_deref()) >= parse_opt(s.reading.sampled_at.as_deref())
         });
         if newer {
@@ -1549,16 +1532,14 @@ impl FailoverCoordinator {
             }
             return "done";
         }
-        if failure_code.is_none() {
-            if let Some(refresh_after) = response.get("refreshAfterSeconds").and_then(Value::as_f64)
-            {
-                if refresh_after > 0.0 {
-                    state.next_attempt = state
-                        .next_attempt
-                        .max(self.now() + refresh_after.min(86_400.0) * 1000.0);
-                    return "done";
-                }
-            }
+        if failure_code.is_none()
+            && let Some(refresh_after) = response.get("refreshAfterSeconds").and_then(Value::as_f64)
+            && refresh_after > 0.0
+        {
+            state.next_attempt = state
+                .next_attempt
+                .max(self.now() + refresh_after.min(86_400.0) * 1000.0);
+            return "done";
         }
         if reading.status == "ok" {
             "done"
@@ -1581,10 +1562,11 @@ fn rate_limit_message(message: &str) -> bool {
             if after.starts_with("limit") {
                 return true;
             }
-            if let Some(&c) = after.as_bytes().first() {
-                if c != b'\n' && after[1..].starts_with("limit") {
-                    return true;
-                }
+            if let Some(&c) = after.as_bytes().first()
+                && c != b'\n'
+                && after[1..].starts_with("limit")
+            {
+                return true;
             }
         }
         if lower[i..].starts_with("429") {
@@ -1710,11 +1692,11 @@ impl FailoverCoordinator {
                     .map(|w| {
                         let mut w = w.clone();
                         w["status"] = json!("cached");
-                        if w.get("sampledAt").is_none() || w.get("sampledAt") == Some(&Value::Null)
+                        if (w.get("sampledAt").is_none()
+                            || w.get("sampledAt") == Some(&Value::Null))
+                            && let Some(sampled) = &reading.sampled_at
                         {
-                            if let Some(sampled) = &reading.sampled_at {
-                                w["sampledAt"] = json!(sampled);
-                            }
+                            w["sampledAt"] = json!(sampled);
                         }
                         w
                     })
@@ -1768,50 +1750,49 @@ impl FailoverCoordinator {
         let requires_sign_in = code
             .as_deref()
             .is_some_and(|c| ["needs_sign_in", "no_browser_cookie", "choose_team"].contains(&c));
-        if let Some(code) = &code {
-            if let Some(message) = message_for(code) {
-                let status = account
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                let provider = account
-                    .get("provider")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                if status != "needs_sign_in"
-                    && (!has_usage_value(&account) || (requires_sign_in && provider != "claude"))
-                {
-                    account["status"] = json!(if requires_sign_in {
-                        "needs_sign_in"
-                    } else {
-                        "unavailable"
-                    });
-                    account["message"] = json!(message);
-                    if status == "cached" {
-                        let sampled = account.get("sampledAt").cloned().unwrap_or(Value::Null);
-                        let windows: Vec<Value> = account
-                            .get("windows")
-                            .and_then(Value::as_array)
-                            .cloned()
-                            .unwrap_or_default()
-                            .iter()
-                            .map(|w| {
-                                let mut w = w.clone();
-                                w["status"] = json!("cached");
-                                if w.get("sampledAt").is_none()
-                                    || w.get("sampledAt") == Some(&Value::Null)
-                                {
-                                    if !sampled.is_null() {
-                                        w["sampledAt"] = sampled.clone();
-                                    }
-                                }
-                                w
-                            })
-                            .collect();
-                        account["windows"] = Value::Array(windows);
-                    }
+        if let Some(code) = &code
+            && let Some(message) = message_for(code)
+        {
+            let status = account
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let provider = account
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            if status != "needs_sign_in"
+                && (!has_usage_value(&account) || (requires_sign_in && provider != "claude"))
+            {
+                account["status"] = json!(if requires_sign_in {
+                    "needs_sign_in"
+                } else {
+                    "unavailable"
+                });
+                account["message"] = json!(message);
+                if status == "cached" {
+                    let sampled = account.get("sampledAt").cloned().unwrap_or(Value::Null);
+                    let windows: Vec<Value> = account
+                        .get("windows")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|w| {
+                            let mut w = w.clone();
+                            w["status"] = json!("cached");
+                            if (w.get("sampledAt").is_none()
+                                || w.get("sampledAt") == Some(&Value::Null))
+                                && !sampled.is_null()
+                            {
+                                w["sampledAt"] = sampled.clone();
+                            }
+                            w
+                        })
+                        .collect();
+                    account["windows"] = Value::Array(windows);
                 }
             }
         }
