@@ -375,19 +375,31 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/account_usage/producer/claude.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/account_usage/producer/codex_local.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
     },
     {
-      "file": "crates/aac-http/src/account_usage/producer/peers.rs",
+      "file": "crates/aac-http/src/account_usage/producer/failover.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/account_usage/producer/recheck.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/account_usage/producer/signin_state.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
