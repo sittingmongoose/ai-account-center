@@ -367,8 +367,9 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 35000));
   const after = await get(ownedReady.port, '/api/status');
   const body = JSON.parse(after.body);
-  report.steps.push({ name: 'kill drill', status: after.status, threads: body.threads?.length });
-  if (after.status !== 200 || !Array.isArray(body.threads) || body.threads.length === 0)
+  const hasData = after.body.includes('vm.fixture');
+  report.steps.push({ name: 'kill drill', status: after.status, hasData });
+  if (after.status !== 200 || body.version !== 1 || !hasData)
     report.failures.push('kill drill: the TS readers did not return with data');
 } catch (error) {
   report.failures.push(String(error && error.stack ? error.stack : error));
