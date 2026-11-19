@@ -1,5 +1,6 @@
 {
   "config/rust-service-routes.json": "3b1f05f61cd9b68f081d59a1910109f67b3c4ed10f6449c5454d9e39faa2aab7",
+  "crates/aac-http/src/public_auth/reset_routes.rs": "49a8cb39eca10921aa35d15d2bcba586d4077aea95751813d83148fb35839389",
   "src/web-server/compose-request.ts": "b48b41b7f36c47236965168743dde68b39e8161e2f6508416f951b1d264c92f4",
   "src/web-server/compose-server.ts": "88495222e3f5f674f679305bce85e2fe70b482d30675ed78ca53a9027d9f8d97",
   "src/web-server/index.ts": "61f925504f14dd21f8c065d1f2ffc7b7da97082d65d1aae038cffeecd681a7d8",
@@ -31,5 +32,6 @@
   "src/web-server/rust-service-supervisor.ts": "e54aa209ccb0b3b5b847e1275a63f6056ae9cb2d0d7685da988a456f72cb301a",
   "src/web-server/rust-service-transport.ts": "57155574753cb16898d41bc763a586e8acf9202143b8c272615f805a293e3174",
   "src/web-server/rust-service.ts": "b72b70133dad0ddaf53606fd37b76653835e82ffbdb2462da60d10e454fa9795",
-  "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
+  "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa",
+  "tests/fixtures/reset-adapter/reset-claim-routes.ts": "7df08409ea6d50ac99e7ce50b6d97fb25204f9f0f4376a70293177dadaf1e989"
 }
