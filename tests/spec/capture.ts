@@ -546,7 +546,13 @@ function emit(relative: string, data: any, view: string | null = null) {
   const composedRow = composed && /^contract\/[0-9]/.test(relative);
   const owner = composedRow ? composedOwner(data.request) : undefined;
   if (owner === 'scoreboard') {
-    assert.equal(view, 'scoreboard@1', 'the composed Scoreboard row must come from its owner');
+    if (view !== 'scoreboard@1')
+      console.error('SCOREBOARD ROW', JSON.stringify(data).slice(0, 900));
+    assert.equal(
+      view,
+      'scoreboard@1',
+      `the composed Scoreboard row must come from its owner: ${data.response.status} ${JSON.stringify(data.response.body).slice(0, 240)}`
+    );
     const body = data.response.body;
     // The two cache reads happen at different instants. Preserve clock-field presence and
     // nulls, while comparing the displayed data and all response headers exactly.
