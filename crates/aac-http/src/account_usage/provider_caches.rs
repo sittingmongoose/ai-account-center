@@ -52,20 +52,6 @@ pub(super) fn load(
     }
 }
 
-pub(super) fn usage_observation(root: &Path, key: &str) -> Option<Value> {
-    if !hex(key, 64) {
-        return None;
-    }
-    load(
-        root,
-        crate::collection_cache::OBSERVATIONS,
-        Some(&format!("{key}.json")),
-        true,
-    )
-    .ok()
-    .flatten()
-}
-
 /// Read the last Windows Claude sample only for the caller's current manifest hash.
 /// The caller still verifies the normalized sample against the admitted profile.
 pub fn claude_snapshot(

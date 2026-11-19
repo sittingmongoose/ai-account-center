@@ -1,11 +1,12 @@
 //! Read the installed account sources and publish a complete Accounts generation.
 mod claude;
 mod codex_local;
+mod failover;
 mod history;
-mod peers;
 pub mod recheck;
 mod selection;
 
+use super::coordinator::FailoverCoordinator;
 use super::{AccountUsageCache, Desktop, dashboard, rows, sampler, sources};
 use crate::{agent_transport::Agents, collection::Collection};
 use aac_core::UtcMs;
@@ -146,6 +147,8 @@ pub struct Producer {
     recheck_forced: Arc<std::sync::Mutex<HashMap<String, i64>>>,
     /// The renewal status the Codex rows read, cached for the TS status TTL (15 s).
     renewal_status: Arc<std::sync::Mutex<Option<RenewalSnapshot>>>,
+    /// The one display-failover coordinator (G4) every provider's row goes through.
+    failover: Arc<FailoverCoordinator>,
 }
 
 type RenewalSnapshot = (
@@ -167,6 +170,7 @@ impl Producer {
         collection: Arc<Collection>,
         cursor: Arc<super::cursor::Reader>,
     ) -> Self {
+        let failover = failover::coordinator(agents.clone(), collection.clone(), owners.clone());
         Self {
             root,
             home: std::env::var_os("HOME").map(PathBuf::from),
@@ -178,6 +182,7 @@ impl Producer {
             active_identities: Arc::default(),
             recheck_forced: Arc::default(),
             renewal_status: Arc::default(),
+            failover,
         }
     }
 
@@ -236,23 +241,16 @@ impl Producer {
             now,
             force,
         );
+        let history = self.mac_history_rows(&disk.claude_private, now).await;
+        let claude = self.claude_rows(&disk.claude, &history, now);
         let entries = self.renewal_entries(now).await;
         let codex = self.codex_rows(disk.codex, &entries, now);
-        let claude = self.claude_rows(&disk.claude_private, disk.refresh, now);
-        let history = self.mac_history_rows(&disk.claude_private, now);
-        let (additional, codex, claude, history) = tokio::join!(additional, codex, claude, history);
+        let (additional, codex, claude) = tokio::join!(additional, codex, claude);
 
         let mut samples = Vec::with_capacity(4);
-        for desktop in [Desktop::Mac, Desktop::Windows] {
+        for (selected, desktop) in [Desktop::Mac, Desktop::Windows].into_iter().enumerate() {
             let mut rows = codex.clone();
-            rows.extend(
-                disk.claude
-                    .iter()
-                    .zip(claude.iter().zip(&history))
-                    .filter_map(|(profile, (raw, history))| {
-                        rows::claude(profile, desktop, raw.as_ref(), history.as_ref())
-                    }),
-            );
+            rows.extend(claude.iter().filter_map(|pair| pair[selected].clone()));
             for profile in &disk.claude_pending {
                 let pending = rows::pending_claude(profile, desktop);
                 if !rows.iter().any(|row| row["id"] == pending["id"]) {
