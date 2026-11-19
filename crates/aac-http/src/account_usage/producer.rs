@@ -152,6 +152,8 @@ pub struct Producer {
     failover: Arc<FailoverCoordinator>,
     /// The cached `claude-host` session answers (the TS five-minute probe).
     sign_in_state: signin_state::SignInCache,
+    #[cfg(test)]
+    mac_session_fixture: Option<signin_state::SessionFixture>,
 }
 
 type RenewalSnapshot = (
@@ -187,6 +189,8 @@ impl Producer {
             renewal_status: Arc::default(),
             failover,
             sign_in_state: Arc::default(),
+            #[cfg(test)]
+            mac_session_fixture: None,
         }
     }
 
@@ -246,7 +250,7 @@ impl Producer {
             force,
         );
         let history = self.mac_history_rows(&disk.claude_private, now).await;
-        let claude = self.claude_rows(&disk.claude, &history, force);
+        let claude = self.claude_rows(&disk.claude, &disk.claude_private, &history, force);
         let entries = self.renewal_entries(now).await;
         let codex = self.codex_rows(disk.codex, &entries, now);
         let (additional, codex, claude) = tokio::join!(additional, codex, claude);
