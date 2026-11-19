@@ -1094,11 +1094,16 @@ fn private_builder() -> fs::DirBuilder {
 /// parents at the umask default, the folder itself 0700, a real folder of this user, tightened.
 fn reference_folder(folder: &Path) -> Result<(), Failure> {
     let refused = || Failure::new(Cause::Refused, "store folder refused");
-    fs::create_dir_all(folder.parent().ok_or_else(refused)?)?;
-    match private_builder().create(folder) {
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-        result => result?,
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(folder.parent().ok_or_else(refused)?)?;
+        match private_builder().create(folder) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            result => result?,
+        }
     }
+    #[cfg(windows)]
+    ensure_directory(folder)?;
     let meta = fs::symlink_metadata(folder)?;
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return Err(refused());
