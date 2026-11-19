@@ -56,7 +56,11 @@ let answer: unknown;
 let failDashboard = false;
 let failProfiles = false;
 let offered = true;
-const saved = { auth: process.env.CCS_DASHBOARD_AUTH_ENABLED, home: process.env.AAC_RUST_HOME_VIEW };
+const saved = {
+  auth: process.env.CCS_DASHBOARD_AUTH_ENABLED,
+  home: process.env.AAC_RUST_HOME_VIEW,
+  group: process.env.AAC_RUST_GROUP_HOME,
+};
 
 /** A service in on mode whose compose() records the envelope and answers `answer` the way the bridge does. */
 function offeringService(): RustService {
@@ -81,11 +85,15 @@ beforeAll(() => {
   // requireDashboardSession checks the session only when sign-in is on (no config file is read).
   process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
   process.env.AAC_RUST_HOME_VIEW = 'on';
+  // This file proves D7's envelope wiring with stubbed reads; the fed group (default-ready, on when unset)
+  // would answer from the real dashboard read first. home-feed.test.ts proves the fed path.
+  process.env.AAC_RUST_GROUP_HOME = 'off';
 });
 afterAll(() => {
   for (const [key, value] of [
     ['CCS_DASHBOARD_AUTH_ENABLED', saved.auth],
     ['AAC_RUST_HOME_VIEW', saved.home],
+    ['AAC_RUST_GROUP_HOME', saved.group],
   ] as const)
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -145,12 +153,27 @@ describe('GET /api/views/home', () => {
     expect(plain.server).toEqual({ version: '0.0.0-test', commit: null });
   });
 
-  it('is not offered with the service on but AAC_RUST_HOME_VIEW off', async () => {
+  it('is not offered with the service on but both Home switches off', async () => {
     process.env.AAC_RUST_HOME_VIEW = 'off';
     try {
       expect((await home()).status).toBe(404);
     } finally {
       process.env.AAC_RUST_HOME_VIEW = 'on';
+    }
+  });
+
+  it('default-ready: the group unset offers Home with the service on even with AAC_RUST_HOME_VIEW off', async () => {
+    process.env.AAC_RUST_HOME_VIEW = 'off';
+    delete process.env.AAC_RUST_GROUP_HOME;
+    try {
+      // The dashboard answer names the offer; no fed read runs on this route.
+      const plain = await (
+        await fetch(`${baseUrl}/api/accounts/dashboard`, { headers: { 'x-test-session': 'true' } })
+      ).json();
+      expect(plain.server.views).toEqual(['home']);
+    } finally {
+      process.env.AAC_RUST_HOME_VIEW = 'on';
+      process.env.AAC_RUST_GROUP_HOME = 'off';
     }
   });
 

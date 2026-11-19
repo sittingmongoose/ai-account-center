@@ -141,10 +141,13 @@ no-follow, nonblocking descriptor after its `lstat`.
 ## Home view (D7)
 
 `AAC_RUST_HOME_VIEW=on`, with the service `on`, lets the server build Home's view model
-(`crates/aac-views` `home`, view model v3); the default is `off`. Off, `GET /api/views/home` is not
-offered: it answers the 404 every unknown endpoint gets, and the dashboard answer is unchanged. On,
-the dashboard answer adds `server.views: ["home"]` and the page asks that route instead of its three
-reads (the dashboard, `/api/claude/desktop-profiles`, `/api/antigravity/profiles`).
+(`crates/aac-views` `home`, view model v3) through the envelope path; the switch itself defaults to `off`.
+The Home group (`rustService.groups.home`, below) is default-ready and offers the same route from fed
+generations when the mode is on, so with the mode on the route is offered unless the group is explicitly
+`off`. With neither on, `GET /api/views/home` is not offered: it answers the 404 every unknown endpoint
+gets, and the dashboard answer is unchanged. When offered, the dashboard answer adds `server.views: ["home"]`
+and the page asks that route instead of its three reads (the dashboard, `/api/claude/desktop-profiles`,
+`/api/antigravity/profiles`).
 
 The route keeps the dashboard route's session, query and failure rules and answers those three answers
 plus `view`. It reads each one the way its own route answers it: the desktop profiles through part 4's
@@ -492,10 +495,11 @@ progress/input and acknowledged cancellation. All binaries stay on the build hos
 ## Home, fed (R1)
 
 R1 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 1.1): Home and the accounts dashboard at the
-**fed** level. Off by default: `rustService.groups.home: on` in `config.yaml` (or `AAC_RUST_GROUP_HOME=on`),
-under `rustService.mode: on`, which stays the ceiling. With the group on, Home is offered as with the D7 switch,
-and `GET /api/views/home` is answered from fed generations; with it off, Home is D7's path (or not offered) and
-nothing below runs.
+**fed** level. Default-ready: with `rustService.mode: on` (the ceiling) and no explicit setting, the Home group
+is on and `GET /api/views/home` is answered from fed generations. `rustService.groups.home: off` in
+`config.yaml` (or `AAC_RUST_GROUP_HOME=off`) turns it off; then Home is D7's path (or not offered) and nothing
+below runs. `on` is accepted explicitly too. The group's parity and measurement gates are the Home corpus and
+`tests/spec/bridge-measure.mjs --home` (see the lane README and `MEASURE-R1*`).
 
 - **The owners push only when their data changed** (`views/home-feed.ts`, `PUT /internal/feed/<source>`), with
   a numeric generation per source that only moves forward (a late push of an older one is not taken, and the

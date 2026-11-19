@@ -26,6 +26,10 @@ Object.assign(process.env, {
   CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
   CCS_SESSION_SECRET: 'fixture-session-secret-for-contract-only',
   AAC_NO_LOCAL_RUST_BUILD: '1',
+  // The M0 contract captures the routes without the optional Home view. The Home group is default-ready
+  // (on when unset under mode on), so pin it and the D7 switch off here to keep the goldens the plain answers.
+  AAC_RUST_HOME_VIEW: 'off',
+  AAC_RUST_GROUP_HOME: 'off',
 });
 spyOn(os, 'homedir').mockReturnValue(home);
 // A few legacy readers use process.env.HOME directly. Reject private paths

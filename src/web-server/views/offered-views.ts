@@ -17,8 +17,9 @@ function homeGroup(service: RustService): boolean {
 }
 
 /**
- * The service that builds Home (GET /api/views/home): the Rust service on, with `AAC_RUST_HOME_VIEW=on` (D7) or
- * the Home group on (R1, `rustService.groups.home`). Both default off. Off, the route is not offered.
+ * The service that builds Home (GET /api/views/home): the Rust service on, with the Home group on (R1,
+ * `rustService.groups.home`, default-ready: on when unset) or `AAC_RUST_HOME_VIEW=on` (D7). Off, the route is
+ * not offered.
  */
 export function homeViewService(res: Response): RustService | null {
   const service: unknown = res.locals.rustService;
