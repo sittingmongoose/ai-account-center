@@ -348,48 +348,46 @@ impl Produce {
         let (browsers_result, simlock_result) = tokio::join!(read_browsers(), read_simlock());
         let pins = read_pins(&rows, local).await;
         let now_i64 = clamp_i64(now);
-        let mut inner = self.lock();
-        for (machine, result) in results {
-            inner.machines.insert(
-                machine.clone(),
-                apply_machine(
-                    inner
-                        .machines
-                        .get(&machine)
-                        .cloned()
-                        .unwrap_or_else(Collected::empty),
-                    result,
-                    now_i64,
-                ),
-            );
+        {
+            let mut inner = self.lock();
+            for (machine, result) in results {
+                let before = inner
+                    .machines
+                    .get(&machine)
+                    .cloned()
+                    .unwrap_or_else(Collected::empty);
+                inner
+                    .machines
+                    .insert(machine, apply_machine(before, result, now_i64));
+            }
+            match browsers_result {
+                Ok(rows) => {
+                    let merged = browsers::merge_rows(inner.browsers.data.as_deref(), rows, now_i64);
+                    let problems = browsers::problems(&merged);
+                    inner.browsers = Collected::succeeded(merged, now_i64).with_problems(problems);
+                }
+                Err((reason, missing)) => {
+                    let before = inner.browsers.clone();
+                    inner.browsers = before.failed(&reason, now_i64, missing);
+                }
+            }
+            match simlock_result {
+                Ok(status) => {
+                    let problems =
+                        simlock_problems(&status, inner.simlock.problems.as_deref(), now_i64);
+                    inner.simlock = Collected::succeeded(status, now_i64).with_problems(problems);
+                }
+                Err(reason) => {
+                    let before = inner.simlock.clone();
+                    inner.simlock = before.failed(&reason, now_i64, false);
+                }
+            }
+            inner.pins = pins;
+            inner.pinned_dirty = true;
+            inner.sources_dirty = true;
+            inner.collecting = false;
+            drop(inner);
         }
-        match browsers_result {
-            Ok(rows) => {
-                let merged = browsers::merge_rows(inner.browsers.data.as_deref(), rows, now_i64);
-                let problems = browsers::problems(&merged);
-                inner.browsers = Collected::succeeded(merged, now_i64).with_problems(problems);
-            }
-            Err((reason, missing)) => {
-                let before = inner.browsers.clone();
-                inner.browsers = before.failed(&reason, now_i64, missing);
-            }
-        }
-        match simlock_result {
-            Ok(status) => {
-                let problems =
-                    simlock_problems(&status, inner.simlock.problems.as_deref(), now_i64);
-                inner.simlock = Collected::succeeded(status, now_i64).with_problems(problems);
-            }
-            Err(reason) => {
-                let before = inner.simlock.clone();
-                inner.simlock = before.failed(&reason, now_i64, false);
-            }
-        }
-        inner.pins = pins;
-        inner.pinned_dirty = true;
-        inner.sources_dirty = true;
-        inner.collecting = false;
-        drop(inner);
         let owner = Arc::clone(self);
         tokio::task::spawn_blocking(move || owner.publish(None))
             .await
@@ -439,6 +437,7 @@ impl Produce {
             .collect();
         inner.answers = self.answers.feed(&cards);
         inner.answers_dirty = false;
+        inner.sources_dirty = true;
     }
 
     /// The pins the readers-check writer matches reports against (`owned-pins`).
@@ -679,14 +678,17 @@ fn computers_rows() -> Vec<(String, String, Option<String>)> {
 }
 
 fn hostname() -> String {
-    let mut buf = [0u8; 256];
-    // SAFETY: `gethostname` writes at most `buf.len()` bytes into the array we own.
-    let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
-    if !ok {
-        return String::new();
+    // Linux keeps the name in procfs; macOS has `uname -n`. (No unsafe call for one word.)
+    if let Some(name) = read_file("/proc/sys/kernel/hostname") {
+        return name.trim().to_owned();
     }
-    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..end]).into_owned()
+    std::process::Command::new("uname")
+        .arg("-n")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default()
 }
 
 fn local_machine() -> String {
@@ -697,21 +699,22 @@ fn read_file(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// `statfs('/')`: `(free bytes, total bytes)` as Node's `bavail*bsize` and `blocks*bsize`.
+/// `statfs('/')`: `(free bytes, total bytes)` as Node's `bavail*bsize` and `blocks*bsize`,
+/// from `df -Pk /` (the same 1 KiB blocks and the same filesystem the probe reads).
 fn statfs_root(_path: &str) -> Option<(f64, f64)> {
-    let path = std::ffi::CString::new("/").ok()?;
-    // SAFETY: `statvfs` fills the struct we pass; its return value is checked.
-    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
-    let rc = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
-    if rc != 0 {
+    let output = std::process::Command::new("df")
+        .args(["-Pk", "/"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
         return None;
     }
-    // SAFETY: the call succeeded, so the struct is initialized.
-    let stats = unsafe { stats.assume_init() };
-    #[allow(clippy::cast_precision_loss)]
-    let block = stats.f_bsize as f64;
-    #[allow(clippy::cast_precision_loss)]
-    Some((stats.f_bavail as f64 * block, stats.f_blocks as f64 * block))
+    let text = String::from_utf8_lossy(&output.stdout);
+    let row = text.lines().nth(1)?;
+    let fields: Vec<&str> = row.split_whitespace().collect();
+    let total: f64 = fields.get(1)?.parse().ok()?;
+    let available: f64 = fields.get(3)?.parse().ok()?;
+    Some((available * 1024.0, total * 1024.0))
 }
 
 fn linux_cpus() -> usize {
