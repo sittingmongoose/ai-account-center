@@ -5,6 +5,7 @@ mod failover;
 mod history;
 pub mod recheck;
 mod selection;
+mod signin_state;
 
 use super::coordinator::FailoverCoordinator;
 use super::{AccountUsageCache, Desktop, dashboard, rows, sampler, sources};
@@ -149,6 +150,8 @@ pub struct Producer {
     renewal_status: Arc<std::sync::Mutex<Option<RenewalSnapshot>>>,
     /// The one display-failover coordinator (G4) every provider's row goes through.
     failover: Arc<FailoverCoordinator>,
+    /// The cached `claude-host` session answers (the TS five-minute probe).
+    sign_in_state: signin_state::SignInCache,
 }
 
 type RenewalSnapshot = (
@@ -183,6 +186,7 @@ impl Producer {
             recheck_forced: Arc::default(),
             renewal_status: Arc::default(),
             failover,
+            sign_in_state: Arc::default(),
         }
     }
 
@@ -242,7 +246,7 @@ impl Producer {
             force,
         );
         let history = self.mac_history_rows(&disk.claude_private, now).await;
-        let claude = self.claude_rows(&disk.claude, &history, now);
+        let claude = self.claude_rows(&disk.claude, &history, force);
         let entries = self.renewal_entries(now).await;
         let codex = self.codex_rows(disk.codex, &entries, now);
         let (additional, codex, claude) = tokio::join!(additional, codex, claude);

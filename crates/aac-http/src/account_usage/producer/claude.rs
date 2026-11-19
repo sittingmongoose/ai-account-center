@@ -47,22 +47,29 @@ impl Producer {
         &self,
         profiles: &[Value],
         history: &[Option<Value>],
-        now: i64,
+        force: bool,
     ) -> Vec<[Option<Value>; 2]> {
-        let _ = now;
         stream::iter(profiles.iter().cloned().zip(history.iter().cloned()))
             .map(move |(profile, history)| async move {
-                self.claude_pair(&profile, history.as_ref()).await
+                self.claude_pair(&profile, history.as_ref(), force).await
             })
             .buffered(3)
             .collect()
             .await
     }
 
-    async fn claude_pair(&self, profile: &Value, history: Option<&Value>) -> [Option<Value>; 2] {
+    async fn claude_pair(
+        &self,
+        profile: &Value,
+        history: Option<&Value>,
+        force: bool,
+    ) -> [Option<Value>; 2] {
         let Some(target) = super::failover::claude_target(&self.root, profile) else {
             return [None, None];
         };
+        // The TS dashboard probed the Mac launcher before publishing the rows; a profile
+        // without a Mac launcher answers unknown and never names Mac.
+        let mac_signed_out = self.mac_signed_out(profile, force).await.unwrap_or(false);
         let mut out: [Option<Value>; 2] = [None, None];
         for (index, desktop) in [Desktop::Mac, Desktop::Windows].into_iter().enumerate() {
             let Some(template) = rows::claude(profile, desktop, None, history) else {
@@ -71,7 +78,8 @@ impl Producer {
             // The first call in a generation reads; the other desktop's call projects the
             // same verified reading from the coordinator's state, as the TS service did for
             // a second dashboard.
-            out[index] = Some(self.failover().collect(&target, &template).await);
+            let row = self.failover().collect(&target, &template).await;
+            out[index] = Some(super::signin_state::with_mac_sign_in(row, mac_signed_out));
         }
         out
     }

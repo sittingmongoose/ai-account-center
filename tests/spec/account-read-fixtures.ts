@@ -394,11 +394,15 @@ export function preferencesForms(): FileForm[] {
   ];
 }
 
-/** The zones Rust admits, read from the Rust source so there is one list. */
+/**
+ * The zones the engine admits, from its own IANA table. The Rust reader validates the same
+ * table (`chrono-tz`), so the gate is the engine's set rather than a scraped hand list.
+ */
 export function admittedZones(): string[] {
-  const source = fs.readFileSync(path.join(repo, 'crates/aac-http/src/account_reads.rs'), 'utf8');
-  const block = source.slice(source.indexOf('ADMITTED_TIME_ZONES: &[&str] = &['));
-  return [...block.slice(0, block.indexOf('];')).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  const supported = (
+    Intl as unknown as { supportedValuesOf?: (key: string) => string[] }
+  ).supportedValuesOf?.('timeZone');
+  return [...new Set(['UTC', ...(supported ?? [])])];
 }
 
 export function writeMeasureFiles(ccs: string): void {
