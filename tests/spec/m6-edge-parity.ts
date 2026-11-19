@@ -354,6 +354,13 @@ function normalizeHeaders(
 }
 
 function normalizeRecord(row: Recorded, ctx: NormalizeContext): Recorded {
+  const body =
+    row.request.path === '/sw.js' && typeof row.response.body === 'string'
+      ? row.response.body.replace(
+          /^var BUILD_ID = '[a-f0-9]{12}';$/m,
+          "var BUILD_ID = '<shell-build-id>';"
+        )
+      : row.response.body;
   // Keys in the corpus order (sorted): headers, method, path / body, headers, status.
   return {
     case: text(row.case, ctx),
@@ -363,7 +370,7 @@ function normalizeRecord(row: Recorded, ctx: NormalizeContext): Recorded {
       path: text(row.request.path, ctx),
     },
     response: {
-      body: normalize(row.response.body, ctx),
+      body: normalize(body, ctx),
       headers: normalizeHeaders(row.response.headers, ctx),
       status: row.response.status,
     },
@@ -387,7 +394,10 @@ function bodyOf(bytes: Buffer, contentType: string | null): unknown {
   return { sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length };
 }
 
-async function runHttp(base: string, ctx: { home: string; buildId: string }): Promise<Recorded[]> {
+async function runHttp(
+  base: string,
+  ctx: { home: string; buildId: string; workerBytes?: Buffer }
+): Promise<Recorded[]> {
   const normalizeContext: NormalizeContext = { base, home: ctx.home, buildId: ctx.buildId };
   const out: Recorded[] = [];
   for (const testCase of HTTP_CASES) {
@@ -407,6 +417,9 @@ async function runHttp(base: string, ctx: { home: string; buildId: string }): Pr
       redirect: 'manual',
     });
     const bytes = Buffer.from(await response.arrayBuffer());
+    if (route === '/sw.js' && ctx.workerBytes) {
+      assert.deepEqual(bytes, ctx.workerBytes, 'the listener must serve the packaged worker bytes');
+    }
     const body = bodyOf(bytes, response.headers.get('content-type'));
     out.push(
       normalizeRecord(
@@ -540,6 +553,7 @@ async function worker(reportPath: string): Promise<void> {
   };
   const built = ui.buildUi({ repoRoot: skeleton, run: fakeRun, readCommit: () => '8fb5e3de' });
   const staticDir = path.join(skeleton, 'dist/ui');
+  const workerBytes = fs.readFileSync(path.join(staticDir, 'sw.js'));
 
   fs.mkdirSync(path.join(ccs, 'auth'), { recursive: true, mode: 0o700 });
   fs.writeFileSync(
@@ -563,7 +577,7 @@ async function worker(reportPath: string): Promise<void> {
       AAC_RUST_HUB_CACHE: cache,
     });
     try {
-      const http = await runHttp(rust.url, { home, buildId: built.buildId });
+      const http = await runHttp(rust.url, { home, buildId: built.buildId, workerBytes });
       fs.writeFileSync(reportPath, JSON.stringify({ http }));
     } finally {
       await rust.stop();
@@ -586,7 +600,7 @@ async function worker(reportPath: string): Promise<void> {
   assert.ok(address && typeof address === 'object', 'the fixture server did not bind');
   const base = `http://127.0.0.1:${address.port}`;
   try {
-    const http = await runHttp(base, { home, buildId: built.buildId });
+    const http = await runHttp(base, { home, buildId: built.buildId, workerBytes });
     const distCli = path.join(repo, 'dist/ccs.js');
     assert.ok(
       fs.existsSync(distCli),
