@@ -1,0 +1,190 @@
+[
+  {
+    "name": "two-profiles-live-is-party",
+    "profiles": [
+      {
+        "id": "gmail",
+        "email": "gmail@example.com",
+        "plan": "Google AI Pro",
+        "identityKey": "5362aa386cc1c4ea87d72cadd07747c3f04af4b41d906f4ade1cd1499bbbe3f3",
+        "hosts": [
+          {
+            "hostId": "ubuntu",
+            "available": true,
+            "active": false,
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "verification": "runtime",
+            "selected": false
+          }
+        ]
+      },
+      {
+        "id": "party",
+        "email": "party@example.com",
+        "plan": null,
+        "identityKey": "e8cc3b529287256ac1ba055e2363af7fe1d53c6d2ed93a876bec3c580c4c26ed",
+        "hosts": [
+          {
+            "hostId": "ubuntu",
+            "available": true,
+            "active": false,
+            "verifiedAt": null,
+            "verification": "stored-only",
+            "selected": true
+          }
+        ]
+      }
+    ],
+    "inventory": {
+      "schemaVersion": 1,
+      "hostId": "ubuntu",
+      "profiles": [
+        {
+          "id": "gmail",
+          "email": "gmail@example.com",
+          "plan": "Google AI Pro",
+          "available": true,
+          "selected": false,
+          "runtimeVerified": false,
+          "verifiedAt": "2026-10-01T16:40:00.000Z",
+          "hostId": "ubuntu"
+        },
+        {
+          "id": "party",
+          "email": "party@example.com",
+          "plan": null,
+          "available": true,
+          "selected": true,
+          "runtimeVerified": false,
+          "verifiedAt": "2026-10-01T16:59:30.000Z",
+          "hostId": "ubuntu"
+        }
+      ]
+    },
+    "selectedProfileId": "party"
+  },
+  {
+    "name": "stale-live-identity",
+    "profiles": [
+      {
+        "id": "gmail",
+        "email": "gmail@example.com",
+        "plan": "Google AI Pro",
+        "identityKey": "5362aa386cc1c4ea87d72cadd07747c3f04af4b41d906f4ade1cd1499bbbe3f3",
+        "hosts": [
+          {
+            "hostId": "ubuntu",
+            "available": true,
+            "active": false,
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "verification": "runtime",
+            "selected": false
+          }
+        ]
+      }
+    ],
+    "inventory": {
+      "schemaVersion": 1,
+      "hostId": "ubuntu",
+      "profiles": [
+        {
+          "id": "gmail",
+          "email": "gmail@example.com",
+          "plan": "Google AI Pro",
+          "available": true,
+          "selected": false,
+          "runtimeVerified": false,
+          "verifiedAt": "2026-10-01T16:40:00.000Z",
+          "hostId": "ubuntu"
+        }
+      ]
+    },
+    "selectedProfileId": null
+  },
+  {
+    "name": "future-live-identity",
+    "profiles": [
+      {
+        "id": "gmail",
+        "email": "gmail@example.com",
+        "plan": "Google AI Pro",
+        "identityKey": "5362aa386cc1c4ea87d72cadd07747c3f04af4b41d906f4ade1cd1499bbbe3f3",
+        "hosts": [
+          {
+            "hostId": "ubuntu",
+            "available": true,
+            "active": false,
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "verification": "runtime",
+            "selected": false
+          }
+        ]
+      }
+    ],
+    "inventory": {
+      "schemaVersion": 1,
+      "hostId": "ubuntu",
+      "profiles": [
+        {
+          "id": "gmail",
+          "email": "gmail@example.com",
+          "plan": "Google AI Pro",
+          "available": true,
+          "selected": false,
+          "runtimeVerified": false,
+          "verifiedAt": "2026-10-01T16:40:00.000Z",
+          "hostId": "ubuntu"
+        }
+      ]
+    },
+    "selectedProfileId": null
+  },
+  {
+    "name": "no-profiles",
+    "profiles": [],
+    "inventory": {
+      "schemaVersion": 1,
+      "hostId": "ubuntu",
+      "profiles": []
+    },
+    "selectedProfileId": null
+  },
+  {
+    "name": "missing-credential-file",
+    "profiles": [
+      {
+        "id": "gmail",
+        "email": "gmail@example.com",
+        "plan": "Google AI Pro",
+        "identityKey": "5362aa386cc1c4ea87d72cadd07747c3f04af4b41d906f4ade1cd1499bbbe3f3",
+        "hosts": [
+          {
+            "hostId": "ubuntu",
+            "available": true,
+            "active": true,
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "verification": "runtime",
+            "selected": true
+          }
+        ]
+      }
+    ],
+    "inventory": {
+      "schemaVersion": 1,
+      "hostId": "ubuntu",
+      "profiles": [
+        {
+          "id": "gmail",
+          "email": "gmail@example.com",
+          "plan": "Google AI Pro",
+          "available": false,
+          "selected": false,
+          "runtimeVerified": false,
+          "verifiedAt": null,
+          "hostId": "ubuntu"
+        }
+      ]
+    },
+    "selectedProfileId": null
+  }
+]

@@ -62,6 +62,11 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
             aac_views::codex_profiles::summary(&input).ok()
         }
         "/api/codex/profiles/quotas" => aac_views::codex_profiles::quotas(envelope(bytes)?).ok(),
+        // G6: the runtime's own read once TS stops sending its input. The live-identity proof
+        // still arrives with the native driver port, so every row is unselected for now.
+        "/api/antigravity/profiles" if bytes.is_empty() => {
+            crate::antigravity_runtime::inventory_now(root)
+        }
         "/api/antigravity/profiles" => aac_views::antigravity::inventory(envelope(bytes)?).ok(),
         "/api/antigravity/profiles/quotas" => aac_views::antigravity::quotas(envelope(bytes)?).ok(),
         _ => None,
