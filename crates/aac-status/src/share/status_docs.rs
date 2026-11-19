@@ -70,6 +70,7 @@ impl Entry {
 }
 
 /// The reader's snapshot: what the pinned panel's status documents hold.
+#[derive(Clone)]
 pub struct StatusDocsState {
     pub state: &'static str,
     pub scanned_at: Option<u64>,

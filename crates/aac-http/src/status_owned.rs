@@ -19,7 +19,7 @@ use aac_status::share::NodeFs;
 use indexmap::IndexMap;
 use serde_json::{json, Value as Json};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The share scan cadence; the registry rides every third pass (30 s).
@@ -54,7 +54,7 @@ struct Outcome {
 
 pub(crate) struct StatusOwned {
     readers: Mutex<Readers>,
-    check: Mutex<ReadersCheckWriter>,
+    check: Arc<Mutex<ReadersCheckWriter>>,
     state: Mutex<OwnedState>,
     /// Accepted report revisions, by `[kind, writer, objectId]` text (the DB deduplicates
     /// across restarts; this map only skips the calls).
@@ -62,6 +62,7 @@ pub(crate) struct StatusOwned {
     store: Arc<StoreHost>,
     feeds: Feeds,
     owners: Owners,
+    flushing: Arc<AtomicBool>,
     generation_clock: AtomicU64,
 }
 
@@ -79,9 +80,12 @@ impl StatusOwned {
         store: Arc<StoreHost>,
         feeds: Feeds,
         owners: Owners,
+        check: Arc<Mutex<ReadersCheckWriter>>,
+        flushing: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            check: Mutex::new(ReadersCheckWriter::new(reports_root.clone())),
+            check,
+            flushing,
             readers: Mutex::new(Readers {
                 reports: AgentReportsReader::new(reports_root.clone(), Limits::default()),
                 quota: QuotaReportReader::new(reports_root.clone()),
@@ -258,7 +262,11 @@ impl StatusOwned {
             .unwrap_or_default();
         let mut check = self.check.lock().unwrap_or_else(|p| p.into_inner());
         check.record_status_scan(reports, docs, &pins);
+        if self.flushing.swap(true, Ordering::Relaxed) {
+            return;
+        }
         check.flush(&self.owners, now);
+        self.flushing.store(false, Ordering::Relaxed);
     }
 
     /// Report captures into the hosted store (`StatusService.captureReportHistory`): the

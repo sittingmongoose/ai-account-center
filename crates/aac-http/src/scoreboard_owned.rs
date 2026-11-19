@@ -13,6 +13,9 @@ use crate::store_host::StoreHost;
 use aac_status::model_identity::{normalize_model, AliasTable, Model};
 use aac_status::read_context::{Envelope, Presentation};
 use aac_status::share::catalog::{self, CatalogReader};
+use aac_files::registry::{Owners, Role};
+use aac_status::share::check::{ReadersCheckWriter, RunRow};
+use aac_status::share::Problem;
 use aac_status::share::NodeFs;
 use aac_status::validate;
 use aac_views::decline::Decline;
@@ -23,7 +26,7 @@ use serde_json::{json, Map, Value as Json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A read within this long of the last view gets that view (the TS service's cache time).
@@ -134,10 +137,21 @@ pub(crate) struct ScoreboardOwned {
     reads: Mutex<IndexMap<String, CompletedRead>>,
     views: Mutex<IndexMap<String, CachedView>>,
     last_full_at: AtomicU64,
+    /// The readers-check rows this owner shares with the Status owner (one file per writer).
+    check: Arc<Mutex<ReadersCheckWriter>>,
+    owners: Owners,
+    flushing: Arc<AtomicBool>,
 }
 
 impl ScoreboardOwned {
-    pub(crate) fn new(root: PathBuf, store: Arc<StoreHost>, feeds: Feeds) -> Arc<Self> {
+    pub(crate) fn new(
+        root: PathBuf,
+        store: Arc<StoreHost>,
+        feeds: Feeds,
+        check: Arc<Mutex<ReadersCheckWriter>>,
+        owners: Owners,
+        flushing: Arc<AtomicBool>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             catalog: Mutex::new(CatalogReader::new(root.clone())),
             catalog_state: Mutex::new(Json::Null),
@@ -150,11 +164,63 @@ impl ScoreboardOwned {
             reads: Mutex::new(IndexMap::new()),
             views: Mutex::new(IndexMap::new()),
             last_full_at: AtomicU64::new(0),
+            check,
+            owners,
+            flushing,
         })
     }
 
     pub(crate) fn set_seed_failures(&self, failures: Vec<Json>) {
         *self.seed_failures.lock().unwrap_or_else(|p| p.into_inner()) = failures;
+    }
+
+    /// The check file's runs rows (`ScoreboardService.recordCheck`): the accepted revisions
+    /// this view read, and the named refusals. Fire and forget behind one in-flight guard,
+    /// as the TS writer does; a hung share never stalls the answer.
+    fn record_check(&self, runs: &Json) {
+        if self.owners.owner("readers-check") != Some(Role::RustService) {
+            return;
+        }
+        let empty: Vec<Json> = Vec::new();
+        let source = runs["accepted"]
+            .as_array()
+            .unwrap_or_else(|| runs["runs"].as_array().unwrap_or(&empty));
+        let rows: Vec<RunRow> = source
+            .iter()
+            .map(|row| RunRow {
+                file: row["file"].as_str().unwrap_or_default().to_string(),
+                seq: row["doc"]["seq"].as_u64().unwrap_or(0),
+                sha256: row["sha256"].as_str().unwrap_or_default().to_string(),
+                first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
+            })
+            .collect();
+        let problems: Vec<Problem> = runs["problems"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .map(|problem| Problem {
+                        file: problem["file"].as_str().unwrap_or_default().to_string(),
+                        reason: problem["reason"].as_str().unwrap_or_default().to_string(),
+                        since: problem["since"].as_u64().unwrap_or(0),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        {
+            let mut check = self.check.lock().unwrap_or_else(|p| p.into_inner());
+            check.record_runs(&rows, &problems);
+        }
+        if self.flushing.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let check = Arc::clone(&self.check);
+        let owners = self.owners.clone();
+        let flushing = Arc::clone(&self.flushing);
+        tokio::task::spawn_blocking(move || {
+            let check = check.lock().unwrap_or_else(|p| p.into_inner());
+            check.flush(&owners, now_ms());
+            flushing.store(false, Ordering::Relaxed);
+        });
     }
 
     /// The catalog scan (30 s): the reader holds the last good copies; the snapshot is what
@@ -630,6 +696,7 @@ impl ScoreboardOwned {
             }
         }
         let runs = self.runs_state(&query).await?;
+        self.record_check(&runs);
         let join_reviews = if filtered {
             let mut reviews_query = Map::new();
             if let Some(from_ms) = feed.from_ms {

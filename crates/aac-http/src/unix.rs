@@ -698,6 +698,17 @@ pub async fn serve(
     // R4: the owned readers run under the store host, with the boot's share roots and the
     // registry writers TS resolved at start.
     let owners = boot.owners()?;
+    // One readers-check writer for both owners (one file per writer carries the status
+    // scan's rows and the runs rows), and one flush in flight.
+    let check = Arc::new(std::sync::Mutex::new(
+        aac_status::share::check::ReadersCheckWriter::new(
+            boot.owned
+                .as_ref()
+                .map(|owned| owned.reports_root.clone())
+                .unwrap_or_default(),
+        ),
+    ));
+    let check_flushing = Arc::new(AtomicBool::new(false));
     let status_owned = match (&boot.owned, &store) {
         (Some(owned), Some(host)) if owned.status => {
             Some(crate::status_owned::StatusOwned::new(
@@ -706,6 +717,8 @@ pub async fn serve(
                 Arc::clone(host),
                 feeds.clone(),
                 owners.clone(),
+                Arc::clone(&check),
+                Arc::clone(&check_flushing),
             ))
         }
         _ => None,
@@ -716,6 +729,9 @@ pub async fn serve(
                 owned.reports_root.clone(),
                 Arc::clone(host),
                 feeds.clone(),
+                Arc::clone(&check),
+                owners.clone(),
+                Arc::clone(&check_flushing),
             ))
         }
         _ => None,
