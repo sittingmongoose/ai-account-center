@@ -11,6 +11,7 @@ import {
   PUBLIC_HEALTH_PRINCIPAL,
   rustAgent,
   type RustConnection,
+  type RustRenewalBoot,
   type RustStoreBoot,
   type RustStoreBootInput,
 } from './rust-service-transport';
@@ -37,6 +38,8 @@ export interface RustBoot extends RustConnection {
   files: Readonly<Record<string, PrivateFileRole>>;
   /** R3: the store host's config this boot was started with; null keeps the store in TS. */
   store: RustStoreBoot | null;
+  /** G10: the renewal timer's homes this boot was started with; null keeps the timer in TS. */
+  renewal: RustRenewalBoot | null;
 }
 
 /**
@@ -56,6 +59,16 @@ function storeKey(store: unknown): string {
   if (!store || typeof store !== 'object' || Array.isArray(store)) return '';
   return JSON.stringify(
     Object.entries(store as Record<string, unknown>).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0
+    )
+  );
+}
+
+/** The same renewal config in a stable spelling, for the attach check. */
+function renewalKey(renewal: unknown): string {
+  if (!renewal || typeof renewal !== 'object' || Array.isArray(renewal)) return '';
+  return JSON.stringify(
+    Object.entries(renewal as Record<string, unknown>).sort(([a], [b]) =>
       a < b ? -1 : a > b ? 1 : 0
     )
   );
@@ -277,7 +290,8 @@ async function readBoot(
   file: string,
   ccsDir: string,
   binary: string,
-  store: RustStoreBoot | null = null
+  store: RustStoreBoot | null = null,
+  renewal: RustRenewalBoot | null = null
 ): Promise<RustBoot | null> {
   try {
     const text = await privateDescriptor(file);
@@ -292,7 +306,9 @@ async function readBoot(
       // A boot started with other file owners is never attached (L2): one writer per file.
       ownersKey(boot.files) !== ownersKey(privateFileOwners()) ||
       // R3: likewise a boot hosting the store for another config (or none) is never attached.
-      storeKey(boot.store) !== storeKey(store)
+      storeKey(boot.store) !== storeKey(store) ||
+      // G10: likewise a boot running the renewal timer for another config (or none).
+      renewalKey(boot.renewal) !== renewalKey(renewal)
     )
       return null;
     const layout = socketLayout(ccsDir, boot.bootId);
@@ -309,6 +325,7 @@ async function readBoot(
       build: boot.build,
       files: boot.files,
       store: boot.store ?? null,
+      renewal: boot.renewal ?? null,
     };
   } catch {
     return null;
@@ -403,10 +420,12 @@ export async function acquireRustService(
   privateRoot: string,
   binaryPath: string,
   active: Set<http.ClientRequest>,
-  store?: RustStoreBootInput | null
+  store?: RustStoreBootInput | null,
+  renewal?: RustRenewalBoot | null
 ): Promise<RustLease | null> {
-  return (await acquireRustServiceDetailed(privateRoot, binaryPath, active, undefined, store))
-    .lease;
+  return (
+    await acquireRustServiceDetailed(privateRoot, binaryPath, active, undefined, store, renewal)
+  ).lease;
 }
 
 export async function acquireRustServiceDetailed(
@@ -414,16 +433,22 @@ export async function acquireRustServiceDetailed(
   binaryPath: string,
   active: Set<http.ClientRequest>,
   signal?: AbortSignal,
-  storeInput?: RustStoreBootInput | null
+  storeInput?: RustStoreBootInput | null,
+  renewalInput?: RustRenewalBoot | null
 ): Promise<AcquireResult> {
   if (acquiring >= FILESYSTEM_LIMIT)
     return { lease: null, failure: 'unhealthy', refusedAttach: false, swept: 0 };
   acquiring++;
   const budget = AbortSignal.timeout(5000);
   const stopped = signal ? AbortSignal.any([signal, budget]) : budget;
-  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput).finally(
-    () => acquiring--
-  );
+  const pending = acquireWithinBudget(
+    privateRoot,
+    binaryPath,
+    active,
+    stopped,
+    storeInput,
+    renewalInput
+  ).finally(() => acquiring--);
   // Async filesystem work may finish late; every continuation checks the signal before adoption.
   return new Promise((resolve) => {
     const aborted = () =>
@@ -443,7 +468,8 @@ async function acquireWithinBudget(
   binaryPath: string,
   active: Set<http.ClientRequest>,
   signal: AbortSignal,
-  storeInput?: RustStoreBootInput | null
+  storeInput?: RustStoreBootInput | null,
+  renewalInput?: RustRenewalBoot | null
 ): Promise<AcquireResult> {
   const result: AcquireResult = { lease: null, failure: null, refusedAttach: false, swept: 0 };
   if (process.platform === 'win32') return { ...result, failure: 'platform' };
@@ -457,7 +483,8 @@ async function acquireWithinBudget(
   signal.throwIfAborted();
   const descriptor = path.join(run, 'aac-http.json');
   const store = expectedStoreBoot(ccsDir, storeInput);
-  const existing = await readBoot(descriptor, ccsDir, binary, store);
+  const renewal = renewalInput ?? null;
+  const existing = await readBoot(descriptor, ccsDir, binary, store, renewal);
   signal.throwIfAborted();
   if (existing) {
     const agent = rustAgent();
@@ -502,6 +529,7 @@ async function acquireWithinBudget(
     build: { commit: 'unknown', sha256, protocol: RUST_SERVICE_PROTOCOL, storeSchema: 0 },
     files: privateFileOwners(),
     store,
+    renewal,
     agent,
   };
   let child: ChildProcess | undefined;
@@ -609,6 +637,7 @@ async function acquireWithinBudget(
         bootId,
         files: boot.files,
         store: boot.store,
+        renewal: boot.renewal,
       }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.

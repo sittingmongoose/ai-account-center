@@ -1,12 +1,12 @@
 /**
  * Per-route-group switches of the private Rust service (DESIGN-M3-COMPLETE section 4): `rustService.groups.<g>`
- * in config.yaml, under the service mode, which stays the ceiling. R1 adds `home`, R2 `status`. An environment
- * variable (`AAC_RUST_GROUP_HOME`, `AAC_RUST_GROUP_STATUS`) wins over the file; absent, unreadable and invalid
- * values are off.
+ * in config.yaml, under the service mode, which stays the ceiling. R1 adds `home`, R2 `status`, G10 `renewal`
+ * (the saved-login renewal timer). An environment variable (`AAC_RUST_GROUP_HOME`, `AAC_RUST_GROUP_STATUS`,
+ * `AAC_RUST_GROUP_RENEWAL`) wins over the file; absent, unreadable and invalid values are off.
  */
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 
-export type RustGroup = 'home' | 'status';
+export type RustGroup = 'home' | 'status' | 'renewal';
 
 export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {
   let value: unknown = env[`AAC_RUST_GROUP_${group.toUpperCase()}`];

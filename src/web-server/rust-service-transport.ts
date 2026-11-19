@@ -470,6 +470,15 @@ export interface RustStoreBoot extends RustStoreBootInput {
   dir: string;
 }
 
+/**
+ * G10: the boot JSON's renewal object — the homes the saved-login renewal timer reads,
+ * resolved by TS at start (no home discovery in the service). Null keeps the timer in TS.
+ */
+export interface RustRenewalBoot {
+  codexHome: string;
+  homeDir: string;
+}
+
 interface RustStoreEntry {
   connection: RustConnection;
   active: Set<http.ClientRequest>;
@@ -743,4 +752,61 @@ export function requestRustStore(
     });
     request.end(args);
   });
+}
+
+/**
+ * G10: per-root renewal-timer ownership, the store-host pattern. The supervisor reserves
+ * it before the first await of `start`; the TS renewal service defers while it is set and
+ * takes the timer back when the service gives up. One writer: two renewal timers would
+ * rotate the same refresh tokens twice.
+ */
+const renewalHostedRoots = new Map<string, boolean>();
+const renewalHostedHandlers = new Map<string, Set<(hosted: boolean) => void>>();
+
+function renewalRootKey(root: string): string {
+  try {
+    return fs.realpathSync(root);
+  } catch {
+    return root;
+  }
+}
+
+/** The supervisor's reservation: true while the Rust boot owns this root's renewal timer. */
+export function setRustRenewalHosted(root: string, hosted: boolean): void {
+  const key = renewalRootKey(root);
+  if (renewalHostedRoots.get(key) === hosted) return;
+  if (hosted) renewalHostedRoots.set(key, true);
+  else renewalHostedRoots.delete(key);
+  for (const handler of renewalHostedHandlers.get(key) ?? []) {
+    try {
+      handler(hosted);
+    } catch {
+      /* A handler never stops the supervisor. */
+    }
+  }
+}
+
+/** Whether the Rust boot owns this root's renewal timer. */
+export function rustRenewalHosted(root: string): boolean {
+  return renewalHostedRoots.has(renewalRootKey(root));
+}
+
+/** Watch ownership changes; returns the unsubscribe. */
+export function onRustRenewalHostedChange(
+  root: string,
+  handler: (hosted: boolean) => void
+): () => void {
+  const key = renewalRootKey(root);
+  let handlers = renewalHostedHandlers.get(key);
+  if (!handlers) {
+    handlers = new Set();
+    renewalHostedHandlers.set(key, handlers);
+  }
+  handlers.add(handler);
+  return () => handlers.delete(handler);
+}
+
+/** The service is absent or gave up: the TS timer takes back over. */
+export function notifyRustRenewalGaveUp(root: string): void {
+  setRustRenewalHosted(root, false);
 }

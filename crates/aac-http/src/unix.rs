@@ -65,6 +65,20 @@ pub struct Boot {
     /// store in the TS process.
     #[serde(default)]
     pub store: Option<crate::store_host::StoreBoot>,
+    /// G10: the renewal timer's homes as TS resolved them at start; absent (or null) keeps
+    /// the saved-login renewal timer in the TS process.
+    #[serde(default)]
+    pub renewal: Option<RenewalBoot>,
+}
+
+/// G10: the saved-login renewal timer's boot config (the homes it reads).
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RenewalBoot {
+    /// The shared native Codex login home (`~/.codex`), absolute.
+    pub codex_home: PathBuf,
+    /// The home folder scanned for `.codex*` homes, absolute.
+    pub home_dir: PathBuf,
 }
 
 struct Shared {
@@ -114,8 +128,26 @@ impl Boot {
     pub fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
         crate::json_object::from_slice(
             bytes,
-            &["ccsDir", "socketPath", "secret", "bootId", "files", "store"],
+            &["ccsDir", "socketPath", "secret", "bootId", "files", "store", "renewal"],
         )
+        .or_else(|_| {
+            crate::json_object::from_slice(
+                bytes,
+                &["ccsDir", "socketPath", "secret", "bootId", "files", "store"],
+            )
+        })
+        .or_else(|_| {
+            crate::json_object::from_slice(
+                bytes,
+                &["ccsDir", "socketPath", "secret", "bootId", "files", "renewal"],
+            )
+        })
+        .or_else(|_| {
+            crate::json_object::from_slice(
+                bytes,
+                &["ccsDir", "socketPath", "secret", "bootId", "store", "renewal"],
+            )
+        })
         .or_else(|_| {
             crate::json_object::from_slice(
                 bytes,
@@ -126,6 +158,12 @@ impl Boot {
             crate::json_object::from_slice(
                 bytes,
                 &["ccsDir", "socketPath", "secret", "bootId", "store"],
+            )
+        })
+        .or_else(|_| {
+            crate::json_object::from_slice(
+                bytes,
+                &["ccsDir", "socketPath", "secret", "bootId", "renewal"],
             )
         })
         .or_else(|_| {
@@ -176,6 +214,12 @@ impl Boot {
                     .share_backup_dir
                     .as_ref()
                     .is_some_and(|d| !d.is_absolute()))
+        {
+            return Err(failure());
+        }
+        // G10: the renewal timer reads the homes TS resolved; both must be absolute.
+        if let Some(renewal) = &self.renewal
+            && (!renewal.codex_home.is_absolute() || !renewal.home_dir.is_absolute())
         {
             return Err(failure());
         }
@@ -615,6 +659,8 @@ pub async fn serve(
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
+    let renewal = boot.renewal.clone();
+    let ccs_dir = boot.ccs_dir.clone();
     let state = AppState(Arc::new(Shared {
         boot,
         limits: Limits::new(),
@@ -656,6 +702,28 @@ pub async fn serve(
     // R3: the hosted store opens beside the HTTP service (its calls wait for the open),
     // its jobs run on TS's cadence, and the engine closes cleanly when the service ends.
     let jobs_stop = Arc::new(AtomicBool::new(false));
+    let (jobs_stop_tx, jobs_stop_rx) = tokio::sync::watch::channel(false);
+    // G10: the hosted renewal timer runs on the TS cadence (first cycle 3-5 minutes,
+    // then 6 hours +/- 30 minutes, sooner for a backoff or busy retry). The TS service
+    // defers while this boot owns it; the stop flag ends the loop when the service ends.
+    if let Some(renewal) = renewal {
+        let service = aac_renewal::service::CodexProfileRenewalService::new(
+            aac_renewal::service::CodexProfileRenewalServiceDeps {
+                ccs_dir: ccs_dir.clone(),
+                renewal: aac_renewal::renewal::CodexProfileRenewalOptions {
+                    env: aac_renewal::planner::CodexRenewalEnvironment {
+                        ccs_dir,
+                        codex_home: Some(renewal.codex_home),
+                        home_dir: Some(renewal.home_dir),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        tokio::spawn(async move { service.run_until(jobs_stop_rx).await });
+    }
     if let Some(host) = &store {
         let opener = Arc::clone(host);
         tokio::task::spawn_blocking(move || opener.open_at_boot());
@@ -667,6 +735,7 @@ pub async fn serve(
         .with_graceful_shutdown(shutdown)
         .await;
     jobs_stop.store(true, Ordering::Release);
+    let _ = jobs_stop_tx.send(true);
     if let Some(host) = store {
         let _ = tokio::task::spawn_blocking(move || host.close_engine()).await;
     }
