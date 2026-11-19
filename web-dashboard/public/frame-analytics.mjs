@@ -112,30 +112,33 @@ export function createFrameAnalytics({
 
   // The controller's lifetime (G5 post-landing fix, as frame-dashboard.mjs): it stays in the window after its page has
   // gone, so once stopped it sends no read (the browser would send it with the next session's cookie), aborts what is in
-  // flight and acts on no late answer.
+  // flight and acts on no late answer. Its own 401 ends the session the same way: the reads fence that latch too, and
+  // it aborts the lifetime at once, before its owner's stop() (Sol L3, g5stop-R1-L2).
   const lifetime = typeof AbortController === 'function' ? new AbortController() : null;
+  const gone = () => stopped || ended;
   const dropped = () => Object.assign(new Error('This page has signed out.'), { dropped: true, status: 0, payload: null });
 
   /** One GET, as bridge.js's sendNow: the payload, or a thrown error with status and payload (`network` offline). */
   async function read(path) {
-    if (stopped) throw dropped();
+    if (gone()) throw dropped();
     let response;
     try {
       response = await fetchImpl(path, { credentials: 'same-origin', ...(lifetime ? { signal: lifetime.signal } : {}) });
     } catch (cause) {
-      if (stopped) throw dropped();
+      if (gone()) throw dropped();
       online = false;
       throw Object.assign(new Error('The dashboard did not answer.'), { network: true, status: 0, payload: null, cause });
     }
-    if (stopped) throw dropped();
+    if (gone()) throw dropped();
     online = true;
     const body = response.status === 204 ? null : await response.json().catch(() => null);
-    if (stopped) throw dropped();
+    if (gone()) throw dropped();
     if (!response.ok) {
       // a 401 about the session ends it (signed out elsewhere, a password change); the frame's sign-in says why
       const code = body?.code;
       if (response.status === 401 && !stopped && !ended && (!code || code === 'auth_required' || code === 'session_revoked')) {
         ended = true;
+        lifetime?.abort();
         signedOut(code === 'session_revoked' ? 'revoked' : undefined);
       }
       throw Object.assign(new Error(body?.error || `Request failed (${response.status}).`), { status: response.status, payload: body });
@@ -162,7 +165,7 @@ export function createFrameAnalytics({
       read('/api/accounts/preferences').catch(() => null),
     ]);
     reading = false;
-    if (stopped) return;
+    if (gone()) return;
     if (next?.schemaVersion === 1 && Array.isArray(next.accounts)) {
       dashboard = next;
       const seconds = next.settings?.refreshIntervalSeconds;
@@ -347,7 +350,7 @@ export function createFrameAnalytics({
    * the analytics only (a range change). `announce`: the header says "Refreshing" (the refresh interval, Refresh).
    */
   async function refresh(force = false, mode = 'static', { silent = false, side = !silent, announce = force } = {}) {
-    if (stopped) return;
+    if (gone()) return;
     const quiet = silent && !force;
     const gen = ++generation;
     if (!quiet) loading(true, '');
@@ -371,7 +374,7 @@ export function createFrameAnalytics({
     } else {
       result = await analytics();
     }
-    if (gen !== generation || stopped) return;
+    if (gen !== generation || gone()) return;
     armInterval();
     if (result.r && result.r.schemaVersion === 1 && Array.isArray(result.r.accounts)) {
       payload = result.r;

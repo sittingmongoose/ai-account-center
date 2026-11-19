@@ -598,7 +598,7 @@ export function createFrameDashboard({
     },
     /** The tab on screen (frame.rs `show`): Accounts & Settings reads its own blocks when it comes on screen. */
     page(id) {
-      if (stopped || typeof id !== 'string') return;
+      if (gone() || typeof id !== 'string') return;
       const page = id === 'accounts' ? 'accounts' : id === 'home' ? 'home' : 'other';
       if (page === currentPage) return;
       currentPage = page;
@@ -606,13 +606,13 @@ export function createFrameDashboard({
     },
     /** One of the page's action kinds (frame-seam.mjs PAGE_ACTIONS); false, and nothing run, for any other. */
     act(kind, value) {
-      if (stopped || typeof kind !== 'string' || !DASHBOARD_ACTIONS.has(kind)) return false;
+      if (gone() || typeof kind !== 'string' || !DASHBOARD_ACTIONS.has(kind)) return false;
       void run(kind, typeof value === 'string' ? value : '');
       return true;
     },
     /** The frame's own commands: Refresh and Update apps (frame.rs). */
     command(action) {
-      if (stopped || !FRAME_COMMANDS.has(action)) return false;
+      if (gone() || !FRAME_COMMANDS.has(action)) return false;
       void run(action, '');
       return true;
     },

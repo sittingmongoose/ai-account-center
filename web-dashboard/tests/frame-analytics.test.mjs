@@ -256,6 +256,83 @@ test('a session that ended stops the page: the frame is told once', async () => 
   assert.ok(!keys(sent).includes('analytics'), 'nothing drawn');
 });
 
+test('a session that ended under one read fences the controller\'s own latch: no further read leaves it', async () => {
+  // Sol L3 (g5stop-R1-L2): `read` checked only `stopped`, so after its own 401 a bare controller could start further
+  // refused reads until its owner stopped it. Reads fence the ended latch now, as the dashboard transport does.
+  let revoked = false;
+  const base = defaultRoutes();
+  const { controller, server, c, sent, ended } = make((path) =>
+    revoked
+      ? { status: 401, body: { code: 'session_revoked', error: 'Signed out.' } }
+      : base(path)
+  );
+  controller.show();
+  await settle();
+  await settle();
+  assert.ok(keys(sent).includes('analytics'), 'a view is drawn while the session lives');
+  revoked = true;
+  controller.hide();
+  controller.show();
+  await settle();
+  await settle();
+  assert.deepEqual(ended(), ['revoked'], 'the frame is told once');
+  const calls = server.calls.length;
+  controller.act('analytics-refresh', '');
+  controller.hide();
+  controller.show();
+  await c.run(HEAD_EVERY_MS * 3);
+  await settle();
+  await settle();
+  assert.equal(server.calls.length, calls, 'no read leaves the controller after its session ended');
+});
+
+test('a session that ends under one read aborts the reads beside it: their late answers publish nothing', async () => {
+  // Sol L3 (g5stop-R1-L2): the 401 latch did not abort the controller's lifetime, so a side read held mid-answer still
+  // landed after the session ended and published (Astra L1's settled-together class, on Analytics' side reads).
+  const sent = [];
+  const ended = [];
+  let aborted = false;
+  let releasePrefs = null;
+  const fetch = async (path, { signal } = {}) => {
+    if (path.startsWith('/api/accounts/preferences')) {
+      await new Promise((resolve, reject) => {
+        if (signal)
+          signal.addEventListener(
+            'abort',
+            () => {
+              aborted = true;
+              reject(Object.assign(new Error('The read was aborted.'), { name: 'AbortError' }));
+            },
+            { once: true }
+          );
+        releasePrefs = resolve;
+      });
+      return { ok: true, status: 200, json: async () => ({ timeZone: 'UTC' }) };
+    }
+    if (path.startsWith('/api/accounts/analytics'))
+      return { ok: false, status: 401, json: async () => ({ code: 'session_revoked', error: 'Signed out.' }) };
+    return { ok: true, status: 200, json: async () => dashboard() };
+  };
+  const controller = createFrameAnalytics({
+    fetch,
+    now: () => NOW,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    emit: (key, json) => sent.push([key, json]),
+    signedOut: (reason) => ended.push(reason ?? null),
+  });
+  controller.show();
+  await settle();
+  await settle();
+  assert.deepEqual(ended, ['revoked'], 'the frame is told once');
+  releasePrefs?.();
+  await settle();
+  await settle();
+  assert.equal(aborted, true, 'the held side read is aborted when the session ends');
+  assert.ok(!keys(sent).includes('chrome'), 'its late answer publishes nothing once the session has ended');
+  assert.ok(!keys(sent).includes('analytics'), 'and no analytics view is drawn');
+});
+
 test('a failed read says so and keeps what was on screen; one failed poll stays quiet', async () => {
   let fail = false;
   const { controller, sent, c } = make(
