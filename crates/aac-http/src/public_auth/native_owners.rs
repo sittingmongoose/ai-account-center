@@ -43,6 +43,7 @@ pub(super) struct Groups {
     home: bool,
     analytics_writers: bool,
     /// G18: the service owns the aac-usage share writer this boot.
+    #[cfg(unix)]
     usage_snapshot: bool,
     store: bool,
 }
@@ -72,6 +73,7 @@ impl Groups {
             app_updates: on("app-updates", "AAC_RUST_GROUP_APP_UPDATES"),
             home: on("home", "AAC_RUST_GROUP_HOME")
                 || std::env::var("AAC_RUST_HOME_VIEW").as_deref() == Ok("on"),
+            #[cfg(unix)]
             usage_snapshot: on("usageSnapshot", "AAC_RUST_GROUP_USAGESNAPSHOT"),
         }
     }
@@ -119,10 +121,13 @@ struct Usage {
     worker_directory: Option<PathBuf>,
     store: bool,
     analytics_writers: bool,
+    #[cfg(unix)]
     usage_snapshot: bool,
     owners: Owners,
+    #[cfg(unix)]
     agents: Arc<Agents>,
     /// The sign-in expiry rows and when they were read (the TS health cache's five minutes).
+    #[cfg(unix)]
     signin_cache: Mutex<Option<(i64, Value)>>,
 }
 
@@ -220,9 +225,12 @@ impl NativeOwners {
                 store: groups.store && worker_directory.is_some(),
                 worker_directory,
                 analytics_writers: groups.analytics_writers,
+                #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
                 owners,
+                #[cfg(unix)]
                 agents,
+                #[cfg(unix)]
                 signin_cache: Mutex::new(None),
                 root,
             });
@@ -448,6 +456,7 @@ impl Usage {
                         // G18: the native sample triggers the share writer itself: the store's
                         // history, long burn and rollups are added by the service, and the
                         // sign-in facts are collected here (only while a folder is set).
+                        #[cfg(unix)]
                         if owner.usage_snapshot && owner.analytics_writers {
                             owner.push_usage_sample(&cache).await;
                         }
@@ -460,6 +469,7 @@ impl Usage {
     /// G18: push this sample to the service's share writer. Every sample's readings count, even
     /// one whose write the service skips, so the reading ring sees the same cadence; the sign-in
     /// probes and the store facts run only while a folder is set and there are accounts.
+    #[cfg(unix)]
     async fn push_usage_sample(self: &Arc<Self>, cache: &AccountUsageCache) {
         let timestamp = super::storage::iso(super::now());
         let Some(timestamp) = timestamp else {
@@ -499,6 +509,7 @@ impl Usage {
 
     /// The sign-in expiry rows of every configured computer, under the publisher's 60 s limit; a
     /// failed or timed-out pass is named (`failed`), never sent as an empty success.
+    #[cfg(unix)]
     async fn sign_in_facts(self: &Arc<Self>) -> Value {
         let since = super::now();
         // Five minutes, like the TypeScript health cache, so one page cannot make every
@@ -594,6 +605,7 @@ impl Usage {
 /// The computers a sign-in poll reads, in the account collectors' order: this one, then every
 /// remote whose packaged alias is set (`configuredUsageHosts`). The same packaged registry
 /// (`web-dashboard/public/computers.json`) the collectors and the coordinator read.
+#[cfg(unix)]
 fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
     static COMPUTERS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
         serde_json::from_str(include_str!(
@@ -663,6 +675,7 @@ fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
 }
 
 /// This service's own helper platform (`helperPlatform(localComputer())`).
+#[cfg(unix)]
 fn instance_platform() -> String {
     if cfg!(target_os = "macos") {
         "mac".to_owned()
