@@ -834,7 +834,10 @@ mod tests {
                             last_attempt_at: None,
                             last_outcome: None,
                             next_attempt_at: None,
-                            access_expires_at: entry["accessExpiresAt"].as_str().map(str::to_owned),
+                            access_expires_at: entry
+                                .get("accessExpiresAt")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
                         },
                     );
                     renewal_row_note(&entries, name, active, needs_reauth, now)
