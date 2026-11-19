@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import { ProfileError } from '../../../src/errors/error-types';
 import { listClaudeDesktopProfiles } from '../../../src/web-server/services/claude-desktop-profile-service';
 import { openClaudeDesktopProfile } from '../../../src/web-server/services/claude-desktop-open-service';
@@ -32,7 +33,9 @@ import {
 
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
 const dirs: string[] = [];
+const writerReleases: Array<() => void> = [];
 afterEach(() => {
+  for (const release of writerReleases.splice(0)) release();
   if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
   else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -127,6 +130,11 @@ function setup(enabled = true) {
   process.env.CCS_HOME = root;
   const ccsDir = path.join(root, '.ccs');
   fs.mkdirSync(ccsDir, { recursive: true });
+  if (process.env.AAC_SPEC_PROVIDER_WRITE_MODE === 'on') {
+    const binary = process.env.AAC_RUST_SERVICE_BINARY;
+    if (!binary) throw new Error('Native writer binary missing');
+    writerReleases.push(registerFileWriter(fs.realpathSync(ccsDir), binary, () => {}));
+  }
   const inventory = {
     version: 1,
     note: 'kept as is',

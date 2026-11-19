@@ -6,7 +6,11 @@ const binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.resolve('target/debug
 for (const mode of modes) {
   const files = ['tests/unit/web-server/codex-account-lifecycle.test.ts'];
   if (process.platform !== 'win32')
-    files.push('tests/unit/web-server/antigravity-signin-flow.test.ts');
+    files.push(
+      'tests/unit/web-server/antigravity-signin-flow.test.ts',
+      'tests/unit/web-server/account-key-sweep.test.ts',
+      'tests/unit/web-server/claude-account-lifecycle.test.ts'
+    );
   for (const file of files) {
     execFileSync('bun', ['test', file], {
       stdio: 'inherit',
