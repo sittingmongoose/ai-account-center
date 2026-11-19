@@ -213,7 +213,7 @@ export class DashboardSessionStore extends session.Store {
     } catch {
       /* An unreadable claim is free. */
     }
-    // The native claim is held for the lifetime of the listener, without a TS heartbeat.
+    // A native listener with a verified live owner holds the claim for its lifetime.
     if (owner.writer === 'rust') {
       if (
         owner.host !== os.hostname() ||

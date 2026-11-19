@@ -99,7 +99,7 @@ pub(super) fn same(left: &str, right: &str) -> bool {
 pub(super) struct Files {
     root: PathBuf,
     entries: BTreeMap<&'static str, OwnedStore>,
-    _session_owner: SessionOwner,
+    session_owner: SessionOwner,
 }
 
 impl Files {
@@ -133,10 +133,11 @@ impl Files {
             entries.insert(path, owners.claim(rows, id, &root, None)?);
         }
         let session_owner = SessionOwner::take(&root)?;
+        session_owner.verify()?;
         Ok(Self {
             root,
             entries,
-            _session_owner: session_owner,
+            session_owner,
         })
     }
 
@@ -170,7 +171,12 @@ impl Files {
         }
     }
 
+    pub(super) fn verify_owner(&self) -> Result<(), StoreError> {
+        Ok(self.session_owner.verify()?)
+    }
+
     pub(super) fn write(&self, file: &'static str, bytes: &[u8]) -> Result<(), StoreError> {
+        self.verify_owner()?;
         self.entries.get(file).ok_or(StoreError)?.write(bytes)?;
         Ok(())
     }
