@@ -29,9 +29,7 @@ mod collection_cache;
 mod dashboard_fed;
 pub mod dashboard_observations;
 mod feed;
-#[cfg(unix)]
 mod home_fed;
-#[cfg(unix)]
 mod home_producer;
 mod identity;
 mod json_object;
@@ -62,12 +60,12 @@ mod runs_ingest_gate;
 #[cfg(unix)]
 mod scoreboard_owned;
 mod signins;
+#[cfg(unix)]
+mod status_answers_route;
 mod status_cache;
 mod status_fed;
 #[cfg(unix)]
 mod status_owned;
-#[cfg(unix)]
-mod status_answers_route;
 #[cfg(unix)]
 mod status_produce;
 #[cfg(unix)]

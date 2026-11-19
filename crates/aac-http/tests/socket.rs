@@ -604,7 +604,10 @@ fn worker_removal_routes_answer_or_decline_honestly() -> Result<()> {
     ] {
         let reply = service.request(path, Some(&"b".repeat(64)), Some(&admin), "GET")?;
         assert!(reply.starts_with("HTTP/1.1 503"), "{path}: {reply}");
-        assert!(reply.contains("x-aac-decline: unsupported"), "{path}: {reply}");
+        assert!(
+            reply.contains("x-aac-decline: unsupported"),
+            "{path}: {reply}"
+        );
     }
     // A query outside the route's contract is the shape decline, before any owner is asked.
     for path in [
@@ -697,8 +700,7 @@ fn owned_status_answers_reads_and_writes_through_the_service() -> Result<()> {
         Some(&json!({"answers": [{"cardId": "fixture-missing", "cardSeq": 1}]})),
     )?;
     assert!(write.starts_with("HTTP/1.1 200"), "{write}");
-    let body: Value =
-        serde_json::from_str(write.split("\r\n\r\n").nth(1).ok_or("body")?.trim())?;
+    let body: Value = serde_json::from_str(write.split("\r\n\r\n").nth(1).ok_or("body")?.trim())?;
     let results = body["results"].as_array().ok_or("results")?;
     assert_eq!(results.len(), 1);
     assert!(matches!(

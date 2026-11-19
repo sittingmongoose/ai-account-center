@@ -13,11 +13,7 @@
 //! `cache-control`, `vary`, the feed views' ETag and 304, and the file envelope's validated
 //! headers and lengths.
 
-use super::{
-    DashboardAccess, DashboardPrincipal, Reply,
-    service_link::ServiceReply,
-    set_header,
-};
+use super::{DashboardAccess, DashboardPrincipal, Reply, service_link::ServiceReply, set_header};
 use axum::{
     body::to_bytes,
     extract::Request,
@@ -60,7 +56,9 @@ impl Routes {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Option<ServiceReply> {
-        self.host.request(method, uri, principal, headers, body).await
+        self.host
+            .request(method, uri, principal, headers, body)
+            .await
     }
 }
 
@@ -131,7 +129,8 @@ fn owns_route(method: &Method, path: &str) -> bool {
 fn media(path: &str) -> Option<(&str, &str)> {
     let rest = path.strip_prefix("/api/status/files/")?;
     let (writer, relative) = rest.split_once('/')?;
-    (!writer.is_empty() && !relative.is_empty() && !writer.contains('/')).then_some((writer, relative))
+    (!writer.is_empty() && !relative.is_empty() && !writer.contains('/'))
+        .then_some((writer, relative))
 }
 
 /// The few request facts the routes read, taken before the request is consumed.
@@ -185,9 +184,11 @@ fn browser_only(access: &DashboardAccess) -> Option<Reply> {
             "device_scope",
             "This page needs a signed-in dashboard session.",
         ))),
-        DashboardPrincipal::Anonymous if access.auth_enabled => {
-            Some(no_store(super::error(401, "auth_required", "Authentication required")))
-        }
+        DashboardPrincipal::Anonymous if access.auth_enabled => Some(no_store(super::error(
+            401,
+            "auth_required",
+            "Authentication required",
+        ))),
         DashboardPrincipal::Anonymous => Some(no_store(super::error(
             403,
             "signin_required",
@@ -409,7 +410,11 @@ async fn answers_post(
         return reply;
     }
     if raw.is_some() {
-        return no_store(super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS));
+        return no_store(super::error(
+            400,
+            "unexpected_query",
+            UNEXPECTED_QUERY_STATUS,
+        ));
     }
     if !facts.origin_present || !facts.same_origin {
         return no_store(super::error(403, "origin_required", ORIGIN_REQUIRED));
@@ -552,7 +557,11 @@ fn query_decode(value: &str) -> Option<String> {
 /// The route's own filter contract (`parseScoreboardQuery`).
 fn scoreboard_query(raw: Option<&str>) -> Result<ScoreboardQuery, (&'static str, &'static str)> {
     let mut pairs: Vec<(String, String)> = Vec::new();
-    for part in raw.unwrap_or_default().split('&').filter(|part| !part.is_empty()) {
+    for part in raw
+        .unwrap_or_default()
+        .split('&')
+        .filter(|part| !part.is_empty())
+    {
         let (key, value) = part.split_once('=').unwrap_or((part, ""));
         let key = query_decode(key).ok_or(("unexpected_query", FILTER_UNEXPECTED))?;
         if !FILTER_KEYS.contains(&key.as_str()) {
@@ -613,13 +622,7 @@ async fn scoreboard_facts(
     now: u64,
 ) -> Option<(u64, String, String)> {
     let reply = routes
-        .request(
-            "GET",
-            "/internal/scoreboard/inputs",
-            SERVICE,
-            &[],
-            None,
-        )
+        .request("GET", "/internal/scoreboard/inputs", SERVICE, &[], None)
         .await?;
     if reply.status != 200 {
         return None;
@@ -870,7 +873,11 @@ async fn card_media(
         return reply;
     }
     if raw.is_some() {
-        return no_store(super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS));
+        return no_store(super::error(
+            400,
+            "unexpected_query",
+            UNEXPECTED_QUERY_STATUS,
+        ));
     }
     let Some(principal) = access.service_principal() else {
         return super::service_error();
@@ -980,9 +987,9 @@ fn deliverable_path(raw: Option<&str>) -> Option<String> {
     let decoded = percent_decode(value)?;
     let safe = !decoded.is_empty()
         && decoded.encode_utf16().count() <= 2048
-        && !decoded.bytes().any(|byte| {
-            byte == b'\\' || byte == b':' || byte == b'%' || byte < 32 || byte == 127
-        })
+        && !decoded
+            .bytes()
+            .any(|byte| byte == b'\\' || byte == b':' || byte == b'%' || byte < 32 || byte == 127)
         && decoded
             .split('/')
             .all(|part| !part.is_empty() && !part.starts_with('.'));
@@ -1130,8 +1137,11 @@ fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
             && (!matches!(
                 kind,
                 Some("image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "video/webm")
-            ) || headers.get("x-content-type-options").and_then(Json::as_str) != Some("nosniff")
-                || headers.get("content-security-policy").and_then(Json::as_str)
+            ) || headers.get("x-content-type-options").and_then(Json::as_str)
+                != Some("nosniff")
+                || headers
+                    .get("content-security-policy")
+                    .and_then(Json::as_str)
                     != Some("default-src 'none'; sandbox")
                 || headers.get("accept-ranges").and_then(Json::as_str) != Some("bytes")
                 || headers.get("cache-control").and_then(Json::as_str)
@@ -1180,9 +1190,7 @@ fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
                 415,
                 "This file is not a PNG, JPEG or WebP image or an MP4 or WebM video.",
             ),
-            (true, "range_not_satisfiable") => {
-                (416, "The requested range is outside this file.")
-            }
+            (true, "range_not_satisfiable") => (416, "The requested range is outside this file."),
             (false, "invalid_path") => (400, "Use a share-relative file path."),
             (false, "not_found") => (404, "This file is not available."),
             (false, "too_large") => (413, "This file exceeds the 100 MB limit."),
@@ -1234,11 +1242,7 @@ mod tests {
         assert!(owns_route(&Method::GET, "/api/status/answers"));
         assert!(owns_route(&Method::POST, "/api/status/answers"));
         assert!(owns_route(&Method::GET, "/api/store/status"));
-        for path in [
-            "/api/usage/history",
-            "/api/usage/at",
-            "/api/usage/burn",
-        ] {
+        for path in ["/api/usage/history", "/api/usage/at", "/api/usage/burn"] {
             assert!(owns_route(&Method::GET, path), "{path}");
         }
         assert!(owns_route(
@@ -1246,7 +1250,10 @@ mod tests {
             "/api/status/files/vm.lead/cards/Q1/one.png"
         ));
         assert!(!owns_route(&Method::GET, "/api/status/files/vm.lead"));
-        assert!(!owns_route(&Method::POST, "/api/status/files/vm.lead/a.png"));
+        assert!(!owns_route(
+            &Method::POST,
+            "/api/status/files/vm.lead/a.png"
+        ));
         assert!(!owns_route(&Method::GET, "/api/scoreboard"));
         assert!(!owns_route(&Method::GET, "/api/views/home"));
     }

@@ -51,7 +51,10 @@ pub(crate) fn read_limit(raw: Option<&str>) -> Option<usize> {
 
 /// `^[0-9a-f]{32}$`
 fn entry_id(text: &str) -> bool {
-    text.len() == 32 && text.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    text.len() == 32
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 /// The route's `validEntryIds`: every present `entryId` is the page's id and none repeats.
@@ -142,11 +145,7 @@ pub(crate) fn entry_view(entry: &HistoryEntry, sends: &IndexMap<String, SendReco
 }
 
 /// The route's answer list: newest first, at most `limit`, in the reference's shape.
-pub(crate) fn history_json(
-    answers: &[HistoryEntry],
-    sends: &[SendRecord],
-    limit: usize,
-) -> Json {
+pub(crate) fn history_json(answers: &[HistoryEntry], sends: &[SendRecord], limit: usize) -> Json {
     let index: IndexMap<String, SendRecord> = sends
         .iter()
         .map(|send| (send.send_id.clone(), send.clone()))
@@ -199,10 +198,7 @@ pub(crate) fn submit_body(body: &Json, device: &str) -> Result<Json, Decline> {
     if !valid_entries(&answers) {
         return Err(Decline::Shape);
     }
-    if map
-        .keys()
-        .any(|key| key != "answers" && key != "sendId")
-    {
+    if map.keys().any(|key| key != "answers" && key != "sendId") {
         return Err(Decline::Shape);
     }
     let send_id = match map.get("sendId") {
@@ -270,8 +266,14 @@ mod tests {
 
     #[test]
     fn the_device_words_are_the_reference_ones() {
-        assert_eq!(device_of(Some("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)")), "iPhone");
-        assert_eq!(device_of(Some("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)")), "Mac");
+        assert_eq!(
+            device_of(Some("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)")),
+            "iPhone"
+        );
+        assert_eq!(
+            device_of(Some("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)")),
+            "Mac"
+        );
         assert_eq!(device_of(Some("Mozilla/5.0 (Windows NT 10.0)")), "Windows");
         assert_eq!(device_of(Some("Mozilla/5.0 (X11; Linux x86_64)")), "Linux");
         assert_eq!(device_of(None), "browser");
@@ -293,14 +295,18 @@ mod tests {
         let row = entry_view(&entry(card, answer), &IndexMap::new());
         assert_eq!(row["id"], "0123456789abcdef0123456789abcdef");
         assert_eq!(row["card"]["cardSha256"], "ab");
-        assert_eq!(row["card"]["options"], json!([{"key": "A", "label": "First"}]));
+        assert_eq!(
+            row["card"]["options"],
+            json!([{"key": "A", "label": "First"}])
+        );
         assert!(row["answer"]["delivery"]["state"].is_string());
     }
 
     #[test]
     fn the_body_is_the_owned_set_or_a_decline() {
         let id = "0123456789abcdef0123456789abcdef";
-        let body = json!({"answers": [{"cardId": "c", "entryId": id}], "sendId": "abcdefghijklmnop"});
+        let body =
+            json!({"answers": [{"cardId": "c", "entryId": id}], "sendId": "abcdefghijklmnop"});
         let submit = submit_body(&body, "Mac").unwrap();
         assert_eq!(submit["device"], "Mac");
         assert_eq!(submit["clientSendId"], "abcdefghijklmnop");

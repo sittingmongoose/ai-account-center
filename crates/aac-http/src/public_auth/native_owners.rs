@@ -40,7 +40,7 @@ pub(super) struct Groups {
     pub(super) collection: bool,
     writes: bool,
     app_updates: bool,
-    home: bool,
+    pub(super) home: bool,
     analytics_writers: bool,
     store: bool,
 }
@@ -236,6 +236,12 @@ impl NativeOwners {
             },
             jobs,
         ))
+    }
+
+    /// The Accounts generations this boot publishes. Home reads the same cache the dashboard and
+    /// the tray read, so its dashboard input is never a second collection.
+    pub(super) fn usage_cache(&self) -> Option<AccountUsageCache> {
+        self.usage.as_ref().map(|usage| usage.cache.clone())
     }
 
     pub(super) fn owns(method: &Method, path: &str) -> bool {

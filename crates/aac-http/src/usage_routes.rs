@@ -89,9 +89,7 @@ impl Query {
 fn account(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() <= 160
-        && bytes
-            .first()
-            .is_some_and(|b| b.is_ascii_alphanumeric())
+        && bytes.first().is_some_and(|b| b.is_ascii_alphanumeric())
         && bytes[1..]
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || b"@:._+-".contains(b))
@@ -108,10 +106,7 @@ fn window(text: &str) -> bool {
 /// `^[a-z][a-z0-9-]{0,31}$`
 fn provider(text: &str) -> bool {
     (1..=32).contains(&text.len())
-        && text
-            .bytes()
-            .next()
-            .is_some_and(|b| b.is_ascii_lowercase())
+        && text.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
         && text
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
@@ -402,9 +397,8 @@ mod tests {
         }
         assert!(parse(Some("bogus=1"), &keys).is_none());
         assert!(parse(Some("account=x&account=y"), &keys).is_none());
-        let bad_filter = |raw: &str| {
-            parse(Some(raw), &keys).is_some_and(|query| filter(&query).is_none())
-        };
+        let bad_filter =
+            |raw: &str| parse(Some(raw), &keys).is_some_and(|query| filter(&query).is_none());
         assert!(bad_filter("account=%3Cscript%3E"));
         assert!(bad_filter("window="));
         assert!(bad_filter("provider=Codex"));
@@ -423,7 +417,10 @@ mod tests {
         ] {
             assert!(!valid_history(Some(bad), 1_767_225_600_000), "{bad}");
         }
-        assert!(valid_history(Some("from=2026-11-01T00:00:00Z"), 1_767_225_600_000));
+        assert!(valid_history(
+            Some("from=2026-11-01T00:00:00Z"),
+            1_767_225_600_000
+        ));
         assert!(valid_at(None));
         assert!(valid_at(Some("t=2026-11-01T00:00:00Z")));
         assert!(!valid_at(Some("t=nope")));

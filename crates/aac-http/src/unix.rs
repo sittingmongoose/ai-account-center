@@ -1165,9 +1165,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
         // The page's answer history from the owned feed: the journal and its verified share
         // copies, newest first, in the route's projection.
         Handler::StatusAnswersRead => {
-            let Some(limit) =
-                crate::status_answers_route::read_limit(req.uri().query())
-            else {
+            let Some(limit) = crate::status_answers_route::read_limit(req.uri().query()) else {
                 return decline(row.handler, Decline::Shape);
             };
             let Some(produce) = shared.status_produce.clone() else {
@@ -1197,9 +1195,8 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             if req.uri().query().is_some() {
                 return decline(row.handler, Decline::Shape);
             }
-            let device = crate::status_answers_route::device_of(
-                one_header(req.headers(), "user-agent"),
-            );
+            let device =
+                crate::status_answers_route::device_of(one_header(req.headers(), "user-agent"));
             let Ok(bytes) = to_bytes(req.into_body(), crate::answers_owned::SEND_CAP).await else {
                 return decline(row.handler, Decline::Shape);
             };

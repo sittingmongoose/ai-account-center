@@ -5,13 +5,14 @@
 mod compose;
 mod dashboard_events;
 mod devices;
+mod home_group;
 mod hub;
+#[cfg(unix)]
+mod native_group;
 mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
-#[cfg(unix)]
-mod native_group;
 mod owner_host;
 mod policy;
 mod request_log;
@@ -95,12 +96,13 @@ impl DashboardAccess {
     /// its private socket (the boot secret). A device principal stays a device principal.
     pub(crate) fn service_principal(&self) -> Option<String> {
         match &self.principal {
-            DashboardPrincipal::Browser { .. } => self.session_id.as_ref().map(|id| {
-                json!({"kind": "session", "id": id, "role": "admin"}).to_string()
-            }),
-            DashboardPrincipal::Device { id, .. } => Some(
-                json!({"kind": "device", "id": id, "role": "device"}).to_string(),
-            ),
+            DashboardPrincipal::Browser { .. } => self
+                .session_id
+                .as_ref()
+                .map(|id| json!({"kind": "session", "id": id, "role": "admin"}).to_string()),
+            DashboardPrincipal::Device { id, .. } => {
+                Some(json!({"kind": "device", "id": id, "role": "device"}).to_string())
+            }
             DashboardPrincipal::Anonymous => None,
         }
     }
@@ -260,10 +262,7 @@ impl DashboardAuth {
             }
             #[cfg(unix)]
             if let Some(group) = &native_group
-                && group.owns(
-                    request.method(),
-                    request.uri().path().trim_end_matches('/'),
-                )
+                && group.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
                     return service_error();
@@ -467,6 +466,13 @@ pub(crate) async fn run_public_at(
         .map(|host| Arc::new(native_group::Routes::new(host.clone())));
     let mut api = Router::new();
     if let Some(host) = &owner_host {
+        // Home answers from this boot's own owners: the shared Accounts generation, the profile
+        // manifest and the Antigravity runtime. Off, the route is absent and the cut's API 404
+        // answers, exactly as the worker did with the view group off.
+        if groups.is_some_and(|groups| groups.home) {
+            let home = Arc::new(home_group::Home::new(host.clone(), root.clone()));
+            host.register("home", home.router(Router::new()));
+        }
         api = host.mount(api);
     }
     if cut || !composed {
