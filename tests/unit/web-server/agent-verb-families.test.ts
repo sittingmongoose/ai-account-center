@@ -17,6 +17,8 @@ import {
   runAnalyticsRemoteScan,
   type AnalyticsRemoteRequest,
 } from '../../../src/web-server/services/analytics-remote-transport';
+import { stringify } from 'yaml';
+import { createEmptyUnifiedConfig } from '../../../src/config/schemas/unified-config';
 
 const ENV_KEYS = ['AAC_AGENT_VERBS', 'AAC_AGENT_VERB_FAMILIES', 'CCS_HOME'] as const;
 let saved: Record<string, string | undefined>;
@@ -99,6 +101,22 @@ describe('per-family verb modes', () => {
     process.env.AAC_AGENT_VERBS = 'on';
     process.env.AAC_AGENT_VERB_FAMILIES = JSON.stringify({ 'key-store': 'on' });
     expect(agentVerbMode('key-store')).toBe('on');
+  });
+  it('an unreadable config leaves the scalar ceiling intact', () => {
+    fs.writeFileSync(path.join(home, 'config.yaml'), '- not a mapping\n');
+    process.env.AAC_AGENT_VERBS = 'on';
+    expect(agentVerbMode('signin-expiry')).toBe('on');
+    expect(agentVerbMode('scan-usage')).toBe('on');
+  });
+  it('a valid config family map gates without environment overrides', () => {
+    const config = {
+      ...createEmptyUnifiedConfig(),
+      agentVerbs: 'on' as const,
+      agentVerbFamilies: { 'signin-expiry': 'shadow' as const },
+    };
+    fs.writeFileSync(path.join(home, 'config.yaml'), stringify(config));
+    expect(agentVerbMode('signin-expiry')).toBe('shadow');
+    expect(agentVerbMode('quota-read')).toBe('off');
   });
   it('admits the glibc Linux artifact and prefers musl when both exist', () => {
     const gnu = { target: 'x86_64-unknown-linux-gnu', version: '0.1.0', sha256: 'b'.repeat(64), file: 'unused' };

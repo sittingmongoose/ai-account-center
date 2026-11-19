@@ -4,6 +4,7 @@ import { ConfigError } from '../../errors/error-types';
 import path from 'path';
 import { createHash, randomBytes } from 'crypto';
 import { requestRustAgent } from '../rust-service-transport';
+import type { UnifiedConfig } from '../../config/schemas/unified-config';
 import transportPolicy from '../../../config/tables/agent-transport-policy.json';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
@@ -67,15 +68,26 @@ const WRITE_VERBS: Partial<Record<AgentVerb, true>> = { 'key-store': true, 'clau
 const MODE_RANK: Record<AgentVerbs, number> = { off: 0, shadow: 1, on: 2 };
 
 /** Per-family modes under the scalar ceiling; an absent map keeps the ceiling for every verb.
- * A present but invalid map stays empty (every family off), never the ceiling.
+ * A present but invalid map stays empty (every family off), never the ceiling. An absent or
+ * unreadable config leaves the legacy scalar behavior intact.
  * `AAC_AGENT_VERB_FAMILIES` (JSON) supports isolated gates. */
 export function agentVerbFamilies(): Partial<Record<AgentVerb, AgentVerbs>> | null {
+  const env = process.env.AAC_AGENT_VERB_FAMILIES;
   let raw: unknown;
-  try {
-    const env = process.env.AAC_AGENT_VERB_FAMILIES;
-    raw = env !== undefined ? JSON.parse(env) : loadUnifiedConfig()?.agentVerbFamilies;
-  } catch {
-    return {};
+  if (env !== undefined) {
+    try {
+      raw = JSON.parse(env);
+    } catch {
+      return {};
+    }
+  } else {
+    let config: UnifiedConfig | null;
+    try {
+      config = loadUnifiedConfig();
+    } catch {
+      return null;
+    }
+    raw = config?.agentVerbFamilies;
   }
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'object' || Array.isArray(raw)) return {};
