@@ -1276,10 +1276,11 @@ describe('remove races and failures', () => {
     const id = String((added.body.account as { id: string }).id);
     // The lookup sees the account; the write sees the registry after a Remove committed.
     const other = path.join(root, 'after-remove', '.ccs');
-    fs.mkdirSync(path.dirname(other), { recursive: true });
-    fs.cpSync(ccsDir, other, { recursive: true });
+    fs.mkdirSync(other, { recursive: true, mode: 0o700 });
     const registryFile = path.join(other, 'account-usage-accounts.json');
-    const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    const registry = JSON.parse(
+      fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'), 'utf8')
+    );
     registry.accounts = registry.accounts.filter((entry: { id: string }) => entry.id !== id);
     fs.writeFileSync(registryFile, JSON.stringify(registry), { mode: 0o600 });
     let calls = 0;
