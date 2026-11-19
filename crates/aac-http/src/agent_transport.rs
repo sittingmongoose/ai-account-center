@@ -276,6 +276,8 @@ impl Agents {
                 "key-store",
                 "claude-history",
                 "failover-inventory",
+                "launch",
+                "claude-host",
             ]
             .contains(&verb)
             || call.deadline_ms == 0

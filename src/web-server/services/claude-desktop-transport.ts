@@ -10,7 +10,7 @@ import {
 } from './claude-desktop-profile-service';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
-import { collectAgentWithFallback, runHistoryAgent } from './agent-verbs';
+import { collectAgentWithFallback, runClaudeHostAgent, runHistoryAgent } from './agent-verbs';
 
 const SSH_TIMEOUT_MS = 8000;
 const MAX_HISTORY_BYTES = 1024 * 1024;
@@ -101,14 +101,14 @@ async function runDesktopSsh(
   );
 }
 
-/** Open the configured named wrapper in the console user's GUI session, keeping existing apps. */
-export async function openClaudeMacLauncher(launcher: ClaudeDesktopLauncher): Promise<void> {
-  const launcherPath = checkPath(launcher.launcherPath, 'mac');
-  if (!launcherPath.endsWith('.app')) {
+/** The fixed Mac Open command: console-user checks and the wrapper open. Exported for the parity table. */
+export function macOpenCommand(launcherPath: string | undefined): string {
+  const checked = checkPath(launcherPath, 'mac');
+  if (!checked.endsWith('.app')) {
     throw new ValidationError('Claude desktop launcher must be a configured application.');
   }
-  const app = quoteShell(launcherPath);
-  const command = [
+  const app = quoteShell(checked);
+  return [
     `test -d ${app} || exit 1`,
     `console_user=$(/usr/bin/stat -f '%Su' /dev/console)`,
     `test "$console_user" != root && test "$console_user" != loginwindow || exit 1`,
@@ -117,7 +117,31 @@ export async function openClaudeMacLauncher(launcher: ClaudeDesktopLauncher): Pr
     `test "$console_uid" = "$current_uid" || exit 1`,
     `exec /usr/bin/open ${app}`,
   ].join('\n');
-  await runDesktopSsh(checkHost(launcher.sshHost), command);
+}
+
+/** Open the configured named wrapper in the console user's GUI session, keeping existing apps. */
+export async function openClaudeMacLauncher(launcher: ClaudeDesktopLauncher): Promise<void> {
+  const launcherPath = checkPath(launcher.launcherPath, 'mac');
+  if (!launcherPath.endsWith('.app')) {
+    throw new ValidationError('Claude desktop launcher must be a configured application.');
+  }
+  const sshHost = checkHost(launcher.sshHost);
+  // M4b: the agent opens the wrapper on the Mac itself when enabled; ssh stays the fallback.
+  const agent = await runClaudeHostAgent(
+    { platform: 'mac', sshHost },
+    {
+      op: 'open',
+      launcher: {
+        launcherName: launcher.launcherName,
+        launcherPath,
+        profilePath: launcher.profilePath ?? launcherPath,
+        sshHost,
+      },
+    }
+  ).catch(() => null);
+  if (agent !== null) return;
+  const command = macOpenCommand(launcherPath);
+  await runDesktopSsh(sshHost, command);
 }
 
 /**
@@ -195,18 +219,11 @@ export async function syncClaudeWindowsAccountList(
 }
 
 /**
- * Start only the existing fixed interactive task; SSH never launches a desktop
- * app in session 0. With `accountList` (default Windows profile first, from the
- * server's current profiles), the launcher's account list is first brought in
- * line with it in the same call, so a stale entry never blocks an Open.
+ * The fixed Windows Open command: the task identity checks and demand start, with the
+ * account-list step when the list carries this profile and fits the command-line limit.
+ * Exported for the parity table; `openClaudeWindowsLauncher` runs it over ssh.
  */
-export async function openClaudeWindowsLauncher(
-  launcher: ClaudeDesktopLauncher,
-  profileId: string,
-  accountList?: readonly string[]
-): Promise<void> {
-  // The caller resolved this launcher from the manifest, which proves the ID
-  // exists; this only rejects unsafe strings before they reach the command.
+export function windowsOpenCommand(profileId: string, accountList?: readonly string[]): string {
   if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) {
     throw new ValidationError('Select a configured Claude Windows account.');
   }
@@ -237,6 +254,39 @@ export async function openClaudeWindowsLauncher(
       /* Open without the list step. */
     }
   }
+  return command;
+}
+
+/**
+ * Start only the existing fixed interactive task; SSH never launches a desktop
+ * app in session 0. With `accountList` (default Windows profile first, from the
+ * server's current profiles), the launcher's account list is first brought in
+ * line with it in the same call, so a stale entry never blocks an Open.
+ */
+export async function openClaudeWindowsLauncher(
+  launcher: ClaudeDesktopLauncher,
+  profileId: string,
+  accountList?: readonly string[]
+): Promise<void> {
+  // The caller resolved this launcher from the manifest, which proves the ID
+  // exists; this only rejects unsafe strings before they reach the command.
+  if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) {
+    throw new ValidationError('Select a configured Claude Windows account.');
+  }
+  // M4b: the agent starts the fixed task on the Windows computer itself when enabled.
+  if (launcher.sshHost !== undefined) {
+    const sshHost = checkHost(launcher.sshHost);
+    const agent = await runClaudeHostAgent(
+      { platform: 'windows', sshHost },
+      {
+        op: 'open',
+        profileId,
+        ...(accountList === undefined ? {} : { accountList: [...accountList] }),
+      }
+    ).catch(() => null);
+    if (agent !== null) return;
+  }
+  const command = windowsOpenCommand(profileId, accountList);
   await runDesktopSsh(checkHost(launcher.sshHost), command);
 }
 

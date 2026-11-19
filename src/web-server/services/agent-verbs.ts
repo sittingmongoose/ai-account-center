@@ -2,7 +2,7 @@
 import fs from 'fs';
 import { ConfigError } from '../../errors/error-types';
 import path from 'path';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes } from 'crypto';
 import { requestRustAgent } from '../rust-service-transport';
 import transportPolicy from '../../../config/tables/agent-transport-policy.json';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
@@ -13,6 +13,7 @@ import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { UsageHost, UsageHelperRequest } from './usage-failover-contract';
 import manifest from './agent-artifacts.json';
 import { PROVIDER_ROWS } from '../../shared/tables';
+import { CONFIRMATION_TTL_MS } from './account-confirmations';
 
 const logger = createLogger('agent-verbs');
 /** Independent transport switch. Invalid or absent values never start Rust transport. */
@@ -35,7 +36,9 @@ export type AgentVerb =
   | 't3-pins'
   | 'key-store'
   | 'claude-history'
-  | 'failover-inventory';
+  | 'failover-inventory'
+  | 'launch'
+  | 'claude-host';
 export interface AgentArtifact {
   target: string;
   version: string;
@@ -334,7 +337,14 @@ export async function collectQuotaWithFallback(
 
 /** New verbs keep their reference helper visible on every failure. */
 export async function collectAgentWithFallback<T>(
-  verb: 'inventory' | 't3-pins' | 'key-store' | 'claude-history' | 'failover-inventory',
+  verb:
+    | 'inventory'
+    | 't3-pins'
+    | 'key-store'
+    | 'claude-history'
+    | 'failover-inventory'
+    | 'launch'
+    | 'claude-host',
   agent: () => Promise<T | null>,
   helper: () => Promise<T>
 ): Promise<T> {
@@ -350,10 +360,74 @@ export async function collectAgentWithFallback<T>(
       ? 'fallback: typescript probe'
       : verb === 't3-pins'
         ? 'fallback: sqlite3'
-        : 'fallback: python',
+        : verb === 'launch'
+          ? 'fallback: typescript launcher'
+          : verb === 'claude-host'
+            ? 'fallback: host bootstrap'
+            : 'fallback: python',
     { verb }
   );
   return helper();
+}
+
+/**
+ * M4b host steps keep the reference's small JSON answers; the ssh bootstrap stays the
+ * labelled fallback. The envelope binds the host family; the agent checks it against its
+ * own computer. Purge carries the permit `claudeHostPurgePermit` issues.
+ */
+export async function runClaudeHostAgent(
+  host: { platform: 'mac' | 'windows'; sshHost?: string },
+  args: Record<string, unknown>,
+  options: Partial<AgentCallOptions> = {}
+): Promise<Record<string, unknown> | null> {
+  const result = await runAgentVerb(
+    { platform: host.platform, sshHost: host.sshHost ?? null },
+    'claude-host',
+    { host: host.platform, ...args },
+    { deadlineMs: 60000, maxBytes: 65536, ...options }
+  );
+  if (result === null) return null;
+  const value: unknown = JSON.parse(result);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  switch (args.op) {
+    case 'create':
+      return typeof row.launcherName === 'string' && typeof row.profilePath === 'string'
+        ? row
+        : null;
+    case 'state':
+      return typeof row.running === 'boolean' ? row : null;
+    case 'session':
+      return typeof row.signedIn === 'boolean' ? row : null;
+    case 'trash':
+      return row.result === 'moved' || row.result === 'cross_volume' ? row : null;
+    case 'undo':
+    case 'restore':
+    case 'purge':
+    case 'open':
+      return row.ok === true ? row : null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * The TS-issued purge permit for the agent boundary: an HMAC-SHA256 over the host, the
+ * exact trash folder and the expiry, with the one shared policy key. The route's
+ * confirmation is consumed in the front door first; this binds the same decision for the
+ * agent, which refuses purge without it. Never logged.
+ */
+export function claudeHostPurgePermit(
+  host: 'mac' | 'windows',
+  trashName: string,
+  now: number = Date.now()
+): string {
+  const expiresMs = now + CONFIRMATION_TTL_MS;
+  const key = Buffer.from(transportPolicy.claudeHostPurgeKey, 'hex');
+  const mac = createHmac('sha256', key)
+    .update(`aac-claude-host-purge\0${host}\0${trashName}\0${expiresMs}`, 'utf8')
+    .digest('hex');
+  return `${expiresMs}.${mac}`;
 }
 
 /**
