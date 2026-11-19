@@ -1,6 +1,6 @@
 //! Ordered Claude host effects and compensation after front-door admission.
 use std::future::Future;
-use tokio::io::{self, AsyncReadExt};
+use tokio::io;
 
 /// A workflow chosen after provider, identity and confirmation checks.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,28 +97,8 @@ where
 /// Compatibility pipe transmits effect names and outcome flags only.
 #[doc(hidden)]
 pub async fn compatibility_pipe(mode: &str) -> io::Result<()> {
-    use std::io::Write;
     let workflow = Workflow::from_wire(mode).ok_or(io::ErrorKind::InvalidInput)?;
-    let input = tokio::sync::Mutex::new(io::stdin());
-    let result = run(workflow, |effect| {
-        let input = &input;
-        async move {
-            {
-                let mut out = std::io::stdout().lock();
-                writeln!(out, "{}", effect.wire_name()).map_err(|e| e.kind())?;
-                out.flush().map_err(|e| e.kind())?;
-            }
-            let response = input.lock().await.read_u8().await.map_err(|e| e.kind())?;
-            match response {
-                b'y' => Ok(true),
-                b'n' => Ok(false),
-                b'e' => Err(io::ErrorKind::Other),
-                _ => Err(io::ErrorKind::InvalidData),
-            }
-        }
-    })
-    .await;
-    let mut out = std::io::stdout().lock();
-    writeln!(out, "{}", if result.is_ok() { "ok" } else { "failed" })?;
-    out.flush()
+    let pipe = crate::lifecycle_effect_pipe::Pipe::new();
+    let result = run(workflow, |effect| pipe.perform(effect.wire_name())).await;
+    crate::lifecycle_effect_pipe::finish(result.map(|_| true))
 }

@@ -22,6 +22,10 @@ mod limits;
 #[cfg(unix)]
 pub mod lifecycle_maintenance;
 #[cfg(unix)]
+mod lifecycle_effect_pipe;
+#[cfg(unix)]
+pub mod key_lifecycle;
+#[cfg(unix)]
 pub mod lifecycle_queue;
 #[cfg(unix)]
 mod preferences_write;

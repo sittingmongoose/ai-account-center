@@ -18,7 +18,8 @@ fn main() {
         Some("--provider-write") => std::process::exit(provider_write::commit()),
         Some("--codex-staging") => std::process::exit(provider_write::staging(false)),
         Some("--antigravity-staging") => std::process::exit(provider_write::staging(true)),
-        Some("--claude-workflow") => std::process::exit(claude_workflow()),
+        Some("--claude-workflow") => std::process::exit(provider_workflow(false)),
+        Some("--key-workflow") => std::process::exit(provider_workflow(true)),
         Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
         Some("--lifecycle-queue") => std::process::exit(lifecycle_queue()),
         Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
@@ -39,13 +40,17 @@ fn main() {
 }
 
 #[cfg(unix)]
-fn claude_workflow() -> i32 {
+fn provider_workflow(key: bool) -> i32 {
     let Some(mode) = std::env::args().nth(2) else {
         return 74;
     };
     let runtime = tokio::runtime::Builder::new_current_thread().build();
     let result = runtime.and_then(|runtime| {
-        runtime.block_on(aac_http::claude_lifecycle::compatibility_pipe(&mode))
+        if key {
+            runtime.block_on(aac_http::key_lifecycle::compatibility_pipe(&mode))
+        } else {
+            runtime.block_on(aac_http::claude_lifecycle::compatibility_pipe(&mode))
+        }
     });
     if result.is_ok() { 0 } else { 74 }
 }

@@ -1,3 +1,4 @@
+import { runKeyWorkflow } from './account-key-workflow';
 import { editRegistry, keyProbeOutcome } from './account-lifecycle-transitions';
 import { lifecyclePlan } from '../../shared/private-file-lease';
 import type { DashboardProvider } from './account-dashboard-types';
@@ -232,12 +233,6 @@ async function addApiKey(
     }
     let keyId = newKeyId();
     while (entries.some((entry) => entry.id === `${provider}:acct:${keyId}`)) keyId = newKeyId();
-    let info: StoredKeyInfo;
-    try {
-      info = await store.put(provider, keyId, secret);
-    } catch {
-      throw new LifecycleHttpError(500, 'key_store_unavailable');
-    }
     const entry: RegistryAccount = {
       id: `${provider}:acct:${keyId}`,
       provider,
@@ -249,33 +244,57 @@ async function addApiKey(
       createdBy: 'dashboard',
     };
     const root = env.ccsDir();
-    try {
-      await updateAccountRegistry(root, (current) => {
-        const edit = editRegistry(root, current, { kind: 'insert', entry, uniqueProvider: false });
-        if ('refusal' in edit) throw new LifecycleHttpError(409, 'too_many_accounts');
-        return edit.registry;
-      });
-    } catch (error) {
-      await store.delete(provider, keyId).catch(() => undefined);
-      throw error instanceof LifecycleHttpError
-        ? error
-        : new LifecycleHttpError(500, 'write_failed');
-    }
-    const reading = await env.probe(registrySource(entry));
-    const check = keyProbeOutcome(root, reading.status);
-    if (check === 'rejected') {
-      await updateAccountRegistry(root, (current) => {
-        const edit = editRegistry(root, current, { kind: 'remove', id: entry.id });
-        return 'refusal' in edit ? current : edit.registry;
-      }).catch(() => undefined);
-      await store.delete(provider, keyId).catch(() => undefined);
-      throw new LifecycleHttpError(422, 'key_rejected');
-    }
+    let info: StoredKeyInfo | null = null;
+    let check: 'ok' | 'unverified' = 'unverified';
+    let email: string | null = null;
+    const accepted = await runKeyWorkflow(root, 'add', async (effect) => {
+      switch (effect) {
+        case 'store':
+          try {
+            info = await store.put(provider, keyId, secret);
+          } catch {
+            throw new LifecycleHttpError(500, 'key_store_unavailable');
+          }
+          return;
+        case 'publish':
+          await updateAccountRegistry(root, (current) => {
+            const edit = editRegistry(root, current, {
+              kind: 'insert',
+              entry,
+              uniqueProvider: false,
+            });
+            if ('refusal' in edit) throw new LifecycleHttpError(409, 'too_many_accounts');
+            return edit.registry;
+          }).catch((error) => {
+            throw error instanceof LifecycleHttpError
+              ? error
+              : new LifecycleHttpError(500, 'write_failed');
+          });
+          return;
+        case 'probe': {
+          const reading = await env.probe(registrySource(entry));
+          const outcome = keyProbeOutcome(root, reading.status);
+          if (outcome === 'rejected') return false;
+          check = outcome;
+          email = reading.email;
+          return true;
+        }
+        case 'unpublish':
+          await updateAccountRegistry(root, (current) => {
+            const edit = editRegistry(root, current, { kind: 'remove', id: entry.id });
+            return 'refusal' in edit ? current : edit.registry;
+          });
+          return;
+        case 'discard':
+          await store.delete(provider, keyId);
+      }
+    });
+    if (!accepted) throw new LifecycleHttpError(422, 'key_rejected');
     env.audit('accounts.add', { provider, kind: 'api-key' });
     env.onChanged();
     return {
       status: 201,
-      body: { account: entryView(entry, info, true, { email: reading.email }), check },
+      body: { account: entryView(entry, info, true, { email }), check },
     };
   });
 }
@@ -341,27 +360,41 @@ export async function replaceKey(
     while (taken.has(trialId) || (await store.info(provider, trialId)) !== null) {
       trialId = newKeyId();
     }
-    try {
-      await store.put(provider, trialId, secret);
-    } catch {
-      throw new LifecycleHttpError(500, 'key_store_unavailable');
-    }
-    let info: StoredKeyInfo;
-    let check: 'ok' | 'unverified';
-    try {
-      const trial: RegistryAccount = { ...entry, credential: { kind: 'aac-key', keyId: trialId } };
-      const reading = await env.probe(registrySource(trial));
-      const decision = keyProbeOutcome(env.ccsDir(), reading.status);
-      if (decision === 'rejected') throw new LifecycleHttpError(422, 'key_rejected');
-      check = decision;
-      // The account must still exist before its key is written (never a key without an account).
-      await currentKeyEntry(env, entry);
-      info = await store.put(provider, keyId, secret).catch(() => {
-        throw new LifecycleHttpError(500, 'key_store_unavailable');
-      });
-    } finally {
-      await store.delete(provider, trialId).catch(() => undefined);
-    }
+    let info: StoredKeyInfo | null = null;
+    let check: 'ok' | 'unverified' = 'unverified';
+    const accepted = await runKeyWorkflow(env.ccsDir(), 'replace', async (effect) => {
+      switch (effect) {
+        case 'store':
+          await store.put(provider, trialId, secret).catch(() => {
+            throw new LifecycleHttpError(500, 'key_store_unavailable');
+          });
+          return;
+        case 'probe': {
+          const trial: RegistryAccount = {
+            ...entry,
+            credential: { kind: 'aac-key', keyId: trialId },
+          };
+          const reading = await env.probe(registrySource(trial));
+          const outcome = keyProbeOutcome(env.ccsDir(), reading.status);
+          if (outcome === 'rejected') return false;
+          check = outcome;
+          return true;
+        }
+        case 'publish':
+          // The store and account identity must still match the reviewed entry.
+          await currentKeyEntry(env, entry);
+          info = await store.put(provider, keyId, secret).catch(() => {
+            throw new LifecycleHttpError(500, 'key_store_unavailable');
+          });
+          return;
+        case 'discard':
+          await store.delete(provider, trialId);
+          return;
+        case 'unpublish':
+          throw new LifecycleHttpError(500, 'write_failed');
+      }
+    });
+    if (!accepted) throw new LifecycleHttpError(422, 'key_rejected');
     env.audit('accounts.key.replaced', { provider });
     env.onChanged();
     return { status: 200, body: { account: entryView(entry, info, true), check } };

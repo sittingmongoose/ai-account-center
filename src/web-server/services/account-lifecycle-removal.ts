@@ -1,3 +1,4 @@
+import { runKeyWorkflow } from './account-key-workflow';
 import { editRegistry } from './account-lifecycle-transitions';
 import { CONFIRMATION_TOKEN_PATTERN, stateFingerprint } from './account-confirmations';
 import { isKeyProvider } from './account-key-store';
@@ -318,32 +319,42 @@ async function removeAdditional(
   const store = keyed ? env.keyStore({ platform: entry.platform, sshHost: entry.sshHost }) : null;
   if (keyed && !store) throw new LifecycleHttpError(500, 'remove_failed');
   let position = -1;
-  await updateAccountRegistry(env.ccsDir(), (current) => {
-    const edit = editRegistry(env.ccsDir(), current, { kind: 'remove', id: entry.id });
-    if ('refusal' in edit || edit.position === null)
-      throw new LifecycleHttpError(409, 'confirmation_stale');
-    position = edit.position;
-    return edit.registry;
-  }).catch((error) => {
-    throw error instanceof LifecycleHttpError
-      ? error
-      : new LifecycleHttpError(500, 'remove_failed');
-  });
-  if (store && credential.kind === 'aac-key' && isKeyProvider(entry.provider)) {
-    try {
-      await store.delete(entry.provider, credential.keyId);
-    } catch {
-      await updateAccountRegistry(env.ccsDir(), (current) => {
-        const edit = editRegistry(env.ccsDir(), current, {
-          kind: 'restore',
-          entry,
-          index: position,
+  const root = env.ccsDir();
+  await runKeyWorkflow(root, 'remove', async (effect) => {
+    switch (effect) {
+      case 'unpublish':
+        await updateAccountRegistry(root, (current) => {
+          const stored = current.accounts.find((candidate) => candidate.id === reviewed.id);
+          if (!stored || reviewedEntry(stored) !== reviewedEntry(reviewed))
+            throw new LifecycleHttpError(409, 'confirmation_stale');
+          const edit = editRegistry(root, current, { kind: 'remove', id: entry.id });
+          if ('refusal' in edit || edit.position === null)
+            throw new LifecycleHttpError(409, 'confirmation_stale');
+          position = edit.position;
+          return edit.registry;
+        }).catch((error) => {
+          throw error instanceof LifecycleHttpError
+            ? error
+            : new LifecycleHttpError(500, 'remove_failed');
         });
-        return 'refusal' in edit ? current : edit.registry;
-      }).catch(() => undefined);
-      throw new LifecycleHttpError(500, 'remove_failed');
+        return;
+      case 'discard':
+        if (store && credential.kind === 'aac-key' && isKeyProvider(entry.provider)) {
+          await store.delete(entry.provider, credential.keyId).catch(() => {
+            throw new LifecycleHttpError(500, 'remove_failed');
+          });
+        }
+        return;
+      case 'publish':
+        await updateAccountRegistry(root, (current) => {
+          const edit = editRegistry(root, current, { kind: 'restore', entry, index: position });
+          return 'refusal' in edit ? current : edit.registry;
+        });
+        return;
+      default:
+        throw new LifecycleHttpError(500, 'remove_failed');
     }
-  }
+  });
   return { trashId: null, purgeAfter: null };
 }
 
