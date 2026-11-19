@@ -37,7 +37,7 @@ serde.workspace = true
 serde_yaml.workspace = true
 serde_json = { workspace = true, features = ["raw_value", "preserve_order", "float_roundtrip"] }
 tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "ws"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }

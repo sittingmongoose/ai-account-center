@@ -175,7 +175,17 @@ async fn run() {
         };
         tokio::select! { _ = input.read(&mut byte) => {}, _ = signal => {}, _ = tokio::signal::ctrl_c() => {} }
     };
-    let result = if std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1") {
+    let native =
+        std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--native-collection"));
+    let result = if native {
+        aac_http::serve_with_native_account_usage(
+            boot,
+            shutdown,
+            Default::default(),
+            Default::default(),
+        )
+        .await
+    } else if std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1") {
         aac_http::serve_composed(boot, shutdown).await
     } else {
         aac_http::serve(boot, shutdown).await

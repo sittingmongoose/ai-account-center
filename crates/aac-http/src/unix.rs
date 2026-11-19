@@ -115,6 +115,7 @@ struct Shared {
     app_update_jobs: Option<BoundJobs>,
     /// G17: the Home feed producer (the TS producer's work, in process).
     producer: Arc<crate::home_producer::HomeProducer>,
+    account_usage: crate::account_usage::AccountUsageCache,
     native_usage: bool,
     agents: Arc<crate::agent_transport::Agents>,
     collection: Arc<crate::collection::Collection>,
@@ -855,6 +856,24 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             {
                 return decline(row.handler, Decline::Unsupported);
             }
+            if shared.native_usage && !req.headers().contains_key(crate::home_fed::FEED_HEADER) {
+                let headers = req.headers().clone();
+                let uri = req.uri().clone();
+                let Ok(_) = to_bytes(req.into_body(), 0).await else {
+                    return decline(row.handler, Decline::Shape);
+                };
+                let cache = shared.account_usage.clone();
+                return match shared
+                    .limits
+                    .blocking(row.pool, move || {
+                        crate::dashboard_fed::latest(&cache, &uri, &headers)
+                    })
+                    .await
+                {
+                    Ok(reply) => reply,
+                    Err(reason) => decline(row.handler, reason),
+                };
+            }
             let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
             let query = req.uri().query().is_some();
             let Ok(body) = to_bytes(req.into_body(), 0).await else {
@@ -1270,6 +1289,16 @@ pub struct NativeAccountUsage {
     pub published: Arc<dyn Fn(&crate::account_usage::AccountUsageCache) + Send + Sync>,
 }
 
+impl Default for NativeAccountUsage {
+    fn default() -> Self {
+        Self {
+            companions: Arc::new(crate::account_usage::producer::CompanionInputs::default),
+            published: Arc::new(|_| {}),
+        }
+    }
+}
+
+/// Start the private binary with the native producer.
 /// Boot account collection with the private server's L5 pool and the public listener's cache.
 pub async fn serve_with_native_account_usage(
     boot: Boot,
@@ -1277,7 +1306,17 @@ pub async fn serve_with_native_account_usage(
     cache: crate::account_usage::AccountUsageCache,
     native: NativeAccountUsage,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, cache, Some(native), None).await
+    let app_updates = std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1");
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        app_updates,
+        cache,
+        Some(native),
+        configured_claude_open_package(),
+    )
+    .await
 }
 
 /// Serve with the G13 Claude Open job owner bound: the package root supplies the pinned
@@ -1435,6 +1474,7 @@ async fn serve_inner(
         reset_claims: crate::reset_claims::ResetClaims::default(),
         app_update_jobs: app_update_jobs.map(BoundJobs::new),
         producer: Arc::new(crate::home_producer::HomeProducer::default()),
+        account_usage: cache.clone(),
         native_usage: native.is_some(),
         agents,
         collection: collection.clone(),

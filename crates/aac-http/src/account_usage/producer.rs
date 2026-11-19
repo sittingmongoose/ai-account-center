@@ -1,5 +1,7 @@
 //! Read the installed account sources and publish a complete Accounts generation.
 mod claude;
+mod codex_local;
+mod history;
 mod peers;
 mod selection;
 
@@ -122,7 +124,8 @@ impl Producer {
         );
         let codex = self.codex_rows(disk.codex, now);
         let claude = self.claude_rows(&disk.claude_private, disk.refresh, now);
-        let (additional, codex, claude) = tokio::join!(additional, codex, claude);
+        let history = self.mac_history_rows(&disk.claude_private, now);
+        let (additional, codex, claude, history) = tokio::join!(additional, codex, claude, history);
 
         let mut samples = Vec::with_capacity(4);
         for desktop in [Desktop::Mac, Desktop::Windows] {
@@ -130,8 +133,10 @@ impl Producer {
             rows.extend(
                 disk.claude
                     .iter()
-                    .zip(&claude)
-                    .filter_map(|(profile, raw)| rows::claude(profile, desktop, raw.as_ref())),
+                    .zip(claude.iter().zip(&history))
+                    .filter_map(|(profile, (raw, history))| {
+                        rows::claude(profile, desktop, raw.as_ref(), history.as_ref())
+                    }),
             );
             for profile in &disk.claude_pending {
                 let pending = rows::pending_claude(profile, desktop);
@@ -212,7 +217,7 @@ impl Producer {
         }
     }
 
-    async fn codex_rows(&self, profiles: Vec<String>, now: i64) -> Vec<Value> {
+    async fn codex_rows(&self, profiles: Vec<SavedCodex>, now: i64) -> Vec<Value> {
         use futures_util::{StreamExt, stream};
         if profiles.is_empty() {
             return vec![];
@@ -231,14 +236,23 @@ impl Producer {
         let active = candidate("default").map(|row| row["identity"].clone());
         let active = profiles
             .iter()
-            .find(|name| {
-                candidate(name).is_some_and(|row| Some(&row["identity"]) == active.as_ref())
+            .filter(|profile| {
+                candidate(&profile.name)
+                    .is_some_and(|row| Some(&row["identity"]) == active.as_ref())
             })
-            .cloned();
-        let requests = profiles.into_iter().map(|name| {
-            let candidate = candidate(&name).cloned();
-            let active = active.as_deref() == Some(&name);
-            (name, candidate, active)
+            .reduce(|best, next| {
+                if next.last_used > best.last_used {
+                    next
+                } else {
+                    best
+                }
+            })
+            .map(|profile| profile.name.clone());
+
+        let requests = profiles.into_iter().map(|profile| {
+            let candidate = candidate(&profile.name).cloned();
+            let active = active.as_deref() == Some(&profile.name);
+            (profile.name, candidate, active)
         });
         let inventory = &inventory;
         stream::iter(requests)
@@ -249,6 +263,24 @@ impl Producer {
                             .await
                     }
                     None => None,
+                };
+                let sample = if name == "default"
+                    && candidate.is_some()
+                    && sample.as_ref().is_none_or(|reading| {
+                        !matches!(
+                            reading["status"].as_str(),
+                            Some("needs_sign_in" | "ok" | "cached")
+                        ) || (reading["status"] != "needs_sign_in"
+                            && rows::windows(&reading["windows"], 256).is_empty())
+                    }) {
+                    let root = self.root.clone();
+                    tokio::task::spawn_blocking(move || codex_local::read(&root, now))
+                        .await
+                        .ok()
+                        .flatten()
+                        .or(sample)
+                } else {
+                    sample
                 };
                 let missing = format!("codex-profile:{name}");
                 let signed_out = inventory_complete(inventory, &missing) && candidate.is_none();
@@ -465,7 +497,7 @@ struct Disk {
     claude: Vec<Value>,
     claude_private: Vec<Value>,
     claude_pending: Vec<Value>,
-    codex: Vec<String>,
+    codex: Vec<SavedCodex>,
 }
 
 impl Disk {
@@ -526,7 +558,12 @@ fn read_refresh(root: &Path) -> u64 {
         .unwrap_or(60)
 }
 
-fn codex_names(root: &Path) -> Result<Vec<String>, Decline> {
+struct SavedCodex {
+    name: String,
+    last_used: String,
+}
+
+fn codex_names(root: &Path) -> Result<Vec<SavedCodex>, Decline> {
     let file = root.join("codex-profiles.yaml");
     let policy = ReadPolicy::capped(256 * 1024).ancestors(Ancestors::NoLinkBelow(root));
     match aac_files::read::read(&file, &policy) {
@@ -545,7 +582,16 @@ fn codex_names(root: &Path) -> Result<Vec<String>, Decline> {
             {
                 return Err(Decline::Shape);
             }
-            Ok(profiles.keys().cloned().collect())
+            Ok(profiles
+                .iter()
+                .map(|(name, metadata)| SavedCodex {
+                    name: name.clone(),
+                    last_used: metadata["last_used"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                })
+                .collect())
         }
         _ => Err(Decline::Unsupported),
     }
