@@ -7,11 +7,14 @@ import { registerRustAgentConnection } from '../../src/web-server/rust-service-t
 import { nativeSignInSession } from '../../src/web-server/services/lifecycle-signin-session';
 import { SignInJobRunner } from '../../src/web-server/services/signin-jobs';
 import type { SignInFlowSpec } from '../../src/web-server/services/signin-job-types';
+import { MuseAccountLifecycle } from '../../src/web-server/services/muse-account-lifecycle';
+import { readMuseLoginThroughAgent } from '../../src/web-server/services/lifecycle-signin-session';
 
 const root = await mkdtemp(path.join(tmpdir(), 'aac-signin-dispatch-'));
 const socketPath = path.join(root, 'agent.sock');
 const calls: Array<{ path: string; action: string | null }> = [];
 let startOutcome: 'install' | 'lost' | 'unavailable' = 'install';
+let identityOutcome: 'found' | 'missing' | 'unsupported' = 'found';
 const stamp = '2026-11-19T00:00:00.000Z';
 let finishSettlement!: () => void;
 const settled = new Promise<void>((resolve) => (finishSettlement = resolve));
@@ -53,6 +56,14 @@ const server = http.createServer(async (request, response) => {
     response.end(
       JSON.stringify({ ...base, type: 'result', value: { job, installPending: true } }) + '\n'
     );
+  } else if (route === '/internal/agent/muse-login-identity') {
+    assert.deepEqual(call.computer, { platform: 'mac', sshHost: 'fixture-mac' });
+    assert.deepEqual(call.args, { homeId: '9f2c41d0' });
+    const identity =
+      identityOutcome === 'unsupported'
+        ? { type: 'fallback', reason: 'unsupported' }
+        : { type: 'result', value: { email: identityOutcome === 'found' ? 'muse@example.test' : null } };
+    response.end(JSON.stringify({ ...base, ...identity }) + '\n');
   } else if (route === '/internal/agent/signin-session' && call.args.action === 'settle') {
     assert.deepEqual(call.computer, { platform: 'ubuntu', sshHost: null });
     assert.equal(call.args.ccs, root);
@@ -134,8 +145,38 @@ try {
     await legacy;
     assert.equal(fallback.cancel(legacyJob.id)?.state, 'cancelled');
     assert.equal(installed, 1);
+    let legacyReads = 0;
+    let readNative = false;
+    const muse = new MuseAccountLifecycle({
+      enabled: true,
+      identity: (host, homeId) => readMuseLoginThroughAgent(root, host, homeId, readNative),
+      ssh: async () => {
+        legacyReads++;
+        return 'legacy@example.test';
+      },
+    }).signInAgainFlow({
+      id: 'muse:acct:9f2c41d0',
+      provider: 'muse',
+      platform: 'mac',
+      sshHost: 'fixture-mac',
+      label: null,
+      credential: { kind: 'config-home', homeId: '9f2c41d0' },
+      createdAt: stamp,
+      createdBy: 'migration',
+    });
+    const complete = () => muse.complete(job.id, { stopped: () => false });
+    assert.equal((await complete()).email, 'legacy@example.test');
+    assert.equal(legacyReads, 1);
+    readNative = true;
+    assert.equal((await complete()).email, 'muse@example.test');
+    identityOutcome = 'missing';
+    await assert.rejects(complete, { code: 'write_failed' });
+    assert.equal(legacyReads, 1);
+    identityOutcome = 'unsupported';
+    assert.equal((await complete()).email, 'legacy@example.test');
+    assert.equal(legacyReads, 2);
     console.log(
-      'sign-in dispatch: start, install, settle, no replay and pre-dispatch fallback passed'
+      'sign-in dispatch: start, install, settle, no replay, fallback and Muse verification passed'
     );
   } finally {
     release();
