@@ -340,7 +340,11 @@ fn a_codex_credit_gone_after_openai_said_reset_confirms_and_unlocks() {
         let r = s.read_check("route-account", &a, &after, NOW + 1).unwrap();
         assert_eq!(
             r["outcome"],
-            if provider_said_reset { "claimed" } else { "claimed-unconfirmed" }
+            if provider_said_reset {
+                "claimed"
+            } else {
+                "claimed-unconfirmed"
+            }
         );
         // Settled means unlocked; unconfirmed keeps the account's lock.
         let lock = s.pending("route-account", NOW + 2).unwrap();
