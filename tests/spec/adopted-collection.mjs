@@ -1,11 +1,12 @@
 // Run on Unix with the parity binaries in an isolated provider home and network namespace.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createEmptyUnifiedConfig } from '../../src/config/unified-config-types';
@@ -78,12 +79,57 @@ function label(dashboard) {
   return dashboard.accounts.find((row) => row.id === accountId)?.label;
 }
 
+async function reservePort() {
+  const reservation = createServer();
+  reservation.listen(0, '127.0.0.1');
+  await once(reservation, 'listening');
+  const { port } = reservation.address();
+  await new Promise((resolve) => reservation.close(resolve));
+  return port;
+}
+
+const exec = promisify(execFile);
+const h2 = process.argv.includes('--http2');
+
 try {
+  const port = await reservePort();
+  const tlsPort = h2 ? await reservePort() : undefined;
+  const certificate = path.join(root, 'cert.pem');
+  const key = path.join(root, 'key.pem');
+  if (h2) {
+    await exec('openssl', [
+      'req',
+      '-x509',
+      '-nodes',
+      '-newkey',
+      'rsa:2048',
+      '-days',
+      '1',
+      '-subj',
+      '/CN=127.0.0.1',
+      '-addext',
+      'subjectAltName=IP:127.0.0.1',
+      '-out',
+      certificate,
+      '-keyout',
+      key,
+    ]);
+  }
   const config = createEmptyUnifiedConfig();
   await writeFile(
     path.join(root, 'config.yaml'),
     JSON.stringify({
       ...config,
+      ...(h2 && {
+        dashboard_tls: {
+          https_listener: {
+            enabled: true,
+            port: tlsPort,
+            cert_path: certificate,
+            key_path: key,
+          },
+        },
+      }),
       dashboard_auth: {
         enabled: true,
         username: credentials.username,
@@ -136,20 +182,41 @@ try {
   await ready(service, async () => (await stat(boot.socketPath).catch(() => null))?.isSocket());
   await writeFile(path.join(run, 'aac-http.json'), JSON.stringify(boot), { mode: 0o600 });
 
-  const reservation = createServer();
-  reservation.listen(0, '127.0.0.1');
-  await once(reservation, 'listening');
-  const { port } = reservation.address();
-  await new Promise((resolve) => reservation.close(resolve));
   const front = spawn(
     launcher,
     ['dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(port)],
     { env, stdio: ['ignore', 'ignore', 'inherit'] }
   );
   children.push(front);
-  const origin = 'http://127.0.0.1:' + port;
-  const send = (uri, options = {}) =>
-    fetch(origin + uri, { ...options, signal: AbortSignal.timeout(15000) });
+  const origin = h2 ? 'https://127.0.0.1:' + tlsPort : 'http://127.0.0.1:' + port;
+  const send = async (uri, options = {}) => {
+    if (!h2) return fetch(origin + uri, { ...options, signal: AbortSignal.timeout(15000) });
+    const args = ['--http2', '--cacert', certificate, '--silent', '--show-error', '--include'];
+    if (options.method === 'HEAD') args.push('--head');
+    else if (options.method) args.push('--request', options.method);
+    for (const [name, value] of Object.entries(options.headers ?? {})) {
+      args.push('--header', name + ': ' + value);
+    }
+    if (options.body !== undefined) args.push('--data-binary', options.body);
+    const { stdout } = await exec('curl', [...args, origin + uri], { timeout: 15000 });
+    const separator = stdout.indexOf('\r\n\r\n');
+    const [statusLine, ...fields] = stdout.slice(0, separator).split('\r\n');
+    assert.match(statusLine, /^HTTP\/2 \d{3}/);
+    const status = Number(statusLine.split(' ')[1]);
+    const headers = new Headers();
+    for (const field of fields) {
+      const separator = field.indexOf(':');
+      headers.append(field.slice(0, separator), field.slice(separator + 1).trim());
+    }
+    const body = stdout.slice(separator + 4);
+    return {
+      status,
+      headers,
+      ok: status >= 200 && status < 300,
+      text: async () => body,
+      json: async () => JSON.parse(body),
+    };
+  };
   const post = (uri, body, headers) =>
     send(uri, {
       method: 'POST',
