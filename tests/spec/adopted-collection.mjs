@@ -97,6 +97,13 @@ try {
     { mode: 0o600 }
   );
   await writeSource('Before');
+  const share = path.join(root, 'usage-share');
+  await mkdir(share, { mode: 0o700 });
+  await writeFile(
+    path.join(root, 'agent-usage-snapshot.json'),
+    JSON.stringify({ version: 1, directory: share }),
+    { mode: 0o600 }
+  );
   const registry = JSON.parse(
     await readFile(new URL('../../config/private-files.json', import.meta.url), 'utf8')
   );
@@ -118,6 +125,7 @@ try {
     socketPath: path.join(folder, 'http.sock'),
     files,
     nativeLifecycle: true,
+    nativeUsageSnapshot: true,
   };
   const service = spawn(serviceBinary, ['--native-collection'], {
     env,
@@ -161,6 +169,10 @@ try {
     'the adopted service supplies the public dashboard and existing Re-check admission'
   );
   assert.equal(label(await initial.json()), 'Before');
+  await ready(service, async () => {
+    const text = await readFile(path.join(share, 'usage.json'), 'utf8').catch(() => '');
+    return text !== '' && label(JSON.parse(text)) === 'Before';
+  });
   assert.equal((await noOrigin.json()).code, 'origin_required');
   const tag = initial.headers.get('etag');
   assert(tag);
@@ -223,7 +235,7 @@ try {
     assert.equal((await response.json()).code, 'route_unavailable');
   }
   console.log(
-    'Adopted collection regression: 1 scenario passed (dashboard, Re-check, device scope and owner loss).'
+    'Adopted collection regression: 1 scenario passed (dashboard, Re-check, usage snapshot, device scope and owner loss).'
   );
 } finally {
   for (const child of children.reverse()) await stop(child);

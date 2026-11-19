@@ -328,6 +328,15 @@ impl NativeOwners {
     }
 
     #[cfg(unix)]
+    pub(crate) async fn private_share_sample(
+        &self,
+        cache: &AccountUsageCache,
+        signins: &ClaudeSignInRenewalReader,
+    ) -> Option<Value> {
+        self.usage.as_ref()?.share_sample(cache, signins).await
+    }
+
+    #[cfg(unix)]
     pub(crate) fn for_private_lifecycle(
         agents: Arc<Agents>,
         owners: Owners,
@@ -650,8 +659,12 @@ impl Usage {
                         // publisher and its facts are the Unix service's; Windows keeps the TS
                         // writer.
                         #[cfg(unix)]
-                        if sampling.usage_snapshot && sampling.analytics_writers {
-                            owner.push_usage_sample(&cache, &sampling.signins).await;
+                        if sampling.usage_snapshot
+                            && sampling.analytics_writers
+                            && let Some(payload) =
+                                owner.share_sample(&cache, &sampling.signins).await
+                        {
+                            super::native_reads::usage_sample(owner.root.clone(), payload).await;
                         }
                     }
                 },
@@ -662,19 +675,14 @@ impl Usage {
     /// G18: push this sample to the service's share writer. Every sample's readings count, even
     /// one whose write the service skips, so the reading ring sees the same cadence; the sign-in
     /// probes and the store facts run only while a folder is set and there are accounts.
-    async fn push_usage_sample(
+    async fn share_sample(
         self: &Arc<Self>,
         cache: &AccountUsageCache,
         signins: &ClaudeSignInRenewalReader,
-    ) {
-        let timestamp = super::storage::iso(super::now());
-        let Some(timestamp) = timestamp else {
-            return;
-        };
+    ) -> Option<Value> {
         let now = super::now();
-        let Ok(accounts) = cache.merged_accounts(&timestamp, now) else {
-            return;
-        };
+        let timestamp = super::storage::iso(now)?;
+        let accounts = cache.merged_accounts(&timestamp, now).ok()?;
         let active = crate::usage_snapshot::sample_active(&self.root, accounts.len());
         let sign_in = if active {
             self.sign_in_facts(signins).await
@@ -694,13 +702,12 @@ impl Usage {
         } else {
             None
         };
-        let payload = json!({
+        Some(json!({
             "event": { "accounts": accounts, "history": null, "sampledAt": now },
             "signIn": sign_in,
             "signInRenewal": renewal,
             "rollups": null,
-        });
-        super::native_reads::usage_sample(self.root.clone(), payload).await;
+        }))
     }
 
     #[cfg(unix)]
