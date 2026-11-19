@@ -305,12 +305,31 @@ impl NativeOwners {
         };
         let cache = usage.cache.clone();
         let secure = access.secure_transport;
-        self.limits
-            .blocking(Pool::Reads, move || {
-                crate::dashboard_fed::latest_for_access(&cache, &uri, &headers, secure)
-            })
+        let read = |cache: crate::account_usage::AccountUsageCache,
+                    uri: Uri,
+                    headers: axum::http::HeaderMap| async move {
+            self.limits
+                .blocking(Pool::Reads, move || {
+                    crate::dashboard_fed::latest_for_access(&cache, &uri, &headers, secure)
+                })
+                .await
+                .unwrap_or_else(|_| unavailable())
+        };
+        let reply = read(cache.clone(), uri.clone(), headers.clone()).await;
+        // A reader that arrives before the first generation asks for one and waits, so the
+        // Accounts page never answers "unavailable" during a cold start (TS collects on demand).
+        if reply.status() != 503 {
+            return reply;
+        }
+        let desktop = crate::account_usage::Desktop::from_query(&uri);
+        cache.request_refresh();
+        if !cache
+            .await_generation(desktop, secure, std::time::Duration::from_secs(12))
             .await
-            .unwrap_or_else(|_| unavailable())
+        {
+            return no_store(reply);
+        }
+        read(cache, uri, headers).await
     }
 
     #[cfg(unix)]

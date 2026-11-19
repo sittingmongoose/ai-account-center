@@ -221,6 +221,9 @@ impl Settings {
             Ok(body) => body,
             Err(reply) => return reply,
         };
+        if !crate::visibility_write::body_valid(patch, &body) {
+            return no_store(body_refusal(Family::Visibility));
+        }
         let root = self.root.clone();
         let owners = self.owners.clone();
         let saved = self
@@ -233,10 +236,16 @@ impl Settings {
             Ok(Ok(value)) if value["state"] == "saved" => {
                 super::response(200, value["visibility"].clone())
             }
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => super::error(
+            // A file that cannot be read back safely cannot take a partial update.
+            Ok(Err(aac_views::decline::Decline::Shape)) | Ok(Ok(_)) => super::error(
                 500,
                 "visibility_unavailable",
                 "Account visibility could not be read safely.",
+            ),
+            Ok(Err(_)) | Err(_) => super::error(
+                500,
+                "visibility_write_failed",
+                "Account visibility could not be saved.",
             ),
         };
         // The change is saved; a failed hint never changes the answer.

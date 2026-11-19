@@ -69,6 +69,17 @@ fn change(key: &str, input: &Value, patch: bool) -> Option<Change> {
     Some(Change::Delta { hide, show })
 }
 
+/// Whether the body is the shape the writer accepts for this method (no file access), so the
+/// public route can answer the TS `invalid_body` sentence before it opens anything.
+pub(crate) fn body_valid(patch: bool, bytes: &[u8]) -> bool {
+    let Some(input) = parse(patch, bytes) else {
+        return false;
+    };
+    input
+        .iter()
+        .all(|(key, input)| change(key, input, patch).is_some())
+}
+
 pub(crate) fn save(
     root: &Path,
     owners: &Owners,
