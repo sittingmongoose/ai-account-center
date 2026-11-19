@@ -485,7 +485,12 @@ pub(crate) async fn run_public_at(
     let agents = native
         .as_ref()
         .map(native_owners::NativeOwners::agents)
-        .unwrap_or_else(|| Arc::new(crate::agent_transport::Agents::with_default(root.clone(), true)));
+        .unwrap_or_else(|| {
+            Arc::new(crate::agent_transport::Agents::with_default(
+                root.clone(),
+                true,
+            ))
+        });
     let account_usage = native
         .as_ref()
         .and_then(native_owners::NativeOwners::cache)

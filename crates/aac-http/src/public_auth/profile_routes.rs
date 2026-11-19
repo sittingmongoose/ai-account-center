@@ -246,13 +246,7 @@ impl Profiles {
         };
         #[cfg(unix)]
         if let Some(reply) = self
-            .host_request(
-                "GET",
-                &uri.to_string(),
-                &access.host_principal(),
-                &[],
-                None,
-            )
+            .host_request("GET", &uri.to_string(), &access.host_principal(), &[], None)
             .await
         {
             return Self::relay(reply, false);
@@ -468,7 +462,13 @@ impl Profiles {
         }
         #[cfg(unix)]
         if let Some(reply) = self
-            .host_request("GET", "/api/codex/profiles", &access.host_principal(), &[], None)
+            .host_request(
+                "GET",
+                "/api/codex/profiles",
+                &access.host_principal(),
+                &[],
+                None,
+            )
             .await
         {
             return Self::relay(reply, false);
