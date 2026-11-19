@@ -57,6 +57,7 @@ pub(super) struct Settings {
     events: DashboardEvents,
     owners: Owners,
     limits: crate::limits::Limits,
+    preference_writes: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Settings {
@@ -66,6 +67,7 @@ impl Settings {
             events,
             owners: owners(),
             limits: crate::limits::Limits::new(),
+            preference_writes: Arc::default(),
         }
     }
 
@@ -173,11 +175,15 @@ impl Settings {
             Ok(body) => body,
             Err(reply) => return reply,
         };
+        // Queue the clients before claiming the nonblocking file leases. The blocking writer
+        // owns the turn through completion even if its HTTP client disconnects.
+        let turn = self.preference_writes.clone().lock_owned().await;
         let root = self.root.clone();
         let owners = self.owners.clone();
         let saved = self
             .limits
             .blocking(crate::table::Pool::Reads, move || {
+                let _turn = turn;
                 Ok(crate::preferences_write::save_public(
                     &root, &owners, patch, &body,
                 ))

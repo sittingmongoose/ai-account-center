@@ -1907,6 +1907,59 @@ mod tests {
         let _ = handle.await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_concurrent_preference_patches_preserve_both_clients() {
+        let (_home, addr, handle) = settings_server().await;
+        let first = format!(
+            "Origin: http://{addr}\r\nContent-Type: application/json\r\nCookie: {}\r\n",
+            login(addr).await
+        );
+        let second = format!(
+            "Origin: http://{addr}\r\nContent-Type: application/json\r\nCookie: {}\r\n",
+            login(addr).await
+        );
+        let path = "/api/accounts/preferences";
+        for _ in 0..20 {
+            let reset = request(
+                addr,
+                path,
+                "PUT",
+                &first,
+                r#"{"timeZone":"UTC","snapshotCleanup":{"auto":false},"usageLogSources":[]}"#,
+            )
+            .await;
+            assert!(reset.starts_with("HTTP/1.1 200"), "{reset}");
+            let (zone, cleanup) = tokio::join!(
+                request(
+                    addr,
+                    path,
+                    "PATCH",
+                    &first,
+                    r#"{"timeZone":"Europe/Paris"}"#
+                ),
+                request(
+                    addr,
+                    path,
+                    "PATCH",
+                    &second,
+                    r#"{"snapshotCleanup":{"auto":true}}"#
+                ),
+            );
+            assert!(
+                zone.starts_with("HTTP/1.1 200") && cleanup.starts_with("HTTP/1.1 200"),
+                "{zone}\n{cleanup}"
+            );
+            let saved = request(addr, path, "GET", &first, "").await;
+            assert!(
+                saved.contains(r#""timeZone":"Europe/Paris""#)
+                    && saved.contains(r#""snapshotCleanup":{"auto":true}"#),
+                "{saved}"
+            );
+        }
+        handle.abort();
+        let _ = handle.await;
+    }
+
     /// The cut's own settings, preferences and visibility routes: the TS admission sentences
     /// and the files the existing owners write.
     #[tokio::test]
