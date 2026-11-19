@@ -126,7 +126,8 @@ mod tests {
             assert!(!cut_route(&method, path), "{method} {path}");
         }
         assert!(cut_route(&Method::PATCH, "/api/accounts/preferences"));
-        assert!(!cut_route(
+        // W-resets owns the reset rows; they leave this list with that lane.
+        assert!(cut_route(
             &Method::POST,
             "/api/accounts/example/reset-claims/prepare"
         ));

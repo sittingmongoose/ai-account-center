@@ -146,6 +146,7 @@ impl Owner {
 }
 
 fn operation(method: &Method, path: &str) -> Option<Operation> {
+    let path = path.trim_end_matches('/');
     let method = if *method == Method::HEAD {
         &Method::GET
     } else {
