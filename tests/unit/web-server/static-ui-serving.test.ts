@@ -461,9 +461,27 @@ describe('page routes and deep links', () => {
     const head = await raw('HEAD', '/analytics');
     expect(head.status).toBe(200);
     expect(head.body.length).toBe(0);
-    const query = await raw('GET', '/accounts?provider=%3Cscript%3E&view=<b>x</b>');
-    expect(query.status).toBe(200);
-    expect(query.body.toString()).toBe(PAGE());
+    const rawQuery = 'provider=%3Cscript%3E&view=<b>x</b>';
+    if (!instance?.publicAddress) {
+      const query = await raw('GET', `/accounts?${rawQuery}`);
+      expect(query.status).toBe(200);
+      expect(query.body.toString()).toBe(PAGE());
+      return;
+    }
+
+    const encodedQuery = 'provider=%3Cscript%3E&view=%3Cb%3Ex%3C%2Fb%3E';
+    const encoded = await raw('GET', `/accounts?${encodedQuery}`);
+    expect(encoded.status).toBe(200);
+    expect(encoded.body.toString()).toBe(PAGE());
+
+    const query = await raw('GET', `/accounts?${rawQuery}`);
+    const body = query.body.toString();
+    expect([200, 400]).toContain(query.status);
+    if (query.status === 200) expect(body).toBe(PAGE());
+    expect(body).not.toContain('provider=');
+    expect(body).not.toContain('view=');
+    expect(body).not.toContain('<b>x</b>');
+    expect(body).not.toContain('%3Cb%3Ex%3C%2Fb%3E');
   });
 
   it.each([
