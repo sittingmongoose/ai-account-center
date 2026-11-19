@@ -146,7 +146,10 @@ pub fn run(args: &[String], root: &Path) -> i32 {
             ));
             line(&format!(
                 "     The files it replaced are in {}.",
-                answer.get("quarantine").and_then(Value::as_str).unwrap_or("")
+                answer
+                    .get("quarantine")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
             ));
             return Ok(0);
         }
@@ -159,9 +162,11 @@ pub fn run(args: &[String], root: &Path) -> i32 {
         let answer = (|| -> Result<i32, aac_store::error::Error> {
             if command == "status" {
                 let status = call(&slot, "status", json!({}))?;
-                line(&serde_json::to_string_pretty(&sorted(status)).map_err(|error| {
-                    aac_store::error::Error::new("invalid", error.to_string())
-                })?);
+                line(
+                    &serde_json::to_string_pretty(&sorted(status)).map_err(|error| {
+                        aac_store::error::Error::new("invalid", error.to_string())
+                    })?,
+                );
             }
             if command == "check" {
                 let answer = call(&slot, "maintain", json!({ "verify": true }))?;
@@ -187,7 +192,10 @@ pub fn run(args: &[String], root: &Path) -> i32 {
                 line(&format!(
                     "[OK] Backup {} written and verified ({} files).",
                     answer.get("id").and_then(Value::as_str).unwrap_or(""),
-                    answer.get("files").map(Value::to_string).unwrap_or_default()
+                    answer
+                        .get("files")
+                        .map(Value::to_string)
+                        .unwrap_or_default()
                 ));
             }
             Ok(0)

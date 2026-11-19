@@ -135,7 +135,9 @@ fn show_status(file: &Path) -> i32 {
             "  public origin: {}\n",
             settings.public_origin.as_deref().unwrap_or("not set")
         ));
-        out("  Requests from that address count as secure only with X-Forwarded-Proto: https and a client IP as the last X-Forwarded-For entry.\n");
+        out(
+            "  Requests from that address count as secure only with X-Forwarded-Proto: https and a client IP as the last X-Forwarded-For entry.\n",
+        );
         return 0;
     }
     if let Some(problem) = &settings.trusted_proxy_problem {
@@ -143,7 +145,9 @@ fn show_status(file: &Path) -> i32 {
             "LAN HTTPS proxy: off. dashboard_tls.trusted_proxy_addresses was refused: {}.\n",
             tls::describe(problem)
         ));
-        out("Fix it with: ai-account-center dashboard proxy set --address <ip> --origin <https url>\n");
+        out(
+            "Fix it with: ai-account-center dashboard proxy set --address <ip> --origin <https url>\n",
+        );
         return 0;
     }
     if let Some(kind) = &settings.trusted_proxy {
@@ -152,7 +156,9 @@ fn show_status(file: &Path) -> i32 {
         ));
         return 0;
     }
-    out("LAN HTTPS proxy: off. Turn it on: ai-account-center dashboard proxy set --address <ip> --origin <https url>\n");
+    out(
+        "LAN HTTPS proxy: off. Turn it on: ai-account-center dashboard proxy set --address <ip> --origin <https url>\n",
+    );
     0
 }
 
@@ -182,8 +188,14 @@ fn set_proxy(args: &[String], file: &Path) -> i32 {
             return 1;
         }
     };
-    let Some(origin) = tls::parse_public_origin(&Value::String(parsed.origin.clone().unwrap())) else {
-        err("[X] Not saved: --origin must be an https:// address with no path, user or query, like https://aac.example.test\n");
+    let Some(origin) = parsed
+        .origin
+        .clone()
+        .and_then(|text| tls::parse_public_origin(&Value::String(text)))
+    else {
+        err(
+            "[X] Not saved: --origin must be an https:// address with no path, user or query, like https://aac.example.test\n",
+        );
         return 1;
     };
     let before = match config_write::read_tls_block(file) {
@@ -194,10 +206,12 @@ fn set_proxy(args: &[String], file: &Path) -> i32 {
         }
     };
     let kind = before.get("trusted_proxy").and_then(Value::as_str);
-    if matches!(kind, Some("tailscale-serve" | "loopback-https-proxy")) && !parsed.replace {
+    if let Some(kind) = kind
+        && matches!(kind, "tailscale-serve" | "loopback-https-proxy")
+        && !parsed.replace
+    {
         err(&format!(
-            "[X] Not saved: dashboard_tls.trusted_proxy is {}, and only one proxy kind works at a time. Add --replace to switch to the LAN HTTPS proxy.\n",
-            kind.unwrap()
+            "[X] Not saved: dashboard_tls.trusted_proxy is {kind}, and only one proxy kind works at a time. Add --replace to switch to the LAN HTTPS proxy.\n"
         ));
         return 1;
     }
