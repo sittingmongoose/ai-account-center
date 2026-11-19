@@ -8,6 +8,7 @@ import {
   AgentReportsReader,
   type AgentReportsState,
 } from '../../../../src/web-server/status/agent-reports-reader';
+import { PinnedThreadsCollector } from '../../../../src/web-server/status/pinned-threads';
 import {
   defaultReadersCheckRoot,
   matchPin,
@@ -48,6 +49,118 @@ const pins: MergedPin[] = [
 ];
 
 describe('the readers check file', () => {
+  it('leaves pin out before the first pins collect, and says it after (both states)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-pins-'));
+    try {
+      const plain = pins[0].id;
+      // One writer whose thread.json and status.json both name the pinned thread, and one whose
+      // name no pin has: before pins are read, neither may be told "no pinned thread has this id".
+      for (const [writer, id] of [
+        ['vm.lead', plain],
+        ['vm.other', 'mcp:launch:unpinned'],
+      ] as const) {
+        fs.mkdirSync(path.join(root, 'v1/writers', writer), { recursive: true });
+        fs.writeFileSync(
+          path.join(root, `v1/writers/${writer}/thread.json`),
+          JSON.stringify({
+            ...threadDoc(writer, { seq: 4 }),
+            agent: {
+              name: 'lead',
+              harness: null,
+              model: 'claude-opus-5-5',
+              effort: 'high',
+              account: null,
+              machine: 'vm',
+              t3Thread: id,
+              parent: null,
+            },
+          })
+        );
+        fs.writeFileSync(
+          path.join(root, `v1/writers/${writer}/status.json`),
+          JSON.stringify({
+            schema: 'agent-reports/status@1',
+            writer,
+            seq: 5,
+            writtenAt: '2026-11-10T08:00:00Z',
+            t3Thread: id,
+            summary: 'Working.',
+          })
+        );
+      }
+      const reports = new AgentReportsReader({ root: () => root, now: () => NOW });
+      await reports.scan();
+      const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
+      const vmPin = { ...pins[0], machine: 'vm' };
+      // The fake native handle: the VM holds the pin, the other machines hold none, and merge
+      // and compose echo what they were given (the collector's own rules are what is tested).
+      const handle: NativeStatusHandle = {
+        call: async (method, args) => {
+          const parsed = JSON.parse(args) as Record<string, unknown>;
+          if (method === 'pins') return JSON.stringify({ pinned: [vmPin] });
+          if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
+          if (method === 'mergePins') {
+            const lists = (parsed.lists ?? []) as Array<{ machine: string; pinned: unknown[] }>;
+            return JSON.stringify({
+              pinned: lists.flatMap((list) =>
+                list.pinned.map((row) => ({ ...(row as object), machine: list.machine }))
+              ),
+            });
+          }
+          if (method === 'parseStatus') {
+            const doc = JSON.parse(
+              Buffer.from(String(parsed.contentBase64), 'base64').toString('utf8')
+            );
+            return JSON.stringify({ ok: true, doc, sha256: `sha:${String(doc.seq)}` });
+          }
+          if (method === 'compose') {
+            return JSON.stringify({
+              asOfMs: parsed.nowMs,
+              head: 'fake head',
+              counts: { pinned: (parsed.pins as unknown[]).length, looping: 0, waitingOnYou: 0 },
+              machineProblems: [],
+              updates: [],
+            });
+          }
+          throw new Error(`unexpected method ${method}`);
+        },
+      };
+      const collector = new PinnedThreadsCollector({
+        handle,
+        readRemote: async () => '[]',
+        now: () => NOW,
+        timeZone: () => 'UTC',
+        reportsRoot: () => root,
+        readersCheck: check,
+      });
+      // Before the first collect lands: no receipt carries a pin key, accepted or refused.
+      await collector.scanStatusDocs();
+      await collector.compose(reports.snapshot(), []);
+      for (const writer of ['vm.lead', 'vm.other']) {
+        const rows = check.rowsFor(writer);
+        expect(rows.map((row) => row.file).sort()).toEqual(['status.json', 'thread.json']);
+        for (const row of rows) expect(Object.hasOwn(row, 'pin')).toBe(false);
+      }
+      // After the first collect: today's behavior — the pin match where one exists, null where none does.
+      await collector.collect();
+      await collector.compose(reports.snapshot(), []);
+      const lead = new Map(check.rowsFor('vm.lead').map((row) => [row.file, row]));
+      expect(lead.get('thread.json')?.pin).toEqual({
+        t3Thread: plain,
+        title: 'Build PMConcept7 and Background Activity',
+      });
+      expect(lead.get('status.json')?.pin).toEqual({
+        t3Thread: plain,
+        title: 'Build PMConcept7 and Background Activity',
+      });
+      const other = new Map(check.rowsFor('vm.other').map((row) => [row.file, row]));
+      expect(other.get('thread.json')?.pin).toBeNull();
+      expect(other.get('status.json')?.pin).toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('writes one reader@1 file per writer from a real scan, with the pin match and refusals', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-check-'));
     try {
