@@ -500,13 +500,13 @@ async fn status(
         return super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS);
     }
     let Some(principal) = access.service_principal() else {
-        return super::decline();
+        return decline_because("principal");
     };
     if !routes.hosted().await {
-        return super::decline();
+        return decline_because("service");
     }
     let Some((time_zone, offsets)) = status_zone(routes.root()) else {
-        return super::decline();
+        return decline_because("zone");
     };
     let now = now_ms().to_string();
     let zone = json!({
