@@ -770,6 +770,9 @@ export class StatusService {
     };
     every(REPORTS_EVERY_MS, () => this.scanReports());
     every(REGISTRY_EVERY_MS, () => this.scanRegistry());
+    // The page must not wait a whole cycle for the first fallback scan.
+    void this.scanReports().catch(() => undefined);
+    void this.scanRegistry().catch(() => undefined);
   }
 
   /** Starts the timers; returns the stop call. */
