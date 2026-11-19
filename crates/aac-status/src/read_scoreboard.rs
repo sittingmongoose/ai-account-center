@@ -785,13 +785,7 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     unknown_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| ctx.compare(&a.0, &b.0)));
     examples.sort_by(|a, b| newest(a, b, &ctx));
     let unscored = json!({"total":scan_limit+unreadable+no_model+no_type+unknown_model+unknown_type,"scanLimit":scan_limit,"unreadable":unreadable,"noModel":no_model,"noTaskType":no_type,"unknownModel":unknown_model,"unknownTaskType":unknown_type,"unknownModels":unknown_counts.iter().take(20).map(|(id,n)|json!({"id":id,"runs":n})).collect::<Vec<_>>(),"examples":examples.into_iter().take(10).collect::<Vec<_>>()});
-    let index = Index::new(
-        docs,
-        &array(&input["joinReviews"]),
-        &known_models,
-        &known_types,
-        &ctx,
-    )?;
+    let index = Index::new(docs, &array(&input["joinReviews"]), &known_models, &known_types, &ctx)?;
     let mut bases = HashMap::new();
     for task in types {
         bases.insert(
