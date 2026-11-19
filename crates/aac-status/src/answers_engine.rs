@@ -1930,7 +1930,6 @@ impl AnswersEngine {
             Instant::now() < deadline && engine.epoch == epoch && wanted.is_none_or(|id| !engine.superseded(id))
         };
         let outcome = delivery::write_share_file(&v1, name, body, &key, guard, &proceed);
-        drop(cell);
         if outcome == ShareOutcome::Dropped && Instant::now() >= deadline {
             // withDeadline rejected: a deadline, not a drop.
             return ShareOutcome::Failed;
