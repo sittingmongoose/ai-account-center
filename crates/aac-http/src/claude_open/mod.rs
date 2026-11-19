@@ -8,6 +8,8 @@ pub mod js;
 pub mod manifest;
 pub mod markers;
 pub mod operations;
+pub mod open;
 pub mod policy;
 pub mod sync;
+pub mod remote;
 pub mod sync_service;

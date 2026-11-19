@@ -6,7 +6,7 @@ use super::js::utf16_len;
 use serde_json::{Map, Value};
 use std::fs::{self, OpenOptions};
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 /// `CLAUDE_PROFILE_ID_PATTERN`: the safe-ID shape every Claude desktop path checks first.

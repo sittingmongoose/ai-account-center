@@ -3,7 +3,7 @@ use aac_config::{Config, LoadOptions, OperatingSystem, TransportConfig};
 use aac_core::{Cause, Failure};
 use aac_protocol::{Control, Event, Handshake, PROTOCOL_VERSION, Request, frame_cap};
 use aac_transport::{
-    AgentArtifact, AgentClient, CallOptions, CancellationToken, Computer, SshPolicy,
+    AgentArtifact, AgentClient, CallOptions, CancellationToken, Computer, ProcessOutput, SshPolicy,
 };
 use axum::{
     Json,
@@ -38,9 +38,9 @@ struct Artifact {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Selector {
-    platform: String,
-    ssh_host: Option<String>,
+pub(crate) struct Selector {
+    pub(crate) platform: String,
+    pub(crate) ssh_host: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,6 +55,9 @@ struct Call {
 struct Entry {
     config: aac_config::ComputerConfig,
     client: Option<AgentClient>,
+    /// The same checked computer without the agent artifact: the Open orchestrator's
+    /// reference commands run over the identical SSH policy when no verb can prove a step.
+    computer: Option<Computer>,
 }
 struct Registry {
     entries: Vec<Entry>,
@@ -95,6 +98,15 @@ fn word(id: &str) -> bool {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
+}
+
+/// A random correlation id for an in-process orchestrator call (hex, as the front door's).
+fn random_call_id() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut bytes))
+        .ok()?;
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 fn line(value: &Value) -> Bytes {
     let mut bytes = value.to_string().into_bytes();
@@ -170,11 +182,16 @@ impl Registry {
                 }
                 admitted = key.is_absolute() && hosts.as_ref().is_some_and(|p| p.is_absolute());
             }
-            let client = if admitted {
+            let computer = if admitted {
                 let policy = SshPolicy::new(
                     hosts.clone().unwrap_or_default(),
                     root.join("run/agent-ssh"),
                 );
+                Computer::new(definition.clone(), policy).ok()
+            } else {
+                None
+            };
+            let client = computer.clone().and_then(|computer| {
                 let artifact = catalog
                     .artifacts
                     .iter()
@@ -194,18 +211,13 @@ impl Registry {
                         )
                         .ok()
                     })
-                    .and_then(|artifact| {
-                        Computer::new(definition.clone(), policy)
-                            .ok()
-                            .map(|c| AgentClient::existing(c, artifact))
-                    })
-            } else {
-                None
-            };
+                    .map(|artifact| AgentClient::existing(computer, artifact))
+            });
             // Missing trust configuration disables this computer, never another computer.
             entries.push(Entry {
                 config: definition,
                 client,
+                computer,
             });
         }
         Ok(Self { entries })
@@ -237,6 +249,34 @@ impl Registry {
             return None;
         }
         found[0].client.clone()
+    }
+    fn computer(&self, selector: &Selector) -> Option<Computer> {
+        let os = match selector.platform.as_str() {
+            "linux" | "ubuntu" => OperatingSystem::Linux,
+            "mac" => OperatingSystem::Mac,
+            "windows" => OperatingSystem::Windows,
+            _ => return None,
+        };
+        let found = self
+            .entries
+            .iter()
+            .filter(|e| {
+                e.config.os == os
+                    && match &selector.ssh_host {
+                        Some(alias) => {
+                            matches!(e.config.transport, TransportConfig::Ssh { .. })
+                                && (e.config.id.as_str() == alias
+                                    || e.config.metadata.get("sshAlias").and_then(Value::as_str)
+                                        == Some(alias))
+                        }
+                        None => matches!(e.config.transport, TransportConfig::Local),
+                    }
+            })
+            .collect::<Vec<_>>();
+        if found.len() != 1 {
+            return None;
+        }
+        found[0].computer.clone()
     }
 }
 
@@ -445,6 +485,117 @@ impl Agents {
             },
         );
         response(Body::from_stream(stream))
+    }
+
+    /// The registry, loaded once per boot, waited for within the caller's deadline.
+    async fn loaded_registry(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Option<Arc<Result<Registry, Failure>>> {
+        let mut loaded = self.registry.subscribe();
+        if !self.loading.swap(true, Ordering::AcqRel) {
+            let root = self.root.clone();
+            let ready = self.registry.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || Registry::load(&root))
+                    .await
+                    .unwrap_or_else(|_| Err(refused()));
+                ready.send_replace(Some(Arc::new(result)));
+            });
+        }
+        tokio::time::timeout_at(deadline, async {
+            loop {
+                if let Some(registry) = loaded.borrow_and_update().clone() {
+                    break Some(registry);
+                }
+                if loaded.changed().await.is_err() {
+                    break None;
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// In-process verb call for the Open orchestrator: the terminal result value, or None
+    /// when the agent falls back, fails or cannot be reached. The same admission as `call`,
+    /// without the streaming control channel these verbs do not use.
+    pub(crate) async fn call_value(
+        &self,
+        verb: &str,
+        computer: Selector,
+        args: Value,
+        deadline_ms: u64,
+        timeout_ms: u64,
+        max_bytes: usize,
+    ) -> Option<Value> {
+        if !matches!(verb, "claude-host" | "claude-history")
+            || deadline_ms == 0
+            || deadline_ms > aac_protocol::MAX_DEADLINE_MS
+            || timeout_ms == 0
+            || timeout_ms > deadline_ms + 5000
+            || max_bytes == 0
+            || max_bytes > frame_cap(verb) * 2
+        {
+            return None;
+        }
+        let budget = timeout_ms
+            .checked_sub(FRONT_DOOR_MARGIN_MS)
+            .filter(|ms| *ms > 0)?;
+        let permit = self.slots.clone().try_acquire_owned().ok()?;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(budget);
+        let registry = self.loaded_registry(deadline).await?;
+        let client = registry
+            .as_deref()
+            .and_then(|result| result.as_ref().ok())
+            .and_then(|registry| registry.client(&computer))?;
+        let call_id = random_call_id()?;
+        let args_text = serde_json::to_string(&args).ok()?;
+        let wire = format!(
+            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":{args_text}}}"
+        );
+        let request = serde_json::from_str::<Request>(&wire).ok()?;
+        let mut options = CallOptions::new(Duration::ZERO, max_bytes);
+        options.deadline = deadline;
+        let events = client.call(&request, &options).await.ok()?;
+        drop(permit);
+        match events.last() {
+            Some(Event::Result { value, .. }) if value != &json!({"fallback":"python"}) => {
+                Some(value.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// One fixed reference command over the identical SSH policy, without the agent: the
+    /// Open orchestrator's fallback when no verb proves a step. The cause distinguishes a
+    /// deadline kill from any other transport failure.
+    pub(crate) async fn reference(
+        &self,
+        computer: Selector,
+        argv: Vec<std::ffi::OsString>,
+        stdin: Vec<u8>,
+        timeout_ms: u64,
+        max_bytes: usize,
+    ) -> Result<ProcessOutput, Cause> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let registry = self.loaded_registry(deadline).await.ok_or(Cause::Refused)?;
+        let handle = registry
+            .as_deref()
+            .and_then(|result| result.as_ref().ok())
+            .and_then(|registry| registry.computer(&computer))
+            .ok_or(Cause::Refused)?;
+        let permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Cause::Refused)?;
+        let mut options = CallOptions::new(Duration::from_millis(timeout_ms), max_bytes.saturating_add(65536));
+        options.deadline = deadline;
+        let result = handle.execute(&argv, &stdin, &options).await;
+        drop(permit);
+        result.map_err(|failure| failure.cause)
     }
 
     pub(crate) async fn control(&self, id: &str, bytes: &[u8]) -> Response {

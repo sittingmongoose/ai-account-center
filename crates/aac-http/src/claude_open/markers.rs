@@ -491,7 +491,7 @@ impl PendingMarker {
         // The core writes, fsyncs the file and the folder, then proves the binding; a failure
         // closes the descriptor (Drop) and leaves any created file to hold Open.
         let result = (|| -> Checked<()> {
-            let file = marker.file()?;
+            let mut file = marker.file()?;
             file.write_all(&bytes).map_err(|_| MarkerRefused::AppendPending)?;
             file.sync_all().map_err(|_| MarkerRefused::AppendPending)?;
             sync_directory(&root).map_err(|_| MarkerRefused::AppendPending)?;

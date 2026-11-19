@@ -114,7 +114,7 @@ fn wire_records(records: &[Record]) -> Value {
 }
 
 /// The expected launchers for the policy rebind, from the resolved profile.
-fn expected(profile: &Profile, platform: &str) -> Option<ExpectedLauncher<'_>> {
+fn expected<'a>(profile: &'a Profile, platform: &str) -> Option<ExpectedLauncher<'a>> {
     let launcher = match platform {
         "mac" => profile.mac.as_ref()?,
         _ => profile.windows.as_ref()?,

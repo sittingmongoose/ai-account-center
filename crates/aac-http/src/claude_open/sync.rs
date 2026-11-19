@@ -609,12 +609,11 @@ pub async fn synchronize_before_profile_open(
     if !PROFILES.contains(&profile_id) || !matches!(target_platform, "mac" | "windows") {
         return skipped("unsupported_profile_or_platform");
     }
-    let Some((_, source_platform, direction_target)) =
-        DIRECTIONS.iter().find(|(id, _, _)| *id == profile_id)
-    else {
+    let Some(direction) = DIRECTIONS.iter().find(|(id, _, _)| *id == profile_id) else {
         return skipped("unsupported_direction");
     };
-    if *direction_target != target_platform {
+    let source_platform = direction.1;
+    if direction.2 != target_platform {
         return skipped("unsupported_direction");
     }
     let started_at = (limits.clock)();
@@ -662,7 +661,7 @@ async fn run_sequence(
     batches_run: &mut u64,
 ) -> Checked<Value> {
     validate_policy(policy)?;
-    if text(&policy["sourcePlatform"]) != Some(*source_platform) {
+    if text(&policy["sourcePlatform"]) != Some(source_platform) {
         return Ok(skipped("history_policy_unverified"));
     }
     if adapters
