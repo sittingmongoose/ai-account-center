@@ -26,6 +26,7 @@ import {
   StatusAnswers,
   type AnswerTiming,
   type Doorbell,
+  type ShareFs,
 } from '../../../../src/web-server/status/answers';
 import {
   QuotaReportReader,
@@ -64,7 +65,7 @@ import { StatusService } from '../../../../src/web-server/status/status-service'
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
 import { cardDoc, NOW, tempDirs, threadDoc, writeCard, writeReport } from './status-test-helpers';
 import { waitForProcessState, waitUntil } from '../../../shared/fixtures/process-state';
-import { withDeadline } from '../../../../src/utils/settle-deadline';
+import { DeadlineExceededError, withDeadline } from '../../../../src/utils/settle-deadline';
 
 const dirs = tempDirs();
 let server: Server | undefined;
@@ -80,7 +81,9 @@ const PNG = Buffer.concat([
 ]);
 const CARD = 'vm.lead--Q1';
 
-function setup(options: { doorbell?: Doorbell; timing?: Partial<AnswerTiming> } = {}) {
+function setup(
+  options: { doorbell?: Doorbell; timing?: Partial<AnswerTiming>; share?: ShareFs } = {}
+) {
   const root = dirs.make('ccs-status-reports-');
   const store = path.join(dirs.make('ccs-status-store-'), 'status');
   const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
@@ -99,6 +102,7 @@ function setup(options: { doorbell?: Doorbell; timing?: Partial<AnswerTiming> } 
       doorbell,
       now: () => NOW,
       timing: options.timing,
+      shareFs: options.share,
       onChange: extra.onChange,
     });
   fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
@@ -121,22 +125,46 @@ function soon<T>(work: Promise<T>, ms = 3000): Promise<T> {
   ]);
 }
 
-/** The share stops answering under `v1`; every other path still does. */
-function hangShare() {
-  const hung = (file: fs.PathLike) => String(file).includes(`${path.sep}v1`);
-  const realStat = fs.promises.stat;
-  const realMkdir = fs.promises.mkdir;
+/**
+ * A share whose calls the test controls: `hang()` stops every call under `v1` from answering, `mount()` gives the
+ * real fs back, and `gateOnce(match)` holds the next matching temporary-file open until released. This replaces
+ * `spyOn(fs.promises, ...)`: Bun 1.4.2 does not reliably make such a replacement visible to a module's own
+ * `fs.promises` reads, so the hung-share cases failed there while still failing closed.
+ */
+function fakeShare() {
   const never = new Promise<never>(() => undefined);
-  const stat = spyOn(fs.promises, 'stat').mockImplementation(((file: fs.PathLike) =>
-    String(file).endsWith(`${path.sep}v1`) ? never : realStat(file)) as typeof fs.promises.stat);
-  const mkdir = spyOn(fs.promises, 'mkdir').mockImplementation(((
-    file: fs.PathLike,
-    options?: fs.MakeDirectoryOptions
-  ) => (hung(file) ? never : realMkdir(file, options))) as typeof fs.promises.mkdir);
+  let hung = false;
+  let gate: { match: string; opened: Promise<void> } | null = null;
+  const underV1 = (file: string) => String(file).includes(`${path.sep}v1`);
+  const share: ShareFs = {
+    mkdir: (dir) => (hung && underV1(dir) ? never : fs.promises.mkdir(dir)),
+    open: async (file, flags, mode) => {
+      const held = gate;
+      if (held && String(file).includes(held.match)) {
+        gate = null;
+        await held.opened;
+      }
+      return fs.promises.open(file, flags, mode);
+    },
+    rm: (file, options) => fs.promises.rm(file, options),
+    readdir: (dir) => fs.promises.readdir(dir),
+    stat: (file) => (hung && underV1(file) ? never : fs.promises.stat(file)),
+  };
   return {
-    mockRestore() {
-      stat.mockRestore();
-      mkdir.mockRestore();
+    share,
+    hang() {
+      hung = true;
+    },
+    mount() {
+      hung = false;
+    },
+    gateOnce(match: string): () => void {
+      let release!: () => void;
+      const opened = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      gate = { match, opened };
+      return release;
     },
   };
 }
@@ -431,27 +459,19 @@ describe('an older answer cannot replace a newer one', () => {
   });
 
   it('drops a write that wakes up after its deadline, before its rename', async () => {
-    const { root, answers } = setup({ timing: { shareMs: 40 } });
+    const share = fakeShare();
+    const { root, make } = setup({ timing: { shareMs: 40 }, share: share.share });
     const first = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    let release = () => undefined as void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const realOpen = fs.promises.open;
-    let held = 0;
-    const open = spyOn(fs.promises, 'open').mockImplementation((async (
-      ...args: Parameters<typeof fs.promises.open>
-    ) => {
-      if (String(args[0]).includes(`.${CARD}.json.tmp-`) && held === 0) {
-        held += 1;
-        await gate;
-      }
-      return realOpen(...args);
-    }) as typeof fs.promises.open);
+    let current = { doc: cardDoc('vm.lead', 'Q1'), sha256: first };
+    // The card read answers at once: only the gated write spends the 40 ms deadline.
+    const answers = make({ readCard: async () => current as never });
+    // Held past the deadline: the write must expire while its temporary file is open.
+    const release = share.gateOnce(`.${CARD}.json.tmp-`);
     try {
       await answers.submitSet([entry(CARD, first)], 'Mac');
       expect(answers.list()[0].share.state).toBe('failed');
       const second = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+      current = { doc: cardDoc('vm.lead', 'Q1', { seq: 2 }), sha256: second };
       await answers.submitSet([entry(CARD, second, { cardSeq: 2 })], 'Mac');
       expect(onShare(root)).toBe(2);
       release();
@@ -461,7 +481,7 @@ describe('an older answer cannot replace a newer one', () => {
         fs.readdirSync(path.join(root, 'v1', 'answers')).filter((f) => f.startsWith('.'))
       ).toEqual([]);
     } finally {
-      open.mockRestore();
+      release();
     }
   });
 
@@ -668,7 +688,8 @@ describe('an unavailable share', () => {
   });
 
   it('a hung card read refuses the entry and frees the queue', async () => {
-    const { root, make } = setup({ timing: { readMs: 20 } });
+    // A zero budget loses to a never-settling read on the next timer tick: no wall-clock race under load.
+    const { root, make } = setup({ timing: { readMs: 0 } });
     const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
     const answers = make({ readCard: () => new Promise(() => undefined) });
     const results = await soon(
@@ -683,20 +704,30 @@ describe('an unavailable share', () => {
   });
 
   it('a send on a hung share ends inside its budget; what is stored is retried', async () => {
-    const { root, answers } = setup({ timing: { shareMs: 30, sendBudgetMs: 60 } });
+    const share = fakeShare();
+    const { root, make } = setup({
+      timing: { shareMs: 30, sendBudgetMs: 60 },
+      share: share.share,
+    });
+    const shas = new Map<string, string>();
     const cards = ['Q1', 'Q2', 'Q3', 'Q4'].map((id) => {
       const sha = writeCard(root, cardDoc('vm.lead', id));
+      shas.set(`vm.lead--${id}`, sha);
       return entry(`vm.lead--${id}`, sha);
     });
-    const stat = hangShare();
+    // Card reads answer at once, so only the hung share writes spend the send's budget.
+    const answers = make({
+      readCard: async (id) =>
+        ({ doc: cardDoc('vm.lead', id.slice('vm.lead--'.length)), sha256: shas.get(id) ?? '' }) as never,
+    });
     let results;
-    const started = Date.now();
+    share.hang();
     try {
+      // `soon` fails a hang; the budget, not a wall-clock measurement, ends the send.
       results = await soon(answers.submitSet(cards, 'Mac'));
     } finally {
-      stat.mockRestore();
+      share.mount();
     }
-    expect(Date.now() - started).toBeLessThan(1000);
     // Recorded while the budget lasted; the entries after it were not checked, so not recorded.
     const outcomes = results.map((r) => r.code ?? r.outcome);
     expect(outcomes).toContain('recorded');
@@ -733,7 +764,11 @@ describe('an unavailable share', () => {
   });
 
   it('a retry pass on a hung share ends inside its budget, and the flag clears', async () => {
-    const { root, answers } = setup({ timing: { shareMs: 20, retryBudgetMs: 50 } });
+    const share = fakeShare();
+    const { root, answers } = setup({
+      timing: { shareMs: 20, retryBudgetMs: 50 },
+      share: share.share,
+    });
     fs.writeFileSync(path.join(root, 'v1', 'answers'), 'blocker');
     const cards = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8'].map((id) =>
       entry(`vm.lead--${id}`, writeCard(root, cardDoc('vm.lead', id)))
@@ -743,11 +778,11 @@ describe('an unavailable share', () => {
     fs.rmSync(path.join(root, 'v1', 'answers'));
     const attempts = () => answers.list().reduce((sum, e) => sum + e.share.attempts, 0);
     const before = attempts();
-    const share = hangShare();
+    share.hang();
     try {
       await soon(answers.retryPending(), 1000);
     } finally {
-      share.mockRestore();
+      share.mount();
     }
     // Out of budget before the last record: what is left waits, its attempts uncounted.
     expect(attempts() - before).toBeLessThan(cards.length);
@@ -1745,15 +1780,21 @@ import http from 'http';
 import { openCardFile, sendFileBytes } from './status-files.mjs';
 const count = () => fs.readdirSync('/proc/self/fd').length;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let inflight = 0;
 const server = http.createServer(async (req, res) => {
-  // As the route does, with the client gone by the time the file is open.
-  const media = await openCardFile(process.argv[2], 'vm.lead', 'c/v.mp4');
-  await sleep(20);
+  inflight += 1;
   try {
-    res.setHeader('Content-Length', String(media.size));
-    await sendFileBytes(media.handle, res, 0, media.size - 1);
+    // As the route does, with the client gone by the time the file is open.
+    const media = await openCardFile(process.argv[2], 'vm.lead', 'c/v.mp4');
+    await sleep(20);
+    try {
+      res.setHeader('Content-Length', String(media.size));
+      await sendFileBytes(media.handle, res, 0, media.size - 1);
+    } finally {
+      await media.handle.close().catch(() => undefined);
+    }
   } finally {
-    await media.handle.close().catch(() => undefined);
+    inflight -= 1;
   }
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -1770,13 +1811,17 @@ await Promise.all(
     })
   )
 );
-await sleep(400);
-console.log(JSON.stringify({ baseline, after: count() }));
+// The handlers, not a fixed sleep, say when the count is meaningful: once none is in flight every opened
+// file is closed. A fixed 400 ms counted mid-request on a loaded machine.
+const deadline = Date.now() + 10_000;
+while (inflight > 0 && Date.now() < deadline) await sleep(5);
+console.log(JSON.stringify({ baseline, after: count(), inflight }));
 process.exit(0);
 `
       );
       const output = execFileSync('node', [harness, root], { encoding: 'utf8', timeout: 15_000 });
-      const { baseline, after } = JSON.parse(output);
+      const { baseline, after, inflight } = JSON.parse(output);
+      expect(inflight).toBe(0);
       expect(after).toBeLessThanOrEqual(baseline + 5);
     }, 25_000);
   });
@@ -2031,12 +2076,14 @@ process.exit(0);
     });
 
     it('an entry that was refused is not remembered: its retry can be recorded', async () => {
-      const { root, make } = setup({ timing: { readMs: 20 } });
+      const { root, make } = setup();
       const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
       let hung = true;
       const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
       const answers = make({
-        readCard: (id) => (hung ? new Promise(() => undefined) : reader.readCardNow(id)),
+        // The read that timed out, without racing a wall-clock budget: the pending refusals are the subject here.
+        readCard: (id) =>
+          hung ? Promise.reject(new DeadlineExceededError('Status card read')) : reader.readCardNow(id),
       });
       const draft = [entry(CARD, sha, { choice: [], note: 'x', entryId: NOTE_ID })];
       expect((await answers.submitSet(draft, 'Mac'))[0].code).toBe('share_unavailable');
