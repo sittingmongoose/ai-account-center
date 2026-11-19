@@ -367,8 +367,11 @@ pub fn scan_codex_process_homes(scan: Option<&ScanProcesses>) -> CodexProcessSca
 /// Same-user processes from Linux `/proc`. Any inspection failure beyond a
 /// vanished process fails the whole scan, as the TS reader does.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
 pub fn read_processes() -> Result<Vec<CodexProcessSnapshot>, ()> {
     use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid has no arguments, memory access or failure state
+    // (the aac-files::path::uid pattern).
     let uid = unsafe { libc::getuid() };
     let entries = std::fs::read_dir("/proc").map_err(|_| ())?;
     let mut processes = Vec::new();
