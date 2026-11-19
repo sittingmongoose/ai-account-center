@@ -1,4 +1,5 @@
 import { lifecyclePlan } from '../../shared/private-file-lease';
+import { serialized } from './account-lifecycle-queue';
 import { randomBytes } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
 import { stateFingerprint } from './account-confirmations';
@@ -415,6 +416,37 @@ export class ClaudeAccountLifecycle {
     return this.restoreFingerprint(entry);
   }
 
+  private purgeQueue(): string {
+    return this.ccsDir() + '\\0claude-purge';
+  }
+
+  private async reservePurge(
+    trashId: string,
+    reviewed?: string,
+    dueBy?: number
+  ): Promise<ClaudeTrashEntry> {
+    try {
+      return await updateTrash(this.ccsDir(), async (entries) => {
+        const entry = entries.find((candidate) => candidate.trashId === trashId);
+        if (!entry || (entry.state !== 'trashed' && entry.state !== 'deleting'))
+          throw new ClaudeLifecycleError('unknown_trash');
+        if (reviewed !== undefined && this.purgeFingerprint(entry) !== reviewed)
+          throw new ClaudeLifecycleError('confirmation_stale');
+        if (trashEntryIsDefault(entry)) throw new ClaudeLifecycleError('account_protected');
+        if (dueBy !== undefined && !(Date.parse(entry.purgeAfter) <= dueBy))
+          throw new ClaudeLifecycleError('unknown_trash');
+        const deleting = { ...entry, state: 'deleting' as const };
+        return {
+          next: entries.map((candidate) => (candidate === entry ? deleting : candidate)),
+          result: deleting,
+        };
+      });
+    } catch (error) {
+      if (error instanceof ClaudeLifecycleError) throw error;
+      throw new ClaudeLifecycleError('purge_failed');
+    }
+  }
+
   /**
    * Delete one trash entry now, before its 30 days are up, on both hosts
    * through the same transport as Remove. An unreachable host keeps the entry
@@ -424,14 +456,11 @@ export class ClaudeAccountLifecycle {
    */
   async purgeOne(trashId: string, reviewed?: string): Promise<{ trashId: string }> {
     this.assertEnabled();
-    const entry = await this.findTrash(trashId).catch(() => null);
-    if (!entry || (entry.state !== 'trashed' && entry.state !== 'deleting')) {
-      throw new ClaudeLifecycleError('unknown_trash');
-    }
-    if (reviewed !== undefined && this.purgeFingerprint(entry) !== reviewed) {
-      throw new ClaudeLifecycleError('confirmation_stale');
-    }
-    if (trashEntryIsDefault(entry)) throw new ClaudeLifecycleError('account_protected');
+    return serialized(this.purgeQueue(), () => this.performPurgeOne(trashId, reviewed));
+  }
+
+  private async performPurgeOne(trashId: string, reviewed?: string): Promise<{ trashId: string }> {
+    const entry = await this.reservePurge(trashId, reviewed);
     let failedHost: ClaudeHost | null = null;
     for (const host of CLAUDE_HOSTS) {
       const detail = entry.hosts[host];
@@ -445,15 +474,7 @@ export class ClaudeAccountLifecycle {
         failedHost ??= host;
       }
     }
-    if (failedHost) {
-      await updateTrash(this.ccsDir(), async (entries) => ({
-        next: entries.map((candidate) =>
-          candidate.trashId === trashId ? { ...candidate, state: 'deleting' as const } : candidate
-        ),
-        result: undefined,
-      })).catch(() => undefined);
-      throw new ClaudeLifecycleError('host_unreachable', failedHost);
-    }
+    if (failedHost) throw new ClaudeLifecycleError('host_unreachable', failedHost);
     try {
       await updateTrash(this.ccsDir(), async (entries) => ({
         next: entries.filter((candidate) => candidate.trashId !== trashId),
@@ -468,6 +489,10 @@ export class ClaudeAccountLifecycle {
   /** Delete trash past `purgeAfter`; an unreachable host keeps the entry as `deleting`. */
   async purgeDue(): Promise<number> {
     if (!this.deps.enabled) return 0;
+    return serialized(this.purgeQueue(), () => this.sweepDueTrash());
+  }
+
+  private async sweepDueTrash(): Promise<number> {
     const now = this.now();
     let due: ClaudeTrashEntry[];
     try {
@@ -486,8 +511,13 @@ export class ClaudeAccountLifecycle {
       return 0;
     }
     const purged = new Set<string>();
-    const pending = new Set<string>();
-    for (const entry of due) {
+    for (const { trashId } of due) {
+      let entry: ClaudeTrashEntry;
+      try {
+        entry = await this.reservePurge(trashId, undefined, now);
+      } catch {
+        continue;
+      }
       let complete = true;
       for (const host of CLAUDE_HOSTS) {
         const detail = entry.hosts[host];
@@ -501,15 +531,11 @@ export class ClaudeAccountLifecycle {
           complete = false;
         }
       }
-      (complete ? purged : pending).add(entry.trashId);
+      if (complete) purged.add(entry.trashId);
     }
-    if (purged.size === 0 && pending.size === 0) return 0;
+    if (purged.size === 0) return 0;
     await updateTrash(this.ccsDir(), async (entries) => ({
-      next: entries
-        .filter((entry) => !purged.has(entry.trashId))
-        .map((entry): ClaudeTrashEntry =>
-          pending.has(entry.trashId) ? { ...entry, state: 'deleting' } : entry
-        ),
+      next: entries.filter((entry) => !purged.has(entry.trashId)),
       result: undefined,
     })).catch(() => undefined);
     return purged.size;
