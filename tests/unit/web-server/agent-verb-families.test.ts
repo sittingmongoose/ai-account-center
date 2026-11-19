@@ -17,7 +17,7 @@ import {
   runAnalyticsRemoteScan,
   type AnalyticsRemoteRequest,
 } from '../../../src/web-server/services/analytics-remote-transport';
-import { stringify } from 'yaml';
+import { dump } from 'js-yaml';
 import { createEmptyUnifiedConfig } from '../../../src/config/schemas/unified-config';
 
 const ENV_KEYS = ['AAC_AGENT_VERBS', 'AAC_AGENT_VERB_FAMILIES', 'CCS_HOME'] as const;
@@ -103,7 +103,8 @@ describe('per-family verb modes', () => {
     expect(agentVerbMode('key-store')).toBe('on');
   });
   it('an unreadable config leaves the scalar ceiling intact', () => {
-    fs.writeFileSync(path.join(home, 'config.yaml'), '- not a mapping\n');
+    fs.mkdirSync(path.join(home, '.ccs'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccs', 'config.yaml'), '- not a mapping\n');
     process.env.AAC_AGENT_VERBS = 'on';
     expect(agentVerbMode('signin-expiry')).toBe('on');
     expect(agentVerbMode('scan-usage')).toBe('on');
@@ -114,7 +115,8 @@ describe('per-family verb modes', () => {
       agentVerbs: 'on' as const,
       agentVerbFamilies: { 'signin-expiry': 'shadow' as const },
     };
-    fs.writeFileSync(path.join(home, 'config.yaml'), stringify(config));
+    fs.mkdirSync(path.join(home, '.ccs'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccs', 'config.yaml'), dump(config));
     expect(agentVerbMode('signin-expiry')).toBe('shadow');
     expect(agentVerbMode('quota-read')).toBe('off');
   });
