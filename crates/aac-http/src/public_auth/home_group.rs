@@ -176,7 +176,6 @@ impl Home {
             .feeds
             .latest(&crate::account_usage::source(platform, secure))
             .ok()?;
-        let dashboard: Value = serde_json::from_str(generation.data.get()).ok()?;
         let updated = generation
             .id
             .parse::<i64>()
