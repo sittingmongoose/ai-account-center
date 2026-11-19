@@ -94,7 +94,9 @@ if (mode === 'cut') {
     AAC_RUST_GROUP_HOME: 'off',
     AAC_RUST_HOME_VIEW: 'off',
     AAC_RUST_GROUP_APP_UPDATES: 'off',
-    AAC_RUST_GROUP_COLLECTION: 'off',
+    // The migration lanes serve Accounts and Re-check natively in both modes, so the native
+    // collection runs here too; the worker still owns its remaining routes.
+    AAC_RUST_GROUP_COLLECTION: 'on',
     AAC_AGENT_VERBS: 'off',
     AAC_AGENT_TRANSPORT: 'off',
     AAC_STATUS_DOORBELL: 'off',
