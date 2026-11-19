@@ -154,7 +154,7 @@ fn unavailable(record: &ProfileRecord, status: &str, validation: &str) -> Value 
 
 /// The process's own cooldown records, beside the persisted file (`inProcessCooldowns`).
 #[derive(Default)]
-struct Cooldowns {
+pub(crate) struct Cooldowns {
     entries: HashMap<String, i64>,
 }
 
@@ -637,23 +637,23 @@ fn timestamp_value(word: Option<&str>) -> Value {
 
 /// The per-profile cache seam (`getProfile`).
 #[derive(Default)]
-struct QuotaService {
+pub(crate) struct QuotaService {
     caches: HashMap<String, Cache>,
 }
 
 /// One read's fixed inputs: the scope, its registry state, the live proof and the clock.
-struct Read<'a> {
-    ccs: &'a Path,
-    state: &'a RegistryState,
-    live: Option<&'a LiveIdentity>,
-    now: i64,
+pub(crate) struct Read<'a> {
+    pub(crate) ccs: &'a Path,
+    pub(crate) state: &'a RegistryState,
+    pub(crate) live: Option<&'a LiveIdentity>,
+    pub(crate) now: i64,
 }
 
 impl QuotaService {
     /// `getAccounts({refresh})` for the registry's profiles. `worker` receives the profile id and
     /// returns the worker snapshot (or `None`, the TS throw). The second registry read rechecks
     /// identity and revision before a sample is published, exactly as TS does.
-    fn get_accounts(
+    pub(crate) fn get_accounts(
         &mut self,
         read: &Read<'_>,
         worker: &mut dyn FnMut(&str) -> Option<Value>,
@@ -840,12 +840,8 @@ impl QuotaService {
 
 /// The route's `/quotas` answer: the runtime's own accounts through the already-ported
 /// `publicQuotas` (`public-reads.ts`).
-fn public_quotas(accounts: &[Value], now: i64, clock: i64) -> Option<Value> {
-    let envelope = aac_status::read_context::Envelope {
-        data: json!({ "accounts": accounts, "now": now as f64, "clock": clock as f64 }),
-        presentation: aac_status::read_context::Presentation::empty(),
-    };
-    aac_views::antigravity::quotas(envelope).ok()
+pub(crate) fn public_quotas(accounts: &[Value], now: i64, clock: i64) -> Option<Value> {
+    aac_views::antigravity::quotas_words(accounts, now as f64, clock as f64)
 }
 
 /// The wall clock for a route answer.
@@ -929,70 +925,17 @@ impl Worker {
         })
     }
 
+    pub(crate) fn invoke_with(&self, extra: &[&str], packet: &Value) -> Option<Value> {
+        invoke_script(&self.python, &self.script, extra, packet)
+    }
+
     fn invoke(&self, packet: &Value) -> Option<Value> {
-        let request = serde_json::to_vec(packet).ok()?;
-        if request.len() > MAX_WORKER_BYTES {
-            return None;
-        }
-        use std::io::{Read, Write};
-        use std::process::{Command, Stdio};
-        let mut child = Command::new(&self.python)
-            .arg("-I")
-            .arg(&self.script)
-            .arg("--collector-dir")
-            .arg(&self.collectors)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        if let Some(mut stdin) = child.stdin.take()
-            && (stdin.write_all(&request).is_err() || stdin.flush().is_err())
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        let mut stdout = child.stdout.take()?;
-        let reader = std::thread::spawn(move || {
-            let mut body = Vec::new();
-            let mut chunk = [0u8; 8192];
-            loop {
-                match stdout.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        body.extend_from_slice(&chunk[..n]);
-                        if body.len() > MAX_WORKER_BYTES + 1 {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            body
-        });
-        let deadline = std::time::Instant::now() + WORKER_TIMEOUT;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-            }
-        };
-        let body = reader.join().ok()?;
-        let status = status?;
-        if !status.success() || body.len() > MAX_WORKER_BYTES {
-            return None;
-        }
-        let value: Value = serde_json::from_slice(&body).ok()?;
-        value.as_object()?;
-        Some(value)
+        invoke_script(
+            &self.python,
+            &self.script,
+            &["--collector-dir", &self.collectors.to_string_lossy()],
+            packet,
+        )
     }
 
     /// `collectQuota(request)`: the saved credential bound to its revision, then one worker call.
@@ -1046,6 +989,77 @@ impl Worker {
         }
         Some(identity)
     }
+}
+
+/// One bounded script call: `python -I script <extra…>` with one JSON object in and out.
+pub(crate) fn invoke_script(
+    python: &Path,
+    script: &Path,
+    extra: &[&str],
+    packet: &Value,
+) -> Option<Value> {
+    let request = serde_json::to_vec(packet).ok()?;
+    if request.len() > MAX_WORKER_BYTES {
+        return None;
+    }
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(python)
+        .arg("-I")
+        .arg(script)
+        .args(extra)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    if let Some(mut stdin) = child.stdin.take()
+        && (stdin.write_all(&request).is_err() || stdin.flush().is_err())
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut body = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    body.extend_from_slice(&chunk[..n]);
+                    if body.len() > MAX_WORKER_BYTES + 1 {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        body
+    });
+    let deadline = std::time::Instant::now() + WORKER_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let body = reader.join().ok()?;
+    let status = status?;
+    if !status.success() || body.len() > MAX_WORKER_BYTES {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(&body).ok()?;
+    value.as_object()?;
+    Some(value)
 }
 
 fn encode_base64(bytes: &[u8]) -> String {
