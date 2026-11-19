@@ -316,14 +316,14 @@ pub fn opened_path(file: &File) -> Option<PathBuf> {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::ffi::OsStringExt;
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
         };
-        let handle = file.as_raw_handle() as *mut std::ffi::c_void;
+        let handle = file.as_raw_handle();
         let mut buffer = vec![0u16; 512];
-        let mut length = 0;
-        loop {
+        let length = loop {
             // SAFETY: the buffer is a live, zeroed u16 slice and the handle is owned by `file`.
             let written = unsafe {
                 GetFinalPathNameByHandleW(
@@ -336,15 +336,15 @@ pub fn opened_path(file: &File) -> Option<PathBuf> {
             if written == 0 {
                 return None;
             }
-            length = written as usize;
+            let length = written as usize;
             if length < buffer.len() {
-                break;
+                break length;
             }
             buffer.resize(length + 1, 0);
-        }
-        let mut buffer = buffer;
-        buffer.truncate(length);
-        Some(PathBuf::from(String::from_utf16_lossy(&buffer)))
+        };
+        Some(PathBuf::from(std::ffi::OsString::from_wide(
+            &buffer[..length],
+        )))
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -410,7 +410,15 @@ fn open_named(
 ) -> Result<(File, Meta), Read> {
     let before = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Read::Absent),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            #[cfg(windows)]
+            if error.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_PATH_NOT_FOUND as i32)
+            {
+                return Err(missing_windows_path(path));
+            }
+            return Err(Read::Absent);
+        }
         Err(error) => return Err(Read::Unreadable(error.kind())),
     };
     if before.link() {
@@ -430,6 +438,25 @@ fn open_named(
         }
     })?;
     opened_checks(file, &before, policy)
+}
+
+/// Windows reports a child of a regular file as a missing path. Distinguish that
+/// from a genuinely absent name without opening an entry for data.
+#[cfg(windows)]
+fn missing_windows_path(path: &Path) -> Read {
+    for ancestor in path
+        .ancestors()
+        .skip(1)
+        .take_while(|p| !p.as_os_str().is_empty())
+    {
+        match fs::metadata(ancestor) {
+            Ok(meta) if meta.is_dir() => break,
+            Ok(_) => return Read::Unreadable(io::ErrorKind::NotADirectory),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Read::Unreadable(error.kind()),
+        }
+    }
+    Read::Absent
 }
 
 /// The leaf relative to a pinned chain of the folders below `base` (Wonder L12). Each folder is
@@ -858,6 +885,18 @@ mod tests {
             read(&file.join("below"), &plain(9)),
             Read::Unreadable(io::ErrorKind::NotADirectory)
         ));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_open_windows_file_proves_its_canonical_path() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("rapport-é.json");
+        fs::write(&path, b"{}")?;
+        let file = File::open(&path)?;
+
+        assert_eq!(opened_path(&file), Some(path.canonicalize()?));
         Ok(())
     }
 
