@@ -474,12 +474,16 @@ async fn answers_post(
 /// The display zone the Status producers format in: the saved preference, else the reference's
 /// default. A zone the database does not hold declines (the reference's `Intl` throw).
 fn status_zone(root: &Path) -> Option<(String, crate::zone_facts::ZoneOffsets)> {
-    let preferences = crate::account_reads::preferences(root)?;
-    let name = preferences
-        .get("timeZone")
-        .and_then(Json::as_str)
-        .unwrap_or("America/New_York")
-        .to_owned();
+    // The preferences reader answers the saved zone; an absent file is the reference's default
+    // (the TypeScript reader falls back the same way), never a missing zone.
+    let name = crate::account_reads::preferences(root)
+        .and_then(|preferences| {
+            preferences
+                .get("timeZone")
+                .and_then(Json::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "America/New_York".to_owned());
     let now = i64::try_from(now_ms()).ok()?;
     let facts = crate::zone_facts::server_zone_facts(&name, now)?;
     Some((name, facts))
