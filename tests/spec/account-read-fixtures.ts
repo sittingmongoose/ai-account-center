@@ -342,8 +342,9 @@ export function preferencesForms(): FileForm[] {
       ),
     },
     {
+      // The admit table is the engine's IANA list now, so this zone is Rust-served.
       name: 'zone outside the admitted list',
-      rust: false,
+      rust: true,
       setup: primary(prefs({ timeZone: 'Asia/Kolkata' })),
     },
     {
