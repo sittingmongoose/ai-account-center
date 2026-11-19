@@ -109,7 +109,8 @@ let passwordHash = '';
 let originalEnvironment: Record<string, string | undefined> = {};
 let tempHome = '';
 let staticDir = '';
-let instance: Awaited<ReturnType<typeof startServer>> | undefined;
+let instance:
+  (Awaited<ReturnType<typeof startServer>> & { restartPublic?: () => Promise<void> }) | undefined;
 let baseUrl = '';
 let processFailures: unknown[] = [];
 const recordProcessFailure = (reason: unknown) => processFailures.push(reason);
@@ -130,7 +131,10 @@ beforeEach(async () => {
   tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-auth-hardening-'));
   staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-auth-hardening-ui-'));
   fs.mkdirSync(path.join(staticDir, 'app'));
-  fs.writeFileSync(path.join(staticDir, 'app', 'index.html'), '<main id="aac-frame-fixture"></main>');
+  fs.writeFileSync(
+    path.join(staticDir, 'app', 'index.html'),
+    '<main id="aac-frame-fixture"></main>'
+  );
   fs.writeFileSync(path.join(staticDir, 'dashboard.wasm'), Buffer.from([0, 97, 115, 109]));
   process.env.CCS_HOME = tempHome;
   process.env.CCS_DIR = path.join(tempHome, '.ccs');
@@ -173,6 +177,9 @@ beforeEach(async () => {
 
   instance = await startServer({ port: 0, host: '127.0.0.1', staticDir });
   baseUrl = `http://127.0.0.1:${(instance.server.address() as AddressInfo).port}`;
+  // The composed listener primes its offline cache before accepting public HTTP.
+  // Measure the route calls and refusals after the listener is ready.
+  if (instance.restartPublic) for (const stub of serviceStubs) stub.mockClear();
 });
 
 afterEach(async () => {
@@ -308,6 +315,7 @@ describe('F1: API session guard whatever the URL letter case', () => {
 
   it('keeps localhost access without auth on canonical paths only', async () => {
     process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+    await instance?.restartPublic?.();
     const canonical = await send('GET', '/api/codex/profiles');
     expect(canonical.status).toBe(200);
     for (const variant of caseVariants('/api/codex/profiles')) {
@@ -395,10 +403,18 @@ describe('F2: malformed login requests stay inside the request', () => {
   });
 
   it('turns a bcrypt failure into a 401', async () => {
-    const compare = spyOn(bcrypt, 'compare').mockImplementation((() =>
-      Promise.reject(new Error('PRIVATE_BCRYPT_FAILURE'))) as never);
+    const compare = instance?.restartPublic
+      ? undefined
+      : spyOn(bcrypt, 'compare').mockImplementation((() =>
+          Promise.reject(new Error('PRIVATE_BCRYPT_FAILURE'))) as never);
+    if (instance?.restartPublic) {
+      // A hash with valid framing and invalid bcrypt encoding reaches the real verifier.
+      process.env.CCS_DASHBOARD_PASSWORD_HASH =
+        '$2b$04$' + 'PRIVATE_BCRYPT_FAILURE'.padEnd(53, '!');
+      await instance.restartPublic();
+    }
     const response = await login({ username: USERNAME, password: PASSWORD });
-    expect(compare).toHaveBeenCalledTimes(1);
+    if (compare) expect(compare).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(401);
     const text = await response.text();
     expect(JSON.parse(text)).toEqual({
