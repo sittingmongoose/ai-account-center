@@ -842,9 +842,9 @@ pub fn compose(envelope: Envelope) -> Option<V> {
             let typed = serde_json::from_value::<crate::scoreboard::ViewIn>(native_input(view.clone())).ok()?;
             {
                 if let Ok(by_model) = crate::scoreboard::by_model(&typed) {
-                    view["byModel"] = native_order(serde_json::to_value(by_model).ok()?);
+                    view["byModel"] = serde_json::to_value(by_model).ok()?;
                     if let Ok(groups) = crate::scoreboard::group_keys(&typed) {
-                        view["groups"] = native_order(serde_json::to_value(groups).ok()?);
+                        view["groups"] = serde_json::to_value(groups).ok()?;
                     }
                 }
             }
@@ -856,21 +856,10 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     ctx.valid().then_some(view)
 }
 
-fn native_order(value: V) -> V {
-    match value {
-        V::Array(items) => json!(items.into_iter().map(native_order).collect::<Vec<_>>()),
-        V::Object(object) => {
-            let mut items = object.into_iter().collect::<Vec<_>>();
-            items.sort_by(|a, b| a.0.cmp(&b.0));
-            let mut out = json!({});
-            for (k, v) in items {
-                out[k] = native_order(v);
-            }
-            out
-        }
-        value => value,
-    }
-}
+// byModel and groups keep their struct field order: the NAPI module TS calls
+// (`composeByModel`, `composeGroups`) serializes the same structs with `preserve_order`
+// (this crate's serde_json feature), so both paths emit the same member order. The
+// earlier key sort here mirrored a sorted-map build that no longer exists.
 
 // JSON.stringify emits integral JS Numbers as integer tokens. Match the input the
 // existing Node adapter parses, including numeric fields its DTO declares as i64.
