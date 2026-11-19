@@ -451,6 +451,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/cli/config_write.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/cli/tls.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/feed.rs",
       "kind": "internal",
       "evidence": [],

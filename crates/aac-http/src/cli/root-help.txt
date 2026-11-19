@@ -15,7 +15,7 @@ Global option: --config-dir PATH selects the existing account configuration dire
 
 Examples:
   ai-account-center dashboard --host localhost --port 3000 --no-open
-  ai-account-center dashboard auth setup
+  ai-account-center dashboard store status
   ai-account-center codex-auth show
   ai-account-center codex-auth login work
   ai-account-center antigravity signin party
