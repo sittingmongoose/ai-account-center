@@ -107,6 +107,8 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac",
  "httpdate",
+ "hyper",
+ "hyper-util",
  "if-addrs",
  "ipnet",
  "libc",

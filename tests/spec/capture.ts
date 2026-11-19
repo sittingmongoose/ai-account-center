@@ -10,13 +10,18 @@ const root = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const spec = path.join(root, 'tests/spec');
 const fixture = JSON.parse(fs.readFileSync(path.join(spec, 'fixture.json'), 'utf8'));
 const regenerate = process.argv.includes('--regenerate');
+const composed = process.argv.includes('--composed');
+assert.ok(!composed || !regenerate, 'record the contract from TypeScript');
+const differences: string[] = [];
+let matched = 0;
+let declines = 0;
 const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
-const rustBinary = path.join(root, 'dist/native/aac-http');
-if (rustMode !== 'off')
-  assert.ok(fs.existsSync(rustBinary), 'on/shadow contract checks require the Nas1-built binary');
+const rustBinary = process.env.AAC_RUST_PUBLIC_BINARY ?? path.join(root, 'dist/native/aac-http');
+if (composed || rustMode !== 'off')
+  assert.ok(fs.existsSync(rustBinary), 'contract replay requires an existing Rust binary');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-contract-'));
 const ccs = path.join(home, '.ccs');
-fs.mkdirSync(ccs, { recursive: true });
+fs.mkdirSync(ccs, { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(ccs, 'fixture.json'), JSON.stringify(fixture));
 for (const key of Object.keys(process.env)) if (key.startsWith('CCS_')) delete process.env[key];
 Object.assign(process.env, {
@@ -30,7 +35,16 @@ Object.assign(process.env, {
   // The M0 contract captures the routes without the optional Home view. The Home group is default-ready
   // (on when unset under mode on), so pin it and the D7 switch off here to keep the goldens the plain answers.
   AAC_RUST_HOME_VIEW: 'off',
-  AAC_RUST_GROUP_HOME: 'off',
+  AAC_RUST_GROUP_HOME: composed && !process.argv.includes('--plain-home') ? 'on' : 'off',
+  ...(composed
+    ? {
+        // The M0 contract uses scripted app-update outcomes. The lane H native owner
+        // is qualified separately with fixture installers rather than live hosts.
+        AAC_RUST_GROUP_APP_UPDATES: 'off',
+        AAC_AGENT_TRANSPORT: 'off',
+        AAC_AGENT_VERBS: 'off',
+      }
+    : {}),
 });
 spyOn(os, 'homedir').mockReturnValue(home);
 // A few legacy readers use process.env.HOME directly. Reject private paths
@@ -40,11 +54,17 @@ const moduleRoot = fs.realpathSync(path.join(root, 'node_modules'));
 const denied = new Set<string>();
 function guardFile(input: any) {
   if (typeof input !== 'string' && !(input instanceof URL)) return;
-  const target = path.resolve(input instanceof URL ? fileURLToPath(input) : input);
-  if ([home, root, moduleRoot].some((base) => target === base || target.startsWith(base + '/')))
+  const slash = (file: string) =>
+    process.platform === 'win32' ? file.replaceAll(path.sep, '/').toLowerCase() : file;
+  const target = slash(path.resolve(input instanceof URL ? fileURLToPath(input) : input));
+  if (
+    [home, root, moduleRoot]
+      .map(slash)
+      .some((base) => target === base || target.startsWith(base + '/'))
+  )
     return;
   if (
-    target.startsWith('/home/') ||
+    /^(?:[a-z]:)?\/home\//.test(target) ||
     target.startsWith('/mnt/Cursor/') ||
     /\/(?:\.ccs|\.claude|\.codex|\.t3)(?:\/|$)/.test(target)
   ) {
@@ -95,10 +115,13 @@ const realSpawn = cp.spawn.bind(cp);
 const realSpawnSync = cp.spawnSync.bind(cp);
 const fixtureSpawn = (...args: any[]) => {
   if (
-    rustMode !== 'off' &&
     args[0] === rustBinary &&
     Array.isArray(args[1]) &&
-    args[1].length === 0
+    ((rustMode !== 'off' && args[1].length === 0) ||
+      (composed &&
+        args[1].length === 1 &&
+        args[1][0] === '--public' &&
+        args[2]?.env?.CCS_DIR === ccs))
   )
     return realSpawn(...(args as Parameters<typeof realSpawn>));
   throw new Error('Fixture process boundary');
@@ -282,6 +305,14 @@ config.dashboard_auth = {
   password_hash: bcrypt.hashSync('fixture-password-only', 4),
   session_timeout_hours: 24,
 };
+if (composed) {
+  config.rustService = {
+    mode: 'on',
+    frontDoor: 'rust',
+    store: 'on',
+    groups: { home: 'on', status: 'on', analytics: 'on', writes: 'on', 'app-updates': 'on' },
+  };
+}
 saveUnifiedConfig(config);
 // Use the owner's writer shape so the Rust subset is exercised, not its TS fallback.
 (
@@ -293,13 +324,15 @@ fs.mkdirSync(ui);
 fs.mkdirSync(path.join(ui, 'app'));
 fs.writeFileSync(path.join(ui, 'app', 'index.html'), '<div id="aac-app-fixture"></div>');
 const { startServer } = await import('../../src/web-server');
-const instance = await startServer({
-  port: 0,
-  host: '127.0.0.1',
-  staticDir: ui,
-  rustServiceBinary: rustBinary,
-});
-const base = `http://127.0.0.1:${(instance.server.address() as any).port}`;
+const serverOptions = { port: 0, host: '127.0.0.1', staticDir: ui, rustServiceBinary: rustBinary };
+const instance = composed
+  ? await (
+      await import('../../src/web-server/compose-server')
+    ).startComposedServer(serverOptions, rustBinary)
+  : await startServer(serverOptions);
+const base =
+  'http://127.0.0.1:' +
+  (instance.publicAddress ?? (instance.server.address() as import('net').AddressInfo)).port;
 const { apiRoutes } = await import('../../src/web-server/routes');
 const codexSummary = await import('../../src/codex-auth/codex-auth-dashboard-service');
 const { pairDevice } = await import('../../src/web-server/services/dashboard-device-store');
@@ -382,7 +415,29 @@ function emit(relative: string, data: any) {
   const file = path.join(spec, relative);
   const bytes = JSON.stringify(data, null, 2) + '\n';
   if (regenerate) fs.writeFileSync(file, bytes);
-  else
+  else if (composed && /^contract\/[0-9]/.test(relative)) {
+    const expected = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (bytes === JSON.stringify(expected, null, 2) + '\n') {
+      matched++;
+      return;
+    }
+    const { request, response } = data;
+    if (response.status === 503 && response.body?.code === 'route_unavailable') declines++;
+    const fields = Object.keys(response).filter(
+      (key) => JSON.stringify(response[key]) !== JSON.stringify(expected.response[key])
+    );
+    differences.push(
+      [
+        relative,
+        request.method,
+        request.path,
+        request.role,
+        response.status + '/' + expected.response.status,
+        fields.join('+'),
+        response.body?.code ?? '',
+      ].join(' ')
+    );
+  } else if (!composed || relative !== 'route-source-hashes.json')
     assert.equal(
       fs.readFileSync(file, 'utf8'),
       bytes,
@@ -431,6 +486,8 @@ try {
   // Guards also cover middleware-only routes and top-level static/upgrade registration changes.
   const routeSources = [
     path.join(root, 'src/web-server/index.ts'),
+    path.join(root, 'src/web-server/compose-request.ts'),
+    path.join(root, 'src/web-server/compose-server.ts'),
     path.join(root, 'src/web-server/rust-service.ts'),
     path.join(root, 'src/web-server/rust-service-lifecycle.ts'),
     path.join(root, 'src/web-server/rust-service-transport.ts'),
@@ -452,7 +509,16 @@ try {
       ])
     )
   );
-  for (const [index, route] of inventory.entries())
+  if (composed) {
+    const direct = await fetch(
+      'http://127.0.0.1:' +
+        (instance.server.address() as import('net').AddressInfo).port +
+        '/api/health'
+    );
+    assert.equal(direct.status, 404, 'private fallback refuses requests without the boot proof');
+    await direct.arrayBuffer();
+  }
+  for (const [index, route] of inventory.entries()) {
     for (const role of roles) {
       const auth = await import('../../src/web-server/middleware/auth-middleware');
       for (const ip of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) auth.loginRateLimiter.resetKey(ip);
@@ -471,14 +537,31 @@ try {
         if (role === 'bar') headers['x-ccs-bar-nonce'] = 'f'.repeat(32);
       }
       if (role === 'device') {
-        const paired = await pairDevice({
-          name: 'Fixture device',
-          platform: 'mac',
-          installId: 'fixture-install',
-          appVersion: '0.0.0',
-          address: '127.0.0.1',
-          transport: 'loopback',
-        });
+        const paired = composed
+          ? await (async () => {
+              const result = await fetch(base + '/api/auth/devices/pair', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  username: 'fixture-admin',
+                  password: 'fixture-password-only',
+                  deviceName: 'Fixture device',
+                  platform: 'mac',
+                  installId: '00000000-0000-4000-8000-000000000001',
+                  appVersion: '0.0.0',
+                }),
+              });
+              assert.equal(result.status, 201);
+              return (await result.json()) as { token: string };
+            })()
+          : await pairDevice({
+              name: 'Fixture device',
+              platform: 'mac',
+              installId: 'fixture-install',
+              appVersion: '0.0.0',
+              address: '127.0.0.1',
+              transport: 'loopback',
+            });
         headers.authorization = `Bearer ${paired.token}`;
       }
       if (role === 'hub') headers.authorization = `Bearer ${hubKey}`;
@@ -561,6 +644,14 @@ try {
         response: normalize({ status: response.status, headers: selected, body }),
       });
     }
+    if (
+      'restartPublic' in instance &&
+      route.path === '/api/auth/login' &&
+      route.method === 'POST'
+    ) {
+      await (instance.restartPublic as () => Promise<void>)();
+    }
+  }
   assert.equal(
     // Route/role documents only; named m3-*.json corpora belong to their own parity checks.
     fs.readdirSync(path.join(spec, 'contract')).filter((file) => /^\d{3}-[a-z-]+\.json$/.test(file))
@@ -568,13 +659,13 @@ try {
     inventory.length * roles.length,
     'Stale or missing golden files'
   );
-  if (rustMode === 'on')
+  if (!composed && rustMode === 'on')
     assert.equal(
       instance.rustService.stats.served,
       27,
       'must actually serve health/settings/diag, the session/bar visibility, preferences and registry reads, and the session/bar (and device-scoped) profile reads from Rust after TS role guards'
     );
-  if (rustMode === 'shadow') {
+  if (!composed && rustMode === 'shadow') {
     // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
     // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
     // compared; the Analytics stub stops at its query check before any Rust composition.
@@ -602,11 +693,13 @@ try {
       assert.equal(counters[route]?.served ?? 0, 0, route);
     }
   }
-  if (rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
+  if (!composed && rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
   // Caller headers cannot create a principal or bypass the TS session/query/origin guards.
   const forged = {
     'x-aac-principal': JSON.stringify({ kind: 'session', id: 'forged', role: 'admin' }),
     'x-aac-boot-secret': 'f'.repeat(64),
+    'x-aac-compose-proof': 'f'.repeat(64),
+    'x-aac-compose-access': 'e30',
   };
   for (const route of ['/api/accounts/settings', '/api/diag'])
     assert.equal((await fetch(base + route, { headers: forged })).status, 401);
@@ -653,7 +746,7 @@ try {
     (await fetch(base + '/api/accounts/settings', { headers, method: 'HEAD' })).status,
     200
   );
-  if (rustMode !== 'off') {
+  if (!composed && rustMode !== 'off') {
     const { RustService } = await import('../../src/web-server/rust-service');
     const attached = new RustService('on');
     const descriptor = path.join(ccs, 'run/aac-http.json');
@@ -693,7 +786,24 @@ try {
       'unhealthy service logs and serves TS'
     );
   }
-  await (await import('./rust-proxy')).checkRustProxyBoundary(home);
+  if (!composed) await (await import('./rust-proxy')).checkRustProxyBoundary(home);
+  else {
+    console.log(
+      'Composed M0: ' +
+        matched +
+        ' matched, ' +
+        declines +
+        ' awaiting-composition declines, ' +
+        differences.length +
+        ' differing. Rust private counters: ' +
+        JSON.stringify(instance.rustService.stats)
+    );
+    console.log(
+      'Composed private service: ' + JSON.stringify(instance.rustService.diagnostics().service)
+    );
+    for (const failure of differences) console.log('M0 DIFFER ' + failure);
+    assert.equal(differences.length, 0, 'composed M0 differences');
+  }
   console.log(
     `${inventory.length} routes x ${roles.length} roles captured; rustService=${rustMode}, routing and boundary checks passed`
   );

@@ -132,7 +132,9 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
                 print!("{DASHBOARD_HELP}");
             } else if let Some(name @ ("channels" | "image-analysis" | "thinking")) = subcommand {
                 return Ok(retired(&format!("config {name}")));
-            } else if env::var("AAC_RUST_DASHBOARD").as_deref() == Ok("1") {
+            } else if env::var("AAC_RUST_DASHBOARD").as_deref() == Ok("1")
+                && env::var("AAC_RUST_COMPOSE").as_deref() != Ok("1")
+            {
                 launch(args, root(config_dir))?;
             } else {
                 return typescript(raw);

@@ -884,3 +884,26 @@ the administrative subcommands and other existing commands. The native CLI
 locates the shipped entry point next to the executable or through
 `AAC_TS_CLI`. Release packaging can use the same native executable under
 the five retired names to keep their guidance.
+
+### Composed public listener
+
+Use config/rust-compose.example.yaml in a fixture root and point
+AAC_RUST_PUBLIC_BINARY at the matching local aac-http build. Run the ordinary
+dashboard command with --no-open to leave browser startup to the fixture runner.
+The frontDoor setting selects composition when set to rust. AAC_RUST_COMPOSE=1
+is its environment override. The default selects the TypeScript listener.
+
+The Rust listener owns public authentication, sessions, devices, WebSockets,
+static assets and T3 management. Other API paths go over the private loopback
+connection to the existing guarded route adapters. Those adapters dispatch to the
+enabled Rust groups and retain the established fallbacks. The per-boot proof
+and transport facts are supplied by Rust and stripped at the receiver. The
+companion refuses direct HTTP requests and does not open the TS session store.
+App Updates uses the same L5 pool as the private service when the group is on.
+
+Lane H fixture tests use synthetic installers. The composed M0 capture uses its
+existing synthetic app-update owner and disables agent transport for that run.
+Use tests/spec/capture.ts --composed to compare with the checked-in TS goldens.
+The --plain-home flag matches the original Home setting. With Home enabled,
+the two signed-in Home rows return the newly offered view. The standalone Rust
+public mode remains available for auth and static fixture tests.

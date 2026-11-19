@@ -2,6 +2,7 @@
 // Reply errors are complete Axum responses with headers. Keep them inline like successes
 // so the guard can return a response without a second allocation.
 #![allow(clippy::result_large_err)]
+mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
@@ -54,6 +55,11 @@ pub struct DashboardAccess {
     pub origin_present: bool,
     /// The socket and HTTP authority both establish localhost access.
     pub local_access: bool,
+    session_id: Option<String>,
+    credential_transport: &'static str,
+    direct_loopback: bool,
+    lan_proxy: bool,
+    client_address: Option<String>,
 }
 
 /// Browser or tray identity admitted from a real session cookie or bearer token.
@@ -154,7 +160,7 @@ impl DashboardAuth {
         cache: HubCache,
         ui_root: Option<PathBuf>,
     ) -> Router {
-        self.edges(downstream, cache, ui_root, None, false)
+        self.edges(downstream, cache, ui_root, None, false, None)
     }
 
     fn edges(
@@ -164,11 +170,17 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
         snapshot: Option<PathBuf>,
         partial_api: bool,
+        backend: Option<compose::Backend>,
     ) -> Router {
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
+            if let Some(backend) = backend
+                && api_path(&request.uri().path().to_ascii_lowercase())
+            {
+                return backend.forward(request).await;
+            }
             let headers = request.headers();
             let session = (!api_path(&request.uri().path().to_ascii_lowercase()))
                 .then(|| {
@@ -275,7 +287,16 @@ pub(crate) async fn run_public_at(
         "/api/health",
         axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
     );
-    let router = auth.protect(auth.edges(api, HubCache::default(), ui_root, snapshot, true));
+    let backend = compose::Backend::from_env(address)?;
+    let composed = backend.is_some();
+    let router = auth.protect(auth.edges(
+        api,
+        HubCache::default(),
+        ui_root,
+        snapshot,
+        !composed,
+        backend,
+    ));
     let tls_server = tls::listener(&auth, address.ip()).await;
     println!("aac-http public listening on {address}");
     if browser {
@@ -283,12 +304,16 @@ pub(crate) async fn run_public_at(
     }
     let shutdown = axum_server::Handle::new();
     let signal = shutdown.clone();
+    let feed_shutdown = shutdown.clone();
     let feed_task =
         (std::env::var("AAC_RUST_PUBLIC_EVENT_STDIN").as_deref() == Ok("1")).then(|| {
             let events = auth.events();
             tokio::spawn(async move {
                 if events.read_feed(tokio::io::stdin()).await.is_err() {
                     tracing::warn!("dashboard.event_feed.closed");
+                }
+                if composed {
+                    feed_shutdown.graceful_shutdown(Some(Duration::from_secs(3)));
                 }
             })
         });
@@ -782,6 +807,10 @@ fn authorize(state: &mut AuthRuntime, facts: Facts, ws: bool) -> Decision {
         }
         return Decision::Reply(reply);
     }
+    let session_id = session
+        .as_ref()
+        .filter(|(_, value)| value.authenticated)
+        .map(|(id, _)| id.clone());
     let principal = if let Some(device) = device {
         DashboardPrincipal::Device {
             id: device.id,
@@ -802,6 +831,11 @@ fn authorize(state: &mut AuthRuntime, facts: Facts, ws: bool) -> Decision {
             same_origin: origin,
             origin_present: header(&req.headers, "origin").is_some_and(|value| !value.is_empty()),
             local_access: local,
+            session_id,
+            credential_transport: req.connection.transport.word(),
+            direct_loopback: req.connection.direct_loopback,
+            lan_proxy: req.connection.lan_proxy,
+            client_address: req.connection.client_address(),
         },
         set_cookie,
     )

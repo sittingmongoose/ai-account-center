@@ -5,11 +5,11 @@ mod account_approvals;
 mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
-pub mod cli;
-#[cfg(unix)]
-pub mod app_updates;
 #[cfg(unix)]
 pub mod app_update_routes;
+#[cfg(unix)]
+pub mod app_updates;
+pub mod cli;
 #[cfg(unix)]
 mod feed;
 #[cfg(unix)]

@@ -1,3 +1,4 @@
+import { compositionGuard } from './compose-request';
 /**
  * AI Account Center - Web Server
  *
@@ -87,6 +88,8 @@ export interface ServerOptions {
   rustService?: RustServiceMode;
   /** Optional existing binary; never built or installed at startup. */
   rustServiceBinary?: string;
+  /** Per-boot proof for a single loopback-only Rust composition companion. */
+  compositionProof?: string;
   /** Optional inherited stdin of the Rust public dashboard event receiver. */
   dashboardEventFeed?: Writable;
   host?: string;
@@ -100,6 +103,7 @@ export interface ServerInstance {
   server: http.Server;
   wss: WebSocketServer;
   cleanup: () => void;
+  publicAddress?: AddressInfo;
   /** Private test/diagnostic counters; never exposed by an HTTP route. */
   rustService: RustService;
   /** The optional in-process HTTPS listener (`dashboard_tls.https_listener`); null when off. */
@@ -141,6 +145,13 @@ function logRequestFailure(status: number, error: unknown, headersSent: boolean)
  * Start Express server with WebSocket support
  */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
+  if (
+    options.compositionProof &&
+    (options.host !== '127.0.0.1' ||
+      options.port !== 0 ||
+      !/^[0-9a-f]{64}$/.test(options.compositionProof))
+  )
+    throw new Error('The composition backend requires an ephemeral loopback listener.');
   const app = express();
   // Routes answer only to their canonical spelling; set before the first app.use.
   app.set('case sensitive routing', true);
@@ -149,6 +160,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.set('query parser', 'extended');
   // The stack's name and version in every answer help no legitimate client.
   app.disable('x-powered-by');
+  if (options.compositionProof) app.use(compositionGuard(options.compositionProof));
   // Trusted TLS proxy hop (off unless dashboard_tls.trusted_proxy is set).
   configureDashboardTransport(app);
   const server = http.createServer(app);
@@ -209,7 +221,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   });
 
   // Session middleware (for dashboard auth)
-  const sessionMiddleware = createSessionMiddleware();
+  const sessionMiddleware = options.compositionProof
+    ? (_req: express.Request, _res: express.Response, next: express.NextFunction) => next()
+    : createSessionMiddleware();
   app.use((req, res, next) => {
     if (res.locals.staticAssetRequest === true) {
       next();
@@ -281,6 +295,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   );
 
   const onUpgrade = (request: http.IncomingMessage, socket: Duplex, head: Buffer): void => {
+    if (options.compositionProof) {
+      rejectWebSocketUpgrade(socket, 404, 'WebSocket endpoint not found');
+      return;
+    }
     const pathname = getUpgradePathname(request.url);
     if (!pathname) {
       rejectWebSocketUpgrade(socket, 400, 'Invalid WebSocket upgrade request');
@@ -494,9 +512,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
       // First run with sign-in on and no password: this run's one-time setup code.
-      void prepareFirstRunSetupCode();
+      if (!options.compositionProof) void prepareFirstRunSetupCode();
       // The optional HTTPS listener (dashboard_tls.https_listener, off by default).
-      void startDashboardHttpsListener(app, listenHost, onUpgrade)
+      const https = options.compositionProof
+        ? Promise.resolve(null)
+        : startDashboardHttpsListener(app, listenHost, onUpgrade);
+      void https
         .catch(() => null)
         .then((started) => {
           httpsServer = started;

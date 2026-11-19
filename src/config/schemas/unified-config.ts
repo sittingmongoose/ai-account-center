@@ -53,6 +53,7 @@ export interface UnifiedConfig {
    * budget automatically falls back to it on the same files.
    */
   rustService?: {
+    frontDoor?: 'ts' | 'rust';
     mode?: 'off' | 'shadow' | 'on';
     groups?: {
       home?: 'off' | 'on';

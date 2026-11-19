@@ -1,4 +1,4 @@
-import { rustGroupOn } from './rust-service-groups';
+import { rustComposeSelected, rustGroupOn } from './rust-service-groups';
 /** Starts or attaches to one private Rust boot. No PID from disk is ever signalled. */
 import fs from 'fs';
 import net from 'net';
@@ -581,7 +581,8 @@ async function acquireWithinBudget(
       env: {
         // Windows already returned above; the default re-detects the platform in its own scope.
         ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
-        AAC_RUST_NATIVE_APP_UPDATES: rustGroupOn('app-updates') ? '1' : '0',
+        AAC_RUST_NATIVE_APP_UPDATES:
+          rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, 'services/agent-artifacts.json'),
         AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,

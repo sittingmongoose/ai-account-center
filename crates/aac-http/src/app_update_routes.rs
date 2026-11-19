@@ -50,7 +50,10 @@ impl AppUpdateJobs for LaneHJobs {
 }
 
 fn to_route_reply(reply: crate::app_updates::AppUpdateReply) -> AppUpdateReply {
-    AppUpdateReply { status: reply.status, body: reply.body }
+    AppUpdateReply {
+        status: reply.status,
+        body: reply.body,
+    }
 }
 
 pub(crate) struct BoundJobs {

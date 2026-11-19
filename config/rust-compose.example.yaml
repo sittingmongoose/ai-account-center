@@ -1,0 +1,25 @@
+# Copy these switches into an isolated dashboard configuration for composition.
+rustService:
+  frontDoor: rust
+  mode: on
+  store: on
+  groups:
+    home: on
+    status: on
+    analytics: on
+    writes: on
+    app-updates: on
+agentTransport: on
+agentVerbs: on
+agentVerbFamilies:
+  inventory: on
+  signin-expiry: on
+  quota-read: on
+  failover-inventory: on
+  t3-pins: on
+  scan-usage: on
+  launch: on
+  claude-host: on
+  signin-session: on
+  key-store: on
+  claude-history: on

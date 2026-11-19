@@ -1,3 +1,4 @@
+import { rustComposeSelected } from '../web-server/rust-service-groups';
 /**
  * Config Command Handler
  *
@@ -169,12 +170,26 @@ export async function handleConfigCommand(
       serverOptions.host = normalizeDashboardHost(options.host);
     }
 
-    const { server, wss, cleanup } = await deps.startServer(serverOptions);
+    const composed = rustComposeSelected();
+    const composeBinary = composed ? process.env.AAC_RUST_PUBLIC_BINARY : undefined;
+    if (composed && !composeBinary) {
+      console.error(deps.fail('Set AAC_RUST_PUBLIC_BINARY for the composed dashboard.'));
+      process.exitCode = 1;
+      return;
+    }
+    const { server, wss, cleanup, publicAddress } = composeBinary
+      ? await (
+          await import('../web-server/compose-server')
+        ).startComposedServer(serverOptions, composeBinary)
+      : await deps.startServer(serverOptions);
 
     // Setup graceful shutdown
     deps.setupGracefulShutdown(server, wss, cleanup);
 
-    const urls = resolveDashboardUrls(resolveServerBindHost(server) ?? options.host, port);
+    const urls = resolveDashboardUrls(
+      publicAddress?.address ?? resolveServerBindHost(server) ?? options.host,
+      publicAddress?.port ?? port
+    );
     const shouldWarnAboutExposure = urls.bindHost ? !isLoopbackHost(urls.bindHost) : false;
 
     console.log(deps.ok(`Dashboard: ${urls.browserUrl}`));

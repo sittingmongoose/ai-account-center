@@ -850,10 +850,13 @@ async fn serve_inner(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
-    let app_update_jobs = app_update_jobs.or_else(|| native_app_updates.then(|| {
-        let jobs = crate::app_updates::AppUpdates::with_pool(boot.ccs_dir.clone(), agents.clone());
-        Arc::new(crate::app_update_routes::LaneHJobs(jobs)) as Arc<dyn AppUpdateJobs>
-    }));
+    let app_update_jobs = app_update_jobs.or_else(|| {
+        native_app_updates.then(|| {
+            let jobs =
+                crate::app_updates::AppUpdates::with_pool(boot.ccs_dir.clone(), agents.clone());
+            Arc::new(crate::app_update_routes::LaneHJobs(jobs)) as Arc<dyn AppUpdateJobs>
+        })
+    });
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
     let state = AppState(Arc::new(Shared {
         boot,

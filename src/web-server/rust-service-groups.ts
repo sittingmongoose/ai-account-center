@@ -14,7 +14,11 @@ export type RustGroup = 'home' | 'status' | 'analytics' | 'writes' | 'app-update
 
 /** The group's switch when neither the environment nor the config names it. */
 const DEFAULT: Record<RustGroup, boolean> = {
-  home: true, status: false, analytics: false, writes: false, 'app-updates': false,
+  home: true,
+  status: false,
+  analytics: false,
+  writes: false,
+  'app-updates': false,
 };
 
 export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -48,4 +52,14 @@ export function rustStoreSwitchOn(env: NodeJS.ProcessEnv = process.env): boolean
     }
   }
   return value === 'on';
+}
+
+/** Select the public Rust composition without changing the installed TS default. */
+export function rustComposeSelected(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.AAC_RUST_COMPOSE !== undefined) return env.AAC_RUST_COMPOSE === '1';
+  try {
+    return loadUnifiedConfig()?.rustService?.frontDoor === 'rust';
+  } catch {
+    return false;
+  }
 }

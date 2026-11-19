@@ -72,7 +72,11 @@ const AGENT_VERBS: readonly AgentVerb[] = [
 /** key-store and claude-history write on the computer: shadow would duplicate the write, so
  * those two families treat shadow as off. The read-only families shadow safely. */
 const WRITE_VERBS: Partial<Record<AgentVerb, true>> = {
-  'key-store': true, 'claude-history': true, launch: true, 'claude-host': true, 'signin-session': true,
+  'key-store': true,
+  'claude-history': true,
+  launch: true,
+  'claude-host': true,
+  'signin-session': true,
 };
 const MODE_RANK: Record<AgentVerbs, number> = { off: 0, shadow: 1, on: 2 };
 
@@ -718,7 +722,8 @@ export async function runHistoryAgent(
     )
       return null;
     const artifacts = options.artifacts ?? manifest.artifacts;
-    if (!artifacts.some((artifact) => artifact.target === target(host.platform))) return null;
+    if (!artifacts.some((artifact) => agentTargets(host.platform).includes(artifact.target)))
+      return null;
   } else if (!['collect', 'closed-check', 'protected-check'].includes(String(args.mode))) {
     return null;
   }
