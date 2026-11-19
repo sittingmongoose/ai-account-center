@@ -495,6 +495,11 @@ fn native_binary_problem(home: &Path, uid: Option<u32>) -> bool {
     false
 }
 
+/// The CLI status report's owned-binary check (the same rule the probe uses).
+pub(crate) fn native_binary_problem_public(home: &Path, uid: Option<u32>) -> bool {
+    native_binary_problem(home, uid)
+}
+
 fn binary_stat_key(binary: &Path) -> Option<String> {
     let meta = std::fs::symlink_metadata(binary).ok()?;
     #[cfg(unix)]

@@ -41,16 +41,12 @@ fn problem_text(reason: ProblemReason) -> String {
         ProblemReason::NotAnAddress => {
             "an entry is not one exact IP address (no ranges, names or ports)".into()
         }
-        ProblemReason::Unspecified => {
-            "an entry is the unspecified address (0.0.0.0 or ::)".into()
-        }
+        ProblemReason::Unspecified => "an entry is the unspecified address (0.0.0.0 or ::)".into(),
         ProblemReason::Loopback => "an entry is a loopback address (this computer)".into(),
         ProblemReason::NotPrivate => {
             "an entry is not a private LAN address (10/8, 172.16/12, 192.168/16, fc00::/7)".into()
         }
-        ProblemReason::ThisComputer => {
-            "an entry is one of this computer's own addresses".into()
-        }
+        ProblemReason::ThisComputer => "an entry is one of this computer's own addresses".into(),
     }
 }
 
@@ -206,6 +202,7 @@ pub fn parse_settings(raw: &Value, self_addresses: &[String]) -> Settings {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -216,10 +213,19 @@ mod tests {
 
     #[test]
     fn parse_address_normalizes_brackets_zones_and_mapped_forms() {
-        assert_eq!(parse_address("[192.168.1.5]").unwrap().to_string(), "192.168.1.5");
+        assert_eq!(
+            parse_address("[192.168.1.5]").unwrap().to_string(),
+            "192.168.1.5"
+        );
         assert_eq!(parse_address("fe80::1%en0").unwrap().to_string(), "fe80::1");
-        assert_eq!(parse_address("::ffff:192.168.1.5").unwrap().to_string(), "192.168.1.5");
-        assert_eq!(parse_address("::FFFF:0a00:5").unwrap().to_string(), "10.0.0.5");
+        assert_eq!(
+            parse_address("::ffff:192.168.1.5").unwrap().to_string(),
+            "192.168.1.5"
+        );
+        assert_eq!(
+            parse_address("::FFFF:0a00:5").unwrap().to_string(),
+            "10.0.0.5"
+        );
         assert_eq!(parse_address(" 10.0.0.5 ").unwrap().to_string(), "10.0.0.5");
         assert!(parse_address("10.0.0.5:80").is_none());
         assert!(parse_address("10.0.0.0/8").is_none());
@@ -237,22 +243,37 @@ mod tests {
         };
         case(json!("192.168.1.20"), ProblemReason::NotAList, None);
         case(json!([]), ProblemReason::Empty, None);
+        case(addresses(&["192.168.1.1"; 9]), ProblemReason::TooMany, None);
         case(
-            addresses(&["192.168.1.1"; 9]),
-            ProblemReason::TooMany,
-            None,
+            addresses(&["192.168.1.20", "name.test"]),
+            ProblemReason::NotAnAddress,
+            Some(1),
         );
-        case(addresses(&["192.168.1.20", "name.test"]), ProblemReason::NotAnAddress, Some(1));
-        case(addresses(&["192.168.1.20", "10.0.0.5:80"]), ProblemReason::NotAnAddress, Some(1));
-        case(addresses(&["192.168.1.20", "fe80::1%en0"]), ProblemReason::NotAnAddress, Some(1));
+        case(
+            addresses(&["192.168.1.20", "10.0.0.5:80"]),
+            ProblemReason::NotAnAddress,
+            Some(1),
+        );
+        case(
+            addresses(&["192.168.1.20", "fe80::1%en0"]),
+            ProblemReason::NotAnAddress,
+            Some(1),
+        );
         case(addresses(&["0.0.0.0"]), ProblemReason::Unspecified, Some(0));
         case(addresses(&["::"]), ProblemReason::Unspecified, Some(0));
         case(addresses(&["127.0.0.1"]), ProblemReason::Loopback, Some(0));
         case(addresses(&["::1"]), ProblemReason::Loopback, Some(0));
         case(addresses(&["8.8.8.8"]), ProblemReason::NotPrivate, Some(0));
-        case(addresses(&["192.168.1.10"]), ProblemReason::ThisComputer, Some(0));
+        case(
+            addresses(&["192.168.1.10"]),
+            ProblemReason::ThisComputer,
+            Some(0),
+        );
         assert_eq!(
-            describe(&Problem { reason: ProblemReason::NotPrivate, index: Some(1) }),
+            describe(&Problem {
+                reason: ProblemReason::NotPrivate,
+                index: Some(1)
+            }),
             "an entry is not a private LAN address (10/8, 172.16/12, 192.168/16, fc00::/7) (entry 2)"
         );
     }
@@ -313,7 +334,10 @@ mod tests {
         );
         assert_eq!(settings.trusted_proxy.as_deref(), Some("lan-https-proxy"));
         assert_eq!(settings.trusted_proxy_addresses, vec!["10.0.0.5"]);
-        assert_eq!(settings.public_origin.as_deref(), Some("https://aac.example.test"));
+        assert_eq!(
+            settings.public_origin.as_deref(),
+            Some("https://aac.example.test")
+        );
         let settings = parse_settings(&json!({"trusted_proxy": "tailscale-serve"}), &own);
         assert_eq!(settings.trusted_proxy.as_deref(), Some("tailscale-serve"));
         let settings = parse_settings(&json!({"trusted_proxy": "unknown-kind"}), &own);

@@ -146,7 +146,10 @@ pub fn run(args: &[String], root: &Path) -> i32 {
             ));
             line(&format!(
                 "     The files it replaced are in {}.",
-                answer.get("quarantine").and_then(Value::as_str).unwrap_or("")
+                answer
+                    .get("quarantine")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
             ));
             return Ok(0);
         }
@@ -187,7 +190,10 @@ pub fn run(args: &[String], root: &Path) -> i32 {
                 line(&format!(
                     "[OK] Backup {} written and verified ({} files).",
                     answer.get("id").and_then(Value::as_str).unwrap_or(""),
-                    answer.get("files").map(Value::to_string).unwrap_or_default()
+                    answer
+                        .get("files")
+                        .map(Value::to_string)
+                        .unwrap_or_default()
                 ));
             }
             Ok(0)

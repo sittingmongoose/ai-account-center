@@ -6,7 +6,11 @@ use std::{
     process::Command,
 };
 
+mod antigravity;
+mod bar;
+mod codex_auth;
 mod config_write;
+mod native_app_paths;
 mod proxy;
 mod store;
 mod tls;
@@ -154,7 +158,19 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
                 return typescript(raw);
             }
         }
-        ("codex-auth" | "antigravity" | "bar" | "help" | "-h" | "--help", _) => {
+        ("codex-auth", args) => {
+            let ccs = root(config_dir).unwrap_or_else(|| PathBuf::from(".ccs"));
+            return Ok(codex_auth::run(args, &ccs));
+        }
+        ("bar", args) => {
+            let ccs = root(config_dir).unwrap_or_else(|| PathBuf::from(".ccs"));
+            return Ok(bar::run(args, &bar::production_deps(&ccs)));
+        }
+        ("antigravity", args) => {
+            let ccs = root(config_dir).unwrap_or_else(|| PathBuf::from(".ccs"));
+            return Ok(antigravity::run(args, &ccs));
+        }
+        ("help" | "-h" | "--help", _) => {
             return typescript(raw);
         }
         (command, _) => return Ok(retired(command)),
@@ -204,7 +220,7 @@ fn retired(command: &str) -> i32 {
     1
 }
 
-fn typescript(args: &[String]) -> Result<i32, String> {
+pub(crate) fn typescript(args: &[String]) -> Result<i32, String> {
     let script = env::var_os("AAC_TS_CLI")
         .map(PathBuf::from)
         .or_else(|| {

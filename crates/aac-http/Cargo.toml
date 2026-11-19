@@ -51,7 +51,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 bcrypt = "0.19"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 getrandom = "0.4"
 hmac = "0.13"
 httpdate = "1"

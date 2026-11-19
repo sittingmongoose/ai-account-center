@@ -150,7 +150,7 @@ pub(crate) struct ProfileRecord {
     pub(crate) credential: CredentialRecord,
 }
 
-struct ActiveRecord {
+pub(crate) struct ActiveRecord {
     profile_id: String,
     verified_at: String,
 }
@@ -165,7 +165,7 @@ impl RegistryState {
         self.profiles.iter().find(|profile| profile.id == id)
     }
 
-    fn active_for(&self, id: &str) -> Option<&ActiveRecord> {
+    pub(crate) fn active_for(&self, id: &str) -> Option<&ActiveRecord> {
         self.active
             .as_ref()
             .filter(|active| active.profile_id == id)

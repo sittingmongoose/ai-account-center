@@ -64,7 +64,10 @@ fn try_acquire(dir: &Path) -> Option<ConfigLock> {
     if path.exists() {
         let content = fs::read_to_string(&path).ok()?;
         let mut lines = content.trim().split('\n');
-        let pid = lines.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let pid = lines
+            .next()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
         let timestamp = lines.next().and_then(|v| v.parse::<u64>().ok());
         let live = pid > 0 && owner_alive(pid, timestamp.unwrap_or(0));
         if live {
@@ -104,10 +107,10 @@ pub fn acquire(dir: &Path) -> Option<ConfigLock> {
 
 impl Drop for ConfigLock {
     fn drop(&mut self) {
-        if let Ok(content) = fs::read_to_string(&self.path) {
-            if content.trim().split('\n').nth(2) == Some(self.token.as_str()) {
-                let _ = fs::remove_file(&self.path);
-            }
+        if let Ok(content) = fs::read_to_string(&self.path)
+            && content.trim().split('\n').nth(2) == Some(self.token.as_str())
+        {
+            let _ = fs::remove_file(&self.path);
         }
     }
 }
@@ -244,7 +247,11 @@ pub fn mutate(
 
 fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = file.parent().ok_or("config path has no directory")?;
-    let tmp = dir.join(format!(".config.yaml.tmp-{}-{}", std::process::id(), now_ms()));
+    let tmp = dir.join(format!(
+        ".config.yaml.tmp-{}-{}",
+        std::process::id(),
+        now_ms()
+    ));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -266,6 +273,11 @@ fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
         fs::set_permissions(file, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The canonical block-YAML spelling of one value, shared with the codex registry writer.
+pub(crate) fn emit_yaml(value: &Value) -> String {
+    emit_document(value)
 }
 
 const NETWORK_COMMENT: &str = "# Dashboard network: trust_local_network lets plain HTTP from trusted_networks carry\n# passwords, keys and sign-in codes (off by default). trusted_networks defaults to\n# 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and fc00::/7.\n";
@@ -384,6 +396,7 @@ fn key_text(key: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -434,8 +447,11 @@ mod tests {
         assert!(read_tls_block(&file).is_err());
         std::fs::write(&file, "agentVerbs: on\n").unwrap();
         assert!(read_tls_block(&file).is_err(), "version is required");
-        std::fs::write(&file, "version: 1\ndashboard_tls:\n  trusted_proxy: tailscale-serve\n")
-            .unwrap();
+        std::fs::write(
+            &file,
+            "version: 1\ndashboard_tls:\n  trusted_proxy: tailscale-serve\n",
+        )
+        .unwrap();
         assert_eq!(
             read_tls_block(&file).unwrap(),
             json!({"trusted_proxy": "tailscale-serve"})
@@ -448,12 +464,18 @@ mod tests {
         let file = dir.path().join("config.yaml");
         std::fs::write(&file, "version: 1\naccounts: {}\n").unwrap();
         let backup = mutate(&file, |config| {
-            config.insert("dashboard_tls".into(), json!({"trusted_proxy": "lan-https-proxy"}));
+            config.insert(
+                "dashboard_tls".into(),
+                json!({"trusted_proxy": "lan-https-proxy"}),
+            );
         })
         .unwrap()
         .expect("backup");
         assert!(backup.display().to_string().contains(".bak-proxy-"));
-        assert_eq!(std::fs::read(&backup).unwrap(), b"version: 1\naccounts: {}\n");
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            b"version: 1\naccounts: {}\n"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -462,10 +484,17 @@ mod tests {
             let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
-        let (values, _) = aac_config::split_active(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let (values, _) =
+            aac_config::split_active(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(values["accounts"], json!({}));
-        assert_eq!(values["dashboard_tls"]["trusted_proxy"], json!("lan-https-proxy"));
-        assert!(!dir.path().join("config.yaml.lock").exists(), "lock released");
+        assert_eq!(
+            values["dashboard_tls"]["trusted_proxy"],
+            json!("lan-https-proxy")
+        );
+        assert!(
+            !dir.path().join("config.yaml.lock").exists(),
+            "lock released"
+        );
     }
 
     #[test]
