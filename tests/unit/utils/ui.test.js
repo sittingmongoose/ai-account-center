@@ -29,8 +29,8 @@ describe('UI Module', function () {
   let ui;
 
   beforeAll(async function () {
-    // Dynamic import for ESM module - import the built dist file
-    const uiModule = await import('../../../dist/utils/ui.js');
+    // Dynamic import for ESM module - load the source, so a source-only suite needs no build first
+    const uiModule = await import('../../../src/utils/ui.ts');
     ui = uiModule;
 
     // Initialize UI dependencies

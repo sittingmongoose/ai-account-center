@@ -43,7 +43,17 @@ function validateUi(options = {}) {
     .map((name) => path.join(crate, 'tests', name));
   run(process.execPath, ['--test', ...testFiles], { cwd: repoRoot, env });
   const source = leptosFingerprint(leptosCrate);
-  const { manifest } = verifyBundle(path.join(repoRoot, 'dist', 'ui'));
+  let bundle;
+  try {
+    bundle = verifyBundle(path.join(repoRoot, 'dist', 'ui'));
+  } catch (error) {
+    // a fresh checkout has no build: say what to run instead of a bare ENOENT from the manifest read
+    if (error && error.code === 'ENOENT' && path.basename(error.path ?? '') === 'ui-build-manifest.json') {
+      throw new Error('The dashboard is not built. Run bun run ui:build first.');
+    }
+    throw error;
+  }
+  const { manifest } = bundle;
   if (manifest.source?.sha256 !== source.sha256 || manifest.source?.files !== source.files) {
     throw new Error('Dashboard source changed after the build. Run bun run ui:build.');
   }
