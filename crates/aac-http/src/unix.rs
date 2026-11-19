@@ -211,7 +211,7 @@ impl Boot {
         crate::json_object::from_slice_with_optional(
             bytes,
             &["ccsDir", "socketPath", "secret", "bootId"],
-            &["files", "store", "owned", "renewal"],
+            &["files", "store", "owned", "renewal", "nativeLifecycle"],
         )
     }
 

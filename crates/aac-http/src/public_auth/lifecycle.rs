@@ -149,7 +149,7 @@ pub(super) async fn handle(root: &Path, route: Route, request: Request) -> Reply
         return reply;
     }
     let query = request.uri().query();
-    if query.is_some() && request.uri().path() != "/api/accounts/signin-command" {
+    if query.is_some() && matches!(route, Route::Trash) {
         return unexpected_query();
     }
     let mut reply = match route {
