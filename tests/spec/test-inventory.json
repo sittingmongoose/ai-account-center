@@ -3736,6 +3736,12 @@
       ]
     },
     {
+      "file": "tests/unit/web-server/status/schema-writer-machines.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/status/share-route.test.ts",
       "kind": "HTTP",
       "evidence": [
