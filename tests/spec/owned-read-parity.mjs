@@ -363,12 +363,16 @@ try {
     report.failures.push('runs audit: the owned ingest differs from the TS ingest');
 
   // The readers-check file: one file per writer, the same rows up to the read clocks.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   const checkToday = await today.command('check');
   const checkOwned = await owned.command('check');
   const checkNames = Object.keys(checkToday.files).sort();
   report.steps.push({ name: 'readers check', writers: checkNames });
-  if (JSON.stringify(Object.keys(checkOwned.files).sort()) !== JSON.stringify(checkNames))
-    report.failures.push('readers check: different writer files');
+  const ownedNames = Object.keys(checkOwned.files).sort();
+  if (JSON.stringify(ownedNames) !== JSON.stringify(checkNames))
+    report.failures.push(
+      `readers check: different writer files (today [${checkNames}] owned [${ownedNames}])`
+    );
   for (const name of checkNames) {
     const a = normalize(JSON.parse(checkToday.files[name]));
     const b = normalize(JSON.parse(checkOwned.files[name] ?? 'null'));
