@@ -42,6 +42,8 @@ pub(super) struct OwnerHost {
     /// The in-process public owners this boot started (Accounts collection, Re-check,
     /// App Updates, settings/writes). One set, whichever platform; the groups ask it directly.
     public: Mutex<Option<PublicOwners>>,
+    /// Route groups registered on this host, mounted on the public API router before the guard.
+    routes: Mutex<Vec<(&'static str, axum::Router)>>,
 }
 
 struct PublicOwners {
@@ -78,11 +80,33 @@ impl OwnerHost {
             #[cfg(unix)]
             embedded: tokio::sync::Mutex::new(None),
             public: Mutex::new(None),
+            routes: Mutex::new(Vec::new()),
         })
     }
 
     pub(super) fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Register one named in-process route group. Its router is merged into the public API
+    /// router before the dashboard guard, so its handlers see `Extension<DashboardAccess>`
+    /// (the verified principal and the origin/transport facts) exactly as `edges` does; the
+    /// group keeps its own admission sentences and encoding.
+    pub(super) fn register(&self, name: &'static str, routes: axum::Router) {
+        let mut held = self.routes.lock().unwrap_or_else(|p| p.into_inner());
+        if !held.iter().any(|(held, _)| *held == name) {
+            held.push((name, routes));
+        }
+    }
+
+    /// The registered groups, merged onto the API router.
+    pub(super) fn mount(&self, router: axum::Router) -> axum::Router {
+        let held = self.routes.lock().unwrap_or_else(|p| p.into_inner());
+        let mut router = router;
+        for (_, routes) in held.iter() {
+            router = router.merge(routes.clone());
+        }
+        router
     }
 
     /// Start the platform's public owners (the same `NativeOwners` the direct call site used).

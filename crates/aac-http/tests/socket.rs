@@ -595,7 +595,7 @@ fn home_view_is_the_js_view_or_the_shared_read_fallback() -> Result<()> {
 #[test]
 fn worker_removal_routes_answer_or_decline_honestly() -> Result<()> {
     let service = Service::start()?;
-    let admin = principal("session", "fixture-admin", "admin");
+    let admin = principal("session", "admin");
     for path in [
         "/api/usage/history",
         "/api/usage/at",
@@ -677,7 +677,7 @@ fn owned_status_answers_reads_and_writes_through_the_service() -> Result<()> {
         root,
         socket,
     };
-    let admin = principal("session", "fixture-admin", "admin");
+    let admin = principal("session", "admin");
     let read = service.request(
         "/api/status/answers",
         Some(&"b".repeat(64)),

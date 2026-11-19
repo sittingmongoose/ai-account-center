@@ -89,6 +89,23 @@ pub struct DashboardAccess {
     client_address: Option<String>,
 }
 
+impl DashboardAccess {
+    /// The verified principal the private service's table adjudicates for this request: the
+    /// front door has already done public admission, and the service trusts this word only on
+    /// its private socket (the boot secret). A device principal stays a device principal.
+    pub(crate) fn service_principal(&self) -> Option<String> {
+        match &self.principal {
+            DashboardPrincipal::Browser { .. } => self.session_id.as_ref().map(|id| {
+                json!({"kind": "session", "id": id, "role": "admin"}).to_string()
+            }),
+            DashboardPrincipal::Device { id, .. } => Some(
+                json!({"kind": "device", "id": id, "role": "device"}).to_string(),
+            ),
+            DashboardPrincipal::Anonymous => None,
+        }
+    }
+}
+
 /// Browser or tray identity admitted from a real session cookie or bearer token.
 #[derive(Clone)]
 pub enum DashboardPrincipal {
@@ -449,6 +466,9 @@ pub(crate) async fn run_public_at(
         .as_ref()
         .map(|host| Arc::new(native_group::Routes::new(host.clone())));
     let mut api = Router::new();
+    if let Some(host) = &owner_host {
+        api = host.mount(api);
+    }
     if cut || !composed {
         api = api.route(
             "/api/health",
@@ -1678,6 +1698,8 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
+            #[cfg(unix)]
+            None,
         ));
         let handle = tokio::spawn(async move {
             axum::serve(
