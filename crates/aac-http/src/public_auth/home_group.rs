@@ -184,7 +184,12 @@ impl Home {
             .and_then(|id| aac_num::ecma::to_iso_string(id / 1000))?;
         let now = aac_core::UtcMs::now().ok()?.get() as i64;
         let prepared = crate::account_usage::prepared(&generation).ok()?;
-        let dashboard_bytes = prepared.render(&updated, now);
+        // `withOfferedViews` (`views/offered-views.ts`): this server builds Home, so the dashboard
+        // names it. The TS route parses the answer, adds the field and serializes again; the same
+        // parse-and-insert keeps the per-response pass and the key order.
+        let dashboard =
+            offered_views(serde_json::from_slice(&prepared.render(&updated, now)).ok()?);
+        let dashboard_bytes = aac_views::js_json::write(&dashboard);
         // No installed runtime is the route's empty Ubuntu inventory, exactly as the TS reader
         // answers without a runtime to ask.
         let antigravity = self
@@ -232,6 +237,19 @@ impl Home {
         set_header(&mut reply, "cache-control", "no-store");
         Some(reply)
     }
+}
+
+/// `withOfferedViews`: the dashboard answer names the views this server builds.
+fn offered_views(mut dashboard: Value) -> Value {
+    match dashboard.get_mut("server").and_then(Value::as_object_mut) {
+        Some(server) => {
+            server.insert("views".into(), json!(["home"]));
+        }
+        None => {
+            dashboard["server"] = json!({"version": "", "commit": null, "views": ["home"]});
+        }
+    }
+    dashboard
 }
 
 /// The fed request's per-request facts, as `home-feed.ts` writes them.
