@@ -1,5 +1,6 @@
 //! L1: bounded blocking work. Every route's blocking work (file reads, compositions, the store)
-//! runs on a semaphore-bounded pool: 8 permits for reads, 4 for the store, and 4 for fed Status.
+//! runs on a semaphore-bounded pool: 8 permits for reads, 4 for the store, 4 for fed Status and
+//! 4 for the reset claims file (which waits [`RESET_WAIT`] for a slot).
 //! A full read or store pool is a `busy` decline at once, never a queue. Fed Status waits a few
 //! milliseconds for its own slot, and declines `busy` if none frees; the request's deadline still
 //! cancels that wait. The permit travels into the blocking task, so a task that outlives its
@@ -22,6 +23,11 @@ pub(crate) const STORE_PERMITS: usize = 4;
 /// Blocking permits for fed Status. Its own set, so a full read pool does not turn a cheap Status
 /// read into `busy`.
 pub(crate) const STATUS_PERMITS: usize = 4;
+/// Blocking permits for the reset claims file (the native module ran on libuv's 4 threads).
+pub(crate) const RESET_PERMITS: usize = 4;
+/// How long a reset claims call waits for a slot. The native module queued; a short wait keeps
+/// that, and the front door's deadline still bounds it.
+pub(crate) const RESET_WAIT: Duration = Duration::from_secs(5);
 /// How long a fed Status read waits for one of its slots. A few milliseconds, and never past the
 /// request's own deadline: that deadline drops this future, and the wait is inside it.
 pub(crate) const STATUS_WAIT: Duration = Duration::from_millis(8);
@@ -32,6 +38,7 @@ pub(crate) struct Limits {
     reads: Arc<Semaphore>,
     store: Arc<Semaphore>,
     status: Arc<Semaphore>,
+    reset: Arc<Semaphore>,
 }
 
 /// Marks the task cancelled when the request's future is dropped before it ends.
@@ -48,6 +55,7 @@ impl Limits {
             reads: Arc::new(Semaphore::new(READ_PERMITS)),
             store: Arc::new(Semaphore::new(STORE_PERMITS)),
             status: Arc::new(Semaphore::new(STATUS_PERMITS)),
+            reset: Arc::new(Semaphore::new(RESET_PERMITS)),
         }
     }
 
@@ -86,6 +94,7 @@ impl Limits {
             Pool::Reads => &self.reads,
             Pool::Store => &self.store,
             Pool::Status => &self.status,
+            Pool::Reset => &self.reset,
         };
         let permit = if wait.is_zero() {
             semaphore

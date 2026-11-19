@@ -74,6 +74,8 @@ struct Shared {
     identity: Identity,
     feeds: Feeds,
     approvals: crate::account_approvals::Approvals,
+    /// M5 lane K: the claims file's writer lease, held from first use to the end of the boot.
+    reset_claims: crate::reset_claims::ResetClaims,
     app_update_jobs: Option<BoundJobs>,
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
@@ -354,6 +356,29 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             match shared.approvals.apply(&bytes) {
                 Some(value) => Json(value).into_response(),
                 None => decline(row.handler, Decline::Shape),
+            }
+        }
+        Handler::ResetClaims => {
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(owners) = shared.boot.owners() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), crate::reset_claims::BODY_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            let state = state.clone();
+            match shared
+                .limits
+                .blocking_for(row.pool, crate::limits::RESET_WAIT, move || {
+                    state.0.reset_claims.apply(&root, &owners, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
             }
         }
         Handler::Agent | Handler::AgentControl => {
@@ -786,6 +811,7 @@ async fn serve_inner(
         identity,
         feeds: Feeds::new(),
         approvals: crate::account_approvals::Approvals::default(),
+        reset_claims: crate::reset_claims::ResetClaims::default(),
         app_update_jobs: app_update_jobs.map(BoundJobs::new),
         agents,
         store: store.clone(),

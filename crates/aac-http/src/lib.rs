@@ -25,6 +25,9 @@ mod read_files;
 mod read_routes;
 #[cfg(unix)]
 mod registered;
+// Platform-neutral, so its tests also run on the Windows build machines.
+#[cfg(any(unix, test))]
+mod reset_claims;
 #[cfg(unix)]
 mod status_cache;
 #[cfg(unix)]
