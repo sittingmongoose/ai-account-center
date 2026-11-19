@@ -54,6 +54,7 @@ function runCli(
       env: {
         PATH: process.env.PATH,
         HOME: home,
+        USERPROFILE: home,
         CCS_DIR: home,
         NO_COLOR: '1',
         TMPDIR: os.tmpdir(),
@@ -91,7 +92,7 @@ function normalize(text: string, homes: string[]): string {
     .replace(/bak-proxy-\d{8}T\d{6}Z(-\d+)?/g, 'bak-proxy-<stamp>')
     .replace(/Backup [0-9A-Za-z_-]+ written/g, 'Backup <id> written')
     .replace(/Restored backup [0-9A-Za-z_-]+\./g, 'Restored backup <id>.')
-    .replace(/quarantine\/[0-9A-Za-z_-]+/g, 'quarantine/<id>')
+    .replace(/quarantine([\\/])[0-9A-Za-z_-]+/g, 'quarantine$1<id>')
     .replace(/"openedAt": \d+/g, '"openedAt": <ms>')
     .replace(/"checkedAt": \d+/g, '"checkedAt": <ms>');
 }
@@ -563,8 +564,9 @@ for (const mutation of MUTATIONS) {
       `proxy ${mutation.name} backup bytes and mode`,
       bytesA.equals(bytesB) &&
         bytesA.toString('utf8') === mutation.seed &&
-        (fs.statSync(path.join(homeA, backupsA[0])).mode & 0o777) === 0o600 &&
-        (fs.statSync(path.join(homeB, backupsB[0])).mode & 0o777) === 0o600
+        (process.platform === 'win32' ||
+          ((fs.statSync(path.join(homeA, backupsA[0])).mode & 0o777) === 0o600 &&
+            (fs.statSync(path.join(homeB, backupsB[0])).mode & 0o777) === 0o600))
     );
   }
   fs.rmSync(homeA, { recursive: true, force: true });
