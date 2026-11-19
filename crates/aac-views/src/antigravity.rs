@@ -528,9 +528,14 @@ fn known(value: &str) -> Option<&'static Plan> {
 /// `antigravityPlanDisplay(plan, sampledAt)` without a reported plan: the `plan` member and the
 /// optional `antigravityPlan`. `clock` is TS's `Date.now()` for a reading without a time.
 fn plan_display(plan: Option<String>, sampled: Option<i64>, clock: f64) -> (Value, Option<Value>) {
-    let Some(definition) = plan.as_deref().and_then(known) else {
-        return (text_or_null(plan), None);
-    };
+    match plan.as_deref().and_then(known) {
+        Some(definition) => display_definition(definition, sampled, clock),
+        None => (text_or_null(plan), None),
+    }
+}
+
+/// The `plan` member and optional `antigravityPlan` for a resolved plan definition.
+fn display_definition(definition: &Plan, sampled: Option<i64>, clock: f64) -> (Value, Option<Value>) {
     #[allow(clippy::cast_precision_loss)]
     let observed = sampled.map_or(clock, |ms| ms as f64);
     let before_removal = observed < MODEL_REMOVAL_AT;
@@ -566,6 +571,42 @@ fn plan_display(plan: Option<String>, sampled: Option<i64>, clock: f64) -> (Valu
             "creditsOverage": definition.credits,
         })),
     )
+}
+
+/// `antigravityPlanDisplay(plan, sampledAt, reported?)` in full: a reported plan's type/tier
+/// refines the class before the definition is resolved. Used by the failover reading parser.
+pub fn reading_plan_display(
+    plan: Option<String>,
+    sampled: Option<i64>,
+    clock: f64,
+    reported: Option<&Value>,
+) -> (Value, Option<Value>) {
+    let tier = reported.and_then(|r| match r.get("paidTier") {
+        Some(v) if !v.is_null() => Some(v),
+        _ => r.get("currentTier").filter(|v| !v.is_null()),
+    });
+    let tier_class = tier.and_then(|t| {
+        t.get("id")
+            .and_then(Value::as_str)
+            .and_then(known)
+            .or_else(|| t.get("name").and_then(Value::as_str).and_then(known))
+    });
+    let plan_type = reported
+        .and_then(|r| r.get("planType"))
+        .and_then(Value::as_str)
+        .and_then(known);
+    let mut plan_class = plan_type.or(tier_class).or_else(|| plan.as_deref().and_then(known));
+    if let (Some(pc), Some(tc)) = (plan_class, tier_class) {
+        if (pc.class == "ultra" && tc.class.starts_with("ultra-"))
+            || (pc.class == "pro" && tc.class == "pro-trial")
+        {
+            plan_class = Some(tc);
+        }
+    }
+    match plan_class {
+        Some(definition) => display_definition(definition, sampled, clock),
+        None => (text_or_null(plan), None),
+    }
 }
 
 /// `publicDashboardAccount(value)` then `markPassedResets(account, now)`.

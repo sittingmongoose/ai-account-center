@@ -1,5 +1,7 @@
 //! Dashboard snapshot publication shared by Accounts, Home, the usage hub and store sampling.
 pub(crate) mod cursor;
+pub(crate) mod contract;
+pub mod coordinator;
 pub mod dashboard;
 pub mod failover;
 pub(crate) mod helper;
