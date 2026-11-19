@@ -55,7 +55,7 @@ export const PRIVATE_SESSION_BUS_CONFIG = [
 ].join('\n');
 
 /** Variables the official CLI may see; nothing else from the caller's environment. */
-const PASSED_ENV = [
+export const PASSED_ENV = [
   'USER',
   'LOGNAME',
   'LANG',

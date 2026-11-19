@@ -45,6 +45,17 @@ enum Request {
     MuseCommands { home_id: Option<String> },
     /// Validate the Muse login email and map it to the job result.
     MuseValidateEmail { account_id: String, email: String },
+    /// The Antigravity bubblewrap argv and allowlisted environment for a staging folder.
+    AntigravitySandbox {
+        bus_config: String,
+        mask: String,
+        stubs: String,
+        real_home: String,
+        native_binary: String,
+        apparmor_leaf: Option<String>,
+        runtime_dir: Option<String>,
+        env: Value,
+    },
 }
 
 #[derive(Deserialize)]
@@ -175,6 +186,25 @@ fn evaluate(request: Request) -> Option<Value> {
                 "result": {"accountId": account_id, "email": trimmed, "plan": null},
             }))
         }
+        Request::AntigravitySandbox {
+            bus_config,
+            mask,
+            stubs,
+            real_home,
+            native_binary,
+            apparmor_leaf,
+            runtime_dir,
+            env,
+        } => antigravity_sandbox(
+            &bus_config,
+            &mask,
+            &stubs,
+            &real_home,
+            &native_binary,
+            apparmor_leaf.as_deref(),
+            runtime_dir.as_deref(),
+            &env,
+        ),
     }
 }
 
@@ -259,6 +289,96 @@ fn muse_email_valid(email: &str) -> bool {
         .iter()
         .enumerate()
         .any(|(i, c)| *c == '.' && i > 0 && i < chars.len() - 1)
+}
+
+/// The Antigravity CLI environment allowlist (`signin-sandbox.ts` PASSED_ENV), in order.
+const AGY_PASSED_ENV: [&str; 19] = [
+    "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "COLORTERM", "COLUMNS", "LINES", "SSH_CLIENT",
+    "SSH_CONNECTION", "SSH_TTY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy",
+    "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR",
+];
+const AGY_WORKDIR: &str = "AAC-signin";
+const AGY_DBUS_RUN_SESSION: &str = "/usr/bin/dbus-run-session";
+
+/// The exact bubblewrap argv and allowlisted environment (`sandboxArgs`/`sandboxEnvironment`).
+/// Declines when the real home is not absolute, so TypeScript answers.
+#[allow(clippy::too_many_arguments)]
+fn antigravity_sandbox(
+    bus_config: &str,
+    mask: &str,
+    stubs: &str,
+    real_home: &str,
+    native_binary: &str,
+    apparmor_leaf: Option<&str>,
+    runtime_dir: Option<&str>,
+    env: &Value,
+) -> Option<Value> {
+    let home = Path::new(real_home);
+    if !home.is_absolute() {
+        return decline();
+    }
+    let real_gemini = home.join(".gemini");
+    let mut args: Vec<String> = vec![
+        "--die-with-parent".into(),
+        "--unshare-user".into(),
+        "--unshare-pid".into(),
+        "--unshare-ipc".into(),
+        "--unshare-uts".into(),
+        "--ro-bind".into(),
+        "/".into(),
+        "/".into(),
+        "--tmpfs".into(),
+        "/tmp".into(),
+    ];
+    if let Some(runtime) = runtime_dir {
+        args.push("--tmpfs".into());
+        args.push(runtime.to_owned());
+    }
+    args.push("--ro-bind".into());
+    args.push(bus_config.to_owned());
+    args.push(bus_config.to_owned());
+    args.push("--ro-bind".into());
+    args.push(native_binary.to_owned());
+    args.push(native_binary.to_owned());
+    args.push("--bind".into());
+    args.push(mask.to_owned());
+    args.push(real_gemini.to_str()?.to_owned());
+    if let Some(leaf) = apparmor_leaf {
+        args.push("--bind".into());
+        args.push(leaf.to_owned());
+        args.push(leaf.to_owned());
+    }
+    args.push("--tmpfs".into());
+    args.push(real_gemini.join("antigravity-cli").join("log").to_str()?.to_owned());
+    args.push("--proc".into());
+    args.push("/proc".into());
+    args.push("--dev".into());
+    args.push("/dev".into());
+    args.push("--chdir".into());
+    args.push(real_gemini.join(AGY_WORKDIR).to_str()?.to_owned());
+    args.push(AGY_DBUS_RUN_SESSION.into());
+    args.push("--config-file".into());
+    args.push(bus_config.to_owned());
+    args.push(native_binary.to_owned());
+
+    let mut command_env = serde_json::Map::new();
+    for key in AGY_PASSED_ENV {
+        if let Some(value) = env.get(key).and_then(|value| value.as_str()) {
+            if !value.bytes().any(|b| b < 0x20) {
+                command_env.insert(key.to_owned(), json!(value));
+            }
+        }
+    }
+    let term = command_env
+        .get("TERM")
+        .and_then(|value| value.as_str())
+        .unwrap_or("xterm-256color")
+        .to_owned();
+    command_env.insert("HOME".to_owned(), json!(home.to_str()?));
+    command_env.insert("PATH".to_owned(), json!(format!("{stubs}:/usr/bin:/bin")));
+    command_env.insert("BROWSER".to_owned(), json!(Path::new(stubs).join("xdg-open").to_str()?));
+    command_env.insert("TERM".to_owned(), json!(term));
+    Some(json!({"status": "ok", "sandboxArgs": args, "env": Value::Object(command_env)}))
 }
 
 /// One registry mutation under the caller-held directory lease.
@@ -423,5 +543,45 @@ mod tests {
         assert!(!muse_email_valid("a@b"));
         assert!(!muse_email_valid("a@@b.c"));
         assert!(!muse_email_valid("a b@c.d"));
+    }
+
+    #[test]
+    fn antigravity_sandbox_builds_bwrap_argv_and_env() {
+        let env = json!({"USER": "u", "TERM": "dumb", "LANG": "C", "SECRET": "x", "BAD": "a\u{1}b"});
+        let answer = antigravity_sandbox(
+            "/ccs/s/bus.conf",
+            "/ccs/s/home/.gemini",
+            "/ccs/s/browser-stubs",
+            "/home/u",
+            "/home/u/.local/bin/agy",
+            Some("/sys/kernel/security/apparmor/.access"),
+            Some("/run/user/1000"),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(answer["status"], "ok");
+        let args: Vec<&str> = answer["sandboxArgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            &args[..10],
+            &["--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc",
+              "--unshare-uts", "--ro-bind", "/", "/", "--tmpfs", "/tmp"]
+        );
+        assert!(args.windows(2).any(|w| w == ["--tmpfs", "/run/user/1000"]));
+        assert!(args.windows(3).any(|w| w == ["--bind", "/ccs/s/home/.gemini", "/home/u/.gemini"]));
+        assert!(args.windows(2).any(|w| w == ["--chdir", "/home/u/.gemini/AAC-signin"]));
+        assert_eq!(args.last(), Some(&"/home/u/.local/bin/agy"));
+        let e = &answer["env"];
+        assert_eq!(e["HOME"], "/home/u");
+        assert_eq!(e["TERM"], "dumb");
+        assert_eq!(e["USER"], "u");
+        assert!(e.get("SECRET").is_none());
+        assert!(e.get("BAD").is_none());
+        assert_eq!(e["PATH"], "/ccs/s/browser-stubs:/usr/bin:/bin");
+        assert_eq!(e["BROWSER"], "/ccs/s/browser-stubs/xdg-open");
     }
 }
