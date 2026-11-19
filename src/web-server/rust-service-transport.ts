@@ -372,7 +372,7 @@ export function rustAgentConnected(root: string): boolean {
 /** Only an old or absent service can delegate a Cursor provider read to TS. */
 export async function readRustCursorAccount(
   root: string,
-  input: { sinceMs: number; untilMs: number; force: boolean }
+  input: { sinceMs: number; untilMs: number; force: boolean } | { command: 'key-status' | 'quota' }
 ): Promise<unknown> {
   const held = rustAgentConnection(root);
   if (!held) return undefined;
@@ -402,7 +402,10 @@ export async function readRustCursorAccount(
 export async function readRustProviderCache(
   root: string,
   input:
-    { profileId: string; manifestHash: string } | { bindingHash: string } | { walletSource: true }
+    | { profileId: string; manifestHash: string }
+    | { bindingHash: string }
+    | { walletSource: true }
+    | { cursorFingerprint: string }
 ): Promise<unknown> {
   const held = rustAgentConnection(root);
   if (!held) return undefined;
@@ -493,7 +496,8 @@ export async function writeRustCollectionCache(
     | 'account-usage-observations'
     | 'claude-live-snapshots'
     | 'opencode-wallet-account'
-    | 'account-usage-cooldown',
+    | 'account-usage-cooldown'
+    | 'cursor-quota-observation',
   key: string,
   bytes: string
 ): Promise<boolean> {

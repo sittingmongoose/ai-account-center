@@ -145,8 +145,16 @@ def install_cursor_fixture(package, root):
     source = """#!/usr/bin/python3
 import json, sys, time
 from pathlib import Path
-assert sys.argv == [sys.argv[0], 'read', '--ccs-dir', ROOT]
+assert sys.argv[-2:] == ['--ccs-dir', ROOT]
 root = Path(ROOT)
+command = sys.argv[1:-2]
+if command == ['key', 'status']:
+    print(json.dumps({'present':True,'fingerprint':'sha256:1234567890abcdef'}))
+    sys.exit(0)
+if command == ['quota']:
+    print(json.dumps({'state':'read','quota':{'planUsage':{'totalPercentUsed':7,'autoPercentUsed':2}}}))
+    sys.exit(0)
+assert command == ['read']
 bounds = json.load(sys.stdin)
 with (root / 'cursor-trace.jsonl').open('a') as trace:
     trace.write(json.dumps(bounds) + '\\n')
@@ -187,6 +195,32 @@ def cursor_gates(agent, service):
         assert fixture.ask(route, payload, method='PUT', principal=public)[0] == 401
         assert fixture.ask(route, dict(payload, sinceMs=until+1), method='PUT')[0] == 503
         assert not trace.exists()
+        assert fixture.ask(route, {'command':'key-delete'}, method='PUT')[0] == 503
+        status, raw = fixture.ask(route, {'command':'key-status'}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'present':True,'fingerprint':'sha256:1234567890abcdef'}
+        status, raw = fixture.ask(route, {'command':'quota'}, method='PUT')
+        assert status == 200 and json.loads(raw)['quota']['planUsage'] == {'totalPercentUsed':7,'autoPercentUsed':2}
+        quota_cache = '/internal/collection-cache/cursor-quota-observation/'
+        quota_read = '/internal/collection-provider-cache'
+        fingerprint = 'sha256:1234567890abcdef'
+        checked = '2026-01-01T01:00:00.000Z'
+        card = {'provider':'cursor','source':'Cursor API key','status':'ok','windows':[]}
+        quota = {'version':1,'fingerprint':fingerprint,'checkedAt':checked,'account':card}
+        assert fixture.ask(quota_cache + 'fedcba0987654321', quota, method='PUT') == (200, '{"saved":false}')
+        assert fixture.ask(quota_cache + '1234567890abcdef', quota, method='PUT') == (200, '{"saved":true}')
+        status, raw = fixture.ask(quota_read, {'cursorFingerprint':fingerprint}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value':quota}
+        status, raw = fixture.ask(quota_read, {'cursorFingerprint':'sha256:fedcba0987654321'}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value':None}
+        quota_file = fixture.root / 'cache/cursor-quota-v1.json'
+        assert quota_file.stat().st_mode & 0o777 == 0o600
+        alias = quota_file.with_suffix('.fixture')
+        alias.hardlink_to(quota_file)
+        assert fixture.ask(quota_cache + 'no-key', {'clear':True}, method='PUT') == (200, '{"saved":false}')
+        assert quota_file.exists()
+        alias.unlink()
+        assert fixture.ask(quota_cache + 'no-key', {'clear':True}, method='PUT') == (200, '{"saved":true}')
+        assert not quota_file.exists()
         (fixture.root / 'cursor-slow').touch()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             a = pool.submit(fixture.ask, route, payload, method='PUT')

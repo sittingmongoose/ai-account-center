@@ -428,6 +428,31 @@ impl OwnedStore {
         self.write(bytes)
     }
 
+    /// Clear a single owner-only cache while holding its writer lease.
+    #[cfg(unix)]
+    pub fn clear_private_cache(&self) -> Result<(), Failure> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        if !private_cache_metadata(&fs::symlink_metadata(parent)?, true) {
+            return Err(Failure::new(
+                Cause::Refused,
+                "cache directory is not private",
+            ));
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(meta)
+                if private_cache_metadata(&meta, false) && meta.len() <= self.max_size as u64 =>
+            {
+                fs::remove_file(&self.path)?;
+                sync_directory(parent)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            _ => Err(Failure::new(Cause::Refused, "cache file is not private")),
+        }
+    }
+
     /// Keep at most `count` validated cache records, including the file just written.
     /// The writer holds its folder lease. Unknown or changed entries are left in place.
     #[cfg(unix)]

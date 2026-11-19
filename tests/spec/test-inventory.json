@@ -344,6 +344,20 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/antigravity_host.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/antigravity_probes.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/antigravity_quota.rs",
       "kind": "helper",
       "evidence": [

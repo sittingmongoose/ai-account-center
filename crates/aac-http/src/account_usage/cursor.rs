@@ -43,11 +43,46 @@ impl Request {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Command {
+    KeyStatus,
+    Quota,
+}
+
+impl Command {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, Decline> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Envelope {
+            command: Command,
+        }
+        crate::json_object::from_slice::<Envelope>(bytes, &["command"])
+            .map(|envelope| envelope.command)
+            .map_err(|_| Decline::Shape)
+    }
+
+    /// The credential stays with the packaged reader. Only the fixed status and quota
+    /// subcommands are exposed to the private service.
+    async fn answer(self, root: PathBuf) -> Result<Value, Decline> {
+        let (binary, os) = tokio::task::spawn_blocking(local_reader)
+            .await
+            .map_err(|_| Decline::Internal)??;
+        let binary = binary.ok_or(Decline::Unsupported)?;
+        let args: &[&str] = match self {
+            Self::KeyStatus => &["key", "status"],
+            Self::Quota => &["quota"],
+        };
+        Ok(execute(&root, binary, os, args, &[]).await)
+    }
+}
+
 type Observation = Arc<Value>;
 
 #[derive(Default)]
 pub(crate) struct Reader {
     latest: Mutex<Option<(Instant, Observation)>>,
+    commands: Mutex<()>,
 }
 
 fn target() -> Option<(&'static str, OperatingSystem)> {
@@ -78,6 +113,15 @@ fn executable(package: &Path, target: &str) -> Option<PathBuf> {
     (bytes.len() == size as usize && entry["sha256"] == sha256_hex(bytes)).then_some(path)
 }
 
+fn local_reader() -> Result<(Option<PathBuf>, OperatingSystem), Decline> {
+    let package = std::env::var_os("AAC_AGENT_PACKAGE_ROOT")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or(Decline::Unsupported)?;
+    let (target, os) = target().ok_or(Decline::Unsupported)?;
+    Ok((executable(&package, target), os))
+}
+
 fn fresh(previous: &Value, now: i64) -> bool {
     previous["checkedAt"]
         .as_str()
@@ -85,7 +129,13 @@ fn fresh(previous: &Value, now: i64) -> bool {
         .is_some_and(|checked| (0..TTL).contains(&now.saturating_sub(checked)))
 }
 
-async fn run(root: &Path, binary: PathBuf, os: OperatingSystem, request: &Request) -> Value {
+async fn execute(
+    root: &Path,
+    binary: PathBuf,
+    os: OperatingSystem,
+    command: &[&str],
+    input: &[u8],
+) -> Value {
     let failed = || json!({"state":"unavailable","cause":"reader_failed"});
     let Ok(id) = ComputerId::new("cursor-local") else {
         return failed();
@@ -103,15 +153,12 @@ async fn run(root: &Path, binary: PathBuf, os: OperatingSystem, request: &Reques
     ) else {
         return failed();
     };
-    let argv = [
-        binary.into_os_string(),
-        OsString::from("read"),
-        OsString::from("--ccs-dir"),
-        root.as_os_str().to_owned(),
-    ];
-    let input = json!({"sinceMs":request.since_ms, "untilMs":request.until_ms}).to_string();
+    let argv: Vec<_> = std::iter::once(binary.into_os_string())
+        .chain(command.iter().copied().map(OsString::from))
+        .chain([OsString::from("--ccs-dir"), root.as_os_str().to_owned()])
+        .collect();
     let options = CallOptions::new(Duration::from_secs(120), CAP);
-    let Ok(result) = computer.execute(&argv, input.as_bytes(), &options).await else {
+    let Ok(result) = computer.execute(&argv, input, &options).await else {
         return failed();
     };
     std::str::from_utf8(&result.stdout)
@@ -123,6 +170,11 @@ async fn run(root: &Path, binary: PathBuf, os: OperatingSystem, request: &Reques
 }
 
 impl Reader {
+    pub(crate) async fn command(&self, command: Command, root: PathBuf) -> Result<Value, Decline> {
+        let _permit = self.commands.lock().await;
+        command.answer(root).await
+    }
+
     pub(crate) async fn read(
         &self,
         root: PathBuf,
@@ -147,12 +199,7 @@ impl Reader {
             if !request.force && previous.as_ref().is_some_and(|row| fresh(row, now)) {
                 return Ok::<_, Decline>((previous, None));
             }
-            let package = std::env::var_os("AAC_AGENT_PACKAGE_ROOT")
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .ok_or(Decline::Unsupported)?;
-            let (target, os) = target().ok_or(Decline::Unsupported)?;
-            let binary = executable(&package, target);
+            let (binary, os) = local_reader()?;
             let store = owners
                 .claim(
                     registry::rows().map_err(|_| Decline::Internal)?,
@@ -169,7 +216,11 @@ impl Reader {
             return previous.map(Arc::new).ok_or(Decline::Internal);
         };
         let current = match binary {
-            Some(binary) => run(&root, binary, os, &request).await,
+            Some(binary) => {
+                let input =
+                    json!({"sinceMs":request.since_ms, "untilMs":request.until_ms}).to_string();
+                execute(&root, binary, os, &["read"], input.as_bytes()).await
+            }
             None => json!({"state":"no_reader","cause":"reader_failed"}),
         };
         let value = Arc::new(project(&current, previous.as_ref(), now)?);
