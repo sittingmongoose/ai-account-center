@@ -19,6 +19,8 @@ pub mod app_update_routes;
 pub mod app_updates;
 #[cfg(unix)]
 pub mod claude_lifecycle;
+#[cfg(unix)]
+pub mod claude_open;
 pub mod cli;
 #[cfg(unix)]
 mod collection;
@@ -95,5 +97,6 @@ pub use identity::PROTOCOL;
 #[cfg(unix)]
 pub use unix::{
     Boot, NativeAccountUsage, serve, serve_composed, serve_with_account_usage_cache,
-    serve_with_app_update_jobs, serve_with_native_account_usage, short_name,
+    serve_with_app_update_jobs, serve_with_claude_open, serve_with_native_account_usage,
+    short_name,
 };

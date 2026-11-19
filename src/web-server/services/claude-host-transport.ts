@@ -51,7 +51,10 @@ export interface ClaudeHostTransport {
     input: ClaudeHostStep & { trashName: string }
   ): Promise<'moved' | 'cross_volume'>;
   restore(host: ClaudeHost, input: ClaudeHostStep & { trashName: string }): Promise<void>;
-  purge(host: ClaudeHost, input: { sshHost: string; trashName: string; token?: string }): Promise<void>;
+  purge(
+    host: ClaudeHost,
+    input: { sshHost: string; trashName: string; token?: string }
+  ): Promise<void>;
 }
 
 export type ClaudeHostRunner = (sshHost: string, command: string, input: string) => Promise<string>;
@@ -301,8 +304,12 @@ export class SshClaudeHostTransport implements ClaudeHostTransport {
           launcherName: request.launcherName,
           profilePath: request.profilePath,
           sshHost,
-          ...(typeof request.launcherPath === 'string' ? { launcherPath: request.launcherPath } : {}),
-          ...(typeof request.startMenuPath === 'string' ? { startMenuPath: request.startMenuPath } : {}),
+          ...(typeof request.launcherPath === 'string'
+            ? { launcherPath: request.launcherPath }
+            : {}),
+          ...(typeof request.startMenuPath === 'string'
+            ? { startMenuPath: request.startMenuPath }
+            : {}),
         };
       }
       return await runClaudeHostAgent({ platform: host, sshHost }, args);

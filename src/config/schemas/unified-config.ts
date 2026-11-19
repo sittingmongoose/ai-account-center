@@ -68,6 +68,7 @@ export interface UnifiedConfig {
       'app-updates'?: 'off' | 'on';
       renewal?: 'off' | 'on';
       usageSnapshot?: 'off' | 'on';
+      'claude-open'?: 'off' | 'on';
     };
     store?: 'off' | 'on';
     homeProducer?: 'off' | 'on';

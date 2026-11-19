@@ -19,7 +19,8 @@ export type RustGroup =
   | 'writes'
   | 'app-updates'
   | 'renewal'
-  | 'usageSnapshot';
+  | 'usageSnapshot'
+  | 'claude-open';
 
 /** The group's switch when neither the environment nor the config names it. */
 const DEFAULT: Record<RustGroup, boolean> = {
@@ -32,6 +33,7 @@ const DEFAULT: Record<RustGroup, boolean> = {
   'app-updates': false,
   renewal: false,
   usageSnapshot: false,
+  'claude-open': false,
 };
 
 export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {

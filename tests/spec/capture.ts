@@ -48,6 +48,7 @@ Object.assign(process.env, {
         AAC_RUST_GROUP_APP_UPDATES: 'off',
         AAC_RUST_GROUP_RENEWAL: 'on',
         AAC_RUST_GROUP_USAGESNAPSHOT: 'on',
+        AAC_RUST_GROUP_CLAUDE_OPEN: 'on',
         AAC_AGENT_TRANSPORT: 'off',
         AAC_AGENT_VERBS: 'off',
       }

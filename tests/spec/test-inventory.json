@@ -415,6 +415,42 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/claude_open/fixture_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_open/js.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_open/marker_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_open/markers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_open/socket_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_open/table_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/feed.rs",
       "kind": "internal",
       "evidence": [],
@@ -3550,6 +3586,13 @@
       "kind": "helper",
       "evidence": [
         "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-open-bridge.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
       ]
     },
     {

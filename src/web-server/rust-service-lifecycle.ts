@@ -643,6 +643,7 @@ async function acquireWithinBudget(
         ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
         AAC_RUST_NATIVE_APP_UPDATES:
           rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
+        AAC_RUST_GROUP_CLAUDE_OPEN: rustGroupOn('claude-open') ? 'on' : 'off',
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, 'services/agent-artifacts.json'),
         AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,

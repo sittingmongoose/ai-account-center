@@ -15,6 +15,7 @@ rustService:
     app-updates: on
     renewal: on
     usageSnapshot: on
+    claude-open: on
 agentTransport: on
 agentVerbs: on
 agentVerbFamilies:

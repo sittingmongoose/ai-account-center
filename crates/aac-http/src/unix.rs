@@ -126,6 +126,8 @@ struct Shared {
     scoreboard_owned: Option<Arc<crate::scoreboard_owned::ScoreboardOwned>>,
     /// G18: the aac-usage share snapshot publisher, fed by the front door's samples.
     usage: Arc<crate::usage_snapshot::UsageSnapshot>,
+    /// G13: the Claude Open job owner, when the boot binds it.
+    claude_open: Option<Arc<crate::claude_open::open::ClaudeOpen>>,
 }
 
 #[derive(Clone)]
@@ -1024,6 +1026,75 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        Handler::ClaudeOpen => {
+            let Some(open) = shared.claude_open.as_ref() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-aac-decline", "unsupported")],
+                    Json(json!({"error": "Claude Open jobs are unbound"})),
+                )
+                    .into_response();
+            };
+            if req.uri().query().is_some_and(|query| !query.is_empty()) {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(map) = crate::json_object::from_slice::<
+                serde_json::Map<String, serde_json::Value>,
+            >(&bytes, &["id", "platform", "respondAsync"]) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(id), Some(platform), Some(respond_async)) = (
+                map.get("id").and_then(serde_json::Value::as_str),
+                map.get("platform").and_then(serde_json::Value::as_str),
+                map.get("respondAsync").and_then(serde_json::Value::as_bool),
+            ) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if !crate::claude_open::manifest::profile_id_pattern(id)
+                || !matches!(platform, "mac" | "windows")
+            {
+                return decline(row.handler, Decline::Shape);
+            }
+            let reply = open.open(id, platform, respond_async).await;
+            (
+                StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                Json(reply.body),
+            )
+                .into_response()
+        }
+        Handler::ClaudeHistoryCleanup => {
+            let Some(open) = shared.claude_open.as_ref() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-aac-decline", "unsupported")],
+                    Json(json!({"error": "Claude Open jobs are unbound"})),
+                )
+                    .into_response();
+            };
+            if req.uri().query().is_some_and(|query| !query.is_empty()) {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if crate::json_object::from_slice::<serde_json::Map<String, serde_json::Value>>(
+                &bytes,
+                &[],
+            )
+            .is_err()
+            {
+                return decline(row.handler, Decline::Shape);
+            }
+            let reply = open.cleanup().await;
+            (
+                StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                Json(reply.body),
+            )
+                .into_response()
+        }
         read => {
             let path = req.uri().path().to_owned();
             let query = req.uri().query().is_some();
@@ -1032,6 +1103,8 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             };
             let root = shared.boot.ccs_dir.clone();
             let store = shared.store.clone();
+            let profiles_path = path.clone();
+            let profiles_root = root.clone();
             match shared
                 .limits
                 .blocking(row.pool, move || {
@@ -1046,7 +1119,25 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 })
                 .await
             {
-                Ok(value) => Json(value).into_response(),
+                Ok(value) => {
+                    // G13: a bound Open owner adds each Open's progress to the manifest rows,
+                    // exactly as the TS composition adds its own store's progress.
+                    let value = if read == Handler::Profiles
+                        && profiles_path == "/api/claude/desktop-profiles"
+                    {
+                        match shared.claude_open.as_ref() {
+                            Some(open) => crate::claude_open::open::with_open_operations(
+                                value,
+                                open,
+                                &profiles_root,
+                            ),
+                            None => value,
+                        }
+                    } else {
+                        value
+                    };
+                    Json(value).into_response()
+                }
                 Err(reason) => decline(read, reason),
             }
         }
@@ -1111,7 +1202,16 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, Default::default(), None).await
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        false,
+        Default::default(),
+        None,
+        configured_claude_open_package(),
+    )
+    .await
 }
 
 /// Serve the private routes with an app-update job owner supplied by the service binary.
@@ -1120,7 +1220,16 @@ pub async fn serve_with_app_update_jobs(
     shutdown: impl Future<Output = ()> + Send + 'static,
     jobs: Arc<dyn AppUpdateJobs>,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, Some(jobs), false, Default::default(), None).await
+    serve_inner(
+        boot,
+        shutdown,
+        Some(jobs),
+        false,
+        Default::default(),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Same private protocol, with the native app-update owner using this boot's agent pool.
@@ -1128,7 +1237,16 @@ pub async fn serve_composed(
     boot: Boot,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, true, Default::default(), None).await
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        true,
+        Default::default(),
+        None,
+        configured_claude_open_package(),
+    )
+    .await
 }
 
 /// Run the private service with a shared dashboard cache.
@@ -1137,7 +1255,7 @@ pub async fn serve_with_account_usage_cache(
     shutdown: impl Future<Output = ()> + Send + 'static,
     cache: crate::account_usage::AccountUsageCache,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, cache, None).await
+    serve_inner(boot, shutdown, None, false, cache, None, None).await
 }
 
 /// Native owner callbacks share the dashboard with the public listener, hub and store.
@@ -1155,7 +1273,32 @@ pub async fn serve_with_native_account_usage(
     cache: crate::account_usage::AccountUsageCache,
     native: NativeAccountUsage,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, cache, Some(native)).await
+    serve_inner(boot, shutdown, None, false, cache, Some(native), None).await
+}
+
+/// Serve with the G13 Claude Open job owner bound: the package root supplies the pinned
+/// reference helpers, and the owner shares the service's own L5 pool.
+pub async fn serve_with_claude_open(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    package_root: PathBuf,
+) -> io::Result<()> {
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        false,
+        Default::default(),
+        None,
+        Some(package_root),
+    )
+    .await
+}
+
+fn configured_claude_open_package() -> Option<PathBuf> {
+    (std::env::var("AAC_RUST_GROUP_CLAUDE_OPEN").as_deref() == Ok("on"))
+        .then(crate::agent_transport::package_root)
+        .flatten()
 }
 
 async fn serve_inner(
@@ -1165,6 +1308,7 @@ async fn serve_inner(
     native_app_updates: bool,
     cache: crate::account_usage::AccountUsageCache,
     native: Option<NativeAccountUsage>,
+    claude_open_package: Option<PathBuf>,
 ) -> io::Result<()> {
     boot.validate()?;
     let owners = boot.owners()?;
@@ -1262,6 +1406,18 @@ async fn serve_inner(
         boot.ccs_dir.clone(),
         package_root.clone().unwrap_or_else(|| boot.ccs_dir.clone()),
     ));
+    let claude_open = claude_open_package.map(|package| {
+        let remote = Arc::new(crate::claude_open::remote::AgentRemote::new(
+            Arc::clone(&agents),
+            package,
+        ));
+        let ccs_dir = boot.ccs_dir.clone();
+        Arc::new(crate::claude_open::open::ClaudeOpen::new(
+            ccs_dir.clone(),
+            remote,
+            Box::new(move || crate::claude_open::open::snapshot_cleanup_auto(&ccs_dir)),
+        ))
+    });
     let state = AppState(Arc::new(Shared {
         owners,
         cache_writes: Arc::default(),
@@ -1280,6 +1436,7 @@ async fn serve_inner(
         status_owned: status_owned.clone(),
         scoreboard_owned: scoreboard_owned.clone(),
         usage,
+        claude_open,
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();

@@ -46,6 +46,8 @@ pub(crate) enum Handler {
     ResetClaims,
     Store,
     UsageSample,
+    ClaudeOpen,
+    ClaudeHistoryCleanup,
 }
 
 impl Handler {
@@ -84,6 +86,8 @@ impl Handler {
             "reset-claims" => Handler::ResetClaims,
             "store" => Handler::Store,
             "usage-sample" => Handler::UsageSample,
+            "claude-open" => Handler::ClaudeOpen,
+            "claude-history-cleanup" => Handler::ClaudeHistoryCleanup,
             _ => return None,
         })
     }
@@ -243,6 +247,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::CursorAccount
                         | Handler::Store
                         | Handler::UsageSample
+                        | Handler::ClaudeOpen
+                        | Handler::ClaudeHistoryCleanup
                 ))
             || (row.group == "internal" && !internal)
             || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
@@ -271,6 +277,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ResetClaims
                         | Handler::Store
                         | Handler::UsageSample
+                        | Handler::ClaudeOpen
+                        | Handler::ClaudeHistoryCleanup
                 ))
             || (method == axum::http::Method::PUT
                 && !matches!(
@@ -332,6 +340,14 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     || row.group != "writes"
                     || roles != [Role::Admin]
                     || row.path != "/api/accounts/visibility"))
+            || (handler == Handler::ClaudeOpen
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/claude-open"
+                    || row.budget_ms != 0))
+            || (handler == Handler::ClaudeHistoryCleanup
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/claude-history-cleanup"
+                    || row.budget_ms != 0))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)
@@ -378,6 +394,8 @@ mod tests {
                     | Handler::CursorAccount
                     | Handler::Store
                     | Handler::UsageSample
+                    | Handler::ClaudeOpen
+                    | Handler::ClaudeHistoryCleanup
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.
