@@ -94,7 +94,7 @@ impl Pricing for ResolverPricing {
 }
 
 fn fed_json(feeds: &Feeds, source: &str) -> Option<Value> {
-    let generation = feeds.latest(source)?;
+    let generation = feeds.latest(source).ok()?;
     serde_json::from_str(generation.data.get()).ok()
 }
 
