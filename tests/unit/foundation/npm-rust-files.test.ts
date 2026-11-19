@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'bun:test';
+import { toPosix } from '../../../scripts/foundation/to-posix.mjs';
 
 const SHIPPED_CRATES = ['crates/aac-core/', 'crates/aac-files/', 'crates/aac-num/'];
 
@@ -29,7 +30,7 @@ describe('npm files for shipped Rust sources', () => {
         // Test modules sit at the end of a file by convention; what follows #[cfg(test)] is test-only.
         const production = source.split('#[cfg(test)]')[0] ?? '';
         for (const match of production.matchAll(/include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)/g)) {
-          const target = path.relative('.', path.resolve(path.dirname(file), match[1] as string));
+          const target = toPosix(path.relative('.', path.resolve(path.dirname(file), match[1] as string)));
           if (!shipped(target)) missing.push(`${file} -> ${target}`);
         }
       }
