@@ -465,6 +465,41 @@ it.skipIf(!rustPublicBinary || process.platform !== 'linux')(
   }
 );
 
+it.skipIf(!rustPublicBinary || process.platform !== 'linux')(
+  'saves settings after the legacy empty marker loses its last writer',
+  async () => {
+    await writeConfig('configured');
+    const { rust, origin } = await startRustAuth();
+    const marker = path.join(home, '.ccs', 'config.yaml.lock');
+    try {
+      const cookie = await signInRust(origin);
+      const save = () =>
+        fetch(origin + '/api/auth/session-lifetime', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', origin, cookie },
+          body: '{"days":30}',
+        });
+      const legacyFd = fs.openSync(marker, 'wx', 0o600);
+      try {
+        expect((await save()).status).toBe(500);
+        const old = new Date(Date.now() - 6_000);
+        fs.futimesSync(legacyFd, old, old);
+        expect((await save()).status).toBe(500);
+        expect(fs.statSync(marker).size).toBe(0);
+      } finally {
+        fs.closeSync(legacyFd);
+      }
+      const saved = await save();
+      expect(saved.status).toBe(200);
+      expect((await saved.json()).days).toBe(30);
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      rust.kill('SIGTERM');
+      await rust.exited;
+    }
+  }
+);
+
 describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
   it('serves the same app over TLS, where secureTransport is true', async () => {
     const files = makeCertificate(0o600);
