@@ -14,6 +14,7 @@ if (operation === 'hold') {
   try {
     await serialized(childRoot, keyQueue('zai'), async () => {
       process.stdout.write('held\n');
+      process.stdin.resume();
       await once(process.stdin, 'end');
     });
   } finally {

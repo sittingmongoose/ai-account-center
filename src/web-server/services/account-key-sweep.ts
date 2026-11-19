@@ -20,7 +20,7 @@ export async function sweepOrphanKeys(
 ): Promise<number> {
   let removed = 0;
   for (const provider of KEY_PROVIDERS) {
-    removed += await serialized(keyQueue(provider), async () => {
+    removed += await serialized(ccsDir, keyQueue(provider), async () => {
       let named: Set<string>;
       try {
         const { mode, entries } = await readAdditionalEntries(ccsDir);

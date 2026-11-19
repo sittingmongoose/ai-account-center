@@ -219,7 +219,7 @@ async function addApiKey(
   await assertCanAdd(env, provider, context);
   const store = env.keyStore({ platform: 'ubuntu', sshHost: null });
   if (!store) throw new LifecycleHttpError(500, 'key_store_unavailable');
-  return serialized(keyQueue(provider), async () => {
+  return serialized(env.ccsDir(), keyQueue(provider), async () => {
     if ((await store.fingerprints(provider)).has(keyFingerprint(secret))) {
       throw new LifecycleHttpError(409, 'duplicate_key');
     }
@@ -322,7 +322,7 @@ export async function replaceKey(
   const store = env.keyStore({ platform: entry.platform, sshHost: entry.sshHost });
   if (!store) throw new LifecycleHttpError(409, 'not_configured');
   // In the provider's key queue, which a Remove of this account also takes.
-  return serialized(keyQueue(provider), async () => {
+  return serialized(env.ccsDir(), keyQueue(provider), async () => {
     const { entries } = await currentKeyEntry(env, entry);
     const own = await store.info(provider, keyId);
     const others = await store.fingerprints(provider);

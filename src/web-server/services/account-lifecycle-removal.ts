@@ -176,7 +176,8 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
       fingerprint: async () => reviewedEntry(entry),
       // In the provider's key queue, so a Replace key can never write the key back
       // after this deleted it (the queue also holds Add and the orphan-key sweep).
-      commit: () => serialized(keyQueue(entry.provider), () => removeAdditional(env, entry)),
+      commit: () =>
+        serialized(env.ccsDir(), keyQueue(entry.provider), () => removeAdditional(env, entry)),
     };
   }
   if (account.kind === 'antigravity' && env.antigravity) {

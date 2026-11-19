@@ -416,10 +416,6 @@ export class ClaudeAccountLifecycle {
     return this.restoreFingerprint(entry);
   }
 
-  private purgeQueue(): string {
-    return this.ccsDir() + '\\0claude-purge';
-  }
-
   private async reservePurge(
     trashId: string,
     reviewed?: string,
@@ -456,7 +452,7 @@ export class ClaudeAccountLifecycle {
    */
   async purgeOne(trashId: string, reviewed?: string): Promise<{ trashId: string }> {
     this.assertEnabled();
-    return serialized(this.purgeQueue(), () => this.performPurgeOne(trashId, reviewed));
+    return serialized(this.ccsDir(), 'claude-purge', () => this.performPurgeOne(trashId, reviewed));
   }
 
   private async performPurgeOne(trashId: string, reviewed?: string): Promise<{ trashId: string }> {
@@ -489,7 +485,7 @@ export class ClaudeAccountLifecycle {
   /** Delete trash past `purgeAfter`; an unreachable host keeps the entry as `deleting`. */
   async purgeDue(): Promise<number> {
     if (!this.deps.enabled) return 0;
-    return serialized(this.purgeQueue(), () => this.sweepDueTrash());
+    return serialized(this.ccsDir(), 'claude-purge', () => this.sweepDueTrash());
   }
 
   private async sweepDueTrash(): Promise<number> {

@@ -20,6 +20,8 @@ mod limits;
 #[cfg(unix)]
 pub mod lifecycle_maintenance;
 #[cfg(unix)]
+pub mod lifecycle_queue;
+#[cfg(unix)]
 mod preferences_write;
 #[cfg(unix)]
 mod profile_reads;

@@ -19,6 +19,7 @@ fn main() {
         Some("--codex-staging") => std::process::exit(provider_write::staging(false)),
         Some("--antigravity-staging") => std::process::exit(provider_write::staging(true)),
         Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
+        Some("--lifecycle-queue") => std::process::exit(lifecycle_queue()),
         Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
         _ => {}
     }
@@ -45,6 +46,25 @@ fn lifecycle_maintenance() -> i32 {
         runtime.block_on(aac_http::lifecycle_maintenance::compatibility_pipe())
     });
     if result.is_ok() { 0 } else { 74 }
+}
+
+#[cfg(unix)]
+fn lifecycle_queue() -> i32 {
+    use std::{fs::File, os::fd::AsFd, path::Path};
+    let mut args = std::env::args_os().skip(2);
+    let (Some(root), Some(scope), None) = (args.next(), args.next(), args.next()) else {
+        return 74;
+    };
+    let Some(scope) = scope.to_str() else {
+        return 74;
+    };
+    let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() else {
+        return 74;
+    };
+    match aac_files::lifecycle_queue::lock_inherited(Path::new(&root), scope, &File::from(fd)) {
+        Ok(()) => 0,
+        Err(_) => 74,
+    }
 }
 
 #[cfg(unix)]
