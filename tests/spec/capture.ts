@@ -24,6 +24,7 @@ assert.ok(!composedOutput || recordComposed, 'a composed output requires --regen
 const differences: string[] = [];
 let matched = 0;
 let declines = 0;
+let retained = 0;
 const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
 const nativePrivate = composed && process.platform !== 'win32';
 const nativeReset = composed;
@@ -372,7 +373,6 @@ const instance = composed
 const base =
   'http://127.0.0.1:' +
   (instance.publicAddress ?? (instance.server.address() as import('net').AddressInfo)).port;
-const codexSummary = await import('../../src/codex-auth/codex-auth-dashboard-service');
 const { pairDevice } = await import('../../src/web-server/services/dashboard-device-store');
 
 const hubModule = await import('../../src/web-server/usage-hub/usage-hub-key-store');
@@ -661,8 +661,8 @@ try {
   }
   for (const [index, route] of inventory.entries()) {
     if (MOVED_TO_RUST.has(`${route.method} ${route.path}`)) {
-      // The Rust listener owns these bytes; their contracts were recorded before the move.
-      matched += roles.length;
+      // The Rust-only public replay verifies these rows. The legacy recorder preserves them.
+      retained += roles.length;
       continue;
     }
     for (const role of roles) {
@@ -757,9 +757,6 @@ try {
         continue;
       }
       const method = route.method === 'ALL' ? 'POST' : route.method;
-      // The Codex summary's 5-second memo would otherwise answer /api/codex/profiles from the
-      // quota route's read, making the Rust reply count depend on timing.
-      codexSummary.invalidateCodexAuthProfilesCache();
       const response = await fetch(base + url, {
         method,
         headers,
@@ -825,36 +822,23 @@ try {
   if (!composed && rustMode === 'on')
     assert.equal(
       instance.rustService.stats.served,
-      27,
-      'must actually serve health/settings/diag, the session/bar visibility, preferences and registry reads, and the session/bar (and device-scoped) profile reads from Rust after TS role guards'
+      15,
+      'must serve health/settings/diag, visibility, preferences and registry through the private service'
     );
   if (!composed && rustMode === 'shadow') {
     // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
     // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
     // compared; the Analytics stub stops at its query check before any Rust composition.
-    // Pair-2 M1 keeps standalone profiles in TS until a minimal shadow DTO exists. These twelve
-    // authenticated profile calls must decline before building or sending a private input.
+    // Profiles now replay at the native public listener. The legacy recorder never sends
+    // private requests for those routes.
     for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)
       await new Promise((r) => setTimeout(r, 10));
     assert.equal(instance.rustService.stats.shadowed, 18);
     assert.equal(instance.rustService.stats.served, 0);
     assert.equal(instance.rustService.stats.differences, 0);
-    const counters = instance.rustService.diagnostics().routes as Record<
-      string,
-      { unavailable?: Record<string, number>; equal?: number; different?: number; served?: number }
-    >;
-    for (const [route, declined] of [
-      ['/api/claude/desktop-profiles', 3],
-      ['/api/codex/profiles', 2],
-      ['/api/codex/profiles/quotas', 2],
-      ['/api/antigravity/profiles', 3],
-      ['/api/antigravity/profiles/quotas', 2],
-    ] as const) {
-      assert.deepEqual(counters[route]?.unavailable, { private_input: declined }, route);
-      assert.equal(counters[route]?.equal ?? 0, 0, route);
-      assert.equal(counters[route]?.different ?? 0, 0, route);
-      assert.equal(counters[route]?.served ?? 0, 0, route);
-    }
+    const counters = instance.rustService.diagnostics().routes as Record<string, unknown>;
+    for (const route of MOVED_TO_RUST)
+      assert.equal(counters[route.slice(route.indexOf(' ') + 1)], undefined, route);
   }
   if (!composed && rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
   // Caller headers cannot create a principal or bypass the TS session/query/origin guards.
@@ -958,7 +942,9 @@ try {
         declines +
         ' awaiting-composition declines, ' +
         differences.length +
-        ' differing. Rust private counters: ' +
+        ' differing, ' +
+        retained +
+        ' retained for native replay. Rust private counters: ' +
         JSON.stringify(instance.rustService.stats)
     );
     console.log(
@@ -973,7 +959,7 @@ try {
     }
   }
   console.log(
-    `${inventory.length} routes x ${roles.length} roles captured; rustService=${rustMode}, routing and boundary checks passed`
+    `${inventory.length} routes x ${roles.length} roles in the inventory, ${retained} retained for native replay; rustService=${rustMode}, routing and boundary checks passed`
   );
 } finally {
   instance.cleanup();
