@@ -1,0 +1,35 @@
+
+Usage: ai-account-center dashboard [command] [options]
+Compatibility: ccs config accepts the same arguments.
+
+Open the account and usage dashboard.
+
+Commands:
+  auth setup         Configure dashboard username and password
+  auth show          Display dashboard authentication status
+  auth disable       Disable dashboard authentication
+  usage-hub status   Show the T3 usage hub state and the URL for T3
+  usage-hub generate --stdout   Create the T3 usage hub key (shown once)
+  usage-hub rotate --stdout     Replace the T3 usage hub key
+  usage-hub off      Turn the T3 usage hub off
+  usage-snapshot set <folder>   Publish account usage for agents into <folder>
+  usage-snapshot status|off     Show or stop the agent usage snapshot
+  proxy status       Show whether the LAN HTTPS reverse proxy is trusted
+  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy
+  proxy off          Stop trusting the LAN HTTPS proxy
+  store status       Show the history store state and last backup
+  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)
+  cursor-key set|status|remove   AAC's Cursor API key (the key on stdin, never printed)
+
+Options:
+  --port, -p PORT    Server port (default: auto-detect)
+  --host, -H HOST    Bind host (default: localhost)
+  --no-open         Start the server without opening a browser
+  --help, -h        Show this help message
+
+Linux service startup never opens a browser automatically.
+
+Examples:
+  ai-account-center dashboard --host localhost --port 3000 --no-open
+  ai-account-center dashboard auth setup
+

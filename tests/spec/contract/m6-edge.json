@@ -1,0 +1,965 @@
+{
+  "cli": [
+    {
+      "argv": [
+        "--help"
+      ],
+      "case": "cli: help",
+      "status": 0,
+      "stderr": "",
+      "stdout": "AI Account Center\n\nUsage: ai-account-center <command> [options]\n\nCommands:\n  dashboard      Open the account and usage dashboard\n  codex-auth     Save Codex logins whose usage the dashboard reads\n  antigravity    Add or sign in again to a saved Antigravity profile on Ubuntu\n  bar            Install, launch, or inspect the native account bar\n  help           Show command help\n  version        Show version and installation paths\n\nCompatibility: ccs uses the same commands; config is an alias for dashboard.\nGlobal option: --config-dir PATH selects the existing account configuration directory.\n\nExamples:\n  ai-account-center dashboard --host localhost --port 3000 --no-open\n  ai-account-center dashboard auth setup\n  ai-account-center codex-auth show\n  ai-account-center codex-auth login work\n  ai-account-center antigravity signin party\n  ai-account-center bar version\n\n"
+    },
+    {
+      "argv": [
+        "--version"
+      ],
+      "case": "cli: version and paths",
+      "status": 0,
+      "stderr": "",
+      "stdout": "AI Account Center v8.10.0\nInstallation: <executable>\nAccount configuration: <fixture-home>/.ccs\nConfig: <fixture-home>/.ccs/config.json\nLicense: MIT; derived from CCS by Tam Nhu Tran (Kai).\nRun 'ai-account-center --help' for usage information.\n"
+    },
+    {
+      "argv": [
+        "dashboard",
+        "--help"
+      ],
+      "case": "cli: dashboard help",
+      "status": 0,
+      "stderr": "",
+      "stdout": "\nUsage: ai-account-center dashboard [command] [options]\nCompatibility: ccs config accepts the same arguments.\n\nOpen the account and usage dashboard.\n\nCommands:\n  auth setup         Configure dashboard username and password\n  auth show          Display dashboard authentication status\n  auth disable       Disable dashboard authentication\n  usage-hub status   Show the T3 usage hub state and the URL for T3\n  usage-hub generate --stdout   Create the T3 usage hub key (shown once)\n  usage-hub rotate --stdout     Replace the T3 usage hub key\n  usage-hub off      Turn the T3 usage hub off\n  usage-snapshot set <folder>   Publish account usage for agents into <folder>\n  usage-snapshot status|off     Show or stop the agent usage snapshot\n  proxy status       Show whether the LAN HTTPS reverse proxy is trusted\n  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy\n  proxy off          Stop trusting the LAN HTTPS proxy\n  store status       Show the history store state and last backup\n  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)\n  cursor-key set|status|remove   AAC's Cursor API key (the key on stdin, never printed)\n\nOptions:\n  --port, -p PORT    Server port (default: auto-detect)\n  --host, -H HOST    Bind host (default: localhost)\n  --no-open         Start the server without opening a browser\n  --help, -h        Show this help message\n\nLinux service startup never opens a browser automatically.\n\nExamples:\n  ai-account-center dashboard --host localhost --port 3000 --no-open\n  ai-account-center dashboard auth setup\n\n"
+    },
+    {
+      "argv": [
+        "config",
+        "--help"
+      ],
+      "case": "cli: config is the dashboard alias",
+      "status": 0,
+      "stderr": "",
+      "stdout": "\nUsage: ai-account-center dashboard [command] [options]\nCompatibility: ccs config accepts the same arguments.\n\nOpen the account and usage dashboard.\n\nCommands:\n  auth setup         Configure dashboard username and password\n  auth show          Display dashboard authentication status\n  auth disable       Disable dashboard authentication\n  usage-hub status   Show the T3 usage hub state and the URL for T3\n  usage-hub generate --stdout   Create the T3 usage hub key (shown once)\n  usage-hub rotate --stdout     Replace the T3 usage hub key\n  usage-hub off      Turn the T3 usage hub off\n  usage-snapshot set <folder>   Publish account usage for agents into <folder>\n  usage-snapshot status|off     Show or stop the agent usage snapshot\n  proxy status       Show whether the LAN HTTPS reverse proxy is trusted\n  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy\n  proxy off          Stop trusting the LAN HTTPS proxy\n  store status       Show the history store state and last backup\n  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)\n  cursor-key set|status|remove   AAC's Cursor API key (the key on stdin, never printed)\n\nOptions:\n  --port, -p PORT    Server port (default: auto-detect)\n  --host, -H HOST    Bind host (default: localhost)\n  --no-open         Start the server without opening a browser\n  --help, -h        Show this help message\n\nLinux service startup never opens a browser automatically.\n\nExamples:\n  ai-account-center dashboard --host localhost --port 3000 --no-open\n  ai-account-center dashboard auth setup\n\n"
+    },
+    {
+      "argv": [
+        "update"
+      ],
+      "case": "cli: retired self-update",
+      "status": 1,
+      "stderr": "[X] Upstream CCS self-update is retired in AI Account Center.\n    Update AI Account Center from its own release or checkout.\n    Installed application updates remain available in the dashboard.\n    Use ai-account-center dashboard, codex-auth, bar, or --help.\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "launch",
+        "work"
+      ],
+      "case": "cli: retired profile workflow",
+      "status": 1,
+      "stderr": "[X] \"launch\" is an unsupported command or retired upstream CCS workflow.\n    AI Account Center manages accounts and usage; profile/model CLI launches are retired.\n    Use ai-account-center dashboard, codex-auth, bar, or --help.\n",
+      "stdout": ""
+    },
+    {
+      "argv": [],
+      "case": "cli: retired legacy bin",
+      "status": 1,
+      "stderr": "[X] ccs-droid is a retired upstream CCS launcher.\n    Use ai-account-center dashboard for accounts and usage.\n    Use ai-account-center codex-auth show to inspect saved Codex logins.\n    Use ai-account-center codex-auth activate <saved-login> to activate the shared login.\n    Shell exports, isolated CODEX_HOME launches, Droid routing, and CLIProxy launches are retired.\n",
+      "stdout": ""
+    }
+  ],
+  "http": [
+    {
+      "case": "hub auth-files with a bearer key",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "files": [
+            {
+              "auth_index": "49a9393745dd05c6",
+              "disabled": false,
+              "email": "codex:alpha@example.com",
+              "id": "codex:alpha",
+              "label": "codex:alpha",
+              "provider": "codex",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "3b57faefdc629b5b",
+              "disabled": false,
+              "email": "codex:gamma@example.com",
+              "id": "codex:gamma",
+              "label": "codex:gamma",
+              "provider": "codex",
+              "sampled_at": null,
+              "status": "error",
+              "status_message": "AI Account Center has no current reading for this account.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "034c5a25f188dc4d",
+              "disabled": false,
+              "email": "claude:beta@example.com",
+              "id": "claude:beta",
+              "label": "claude:beta",
+              "provider": "claude",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "claude"
+            }
+          ]
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub auth-files with X-Management-Key",
+      "request": {
+        "headers": {
+          "x-management-key": "<management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "files": [
+            {
+              "auth_index": "49a9393745dd05c6",
+              "disabled": false,
+              "email": "codex:alpha@example.com",
+              "id": "codex:alpha",
+              "label": "codex:alpha",
+              "provider": "codex",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "3b57faefdc629b5b",
+              "disabled": false,
+              "email": "codex:gamma@example.com",
+              "id": "codex:gamma",
+              "label": "codex:gamma",
+              "provider": "codex",
+              "sampled_at": null,
+              "status": "error",
+              "status_message": "AI Account Center has no current reading for this account.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "034c5a25f188dc4d",
+              "disabled": false,
+              "email": "claude:beta@example.com",
+              "id": "claude:beta",
+              "label": "claude:beta",
+              "provider": "claude",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "claude"
+            }
+          ]
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: Codex usage",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"plan_type\":\"pro\",\"rate_limit\":{\"primary_window\":{\"used_percent\":30,\"reset_at\":1791298800,\"limit_window_seconds\":18000},\"secondary_window\":{\"used_percent\":78,\"reset_at\":1791581532,\"limit_window_seconds\":604800}}}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: Claude usage",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"five_hour\":{\"utilization\":10,\"resets_at\":null},\"seven_day\":{\"utilization\":50,\"resets_at\":\"2026-10-10T00:00:00.000Z\"},\"limits\":[]}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: an account with no reading answers 503 upstream",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"error\":{\"type\":\"no_cached_reading\",\"message\":\"AI Account Center has no current reading for this account.\"}}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 503
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: an unknown auth_index",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unknown_auth_index",
+          "error": "No account has this auth_index. List auth-files."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "hub api-call: a provider mismatch",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "This usage read does not match the account provider."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: a foreign URL is not proxied",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center answers only the Codex and Claude usage reads T3 makes. It is not a proxy."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: reset credits are refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center does not offer Codex reset credits to T3."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: a write is refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center answers only GET usage reads. It is not a proxy and changes nothing."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: invalid JSON",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "invalid_json",
+          "error": "Invalid JSON in request body"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 400
+      }
+    },
+    {
+      "case": "hub reset-quota is refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/reset-quota"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center does not reset quotas for T3. It only reports usage."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub: no key",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "missing_management_key",
+          "error": "A management key is required."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 401
+      }
+    },
+    {
+      "case": "hub: a wrong key",
+      "request": {
+        "headers": {
+          "authorization": "Bearer aacu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "invalid_management_key",
+          "error": "The management key is not valid."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 401
+      }
+    },
+    {
+      "case": "hub: a key in the query string is refused",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/v0/management/auth-files?key=<management-key>"
+      },
+      "response": {
+        "body": {
+          "code": "key_in_query",
+          "error": "Send the management key only in a request header."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 400
+      }
+    },
+    {
+      "case": "hub: any other path",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/other"
+      },
+      "response": {
+        "body": {
+          "code": "not_found",
+          "error": "AI Account Center offers only auth-files and api-call usage reads here."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "hub: a method it does not serve",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "PUT",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "not_found",
+          "error": "AI Account Center offers only auth-files and api-call usage reads here."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "page: /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "body": "<!doctype html><title>AI Account Center</title><link rel=\"stylesheet\" href=\"/app/app.css?v=0607085ef441\"><link rel=\"modulepreload\" href=\"/pkg/<build-id>/aac_web.js\"><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><script type=\"module\">import init from '/pkg/<build-id>/aac_web.js'; init({ module_or_path: '/pkg/<build-id>/aac_web_bg.wasm' });</script>",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: /app/home",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/home"
+      },
+      "response": {
+        "body": "<!doctype html><title>AI Account Center</title><link rel=\"stylesheet\" href=\"/app/app.css?v=0607085ef441\"><link rel=\"modulepreload\" href=\"/pkg/<build-id>/aac_web.js\"><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><script type=\"module\">import init from '/pkg/<build-id>/aac_web.js'; init({ module_or_path: '/pkg/<build-id>/aac_web_bg.wasm' });</script>",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: /login (bookmark alias)",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/login"
+      },
+      "response": {
+        "body": "<!doctype html><title>AI Account Center</title><link rel=\"stylesheet\" href=\"/app/app.css?v=0607085ef441\"><link rel=\"modulepreload\" href=\"/pkg/<build-id>/aac_web.js\"><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><!-- page --><script type=\"module\">import init from '/pkg/<build-id>/aac_web.js'; init({ module_or_path: '/pkg/<build-id>/aac_web_bg.wasm' });</script>",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: HEAD",
+      "request": {
+        "headers": {},
+        "method": "HEAD",
+        "path": "/app/home"
+      },
+      "response": {
+        "body": "",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "frame stylesheet revalidates",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/app.css"
+      },
+      "response": {
+        "body": "body{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\nbody{margin:0}\n",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/css; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "classic upgrade module is a script",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/bridge.js"
+      },
+      "response": {
+        "body": "// The upgrade path for a cached classic page; not the classic app's bridge. The classic Slint app was retired (Leptos\n// finish, step 9) and its bridge with it. A device that chose the classic app (aac-frame=classic) can still open the\n// copy of the classic start page that its previous service worker stored (a slow launch falls back to it after 3 s),\n// and that page loads exactly one script: this address, as a module. Here it forgets the classic choice and moves the\n// page to the app frame, at the tab its address named (lib.rs page_from_location, case for case) with the rest of its\n// query and its #fragment. It loads nothing else, so it works whatever else the old cache holds.\n\nconst TABS = ['home', 'analytics', 'accounts', 'status', 'scoreboard'];\n/** The classic app's own query keys; the tab is in the frame's path instead (lib.rs kept_search). */\nconst RETIRED_KEYS = ['view', 'classic', 'content'];\n\n/** A query key as URLSearchParams reads it (`+` is a space, `%XX` is decoded); a malformed one stays as written. */\nfunction decodedKey(pair) {\n  const key = pair.split('=')[0].replace(/\\+/g, ' ');\n  try {\n    return decodeURIComponent(key);\n  } catch {\n    return key;\n  }\n}\n\n/** The frame address for a classic page's address: `/app/<tab>` plus the query without the classic keys. */\nexport function frameAddress(pathname, search) {\n  const raw = typeof search === 'string' ? search : '';\n  let view = null;\n  try {\n    view = new URLSearchParams(raw).get('view');\n  } catch {\n    view = null;\n  }\n  const path = typeof pathname === 'string' ? pathname : '/';\n  const trimmed = path.replace(/\\/+$/, '');\n  let tab;\n  if (path === '/app' || path.startsWith('/app/')) {\n    const last = trimmed.split('/').pop();\n    tab = TABS.includes(last) ? last : 'status';\n  } else if (TABS.includes(view)) {\n    tab = view;\n  } else if (['/analytics', '/accounts', '/status', '/scoreboard'].includes(trimmed)) {\n    tab = trimmed.slice(1);\n  } else {\n    tab = /^\\/accounts\\/[a-z0-9][a-z0-9-]{0,63}$/.test(trimmed) ? 'accounts' : 'home';\n  }\n  const kept = raw\n    .replace(/^\\?/, '')\n    .split('&')\n    .filter((pair) => pair !== '' && !RETIRED_KEYS.includes(decodedKey(pair)));\n  return `/app/${tab}${kept.length ? `?${kept.join('&')}` : ''}`;\n}\n\n/** Forget the classic choice and open the frame in this page's place (no history entry for the classic page). The\n * #fragment comes along as written (an empty one adds nothing), as the frame keeps it when it takes an address over. */\nexport function leaveClassic(win) {\n  try {\n    win.localStorage.removeItem('aac-frame');\n  } catch {\n    // storage refused: the frame ignores the choice anyway\n  }\n  const hash =\n    typeof win.location.hash === 'string' && win.location.hash.length > 1 ? win.location.hash : '';\n  win.location.replace(frameAddress(win.location.pathname, win.location.search) + hash);\n}\n\nif (typeof window !== 'undefined' && window.location) leaveClassic(window);\n",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: identity",
+      "request": {
+        "headers": {
+          "accept-encoding": "identity"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": "export default async function init() {}\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n",
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: brotli variant",
+      "request": {
+        "headers": {
+          "accept-encoding": "br"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": "export default async function init() {}\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n",
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: gzip variant",
+      "request": {
+        "headers": {
+          "accept-encoding": "gzip"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": "export default async function init() {}\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n// glue\n",
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "gzip",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: wasm",
+      "request": {
+        "headers": {
+          "accept-encoding": "br"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web_bg.wasm"
+      },
+      "response": {
+        "body": {
+          "bytes": 11795,
+          "sha256": "<build-id>799841a9c4f319f6abdcec979580bcab28655800d0d4f309175f"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "application/wasm",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: a matching ETag revalidates",
+      "request": {
+        "headers": {
+          "accept-encoding": "gzip"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": "",
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 304
+      }
+    },
+    {
+      "case": "pkg: a precompressed file is never served directly",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js.br"
+      },
+      "response": {
+        "body": {
+          "error": "Not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "the build manifest is never served",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/ui-build-manifest.json"
+      },
+      "response": {
+        "body": {
+          "error": "Not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "service worker",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/sw.js"
+      },
+      "response": {
+        "body": "// The app shell's service worker (DESIGN-MOBILE.md 6.5): offline and fast start.\n// scripts/build-ui.js stamps BUILD_ID (a hash of the shell inputs) and PRECACHE (every address the app needs offline:\n// its page addresses and every packaged asset) into the packaged copy; any shell change then installs a new worker.\n// Installing downloads the whole replacement first: if any part fails, the install fails and the worker in charge,\n// with its cache, stays. The new worker activates on the next launch (no skipWaiting, no update prompt) and only\n// then, with its own copy complete, drops the previous build's caches, so the installed app always has one usable\n// copy offline (review M1). Routing rules live in the pure sw-route.js (tested); this file only runs them against\n// fetch/cache. The installed copy is immutable: ordinary network reads never change it.\nimportScripts('./sw-route.js');\n\nvar BUILD_ID = '6d02dee91aad';\nvar CACHE = AacSwRoute.cacheName(BUILD_ID);\nvar PRECACHE = [\"/\",\"/app/home\",\"/app/analytics\",\"/app/accounts\",\"/app/status\",\"/app/scoreboard\",\"/account-actions.mjs\",\"/accounts-controller.mjs\",\"/accounts-data.mjs\",\"/accounts-view.mjs\",\"/analytics-data.mjs\",\"/analytics-page.mjs\",\"/analytics-quota.mjs\",\"/analytics-usage.mjs\",\"/antigravity-data.mjs\",\"/app/MartianMono.ttf\",\"/app/app.css?v=0607085ef441\",\"/assets/InstrumentSans.ttf\",\"/assets/aac-logo.svg\",\"/assets/favicon.svg\",\"/auth-view.mjs\",\"/bridge.js\",\"/claude-open.mjs\",\"/claude-signins.mjs\",\"/computers.json\",\"/computers.mjs\",\"/cursor-data.mjs\",\"/device.mjs\",\"/frame-analytics.mjs\",\"/frame-dashboard.mjs\",\"/frame-seam.mjs\",\"/frame-session.mjs\",\"/icons/aac-192.png\",\"/icons/aac-512.png\",\"/icons/aac-maskable-192.png\",\"/icons/aac-maskable-512.png\",\"/icons/apple-touch-icon-180-v2.png\",\"/icons/apple-touch-icon-180.png\",\"/manifest.webmanifest\",\"/model-rates.mjs\",\"/pkg/<build-id>/aac_web.js\",\"/pkg/<build-id>/aac_web_bg.wasm\",\"/reset-live.mjs\",\"/reset-rows.mjs\",\"/status-bar.css\",\"/time-format.mjs\",\"/transport.mjs\",\"/view-model.mjs\",\"/visible-usage.mjs\"];\n\n// First visit while offline: neither the network nor the cache has the shell.\n// Once the app has loaded, the in-app Offline screen (phase 5) takes over.\nvar OFFLINE_PAGE =\n  '<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">' +\n  '<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">' +\n  '<meta name=\"mobile-web-app-capable\" content=\"yes\">' +\n  '<meta name=\"apple-mobile-web-app-capable\" content=\"yes\">' +\n  '<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black-translucent\">' +\n  '<meta name=\"theme-color\" media=\"(prefers-color-scheme: light)\" content=\"#ECF0F3\">' +\n  '<meta name=\"theme-color\" media=\"(prefers-color-scheme: dark)\" content=\"#0C1217\">' +\n  '<title>AI Account Center</title>' +\n  '<style>html,body{margin:0;height:100%}body{display:flex;align-items:center;justify-content:center;' +\n  'background:#ECF0F3;color:#15202B;font:15px/1.5 system-ui,sans-serif;text-align:center}' +\n  '@media (prefers-color-scheme:dark){body{background:#0C1217;color:#E6EBF0}}' +\n  'body::before,body::after{content:\"\";position:fixed;top:0;left:0;right:0;pointer-events:none;z-index:2147483646;box-sizing:border-box}' +\n  'body::before{height:max(env(safe-area-inset-top,0px),var(--safe-top,0px));background:#0C1217}' +\n  'body::after{height:184px;border-style:solid;border-color:#0C1217;border-width:0 env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}' +\n  'main{padding:calc(24px + env(safe-area-inset-top,0px)) calc(24px + env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) calc(24px + env(safe-area-inset-left,0px))}a{color:#2552CC}</style></head><body><main>' +\n  '<h1>Can&rsquo;t reach the dashboard</h1>' +\n  '<p>The app shell has not been downloaded yet, and there is no connection.</p>' +\n  '<p><a href=\"/\">Try again</a></p></main></body></html>';\n\n// The network answer is never aborted. A packaged worker keeps its installed generation intact; only a complete\n// install may replace it. An unstamped development worker can still warm resources as they are read.\nfunction fromNetwork(event, request) {\n  var network = fetch(request).then(function (response) {\n    if (response.status < 500 || response.status > 599) storeFor(event, request, response);\n    return response;\n  });\n  try {\n    event.waitUntil(\n      network.catch(function () {\n        // offline: the cache answers\n      })\n    );\n  } catch {\n    // The event already finished; the fetch still runs while the worker lives.\n  }\n  return network;\n}\n\n/** Rejects after `ms`, so a slow network can give way to the cached shell. */\nfunction giveUpAfter(ms) {\n  return new Promise(function (resolve, reject) {\n    setTimeout(function () {\n      reject(new Error('The network was too slow; the cached shell answers.'));\n    }, ms);\n  });\n}\n\n// Stores a copy of a fetched response. The copies are cloned right away, before\n// the original goes back to the page and its body is read; cloning later, after\n// the cache opened, failed silently and left the cache empty.\nfunction store(request, response) {\n  if (PRECACHE.length > 0 || request.cache === 'no-store' || !AacSwRoute.cacheable(response))\n    return Promise.resolve();\n  var copy = response.clone();\n  var mirror = null;\n  try {\n    var url = new URL(request.url);\n    if (\n      AacSwRoute.shouldMirrorStartUrl(\n        {\n          method: request.method,\n          sameOrigin: url.origin === self.location.origin,\n          pathname: url.pathname,\n          isNavigation: request.mode === 'navigate',\n        },\n        response\n      )\n    ) {\n      // Every page route serves the same index.html: mirror it under the\n      // start URL, so the installed app's first offline launch finds a shell.\n      mirror = new URL(AacSwRoute.START_URL_PATHNAME, url.origin).toString();\n    }\n  } catch {\n    mirror = null;\n  }\n  // A separate copy per entry; the original stays with the page.\n  var mirrorCopy = mirror ? response.clone() : null;\n  return caches\n    .open(CACHE)\n    .then(function (cache) {\n      var puts = [cache.put(request, copy)];\n      if (mirror) puts.push(cache.put(mirror, mirrorCopy));\n      return Promise.all(puts);\n    })\n    .catch(function () {});\n}\n\n// Keeps the worker alive until the copy is stored.\nfunction storeFor(event, request, response) {\n  var done = store(request, response);\n  try {\n    event.waitUntil(done);\n  } catch {\n    // The event already finished; the store still runs while the worker lives.\n  }\n}\n\n// A packaged copy's runtime is already named by its precache addresses and entry HTML.\nfunction runtimePath(html) {\n  var found = /[\"'](\\/pkg\\/[a-f0-9]{12})\\/aac_web\\.js[\"']/.exec(html);\n  return found ? found[1] : null;\n}\n\nvar installedRuntime = PRECACHE.map(function (address) {\n  var found = /^(\\/pkg\\/[a-f0-9]{12})\\/aac_web\\.js$/.exec(address);\n  return found ? found[1] : null;\n}).filter(Boolean)[0];\nvar installedStylesheet = PRECACHE.filter(function (address) {\n  return /^\\/app\\/app\\.css\\?v=[a-f0-9]{12}$/.test(address);\n})[0];\nvar selectedCache;\n\n// Never read a waiting/partial generation through CacheStorage.match. If storage lost part of our copy before\n// activation, use one retained generation for every request, including its entry page and runtime.\nfunction launchCache() {\n  if (PRECACHE.length === 0) return caches.open(CACHE);\n  if (selectedCache) return selectedCache;\n  selectedCache = copyComplete().then(function (complete) {\n    if (complete) return caches.open(CACHE);\n    return caches.keys().then(function (names) {\n      var chain = Promise.resolve(undefined);\n      names.filter(function (name) {\n        return name !== CACHE && name.indexOf('aac-shell-') === 0;\n      }).forEach(function (name) {\n        chain = chain.then(function (found) {\n          if (found) return found;\n          return caches.open(name).then(function (cache) {\n            return cache.match('/').then(function (page) {\n              if (!page || !AacSwRoute.isHtmlDocument(page)) return undefined;\n              return page.clone().text().then(function (html) {\n                var pkg = runtimePath(html);\n                if (!pkg) return undefined;\n                return Promise.all([cache.match(pkg + '/aac_web.js'), cache.match(pkg + '/aac_web_bg.wasm')])\n                  .then(function (parts) { return parts.every(Boolean) ? cache : undefined; });\n              });\n            });\n          });\n        });\n      });\n      return chain;\n    });\n  }).catch(function () { return undefined; });\n  return selectedCache;\n}\n\nfunction matchCached(request, options) {\n  return launchCache().then(function (cache) {\n    return cache ? cache.match(request, options) : undefined;\n  });\n}\n\n// A navigation's cached answer: its own entry, then the pure fallback lookups in\n// order (same URL ignoring the query, the start-URL shell, any cached navigation\n// shell). Undefined when the cache has no shell at all.\nfunction cachedNavigation(request, url) {\n  var lookups = AacSwRoute.navigationFallbackLookups({\n    method: request.method,\n    sameOrigin: url.origin === self.location.origin,\n    pathname: url.pathname,\n  });\n  var chain = matchCached(request).catch(function () {\n    return undefined;\n  });\n  lookups.forEach(function (lookup) {\n    chain = chain.then(function (cached) {\n      if (cached) return cached;\n      return matchFallback(request, url, lookup).catch(function () {\n        return undefined;\n      });\n    });\n  });\n  return chain;\n}\n\n// A navigation the network could not answer: a cached shell, and only then the\n// bare offline page.\nfunction offlineNavigation(request, url) {\n  return cachedNavigation(request, url).then(function (cached) {\n    if (cached) return cached;\n    return new Response(OFFLINE_PAGE, {\n      status: AacSwRoute.OFFLINE_STATUS,\n      headers: { 'Content-Type': 'text/html; charset=utf-8' },\n    });\n  });\n}\n\nfunction matchFallback(request, url, lookup) {\n  if (!lookup) return Promise.resolve(undefined);\n  if (lookup.lookup === 'same-url-ignore-search') {\n    return matchCached(request, { ignoreSearch: true });\n  }\n  if (lookup.lookup === 'canonical-app-page') {\n    return matchCached(new URL(lookup.pathname, url.origin).toString());\n  }\n  if (lookup.lookup === 'start-url') {\n    return matchCached(new URL(lookup.pathname || '/', url.origin).toString());\n  }\n  if (lookup.lookup === 'any-navigation-shell') {\n    return anyCachedShell();\n  }\n  return Promise.resolve(undefined);\n}\n\n// Any cached navigation shell: the first same-origin cached entry holding an\n// HTML document. Every page route serves the same index.html, so any one of\n// them shows the in-app Offline card; subresources never qualify.\nfunction anyCachedShell() {\n  return launchCache()\n    .then(function (cache) {\n      if (!cache) return undefined;\n      return cache.keys().then(function (keys) {\n        var documents = keys.filter(function (key) {\n          if (!key || key.method !== 'GET') return false;\n          var keyUrl;\n          try {\n            keyUrl = new URL(key.url);\n          } catch {\n            return false;\n          }\n          // the /app pages (the Status iframe's Leptos pages) are documents too, never the shell\n          return keyUrl.origin === self.location.origin && !AacSwRoute.isAppPage(keyUrl.pathname);\n        });\n        var chain = Promise.resolve(undefined);\n        documents.forEach(function (key) {\n          chain = chain.then(function (found) {\n            if (found) return found;\n            return cache.match(key).then(function (response) {\n              if (response && AacSwRoute.isHtmlDocument(response)) return response;\n              return undefined;\n            });\n          });\n        });\n        return chain;\n      });\n    })\n    .catch(function () {\n      return undefined;\n    });\n}\n\n// What the cache holds for a shell request: the entry itself, or for a\n// navigation any cached shell. Undefined when nothing can answer.\nfunction cachedShell(request) {\n  if (request.mode === 'navigate') return cachedNavigation(request, new URL(request.url));\n  return matchCached(request).catch(function () {\n    return undefined;\n  });\n}\n\n// The shell (index.html, bridge.js, *.mjs, fonts, icons, page routes): the\n// network first, so the shell stays in step with the server, then the cache.\n// A navigation gives up on a slow network only when a cached shell can answer\n// instead; with nothing cached it waits, since the bare offline page would be\n// worse than a slow start. A server error (a proxy's 502 while the dashboard\n// restarts) is answered from the cache too when the cache has the shell.\nfunction networkFirst(event, request, timeoutMs) {\n  // An installed generation serves its own page and dependencies until the next complete worker activates.\n  // This also prevents a slow navigation's cached old entry from importing newer network controllers. The build\n  // probe explicitly uses no-store and must continue to see the server, even while the installed app stays put.\n  if (PRECACHE.length > 0 && request.cache !== 'no-store') {\n    return cachedShell(request).then(function (cached) {\n      return cached || networkFallback(event, request, timeoutMs);\n    });\n  }\n  return networkFallback(event, request, timeoutMs);\n}\n\nfunction networkFallback(event, request, timeoutMs) {\n  var waited =\n    timeoutMs > 0\n      ? cachedShell(request).then(function (cached) {\n          return cached ? timeoutMs : 0;\n        })\n      : Promise.resolve(0);\n  return waited\n    .then(function (ms) {\n      var network = fromNetwork(event, request);\n      return ms > 0 ? Promise.race([network, giveUpAfter(ms)]) : network;\n    })\n    .then(\n      function (response) {\n        if (response.status >= 500 && response.status <= 599) {\n          // A no-store check (the frame's build check) never reads the cache: a proxy 5xx\n          // must not read as the server's newer build.\n          if (request.cache === 'no-store') return response;\n          return cachedShell(request).then(function (cached) {\n            return cached || response;\n          });\n        }\n        return response;\n      },\n      function () {\n        if (request.cache === 'no-store') throw new Error('The network could not answer.');\n        return matchCached(request).then(function (cached) {\n          if (cached) return cached;\n          if (request.mode === 'navigate') {\n            return offlineNavigation(request, new URL(request.url));\n          }\n          throw new Error('The app shell is not cached yet.');\n        });\n      }\n    );\n}\n\n// The content-addressed runtime: immutable, so the cache answers first.\nfunction cacheFirst(event, request) {\n  return matchCached(request).then(function (cached) {\n    if (cached) return cached;\n    return fetch(request).then(function (response) {\n      storeFor(event, request, response);\n      return response;\n    });\n  });\n}\n\nself.addEventListener('fetch', function (event) {\n  var request = event.request;\n  var url;\n  try {\n    url = new URL(request.url);\n  } catch {\n    return;\n  }\n  var decision = AacSwRoute.route({\n    method: request.method,\n    sameOrigin: url.origin === self.location.origin,\n    pathname: url.pathname,\n  });\n  if (decision === 'cache-first') {\n    event.respondWith(cacheFirst(event, request));\n  } else if (decision === 'network-first') {\n    event.respondWith(\n      networkFirst(event, request, AacSwRoute.navigationTimeoutMs(request.mode === 'navigate'))\n    );\n  }\n  // 'passthrough': /api, /v0, /ws, non-GET and cross-origin requests are never\n  // intercepted, so no respondWith here.\n});\n\n// Install: the whole replacement, or nothing. Each address is asked for fresh from the server (`no-cache`: the HTTP\n// cache may answer only after the server confirms it) and must come back as what it is (precacheable): a page address\n// as the frame page, an asset as itself, never a redirect to the page. One failure rejects the install, and the\n// worker in charge keeps serving its own complete copy; the browser tries again on a later visit.\nfunction precache() {\n  if (PRECACHE.length === 0) return Promise.resolve();\n  return caches.open(CACHE).then(function (cache) {\n    return Promise.all(\n      PRECACHE.map(function (address) {\n        return fetch(new Request(address, { cache: 'no-cache' })).then(function (response) {\n          if (!AacSwRoute.precacheable(address, response))\n            throw new Error('The new app copy is incomplete: ' + address + '.');\n          if (AacSwRoute.isHtmlDocument(response)) {\n            return response.clone().text().then(function (html) {\n              if (!installedRuntime || runtimePath(html) !== installedRuntime)\n                throw new Error('The new app copy names a different runtime: ' + address + '.');\n              var css = /href=[\"'](\\/app\\/app\\.css\\?v=[a-f0-9]{12})[\"']/.exec(html);\n              if (!installedStylesheet || !css || css[1] !== installedStylesheet)\n                throw new Error('The new app copy names a different stylesheet: ' + address + '.');\n              return cache.put(address, response);\n            });\n          }\n          return cache.put(address, response);\n        });\n      })\n    );\n  }).catch(function (error) {\n    // A part failed: the partial copy goes (no worker uses this build's cache yet: a new stamp, a new cache) and the\n    // install fails.\n    var fail = function () {\n      throw error;\n    };\n    return caches.delete(CACHE).then(fail, fail);\n  });\n}\n\nself.addEventListener('install', function (event) {\n  event.waitUntil(precache());\n});\n\n/** Whether this build's cache holds every address of PRECACHE (an older build's cache may go only then). */\nfunction copyComplete() {\n  if (PRECACHE.length === 0) return Promise.resolve(true);\n  return caches\n    .open(CACHE)\n    .then(function (cache) {\n      return Promise.all(\n        PRECACHE.map(function (address) {\n          return cache.match(address);\n        })\n      );\n    })\n    .then(function (found) {\n      return found.every(Boolean);\n    })\n    .catch(function () {\n      return false;\n    });\n}\n\n// Activate (the next launch): the older builds' caches go only once this build's copy is complete. Should the browser\n// have dropped part of it since the install, they stay, still answering the offline fallbacks (caches.match reads\n// every cache), until a later build's complete copy replaces them.\nself.addEventListener('activate', function (event) {\n  event.waitUntil(\n    copyComplete()\n      .then(function (complete) {\n        if (!complete) return undefined;\n        return caches.keys().then(function (names) {\n          return Promise.all(\n            names\n              .filter(function (name) {\n                return name !== CACHE && name.indexOf('aac-shell-') === 0;\n              })\n              .map(function (name) {\n                return caches.delete(name);\n              })\n          );\n        });\n      })\n      .then(function () {\n        return self.clients.claim();\n      })\n  );\n});\n",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "service worker routing module",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/sw-route.js"
+      },
+      "response": {
+        "body": "// The service worker's routing rules (DESIGN-MOBILE.md 6.5 and the orchestrator's\n// 6.5 correction): which requests the worker may touch, and how.\n//\n// Pure: no fetch, cache, DOM or worker API is used here. sw.js loads this file\n// through importScripts (classic worker script, no modules); node:test loads it\n// through require. Every number, label and caching decision stays here (tested).\n(function (root, factory) {\n  'use strict';\n  var api = factory();\n  if (typeof module === 'object' && module !== null && typeof module.exports === 'object') {\n    module.exports = api;\n  } else {\n    root.AacSwRoute = api;\n  }\n})(typeof self !== 'undefined' ? self : globalThis, function () {\n  'use strict';\n\n  /** The shell hash scripts/build-ui.js stamps into the packaged sw.js. */\n  var BUILD_ID_PATTERN = /^[a-f0-9]{12}$/;\n  /** Content-addressed runtime: only pkg/<buildId>/** is immutable (6.5 correction). */\n  var VERSIONED_PKG = /^\\/pkg\\/[a-f0-9]{12}\\//;\n  /** Never cached or intercepted: APIs, the usage hub, the socket, in any letter case. */\n  var NEVER_CACHED = [/^\\/api(\\/|$)/, /^\\/v0(\\/|$)/, /^\\/ws$/];\n  /**\n   * The app frame's own addresses (/app/home ... /app/scoreboard and their assets). An /app page offline falls\n   * back only to its own cached copy (the frame stores every tab's address and the start page while online), is\n   * never mirrored to the start URL and never answers another navigation as \"any shell\". The rule dates from the\n   * retired Slint shell, which showed /app pages in its iframes; it keeps each address answering with its own copy.\n   */\n  var CANONICAL_APP_PAGE = /^\\/app\\/(home|analytics|accounts|status|scoreboard)\\/$/;\n  var APP_PAGES = /^\\/app(\\/|$)/i;\n  /** A navigation waits this long for the network before reading the cache. */\n  var NAVIGATION_TIMEOUT_MS = 3000;\n  /** The offline fallback answers navigations only when neither network nor cache has the shell. */\n  var OFFLINE_STATUS = 503;\n  /** The installed app launches here, so every stored page shell is mirrored to it. */\n  var START_URL_PATHNAME = '/';\n  /** Offline fallback lookups, in order: same URL, start URL, any shell. */\n  var SAME_URL_IGNORE_SEARCH = 'same-url-ignore-search';\n  var START_URL = 'start-url';\n  var ANY_NAVIGATION_SHELL = 'any-navigation-shell';\n\n  /** The one cache name for a build; every deploy installs a new worker and drops the old caches. */\n  function cacheName(buildId) {\n    if (!BUILD_ID_PATTERN.test(buildId || '')) throw new Error('Invalid service worker build id.');\n    return 'aac-shell-' + buildId;\n  }\n\n  /** Whether this pathname is one of the Leptos /app pages or their assets (never a dashboard shell). */\n  function isAppPage(pathname) {\n    return APP_PAGES.test(String(pathname || ''));\n  }\n\n  /** Whether this pathname must pass through untouched (compared in lower case). */\n  function isNeverCached(pathname) {\n    var lower = String(pathname || '/').toLowerCase();\n    return NEVER_CACHED.some(function (pattern) {\n      return pattern.test(lower);\n    });\n  }\n\n  /**\n   * How sw.js answers a request: 'passthrough' (the worker does not call\n   * respondWith), 'network-first' (the shell: the frame page, *.mjs,\n   * fonts, icons, page routes) or 'cache-first' (the immutable pkg runtime).\n   * `request` is { method, sameOrigin, pathname }; anything cross-origin or not\n   * a GET passes through, as do the never-cached paths whatever the method.\n   */\n  function route(request) {\n    if (!request || request.method !== 'GET' || request.sameOrigin !== true) return 'passthrough';\n    var pathname = request.pathname || '/';\n    if (isNeverCached(pathname)) return 'passthrough';\n    if (VERSIONED_PKG.test(pathname)) return 'cache-first';\n    return 'network-first';\n  }\n\n  /** Navigations race the network against the timeout; subresources wait for their answer. */\n  function navigationTimeoutMs(isNavigation) {\n    return isNavigation === true ? NAVIGATION_TIMEOUT_MS : 0;\n  }\n\n  /**\n   * Whether a fetched response may be stored: a plain same-origin 200 the server\n   * did not mark `no-store`. Anything else (an opaque cross-origin answer, an\n   * error) is served but never written to the cache. Browsers hide Set-Cookie\n   * from a worker, so the cookie check only catches synthetic responses; what\n   * keeps private data out is route(): /api, /v0 and /ws are never intercepted.\n   * `no-cache` (the revalidated shell) is still stored.\n   */\n  function cacheable(response) {\n    if (!response || response.status !== 200) return false;\n    if (response.type !== 'basic' && response.type !== 'default') return false;\n    try {\n      var headers = response.headers;\n      if (headers && typeof headers.has === 'function' && headers.has('set-cookie')) return false;\n      var control =\n        headers && typeof headers.get === 'function' ? headers.get('cache-control') : null;\n      if (typeof control === 'string' && /(?:^|,)\\s*no-store\\s*(?:,|$)/i.test(control))\n        return false;\n    } catch {\n      return false;\n    }\n    return true;\n  }\n\n  /**\n   * Ordered cache lookups for an offline navigation whose own entry missed:\n   * the same URL ignoring the query (so /?e2e finds / and /accounts?x=1 finds\n   * /accounts), the cached start-URL shell, then any cached navigation shell.\n   * Only network-first paths get a shell fallback: /api, /v0, /ws and\n   * anything else route() passes through (or serves cache-first) returns no\n   * lookups. `request` is { method, sameOrigin, pathname }, as route() takes.\n   */\n  function navigationFallbackLookups(request) {\n    if (route(request) !== 'network-first') return [];\n    if (isAppPage(request.pathname)) {\n      var alias = CANONICAL_APP_PAGE.test(request.pathname);\n      return alias\n        ? [{ lookup: SAME_URL_IGNORE_SEARCH }, { lookup: 'canonical-app-page', pathname: request.pathname.slice(0, -1) }]\n        : [{ lookup: SAME_URL_IGNORE_SEARCH }];\n    }\n    return [\n      { lookup: SAME_URL_IGNORE_SEARCH },\n      { lookup: START_URL, pathname: START_URL_PATHNAME },\n      { lookup: ANY_NAVIGATION_SHELL },\n    ];\n  }\n\n  /**\n   * Whether a stored navigation is also stored under the start URL, so the\n   * installed app's first offline launch finds a shell. Only HTML page-route\n   * navigations qualify: /api, /v0, /ws and anything else route() passes\n   * through never mirrors, and neither do subresources (never HTML), the\n   * start URL itself or non-navigation requests. `request` is\n   * { method, sameOrigin, pathname, isNavigation }; `response` is the fetched\n   * response (only its content type is read).\n   */\n  function shouldMirrorStartUrl(request, response) {\n    if (!request || request.isNavigation !== true) return false;\n    if (!isHtmlDocument(response)) return false;\n    if (route(request) !== 'network-first') return false;\n    if (isAppPage(request.pathname)) return false;\n    return String(request.pathname || '/') !== START_URL_PATHNAME;\n  }\n\n  /**\n   * Whether a response is a navigation shell: an HTML document, which is what\n   * every page route serves. Subresources (scripts, fonts, icons, the wasm\n   * runtime) never qualify, so the any-shell scan cannot answer a document\n   * with one of them.\n   */\n  function isHtmlDocument(response) {\n    try {\n      var type = response && response.headers ? response.headers.get('content-type') : null;\n      return typeof type === 'string' && type.toLowerCase().indexOf('text/html') !== -1;\n    } catch {\n      return false;\n    }\n  }\n\n  /** The frame page's own addresses in the precache list (`/` and `/app/<tab>`): they must come back as the page. */\n  var PAGE_ADDRESS = /^\\/(app\\/[a-z]+)?$/;\n\n  /**\n   * Whether an install-time download may stand in the new copy (sw.js precache): a cacheable 200 that was not\n   * redirected, a page address answered with HTML and anything else with something that is not HTML. A missing asset\n   * is redirected to the page by the server, so it fails here rather than being stored as the page.\n   */\n  function precacheable(address, response) {\n    if (!cacheable(response) || response.redirected === true) return false;\n    var page = PAGE_ADDRESS.test(String(address || '').split('?')[0]);\n    return page === isHtmlDocument(response);\n  }\n\n  return {\n    BUILD_ID_PATTERN: BUILD_ID_PATTERN,\n    NAVIGATION_TIMEOUT_MS: NAVIGATION_TIMEOUT_MS,\n    OFFLINE_STATUS: OFFLINE_STATUS,\n    START_URL_PATHNAME: START_URL_PATHNAME,\n    cacheName: cacheName,\n    isNeverCached: isNeverCached,\n    isAppPage: isAppPage,\n    route: route,\n    navigationTimeoutMs: navigationTimeoutMs,\n    cacheable: cacheable,\n    navigationFallbackLookups: navigationFallbackLookups,\n    shouldMirrorStartUrl: shouldMirrorStartUrl,\n    isHtmlDocument: isHtmlDocument,\n    precacheable: precacheable,\n  };\n});\n",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "PWA manifest",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/manifest.webmanifest"
+      },
+      "response": {
+        "body": "{\n  \"id\": \"/\",\n  \"name\": \"AI Account Center\",\n  \"short_name\": \"AAC\",\n  \"description\": \"Usage and accounts for your AI subscriptions\",\n  \"start_url\": \"/\",\n  \"scope\": \"/\",\n  \"display\": \"standalone\",\n  \"orientation\": \"any\",\n  \"background_color\": \"#ECF0F3\",\n  \"theme_color\": \"#FBFCFD\",\n  \"icons\": [\n    {\n      \"src\": \"/icons/apple-touch-icon-180-v2.png\",\n      \"sizes\": \"180x180\",\n      \"type\": \"image/png\",\n      \"purpose\": \"any\"\n    },\n    {\n      \"src\": \"/icons/apple-touch-icon-180.png\",\n      \"sizes\": \"180x180\",\n      \"type\": \"image/png\",\n      \"purpose\": \"any\"\n    },\n    {\n      \"src\": \"/icons/aac-192.png\",\n      \"sizes\": \"192x192\",\n      \"type\": \"image/png\",\n      \"purpose\": \"any\"\n    },\n    {\n      \"src\": \"/icons/aac-512.png\",\n      \"sizes\": \"512x512\",\n      \"type\": \"image/png\",\n      \"purpose\": \"any\"\n    },\n    {\n      \"src\": \"/icons/aac-maskable-192.png\",\n      \"sizes\": \"192x192\",\n      \"type\": \"image/png\",\n      \"purpose\": \"maskable\"\n    },\n    {\n      \"src\": \"/icons/aac-maskable-512.png\",\n      \"sizes\": \"512x512\",\n      \"type\": \"image/png\",\n      \"purpose\": \"maskable\"\n    }\n  ]\n}\n",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "application/manifest+json",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "PWA icon",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/icons/aac-192.png"
+      },
+      "response": {
+        "body": {
+          "bytes": 16845,
+          "sha256": "68e1d1b38a425bca74dbb35ced3f0062f2096b22b5eb4767cdd0d8bd0db9aeab"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "image/png",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "root icon alias",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/favicon.ico"
+      },
+      "response": {
+        "body": {
+          "bytes": 6326,
+          "sha256": "01074f134d369d0d5700739ee2c34df8d969621b5dafe0737f6f45fe12777b8d"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "image/png",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "an unknown API path answers JSON 404",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/api/definitely-not-a-route"
+      },
+      "response": {
+        "body": {
+          "error": "API endpoint was not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "an unknown page goes back to /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/definitely-not-a-page"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    },
+    {
+      "case": "an unknown asset goes back to /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/definitely-not-there.js"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    },
+    {
+      "case": "dot segments never escape the static folder",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/%2e%2e/%2e%2e/package.json"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    }
+  ],
+  "version": 1
+}

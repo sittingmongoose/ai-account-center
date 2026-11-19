@@ -1,0 +1,23 @@
+AI Account Center
+
+Usage: ai-account-center <command> [options]
+
+Commands:
+  dashboard      Open the account and usage dashboard
+  codex-auth     Save Codex logins whose usage the dashboard reads
+  antigravity    Add or sign in again to a saved Antigravity profile on Ubuntu
+  bar            Install, launch, or inspect the native account bar
+  help           Show command help
+  version        Show version and installation paths
+
+Compatibility: ccs uses the same commands; config is an alias for dashboard.
+Global option: --config-dir PATH selects the existing account configuration directory.
+
+Examples:
+  ai-account-center dashboard --host localhost --port 3000 --no-open
+  ai-account-center dashboard auth setup
+  ai-account-center codex-auth show
+  ai-account-center codex-auth login work
+  ai-account-center antigravity signin party
+  ai-account-center bar version
+

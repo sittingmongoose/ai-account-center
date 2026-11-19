@@ -3,7 +3,8 @@
  * --require-complete fails for any changed answer or explicit unmounted route.
  */
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { createHash, createHmac } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,6 +33,7 @@ const hub = 'aacu_' + 'f'.repeat(43);
 const environment = fixtureEnvironment();
 
 function normalize(value: unknown, key = ''): unknown {
+  if (value === undefined) return value;
   if (key === 'etag') return '<etag>';
   if (key === 'x-ccs-bar-token') return '<bar-proof>';
   if (key === 'retry-after' || key === 'retryAfterSeconds') {
@@ -116,7 +118,9 @@ function upgrade(base: string, headers: Headers): Promise<number> {
 const counts = { match: 0, decline: 0, different: 0 };
 const owned = { match: 0, failed: 0 };
 const owns = (route: string) =>
-  route.startsWith('/api/auth/') || ['/api/bar/auth', '/api/health', '/ws'].includes(route);
+  route.startsWith('/api/auth/') ||
+  route.startsWith('/v0/management/') ||
+  ['/{*splat}', '/api/bar/auth', '/api/health', '/ws'].includes(route);
 const declined = new Set<string>();
 const different: string[] = [];
 const expectedHeaders = [
@@ -135,6 +139,22 @@ const expectedHeaders = [
 ];
 
 try {
+  const ui = path.join(root, 'ui');
+  await fs.mkdir(path.join(ui, 'app'), { recursive: true });
+  await fs.writeFile(path.join(ui, 'app/index.html'), '<div id="aac-app-fixture"></div>');
+  const auth = path.join(root, 'auth');
+  await fs.mkdir(auth, { mode: 0o700 });
+  await fs.writeFile(
+    path.join(auth, 'usage-hub-key.json'),
+    JSON.stringify({
+      version: 1,
+      keySha256: createHash('sha256').update(hub).digest('hex'),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }),
+    { mode: 0o600 }
+  );
+  environment.AAC_RUST_UI_DIR = ui;
+  delete environment.AAC_RUST_HUB_CACHE;
   await fs.writeFile(
     path.join(root, 'config.yaml'),
     JSON.stringify({
@@ -209,11 +229,9 @@ try {
           counts.match++;
           if (owns(route.path)) owned.match++;
         } catch {
-          const want = JSON.stringify(expected.body);
-          const got = JSON.stringify(normalize(body));
           const fields = [
             status !== expected.status ? `status ${status}/${expected.status}` : '',
-            want !== got ? 'body' : '',
+            isDeepStrictEqual(normalize(body), expected.body) ? '' : 'body',
             ...expectedHeaders.filter(
               (key) =>
                 normalize(selected?.[key], key) !== expected.headers?.[key] &&

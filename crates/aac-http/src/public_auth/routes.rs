@@ -10,7 +10,7 @@ use axum::http::Method;
 use serde_json::{Value, json};
 use std::sync::LazyLock;
 
-mod limits;
+pub(super) mod limits;
 pub(super) use limits::Limits;
 use limits::{Budget, limited};
 

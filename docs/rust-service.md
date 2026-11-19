@@ -706,3 +706,33 @@ all runner and the real Rust WebSocket. The public contract replay drives all
 M0 route/role rows directly against Rust. Its strict mode fails while any
 handler is unmounted or any reply differs. Set `AAC_M6_REQUIRE_COMPLETE=1`
 with `AAC_RUST_PUBLIC_BINARY` to enable strict mode from `tests/spec/run.mjs`.
+
+### M6 hub, dashboard assets and CLI
+
+Compose the API with `auth.protect(auth.mount_edges(api, cache, ui_root))`.
+Give account collection a clone of `HubCache` and call
+`publish_dashboard_cache` with the cached dashboard DTOs in Mac, Windows
+order after their normal passed-reset calculation. The facade reads those
+published answers without collecting. The standalone front door can also
+poll an absolute `AAC_RUST_HUB_CACHE` path at most once per five seconds.
+Write a single dashboard or an array of dashboards atomically as owner-only
+JSON with an `accounts` array on each dashboard. An unavailable or invalid
+read retains the last published answer. The hub key stays in the existing TS
+auth store and can be managed with the shipped dashboard usage-hub command.
+
+Set `AAC_RUST_UI_DIR` to a packaged `dist/ui` for development, or set
+`AAC_UI_EMBED_DIR` when building the binary for a self-contained install.
+Supply the output from `scripts/build-ui.js`, including its build manifest.
+An unpackaged development binary also looks for `dist/ui` in the checkout.
+The front door uses strong per-encoding ETags for the verified precompressed
+variants and keeps unversioned assets, the service worker and the app frame
+revalidating. Static files skip session persistence. Page and hub responses
+preserve rolling browser cookies.
+
+The native `ai-account-center` and `ccs` binaries share the same command parser.
+Set `AAC_RUST_DASHBOARD=1` to opt their dashboard launcher into the public Rust
+listener. The shipped TS CLI continues to run dashboard by default and handles
+the administrative subcommands and other existing commands. The native CLI
+locates the shipped entry point next to the executable or through
+`AAC_TS_CLI`. Release packaging can use the same native executable under
+the five retired names to keep their guidance.
