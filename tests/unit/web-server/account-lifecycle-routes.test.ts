@@ -1571,6 +1571,52 @@ describe('registry, re-check, open, label and trash', () => {
     expect(codex.status).toBe(404);
   });
 
+  it('does not publish a reading after the account changes hosts during Re-check', async () => {
+    const f = await fixture();
+    let finish!: () => void;
+    const continueProbe = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let entered = false;
+    const collect = f.env.refreshAdditional;
+    f.env.refreshAdditional = async (id) => {
+      entered = true;
+      await continueProbe;
+      return collect(id);
+    };
+    let published = 0;
+    f.env.replaceRow = () => {
+      published++;
+    };
+    const result = f.request('POST', '/zai:usage/recheck', {});
+    try {
+      await until(() => entered);
+      fs.writeFileSync(
+        path.join(ccsDir, 'account-usage-accounts.json'),
+        JSON.stringify({
+          version: 2,
+          accounts: [
+            {
+              id: 'zai:usage',
+              provider: 'zai',
+              platform: 'mac',
+              sshHost: 'replacement-mac',
+              label: null,
+              credential: { kind: 'discover' },
+              createdAt: null,
+              createdBy: null,
+            },
+          ],
+        }),
+        { mode: 0o600 }
+      );
+    } finally {
+      finish();
+    }
+    expect(await result).toMatchObject({ status: 404, body: { code: 'unknown_account' } });
+    expect(published).toBe(0);
+  });
+
   it('opens Cursor on the Mac only, and relabels additional accounts', async () => {
     const f = await fixture();
     expect((await f.request('POST', '/cursor:usage/open', { platform: 'mac' })).body).toEqual({
