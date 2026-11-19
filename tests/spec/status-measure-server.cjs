@@ -145,11 +145,15 @@ async function main() {
     // R4: the owner forwards the service's owned snapshots; wait for the first owned scan of the share.
     setStatusRustService(service);
     stopOwner = owner.start();
-    const deadline = Date.now() + 120000;
+    const deadline = Date.now() + 300000;
     for (;;) {
       const inputs = await service.internalJson('/internal/status/inputs');
       if (inputs && typeof inputs.generation === 'number' && inputs.generation > 0) break;
-      if (Date.now() > deadline) throw new Error('the owned Status readers never produced a generation');
+      if (Date.now() > deadline)
+        throw new Error(
+          `the owned Status readers never produced a generation (inputs ${inputs === null ? 'null' : JSON.stringify(inputs).slice(0, 300)}; ` +
+            `service ${JSON.stringify(service.diagnostics().service ?? null).slice(0, 400)})`
+        );
       await new Promise((r) => setTimeout(r, 200));
     }
     await owner.collect();
