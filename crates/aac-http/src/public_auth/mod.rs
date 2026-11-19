@@ -1551,6 +1551,7 @@ mod tests {
                 hop,
                 None,
                 None,
+                None,
             )
         } else {
             Router::new().fallback(|| async { decline() })

@@ -1787,9 +1787,6 @@ async fn serve_inner(
         status_produce,
         answers_owned,
         scoreboard_owned,
-        check,
-        check_flushing,
-        ..
     } = crate::owners::Owners::start(
         crate::owners::Config {
             ccs_dir: boot.ccs_dir.clone(),

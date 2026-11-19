@@ -18,7 +18,7 @@ use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
@@ -57,12 +57,6 @@ pub(crate) struct Owners {
     pub(crate) status_produce: Option<Arc<Produce>>,
     pub(crate) answers_owned: Option<Arc<AnswersOwned>>,
     pub(crate) scoreboard_owned: Option<Arc<ScoreboardOwned>>,
-    /// One readers-check writer for both owners (one file per writer carries the Status scan's
-    /// rows and the runs rows), and one flush in flight.
-    pub(crate) check: Arc<Mutex<aac_status::share::check::ReadersCheckWriter>>,
-    pub(crate) check_flushing: Arc<AtomicBool>,
-    /// Each registry row's writer for this boot.
-    pub(crate) registry: Registry,
 }
 
 fn invalid(error: impl std::fmt::Display) -> io::Error {
@@ -77,6 +71,7 @@ impl Owners {
             None => Registry::defaults(rows),
         };
         let store = config.store.map(StoreHost::new);
+        // Status and Scoreboard share one readers-check writer and one in-flight flush.
         let check = Arc::new(Mutex::new(
             aac_status::share::check::ReadersCheckWriter::new(
                 config
@@ -95,7 +90,6 @@ impl Owners {
             )),
             _ => None,
         };
-        let owned = config.owned.clone();
         let status_owned = match (&config.owned, &store) {
             (Some(owned), Some(host)) if owned.status => Some(StatusOwned::new(
                 owned.reports_root.clone(),
@@ -133,14 +127,6 @@ impl Owners {
             status_produce,
             answers_owned,
             scoreboard_owned,
-            check,
-            check_flushing,
-            registry,
         })
-    }
-
-    /// The store folder for the Engine (`<ccs>/store`), for a caller that opens it directly.
-    pub(crate) fn store_dir(ccs_dir: &Path) -> PathBuf {
-        ccs_dir.join("store")
     }
 }
