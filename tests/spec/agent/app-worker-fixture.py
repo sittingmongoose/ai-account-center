@@ -40,7 +40,8 @@ if args.app == "codex-desktop":
         extra = {"previousVersion":"1.2.3","version":"1.2.4","manager":"msix"}
 elif args.app == "antigravity-cli":
     status, code = "held", "held_for_review"
-    extra = {"heldVersion":"1.2.4","version":"1.2.3","manager":"native"}
+    extra = {"heldVersion":"1.2.4","version":"1.2.3","manager":"native",
+             "diagnostics":{"cause":"none","tail":"fixture leak sampler","command":"fixture command"}}
 elif args.app == "t3-acp-adapters":
     status, code = "action_required", "in_use"
     extra = {"parts":[{"name":"muse-acp","previousVersion":"1.2.3","version":"1.2.3","inUse":True}]}

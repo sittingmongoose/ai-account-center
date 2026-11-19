@@ -164,7 +164,7 @@ impl Python {
                             if row["appId"] != app || row["platform"] != platform.name() || !row["status"].is_string() {
                                 return Err(invalid());
                             }
-                            final_row = Some(row.clone());
+                            final_row = Some(worker_result(row.clone()));
                         } else {
                             return Err(invalid());
                         }
@@ -185,6 +185,41 @@ impl Python {
         reader.abort();
         result
     }
+}
+
+fn worker_result(mut row: Value) -> Value {
+    if let Some(fields) = row.as_object_mut() {
+        fields.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "appId"
+                    | "platform"
+                    | "status"
+                    | "previousVersion"
+                    | "version"
+                    | "manager"
+                    | "messageCode"
+                    | "updateAttempted"
+                    | "restartedProcesses"
+                    | "forcedStops"
+                    | "heldVersion"
+                    | "restartTargets"
+                    | "parts"
+                    | "strays"
+                    | "diagnostics"
+            )
+        });
+    }
+    // U13 applies at the worker journal as well as at the dashboard boundary.
+    if let Some(diagnostics) = row.get_mut("diagnostics").and_then(Value::as_object_mut) {
+        diagnostics.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "cause" | "tool" | "reason" | "exitCode" | "phases" | "notes" | "owner"
+            )
+        });
+    }
+    row
 }
 
 fn invalid() -> Failure {

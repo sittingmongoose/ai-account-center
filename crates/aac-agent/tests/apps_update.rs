@@ -389,6 +389,13 @@ async fn production_backend_streams_the_one_app_worker_and_routes_cancel() {
     );
     let rows = result["results"].as_array().expect("complete result");
     assert_eq!(rows.len(), 12);
-    assert!(rows.iter().any(|row| row["status"] == "held"));
+    let held = rows
+        .iter()
+        .find(|row| row["status"] == "held")
+        .expect("held row");
+    assert_eq!(held["diagnostics"], json!({"cause":"none"}));
+    let journal =
+        std::fs::read_to_string(root.path().join("agent-journal.json")).expect("host journal");
+    assert!(!journal.contains("fixture leak sampler") && !journal.contains("fixture command"));
     assert!(rows.iter().any(|row| row["parts"][0]["inUse"] == true));
 }
