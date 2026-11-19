@@ -6,6 +6,7 @@ mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
+mod lifecycle;
 mod native_owners;
 #[cfg(unix)]
 mod native_reads;
@@ -223,6 +224,11 @@ impl DashboardAuth {
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
+            if let Some(root) = cut_root.as_deref()
+                && let Some(route) = lifecycle::Route::of(request.method(), request.uri().path())
+            {
+                return lifecycle::handle(root, route, request).await;
+            }
             if let Some(settings) = &native_settings
                 && let Some(family) = native_settings::route(request.method(), request.uri().path())
             {

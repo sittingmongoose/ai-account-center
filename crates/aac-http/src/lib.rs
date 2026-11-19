@@ -20,6 +20,7 @@ pub mod antigravity_runtime;
 pub mod app_update_routes;
 #[cfg(unix)]
 pub mod app_updates;
+mod claude_account_store;
 #[cfg(unix)]
 pub mod claude_lifecycle;
 pub mod claude_open;

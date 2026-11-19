@@ -31,7 +31,7 @@ pub const IDENTITY_FUTURE_TOLERANCE_MS: i64 = 60_000;
 /// `runtime-service.ts` `ANTIGRAVITY_RUNTIME_RETRY_MS`: an empty scope is asked again this often.
 pub const RUNTIME_RETRY_MS: i64 = 15_000;
 
-fn profile_id_ok(id: &str) -> bool {
+pub(crate) fn profile_id_ok(id: &str) -> bool {
     let bytes = id.as_bytes();
     matches!(bytes.first(), Some(c) if c.is_ascii_lowercase())
         && id.len() <= 48

@@ -306,6 +306,10 @@ enum Other {
     Unsupported,
 }
 
+pub(super) fn other_account_exists(root: &Path, id: &str) -> bool {
+    resolve_other(root, id).is_some()
+}
+
 fn resolve_other(root: &Path, id: &str) -> Option<Other> {
     if id.starts_with("plan-opencode-go-console-") {
         return Some(Other::Unsupported);

@@ -33,6 +33,7 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+mod lifecycle_open;
 mod recheck;
 
 #[derive(Clone, Copy, Default)]
@@ -76,6 +77,7 @@ impl Groups {
 
 #[derive(Clone)]
 pub(super) struct NativeOwners {
+    agents: Arc<Agents>,
     usage: Option<Arc<Usage>>,
     #[cfg(unix)]
     apps: Option<Arc<BoundJobs>>,
@@ -215,7 +217,7 @@ impl NativeOwners {
                 worker_directory,
                 analytics_writers: groups.analytics_writers,
                 owners,
-                agents,
+                agents: agents.clone(),
                 root,
             });
             // Subscribe before the HTTP listener can admit a sign-in.
@@ -228,6 +230,7 @@ impl NativeOwners {
         };
         Ok((
             Self {
+                agents,
                 usage,
                 #[cfg(unix)]
                 apps,
@@ -241,6 +244,7 @@ impl NativeOwners {
     pub(super) fn owns(method: &Method, path: &str) -> bool {
         Self::dashboard_route(method, path)
             || recheck::route(method, path).is_some()
+            || lifecycle_open::route(method, path).is_some()
             || Self::app_operation(method, path).is_some()
     }
 
@@ -271,6 +275,9 @@ impl NativeOwners {
         if Self::dashboard_route(request.method(), path) {
             let (parts, _) = request.into_parts();
             return self.dashboard(&access, parts.uri, parts.headers).await;
+        }
+        if let Some(id) = lifecycle_open::route(request.method(), path).map(str::to_owned) {
+            return lifecycle_open::handle(&self.agents, &id, request).await;
         }
         if let Some(id) = recheck::route(request.method(), path).map(str::to_owned) {
             let reply = match self.usage.as_ref().filter(|_| self.writes) {
@@ -490,7 +497,7 @@ impl Usage {
     }
 }
 
-fn json_content(request: &Request) -> bool {
+pub(super) fn json_content(request: &Request) -> bool {
     super::header(request.headers(), "content-type")
         .and_then(|value| value.split(';').next())
         .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
