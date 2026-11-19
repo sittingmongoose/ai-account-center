@@ -161,7 +161,7 @@ impl AnswersOwned {
     /// (`mergeSharedAnswers`), the sends with them and the share map pruned to the open cards.
     pub(crate) fn feed(&self, cards: &[(Json, String)]) -> AnswersFeed {
         let mut engine = lock(&self.engine);
-        let history = engine.list().map(<[aac_status::answers_engine::HistoryEntry]>::to_vec);
+        let history = engine.list().map(|entries| entries.to_vec());
         let sends = engine.send_list();
         let closed = history
             .as_ref()

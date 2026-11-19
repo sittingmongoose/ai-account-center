@@ -338,8 +338,7 @@ pub fn merge_rows(
                 } else {
                     Some(next_problem(
                         last.and_then(|last| last.problem.as_ref().and_then(Option::as_ref)),
-                        last.and_then(|last| last.label.as_deref())
-                            .unwrap_or(row.machine.as_str()),
+                        row.label.as_deref().unwrap_or(row.machine.as_str()),
                         &notes.join("; "),
                         now,
                     ))
@@ -354,6 +353,7 @@ pub fn merge_rows(
                 let item = row
                     .label
                     .clone()
+                    .or_else(|| last.and_then(|last| last.label.clone()))
                     .unwrap_or_else(|| row.machine.clone());
                 let problem = Some(next_problem(
                     last.and_then(|last| last.problem.as_ref().and_then(Option::as_ref)),

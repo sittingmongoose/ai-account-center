@@ -30,6 +30,7 @@ pub mod facts;
 pub mod machines;
 pub mod pinned_input;
 pub mod simlock;
+pub mod sources;
 pub mod usage;
 
 use serde::{Deserialize, Serialize};

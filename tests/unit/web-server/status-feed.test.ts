@@ -68,6 +68,9 @@ class StandIn extends RustService {
     headers: Record<string, string>,
     view: string
   ) {
+    // G16c: the stand-in holds no producers, so an owned request declines and the front door
+    // answers from the fed path this suite pins.
+    if (headers['x-aac-owned']) return null;
     expect(route).toBe('/api/status');
     expect(view).toBe('status@1');
     this.views.push(headers);
@@ -153,6 +156,7 @@ beforeAll(async () => {
             reads++;
             return input;
           },
+          handBackProducers: () => undefined,
           view: () => buildStatusView(input),
           answers: {},
         }) as any
@@ -217,7 +221,8 @@ describe('Status, fed', () => {
     const envelope = rustStatusInput(input) as any;
     expect(feed.clock).toBe(envelope.presentation.dates[String(NOW + 1500)].clock);
     expect(feed.day).toBe(envelope.presentation.dates[String(NOW + 1500)].day);
-    expect(reads).toBe(2);
+    // G16c: the owned producers decline in the stand-in, so the route reads again for the fallback.
+    expect(reads).toBe(4);
     // 304 for a matching validator.
     const revalidated = await get({ 'If-None-Match': ETAG });
     expect(revalidated.response.status).toBe(304);
@@ -310,7 +315,7 @@ describe('Status, fed', () => {
     let reply = await get();
     expect(reply.text).toBe(today());
     expect(reply.response.headers.get('cache-control')).toBe('private, no-cache');
-    expect(reads).toBe(1);
+    expect(reads).toBe(2);
     service.decline = null;
     // A member this code does not know.
     input = { ...input, extra: 1 };

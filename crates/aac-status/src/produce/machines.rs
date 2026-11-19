@@ -71,12 +71,34 @@ pub struct Sample {
     pub memory_error: Option<String>,
     /// `/proc/stat` totals, for the busy percent between two readings.
     pub cpu_times: Option<CpuTimes>,
-    /// Set by the service: when `busyPct` was read (null when it never was).
+    /// Set by the service: when `busyPct` was read (null when it never was). The probe's own
+    /// parse leaves these three out (`to_collected_json` adds them, as the collector does).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_read_at: Option<i64>,
     /// Set by the service: when `disk` was read (null when it never was).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_read_at: Option<i64>,
     /// Set by the service: when the memory numbers were read (null when they never were).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_read_at: Option<i64>,
+}
+
+impl Sample {
+    /// The reading as `collectMachines` puts it in `data`: the probe's members, then `busyPct`
+    /// (already a member) and the three read times, always present (null when never read).
+    #[must_use]
+    pub fn to_collected_json(&self) -> Json {
+        let mut value = serde_json::to_value(self).unwrap_or(Json::Null);
+        if let Some(object) = value.as_object_mut() {
+            object.insert("cpuReadAt".into(), self.cpu_read_at.map_or(Json::Null, Json::from));
+            object.insert("diskReadAt".into(), self.disk_read_at.map_or(Json::Null, Json::from));
+            object.insert(
+                "memoryReadAt".into(),
+                self.memory_read_at.map_or(Json::Null, Json::from),
+            );
+        }
+        value
+    }
 }
 
 /// `/proc/stat`'s first line totals.

@@ -162,9 +162,8 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
     const fed = statusFedService(res);
     if (fed) {
       if (await answerStatusOwned(req, res, fed, input)) return;
-      const owner = getStatusService();
-      owner.handBackProducers();
-      const local = owner.readInputs();
+      if (typeof current.handBackProducers === 'function') current.handBackProducers();
+      const local = current.readInputs();
       // R2: the same answer from fed generations this side now produces.
       if (await answerStatusFed(req, res, fed, local, getCcsDir())) return;
       sendRevalidatedView(

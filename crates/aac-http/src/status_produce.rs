@@ -24,12 +24,11 @@
 //! cannot read, a pinned composition whose documents fail their projection. The front door then
 //! answers with its own producers, which it restarts on the first decline.
 
-use aac_status::answer_delivery::DOORBELL_SENDER;
 use aac_status::answers_engine::{closing_card_versions, HistoryEntry, SendRecord};
 use aac_status::produce::answered::{closed_versions, resolved_card_waits, ResolvedWaits};
 use aac_status::produce::answers_feed::{merge_shared, AnswersFeed};
 use aac_status::produce::browsers::{self, BrowserMachine};
-use aac_status::produce::facts::{Facts, ZoneFacts};
+use aac_status::produce::facts::ZoneFacts;
 use aac_status::produce::machines::{self as machines_produce, HostOs, Platform, Sample};
 use aac_status::produce::pinned_input;
 use aac_status::produce::simlock::{self, SimlockError, Status as SimlockStatus};
@@ -135,19 +134,23 @@ struct Inner {
 
 impl Inner {
     fn new() -> Self {
+        let empty = empty_reports();
         Self {
-            reports: json!({}),
+            reports: aac_status::share::reports::state_json(&empty),
+            reports_rows: empty,
             quota: Json::Null,
             docs: Json::Null,
             registry: json!({"data": null, "asOf": null, "error": null}),
-            reports_rows: empty_reports(),
             docs_rows: StatusDocsState {
                 state: "missing",
                 scanned_at: None,
                 docs: Vec::new(),
                 problems: Vec::new(),
             },
-            machines: BTreeMap::new(),
+            machines: aac_status::computers::machine_ids()
+                .into_iter()
+                .map(|machine| (machine.to_owned(), Collected::empty()))
+                .collect(),
             browsers: Collected::empty(),
             simlock: Collected::empty(),
             usage: None,
@@ -318,8 +321,7 @@ impl Produce {
             let sample = if is_local {
                 tokio::task::spawn_blocking(local_sample)
                     .await
-                    .ok()
-                    .and_then(Result::ok)
+                    .unwrap_or_else(|_| Err("The machine did not answer.".to_owned()))
             } else {
                 let Some(host) = host else {
                     results.insert(machine, Err("No ssh host is configured for this machine.".to_owned()));
@@ -331,7 +333,7 @@ impl Produce {
                 };
                 read_remote(host, &alias).await
             };
-            results.insert(machine, sample.ok_or_else(|| "The machine did not answer.".to_owned()));
+            results.insert(machine, sample);
         }
         let (browsers_result, simlock_result) = tokio::join!(read_browsers(), read_simlock());
         let pins = read_pins(&rows, local).await;
@@ -397,7 +399,7 @@ impl Produce {
             inner.docs_rows = scan.docs.clone();
             inner.reports = resolved_reports(&scan.reports, &feed);
             inner.quota = scan.quota;
-            inner.docs = scan.docs_json;
+            inner.docs = aac_status::share::status_docs::state_json(&scan.docs);
             inner.registry = scan.registry;
             inner.answers = feed;
             inner.answers_dirty = false;
@@ -484,97 +486,35 @@ impl Produce {
         let Some(zone) = zone.filter(|_| inner.reports.as_object().is_some()) else {
             return;
         };
-        let mut data = Map::new();
-        data.insert("reports".into(), inner.reports.clone());
-        data.insert("quota".into(), json!({"quota": inner.quota.clone()}));
-        data.insert(
-            "collected".into(),
-            json!({
-                "registry": inner.registry.clone(),
-                "machines": machines_json(&inner.machines),
-                "browsers": json!(inner.browsers),
-                "simlock": json!(inner.simlock),
-                "usage": inner.usage.clone(),
-            }),
-        );
-        data.insert("pinned".into(), json!({"pinned": inner.pinned.clone()}));
-        data.insert("answers".into(), inner.answers.to_json());
-        data.insert(
-            "facts".into(),
-            json!({
-                "timeZone": zone.name,
-                "hiddenThreadNames": [DOORBELL_SENDER],
-                "machineIds": aac_status::computers::machine_ids(),
-                "machineLabels": Map::from_iter(
-                    aac_status::computers::machine_labels()
-                        .into_iter()
-                        .map(|(id, label)| (id.to_owned(), Json::from(label))),
-                ),
-            }),
-        );
-        // The spend-by-stream panel: the spend view the composer builds, then the panel over it,
-        // with the whole data object's facts (the panel is part of the data the facts cover).
-        let partial_facts = Facts::of(
-            &[
-                &data["reports"],
-                &data["quota"],
-                &data["pinned"],
-                &data["collected"],
-                &data["answers"],
-            ],
-            Some(&zone.zone),
-        );
-        let presentation: Option<aac_status::read_context::Presentation> =
-            serde_json::from_value(partial_facts.to_json()).ok();
-        let panel = presentation.and_then(|presentation| {
-            let now_date = now_date(now, zone)?;
-            let account_order = inner
-                .usage
-                .as_ref()
-                .map(UsageInput::account_order)
-                .unwrap_or_default();
-            aac_status::read_status::spend_by_stream(
-                &Json::Object(data.clone()),
-                Arc::new(presentation),
-                (clamp_i64(now), now_date),
-                zone.offset_now,
-                account_order,
-            )
+        let machines = machines_json(&inner.machines);
+        let sources = aac_status::produce::sources::build(&aac_status::produce::sources::Readings {
+            reports: &inner.reports,
+            quota: &inner.quota,
+            pinned: &inner.pinned,
+            registry: &inner.registry,
+            machines: &machines,
+            browsers: &json!(inner.browsers),
+            simlock: &json!(inner.simlock),
+            usage: inner.usage.as_ref(),
+            answers: &inner.answers,
+            time_zone: &zone.name,
+            now: clamp_i64(now),
+            offset_minutes: zone.offset_now,
+            zone: &zone.zone,
         });
-        let mut quota = Map::new();
-        quota.insert("quota".into(), inner.quota.clone());
-        if let Some(panel) = panel {
-            quota.insert("spendByStream".into(), panel);
-        }
-        data.insert("quota".into(), Json::Object(quota));
-        let collected = data["collected"].clone();
-        let answers = data["answers"].clone();
-        let facts_data = data["facts"].clone();
-        let facts = Facts::of(
-            &[
-                &data["reports"],
-                &data["quota"],
-                &data["pinned"],
-                &collected,
-                &answers,
-                &facts_data,
-            ],
-            Some(&zone.zone),
-        );
+        let Ok(sources) = sources else {
+            return;
+        };
         let pushed = [
-            (REPORTS, data["reports"].clone(), None),
-            (QUOTA, data["quota"].clone(), None),
-            (PINNED, data["pinned"].clone(), None),
-            (COLLECTED, collected, None),
-            (ANSWERS, answers, None),
-            (FACTS, facts_data, Some(facts)),
+            (REPORTS, sources.reports, None),
+            (QUOTA, sources.quota, None),
+            (PINNED, sources.pinned, None),
+            (COLLECTED, sources.collected, None),
+            (ANSWERS, sources.answers, None),
+            (FACTS, sources.facts_data, Some(sources.facts)),
         ];
-        for (source, value, facts) in pushed {
-            let text = String::from_utf8_lossy(&aac_views::js_json::write(&value)).into_owned();
-            let facts_text = match facts {
-                Some(facts) => facts.to_text(),
-                None => "{}".to_owned(),
-            };
+        for (source, text, facts) in pushed {
+            let facts_text = facts.unwrap_or_else(|| "{}".to_owned());
             let unchanged = inner
                 .held_sources
                 .get(source)
@@ -586,16 +526,11 @@ impl Produce {
             let body = format!(
                 "{{\"generation\":\"{generation}\",\"data\":{text},\"facts\":{facts_text}}}"
             );
-            match self.feeds.put(source, body.as_bytes()) {
-                Ok(value) => {
-                    if let Some(held) = value.get("generation").and_then(Json::as_str) {
-                        inner.held.insert(source, held.to_owned());
-                    }
-                    inner
-                        .held_sources
-                        .insert(source, (text, facts_text));
+            if let Ok(value) = self.feeds.put(source, body.as_bytes()) {
+                if let Some(held) = value.get("generation").and_then(Json::as_str) {
+                    inner.held.insert(source, held.to_owned());
                 }
-                Err(_) => {}
+                inner.held_sources.insert(source, (text, facts_text));
             }
         }
     }
@@ -649,7 +584,8 @@ impl Produce {
                 .as_ref()
                 .is_some_and(|held| held.name != time_zone || held.zone != zone)
         {
-            self.push_sources(&mut inner, inner.zone.clone().as_ref(), now);
+            let zone = inner.zone.clone();
+            self.push_sources(&mut inner, zone.as_ref(), now);
             inner.sources_dirty = false;
         }
         let mut parts = Vec::with_capacity(SOURCES.len());
@@ -869,7 +805,7 @@ fn command_failure(tool: &str, result: &crate::status_run::Run) -> String {
 }
 
 /// One remote machine over the dashboard's ssh alias.
-async fn read_remote(host: HostOs, alias: &str) -> Option<Sample> {
+async fn read_remote(host: HostOs, alias: &str) -> Result<Sample, String> {
     let args = ssh_argv(
         alias,
         &machines_produce::probe_command(host),
@@ -877,9 +813,10 @@ async fn read_remote(host: HostOs, alias: &str) -> Option<Sample> {
     );
     let result = run(Path::new("ssh"), &args, 20_000, 64 * 1024).await;
     if result.code != Some(0) {
-        return None;
+        return Err(command_failure("ssh", &result));
     }
     machines_produce::parse_probe(host, &result.stdout)
+        .ok_or_else(|| "The machine answered without a reading.".to_owned())
 }
 
 /// `collectMachines`' per-machine step: the sample with its read times, a failed part named and
@@ -1183,9 +1120,32 @@ fn resolved_reports(reports: &AgentReportsState, answers: &AnswersFeed) -> Json 
 fn machines_json(machines: &BTreeMap<String, Collected<Sample>>) -> Json {
     let mut out = Map::new();
     for machine in aac_status::computers::machine_ids() {
-        if let Some(collected) = machines.get(machine) {
-            out.insert(machine.to_owned(), json!(collected));
+        let Some(collected) = machines.get(machine) else {
+            continue;
+        };
+        let mut value = Map::new();
+        value.insert(
+            "data".into(),
+            collected
+                .data
+                .as_ref()
+                .map_or(Json::Null, Sample::to_collected_json),
+        );
+        value.insert("asOf".into(), collected.as_of.map_or(Json::Null, Json::from));
+        value.insert(
+            "error".into(),
+            collected
+                .error
+                .as_ref()
+                .map_or(Json::Null, |error| json!({"reason": error.reason, "since": error.since})),
+        );
+        if let Some(missing) = collected.missing {
+            value.insert("missing".into(), Json::Bool(missing));
         }
+        if let Some(problems) = &collected.problems {
+            value.insert("problems".into(), json!(problems));
+        }
+        out.insert(machine.to_owned(), Json::Object(value));
     }
     Json::Object(out)
 }
@@ -1218,9 +1178,4 @@ fn pinned_panel(inner: &Inner, now: i64, offset: i64) -> Option<Json> {
     serde_json::to_value(output).ok()
 }
 
-/// `now`'s date facts, from the request's zone.
-fn now_date(now: u64, zone: &RequestZone) -> Option<aac_status::read_context::Date> {
-    let (clock, day) = zone.zone.words(clamp_i64(now))?;
-    aac_status::read_context::Date::of_now(clamp_i64(now), clock, day)
-}
 
