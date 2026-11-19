@@ -45,8 +45,8 @@
       },
       "logs": {
         "ledger": {
-          "activeBytes": 246308,
-          "bytesOnDisk": 246723,
+          "activeBytes": 247413,
+          "bytesOnDisk": 247828,
           "degraded": [],
           "lastSequence": 96,
           "name": "ledger",
@@ -78,10 +78,10 @@
       "redbBytes": 1056768,
       "redbStats": {
         "allocatedPages": 62,
-        "fragmentedBytes": 887347,
+        "fragmentedBytes": 887237,
         "metadataBytes": 22698,
         "pageSize": 4096,
-        "storedBytes": 109859
+        "storedBytes": 109969
       },
       "retentionDays": 0,
       "state": "ready",
@@ -105,7 +105,7 @@
       },
       "storeSchemaVersion": 2
     },
-    "wireSha256": "4f1d7e8ddc2fe2eb197dd8f82e5d87f1c7cc0b644100fae00576792eaf32e445"
+    "wireSha256": "fe2449d0d7032ad79c6f409774cab4ce5eea59955daab2b84c0075421bf166a9"
   },
   {
     "route": "/api/status",
@@ -723,6 +723,21 @@
             "notes": null
           },
           {
+            "model": "openai/gpt-6.2-sol",
+            "label": "Sol 6.2",
+            "family": "GPT-6",
+            "runtimes": [
+              "codex"
+            ],
+            "efforts": [
+              "medium",
+              "high",
+              "max"
+            ],
+            "prices": null,
+            "notes": null
+          },
+          {
             "model": "openai/gpt-6-astra",
             "label": "Astra",
             "family": "GPT-6",
@@ -890,6 +905,17 @@
             "efforts": [],
             "prices": null,
             "notes": null
+          },
+          {
+            "model": "alibaba/qwen4-max",
+            "label": "Qwen 4 Max",
+            "family": "Qwen",
+            "runtimes": [
+              "omp"
+            ],
+            "efforts": [],
+            "prices": null,
+            "notes": "Released Qwen 4 Max on the Qwen token plan; no thinking option in OMP"
           },
           {
             "model": "alibaba/qwen4-max-preview",
@@ -12611,12 +12637,17 @@
           "alibaba/qwen3.8-max": {
             "family": "qwen",
             "label": "Qwen 3.8 Max",
-            "order": 18
+            "order": 19
+          },
+          "alibaba/qwen4-max": {
+            "family": "qwen",
+            "label": "Qwen 4 Max",
+            "order": 20
           },
           "alibaba/qwen4-max-preview": {
             "family": "qwen",
             "label": "Qwen 4 Max Preview",
-            "order": 19
+            "order": 21
           },
           "anthropic/claude-fable-5-1": {
             "family": "anthropic",
@@ -12626,7 +12657,7 @@
           "anthropic/claude-fable-5-2": {
             "family": "anthropic",
             "label": "Fable 5.2",
-            "order": 12
+            "order": 13
           },
           "anthropic/claude-haiku-5-5": {
             "family": "anthropic",
@@ -12646,47 +12677,47 @@
           "deepseek/deepseek-v4.1-flash": {
             "family": "deepseek",
             "label": "DeepSeek V4.1 Flash",
-            "order": 17
+            "order": 18
           },
           "google/gemini-4-argon": {
             "family": "google",
             "label": "Gemini 4 Argon",
-            "order": 16
+            "order": 17
           },
           "google/gemini-4-hydrogen": {
             "family": "google",
             "label": "Gemini 4 Hydrogen",
-            "order": 20
+            "order": 22
           },
           "muse/muse-ember-1.0": {
             "family": "muse",
             "label": "Muse Ember 1.0",
-            "order": 14
+            "order": 15
           },
           "muse/muse-spark-1.3-contributor": {
             "family": "muse",
             "label": "Muse Spark 1.3",
-            "order": 10
+            "order": 11
           },
           "muse/muse-wonder-1.0": {
             "family": "muse",
             "label": "Muse Wonder 1.0",
-            "order": 13
+            "order": 14
           },
           "muse/muse-wonder-full-1.0": {
             "family": "muse",
             "label": "Muse Wonder Full 1.0",
-            "order": 11
+            "order": 12
           },
           "openai/gpt-6-astra": {
             "family": "openai",
             "label": "Astra",
-            "order": 5
+            "order": 6
           },
           "openai/gpt-6-luna": {
             "family": "openai",
             "label": "Luna",
-            "order": 7
+            "order": 8
           },
           "openai/gpt-6.1-sol": {
             "family": "openai",
@@ -12696,22 +12727,27 @@
           "openai/gpt-6.1-terra": {
             "family": "openai",
             "label": "Terra 6.1",
-            "order": 8
+            "order": 9
           },
           "openai/gpt-6.2-astra": {
             "family": "openai",
             "label": "Astra 6.2",
-            "order": 6
+            "order": 7
+          },
+          "openai/gpt-6.2-sol": {
+            "family": "openai",
+            "label": "Sol 6.2",
+            "order": 5
           },
           "xai/grok-4.7": {
             "family": "xai",
             "label": "Grok 4.7",
-            "order": 15
+            "order": 16
           },
           "zai/glm-5.3": {
             "family": "zai",
             "label": "GLM 5.3",
-            "order": 9
+            "order": 10
           }
         }
       },
@@ -12751,7 +12787,7 @@
                 "text": "In the catalog with no runs:"
               },
               {
-                "text": " Fable 5.1, Astra, Astra 6.2, Luna, Terra 6.1, Muse Wonder Full 1.0, Fable 5.2, Muse Wonder 1.0, Muse Ember 1.0, Grok 4.7, Gemini 4 Argon, DeepSeek V4.1 Flash, Qwen 3.8 Max, Qwen 4 Max Preview, Gemini 4 Hydrogen."
+                "text": " Fable 5.1, Sol 6.2, Astra, Astra 6.2, Luna, Terra 6.1, Muse Wonder Full 1.0, Fable 5.2, Muse Wonder 1.0, Muse Ember 1.0, Grok 4.7, Gemini 4 Argon, DeepSeek V4.1 Flash, Qwen 3.8 Max, Qwen 4 Max, Qwen 4 Max Preview, Gemini 4 Hydrogen."
               }
             ],
             "id": "pipeline",
@@ -13466,7 +13502,7 @@
                 "text": "In the catalog with no runs:"
               },
               {
-                "text": " Fable 5.1, Astra, Astra 6.2, Luna, Terra 6.1, Muse Wonder Full 1.0, Fable 5.2, Muse Wonder 1.0, Muse Ember 1.0, Grok 4.7, Gemini 4 Argon, DeepSeek V4.1 Flash, Qwen 3.8 Max, Qwen 4 Max Preview, Gemini 4 Hydrogen."
+                "text": " Fable 5.1, Sol 6.2, Astra, Astra 6.2, Luna, Terra 6.1, Muse Wonder Full 1.0, Fable 5.2, Muse Wonder 1.0, Muse Ember 1.0, Grok 4.7, Gemini 4 Argon, DeepSeek V4.1 Flash, Qwen 3.8 Max, Qwen 4 Max, Qwen 4 Max Preview, Gemini 4 Hydrogen."
               }
             ],
             "id": "pm-users",
@@ -14342,7 +14378,7 @@
               "effortOrder": 6,
               "family": "zai",
               "lastRunAt": "<iso>",
-              "modelOrder": 9,
+              "modelOrder": 10,
               "passed": 1,
               "rank": 2,
               "runs": 6,
@@ -14470,7 +14506,7 @@
               "effortOrder": 6,
               "family": "zai",
               "lastRunAt": "<iso>",
-              "modelOrder": 9,
+              "modelOrder": 10,
               "passed": 1,
               "rank": 2,
               "runs": 6,
@@ -14487,7 +14523,7 @@
       "cacheAgeSeconds": 0,
       "refreshing": false
     },
-    "wireSha256": "cfb062714e0758571c952a11e1dbf16856fbc95098ffaf8754171a9d4c19d49e"
+    "wireSha256": "3c072a7e3f093f71ca01eb94f32e548c49c12da76c9dcc496c403a1eec323a1d"
   },
   {
     "route": "/api/status/files/vm.fixture/media/image.png",
