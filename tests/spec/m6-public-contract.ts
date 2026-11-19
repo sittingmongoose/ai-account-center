@@ -107,7 +107,7 @@ const nativeGroupRow = (method: string, route: string) =>
       route === '/api/store/status' ||
       route.startsWith('/api/usage/') ||
       route === '/api/scoreboard' ||
-      (group === 'store-usage-home' && route === '/api/views/home')));
+      ((mode === 'cut-rust-only' || group === 'store-usage-home') && route === '/api/views/home')));
 const recordNative = process.argv
   .find((arg) => arg.startsWith('--record-native='))
   ?.slice('--record-native='.length);
@@ -383,6 +383,11 @@ try {
       AAC_RUST_GROUP_HOME: 'on',
       AAC_TS_SIDECAR: 'off',
     });
+  }
+  if (group === undefined && mode === 'cut-rust-only') {
+    environment.AAC_RUST_GROUP_HOME = 'on';
+    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.mkdir(path.join(root, 'registry'), { recursive: true });
   }
   if (group === 'resets') {
     Object.assign(environment, {
