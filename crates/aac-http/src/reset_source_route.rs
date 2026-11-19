@@ -9,7 +9,9 @@
 //! ambiguous). A Claude failure before the host command is dispatched proves nothing was sent and
 //! answers `not-sent`; after that point every failure is an error, never a retry.
 use aac_status::reset_claude_source::HelperCommand;
-use serde_json::{Map, Value, json};
+#[cfg(any(unix, test))]
+use serde_json::json;
+use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
@@ -436,8 +438,7 @@ pub(crate) fn local_computer(hostname: &str) -> String {
     } else {
         "linux"
     };
-    let table: Value = serde_json::from_str(crate::account_reads::COMPUTERS).unwrap_or(Value::Null);
-    let Some(rows) = table.as_object() else {
+    let Some(rows) = aac_status::computers::registry().as_object() else {
         return "ubuntu".to_owned();
     };
     let lower = hostname.to_lowercase();
