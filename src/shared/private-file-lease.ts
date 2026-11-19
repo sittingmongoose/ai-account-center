@@ -132,11 +132,12 @@ export async function writeProviderDirectory(
     | ['codex-discard', home: string, target: string]
 ): Promise<boolean> {
   const canonical = canonicalLeaseRoot(root);
-  const writer = writers.get(canonical);
-  if (!writer) return false;
+  if (!writers.has(canonical)) return false;
   const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
   const descriptor = await fs.promises.open(marker, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
   try {
+    const writer = writers.get(canonical);
+    if (!writer) return false;
     const [operation, ...args] = action;
     const child = spawn(writer.binary, ['--provider-write', operation, canonical, ...args], {
       stdio: ['ignore', 'ignore', descriptor.fd],

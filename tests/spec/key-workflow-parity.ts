@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { registerFileWriter } from '../../src/shared/private-file-lease';
 import {
@@ -39,6 +39,30 @@ for (const mode of ['off', 'shadow', 'on']) {
       assert.deepEqual(seen, expected);
     }
     console.log('key workflow ' + mode + ': ' + cases.length + '/' + cases.length);
+  } finally {
+    releaseWriter();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+if (process.platform !== 'win32') {
+  const root = await mkdtemp(path.join(tmpdir(), 'aac-key-failover-'));
+  const partial = path.join(root, 'partial-workflow');
+  await writeFile(
+    partial,
+    "#!/bin/sh\nprintf 'store\\n'\n/usr/bin/head -c 1 >/dev/null\nexit 74\n",
+    { mode: 0o700 }
+  );
+  const releaseWriter = registerFileWriter(root, partial, () => undefined);
+  try {
+    const seen: string[] = [];
+    const accepted = await runKeyWorkflow(root, 'add', async (effect) => {
+      seen.push(effect);
+      return effect !== 'probe';
+    });
+    assert.equal(accepted, false);
+    assert.deepEqual(seen, ['store', 'publish', 'probe', 'unpublish', 'discard']);
+    console.log('key workflow process exit: completed using receipts');
   } finally {
     releaseWriter();
     await rm(root, { recursive: true, force: true });
