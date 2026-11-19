@@ -1,5 +1,5 @@
 //! The cut's authenticated access to the remaining store host.
-use super::{Reply, storage};
+use super::storage;
 use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
 use axum::{body::Body, extract::Request};
 use hyper::client::conn::http1;

@@ -15,6 +15,22 @@ use tokio::{net::TcpStream, sync::Semaphore};
 const PROOF: &str = "x-aac-compose-proof";
 const ACCESS: &str = "x-aac-compose-access";
 
+/// The literal second segments `/api/accounts` mounts. A request for one is never matched by
+/// the `:id` pattern: Express reaches the literal router first, and the settings family is
+/// native now, so forwarding it as an account id would answer from the wrong owner.
+const ACCOUNT_LITERALS: &[&str] = &[
+    "add",
+    "analytics",
+    "dashboard",
+    "preferences",
+    "registry",
+    "settings",
+    "signin-command",
+    "signin-jobs",
+    "trash",
+    "visibility",
+];
+
 // Only the cut uses this list. The composition fixture remains a reference for
 // the complete legacy router, including its handling of unknown methods.
 const CUT_ROUTES: &[(&str, &[&str])] = &[
@@ -84,6 +100,7 @@ pub(super) fn cut_route(method: &Method, path: &str) -> bool {
             }
             if (part.starts_with(':') && segment.is_empty())
                 || (!part.starts_with(':') && part != segment)
+                || (part == ":id" && ACCOUNT_LITERALS.contains(&segment))
             {
                 return false;
             }
@@ -105,7 +122,7 @@ mod tests {
         assert!(!cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"));
         assert!(!cut_route(&Method::POST, "/api/accounts/example/recheck"));
         assert!(!cut_route(&Method::GET, "/api/accounts/settings"));
-        assert!(cut_route(&Method::PUT, "/api/accounts/settings"));
+        assert!(!cut_route(&Method::PUT, "/api/accounts/settings"));
         assert!(!cut_route(&Method::GET, "/api/accounts/preferences"));
         assert!(!cut_route(&Method::PUT, "/api/accounts/preferences"));
         assert!(!cut_route(&Method::PATCH, "/api/accounts/preferences"));
@@ -124,7 +141,7 @@ mod tests {
             cut_route(&Method::POST, "/api/app-updates/cancel"),
             cfg!(not(unix))
         );
-        assert!(cut_route(
+        assert!(!cut_route(
             &Method::POST,
             "/api/accounts/example/reset-claims/prepare"
         ));
