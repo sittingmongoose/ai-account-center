@@ -123,7 +123,9 @@ async function ensureFacts(
   } catch {
     return null;
   }
-  const factsId = `${input.generation}:${input.catalogHash}:${zone}`;
+  // The feed's generation word admits only [A-Za-z0-9._:-]; zone names carry slashes.
+  const zoneWord = zone.replace(/[^A-Za-z0-9._:-]/g, '-');
+  const factsId = `${input.generation}:${input.catalogHash}:${zoneWord}`;
   const held = await service.pushFeed(boot, 'scoreboard-facts', factsId, dataText, factsText);
   if (held === null) return null;
   state = {
