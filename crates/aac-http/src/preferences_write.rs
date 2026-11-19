@@ -42,6 +42,15 @@ fn stored(root: &Path, id: &str) -> Result<Option<Vec<u8>>, Decline> {
     }
 }
 
+/// A committed intent the reader gives precedence over the materialized files, exactly as
+/// `readDashboardPreferences` does after an interrupted save.
+pub(crate) fn pending(root: &Path) -> Option<Value> {
+    let bytes = stored(root, TRANSACTION).ok()??;
+    let documents: Documents = crate::json_object::from_slice(&bytes, &["primary", "companion"])
+        .ok()?;
+    response(&documents).ok()
+}
+
 fn revision(root: &Path) -> Result<[Option<String>; 2], Decline> {
     let hash = |bytes: Vec<u8>| {
         Sha256::digest(bytes)
@@ -209,9 +218,9 @@ pub(crate) fn save_public(
         if !patch_valid(&value, &hosts) {
             return Err(PublicError::Invalid);
         }
-        let mut current = crate::account_reads::preferences(root).unwrap_or_else(|| {
-            Value::Object(crate::account_reads::defaults())
-        });
+        let mut current = crate::account_reads::preferences(root)
+            .or_else(|| pending(root))
+            .unwrap_or_else(|| Value::Object(crate::account_reads::defaults()));
         apply_patch(&mut current, &value);
         current
     } else {

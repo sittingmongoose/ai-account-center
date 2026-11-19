@@ -138,6 +138,7 @@ impl Settings {
                 .limits
                 .blocking(crate::table::Pool::Reads, move || {
                     Ok(crate::account_reads::preferences(&root)
+                        .or_else(|| crate::preferences_write::pending(&root))
                         .unwrap_or_else(|| Value::Object(crate::account_reads::defaults())))
                 })
                 .await
