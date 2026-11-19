@@ -254,23 +254,6 @@ fn calendar_date(value: &str) -> Option<i64> {
     Some(aac_num::civil::days_from_civil(year, month, day))
 }
 
-/// `isAccountAnalyticsTimeZone`'s shape: an IANA name or `UTC`, never an offset string.
-fn time_zone(value: &str) -> bool {
-    if value.is_empty() || value.len() > 64 {
-        return false;
-    }
-    let mut bytes = value.bytes();
-    if !bytes.next().is_some_and(|b| b.is_ascii_alphabetic()) {
-        return false;
-    }
-    value.split('/').all(|part| {
-        !part.is_empty()
-            && part
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b))
-    }) && (1..=4).contains(&value.split('/').count())
-}
-
 /// The route's query guard: `Some(path_and_query)` when admitted, else the 400 reply.
 fn admitted_analytics(raw: Option<&str>, providers: &[&str]) -> Result<Option<String>, Reply> {
     let Some(pairs) = query_pairs(raw) else {
@@ -307,7 +290,7 @@ fn admitted_analytics(raw: Option<&str>, providers: &[&str]) -> Result<Option<St
     }
     // validateAccountAnalyticsRangeShape: the clock-free parts of the range.
     if let Some(tz) = get(&pairs, "tz")
-        && !time_zone(tz)
+        && crate::analytics_route::approved_time_zone(tz).is_none()
     {
         return Err(refused(400, "invalid_tz", INVALID_TZ));
     }

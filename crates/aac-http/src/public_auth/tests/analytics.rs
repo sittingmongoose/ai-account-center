@@ -194,3 +194,33 @@ async fn analytics_named_account_reads_hourly_and_daily_ranges_from_the_real_sto
     }
     handle.abort();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn analytics_admits_canonical_linked_and_case_variant_zones_and_refuses_unknown_zones() {
+    let owner_home = tempfile::tempdir().unwrap();
+    let (hop, _) = real_analytics_owner(owner_home.path(), false);
+    let (_home, _auth, addr, handle) = server_with_analytics(true, Some(hop)).await;
+    let headers = headers(addr).await;
+    let cases = [
+        ("America/New_York", "America/New_York"),
+        ("GMT", "UTC"),
+        ("US/Eastern", "America/New_York"),
+        ("america/new_york", "America/New_York"),
+    ];
+    for (input, expected) in cases {
+        let path = format!("{ANALYTICS}?range=7d&tz={input}");
+        let reply = request(addr, &path, "GET", &headers, "").await;
+        assert_eq!(body(&reply, 200)["range"]["tz"], expected, "{input}");
+    }
+    let invalid = request(
+        addr,
+        &format!("{ANALYTICS}?tz=Bogus/Zone"),
+        "GET",
+        &headers,
+        "",
+    )
+    .await;
+    assert_eq!(body(&invalid, 400)["code"], "invalid_tz");
+    handle.abort();
+}

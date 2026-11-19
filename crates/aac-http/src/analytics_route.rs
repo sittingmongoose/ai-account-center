@@ -167,6 +167,23 @@ fn dashboard_of(snapshot: Option<&Value>, platform: &str) -> Result<Value, Decli
     Ok(found.unwrap_or_else(|| json!({ "accounts": [] })))
 }
 
+/// IANA admission and case normalization use the same table as dashboard preferences.
+pub(crate) fn approved_time_zone(value: &str) -> Option<&'static str> {
+    if !aac_files::zoneinfo::valid_name(value) {
+        return None;
+    }
+    value
+        .parse::<chrono_tz::Tz>()
+        .ok()
+        .or_else(|| {
+            chrono_tz::TZ_VARIANTS
+                .iter()
+                .copied()
+                .find(|zone| zone.name().eq_ignore_ascii_case(value))
+        })
+        .map(chrono_tz::Tz::name)
+}
+
 /// The native Analytics answer for one admitted query.
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn compose(
@@ -194,13 +211,17 @@ pub(crate) fn compose(
         return Err(Decline::Shape);
     }
     // The route's tz is the request's or the saved display zone (`canonicalAccountAnalyticsTimeZone`).
-    let tz = match query.get("tz").and_then(Value::as_str) {
-        Some(tz) => tz.to_owned(),
-        None => saved_zone(root),
+    let saved;
+    let requested = match query.get("tz").and_then(Value::as_str) {
+        Some(tz) => tz,
+        None => {
+            saved = saved_zone(root);
+            &saved
+        }
     };
-    if tz != "UTC" && !aac_files::zoneinfo::known(&tz) {
-        return Err(Decline::Zone);
-    }
+    let tz = approved_time_zone(requested)
+        .and_then(aac_files::zoneinfo::canonical_name)
+        .ok_or(Decline::Zone)?;
     // The query object the answer carries: the route object, with the resolved tz in its place.
     query.insert("tz".into(), json!(tz.clone()));
 
