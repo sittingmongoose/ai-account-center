@@ -1,3 +1,4 @@
+import { lifecyclePlan } from '../../shared/private-file-lease';
 import type { DashboardProvider } from './account-dashboard-types';
 import { isDashboardProviderId } from './dashboard-provider-table';
 import {
@@ -65,9 +66,23 @@ async function assertCanAdd(
   }
   if (state.unavailableReason) throw new LifecycleHttpError(409, state.unavailableReason);
   const count = await providerAccountCount(env, provider);
-  if (!state.multiAccount && count > 0)
-    throw new LifecycleHttpError(409, 'single_account_provider');
-  if (count >= MAX_ACCOUNTS_PER_PROVIDER) throw new LifecycleHttpError(409, 'too_many_accounts');
+  const chosen = lifecyclePlan(env.ccsDir(), {
+    operation: 'add-admission',
+    multiAccount: state.multiAccount,
+    count,
+    limit: MAX_ACCOUNTS_PER_PROVIDER,
+  });
+  const refusal =
+    chosen === undefined
+      ? !state.multiAccount && count > 0
+        ? 'single_account_provider'
+        : count >= MAX_ACCOUNTS_PER_PROVIDER
+          ? 'too_many_accounts'
+          : null
+      : chosen;
+  if (refusal === 'single_account_provider' || refusal === 'too_many_accounts')
+    throw new LifecycleHttpError(409, refusal);
+  if (refusal !== null) throw new LifecycleHttpError(500, 'write_failed');
 }
 
 export async function addAccount(

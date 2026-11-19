@@ -114,7 +114,11 @@ function parseJournalReply(input: string, id: string): SignInJob | null | undefi
   let error: SignInJob['error'] = null;
   if (job.error !== null) {
     const code = record(job.error)?.code;
-    if (typeof code !== 'string' || !Object.hasOwn(SIGNIN_ERROR_MESSAGES, code)) return undefined;
+    if (
+      typeof code !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(SIGNIN_ERROR_MESSAGES, code)
+    )
+      return undefined;
     const admitted = code as SignInJobErrorCode;
     error = { code: admitted, message: SIGNIN_ERROR_MESSAGES[admitted] };
   }

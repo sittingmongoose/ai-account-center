@@ -1,3 +1,4 @@
+import { lifecyclePlan } from '../../shared/private-file-lease';
 import { randomBytes } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
 import { stateFingerprint } from './account-confirmations';
@@ -470,7 +471,17 @@ export class ClaudeAccountLifecycle {
     const now = this.now();
     let due: ClaudeTrashEntry[];
     try {
-      due = (await readTrash(this.ccsDir())).filter((entry) => Date.parse(entry.purgeAfter) <= now);
+      const root = this.ccsDir();
+      const entries = await readTrash(root);
+      const plan = lifecyclePlan(root, {
+        operation: 'due-trash',
+        now,
+        entries: entries.map((entry) => ({ id: entry.trashId, at: Date.parse(entry.purgeAfter) })),
+      });
+      const selected = plan === undefined ? null : new Set(Array.isArray(plan) ? plan : []);
+      due = entries.filter(
+        (entry) => Date.parse(entry.purgeAfter) <= now && (!selected || selected.has(entry.trashId))
+      );
     } catch {
       return 0;
     }
@@ -496,8 +507,9 @@ export class ClaudeAccountLifecycle {
     await updateTrash(this.ccsDir(), async (entries) => ({
       next: entries
         .filter((entry) => !purged.has(entry.trashId))
-        .map((entry): ClaudeTrashEntry =>
-          pending.has(entry.trashId) ? { ...entry, state: 'deleting' } : entry
+        .map(
+          (entry): ClaudeTrashEntry =>
+            pending.has(entry.trashId) ? { ...entry, state: 'deleting' } : entry
         ),
       result: undefined,
     })).catch(() => undefined);

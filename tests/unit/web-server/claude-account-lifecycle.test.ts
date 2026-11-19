@@ -197,7 +197,11 @@ function setup(enabled = true) {
 describe('Claude Add', () => {
   it('creates launchers on both hosts and waits in the pending store', async () => {
     const { ccsDir, hosts, lifecycle } = setup();
-    const profile = await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
+    const profile = await lifecycle.add({
+      profileId: 'work2',
+      label: 'Work 2',
+      email: 'work2@example.com',
+    });
     expect(profile).toMatchObject({
       id: 'work2',
       label: 'Work 2',
@@ -221,7 +225,9 @@ describe('Claude Add', () => {
   it('is all or nothing: a failing second host removes the first host again', async () => {
     const { hosts, lifecycle } = setup();
     hosts.fail.create = 'windows';
-    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+    await expect(
+      lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })
+    ).rejects.toMatchObject({
       code: 'host_unreachable',
       host: 'windows',
     });
@@ -241,7 +247,9 @@ describe('Claude Add', () => {
   it('leaves the allowlist unchanged when the Windows step fails', async () => {
     const { hosts, lifecycle } = setup();
     hosts.fail.create = 'windows';
-    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+    await expect(
+      lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })
+    ).rejects.toMatchObject({
       code: 'host_unreachable',
       host: 'windows',
     });
@@ -254,7 +262,9 @@ describe('Claude Add', () => {
     await lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' });
     hosts.calls = [];
     for (const id of ['party', 'work2']) {
-      await expect(lifecycle.add({ profileId: id, label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+      await expect(
+        lifecycle.add({ profileId: id, label: null, email: 'work2@example.com' })
+      ).rejects.toMatchObject({
         code: 'id_in_use',
       });
     }
@@ -263,7 +273,9 @@ describe('Claude Add', () => {
 
   it('answers not_implemented while host steps are switched off', async () => {
     const { hosts, lifecycle } = setup(false);
-    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
+    await expect(
+      lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })
+    ).rejects.toMatchObject({
       code: 'not_implemented',
     });
     const party = await lifecycle.findProfile('party');

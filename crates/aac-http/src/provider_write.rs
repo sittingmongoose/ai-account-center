@@ -74,7 +74,7 @@ pub(crate) fn commit() -> i32 {
     if result.is_ok() { 0 } else { 75 }
 }
 
-pub(crate) fn staging() -> i32 {
+pub(crate) fn staging(antigravity: bool) -> i32 {
     let args: Vec<_> = std::env::args_os().skip(2).take(5).collect();
     let Some(args) = args
         .iter()
@@ -83,15 +83,30 @@ pub(crate) fn staging() -> i32 {
     else {
         return 74;
     };
-    let outcome = match args.as_slice() {
-        ["prepare", root, name, shared] => {
+    use aac_files::profile_staging;
+    let outcome = match (antigravity, args.as_slice()) {
+        (true, ["prepare", root, name]) => {
+            let mut bus = Vec::new();
+            if io::stdin().take(4097).read_to_end(&mut bus).is_err() {
+                return 74;
+            }
+            profile_staging::prepare_antigravity(Path::new(root), name, &bus).map(|()| 0)
+        }
+        (true, ["cleanup", root, name]) => {
+            profile_staging::cleanup_antigravity(Path::new(root), name).map(|()| 0)
+        }
+        (true, ["sweep", root, now]) => match now.parse() {
+            Ok(now) => profile_staging::sweep_antigravity(Path::new(root), now),
+            Err(_) => return 74,
+        },
+        (false, ["prepare", root, name, shared]) => {
             aac_files::profile_staging::prepare(Path::new(root), name, Path::new(shared))
                 .map(|()| 0)
         }
-        ["cleanup", root, name] => {
+        (false, ["cleanup", root, name]) => {
             aac_files::profile_staging::cleanup(Path::new(root), name).map(|()| 0)
         }
-        ["sweep", root, now] => match now.parse() {
+        (false, ["sweep", root, now]) => match now.parse() {
             Ok(now) => aac_files::profile_staging::sweep(Path::new(root), now),
             Err(_) => return 74,
         },

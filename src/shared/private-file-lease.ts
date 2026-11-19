@@ -94,30 +94,59 @@ export function writeProviderFile(
   }
 }
 
-export function codexStaging(
+export function signInStaging(
   root: string,
+  provider: 'codex' | 'antigravity',
   operation:
-    | ['prepare', staging: string, shared: string]
+    | ['prepare', staging: string, shared?: string]
     | ['cleanup', staging: string]
-    | ['sweep', now: string]
+    | ['sweep', now: string],
+  input?: string
 ): number | undefined {
   const canonical = canonicalLeaseRoot(root);
   const writer = writers.get(canonical);
   if (!writer) return undefined;
   const [action, ...args] = operation;
-  const result = spawnSync(writer.binary, ['--codex-staging', action, canonical, ...args], {
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 5000,
-    maxBuffer: 64,
-    encoding: 'utf8',
-    windowsHide: true,
-  });
+  const result = spawnSync(
+    writer.binary,
+    ['--' + provider + '-staging', action, canonical, ...args],
+    {
+      input,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'ignore'],
+      timeout: 5000,
+      maxBuffer: 64,
+      encoding: 'utf8',
+      windowsHide: true,
+    }
+  );
   if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
   const count = Number(result.stdout?.trim());
   if (result.status !== 0 || !Number.isSafeInteger(count) || count < 0)
     throw new ConfigError('The sign-in staging write could not be confirmed.');
   writer.committed();
   return count;
+}
+
+/** A pure policy evaluation scoped to the same opted-in service as the writers. */
+export function lifecyclePlan(root: string, request: object): unknown {
+  const writer = writers.get(canonicalLeaseRoot(root));
+  if (!writer) return undefined;
+  const result = spawnSync(writer.binary, ['--lifecycle-plan'], {
+    input: JSON.stringify(request),
+    stdio: ['pipe', 'pipe', 'ignore'],
+    timeout: 5000,
+    maxBuffer: 256 * 1024,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  if (result.status !== 0 || typeof result.stdout !== 'string')
+    throw new ConfigError('The account lifecycle decision could not be confirmed.');
+  try {
+    return JSON.parse(result.stdout) as unknown;
+  } catch {
+    throw new ConfigError('The account lifecycle decision was invalid.');
+  }
 }
 
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');

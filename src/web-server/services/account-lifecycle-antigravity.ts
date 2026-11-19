@@ -136,7 +136,7 @@ export function antigravityJobFlow(
       marker = claimAntigravitySignInMarker(ccsDir, profileName);
       if (!marker) throw new SignInJobError('write_failed');
       try {
-        staging = prepareSignInStaging(ccsDir);
+        staging = prepareSignInStaging(ccsDir, true);
       } catch (error) {
         marker.release();
         marker = null;
@@ -203,7 +203,7 @@ export function antigravityJobFlow(
     cleanup: async () => {
       if (staging) {
         try {
-          removeSignInStaging(staging);
+          removeSignInStaging(staging, ccsDir);
         } catch {
           /* Swept within a day. */
         }

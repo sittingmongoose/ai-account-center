@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   canonicalLeaseRoot,
-  codexStaging,
+  signInStaging,
   writeProviderFile,
 } from '../../shared/private-file-lease';
 import path from 'path';
@@ -254,7 +254,10 @@ export class CodexAccountLifecycle {
     const staging = this.stagingDir(jobId);
     const shared = path.resolve(this.deps.sharedConfigPath ?? getSharedCodexConfigPath());
     const root = this.nativeStagingRoot();
-    if (!root || codexStaging(root, ['prepare', path.basename(staging), shared]) === undefined) {
+    if (
+      !root ||
+      signInStaging(root, 'codex', ['prepare', path.basename(staging), shared]) === undefined
+    ) {
       await fs.mkdir(this.instancesDir(), { recursive: true, mode: 0o700 });
       await fs.mkdir(staging, { mode: 0o700 });
       await fs.chmod(staging, 0o700);
@@ -282,7 +285,8 @@ export class CodexAccountLifecycle {
   private async cleanupStaging(jobId: string): Promise<void> {
     const target = this.stagingDir(jobId);
     const root = this.nativeStagingRoot();
-    if (root && codexStaging(root, ['cleanup', path.basename(target)]) !== undefined) return;
+    if (root && signInStaging(root, 'codex', ['cleanup', path.basename(target)]) !== undefined)
+      return;
     await fs.rm(target, { recursive: true, force: true });
   }
 
@@ -611,7 +615,7 @@ export class CodexAccountLifecycle {
   async sweepStaging(): Promise<number> {
     const root = this.nativeStagingRoot();
     if (root) {
-      const removed = codexStaging(root, ['sweep', String(this.now())]);
+      const removed = signInStaging(root, 'codex', ['sweep', String(this.now())]);
       if (removed !== undefined) return removed;
     }
     let names: string[];

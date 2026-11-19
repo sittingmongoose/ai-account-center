@@ -1,3 +1,4 @@
+import { lifecyclePlan } from '../../shared/private-file-lease';
 import { LifecycleHttpError } from './account-lifecycle-accounts';
 import { ClaudeLifecycleError, isClaudeEmail } from './claude-account-lifecycle';
 import {
@@ -7,7 +8,7 @@ import {
   type LifecycleEnv,
   type LifecycleResult,
 } from './account-lifecycle-env';
-import { updateAccountRegistry } from './account-registry-v2';
+import { parseAccountRegistry, updateAccountRegistry } from './account-registry-v2';
 import { SIGNIN_CODE_PATTERN } from './signin-jobs';
 import {
   entryView,
@@ -37,7 +38,15 @@ export async function relabel(
   const name = label(body.label);
   const account = await resolveIn(env, id);
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
-  const registry = await updateAccountRegistry(env.ccsDir(), (current) => {
+  const root = env.ccsDir();
+  const registry = await updateAccountRegistry(root, (current) => {
+    const reply = lifecyclePlan(root, { operation: 'label', registry: current, id, label: name });
+    if (reply !== undefined) {
+      if (reply === null) throw new LifecycleHttpError(404, 'unknown_account');
+      const next = parseAccountRegistry(reply);
+      if (!next) throw new LifecycleHttpError(500, 'write_failed');
+      return next;
+    }
     // Removed between the lookup and the write: nothing to label.
     if (!current.accounts.some((entry) => entry.id === id)) {
       throw new LifecycleHttpError(404, 'unknown_account');
@@ -164,17 +173,26 @@ export async function openApp(
   keys(body, ['platform']);
   if (body.platform !== 'mac' && body.platform !== 'windows') throw invalid();
   const account = await resolveIn(env, id);
-  if (
-    account.kind !== 'additional' ||
-    account.provider !== 'cursor' ||
-    body.platform !== 'mac' ||
-    account.entry.platform !== 'mac' ||
-    account.entry.sshHost === null
-  ) {
+  const additional = account.kind === 'additional';
+  const platform = additional ? account.entry.platform : null;
+  const host = additional ? account.entry.sshHost : null;
+  const reply = lifecyclePlan(env.ccsDir(), {
+    operation: 'open-cursor',
+    additional,
+    provider: account.provider,
+    requestPlatform: body.platform,
+    accountPlatform: platform,
+    hostConfigured: host !== null,
+  });
+  const allowed =
+    reply === undefined
+      ? additional && account.provider === 'cursor' && body.platform === 'mac' && platform === 'mac'
+      : reply === true;
+  if (!allowed || host === null) {
     throw new LifecycleHttpError(409, 'not_configured');
   }
   try {
-    await env.openCursor(account.entry.sshHost);
+    await env.openCursor(host);
   } catch {
     throw new LifecycleHttpError(502, 'host_unreachable', { host: 'mac' });
   }

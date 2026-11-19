@@ -2,7 +2,7 @@
 use super::{path, profile_writes::owned_directory, require_absolute, sync_directory};
 use std::{
     fs, io,
-    os::unix::fs::{DirBuilderExt, PermissionsExt, symlink},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink},
     path::Path,
     time::{Duration, UNIX_EPOCH},
 };
@@ -40,8 +40,8 @@ pub fn prepare(root: &Path, name: &str, shared: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn remove(parent: &Path, name: &str) -> io::Result<bool> {
-    if !stage_name(name) {
+fn remove(parent: &Path, name: &str, valid: fn(&str) -> bool) -> io::Result<bool> {
+    if !valid(name) {
         return Err(io::Error::other("invalid staging name"));
     }
     let target = parent.join(name);
@@ -65,22 +65,25 @@ fn remove(parent: &Path, name: &str) -> io::Result<bool> {
 pub fn cleanup(root: &Path, name: &str) -> io::Result<()> {
     let parent = root.join("codex-instances");
     owned_directory(&parent)?;
-    remove(&parent, name).map(|_| ())
+    remove(&parent, name, stage_name).map(|_| ())
 }
 
 /// Sweep only expired staging directories. Live profiles and symlinks stay in place.
 pub fn sweep(root: &Path, now_ms: u64) -> io::Result<usize> {
-    let parent = root.join("codex-instances");
-    match owned_directory(&parent) {
+    sweep_expired(&root.join("codex-instances"), now_ms, stage_name)
+}
+
+fn sweep_expired(parent: &Path, now_ms: u64, valid: fn(&str) -> bool) -> io::Result<usize> {
+    match owned_directory(parent) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
         Err(error) => return Err(error),
         Ok(()) => {}
     }
     let cutoff = Duration::from_millis(now_ms).saturating_sub(Duration::from_secs(3600));
     let mut removed = 0;
-    for entry in fs::read_dir(&parent)?.flatten() {
+    for entry in fs::read_dir(parent)?.flatten() {
         let name = entry.file_name();
-        let Some(name) = name.to_str().filter(|name| stage_name(name)) else {
+        let Some(name) = name.to_str().filter(|name| valid(name)) else {
             continue;
         };
         let metadata = fs::symlink_metadata(entry.path());
@@ -95,9 +98,88 @@ pub fn sweep(root: &Path, now_ms: u64) -> io::Result<usize> {
         }) {
             continue;
         }
-        if remove(&parent, name).unwrap_or(false) {
+        if remove(parent, name, valid).unwrap_or(false) {
             removed += 1;
         }
     }
     Ok(removed)
+}
+
+fn antigravity_name(name: &str) -> bool {
+    name.strip_prefix(".staging-").is_some_and(|id| {
+        id.len() == 16
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn private_folder(target: &Path) -> io::Result<()> {
+    fs::DirBuilder::new().mode(0o700).create(target)?;
+    fs::set_permissions(target, fs::Permissions::from_mode(0o700))
+}
+
+fn create_file(path: &Path, content: &[u8], mode: u32) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(mode)
+        .open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(mode))?;
+    file.write_all(content)?;
+    file.sync_all()
+}
+
+/// Create the isolated Antigravity home and fixed browser stubs, never a login file.
+pub fn prepare_antigravity(root: &Path, name: &str, bus: &[u8]) -> io::Result<()> {
+    let parent = root.join("antigravity-signin");
+    owned_directory(&parent)?;
+    if !antigravity_name(name) || bus.is_empty() || bus.len() > 4096 {
+        return Err(io::Error::other("invalid staging layout"));
+    }
+    let stage = parent.join(name);
+    private_folder(&stage)?;
+    let home = stage.join("home");
+    let mask = home.join(".gemini");
+    let cli = mask.join("antigravity-cli");
+    let stubs = stage.join("browser-stubs");
+    let create = || -> io::Result<()> {
+        for path in [
+            &home,
+            &mask,
+            &cli,
+            &cli.join("log"),
+            &mask.join("AAC-signin"),
+            &stubs,
+        ] {
+            private_folder(path)?;
+        }
+        for name in [
+            "xdg-open",
+            "open",
+            "sensible-browser",
+            "x-www-browser",
+            "www-browser",
+        ] {
+            create_file(&stubs.join(name), b"#!/bin/sh\\nexit 0\\n", 0o700)?;
+        }
+        create_file(&stage.join("session-bus.conf"), bus, 0o600)
+    };
+    if let Err(error) = create() {
+        let _ = remove(&parent, name, antigravity_name);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Remove only the Antigravity staging folder named by this job.
+pub fn cleanup_antigravity(root: &Path, name: &str) -> io::Result<()> {
+    let parent = root.join("antigravity-signin");
+    owned_directory(&parent)?;
+    remove(&parent, name, antigravity_name).map(|_| ())
+}
+
+/// Expire only abandoned Antigravity staging folders.
+pub fn sweep_antigravity(root: &Path, now_ms: u64) -> io::Result<usize> {
+    sweep_expired(&root.join("antigravity-signin"), now_ms, antigravity_name)
 }
