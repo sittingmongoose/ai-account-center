@@ -544,7 +544,9 @@ if (recordNative) {
   );
   const output = path.resolve(spec, recordNative);
   await fs.writeFile(output, JSON.stringify(recordedNative, null, 2) + '\n');
-  console.log(`Recorded ${expected} native rows into ${output}`);
+  console.log(
+    `Recorded ${Object.keys(recordedNative).length} native rows, ${nativeRecordingDeclines} explicit declines, into ${output}`
+  );
 }
 console.log(
   `Rust public M0: ${counts.match} matching replies, ${counts.decline} explicit declines across ${declined.size} routes, ${counts.different} differences.`
