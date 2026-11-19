@@ -540,6 +540,12 @@ export class RustService extends RustSupervisor {
     this.fallback(route, { kind: 'unavailable', reason });
   }
 
+  /** G17: a named decline of the Rust feed producer: the service answered, so it counts as a fed decline
+   * (like `fedView`'s own 503s), not a front-door `unavailable`. */
+  producerDeclined(route: string, reason: string): void {
+    this.fallback(route, { kind: 'fedDeclined', reason });
+  }
+
   async respond(
     req: Request,
     res: Response,
