@@ -9,9 +9,7 @@
 //! ambiguous). A Claude failure before the host command is dispatched proves nothing was sent and
 //! answers `not-sent`; after that point every failure is an error, never a retry.
 use aac_status::reset_claude_source::HelperCommand;
-#[cfg(any(unix, test))]
-use serde_json::json;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},

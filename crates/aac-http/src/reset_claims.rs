@@ -1,7 +1,9 @@
 //! Exclusive writer lease and native ledger dispatch shared by the public and private listeners.
 use aac_files::{OwnedStore, registry::Owners};
 use aac_views::decline::Decline;
-use serde_json::{Map, Value, json};
+#[cfg(any(unix, test))]
+use serde_json::json;
+use serde_json::{Map, Value};
 use std::{path::Path, sync::Mutex};
 
 /// The registry row this module writes.
