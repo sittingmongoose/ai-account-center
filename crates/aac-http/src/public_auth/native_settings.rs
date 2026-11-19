@@ -57,6 +57,7 @@ pub(super) struct Settings {
     events: DashboardEvents,
     owners: Owners,
     limits: crate::limits::Limits,
+    preference_writes: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Settings {
@@ -66,6 +67,7 @@ impl Settings {
             events,
             owners: owners(),
             limits: crate::limits::Limits::new(),
+            preference_writes: Arc::default(),
         }
     }
 
@@ -87,34 +89,32 @@ impl Settings {
         family: Family,
         request: Request,
     ) -> Reply {
-        match access.principal {
-            DashboardPrincipal::Anonymous => {
-                return super::error(401, "auth_required", "Authentication required");
-            }
-            DashboardPrincipal::Device { .. } => {
-                return super::error(
-                    403,
-                    "device_scope",
-                    "This action needs a signed-in dashboard session.",
-                );
-            }
-            DashboardPrincipal::Browser { .. } => {}
-        }
         let head = request.method() == Method::HEAD;
-        match family {
-            Family::Settings => self.settings(request, head).await,
-            Family::Preferences => self.preferences(request, head).await,
-            Family::Visibility => self.visibility(request, head).await,
-        }
+        let reply = match access.principal {
+            DashboardPrincipal::Anonymous => {
+                super::error(401, "auth_required", "Authentication required")
+            }
+            DashboardPrincipal::Device { .. } => super::error(
+                403,
+                "device_scope",
+                "This action needs a signed-in dashboard session.",
+            ),
+            DashboardPrincipal::Browser { .. } => match family {
+                Family::Settings => self.settings(request).await,
+                Family::Preferences => self.preferences(request).await,
+                Family::Visibility => self.visibility(request).await,
+            },
+        };
+        truncate(reply, head)
     }
 
-    async fn settings(&self, request: Request, head: bool) -> Reply {
+    async fn settings(&self, request: Request) -> Reply {
         if request.uri().query().is_some_and(|query| {
             url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| !key.is_empty())
         }) {
             return no_store(super::plain(400, "Unexpected settings query."));
         }
-        if request.method() == Method::GET {
+        if matches!(*request.method(), Method::GET | Method::HEAD) {
             let root = self.root.clone();
             let reply = match self
                 .limits
@@ -124,7 +124,7 @@ impl Settings {
                 Ok(value) => super::response(200, value),
                 Err(_) => super::plain(500, "Usage refresh settings could not be read."),
             };
-            return no_store(truncate(reply, head));
+            return no_store(reply);
         }
         let body = match self.write(request, Family::Settings, SETTINGS_CAP).await {
             Ok(body) => body,
@@ -143,11 +143,11 @@ impl Settings {
         }
     }
 
-    async fn preferences(&self, request: Request, head: bool) -> Reply {
+    async fn preferences(&self, request: Request) -> Reply {
         if request.uri().query().is_some_and(|query| !query.is_empty()) {
             return no_store(super::plain(400, "Unexpected preferences query."));
         }
-        if request.method() == Method::GET {
+        if matches!(*request.method(), Method::GET | Method::HEAD) {
             let root = self.root.clone();
             let reply = match self
                 .limits
@@ -161,7 +161,7 @@ impl Settings {
                 Ok(value) => super::response(200, value),
                 Err(_) => super::plain(500, "Dashboard preferences could not be read."),
             };
-            return no_store(truncate(reply, head));
+            return no_store(reply);
         }
         let patch = request.method() == Method::PATCH;
         let body = match self
@@ -175,11 +175,15 @@ impl Settings {
             Ok(body) => body,
             Err(reply) => return reply,
         };
+        // Queue the clients before claiming the nonblocking file leases. The blocking writer
+        // owns the turn through completion even if its HTTP client disconnects.
+        let turn = self.preference_writes.clone().lock_owned().await;
         let root = self.root.clone();
         let owners = self.owners.clone();
         let saved = self
             .limits
             .blocking(crate::table::Pool::Reads, move || {
+                let _turn = turn;
                 Ok(crate::preferences_write::save_public(
                     &root, &owners, patch, &body,
                 ))
@@ -200,7 +204,7 @@ impl Settings {
         }
     }
 
-    async fn visibility(&self, request: Request, head: bool) -> Reply {
+    async fn visibility(&self, request: Request) -> Reply {
         if request.uri().query().is_some() {
             return no_store(super::error(
                 400,
@@ -208,7 +212,7 @@ impl Settings {
                 "This request does not take a query string.",
             ));
         }
-        if request.method() == Method::GET {
+        if matches!(*request.method(), Method::GET | Method::HEAD) {
             let root = self.root.clone();
             let reply = match self
                 .limits
@@ -224,7 +228,7 @@ impl Settings {
                     "Account visibility could not be read safely.",
                 ),
             };
-            return no_store(truncate(reply, head));
+            return no_store(reply);
         }
         let patch = request.method() == Method::PATCH;
         let body = match self

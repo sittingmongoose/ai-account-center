@@ -109,6 +109,65 @@ fn materialize(
         .map_err(|_| Decline::Internal)
 }
 
+struct WriteLease {
+    primary: OwnedStore,
+    companion: OwnedStore,
+    transaction: OwnedStore,
+}
+
+impl WriteLease {
+    fn acquire(root: &Path, owners: &Owners) -> Result<Self, Decline> {
+        let rows = registry::rows().map_err(|_| Decline::Internal)?;
+        let claim = |id| {
+            owners
+                .claim(rows, id, root, None)
+                .map_err(|_| Decline::Unsupported)
+        };
+        let lease = Self {
+            primary: claim(PRIMARY)?,
+            companion: claim(COMPANION)?,
+            transaction: claim(TRANSACTION)?,
+        };
+        // Resume an earlier committed intent before reading or comparing the current files.
+        if let Some(pending) = stored(root, TRANSACTION)? {
+            let old: Documents =
+                crate::json_object::from_slice(&pending, &["primary", "companion"])
+                    .map_err(|_| Decline::Unsupported)?;
+            response(&old)?;
+            materialize(&lease.primary, &lease.companion, &old)?;
+            lease
+                .transaction
+                .remove_settings()
+                .map_err(|_| Decline::Internal)?;
+        }
+        Ok(lease)
+    }
+
+    fn publish(&self, documents: &Documents) -> Result<(), Decline> {
+        self.primary
+            .can_replace_settings()
+            .map_err(|_| Decline::Unsupported)?;
+        self.companion
+            .can_replace_settings()
+            .map_err(|_| Decline::Unsupported)?;
+
+        // Once the intent has been published, the next writer can finish materializing it.
+        let mut pending = serde_json::to_vec(documents).map_err(|_| Decline::Internal)?;
+        pending.push(b'\n');
+        self.transaction
+            .write(&pending)
+            .map_err(|_| Decline::Internal)?;
+        materialize(&self.primary, &self.companion, documents)?;
+        self.transaction
+            .remove_settings()
+            .map_err(|_| Decline::Internal)?;
+        self.primary.clean_settings_temporaries();
+        self.companion.clean_settings_temporaries();
+        self.transaction.clean_settings_temporaries();
+        Ok(())
+    }
+}
+
 pub(crate) fn save(
     root: &Path,
     owners: &Owners,
@@ -126,51 +185,13 @@ pub(crate) fn save(
         companion: request.companion,
     };
     let saved = response(&documents)?;
-    let rows = registry::rows().map_err(|_| Decline::Internal)?;
-    let claim = |id| {
-        owners
-            .claim(rows, id, root, None)
-            .map_err(|_| Decline::Unsupported)
-    };
-    let primary = claim(PRIMARY)?;
-    let companion = claim(COMPANION)?;
-    let transaction = claim(TRANSACTION)?;
-
-    // Resume an earlier committed intent before considering another write.
-    // The TS reader gives the intent precedence over the materialized files.
-    if let Some(pending) = stored(root, TRANSACTION)? {
-        let old: Documents = crate::json_object::from_slice(&pending, &["primary", "companion"])
-            .map_err(|_| Decline::Unsupported)?;
-        response(&old)?;
-        materialize(&primary, &companion, &old)?;
-        transaction
-            .remove_settings()
-            .map_err(|_| Decline::Internal)?;
-    }
+    let lease = WriteLease::acquire(root, owners)?;
     if let Some(expected) = request.previous
         && revision(root)? != expected
     {
         return Err(Decline::Stale);
     }
-    primary
-        .can_replace_settings()
-        .map_err(|_| Decline::Unsupported)?;
-    companion
-        .can_replace_settings()
-        .map_err(|_| Decline::Unsupported)?;
-
-    // Once the intent has been published, a transport failure is ambiguous.
-    // The next writer completes it under the same three leases.
-    let mut pending = serde_json::to_vec(&documents).map_err(|_| Decline::Internal)?;
-    pending.push(b'\n');
-    transaction.write(&pending).map_err(|_| Decline::Internal)?;
-    materialize(&primary, &companion, &documents)?;
-    transaction
-        .remove_settings()
-        .map_err(|_| Decline::Internal)?;
-    primary.clean_settings_temporaries();
-    companion.clean_settings_temporaries();
-    transaction.clean_settings_temporaries();
+    lease.publish(&documents)?;
     Ok(saved)
 }
 
@@ -185,7 +206,7 @@ pub(crate) enum PublicError {
 }
 
 /// The public route's write: validate one whole document or patch exactly as the TS route
-/// did, prepare both documents, then take the same leases and install them.
+/// did. A patch reads, merges and installs both documents under the same writer leases.
 pub(crate) fn save_public(
     root: &Path,
     owners: &Owners,
@@ -217,43 +238,29 @@ pub(crate) fn save_public(
             "Generic JSONL usage log sources are supported only on ubuntu".into(),
         ));
     }
-    let merged = if patch {
+    let (documents, lease) = if patch {
         if !patch_valid(&value, &hosts) {
             return Err(PublicError::Invalid);
         }
+        let lease = WriteLease::acquire(root, owners).map_err(|_| PublicError::Unavailable)?;
+        // Refuse unsafe leaves as the revision check did. The reader may otherwise default an
+        // unreadable preference, which would let a partial update discard the existing fields.
+        stored(root, PRIMARY).map_err(|_| PublicError::Unavailable)?;
+        stored(root, COMPANION).map_err(|_| PublicError::Unavailable)?;
         let mut current = crate::account_reads::preferences(root)
-            .or_else(|| pending(root))
             .unwrap_or_else(|| Value::Object(crate::account_reads::defaults()));
         apply_patch(&mut current, &value);
-        current
+        (prepare_documents(&current, &hosts)?, lease)
     } else {
-        let valid = crate::account_reads::preferences_valid(
-            value.as_object().ok_or(PublicError::Invalid)?,
-            &hosts,
-        );
-        match valid {
-            Some(true) => value,
-            Some(false) => return Err(PublicError::Invalid),
-            None => return Err(PublicError::Invalid),
-        }
+        let documents = prepare_documents(&value, &hosts)?;
+        let lease = WriteLease::acquire(root, owners).map_err(|_| PublicError::Unavailable)?;
+        (documents, lease)
     };
-    let documents = prepare_documents(&merged, &hosts)?;
-    let previous = if patch {
-        Some(revision(root).map_err(|_| PublicError::Unavailable)?)
-    } else {
-        None
-    };
-    let request = json!({
-        "previous": previous,
-        "primary": documents.primary,
-        "companion": documents.companion,
-    });
-    let bytes = serde_json::to_vec(&request).map_err(|_| PublicError::Unavailable)?;
-    match save(root, owners, patch, &bytes) {
-        Ok(value) => Ok(value),
-        Err(Decline::Stale) => Err(PublicError::Unavailable),
-        Err(_) => Err(PublicError::Unavailable),
-    }
+    let saved = response(&documents).map_err(|_| PublicError::Unavailable)?;
+    lease
+        .publish(&documents)
+        .map_err(|_| PublicError::Unavailable)?;
+    Ok(saved)
 }
 
 /// `isDashboardPreferencesPatch`: one or more known members with valid values.
