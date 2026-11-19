@@ -481,6 +481,30 @@ it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
     const removed = await f.request('POST', '/' + id + '/remove', { confirmationToken: token });
     expect(removed.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
 
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'party',
+            email: 'party@example.com',
+            mac: {
+              launcherName: 'p',
+              launcherPath: '/a',
+              profilePath: '/fake/mac/Claude-party',
+              sshHost: 'mac-host',
+            },
+            windows: {
+              launcherName: 'p',
+              profilePath: 'C:\\x\\Claude-party',
+              sshHost: 'windows-host',
+            },
+          },
+        ],
+      }),
+      { mode: 0o600 }
+    );
     const profile = await f.request('POST', '/add', {
       provider: 'claude',
       profileId: 'work2',
@@ -497,6 +521,28 @@ it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
     );
     expect(pending.profiles.map((value: { id: string }) => value.id)).toContain('work2');
     expect(f.rustService?.registeredWrites).toBe(writeParityMode === 'on' ? 4 : 0);
+    const prepare = await f.request('POST', '/claude:party/remove', {});
+    const removeToken = (prepare.body.confirmation as { token: string }).token;
+    const moved = await f.request('POST', '/claude:party/remove', {
+      confirmationToken: removeToken,
+    });
+    expect(moved.body).toMatchObject({ removed: true, purgeAfter: '2026-11-01T08:00:00Z' });
+    const trashed = String(moved.body.trashId);
+    expect((await f.request('GET', '/trash')).body.entries).toMatchObject([
+      { trashId: trashed, state: 'trashed' },
+    ]);
+    const restore = await f.request('POST', '/trash/' + trashed + '/restore', {});
+    const restoreToken = (restore.body.confirmation as { token: string }).token;
+    const restored = await f.request('POST', '/trash/' + trashed + '/restore', {
+      confirmationToken: restoreToken,
+    });
+    expect(restored.body).toEqual({ restored: true, accountId: 'claude:party' });
+    const writes = f.rustService?.registeredWrites ?? 0;
+    if (writeParityMode === 'on') expect(writes).toBeGreaterThan(4);
+    else expect(writes).toBe(0);
+    f.rustService?.stop();
+    expect((await f.request('PATCH', '/zai:usage', { label: 'Fallback' })).status).toBe(200);
+    expect(f.rustService?.registeredWrites).toBe(writes);
   }
 );
 
