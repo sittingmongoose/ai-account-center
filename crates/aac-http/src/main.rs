@@ -187,6 +187,16 @@ async fn run() {
             inputs.companions = std::sync::Arc::new(|| {
                 let mut facts = aac_http::account_usage::producer::CompanionInputs::default();
                 facts.lifecycle.mounted = true;
+                let build = env!("AAC_BUILD_COMMIT");
+                let commit = build.get(..8).filter(|prefix| {
+                    build.len() == 40 && prefix.bytes().all(|byte| byte.is_ascii_hexdigit())
+                });
+                let mut server =
+                    serde_json::json!({"version": env!("AAC_VERSION"), "commit": commit});
+                if std::env::var("AAC_CUT_OFFER_HOME").as_deref() == Ok("1") {
+                    server["views"] = serde_json::json!(["home"]);
+                }
+                facts.server = Some(server);
                 facts
             });
             if let Some(directory) = std::env::var_os("AAC_CUT_HUB_DIRECTORY")

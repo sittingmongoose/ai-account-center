@@ -22,6 +22,8 @@
 import { accessSync, constants } from 'fs';
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process';
 
+class AppLaunchError extends Error {}
+
 export interface AppLaunchSpec {
   /** Short lowercase name used in the transient unit (aac-launch-<app>-<id>). */
   app: string;
@@ -218,7 +220,7 @@ export async function launchApp(
   const systemdRun =
     deps.systemdRunPath === undefined ? defaultSystemdRunPath() : deps.systemdRunPath;
   if (systemdRun === null) {
-    throw new Error(
+    throw new AppLaunchError(
       `Cannot launch ${spec.app} outside the dashboard cgroup: systemd-run is unavailable. ` +
         'Refusing to start it inside ccs-dashboard.service, where a dashboard restart would kill it.'
     );
@@ -235,12 +237,12 @@ export async function launchApp(
   try {
     code = await waitForExit(child);
   } catch (error) {
-    throw new Error(
+    throw new AppLaunchError(
       `Cannot launch ${spec.app} outside the dashboard cgroup: systemd-run failed to start (${error}).`
     );
   }
   if (code !== 0) {
-    throw new Error(
+    throw new AppLaunchError(
       `Cannot launch ${spec.app} outside the dashboard cgroup: systemd-run exited with code ${code}.`
     );
   }

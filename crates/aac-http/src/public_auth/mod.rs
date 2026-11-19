@@ -6,6 +6,8 @@ mod compose;
 mod dashboard_events;
 mod devices;
 mod hub;
+#[cfg(unix)]
+mod native_reads;
 mod policy;
 mod request_log;
 mod routes;
@@ -185,7 +187,7 @@ impl DashboardAuth {
         cache: HubCache,
         ui_root: Option<PathBuf>,
     ) -> Router {
-        self.edges(downstream, cache, ui_root, None, false, None, false)
+        self.edges(downstream, cache, ui_root, None, false, None, None)
     }
 
     fn edges(
@@ -196,17 +198,46 @@ impl DashboardAuth {
         snapshot: Option<PathBuf>,
         partial_api: bool,
         backend: Option<compose::Backend>,
-        cut: bool,
+        cut_root: Option<PathBuf>,
     ) -> Router {
+        let cut = cut_root.is_some();
+        #[cfg(unix)]
+        let native = cut_root.map(native_reads::NativeReads::new);
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
-            if let Some(backend) = backend
-                && api_path(&request.uri().path().to_ascii_lowercase())
-                && (!cut || compose::cut_route(request.method(), request.uri().path()))
-            {
-                return backend.forward(request).await;
+            #[cfg(unix)]
+            if let Some(native) = native {
+                if matches!(*request.method(), Method::GET | Method::HEAD)
+                    && matches!(
+                        request.uri().path(),
+                        "/api/accounts/settings" | "/api/accounts/settings/"
+                    )
+                {
+                    let session =
+                        request
+                            .extensions()
+                            .get::<DashboardAccess>()
+                            .is_some_and(|access| {
+                                matches!(access.principal, DashboardPrincipal::Browser { .. })
+                            });
+                    let head = request.method() == Method::HEAD;
+                    return native.settings(session, request.uri().clone(), head).await;
+                }
+                if let Some(input) = native_reads::DashboardRequest::authorized(&request)
+                    && let Some(reply) = native.try_dashboard(input).await
+                {
+                    return reply;
+                }
+            }
+            if let Some(backend) = backend {
+                if api_path(&request.uri().path().to_ascii_lowercase()) {
+                    if !cut || compose::cut_route(request.method(), request.uri().path()) {
+                        return backend.forward(request).await;
+                    }
+                    return plain(404, "API endpoint was not found.");
+                }
             }
             let headers = request.headers();
             let session = (!api_path(&request.uri().path().to_ascii_lowercase()))
@@ -337,6 +368,9 @@ pub(crate) async fn run_public_at(
             axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
         );
     }
+    if cut {
+        api = api.route("/api/diag", axum::routing::get(cut_diagnostics));
+    }
     let router = auth
         .protect(auth.edges(
             api,
@@ -345,7 +379,7 @@ pub(crate) async fn run_public_at(
             snapshot,
             !composed,
             backend,
-            cut,
+            cut.then(|| root.clone()),
         ))
         .layer(middleware::from_fn_with_state(
             request_log::Audit {
@@ -431,6 +465,16 @@ pub(crate) async fn run_public_at(
         ));
     }
     result
+}
+
+async fn cut_diagnostics(axum::Extension(access): axum::Extension<DashboardAccess>) -> Reply {
+    let mut reply = if matches!(access.principal, DashboardPrincipal::Browser { .. }) {
+        response(200, json!(aac_diag::diagnostics()))
+    } else {
+        plain(401, "Authentication required")
+    };
+    set_header(&mut reply, "cache-control", "no-store");
+    reply
 }
 
 fn record_public_build(root: &std::path::Path) {

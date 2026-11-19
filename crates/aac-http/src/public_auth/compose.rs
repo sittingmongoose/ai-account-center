@@ -19,7 +19,14 @@ const ACCESS: &str = "x-aac-compose-access";
 // the complete legacy router, including its handling of unknown methods.
 const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/dashboard", &["GET"]),
-    ("/api/accounts/settings", &["GET", "PUT"]),
+    (
+        "/api/accounts/settings",
+        if cfg!(unix) {
+            &["PUT"]
+        } else {
+            &["GET", "PUT"]
+        },
+    ),
     ("/api/accounts/preferences", &["GET", "PUT", "PATCH"]),
     ("/api/accounts/visibility", &["GET", "PUT", "PATCH"]),
     ("/api/accounts/analytics", &["GET"]),
@@ -53,7 +60,6 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/claude/history-snapshots/cleanup", &["POST"]),
     ("/api/codex/profiles", &["GET"]),
     ("/api/codex/profiles/quotas", &["GET"]),
-    ("/api/diag", &["GET"]),
     ("/api/scoreboard", &["GET"]),
     ("/api/status", &["GET"]),
     ("/api/status/answers", &["GET", "POST"]),

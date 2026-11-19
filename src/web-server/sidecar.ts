@@ -7,6 +7,7 @@ import { ConfigError } from '../errors/error-types';
 import { getCcsDir } from '../utils/config-manager';
 import { hubRows, publishHubCache, type RenderedHubRows } from './compose-server';
 import { startServer } from './index';
+import { rustGroupOn } from './rust-service-groups';
 import type { ClaudeDashboardPlatform } from './services/account-dashboard-types';
 import { setupGracefulShutdown } from './shutdown';
 
@@ -26,6 +27,8 @@ async function main(): Promise<void> {
   await mkdir(ccs, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(path.join(os.tmpdir(), 'aac-sidecar-'));
   process.env.AAC_CUT_HUB_DIRECTORY = directory;
+  process.env.AAC_CUT_OFFER_HOME =
+    rustGroupOn('home') || process.env.AAC_RUST_HOME_VIEW === 'on' ? '1' : '0';
   const cache = path.join(directory, 'hub.json');
   const native = new Map<ClaudeDashboardPlatform, RenderedHubRows>();
   const refresh = () => {
