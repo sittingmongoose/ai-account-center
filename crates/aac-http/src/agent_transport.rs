@@ -677,7 +677,11 @@ impl Agents {
                     Some(Event::Failure { failure, .. })
                         if matches!(
                             request.verb.as_str(),
-                            "cursor-open" | "key-store" | "muse-login-identity" | "signin-session"
+                            "cursor-open"
+                                | "key-store"
+                                | "muse-login-identity"
+                                | "signin-session"
+                                | "claude-host"
                         ) && failure.cause == Cause::Refused
                             && failure.detail.as_str() == "unsupported agent verb" =>
                     {

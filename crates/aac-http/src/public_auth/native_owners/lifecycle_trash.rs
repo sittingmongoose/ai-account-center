@@ -2,8 +2,9 @@
 use super::NativeOwners;
 use crate::{
     account_approvals::Approvals,
-    agent_transport::{Agents, Selector},
+    agent_transport::Agents,
     claude_account_store::{read_trash, trash_id},
+    claude_host,
     claude_lifecycle::{self, Effect, Workflow},
     claude_open::manifest,
     lifecycle_queue::LifecycleQueues,
@@ -453,16 +454,7 @@ impl Trash {
 
     async fn host_call(&self, host: &str, detail: &Value, args: Value) -> Option<Value> {
         let alias = detail["launcher"]["sshHost"].as_str()?;
-        self.agents
-            .call_value(
-                "claude-host",
-                Selector::usage(host, Some(alias)),
-                args,
-                60_000,
-                62_000,
-                65_536,
-            )
-            .await
+        self.call_host(host, alias, args).await
     }
 }
 
@@ -754,16 +746,7 @@ impl Trash {
     }
 
     async fn call_host(&self, host: &str, alias: &str, args: Value) -> Option<Value> {
-        self.agents
-            .call_value(
-                "claude-host",
-                Selector::usage(host, Some(alias)),
-                args,
-                60_000,
-                62_000,
-                65_536,
-            )
-            .await
+        claude_host::call(&self.agents, host, alias, args, 60_000).await
     }
 }
 

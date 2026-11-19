@@ -741,7 +741,13 @@ fn connection_options(ctx: &SourceContext, alias: &str) -> Res<Vec<String>> {
             Some(rest) => posix_join(&ctx.home, rest).to_string_lossy().into_owned(),
             None => file.to_owned(),
         };
-        if !expanded.starts_with('/') || expanded.contains(['\r', '\n', '%', '"', '\\']) {
+        let absolute = Path::new(&expanded).is_absolute();
+        let expanded = if cfg!(windows) {
+            expanded.replace('\\', "/")
+        } else {
+            expanded
+        };
+        if !absolute || expanded.contains(['\r', '\n', '%', '"', '\\']) {
             return Err(refused);
         }
         Ok(expanded)
@@ -809,7 +815,12 @@ fn raw_config(ccs: &Path) -> Option<Value> {
 }
 
 /// `sshArgv(alias, command, {interval: 5, countMax: 3})`.
-fn ssh_argv(ctx: &SourceContext, alias: &str, command: &str) -> Res<Vec<String>> {
+fn ssh_argv(
+    ctx: &SourceContext,
+    alias: &str,
+    command: &str,
+    keepalive_count: u8,
+) -> Res<Vec<String>> {
     let connection = connection_options(ctx, alias)?;
     let (_, capabilities) = capabilities(ctx)?;
     let mut argv = vec!["-T".to_owned()];
@@ -822,12 +833,22 @@ fn ssh_argv(ctx: &SourceContext, alias: &str, command: &str) -> Res<Vec<String>>
         "-o".to_owned(),
         "ServerAliveInterval=5".to_owned(),
         "-o".to_owned(),
-        "ServerAliveCountMax=3".to_owned(),
+        format!("ServerAliveCountMax={keepalive_count}"),
         "--".to_owned(),
         alias.to_owned(),
         command.to_owned(),
     ]);
     Ok(argv)
+}
+
+/// Build one command with the dashboard's legacy SSH trust and isolation policy.
+pub(crate) fn claude_host_ssh(ctx: &SourceContext, alias: &str, command: &str) -> Res<Command> {
+    let args = ssh_argv(ctx, alias, command, 1)?;
+    let executable = ssh_launch(ctx, &args)?;
+    let mut command = Command::new(executable);
+    command.args(args);
+    ssh_environment(&mut command, &ctx.path);
+    Ok(command)
 }
 
 /// `usageHelperCommand('windows')`.
@@ -907,7 +928,7 @@ fn claude_command(
     input: Value,
 ) -> Res<HelperCommand> {
     let (executable, args) = if let Some(ssh_host) = ssh_host {
-        let args = ssh_argv(ctx, ssh_host, &windows_helper_command())?;
+        let args = ssh_argv(ctx, ssh_host, &windows_helper_command(), 3)?;
         let executable = ssh_launch(ctx, &args)?;
         (
             executable.to_str().ok_or("ssh-unavailable")?.to_owned(),
