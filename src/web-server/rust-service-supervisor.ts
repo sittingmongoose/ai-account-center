@@ -31,7 +31,7 @@ import {
   type RustRenewalBoot,
   type RustStoreBootInput,
 } from './rust-service-transport';
-import { settlePrivateFileOwners } from '../shared/private-files';
+import { settlePrivateFileOwners, PRIVATE_FILE_ROWS } from '../shared/private-files';
 import { registerFileWriter, rememberFileLeaseBinary } from '../shared/private-file-lease';
 import {
   rustComposeSelected,
@@ -48,6 +48,23 @@ import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
 
 export type RustServiceMode = 'off' | 'shadow' | 'on';
+
+/**
+ * The rows the cut's native public listener writes where it has no private socket (Windows):
+ * the settings, preferences and visibility leaves its public routes own, and the collection
+ * caches its producer owns. TS keeps the wallet pointer, the lifecycle and key rows.
+ */
+const PUBLIC_NATIVE_ROWS: Readonly<Record<string, true>> = {
+  'account-refresh-settings': true,
+  'dashboard-preferences': true,
+  'dashboard-preferences-extra-sources': true,
+  'dashboard-preferences-transaction': true,
+  'account-visibility': true,
+  'account-usage-observations': true,
+  'cursor-quota-observation': true,
+  'claude-live-snapshots': true,
+  'opencode-wallet-account': true,
+};
 
 /**
  * `AAC_RUST_SERVICE`, else `rustService.mode` in config.yaml, else off. Invalid values stay off.
@@ -142,15 +159,24 @@ export class RustSupervisor {
   ) {
     this.mode = rustServiceMode(mode);
     const native = this.mode === 'on' && process.platform !== 'win32';
+    // On Windows the native public listener has no private socket but still writes its own rows:
+    // the settings, preferences and visibility leaves and the collection caches.
+    const publicNative = this.mode === 'on' && process.env.AAC_CUT_PUBLIC_OWNERS === '1';
     this.writesOn = native && rustGroupOn('writes');
     const collectionOn = native && rustGroupOn('collection');
     // One readers-check file carries the Status and Scoreboard writers.
-    settlePrivateFileOwners((group) => {
-      if (!native) return false;
-      if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
-      if (group === 'scoreboard') return rustOwnedScoreboardOn();
-      return (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn);
-    });
+    settlePrivateFileOwners(
+      (group) => {
+        if (!native) return false;
+        if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
+        if (group === 'scoreboard') return rustOwnedScoreboardOn();
+        return (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn);
+      },
+      PRIVATE_FILE_ROWS,
+      publicNative && process.platform === 'win32'
+        ? (id) => PUBLIC_NATIVE_ROWS[id] === true
+        : undefined
+    );
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }

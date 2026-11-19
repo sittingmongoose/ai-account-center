@@ -135,15 +135,19 @@ export const PRIVATE_FILE_ROWS: readonly PrivateFileRow[] = Object.freeze(
 
 /**
  * Each row's writer on the dashboard host: its own `owner`, or the Rust service when the row
- * moves with a route group that is `on`.
+ * moves with a route group that is `on`, or when `owned` names it.
  */
 export function resolvePrivateFileOwners(
   rows: readonly PrivateFileRow[],
-  groupOn: (group: string) => boolean
+  groupOn: (group: string) => boolean,
+  owned: (id: string) => boolean = () => false
 ): Record<string, PrivateFileRole> {
   const owners: Record<string, PrivateFileRole> = {};
   for (const row of rows)
-    owners[row.id] = row.movesWith !== null && groupOn(row.movesWith) ? 'rust-service' : row.owner;
+    owners[row.id] =
+      (row.movesWith !== null && groupOn(row.movesWith)) || owned(row.id)
+        ? 'rust-service'
+        : row.owner;
   return owners;
 }
 
@@ -152,12 +156,14 @@ let settled: Readonly<Record<string, PrivateFileRole>> | null = null;
 /**
  * Resolve the owners for this process from the service's route groups; the dashboard calls this
  * once at start (the Rust supervisor), before the boot JSON is written.
+ * `owned` names rows the native public process writes itself where no private socket exists.
  */
 export function settlePrivateFileOwners(
   groupOn: (group: string) => boolean,
-  rows: readonly PrivateFileRow[] = PRIVATE_FILE_ROWS
+  rows: readonly PrivateFileRow[] = PRIVATE_FILE_ROWS,
+  owned: (id: string) => boolean = () => false
 ): Readonly<Record<string, PrivateFileRole>> {
-  settled = Object.freeze(resolvePrivateFileOwners(rows, groupOn));
+  settled = Object.freeze(resolvePrivateFileOwners(rows, groupOn, owned));
   return settled;
 }
 
