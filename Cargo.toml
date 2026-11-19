@@ -41,6 +41,9 @@ fs2 = "0.4"
 libc = "0.2"
 serde_yaml = "0.9"
 yaml-rust2 = { version = "0.13", default-features = false }
+# The display-zone offsets the Status and Scoreboard producers need (the TypeScript front
+# door's `Intl` was the only source): the IANA rules, embedded, on every platform.
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "time", "sync", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 

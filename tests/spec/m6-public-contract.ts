@@ -35,6 +35,7 @@ const routes = JSON.parse(await fs.readFile(path.join(spec, 'routes.json'), 'utf
   roles: string[];
 }[];
 const groups = {
+  'status-home': /^\w+ \/api\/(status(?:\/|$)|store\/status$|usage\/[^/]+$)/,
   resets: /^\w+ \/api\/accounts\/[^/]+\/reset-claims(?:\/|$)/,
   'store-usage-home': /^\w+ \/api\/(store\/status|usage\/[^/]+|views\/home)$/,
   status: /^\w+ \/api\/(status(?:\/|$)|scoreboard$)/,
@@ -73,6 +74,37 @@ const overrides: Record<string, Contract> =
         )
       )
     : {};
+// W-status-home: the group's own composed rows (the native answers of the fixture home).
+// They are read only for the group's worker-less run; every other row keeps the shared
+// composed contract and the reset rows' own override below.
+const nativeGroupRow = (method: string, route: string) =>
+  method === 'GET' &&
+  (route === '/api/status' ||
+    route.startsWith('/api/status/') ||
+    route === '/api/store/status' ||
+    route.startsWith('/api/usage/') ||
+    route === '/api/scoreboard');
+const groupOverrides: Record<string, Contract> = {};
+if (group !== undefined && mode === 'cut-rust-only') {
+  try {
+    Object.assign(
+      groupOverrides,
+      JSON.parse(
+        await fs.readFile(
+          path.join(
+            spec,
+            'contract',
+            `m0-composed-${process.platform === 'win32' ? 'windows' : 'unix'}-native.json`
+          ),
+          'utf8'
+        )
+      )
+    );
+  } catch {
+    // Not recorded yet: the plain contract answers and the run fails on the difference.
+  }
+}
+
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-m6-contract-'));
 const username = 'fixture-admin';
 const password = 'fixture-password-only';
@@ -117,6 +149,12 @@ function normalize(value: unknown, key = ''): unknown {
   if (value === undefined) return value;
   if (key === 'etag') return '<etag>';
   if (key === 'x-ccs-bar-token') return '<bar-proof>';
+  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
+  if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
+  if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
+    return '<elapsed-seconds>';
+  if (key === 'cpu' || key === 'memory' || key === 'gpuPct') return null;
+  if (key === 'disk' || key === 'warnings') return [];
   if (key === 'retry-after' || key === 'retryAfterSeconds') {
     const seconds = Number(value);
     assert(Number.isInteger(seconds) && seconds >= 1 && seconds <= 900);
@@ -253,7 +291,20 @@ try {
     }),
     { mode: 0o600 }
   );
-  if (group === 'resets') {
+  if (group === 'status-home' || group === 'status') {
+  for (const key of Object.keys(environment))
+    if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
+  Object.assign(environment, {
+    AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+    AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+    AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+    AAC_AGENT_VERBS: 'off',
+    AAC_AGENT_TRANSPORT: 'off',
+  });
+  await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+  await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+}
+if (group === 'resets') {
     Object.assign(environment, {
       CCS_HOME: root,
       AAC_RUST_GROUP_COLLECTION: 'off',
@@ -272,8 +323,13 @@ try {
       const ownsReset = nativeReset(route.method, route.path);
       for (const role of route.roles) {
         const fixture = String(index).padStart(3, '0') + '-' + role + '.json';
+        const mine = nativeGroupRow(route.method, route.path);
         const contract: Contract =
-          (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
+          (mine
+            ? groupOverrides['contract/' + fixture]
+            : composedGolden || ownsReset
+              ? overrides['contract/' + fixture]
+              : undefined) ??
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
         const { request, response: expected } = contract;
         const headers = await roleHeaders(rust.url, role);

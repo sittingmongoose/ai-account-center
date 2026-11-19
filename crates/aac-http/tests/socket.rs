@@ -588,3 +588,123 @@ fn home_view_is_the_js_view_or_the_shared_read_fallback() -> Result<()> {
     assert!(home("/api/views/home", Some(&session), "POST", None)?.starts_with("HTTP/1.1 405"));
     Ok(())
 }
+
+/// W-status-home: the service routes the worker-removal group now owns. Without the store or
+/// the owned Status group each answers the named decline; with the owned group the answer
+/// history reads the owner's store.
+#[test]
+fn worker_removal_routes_answer_or_decline_honestly() -> Result<()> {
+    let service = Service::start()?;
+    let admin = principal("session", "fixture-admin", "admin");
+    for path in [
+        "/api/usage/history",
+        "/api/usage/at",
+        "/api/usage/burn",
+        "/api/status/answers",
+    ] {
+        let reply = service.request(path, Some(&"b".repeat(64)), Some(&admin), "GET")?;
+        assert!(reply.starts_with("HTTP/1.1 503"), "{path}: {reply}");
+        assert!(reply.contains("x-aac-decline: unsupported"), "{path}: {reply}");
+    }
+    // A query outside the route's contract is the shape decline, before any owner is asked.
+    for path in [
+        "/api/usage/history?resolution=minute",
+        "/api/usage/at?t=nope",
+        "/api/usage/burn?span=2y",
+        "/api/status/answers?limit=0",
+    ] {
+        let reply = service.request(path, Some(&"b".repeat(64)), Some(&admin), "GET")?;
+        assert!(reply.starts_with("HTTP/1.1 503"), "{path}: {reply}");
+        assert!(reply.contains("x-aac-decline: shape"), "{path}: {reply}");
+    }
+    // The write never reaches an owner that is not running.
+    let reply = service.request_input(
+        "/api/status/answers",
+        Some(&"b".repeat(64)),
+        Some(&admin),
+        "POST",
+        Some(&json!({"answers": [{"cardId": "fixture"}]})),
+    )?;
+    assert!(reply.starts_with("HTTP/1.1 503"), "{reply}");
+    assert!(reply.contains("x-aac-decline: unsupported"), "{reply}");
+    Ok(())
+}
+
+/// The owned Status group's answer history: an empty journal answers the route's shape, and a
+/// post with no open card is recorded as a per-entry refusal, never a 500.
+#[test]
+fn owned_status_answers_reads_and_writes_through_the_service() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let run = root.path().join("run");
+    let directory = run.join(format!("aac-http-{}", "a".repeat(24)));
+    let reports = root.path().join("reports");
+    let registry = root.path().join("registry");
+    for path in [&run, &directory, &reports, &registry] {
+        fs::create_dir_all(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    let socket = directory.join("http.sock");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_aac-http"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let boot = json!({
+        "ccsDir": fs::canonicalize(root.path())?,
+        "socketPath": socket,
+        "secret": "b".repeat(64),
+        "bootId": "a".repeat(24),
+        "store": {
+            "dir": root.path().join("store"),
+            "retentionDays": 0,
+            "bindingIdentity": aac_store::build_identity(),
+            "snapshotDirectory": null,
+            "shareBackupDir": null,
+            "shareBackupOff": false,
+        },
+        "owned": {"reportsRoot": reports, "registryDir": registry, "status": true, "scoreboard": false},
+    });
+    writeln!(child.stdin.as_mut().ok_or("stdin missing")?, "{boot}")?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !socket.exists() {
+        if child.try_wait()?.is_some() || Instant::now() >= deadline {
+            return Err("service failed to start".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let service = Service {
+        child,
+        root,
+        socket,
+    };
+    let admin = principal("session", "fixture-admin", "admin");
+    let read = service.request(
+        "/api/status/answers",
+        Some(&"b".repeat(64)),
+        Some(&admin),
+        "GET",
+    )?;
+    assert!(read.starts_with("HTTP/1.1 200"), "{read}");
+    assert_eq!(
+        serde_json::from_str::<Value>(read.split("\r\n\r\n").nth(1).ok_or("body")?.trim())?,
+        json!({"answers": []})
+    );
+    let write = service.request_input(
+        "/api/status/answers",
+        Some(&"b".repeat(64)),
+        Some(&admin),
+        "POST",
+        Some(&json!({"answers": [{"cardId": "fixture-missing", "cardSeq": 1}]})),
+    )?;
+    assert!(write.starts_with("HTTP/1.1 200"), "{write}");
+    let body: Value =
+        serde_json::from_str(write.split("\r\n\r\n").nth(1).ok_or("body")?.trim())?;
+    let results = body["results"].as_array().ok_or("results")?;
+    assert_eq!(results.len(), 1);
+    assert!(matches!(
+        results[0]["outcome"].as_str(),
+        Some("refused" | "card_changed")
+    ));
+    assert!(results[0]["code"].is_string());
+    Ok(())
+}

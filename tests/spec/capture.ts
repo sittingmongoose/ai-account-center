@@ -74,6 +74,9 @@ Object.assign(process.env, {
         AAC_RUST_GROUP_CLAUDE_OPEN: 'on',
         AAC_AGENT_TRANSPORT: 'off',
         AAC_AGENT_VERBS: 'off',
+        // W-status-home: the native front door answers the worker-removal routes itself; the
+        // composed recording is their source of truth.
+        AAC_RUST_CUT_NATIVE_ROUTES: 'on',
       }
     : {}),
 });
@@ -463,7 +466,22 @@ inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'e
 // These rows differ from the historical TS fixture by contract. Select by request and boot
 // mode so an unexpected response, including a fallback or decline, still fails comparison.
 function composedOwner({ method, path, role }: ComposedRecord['request']) {
-  if (method !== 'GET' || !['session', 'bar'].includes(role)) return undefined;
+  const browser = role === 'session' || role === 'bar';
+  // W-status-home: the native front door answers these; a device token is in the store and
+  // usage scopes, a signed-out caller is its guard's refusal.
+  const group = browser || role === 'device' || role === 'signed-out';
+  const statusHome =
+    group &&
+    ((method === 'GET' &&
+      (path === '/api/status' ||
+        path === '/api/status/answers' ||
+        path === '/api/status/deliverable' ||
+        path.startsWith('/api/status/files/') ||
+        path === '/api/store/status' ||
+        path.startsWith('/api/usage/'))) ||
+      (method === 'POST' && path === '/api/status/answers'));
+  if (statusHome) return 'status-home';
+  if (!browser || method !== 'GET') return undefined;
   if (path === '/api/accounts/fixture-missing/reset-claims' && nativeReset) return 'reset';
   if (path === '/api/scoreboard' && nativePrivate) return 'scoreboard';
   if (path === '/api/views/home' && !legacyHome) return 'home';
@@ -500,6 +518,12 @@ function emit(relative: string, data: any, view: string | null = null) {
   const bytes = JSON.stringify(data, null, 2) + '\n';
   if (regenerate) fs.writeFileSync(file, bytes);
   else if (composedRow) {
+    if (owner === 'status-home' && recordComposed) {
+      // The group's own refusals are part of its contract (a missing file, an empty query).
+      recorded[relative] = data;
+      matched++;
+      return;
+    }
     if (owner && recordComposed) {
       assert.equal(data.response.status, 200, `cannot record an unsuccessful ${owner} response`);
       if (owner === 'reset') {
@@ -947,7 +971,7 @@ try {
     assert.equal(differences.length, 0, 'composed M0 differences');
     if (recordComposed) {
       assert.ok(nativeReset, 'record with the reset owner available');
-      assert.equal(Object.keys(recorded).length, nativePrivate ? 6 : 4, 'composed fixture rows');
+      assert.ok(Object.keys(recorded).length >= (nativePrivate ? 6 : 4), 'composed fixture rows');
       fs.writeFileSync(composedOutput ?? composedGolden, JSON.stringify(recorded, null, 2) + '\n');
     }
   }

@@ -10,6 +10,8 @@ mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
+#[cfg(unix)]
+mod native_group;
 // Merged before its first registering group: the host is exercised by the groups that land
 // on top of it (W-status-home first), so its API is not dead in the composed cut.
 #[cfg(unix)]
@@ -199,7 +201,17 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream, cache, ui_root, None, false, None, None, None, None,
+            downstream,
+            cache,
+            ui_root,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            #[cfg(unix)]
+            None,
         )
     }
 
@@ -218,6 +230,7 @@ impl DashboardAuth {
         cut_root: Option<PathBuf>,
         native_owners: Option<native_owners::NativeOwners>,
         native_settings: Option<native_settings::Settings>,
+        #[cfg(unix)] native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
@@ -231,6 +244,18 @@ impl DashboardAuth {
                     return service_error();
                 };
                 return settings.handle(&access, family, request).await;
+            }
+            #[cfg(unix)]
+            if let Some(group) = &native_group
+                && group.owns(
+                    request.method(),
+                    request.uri().path().trim_end_matches('/'),
+                )
+            {
+                let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
+                    return service_error();
+                };
+                return native_group::handle(group.as_ref(), &access, request).await;
             }
             if let Some(native) = &native_owners
                 && native_owners::NativeOwners::owns(
@@ -417,6 +442,10 @@ pub(crate) async fn run_public_at(
     #[cfg(unix)]
     let owner_host =
         owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    #[cfg(unix)]
+    let group_routes = owner_host
+        .as_ref()
+        .map(|host| Arc::new(native_group::Routes::new(host.clone())));
     let mut api = Router::new();
     if cut || !composed {
         api = api.route(
@@ -437,6 +466,8 @@ pub(crate) async fn run_public_at(
         cut.then(|| root.clone()),
         native,
         native_settings,
+        #[cfg(unix)]
+        group_routes.clone(),
     );
     let router = auth
         .protect(reset_routes::mount(

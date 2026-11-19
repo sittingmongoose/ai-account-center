@@ -28,6 +28,14 @@ pub(crate) enum Handler {
     StoreStatus,
     StatusInputs,
     StatusAnswers,
+    /// GET `/api/status/answers` (the owner's history, the route view).
+    StatusAnswersRead,
+    /// POST `/api/status/answers` (one answer set).
+    StatusAnswersPost,
+    /// GET `/api/usage/history`, `/api/usage/at` and `/api/usage/burn` (the hosted store).
+    UsageHistory,
+    UsageAt,
+    UsageBurn,
     StatusUsage,
     ScoreboardInputs,
     Feed,
@@ -74,6 +82,11 @@ impl Handler {
             "store-status" => Handler::StoreStatus,
             "status-inputs" => Handler::StatusInputs,
             "status-answers" => Handler::StatusAnswers,
+            "status-answers-read" => Handler::StatusAnswersRead,
+            "status-answers-post" => Handler::StatusAnswersPost,
+            "usage-history" => Handler::UsageHistory,
+            "usage-at" => Handler::UsageAt,
+            "usage-burn" => Handler::UsageBurn,
             "status-usage" => Handler::StatusUsage,
             "scoreboard-inputs" => Handler::ScoreboardInputs,
             "feed" => Handler::Feed,
@@ -276,6 +289,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ClaudeOpen
                         | Handler::ClaudeHistoryCleanup
                         | Handler::StatusAnswers
+                        | Handler::StatusAnswersPost
                         | Handler::SignInPoll
                 ))
             || (row.group == "internal" && !internal)
@@ -309,6 +323,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::UsageSample
                         | Handler::ClaudeOpen
                         | Handler::ClaudeHistoryCleanup
+                        | Handler::StatusAnswersPost
                 ))
             || (method == axum::http::Method::PUT
                 && !matches!(
@@ -385,6 +400,50 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/claude-history-cleanup"
                     || row.budget_ms != 0))
+            || {
+                let worker_removal = matches!(
+                    handler,
+                    Handler::StatusAnswersRead
+                        | Handler::StatusAnswersPost
+                        | Handler::UsageHistory
+                        | Handler::UsageAt
+                        | Handler::UsageBurn
+                );
+                let shape_ok = match handler {
+                    Handler::StatusAnswersRead => {
+                        method == axum::http::Method::GET
+                            && row.path == "/api/status/answers"
+                            && row.budget_ms == 400
+                            && roles == [Role::Admin]
+                    }
+                    Handler::StatusAnswersPost => {
+                        method == axum::http::Method::POST
+                            && row.path == "/api/status/answers"
+                            && row.budget_ms == 0
+                            && roles == [Role::Admin]
+                    }
+                    Handler::UsageHistory => {
+                        method == axum::http::Method::GET
+                            && row.path == "/api/usage/history"
+                            && row.budget_ms == 400
+                            && roles == [Role::Admin, Role::Device]
+                    }
+                    Handler::UsageAt => {
+                        method == axum::http::Method::GET
+                            && row.path == "/api/usage/at"
+                            && row.budget_ms == 400
+                            && roles == [Role::Admin, Role::Device]
+                    }
+                    Handler::UsageBurn => {
+                        method == axum::http::Method::GET
+                            && row.path == "/api/usage/burn"
+                            && row.budget_ms == 400
+                            && roles == [Role::Admin, Role::Device]
+                    }
+                    _ => true,
+                };
+                worker_removal && !shape_ok
+            }
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)
@@ -435,6 +494,7 @@ mod tests {
                     | Handler::ClaudeOpen
                     | Handler::ClaudeHistoryCleanup
                     | Handler::StatusAnswers
+                    | Handler::StatusAnswersPost
                     | Handler::SignInPoll
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
@@ -479,6 +539,47 @@ mod tests {
         ] {
             assert!(rows(&format!("[{bad},{tail}]")).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn startup_refuses_the_worker_removal_rows_off_their_one_shape() -> io::Result<()> {
+        let tail = r#"{"method":"*","path":"*","owner":"ts-fallback"}"#;
+        for good in [
+            r#"{"method":"GET","path":"/api/status/answers","owner":"rust","group":"status","roles":["admin"],"budgetMs":400,"handler":"status-answers-read"}"#,
+            r#"{"method":"POST","path":"/api/status/answers","owner":"rust","group":"status","roles":["admin"],"budgetMs":0,"handler":"status-answers-post"}"#,
+            r#"{"method":"GET","path":"/api/usage/history","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":400,"handler":"usage-history"}"#,
+            r#"{"method":"GET","path":"/api/usage/at","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":400,"handler":"usage-at"}"#,
+            r#"{"method":"GET","path":"/api/usage/burn","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":400,"handler":"usage-burn"}"#,
+        ] {
+            assert!(rows(&format!("[{good},{tail}]")).is_ok(), "{good}");
+        }
+        for bad in [
+            // the answers write with a deadline
+            r#"{"method":"POST","path":"/api/status/answers","owner":"rust","group":"status","roles":["admin"],"budgetMs":400,"handler":"status-answers-post"}"#,
+            // the answers read as a write
+            r#"{"method":"POST","path":"/api/status/answers","owner":"rust","group":"status","roles":["admin"],"budgetMs":400,"handler":"status-answers-read"}"#,
+            // a usage read with the wrong path
+            r#"{"method":"GET","path":"/api/usage","owner":"rust","group":"store","roles":["admin"],"budgetMs":400,"handler":"usage-history"}"#,
+            // a usage read open to the service role
+            r#"{"method":"GET","path":"/api/usage/at","owner":"rust","group":"store","roles":["service"],"budgetMs":400,"handler":"usage-at"}"#,
+        ] {
+            assert!(rows(&format!("[{bad},{tail}]")).is_err(), "{bad}");
+        }
+        let rows = rows(ROUTES)?;
+        for handler in [
+            Handler::StatusAnswersRead,
+            Handler::StatusAnswersPost,
+            Handler::UsageHistory,
+            Handler::UsageAt,
+            Handler::UsageBurn,
+        ] {
+            assert_eq!(
+                rows.iter().filter(|row| row.handler == handler).count(),
+                1,
+                "{handler:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

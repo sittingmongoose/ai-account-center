@@ -67,6 +67,8 @@ mod status_fed;
 #[cfg(unix)]
 mod status_owned;
 #[cfg(unix)]
+mod status_answers_route;
+#[cfg(unix)]
 mod status_produce;
 #[cfg(unix)]
 mod status_run;
@@ -75,9 +77,13 @@ mod table;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
+mod usage_routes;
+#[cfg(unix)]
 mod usage_snapshot;
 pub mod view_reply;
 mod visibility_write;
+#[cfg(unix)]
+mod zone_facts;
 pub use identity::PROTOCOL;
 #[cfg(unix)]
 pub use unix::{
