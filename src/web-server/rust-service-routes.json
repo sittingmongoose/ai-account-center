@@ -24,5 +24,7 @@
   { "method": "POST", "path": "/internal/agent/{verb}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "agent" },
   { "method": "POST", "path": "/internal/agent/{callId}/control", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 2500, "handler": "agent-control" },
   { "method": "POST", "path": "/internal/store/{method}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "store" },
+  { "method": "GET", "path": "/internal/status/inputs", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "status-inputs" },
+  { "method": "GET", "path": "/internal/scoreboard/inputs", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "scoreboard-inputs" },
   { "method": "*", "path": "*", "owner": "ts-fallback" }
 ]

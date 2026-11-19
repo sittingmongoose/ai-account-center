@@ -76,6 +76,15 @@ export const ALLOWLIST = [
       "The service hashes its own executable image at start (L1 build check). That is not a " +
       'private file, and the open must follow the path the kernel ran.',
   },
+  {
+    path: 'crates/aac-status/src/share/seed.rs',
+    reason:
+      'The R4 catalog seeder keeps the TypeScript share mechanics byte for byte: a new file ' +
+      'is admitted by hard link (fails on a file another machine wrote meanwhile), an existing ' +
+      'models/aliases file is appended in its own layout and re-read before the rename. The ' +
+      'share catalog is not a private file; the readers-check writer uses the leased aac-files ' +
+      'writer, not these mechanics.',
+  },
 ];
 
 const OWNER = 'crates/aac-files/src/';

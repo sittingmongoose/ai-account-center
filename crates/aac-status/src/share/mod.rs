@@ -17,6 +17,7 @@ pub mod quota;
 pub mod registry;
 pub mod report;
 pub mod reports;
+pub mod seed;
 pub mod status_docs;
 
 use aac_files::read::{Read, ReadPolicy, Stat};

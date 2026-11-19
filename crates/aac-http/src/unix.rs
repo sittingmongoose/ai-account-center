@@ -65,6 +65,26 @@ pub struct Boot {
     /// store in the TS process.
     #[serde(default)]
     pub store: Option<crate::store_host::StoreBoot>,
+    /// R4: the owned readers' config as TS resolved it at start; absent keeps the share
+    /// readers and the Scoreboard owner in the TS process.
+    #[serde(default)]
+    pub owned: Option<OwnedBoot>,
+}
+
+/// R4 (DESIGN-M3-COMPLETE 1.2/1.4): which owners this boot runs, and the share roots they
+/// read. TS resolves the roots and the group switches once at start; the store host must be
+/// on for either owner (the runs tables and the report captures go through its lock).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnedBoot {
+    /// The agent-reports root (`AAC_AGENT_REPORTS_DIR`, else the shared folder).
+    pub reports_root: PathBuf,
+    /// The pm-mail registry folder (`AAC_PM_MAIL_REGISTRY_DIR`, else the shared inbox).
+    pub registry_dir: PathBuf,
+    /// The owned Status readers (the status group on, under the store host).
+    pub status: bool,
+    /// The owned Scoreboard (the scoreboard group on, under the store host).
+    pub scoreboard: bool,
 }
 
 struct Shared {
@@ -75,6 +95,10 @@ struct Shared {
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
+    /// R4: the owned Status readers, when the boot carries their config.
+    status_owned: Option<Arc<crate::status_owned::StatusOwned>>,
+    /// R4: the owned Scoreboard, when the boot carries its config.
+    scoreboard_owned: Option<Arc<crate::scoreboard_owned::ScoreboardOwned>>,
 }
 
 #[derive(Clone)]
@@ -112,25 +136,25 @@ fn name_of(path: &Path) -> Option<&str> {
 impl Boot {
     /// Parse only the exact object envelope supplied by TS; arrays are never positional fields.
     pub fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
-        crate::json_object::from_slice(
-            bytes,
-            &["ccsDir", "socketPath", "secret", "bootId", "files", "store"],
-        )
-        .or_else(|_| {
-            crate::json_object::from_slice(
-                bytes,
-                &["ccsDir", "socketPath", "secret", "bootId", "files"],
-            )
-        })
-        .or_else(|_| {
-            crate::json_object::from_slice(
-                bytes,
-                &["ccsDir", "socketPath", "secret", "bootId", "store"],
-            )
-        })
-        .or_else(|_| {
-            crate::json_object::from_slice(bytes, &["ccsDir", "socketPath", "secret", "bootId"])
-        })
+        const BASE: [&str; 4] = ["ccsDir", "socketPath", "secret", "bootId"];
+        let mut last = None;
+        for extra in [
+            vec![],
+            vec!["files"],
+            vec!["store"],
+            vec!["files", "store"],
+            vec!["owned"],
+            vec!["files", "owned"],
+            vec!["store", "owned"],
+            vec!["files", "store", "owned"],
+        ] {
+            let keys: Vec<&str> = BASE.iter().copied().chain(extra).collect();
+            match crate::json_object::from_slice(bytes, &keys) {
+                Ok(boot) => return Ok(boot),
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(last.unwrap_or_else(|| serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, "invalid boot"))))
     }
 
     /// Each registry row's writer for this boot. A map that names another row set, or gives a
@@ -176,6 +200,15 @@ impl Boot {
                     .share_backup_dir
                     .as_ref()
                     .is_some_and(|d| !d.is_absolute()))
+        {
+            return Err(failure());
+        }
+        // R4: the owned readers read absolute share roots, and only under the store host
+        // (the runs tables and the report captures go through its single-writer lock).
+        if let Some(owned) = &self.owned
+            && (!owned.reports_root.is_absolute()
+                || !owned.registry_dir.is_absolute()
+                || ((owned.status || owned.scoreboard) && self.store.is_none()))
         {
             return Err(failure());
         }
@@ -528,6 +561,52 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             );
             response
         }
+        // R4: Scoreboard from the owned store and catalog (no body; the filters, the clock
+        // and the facts generation in `x-aac-feed`). Without it, the envelope read below.
+        Handler::Scoreboard if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
+            let Some(owner) = shared.scoreboard_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let query = req.uri().query().is_some();
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(feed), false, true) = (feed, query, body.is_empty()) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match owner.answer(&feed).await {
+                Ok((bytes, etag)) => {
+                    crate::view_reply::respond_tagged("scoreboard", 1, bytes, &etag)
+                }
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        // R4: the owned Status snapshots the front door forwards as the fed generations
+        // (and its fallback composer reads when the service declines).
+        Handler::StatusInputs => {
+            let Some(owner) = shared.status_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            match shared
+                .limits
+                .blocking(row.pool, move || Ok(owner.inputs()))
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        // R4: the owned Scoreboard input the front door computes the facts over.
+        Handler::ScoreboardInputs => {
+            let Some(owner) = shared.scoreboard_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            match owner.inputs().await {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         read => {
             let path = req.uri().path().to_owned();
             let query = req.uri().query().is_some();
@@ -615,13 +694,41 @@ pub async fn serve(
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
+    let feeds = Feeds::new();
+    // R4: the owned readers run under the store host, with the boot's share roots and the
+    // registry writers TS resolved at start.
+    let owners = boot.owners()?;
+    let status_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(host)) if owned.status => {
+            Some(crate::status_owned::StatusOwned::new(
+                owned.reports_root.clone(),
+                owned.registry_dir.clone(),
+                Arc::clone(host),
+                feeds.clone(),
+                owners.clone(),
+            ))
+        }
+        _ => None,
+    };
+    let scoreboard_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(host)) if owned.scoreboard => {
+            Some(crate::scoreboard_owned::ScoreboardOwned::new(
+                owned.reports_root.clone(),
+                Arc::clone(host),
+                feeds.clone(),
+            ))
+        }
+        _ => None,
+    };
     let state = AppState(Arc::new(Shared {
         boot,
         limits: Limits::new(),
         identity,
-        feeds: Feeds::new(),
+        feeds,
         agents,
         store: store.clone(),
+        status_owned: status_owned.clone(),
+        scoreboard_owned: scoreboard_owned.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -662,6 +769,37 @@ pub async fn serve(
         let jobs = Arc::clone(host);
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { store_jobs(jobs, stop).await });
+    }
+    // R4: the owned readers' jobs, and the catalog seed before the first ingest pass.
+    if let Some(owner) = &status_owned {
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::status_owned::jobs(jobs, stop).await });
+    }
+    if let Some(owner) = &scoreboard_owned {
+        let seeder = Arc::clone(owner);
+        let root = state.0.boot.owned.as_ref().expect("scoreboard owner").reports_root.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let mut failures = Vec::new();
+            aac_status::share::seed::seed_catalog(
+                &root,
+                &|name| aac_status::share::seed::embedded_seed(name).map(|bytes| bytes.to_vec()),
+                &mut failures,
+            );
+            seeder.set_seed_failures(
+                failures
+                    .iter()
+                    .map(|failure| json!({"file": failure.file, "code": failure.code}))
+                    .collect(),
+            );
+        })
+        .await;
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::scoreboard_owned::ingest_jobs(jobs, stop).await });
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::scoreboard_owned::catalog_jobs(jobs, stop).await });
     }
     let served = axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
