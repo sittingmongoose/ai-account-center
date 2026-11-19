@@ -441,6 +441,23 @@ impl Produce {
         inner.answers_dirty = false;
     }
 
+    /// The pins the readers-check writer matches reports against (`owned-pins`).
+    fn push_owned_pins(&self, inner: &Inner, now: u64) {
+        let pins: Vec<Json> = inner
+            .pins
+            .merged
+            .iter()
+            .map(|pin| json!({"id": pin.id, "title": pin.title}))
+            .collect();
+        let generation = self.next_generation(now);
+        let data = aac_views::js_json::write(&Json::Array(pins));
+        let body = format!(
+            "{{\"generation\":\"{generation}\",\"data\":{},\"facts\":null}}",
+            String::from_utf8_lossy(&data)
+        );
+        let _ = self.feeds.put(OWNED_PINS, body.as_bytes());
+    }
+
     /// Rebuild every source the current state makes, push what changed, and compose the panel
     /// when a zone is known. Called on the blocking pool or with no await inside.
     fn publish(&self, zone_override: Option<(&str, &ZoneFacts, &Zone)>) {
@@ -478,19 +495,7 @@ impl Produce {
                 inner.pinned_at = now;
                 inner.pinned_offset = Some(offset);
                 inner.pinned_dirty = false;
-                let pins: Vec<Json> = inner
-                    .pins
-                    .merged
-                    .iter()
-                    .map(|pin| json!({"id": pin.id, "title": pin.title}))
-                    .collect();
-                let generation = self.next_generation(now);
-                let data = aac_views::js_json::write(&Json::Array(pins));
-                let body = format!(
-                    "{{\"generation\":\"{generation}\",\"data\":{},\"facts\":null}}",
-                    String::from_utf8_lossy(&data)
-                );
-                let _ = self.feeds.put(OWNED_PINS, body.as_bytes());
+                self.push_owned_pins(&inner, now);
             }
         }
         if inner.sources_dirty {
@@ -591,6 +596,7 @@ impl Produce {
                 inner.pinned_offset = Some(offset);
                 inner.pinned_dirty = false;
                 inner.sources_dirty = true;
+                self.push_owned_pins(&inner, now);
             }
         }
         if inner.sources_dirty
@@ -1195,6 +1201,11 @@ fn machines_json(machines: &BTreeMap<String, Collected<Sample>>) -> Json {
 
 /// The pinned panel for these readings, or `None` when the projection refuses a document.
 fn pinned_panel(inner: &Inner, now: i64, offset: i64) -> Option<Json> {
+    // Before the first collect there are no pins to compose over; the panel says it has not
+    // been read yet, as the collector's view did.
+    if !inner.pins.collected {
+        return None;
+    }
     let closed = closing_card_versions(&inner.answers.answers);
     let cards: Vec<aac_status::produce::answered::CardRow<'_>> = inner
         .reports_rows

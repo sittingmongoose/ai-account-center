@@ -16,6 +16,11 @@ use aac_status::produce::machines::{self, HostOs};
 use aac_status::produce::simlock;
 use aac_status::produce::sources::{self, Readings};
 use aac_status::produce::usage::UsageInput;
+use aac_status::produce::pinned_input;
+use aac_status::pins::MergedPin;
+use aac_status::share::Problem;
+use aac_status::share::reports::{AgentReportsState, SeenReport};
+use aac_status::share::status_docs::StatusDocsState;
 use serde_json::{Value as Json, json};
 
 fn vectors() -> Json {
@@ -134,6 +139,111 @@ fn shared_answer_copies_fill_a_version_the_journal_has_not_closed() {
         .map(|entry| entry["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, expected);
+}
+
+/// Object keys sorted at every level: the composer reads by key, and the reference's spread puts
+/// `progress` where this typed struct writes it.
+fn canonical(value: &Json) -> String {
+    match value {
+        Json::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let parts: Vec<String> = keys
+                .into_iter()
+                .map(|key| format!("{}:{}", Json::from(key.clone()), canonical(&map[key])))
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        Json::Array(items) => format!(
+            "[{}]",
+            items.iter().map(canonical).collect::<Vec<_>>().join(",")
+        ),
+        other => aac_status::share::js_text(other),
+    }
+}
+
+fn seen(value: &Json) -> SeenReport {
+    SeenReport {
+        file: value["file"].as_str().unwrap_or("").to_owned(),
+        writer: value["writer"].as_str().unwrap_or("").to_owned(),
+        doc: value["doc"].clone(),
+        sha256: value["sha256"].as_str().unwrap_or("").to_owned(),
+        first_seen_at: value["firstSeenAt"].as_u64().unwrap_or(0),
+        written_at_ms: value["writtenAtMs"].as_i64().unwrap_or(0),
+        problem: value["problem"].as_object().map(|problem| Problem {
+            file: problem["file"].as_str().unwrap_or("").to_owned(),
+            reason: problem["reason"].as_str().unwrap_or("").to_owned(),
+            since: problem["since"].as_u64().unwrap_or(0),
+        }),
+    }
+}
+
+#[test]
+fn the_pinned_composer_gets_the_input_the_collector_built() {
+    let vectors = vectors();
+    let reports = &vectors["input"]["reports"];
+    let state = AgentReportsState {
+        root: reports["root"].as_str().unwrap_or("").to_owned(),
+        state: "ok",
+        scanned_at: reports["scannedAt"].as_u64(),
+        complete: true,
+        threads: reports["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(seen)
+            .collect(),
+        tasks: reports["tasks"].as_array().unwrap().iter().map(seen).collect(),
+        cards: reports["cards"].as_array().unwrap().iter().map(seen).collect(),
+        problems: Vec::new(),
+        boards: serde_json::Map::new(),
+    };
+    let docs = StatusDocsState {
+        state: "missing",
+        scanned_at: None,
+        docs: Vec::new(),
+        problems: Vec::new(),
+    };
+    let pins: Vec<MergedPin> = vectors["pinned"]["pins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pin| MergedPin {
+            machine: pin["machine"].as_str().unwrap().to_owned(),
+            id: pin["id"].as_str().unwrap().to_owned(),
+            title: pin["title"].as_str().unwrap().to_owned(),
+            pinned_at: pin["pinnedAt"].clone(),
+            pin_order_key: pin["pinOrderKey"].clone(),
+        })
+        .collect();
+    let cards: Vec<aac_status::produce::answered::CardRow<'_>> = state
+        .cards
+        .iter()
+        .map(|row| aac_status::produce::answered::CardRow {
+            writer: &row.writer,
+            doc: &row.doc,
+            sha256: &row.sha256,
+        })
+        .collect();
+    let closed = std::collections::HashSet::new();
+    let reads = aac_status::produce::answered::resolved_card_waits(&cards, &closed);
+    let input = pinned_input::compose_input(
+        &state,
+        &docs,
+        &pins,
+        &[],
+        vectors["pinned"]["now"].as_i64().unwrap(),
+        vectors["pinned"]["offset"].as_i64().unwrap(),
+        &closed,
+        &reads,
+    )
+    .expect("the fixture composes");
+    let rust = serde_json::to_value(&input).expect("serializes");
+    assert_eq!(
+        canonical(&rust),
+        canonical(&vectors["pinned"]["input"]),
+        "pinned input"
+    );
 }
 
 #[test]

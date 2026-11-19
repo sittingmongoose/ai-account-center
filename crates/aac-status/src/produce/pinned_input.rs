@@ -370,6 +370,7 @@ pub fn compose_input(
             model: model.map(str::to_owned),
             model_label: model_label_for(model),
             effort: agent.get("effort").and_then(Json::as_str).map(str::to_owned),
+            account: agent.get("account").and_then(Json::as_str).map(str::to_owned),
             project: doc.get("project").and_then(Json::as_str).map(str::to_owned),
             stream: doc.get("stream").and_then(Json::as_str).map(str::to_owned),
             state: doc.get("state").and_then(Json::as_str).unwrap_or("").to_owned(),

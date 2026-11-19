@@ -31,6 +31,9 @@ import { answerStatusFed } from '../../src/web-server/status/status-feed';
 import { buildStatusView, type StatusInputs } from '../../src/web-server/status/status-view';
 import { SPEND_BY_STREAM_UNAVAILABLE } from '../../src/web-server/status/spend-by-stream';
 import { AgentReportsReader } from '../../src/web-server/status/agent-reports-reader';
+import { PinnedThreadsCollector } from '../../src/web-server/status/pinned-threads';
+import type { NativeStatusHandle } from '../../src/status-native/native-loader';
+import { ago, cardDoc, item, tasksDoc, threadDoc } from '../unit/web-server/status/status-test-helpers';
 import { serverZoneFacts } from '../../src/web-server/views/home-zone';
 import type { MachineId } from '../../src/web-server/status/report-schema';
 import type { Collected } from '../../src/web-server/status/status-view';
@@ -185,59 +188,36 @@ async function input(): Promise<StatusInputs> {
       path.join(share, 'v1/writers/vm.lead', name),
       `${JSON.stringify(doc, null, 2)}\n`
     );
-  write('thread.json', {
-    schema: 'agent-reports/thread@1',
-    writer: 'vm.lead',
-    seq: 3,
-    writtenAt: '2026-09-21T14:00:00.000Z',
-    agent: { name: 'Lead', harness: 'codex', model: 'openai/gpt-5', effort: 'high' },
-    project: 'aac',
-    stream: 'status',
-    state: 'active',
-    doing: 'Porting the producers',
-    blockedOn: null,
-    ttlSeconds: 900,
-  });
-  write('tasks.json', {
-    schema: 'agent-reports/tasks@1',
-    writer: 'vm.lead',
-    seq: 2,
-    writtenAt: '2026-09-21T14:00:00.000Z',
-    project: 'aac',
-    stream: 'status',
-    items: [
-      {
-        id: 'T1',
-        title: 'Port the collectors',
-        state: 'landed',
-        reviews: [],
-        updatedAt: '2026-09-21T14:00:00.000Z',
-      },
-    ],
-  });
-  write('cards/vm.lead--Q1.json', {
-    schema: 'agent-reports/card@1',
-    id: 'vm.lead--Q1',
-    writer: 'vm.lead',
-    seq: 1,
-    writtenAt: '2026-09-21T14:00:00.000Z',
-    project: 'aac',
-    stream: 'status',
-    askedBy: 'lead',
-    replyTo: { pmMail: null, t3Thread: null },
-    state: 'open',
-    label: 'S-Q1',
-    title: 'Question Q1',
-    now: 'Plain words.',
-    nowAsOf: null,
-    oldAnswer: null,
-    whatChanged: null,
-    options: [{ key: 'A', label: 'First', gets: 'Simple', costs: null, media: [], sections: [] }],
-    recommendation: { key: 'A', why: 'Simpler.' },
-    multiple: false,
-    urgency: 'today',
-    blocks: null,
-  });
+  write(
+    'thread.json',
+    threadDoc('vm.lead', {
+      seq: 3,
+      writtenAt: ago(60_000, NOW),
+      doing: 'Porting the producers',
+      project: 'aac',
+      stream: 'status',
+      ttlSeconds: 900,
+    })
+  );
+  write(
+    'tasks.json',
+    tasksDoc('vm.lead', [item('T1', 'landed')], {
+      seq: 2,
+      writtenAt: ago(60_000, NOW),
+      project: 'aac',
+      projectLabel: 'AAC',
+      stream: 'status',
+      streamLabel: 'Status',
+    })
+  );
+  write(
+    'cards/vm.lead--Q1.json',
+    cardDoc('vm.lead', 'Q1', {
+      writtenAt: ago(60_000, NOW),
+      project: 'aac',
+      stream: 'status',
+    })
+  );
   const reader = new AgentReportsReader({ root: () => share, now: () => NOW });
   await reader.scan();
   const reports = reader.snapshot();
@@ -335,6 +315,46 @@ function entry(id: string, cardId: string, sha: string, at: string, shared: bool
   };
 }
 
+/** The pinned collector's native calls, recorded so the Rust input can be compared. */
+async function pinnedInput(value: StatusInputs): Promise<{ input: unknown; pins: unknown }> {
+  const ids = ['t1'];
+  const pins = [
+    {
+      id: 't1',
+      title: 'Pinned',
+      pinnedAt: '2026-09-20T00:00:00.000Z',
+      pinOrderKey: 'a',
+      machine: 'vm',
+    },
+  ];
+  let captured: unknown = null;
+  const handle = {
+    async call(method: string, args: string): Promise<string> {
+      if (method === 'pins')
+        return JSON.stringify({ pinned: [{ id: 't1', title: 'Pinned', pinnedAt: '2026-09-20T00:00:00.000Z', pinOrderKey: 'a' }], notShown: 0 });
+      if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [], notShown: 0 });
+      if (method === 'mergePins') return JSON.stringify({ pinned: pins });
+      if (method === 'compose') {
+        captured = JSON.parse(args);
+        return JSON.stringify({ head: '1 pinned', updates: [] });
+      }
+      return JSON.stringify({ ok: false });
+    },
+  } as unknown as NativeStatusHandle;
+  const collector = new PinnedThreadsCollector({
+    handle,
+    run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+    readRemote: async () => '[]',
+    now: () => NOW,
+    timeZone: () => TIME_ZONE,
+    reportsRoot: () => value.reports.root,
+    readersCheck: null,
+  });
+  await collector.collect();
+  await collector.compose(value.reports, [], collector.docs.snapshot());
+  return { input: captured, pins };
+}
+
 async function main(): Promise<void> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-produce-scope-'));
   process.env.CCS_DIR = path.join(home, '.ccs');
@@ -358,8 +378,10 @@ async function main(): Promise<void> {
     entry('b', 'vm.lead--Q1', 's1', '2026-09-21T14:00:00.000Z', true),
     entry('c', 'vm.lead--Q2', 's2', '2026-09-21T13:00:00.000Z', true),
   ];
+  const pinned = await pinnedInput(value);
   const out = {
     now: NOW,
+    pinned: { now: NOW, offset: -240, ...pinned },
     timeZone: TIME_ZONE,
     zone,
     input: value,

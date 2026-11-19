@@ -41,6 +41,9 @@ class StandIn extends RustService {
   views: Record<string, string>[] = [];
   decline: string | null = null;
   failPush = false;
+  /** G16c: the stand-in's own producers answer an owned request when this is set. */
+  owned = false;
+  ownedHeaders: Record<string, string>[] = [];
 
   constructor() {
     super('on');
@@ -68,9 +71,13 @@ class StandIn extends RustService {
     headers: Record<string, string>,
     view: string
   ) {
-    // G16c: the stand-in holds no producers, so an owned request declines and the front door
-    // answers from the fed path this suite pins.
-    if (headers['x-aac-owned']) return null;
+    // G16c: an owned request is the service's own producers; the default stand-in holds none
+    // (it declines) so the fed path this suite pins answers.
+    if (headers['x-aac-owned']) {
+      this.ownedHeaders.push(headers);
+      if (!this.owned) return null;
+      return { bytes: Buffer.from(RUST_BYTES), etag: ETAG, view };
+    }
     expect(route).toBe('/api/status');
     expect(view).toBe('status@1');
     this.views.push(headers);
@@ -226,6 +233,24 @@ describe('Status, fed', () => {
     // 304 for a matching validator.
     const revalidated = await get({ 'If-None-Match': ETAG });
     expect(revalidated.response.status).toBe(304);
+  });
+
+  it('the owned producers answer first: no push, the zone and the clock cross', async () => {
+    service.owned = true;
+    const reply = await get();
+    expect(reply.text).toBe(RUST_BYTES);
+    expect(service.puts).toEqual([]);
+    expect(service.ownedHeaders).toHaveLength(1);
+    const headers = service.ownedHeaders[0];
+    expect(headers['x-aac-now']).toBe(String(NOW));
+    const zone = JSON.parse(headers['x-aac-zone']);
+    expect(zone.timeZone).toBe('America/New_York');
+    expect(zone.offsets.length).toBeGreaterThan(0);
+    // A decline hands the producers back: this process answers the next request itself.
+    service.owned = false;
+    const fallback = await get();
+    expect(fallback.text).toBe(RUST_BYTES);
+    expect(pushed()).toEqual(SOURCES);
   });
 
   it('pushes data and facts that make exactly the envelope of the whole input, less the request clock', async () => {

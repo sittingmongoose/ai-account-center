@@ -70,7 +70,7 @@ fn machine_label(machine: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // Input (what the TypeScript side sends; every field already validated by its own reader)
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeInput {
     pub now_ms: i64,
@@ -95,7 +95,7 @@ pub struct ComposeInput {
 }
 
 /// One merged pin (`pins::merge_pins` output, in merged order).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinIn {
     pub machine: String,
@@ -112,7 +112,7 @@ pub struct PinIn {
 /// was not the shape T3's state file has), `missing` / `io` / `limit` (this computer's own
 /// T3 database), and `truncated` — the pins show, but `not_shown` counted pins past the
 /// reader's row budget do not; it is a note beside a good list, never an absence.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineProblemIn {
     pub machine: String,
@@ -122,7 +122,7 @@ pub struct MachineProblemIn {
     pub not_shown: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIn {
     #[serde(flatten)]
@@ -145,6 +145,10 @@ pub struct ThreadIn {
     pub model_label: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// The account the agent reported; carried for the input's fidelity (the composer does not
+    /// read it today).
+    #[serde(default)]
+    pub account: Option<String>,
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
@@ -191,7 +195,7 @@ pub struct ProgressIn {
     pub unit: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TasksIn {
     #[serde(flatten)]
@@ -212,7 +216,7 @@ pub struct TasksIn {
     pub items: Vec<ItemIn>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemIn {
     #[serde(default)]
@@ -230,7 +234,7 @@ pub struct ItemIn {
     pub updated_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewIn {
     #[serde(default)]
@@ -239,14 +243,14 @@ pub struct ReviewIn {
     pub verdict: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LandedIn {
     #[serde(default)]
     pub at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardIn {
     pub writer: String,
@@ -271,7 +275,7 @@ fn is_question_kind(kind: &str) -> bool {
     matches!(kind, "question" | "judgement" | "action")
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusIn {
     #[serde(flatten)]
@@ -301,7 +305,7 @@ pub struct StatusIn {
 /// One standalone refusal from the status reader: a `status.json` TypeScript refused with no
 /// accepted document to keep. The file and reason are fixed words; the refused content is never
 /// shown.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusProblemIn {
     pub file: String,
@@ -309,7 +313,7 @@ pub struct StatusProblemIn {
     pub since_ms: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ItemLiteIn {
     pub id: String,
     pub title: String,
@@ -324,7 +328,7 @@ pub struct BlockerIn {
     pub waiting_on: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoopingIn {
     pub state: String,
     #[serde(default)]
