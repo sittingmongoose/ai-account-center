@@ -1,8 +1,9 @@
 // Run on Unix with the parity binaries in an isolated provider home and network namespace.
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
+import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
@@ -190,6 +191,19 @@ async function exerciseClaudeHosts(post, cookie, origin, { receipts, failWindows
 }
 
 try {
+  if (incompatible) {
+    const digest = async (file) => {
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(file)) hash.update(chunk);
+      return hash.digest('hex');
+    };
+    const installed = path.join(path.dirname(launcher), 'aac-http');
+    assert.notEqual(
+      await digest(installed),
+      await digest(serviceBinary),
+      'set AAC_RUST_SERVICE_BINARY to a different image for --incompatible-owner'
+    );
+  }
   const hostFixtures = claudeHosts ? await prepareClaudeHosts() : null;
   const port = await reservePort();
   const tlsPort = h2 ? await reservePort() : undefined;
@@ -315,12 +329,18 @@ try {
   const front = spawn(
     launcher,
     ['dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(port)],
-    { env, stdio: ['ignore', 'ignore', 'inherit'] }
+    { env, stdio: ['ignore', 'ignore', incompatible ? 'pipe' : 'inherit'] }
   );
   children.push(front);
   if (incompatible) {
+    let startupError = '';
+    front.stderr.setEncoding('utf8');
+    front.stderr.on('data', (text) => {
+      startupError += text;
+    });
     for (let i = 0; i < 200 && front.exitCode === null; i++) await delay(20);
     assert.equal(front.exitCode, 1, 'a live incompatible owner must prevent public startup');
+    assert.match(startupError, /an incompatible private lifecycle service must stop/);
     console.log('Incompatible lifecycle owner regression: 1 scenario passed.');
     process.exitCode = 0;
   } else {
