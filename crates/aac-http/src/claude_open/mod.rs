@@ -19,3 +19,5 @@ mod table_tests;
 mod marker_tests;
 #[cfg(test)]
 mod fixture_tests;
+#[cfg(test)]
+mod socket_tests;
