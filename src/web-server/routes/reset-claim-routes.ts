@@ -26,6 +26,20 @@ export interface ResetRouteDeps {
   source?: ResetSource;
   ccsDir?: string;
   now?: () => number;
+  /** G11: while the Rust service owns the claims file, it resolves the account and runs the
+   * reads and the one send itself; `source` is used only while TS owns the file. */
+  rustSource?: boolean;
+}
+
+/** The Rust service as the reset source (G11). Its replies are the adapter's: a snapshot, or
+ * the send's `{outcome, retryAfterMs?}`; a refusal raises `<code>: ...` like the adapter. */
+function rustResetSource(file: NativeStatusHandle): ResetSource {
+  return {
+    read: async (account) =>
+      JSON.parse(await file.call('resetSourceRead', JSON.stringify({ routeAccount: account }))),
+    send: async (write) =>
+      JSON.parse(await file.call('resetSourceSend', JSON.stringify({ write }))),
+  };
 }
 /** Fixed native refusal codes the browser may word for the owner. They name no account, grant or host. */
 const SAFE_REASONS = new Set([
@@ -93,11 +107,21 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       )
     );
   }
+  /** The source for this request: the Rust service while it owns the claims file (G11). */
+  function sourceFor(res: Response): { source: ResetSource | undefined; rust: boolean } {
+    if (deps.rustSource && !deps.native) {
+      const rust = rustResetClaimsFile(res);
+      if (rust) return { source: rustResetSource(rust), rust: true };
+    }
+    return { source: deps.source, rust: false };
+  }
   async function readSnapshot(res: Response, account: string): Promise<unknown> {
-    const source = deps.source;
+    const { source, rust } = sourceFor(res);
     if (!source) throw new ProviderError('Reset source unavailable.', 'reset-claims');
     // The ticketed read writes the claims file too, so it uses the same writer.
-    const snapshot = await source.read(account, deps.native ? undefined : claimsFile(res));
+    const snapshot = rust
+      ? await source.read(account)
+      : await source.read(account, deps.native ? undefined : claimsFile(res));
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new ProviderError('Reset source unavailable.', 'reset-claims');
     }
@@ -184,6 +208,8 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       // Set just before the one provider write: a failure after it may have spent the chosen grant.
       let sent = false;
       try {
+        const sender = sourceFor(res).source ?? deps.source;
+        if (!sender) throw new ProviderError('Reset source unavailable.', 'reset-claims');
         if (op !== 'check') {
           await call(res, op === 'prepare' ? 'prepareGate' : 'claimGate', account, {
             key: req.body.grantKey,
@@ -214,7 +240,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         let result: { outcome: string; retryAfterMs?: number } = { outcome: 'ambiguous' };
         sent = true;
         try {
-          result = await deps.source.send(write);
+          result = await sender.send(write);
           // This proof word belongs to the Claude host executor, never an
           // unrecognized upstream outcome from another provider.
           if (result.outcome === 'not-sent') {
@@ -264,4 +290,4 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
   }
   return router;
 }
-export default createResetClaimRouter({ source: createResetSourceAdapter() });
+export default createResetClaimRouter({ source: createResetSourceAdapter(), rustSource: true });

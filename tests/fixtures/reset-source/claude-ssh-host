@@ -1,0 +1,82 @@
+#!/usr/bin/python3
+# Offline stand-in for `ssh <windows alias> <powershell helper>` (lane K reset-source parity).
+# It never contacts a host or a provider. State lives beside this file (the parity bin folder):
+#   no-knownhostscommand  the capability probe rejects KnownHostsCommand like an old OpenSSH
+#   ssh-argv.jsonl        one line per real invocation: the argv after the program name
+#   ssh-payload.jsonl     the stdin payload, helperSource replaced by its SHA-256
+#   login                 the saved login's account id; claimed marks the grant spent
+#   claims.jsonl          one line per claim POST that reached the (fake) opener
+#   claim-mode            "reset" (default) or "hang" (no answer: the transport times out)
+# The helper source sent by the transport must embed the packaged claude_usage.py: the real
+# reset_host runs with its credential and provider clients replaced by fixtures.
+import hashlib, json, sys, time
+from pathlib import Path
+
+root = Path(__file__).resolve().parent
+argv = sys.argv[1:]
+if '-G' in argv:
+    option = argv[argv.index('-o') + 1]
+    if option.startswith('KnownHostsCommand') and (root / 'no-knownhostscommand').exists():
+        print('command-line line 0: Bad configuration option: knownhostscommand', file=sys.stderr)
+        sys.exit(255)
+    sys.exit(0)
+with (root / 'ssh-argv.jsonl').open('a') as f:
+    f.write(json.dumps(argv) + '\n')
+payload = json.loads(sys.stdin.buffer.read().decode('utf-8'))
+request = payload['request']
+source = payload['helperSource']
+with (root / 'ssh-payload.jsonl').open('a') as f:
+    f.write(json.dumps({'helperSource': hashlib.sha256(source.encode()).hexdigest(), 'request': request}, sort_keys=True) + '\n')
+marker = 'exec(compile(json.loads('
+line = next(l for l in source.split('\n') if l.startswith(marker))
+literal = line[len(marker):line.rindex('),"managed-reset"')]
+script = json.loads(json.loads(literal))
+scope = {'__name__': 'aac_fixture_reset', '__file__': 'managed-claude.py'}
+exec(compile(script, 'managed-claude', 'exec'), scope)
+scope['sys'].platform = 'win32'
+scope['resolve_profile_path'] = lambda *args, **kwargs: root / 'profile'
+ORG = '33333333-3333-3333-3333-333333333333'
+CLIENT = '22222222-2222-2222-2222-222222222222'
+
+def decrypt(*args):
+    account = (root / 'login').read_text()
+    key = 'acct:' + account + '|' + CLIENT + ':' + ORG + ':https://api.anthropic.com:user:inference user:profile'
+    return account, {key: {'token': 'fixture-token-' + account, 'refreshToken': 'fixture-refresh', 'expiresAt': 4102444800000}}
+scope['decrypt_cache'] = decrypt
+
+def no_web(*args, **kwargs):
+    raise scope['UsageUnavailable']()
+scope['verified_web_client'] = no_web
+scope['live_session_cookies'] = lambda *args, **kwargs: [{'name': 'sessionKey', 'value': 'fixture-cookie'}]
+
+class Response:
+    def __init__(self, body):
+        self.body = body
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
+    def read(self, limit):
+        return self.body
+
+class Opener:
+    def open(self, req, timeout=None):
+        with (root / 'claims.jsonl').open('a') as f:
+            f.write(json.dumps({'url': req.full_url, 'body': json.loads(req.data.decode())}, sort_keys=True) + '\n')
+        if (root / 'claim-mode').exists() and (root / 'claim-mode').read_text() == 'hang':
+            time.sleep(30)
+        (root / 'claimed').write_text('1')
+        return Response(json.dumps({'result': 'reset'}).encode())
+
+class Client:
+    opener = Opener()
+    def get(self, route, token):
+        account = token[len('fixture-token-'):]
+        if route == '/api/oauth/profile':
+            return {'account': {'uuid': account, 'email': 'fixture@example.com', 'has_claude_pro': True}, 'organization': {'uuid': ORG}}
+        spent = (root / 'claimed').exists()
+        return {'five_hour': {'utilization': 0 if spent else 100},
+                'cedar_ember': {'eligible': True, 'grants': [{'id': 'fixture_grant', 'resets_left': 0 if spent else 1, 'resets_total': 1,
+                                                              'paused': False, 'usable_now': not spent, 'clears': ['five_hour']}]}}
+scope['Client'] = Client
+print(json.dumps(scope['reset_host'](request), allow_nan=False))

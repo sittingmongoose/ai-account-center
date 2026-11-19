@@ -646,6 +646,11 @@ export class RustService extends RustSupervisor {
           body = { op: 'sourceClaudeRead', ...input };
           refusal = 'Reset source unavailable.';
           deadlineMs = RESET_SOURCE_DEADLINE_MS;
+        } else if (method === 'resetSourceRead' || method === 'resetSourceSend') {
+          // G11: the service resolves the account and runs the read or the one send itself.
+          body = { op: method === 'resetSourceRead' ? 'sourceRead' : 'sourceSend', ...input };
+          refusal = 'Reset source unavailable.';
+          deadlineMs = RESET_SOURCE_DEADLINE_MS;
         } else {
           throw new ProviderError('Rust reset method refused', 'reset-claims');
         }

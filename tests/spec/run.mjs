@@ -50,6 +50,13 @@ for (const [program, args] of [
             ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
           ],
         ],
+        [
+          'bun',
+          [
+            'tests/spec/reset-source-parity.ts',
+            ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+          ],
+        ],
       ]),
   [
     'bun',
