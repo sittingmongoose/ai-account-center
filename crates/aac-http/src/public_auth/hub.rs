@@ -135,9 +135,7 @@ impl SnapshotFeed {
     }
 
     fn read(path: &std::path::Path) -> Option<Vec<Value>> {
-        let Some(parent) = path.parent() else {
-            return None;
-        };
+        let parent = path.parent()?;
         let policy = ReadPolicy::capped(CACHE_LIMIT)
             .ancestors(Ancestors::NoLinkBelow(parent))
             .mode(Mode::Private)

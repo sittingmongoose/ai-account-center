@@ -134,24 +134,24 @@ pub fn report_v2(doc: &Map<String, Json>) -> Valid<Map<String, Json>> {
                 one_of(Some(by), &format!("{field}.by"), &STAGE_BY)?;
             }
             for key in ["round", "of"] {
-                if let Some(value) = present(row, key) {
-                    if !value.is_null() {
-                        let value = count(Some(value), &format!("{field}.{key}"))?;
-                        if !(1..=99).contains(&value) {
-                            return Err(fail(&format!("{field}.{key}")));
-                        }
+                if let Some(value) = present(row, key)
+                    && !value.is_null()
+                {
+                    let value = count(Some(value), &format!("{field}.{key}"))?;
+                    if !(1..=99).contains(&value) {
+                        return Err(fail(&format!("{field}.{key}")));
                     }
                 }
             }
-            if let Some(note) = present(row, "note") {
-                if !note.is_null() {
-                    text(Some(note), &format!("{field}.note"), 40)?;
-                }
+            if let Some(note) = present(row, "note")
+                && !note.is_null()
+            {
+                text(Some(note), &format!("{field}.note"), 40)?;
             }
-            if let Some(waiting) = present(row, "waitingOn") {
-                if !waiting.is_null() {
-                    one_of(Some(waiting), &format!("{field}.waitingOn"), &WAITING_ON)?;
-                }
+            if let Some(waiting) = present(row, "waitingOn")
+                && !waiting.is_null()
+            {
+                one_of(Some(waiting), &format!("{field}.waitingOn"), &WAITING_ON)?;
             }
             let mut stage = Map::new();
             passthrough(
@@ -182,16 +182,16 @@ pub fn report_v2(doc: &Map<String, Json>) -> Valid<Map<String, Json>> {
                 ("note", 160),
                 ("unlocks", 160),
             ] {
-                if let Some(value) = present(row, key) {
-                    if !value.is_null() {
-                        text(Some(value), &format!("{field}.{key}"), cap)?;
-                    }
+                if let Some(value) = present(row, key)
+                    && !value.is_null()
+                {
+                    text(Some(value), &format!("{field}.{key}"), cap)?;
                 }
             }
-            if let Some(main) = present(row, "main") {
-                if !main.is_boolean() {
-                    return Err(fail(&format!("{field}.main")));
-                }
+            if let Some(main) = present(row, "main")
+                && !main.is_boolean()
+            {
+                return Err(fail(&format!("{field}.main")));
             }
             if let Some(cards) = present(row, "cards") {
                 list(Some(cards), &format!("{field}.cards"), 100, |value, at| {
@@ -257,26 +257,26 @@ pub fn report_media(value: Option<&Json>) -> Valid<Json> {
             return Err(fail(field));
         }
         for key in ["path", "url", "poster"] {
-            if let Some(value) = present(row, key) {
-                if !value.is_null() {
-                    text(Some(value), &format!("{field}.{key}"), 400)?;
-                }
+            if let Some(value) = present(row, key)
+                && !value.is_null()
+            {
+                text(Some(value), &format!("{field}.{key}"), 400)?;
             }
         }
-        if let Some(caption) = present(row, "caption") {
-            if !caption.is_null() {
-                text(Some(caption), &format!("{field}.caption"), 60)?;
-            }
+        if let Some(caption) = present(row, "caption")
+            && !caption.is_null()
+        {
+            text(Some(caption), &format!("{field}.caption"), 60)?;
         }
-        if let Some(label) = present(row, "label") {
-            if !label.is_null() {
-                one_of(Some(label), &format!("{field}.label"), &["built", "mockup"])?;
-            }
+        if let Some(label) = present(row, "label")
+            && !label.is_null()
+        {
+            one_of(Some(label), &format!("{field}.label"), &["built", "mockup"])?;
         }
-        if let Some(seconds) = present(row, "seconds") {
-            if !seconds.is_null() {
-                count(Some(seconds), &format!("{field}.seconds"))?;
-            }
+        if let Some(seconds) = present(row, "seconds")
+            && !seconds.is_null()
+        {
+            count(Some(seconds), &format!("{field}.seconds"))?;
         }
         let mut out = Map::new();
         passthrough(
@@ -333,15 +333,15 @@ pub fn thread(doc: &Map<String, Json>, writer: &str) -> Valid<Json> {
         }
     }
     let mut progress = Json::Null;
-    if let Some(value) = present(doc, "progress") {
-        if !value.is_null() {
-            let item = obj(Some(value), "progress")?;
-            progress = json!({
-                "done": count(item.get("done"), "progress.done")?,
-                "total": count(item.get("total"), "progress.total")?,
-                "unit": opt_text(item.get("unit"), "progress.unit", 40)?,
-            });
-        }
+    if let Some(value) = present(doc, "progress")
+        && !value.is_null()
+    {
+        let item = obj(Some(value), "progress")?;
+        progress = json!({
+            "done": count(item.get("done"), "progress.done")?,
+            "total": count(item.get("total"), "progress.total")?,
+            "unit": opt_text(item.get("unit"), "progress.unit", 40)?,
+        });
     }
     let head = head(doc, THREAD_SCHEMA, writer)?;
     let v2 = report_v2(doc)?;
@@ -385,14 +385,14 @@ fn task_item(value: &Json, field: &str) -> Valid<Json> {
         return Err(fail(&format!("{field}.needsYou")));
     }
     let mut landed = Json::Null;
-    if let Some(value) = present(row, "landed") {
-        if !value.is_null() {
-            let value = obj(Some(value), &format!("{field}.landed"))?;
-            landed = json!({
-                "sha": text(value.get("sha"), &format!("{field}.landed.sha"), 64)?,
-                "at": opt_iso(value.get("at"), &format!("{field}.landed.at"))?,
-            });
-        }
+    if let Some(value) = present(row, "landed")
+        && !value.is_null()
+    {
+        let value = obj(Some(value), &format!("{field}.landed"))?;
+        landed = json!({
+            "sha": text(value.get("sha"), &format!("{field}.landed.sha"), 64)?,
+            "at": opt_iso(value.get("at"), &format!("{field}.landed.at"))?,
+        });
     }
     let mut item = json!({
         "id": text(row.get("id"), &format!("{field}.id"), 64)?,
@@ -591,9 +591,8 @@ pub fn section(value: &Json, field: &str) -> Valid<Json> {
             each(item, at)
         })
     };
-    let line = |max: usize| -> Box<dyn Fn(&Json, &str) -> Valid<Json>> {
-        Box::new(move |item, at| Ok(json!(text(Some(item), at, max)?)))
-    };
+    type ReportLine = dyn Fn(&Json, &str) -> Valid<Json>;
+    let line = |max: usize| -> Box<ReportLine> { Box::new(move |item, at| Ok(json!(text(Some(item), at, max)?))) };
     match kind.as_str() {
         "text" => {
             out.insert(
@@ -822,33 +821,33 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
         }
     }
     let mut recommendation = Json::Null;
-    if let Some(value) = present(doc, "recommendation") {
-        if !value.is_null() {
-            let value = obj(Some(value), "recommendation")?;
-            let key = value.get("key").and_then(Json::as_str).unwrap_or_default();
-            if !options.iter().any(|option| option["key"] == json!(key)) {
-                return Err(fail("recommendation.key"));
-            }
-            recommendation = json!({
-                "key": value.get("key").cloned().unwrap_or(Json::Null),
-                "why": opt_text(value.get("why"), "recommendation.why", 1000)?,
-                "confidence": match value.get("confidence") {
-                    None | Some(Json::Null) => Json::Null,
-                    other => json!(one_of(other, "recommendation.confidence", &["low", "medium", "high"])?),
-                },
-                "flip": opt_text(value.get("flip"), "recommendation.flip", 500)?,
-            });
+    if let Some(value) = present(doc, "recommendation")
+        && !value.is_null()
+    {
+        let value = obj(Some(value), "recommendation")?;
+        let key = value.get("key").and_then(Json::as_str).unwrap_or_default();
+        if !options.iter().any(|option| option["key"] == json!(key)) {
+            return Err(fail("recommendation.key"));
         }
+        recommendation = json!({
+            "key": value.get("key").cloned().unwrap_or(Json::Null),
+            "why": opt_text(value.get("why"), "recommendation.why", 1000)?,
+            "confidence": match value.get("confidence") {
+                None | Some(Json::Null) => Json::Null,
+                other => json!(one_of(other, "recommendation.confidence", &["low", "medium", "high"])?),
+            },
+            "flip": opt_text(value.get("flip"), "recommendation.flip", 500)?,
+        });
     }
     let mut old_answer = Json::Null;
-    if let Some(value) = present(doc, "oldAnswer") {
-        if !value.is_null() {
-            let value = obj(Some(value), "oldAnswer")?;
-            old_answer = json!({
-                "text": text(value.get("text"), "oldAnswer.text", 2000)?,
-                "at": opt_iso(value.get("at"), "oldAnswer.at")?,
-            });
-        }
+    if let Some(value) = present(doc, "oldAnswer")
+        && !value.is_null()
+    {
+        let value = obj(Some(value), "oldAnswer")?;
+        old_answer = json!({
+            "text": text(value.get("text"), "oldAnswer.text", 2000)?,
+            "at": opt_iso(value.get("at"), "oldAnswer.at")?,
+        });
     }
     let state = one_of(Some(or(doc, "state", &json!("open"))), "state", &CARD_STATES)?;
     let local = &file_id[file_id.find("--").map(|at| at + 2).unwrap_or(0)..];
@@ -942,7 +941,6 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
                 "ifNoAnswer": opt_text(value.get("ifNoAnswer"), "neededBy.ifNoAnswer", 500)?,
             }))
         })?
-        .map(|value| value)
         .unwrap_or(Json::Null),
     );
     out.insert(
@@ -974,10 +972,11 @@ pub fn card(doc: &Map<String, Json>, writer: &str, file_id: &str) -> Valid<Json>
     out.insert(
         "agreement".to_string(),
         opt_obj(doc.get("agreement"), "agreement", |value| {
-            if let Some(same) = present(value, "same") {
-                if !same.is_null() && !same.is_boolean() {
-                    return Err(fail("agreement.same"));
-                }
+            if let Some(same) = present(value, "same")
+                && !same.is_null()
+                && !same.is_boolean()
+            {
+                return Err(fail("agreement.same"));
             }
             Ok(json!({
                 "same": match value.get("same") {

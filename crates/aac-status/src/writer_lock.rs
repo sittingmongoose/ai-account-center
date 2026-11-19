@@ -174,12 +174,12 @@ fn running(pid: i64) -> bool {
             return false;
         }
     }
-    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
-        if let Some(at) = stat.rfind(')') {
-            let state = stat.as_bytes().get(at + 2).copied();
-            if state == Some(b'Z') || state == Some(b'X') {
-                return false;
-            }
+    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat"))
+        && let Some(at) = stat.rfind(')')
+    {
+        let state = stat.as_bytes().get(at + 2).copied();
+        if state == Some(b'Z') || state == Some(b'X') {
+            return false;
         }
     }
     true
@@ -206,10 +206,10 @@ fn stale(holder: Option<&Holder>, mtime_ms: f64) -> bool {
     if holder.host != host_name() {
         return now_ms() - mtime_ms > UNREFRESHED_MS;
     }
-    if let (Some(boot), Some(theirs)) = (boot_id(), holder.boot.as_ref()) {
-        if &boot != theirs {
-            return true;
-        }
+    if let (Some(boot), Some(theirs)) = (boot_id(), holder.boot.as_ref())
+        && &boot != theirs
+    {
+        return true;
     }
     if !running(holder.pid) {
         return true;
@@ -345,11 +345,11 @@ fn create_store_dir(dir: &Path) -> io::Result<()> {
 pub fn hold_writer_lock(dir: &Path) -> Result<bool, LockError> {
     let file = dir.join(WRITER_LOCK_FILE);
     let mine = held().lock().unwrap_or_else(|e| e.into_inner()).get(&file).cloned();
-    if let Some(mine) = mine {
-        if read_text(&file)?.as_deref() == Some(mine.as_str()) {
-            refresh(&file);
-            return Ok(false);
-        }
+    if let Some(mine) = mine
+        && read_text(&file)?.as_deref() == Some(mine.as_str())
+    {
+        refresh(&file);
+        return Ok(false);
     }
     held().lock().unwrap_or_else(|e| e.into_inner()).remove(&file);
     create_store_dir(dir)?;
@@ -397,10 +397,10 @@ pub fn release_writer_locks() {
 pub fn release_writer_lock(dir: &Path) {
     let file = dir.join(WRITER_LOCK_FILE);
     let text = held().lock().unwrap_or_else(|e| e.into_inner()).remove(&file);
-    if let Some(text) = text {
-        if read_text(&file).ok().flatten().as_deref() == Some(text.as_str()) {
-            remove_quietly(&file);
-        }
+    if let Some(text) = text
+        && read_text(&file).ok().flatten().as_deref() == Some(text.as_str())
+    {
+        remove_quietly(&file);
     }
 }
 

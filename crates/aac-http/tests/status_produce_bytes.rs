@@ -8,6 +8,8 @@
 //! zone's proved window keeps no date word here, while the reference's `Intl` writes one for any
 //! instant); their epochs and ranks are the whole set.
 
+#![allow(clippy::unwrap_used)]
+
 use aac_status::answers_engine::{HistoryEntry, StepState};
 use aac_status::produce::answers_feed::AnswersFeed;
 use aac_status::produce::facts::ZoneFacts;
@@ -32,7 +34,7 @@ fn entry(value: &Json) -> HistoryEntry {
     HistoryEntry {
         id: value["id"].as_str().unwrap_or("").to_owned(),
         send_id: value["sendId"].as_str().map(str::to_owned),
-        shared_only: value["sharedOnly"] == Json::from(true),
+        shared_only: value["sharedOnly"] == true,
         answer: value["answer"].clone(),
         card: value["card"].clone(),
         share: state(&value["share"]),

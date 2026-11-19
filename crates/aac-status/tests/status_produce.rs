@@ -43,7 +43,7 @@ fn entry(value: &Json) -> HistoryEntry {
         state: value["state"].as_str().unwrap_or("").to_owned(),
         at: value["at"].as_str().map(str::to_owned),
         detail: value["detail"].as_str().map(str::to_owned),
-        attempts: u64::try_from(value["attempts"].as_u64().unwrap_or(0)).unwrap_or(0),
+        attempts: value["attempts"].as_u64().unwrap_or(0),
     };
     HistoryEntry {
         id: value["id"].as_str().unwrap_or("").to_owned(),

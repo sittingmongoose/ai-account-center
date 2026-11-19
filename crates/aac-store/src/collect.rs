@@ -523,10 +523,11 @@ pub fn worker_from_scan(
     // A row's file names its session through the session rows (keyed on the host that read them).
     let mut session_of: HashMap<String, String> = HashMap::new();
     for row in srows {
-        if let (Some(file), Some(key)) = (row["f"].as_str(), row["s"].as_str()) {
-            if !file.is_empty() && !key.is_empty() {
-                session_of.insert(file.to_string(), key.to_string());
-            }
+        if let (Some(file), Some(key)) = (row["f"].as_str(), row["s"].as_str())
+            && !file.is_empty()
+            && !key.is_empty()
+        {
+            session_of.insert(file.to_string(), key.to_string());
         }
     }
     let keyed_compact: Vec<Value> = compact

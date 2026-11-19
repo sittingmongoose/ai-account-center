@@ -349,12 +349,10 @@ fn resolve_float(s: &str) -> bool {
         return exp_ok(exponent);
     }
     // Branch 2: \.[0-9_]+([eE][-+]?[0-9]+)? (no sign)
-    if !sign {
-        if let Some(frac) = body.strip_prefix('.') {
-            let (mantissa, exponent) = split_exp(frac);
-            if !mantissa.is_empty() && mantissa.chars().all(digit_underscore) {
-                return exp_ok(exponent);
-            }
+    if !sign && let Some(frac) = body.strip_prefix('.') {
+        let (mantissa, exponent) = split_exp(frac);
+        if !mantissa.is_empty() && mantissa.chars().all(digit_underscore) {
+            return exp_ok(exponent);
         }
     }
     false
@@ -489,10 +487,10 @@ fn deprecated_base60(s: &str) -> bool {
         Some((int_part, frac)) => (int_part, Some(frac)),
         None => (body, None),
     };
-    if let Some(frac) = frac {
-        if !frac.chars().all(digit_underscore) {
-            return false;
-        }
+    if let Some(frac) = frac
+        && !frac.chars().all(digit_underscore)
+    {
+        return false;
     }
     let mut groups = int_part.split(':');
     let first = groups.next().unwrap_or("");
@@ -738,10 +736,11 @@ fn validate_meta(node: &Node) -> Option<Meta> {
             scalar_is_string(value)?;
         }
     }
-    if let Some(value) = get("plan_type") {
-        if !scalar_is_null(value) && scalar_is_string(value).is_none() {
-            return None;
-        }
+    if let Some(value) = get("plan_type")
+        && !scalar_is_null(value)
+        && scalar_is_string(value).is_none()
+    {
+        return None;
     }
     let mut meta = Meta::new();
     for (key, value) in entries {
@@ -788,10 +787,10 @@ pub fn parse(bytes: &[u8]) -> Option<Registry> {
         }
         _ => return None,
     }
-    if let Some(default) = &default {
-        if !profiles.iter().any(|(n, _)| n == default) {
-            return None;
-        }
+    if let Some(default) = &default
+        && !profiles.iter().any(|(n, _)| n == default)
+    {
+        return None;
     }
     let registry = Registry {
         version,

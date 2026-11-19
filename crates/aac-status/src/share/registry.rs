@@ -143,14 +143,13 @@ fn named_computer(lower: &str) -> Option<&'static Json> {
     let mut hosts: Vec<(&String, &Json)> = registry.iter().collect();
     hosts.sort_by_key(|(_, row)| row["legacy"].as_bool().unwrap_or(false));
     for (_, row) in hosts {
-        if let Some(names) = row["names"].as_array() {
-            if names
+        if let Some(names) = row["names"].as_array()
+            && names
                 .iter()
                 .filter_map(Json::as_str)
                 .any(|name| lower.contains(&name.to_lowercase()))
-            {
-                return Some(row);
-            }
+        {
+            return Some(row);
         }
     }
     None
@@ -286,10 +285,11 @@ impl PmMailRegistryReader {
                 continue;
             }
             let key = stat_key(&stat);
-            if let Some(entry) = self.files.get(&name) {
-                if entry.key == key && entry.problem.is_none() {
-                    continue;
-                }
+            if let Some(entry) = self.files.get(&name)
+                && entry.key == key
+                && entry.problem.is_none()
+            {
+                continue;
             }
             let bytes = match fs.read(&file, REGISTRY_FILE_CAP) {
                 Ok(bytes) => bytes,

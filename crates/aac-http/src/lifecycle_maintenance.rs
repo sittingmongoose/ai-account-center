@@ -94,7 +94,7 @@ pub async fn compatibility_pipe() -> io::Result<()> {
         for step in Step::ALL {
             writeln!(output, "{}", step.wire_name())?;
             output.flush()?;
-            if input.read(&mut byte).await? != 1 || byte != [b'\n'] {
+            if input.read(&mut byte).await? != 1 || byte != *b"\n" {
                 return Ok(());
             }
         }

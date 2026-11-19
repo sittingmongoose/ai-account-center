@@ -2100,10 +2100,10 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
         }
         last = json!(cursor);
         let mut row = row.clone();
-        if args.include_cursors != Some(true) {
-            if let Some(obj) = row.as_object_mut() {
-                obj.remove("_cursor");
-            }
+        if args.include_cursors != Some(true)
+            && let Some(obj) = row.as_object_mut()
+        {
+            obj.remove("_cursor");
         }
         out.push(row);
     }

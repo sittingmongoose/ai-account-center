@@ -167,10 +167,10 @@ pub fn build_snapshot_files(
     if !sign_in.is_empty() {
         snapshot["signIn"] = Value::Array(sign_in.to_vec());
     }
-    if let Some(renewal) = sign_in_renewal {
-        if !renewal.is_null() {
-            snapshot["signInRenewal"] = renewal.clone();
-        }
+    if let Some(renewal) = sign_in_renewal
+        && !renewal.is_null()
+    {
+        snapshot["signInRenewal"] = renewal.clone();
     }
     let history = js::object(vec![
         ("version", json!(1)),

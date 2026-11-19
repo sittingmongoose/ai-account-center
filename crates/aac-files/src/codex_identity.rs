@@ -118,10 +118,10 @@ pub fn decode_id_token(id_token: &str) -> Display {
         _ => profile.and_then(|claim| claim.get("email")),
     };
     let mut display = Display::default();
-    if let Some(email) = email.and_then(|value| value.as_str()) {
-        if !email.is_empty() {
-            display.email = Some(email.to_owned());
-        }
+    if let Some(email) = email.and_then(|value| value.as_str())
+        && !email.is_empty()
+    {
+        display.email = Some(email.to_owned());
     }
     if let Some(plan) = claim_str(auth, "chatgpt_plan_type") {
         display.plan_type = Some(plan.to_owned());
@@ -205,20 +205,20 @@ pub fn matches_activation_identity(expected: &Binding, actual: &Binding) -> bool
     if expected.account_id != actual.account_id {
         return false;
     }
-    if let Some(user) = &expected.user_id {
-        if actual.user_id.as_ref() != Some(user) {
-            return false;
-        }
+    if let Some(user) = &expected.user_id
+        && actual.user_id.as_ref() != Some(user)
+    {
+        return false;
     }
-    if let Some(subject) = &expected.subject {
-        if actual.subject.as_ref() != Some(subject) {
-            return false;
-        }
+    if let Some(subject) = &expected.subject
+        && actual.subject.as_ref() != Some(subject)
+    {
+        return false;
     }
-    if let Some(issuer) = &expected.issuer {
-        if actual.issuer.as_ref() != Some(issuer) {
-            return false;
-        }
+    if let Some(issuer) = &expected.issuer
+        && actual.issuer.as_ref() != Some(issuer)
+    {
+        return false;
     }
     if expected.user_id.is_some() || (expected.subject.is_some() && expected.issuer.is_some()) {
         return true;
@@ -247,10 +247,10 @@ pub fn same_codex_identity(
         return false;
     };
     let known_email = saved.map(|s| s.email.as_str()).or(meta_email);
-    if let Some(known) = known_email {
-        if !same_text(Some(known), Some(&fresh.email)) {
-            return false;
-        }
+    if let Some(known) = known_email
+        && !same_text(Some(known), Some(&fresh.email))
+    {
+        return false;
     }
     let known_accounts = [
         saved

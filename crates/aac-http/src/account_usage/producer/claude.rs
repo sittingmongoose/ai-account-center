@@ -270,8 +270,8 @@ impl Producer {
             }
         }
         saved.write_state(self, &target, &failure);
-        let result = saved.sample.clone().or_else(snapshot);
-        result
+
+        saved.sample.clone().or_else(snapshot)
     }
 }
 

@@ -45,7 +45,6 @@ struct OwnedState {
 /// G16c: one pass's snapshots for the producers. The front door's `GET
 /// /internal/status/inputs` still reads the JSON the state holds; the producers read these.
 pub(crate) struct Scan {
-    pub generation: u64,
     pub reports: AgentReportsState,
     pub docs: StatusDocsState,
     pub quota: Json,
@@ -226,7 +225,6 @@ impl StatusOwned {
             }));
         }
         Scan {
-            generation,
             reports: outcome.reports,
             docs: outcome.docs,
             quota: quota::state_json(&outcome.quota),
@@ -510,7 +508,7 @@ pub(crate) async fn jobs(
         if stop.load(Ordering::Acquire) {
             return;
         }
-        let scan = owner.pass(tick % REGISTRY_EVERY_PASSES == 0).await;
+        let scan = owner.pass(tick.is_multiple_of(REGISTRY_EVERY_PASSES)).await;
         if let Some(produce) = &produce {
             produce.after_scan(scan).await;
         }

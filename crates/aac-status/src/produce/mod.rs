@@ -11,7 +11,7 @@
 //!   display zone's offsets supplied as facts (the engine's `Intl` is the only part a
 //!   server cannot reproduce; every word is computed here);
 //! - [`browsers`]: `parseBrowserSlots` / `mergeBrowserRows` / `sessionUrl`;
-//! - [`simlock`]: `parseSimlockStatus`;
+//! - [`simlock`] `parseSimlockStatus`;
 //! - [`machines`]: `parseMachineProbe`, `busyBetween`, the probe commands and the local
 //!   reading's shape;
 //! - [`answered`]: `resolvedCardWaits` / `activeBlocker` / `closingCardVersions` as the feed

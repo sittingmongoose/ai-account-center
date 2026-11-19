@@ -200,10 +200,10 @@ pub fn analytics_window(value: &Value) -> Option<Map<String, Value>> {
     if let Some(pool) = safe_pool_id(window.get("poolId").unwrap_or(&Value::Null)) {
         out.insert("poolId".into(), Value::String(pool.to_owned()));
     }
-    if let Some(source) = window.get("poolIdSource").and_then(Value::as_str) {
-        if source == "provider-id" || source == "provider-bucket-membership" {
-            out.insert("poolIdSource".into(), Value::String(source.to_owned()));
-        }
+    if let Some(source) = window.get("poolIdSource").and_then(Value::as_str)
+        && (source == "provider-id" || source == "provider-bucket-membership")
+    {
+        out.insert("poolIdSource".into(), Value::String(source.to_owned()));
     }
     if let Some(pool_label) = display_text(window.get("poolLabel").unwrap_or(&Value::Null), 80) {
         out.insert("poolLabel".into(), Value::String(pool_label));
@@ -231,10 +231,10 @@ pub fn window_identity(window: &Map<String, Value>) -> String {
         window.get("kind").cloned().unwrap_or(Value::Null),
         window.get("unit").cloned().unwrap_or(Value::Null),
     ];
-    if let Some(pool) = window.get("poolId").and_then(Value::as_str) {
-        if !pool.is_empty() {
-            parts.push(Value::String(pool.to_owned()));
-        }
+    if let Some(pool) = window.get("poolId").and_then(Value::as_str)
+        && !pool.is_empty()
+    {
+        parts.push(Value::String(pool.to_owned()));
     }
     Value::Array(parts).to_string()
 }
@@ -266,10 +266,10 @@ fn host_platform(host: &str) -> Option<&'static str> {
 
 /// `sourcePlatform`: the live reading's host wins over the launch selector.
 pub fn source_platform(account: &Map<String, Value>) -> String {
-    if let Some(host) = account.get("host").and_then(Value::as_str) {
-        if let Some(platform) = host_platform(host) {
-            return platform.to_owned();
-        }
+    if let Some(host) = account.get("host").and_then(Value::as_str)
+        && let Some(platform) = host_platform(host)
+    {
+        return platform.to_owned();
     }
     let source = account.get("source").and_then(Value::as_str).unwrap_or("");
     if source.contains("on Windows") {
@@ -346,10 +346,10 @@ pub fn observation_from_account(account: &Value, now: i64, retention_ms: i64) ->
             let Some(stored) = store_window(window) else {
                 continue;
             };
-            if let Some(cached) = stored.cached_sampled_at_ms {
-                if cached > now || cached < cutoff {
-                    continue;
-                }
+            if let Some(cached) = stored.cached_sampled_at_ms
+                && (cached > now || cached < cutoff)
+            {
+                continue;
             }
             windows.push(stored);
         }

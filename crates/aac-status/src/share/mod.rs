@@ -98,10 +98,7 @@ impl ShareFs for NodeFs {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(aac_files::read::Listed::TooMany) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "folder listing past the count cap",
-                    ));
+                    return Err(io::Error::other("folder listing past the count cap"));
                 }
                 Err(aac_files::read::Listed::Entry(error)) => return Err(error),
             };
@@ -129,10 +126,9 @@ impl ShareFs for NodeFs {
             // The TypeScript reader's open is O_NOFOLLOW | O_NONBLOCK with a regular-file
             // check on the handle: a link, a FIFO or a folder where a report belongs fails
             // the read (never a transient share error).
-            Read::Link | Read::Directory | Read::NotRegular => Err(ReadError::Io(io::Error::new(
-                io::ErrorKind::Other,
-                "not a regular file",
-            ))),
+            Read::Link | Read::Directory | Read::NotRegular => {
+                Err(ReadError::Io(io::Error::other("not a regular file")))
+            }
             Read::Absent => Err(ReadError::Io(io::Error::from_raw_os_error(2))),
             Read::Unreadable(kind) | Read::ChainUnreadable(kind) => {
                 Err(ReadError::Io(io::Error::new(kind, "share read failed")))

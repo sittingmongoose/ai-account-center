@@ -95,7 +95,7 @@ fn injected(errors: &Json, path: &str, op: &str) -> Option<io::Error> {
         "ENOTDIR" => io::Error::from_raw_os_error(20),
         "ESTALE" => io::Error::from_raw_os_error(116),
         "EACCES" => io::Error::from_raw_os_error(13),
-        other => io::Error::new(io::ErrorKind::Other, other.to_string()),
+        other => io::Error::other(other.to_string()),
     })
 }
 
@@ -174,8 +174,8 @@ impl ShareFs for MemFs {
                 Ok(bytes[..bytes.len().min(cap + 1)].to_vec())
             }
             // The hardened open refuses a link; a FIFO or folder is not a regular file.
-            "link" => Err(ReadError::Io(io::Error::new(io::ErrorKind::Other, "ELOOP"))),
-            _ => Err(ReadError::Io(io::Error::new(io::ErrorKind::Other, "ENOTREG"))),
+            "link" => Err(ReadError::Io(io::Error::other("ELOOP"))),
+            _ => Err(ReadError::Io(io::Error::other("ENOTREG"))),
         }
     }
 }

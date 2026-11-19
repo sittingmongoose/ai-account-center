@@ -145,15 +145,13 @@ pub struct Producer {
     /// Per-account forced refresh stamps for a single-row Re-check (the TS debounce).
     recheck_forced: Arc<std::sync::Mutex<HashMap<String, i64>>>,
     /// The renewal status the Codex rows read, cached for the TS status TTL (15 s).
-    renewal_status: Arc<
-        std::sync::Mutex<
-            Option<(
-                i64,
-                HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus>,
-            )>,
-        >,
-    >,
+    renewal_status: Arc<std::sync::Mutex<Option<RenewalSnapshot>>>,
 }
+
+type RenewalSnapshot = (
+    i64,
+    HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus>,
+);
 
 impl Producer {
     /// Open the production readers for the given canonical service root and file owners.
@@ -184,6 +182,7 @@ impl Producer {
     }
 
     /// Point the renewal snapshot's homes at a fixture root (tests only).
+    #[cfg(test)]
     pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
         self
@@ -349,10 +348,10 @@ impl Producer {
                 .renewal_status
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some((at, entries)) = held.as_ref() {
-                if now.saturating_sub(*at) < STATUS_TTL_MS {
-                    return entries.clone();
-                }
+            if let Some((at, entries)) = held.as_ref()
+                && now.saturating_sub(*at) < STATUS_TTL_MS
+            {
+                return entries.clone();
             }
         }
         let root = self.root.clone();
@@ -434,7 +433,6 @@ impl Producer {
             (profile.name, candidate, active)
         });
         let inventory = &inventory;
-        let entries = entries;
         stream::iter(requests)
             .map(move |(name, candidate, active)| async move {
                 let (sample, failure) = match &candidate {
@@ -851,6 +849,7 @@ fn source_host(platform: &str, alias: Option<&str>) -> (String, String) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use aac_renewal::renewal::CodexProfileRenewalProfileStatus;

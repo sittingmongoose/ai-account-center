@@ -421,10 +421,10 @@ fn antigravity_sandbox(
 
     let mut command_env = serde_json::Map::new();
     for key in AGY_PASSED_ENV {
-        if let Some(value) = env.get(key).and_then(|value| value.as_str()) {
-            if !value.bytes().any(|b| b < 0x20) {
-                command_env.insert(key.to_owned(), json!(value));
-            }
+        if let Some(value) = env.get(key).and_then(|value| value.as_str())
+            && !value.bytes().any(|b| b < 0x20)
+        {
+            command_env.insert(key.to_owned(), json!(value));
         }
     }
     let term = command_env

@@ -171,6 +171,10 @@ impl AgentReportsReader {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the scan preserves document and file provenance"
+    )]
     fn accept(
         &mut self,
         rel: &str,
@@ -191,20 +195,20 @@ impl AgentReportsReader {
             problem: None,
             missing_since: None,
         });
-        if let Some(good) = &entry.good {
-            if seq < good.doc["seq"].as_u64().unwrap_or(0) {
-                return self.set_problem(rel, kind, writer, SEQ_WENT_BACK, stat_key, now);
-            }
+        if let Some(good) = &entry.good
+            && seq < good.doc["seq"].as_u64().unwrap_or(0)
+        {
+            return self.set_problem(rel, kind, writer, SEQ_WENT_BACK, stat_key, now);
         }
         let had_problem = entry.problem.is_some();
         entry.stat_key = stat_key.to_string();
         entry.problem = None;
-        if let Some(good) = &mut entry.good {
-            if good.sha256 == sha256 {
-                good.problem = None;
-                self.entries.insert(rel.to_string(), entry);
-                return had_problem;
-            }
+        if let Some(good) = &mut entry.good
+            && good.sha256 == sha256
+        {
+            good.problem = None;
+            self.entries.insert(rel.to_string(), entry);
+            return had_problem;
         }
         entry.good = Some(SeenReport {
             file: rel.to_string(),
@@ -220,6 +224,10 @@ impl AgentReportsReader {
     }
 
     /// Stat and, when changed, read one listed file. Resolves whether it changed the view.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the scan retains bounded read context for each document"
+    )]
     fn visit(
         &mut self,
         fs: &dyn ShareFs,
@@ -262,11 +270,11 @@ impl AgentReportsReader {
         }
         seen.insert(rel.to_string());
         let key = stat_key(&stat);
-        if let Some(entry) = self.entries.get(rel) {
-            if entry.stat_key == key {
-                self.misses.clear(rel);
-                return false;
-            }
+        if let Some(entry) = self.entries.get(rel)
+            && entry.stat_key == key
+        {
+            self.misses.clear(rel);
+            return false;
         }
         if stat.size > cap as u64 {
             return self.set_problem(
@@ -309,6 +317,10 @@ impl AgentReportsReader {
 
     /// A writer or `cards/` folder that could not be listed: not listed is not withdrawn;
     /// its known files are kept, and a lasting failure is named on the folder and its rows.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the scan distinguishes failure scopes and transient retries"
+    )]
     fn listing_failed(
         &mut self,
         name: &str,
@@ -617,10 +629,9 @@ impl AgentReportsReader {
                     if link["label"]
                         .as_str()
                         .is_some_and(|label| label.to_ascii_lowercase().contains("board"))
+                        && let Some(path) = link["path"].as_str()
                     {
-                        if let Some(path) = link["path"].as_str() {
-                            push(path);
-                        }
+                        push(path);
                     }
                 }
             }
@@ -629,7 +640,7 @@ impl AgentReportsReader {
         for given in paths {
             let local = share_local_path(&given, &self.root);
             let mtime = local.and_then(|local| fs.stat(&local).ok().filter(|stat| stat.file).map(|stat| stat.mtime_ms));
-            next.insert(given, mtime.map(|ms| Json::from(ms)).unwrap_or(Json::Null));
+            next.insert(given, mtime.map(Json::from).unwrap_or(Json::Null));
         }
         let changed =
             next.len() != self.boards.len() || next.iter().any(|(key, value)| self.boards.get(key) != Some(value));
@@ -703,10 +714,10 @@ impl AgentReportsReader {
             .entries
             .get(&format!("writers/{writer}/cards/{card_id}.json"))
             .and_then(|entry| entry.good.as_ref());
-        if let Some(held) = held {
-            if doc["seq"].as_u64().unwrap_or(0) < held.doc["seq"].as_u64().unwrap_or(0) {
-                return Ok(None);
-            }
+        if let Some(held) = held
+            && doc["seq"].as_u64().unwrap_or(0) < held.doc["seq"].as_u64().unwrap_or(0)
+        {
+            return Ok(None);
         }
         Ok(Some((doc, sha256)))
     }

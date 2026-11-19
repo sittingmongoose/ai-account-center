@@ -118,12 +118,11 @@ fn member_span(text: &str, key: &str) -> Option<(usize, usize)> {
             depth += 1;
         } else if c == b'}' || c == b']' {
             depth = depth.saturating_sub(1);
-            if depth == 1 {
-                if let Some((open, close)) = span {
-                    if close == usize::MAX {
-                        span = Some((open, i));
-                    }
-                }
+            if depth == 1
+                && let Some((open, close)) = span
+                && close == usize::MAX
+            {
+                span = Some((open, i));
             }
         }
         i += 1;
@@ -148,15 +147,10 @@ fn append_to_member(text: &str, span: (usize, usize), entries: &[NewEntry]) -> S
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
             .collect();
+        let indent = format!("{outer}  ");
         let body = entries
             .iter()
-            .map(|entry| {
-                format!(
-                    "{}{}",
-                    format!("{outer}  "),
-                    indented(&entry.wide, &format!("{outer}  "))
-                )
-            })
+            .map(|entry| format!("{indent}{}", indented(&entry.wide, &indent)))
             .collect::<Vec<_>>()
             .join(&format!(",{eol}"));
         return format!("{}{eol}{body}{eol}{outer}{}", &text[..open + 1], &text[close..]);
@@ -275,14 +269,14 @@ fn append_missing(
         });
         return false;
     }
-    if parse_catalog_file(name, &seed_bytes).is_err() {
+    if parse_catalog_file(name, seed_bytes).is_err() {
         failures.push(SeedFailure {
             file: name.to_string(),
             code: "invalid-seed".to_string(),
         });
         return false;
     }
-    let seed: Json = match serde_json::from_slice(&seed_bytes) {
+    let seed: Json = match serde_json::from_slice(seed_bytes) {
         Ok(seed) => seed,
         Err(_) => {
             failures.push(SeedFailure {

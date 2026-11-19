@@ -1617,8 +1617,6 @@ async fn serve_inner(
     // G16c: the producers of the fed Status generations (the owned Status group).
     let status_produce = match (&boot.owned, &answers_owned) {
         (Some(owned), Some(answers)) if owned.status => Some(crate::status_produce::Produce::new(
-            boot.ccs_dir.clone(),
-            owned.reports_root.clone(),
             feeds.clone(),
             Arc::clone(answers),
         )),

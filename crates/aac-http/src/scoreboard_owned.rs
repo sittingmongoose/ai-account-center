@@ -113,8 +113,10 @@ struct PreparedDocs {
     /// What compose reads of each row (`read_scoreboard::row_facts`).
     facts: Vec<aac_status::read_scoreboard::RowFacts>,
     /// Each doc's position in the newest order, per facts generation id (None: not provable).
-    order: Mutex<Option<(String, Option<Arc<Vec<usize>>>)>>,
+    order: Mutex<Option<PositionsByFacts>>,
 }
+
+type PositionsByFacts = (String, Option<Arc<Vec<usize>>>);
 
 impl PreparedDocs {
     /// The newest positions under this facts generation, made once per id.
@@ -647,7 +649,7 @@ impl ScoreboardOwned {
             identity,
             status_runs,
         });
-        if self.store_epoch.load(Ordering::SeqCst) == epoch && epoch % 2 == 0 {
+        if self.store_epoch.load(Ordering::SeqCst) == epoch && epoch.is_multiple_of(2) {
             *self.store_facts.lock().unwrap_or_else(|p| p.into_inner()) =
                 Some((epoch, facts.clone()));
         }
@@ -933,15 +935,15 @@ impl ScoreboardOwned {
         // The 60 s view cache: a hit fills only cacheAgeSeconds, as the TS service does.
         {
             let views = self.views.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(hit) = views.get(&cache_key) {
-                if now.saturating_sub(hit.at) < CACHE_MS {
-                    let mut view = hit.view.clone();
-                    view["cacheAgeSeconds"] = json!((now.saturating_sub(hit.at)) as f64 / 1000.0);
-                    let mut writer = Writer::with_capacity(64 * 1024);
-                    writer.value(&view);
-                    let (bytes, _) = writer.finish();
-                    return Ok((bytes, hit.etag.clone()));
-                }
+            if let Some(hit) = views.get(&cache_key)
+                && now.saturating_sub(hit.at) < CACHE_MS
+            {
+                let mut view = hit.view.clone();
+                view["cacheAgeSeconds"] = json!((now.saturating_sub(hit.at)) as f64 / 1000.0);
+                let mut writer = Writer::with_capacity(64 * 1024);
+                writer.value(&view);
+                let (bytes, _) = writer.finish();
+                return Ok((bytes, hit.etag.clone()));
             }
         }
         // One compose per view-cache key: a request that finds its key being composed (its

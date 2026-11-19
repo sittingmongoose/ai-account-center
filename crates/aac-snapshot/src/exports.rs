@@ -168,10 +168,10 @@ fn page(
     }
     if let Some(items) = member(&result, "series").as_array() {
         for item in items {
-            if member(member(item, "window"), "identity").as_str() == Some(window_identity) {
-                if let Some(item_points) = member(item, "points").as_array() {
-                    points.extend(item_points.iter().cloned());
-                }
+            if member(member(item, "window"), "identity").as_str() == Some(window_identity)
+                && let Some(item_points) = member(item, "points").as_array()
+            {
+                points.extend(item_points.iter().cloned());
             }
         }
     }

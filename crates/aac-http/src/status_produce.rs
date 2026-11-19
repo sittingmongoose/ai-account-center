@@ -44,7 +44,7 @@ use aac_status::share::status_docs::StatusDocsState;
 use aac_views::decline::Decline;
 use serde_json::{Map, Value as Json, json};
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -190,7 +190,6 @@ fn empty_reports() -> AgentReportsState {
 }
 
 pub(crate) struct Produce {
-    ccs: PathBuf,
     feeds: Feeds,
     answers: Arc<AnswersOwned>,
     inner: Mutex<Inner>,
@@ -198,14 +197,8 @@ pub(crate) struct Produce {
 }
 
 impl Produce {
-    pub(crate) fn new(
-        ccs: PathBuf,
-        _root: PathBuf,
-        feeds: Feeds,
-        answers: Arc<AnswersOwned>,
-    ) -> Arc<Self> {
+    pub(crate) fn new(feeds: Feeds, answers: Arc<AnswersOwned>) -> Arc<Self> {
         Arc::new(Self {
-            ccs,
             feeds,
             answers,
             inner: Mutex::new(Inner::new()),

@@ -21,10 +21,10 @@ fn num(value: Option<&Json>, field: &str) -> Valid<Option<f64>> {
 /// A 0..1 share of a period (`share`).
 fn share(value: Option<&Json>, field: &str) -> Valid<Option<f64>> {
     let n = num(value, field)?;
-    if let Some(n) = n {
-        if !(0.0..=1.0).contains(&n) {
-            return Err(fail(field));
-        }
+    if let Some(n) = n
+        && !(0.0..=1.0).contains(&n)
+    {
+        return Err(fail(field));
     }
     Ok(n)
 }
@@ -332,11 +332,11 @@ impl QuotaReportReader {
         self.problem = None;
         // An older write landing late: ignored.
         let seq = doc["seq"].as_u64().unwrap_or(0);
-        if let Some(good) = &self.good {
-            if seq < good.doc["seq"].as_u64().unwrap_or(0) {
-                self.scanned_at = Some(now);
-                return self.changed_since(before);
-            }
+        if let Some(good) = &self.good
+            && seq < good.doc["seq"].as_u64().unwrap_or(0)
+        {
+            self.scanned_at = Some(now);
+            return self.changed_since(before);
         }
         if self.good.as_ref().map(|good| good.sha256.as_str()) != Some(sha256.as_str()) {
             self.good = Some(QuotaGood {

@@ -70,23 +70,21 @@ impl Acc {
                         self.words.insert(rest.to_owned());
                     }
                 }
-                if ecma::iso_prefixed(text) {
-                    if let Some(ms) = ecma::parse_instant(text) {
-                        self.epochs.insert(text.clone(), ms);
-                        self.times.insert(ms);
-                    }
+                if ecma::iso_prefixed(text)
+                    && let Some(ms) = ecma::parse_instant(text)
+                {
+                    self.epochs.insert(text.clone(), ms);
+                    self.times.insert(ms);
                 }
             }
             Json::Number(number) => {
-                if let Some(n) = number.as_f64() {
-                    if n.fract() == 0.0
-                        && n >= 100_000_000_000.0
-                        && n <= 8_640_000_000_000_000.0
-                        && n.abs() <= 9_007_199_254_740_991.0
-                    {
-                        #[allow(clippy::cast_possible_truncation)]
-                        self.times.insert(n as i64);
-                    }
+                if let Some(n) = number.as_f64()
+                    && n.fract() == 0.0
+                    && (100_000_000_000.0..=8_640_000_000_000_000.0).contains(&n)
+                    && n.abs() <= 9_007_199_254_740_991.0
+                {
+                    #[allow(clippy::cast_possible_truncation)]
+                    self.times.insert(n as i64);
                 }
             }
             Json::Array(items) => {

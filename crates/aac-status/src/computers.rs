@@ -113,7 +113,7 @@ pub fn local_computer(host: &str, platform: &str) -> &'static str {
         _ => "linux",
     };
     match named_computer(host) {
-        Some(id) if computer(id).is_some_and(|row| row["os"] == Value::from(kind)) => id,
+        Some(id) if computer(id).is_some_and(|row| row["os"] == kind) => id,
         _ if kind == "linux" => "vm",
         _ => kind,
     }

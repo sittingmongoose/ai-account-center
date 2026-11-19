@@ -1009,7 +1009,7 @@ fn compose_core(
                 by_type.get(s(&task["id"])).map(Vec::as_slice).unwrap_or(&[]),
                 catalog,
                 &index,
-                &ctx,
+                ctx,
             )?,
         );
     }
@@ -1026,7 +1026,7 @@ fn compose_core(
         };
         let mut task_types = Vec::new();
         for task in wanted {
-            task_types.push(json!({"id":task["id"],"label":task["label"],"description":task["description"],"unit":task["unit"],"measures":task["measures"],"byProcess":task["byProcess"],"rows":judged_rows(bases.get(s(&task["id"]))?,task,usage,catalog,&ctx)?}));
+            task_types.push(json!({"id":task["id"],"label":task["label"],"description":task["description"],"unit":task["unit"],"measures":task["measures"],"byProcess":task["byProcess"],"rows":judged_rows(bases.get(s(&task["id"]))?,task,usage,catalog,ctx)?}));
         }
         uses.push(
             json!({"id":usage["id"],"label":usage["label"],"description":usage["description"],"taskTypes":task_types}),
@@ -1041,7 +1041,7 @@ fn compose_core(
         None => newest_order(docs, ctx),
     };
     let recent: Vec<&V> = newest.into_iter().take(20).map(|i| docs[i]).collect();
-    let mut view = json!({"version":1,"generatedAt":ctx.iso(Some(now)),"refresh":{"pollSeconds":60},"sources":[runs_source(&input,docs,no_model+no_type,&index,now,&ctx)?,catalog_source(&input,&missing_types,&missing_models,now,&ctx)?],"catalog":{"minRuns":catalog["minRuns"],"models":catalog["models"],"taskTypes":catalog["taskTypes"],"measures":catalog["measures"],"uses":catalog["uses"],"benchmarks":catalog["benchmarks"]},"uses":uses,"recent":recent.iter().map(|r|summary(r,models)).collect::<Vec<_>>(),"unscored":unscored});
+    let mut view = json!({"version":1,"generatedAt":ctx.iso(Some(now)),"refresh":{"pollSeconds":60},"sources":[runs_source(input,docs,no_model+no_type,&index,now,ctx)?,catalog_source(input,&missing_types,&missing_models,now,ctx)?],"catalog":{"minRuns":catalog["minRuns"],"models":catalog["models"],"taskTypes":catalog["taskTypes"],"measures":catalog["measures"],"uses":catalog["uses"],"benchmarks":catalog["benchmarks"]},"uses":uses,"recent":recent.iter().map(|r|summary(r,models)).collect::<Vec<_>>(),"unscored":unscored});
     if let Some(finish) = input.get("finish") {
         for key in ["filters", "identity", "history"] {
             view[key] = finish.get(key)?.clone();

@@ -89,6 +89,10 @@ impl Python {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the installer coordinates its job deadline, cancellation and progress"
+    )]
     pub(super) async fn install<F: Future<Output = ()>>(
         &self,
         app: &str,

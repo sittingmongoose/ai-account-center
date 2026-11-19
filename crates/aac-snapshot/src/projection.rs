@@ -259,10 +259,10 @@ fn clear_slug(value: &str) -> bool {
 fn profile_of(account: &Value) -> Option<String> {
     let capabilities = member(account, "capabilities");
     for key in ["codexProfile", "claudeProfileId", "antigravityProfileId"] {
-        if let Some(value) = member(capabilities, key).as_str() {
-            if profile_name(value) {
-                return Some(value.to_owned());
-            }
+        if let Some(value) = member(capabilities, key).as_str()
+            && profile_name(value)
+        {
+            return Some(value.to_owned());
         }
     }
     None
@@ -294,15 +294,15 @@ fn on_words(source: &str) -> String {
 /// label first), else the OS platform.
 fn quota_host(account: &Value) -> String {
     let host = member(account, "host");
-    if let Some(id) = host.as_str() {
-        if dashboard_hosts().contains(&id) {
-            return id.to_owned();
-        }
+    if let Some(id) = host.as_str()
+        && dashboard_hosts().contains(&id)
+    {
+        return id.to_owned();
     }
     let words = on_words(member(account, "source").as_str().unwrap_or(""));
     let mut hosts = dashboard_hosts();
     // Longest label first; ties keep registry order (a stable sort).
-    hosts.sort_by(|a, b| host_label(b).len().cmp(&host_label(a).len()));
+    hosts.sort_by_key(|host| std::cmp::Reverse(host_label(host).len()));
     for id in hosts {
         let label = host_label(id).to_lowercase();
         if words == label
@@ -544,10 +544,10 @@ pub fn project_agent_usage(
         let Some(account) = account_of(row, now) else {
             continue;
         };
-        if let Some(wanted) = provider {
-            if account.provider != wanted {
-                continue;
-            }
+        if let Some(wanted) = provider
+            && account.provider != wanted
+        {
+            continue;
         }
         if account.hidden && !include_hidden {
             continue;

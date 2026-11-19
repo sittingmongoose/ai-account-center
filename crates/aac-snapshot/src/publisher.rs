@@ -28,6 +28,12 @@ const STALL_LOG_MS: i64 = 5 * 60_000;
 /// The sign-in fetch waits at most this long inside a publish slot.
 const SIGNIN_FETCH_LIMIT_MS: u64 = 60_000;
 
+type SerialWrite = dyn Fn(&str, &str, &str) -> io::Result<()> + Send + Sync;
+type DirectoryCheck = dyn Fn(&str) -> io::Result<bool> + Send + Sync;
+type ClientSync = dyn Fn(&str) -> io::Result<()> + Send + Sync;
+type RollupRead = dyn Fn(&SampleEvent) -> Result<Option<(Value, Value)>, ()> + Send + Sync;
+type LogWarning = dyn Fn(&str, &str) + Send + Sync;
+
 /// The publisher's injectable effects, the TypeScript `SnapshotPublisherDeps` one for one.
 /// Every closure is synchronous; the sign-in fetch runs on its own thread under the 60-second
 /// limit, exactly as the TS promise race releases a fetch that never returns.
@@ -36,26 +42,25 @@ pub struct Deps {
     /// The saved setting, or None while no folder is configured.
     pub settings: Arc<dyn Fn() -> Option<SnapshotSettings> + Send + Sync>,
     /// The atomic share write.
-    pub write: Arc<dyn Fn(&str, &str, &str) -> io::Result<()> + Send + Sync>,
+    pub write: Arc<SerialWrite>,
     /// Whether the configured folder is a folder (an error fails the pass).
-    pub is_directory: Arc<dyn Fn(&str) -> io::Result<bool> + Send + Sync>,
+    pub is_directory: Arc<DirectoryCheck>,
     /// The dashboard's refresh interval in seconds.
     pub refresh_seconds: Arc<dyn Fn() -> f64 + Send + Sync>,
     /// Keeps the reader and runner files current in the folder.
-    pub sync_client: Arc<dyn Fn(&str) -> io::Result<()> + Send + Sync>,
+    pub sync_client: Arc<ClientSync>,
     /// The sign-in expiry rows; Err is a collection failure, not an empty result.
     pub sign_in: Arc<dyn Fn() -> Result<Vec<Value>, ()> + Send + Sync>,
     /// The renewal runner's summary, best effort.
     pub sign_in_renewal: Arc<dyn Fn() -> Option<Value> + Send + Sync>,
     /// The store's hourly and daily rollup files: Ok(None) without the store, Err retries next sample.
-    pub rollup_exports:
-        Arc<dyn Fn(&SampleEvent) -> Result<Option<(Value, Value)>, ()> + Send + Sync>,
+    pub rollup_exports: Arc<RollupRead>,
     /// The wall clock (`Date.now`).
     pub now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// The machine name a failed collection row names (`os.hostname`).
     pub hostname: Arc<dyn Fn() -> String + Send + Sync>,
     /// The dashboard log's warn lines: `write_stalled` and `write_failed`.
-    pub log: Arc<dyn Fn(&str, &str) + Send + Sync>,
+    pub log: Arc<LogWarning>,
 }
 
 /// The per-folder caches the pass keeps between samples. The service holds the guard opaquely
@@ -252,48 +257,48 @@ impl SnapshotPublisher {
             directory,
             crate::exports::export_hour(event.sampled_at)
         );
-        if inner.rollups_written.as_deref() != Some(hour_key.as_str()) {
-            if let Ok(files) = (deps.rollup_exports)(event) {
-                let mut landed = true;
-                if let Some((hourly, daily)) = files {
-                    if (deps.write)(
+        if inner.rollups_written.as_deref() != Some(hour_key.as_str())
+            && let Ok(files) = (deps.rollup_exports)(event)
+        {
+            let mut landed = true;
+            if let Some((hourly, daily)) = files {
+                if (deps.write)(
+                    directory,
+                    SNAPSHOT_HISTORY_HOURLY,
+                    &format!("{}\n", stringify(&hourly)),
+                )
+                .is_err()
+                {
+                    landed = false;
+                }
+                if landed
+                    && (deps.write)(
                         directory,
-                        SNAPSHOT_HISTORY_HOURLY,
-                        &format!("{}\n", stringify(&hourly)),
+                        SNAPSHOT_HISTORY_DAILY,
+                        &format!("{}\n", stringify(&daily)),
                     )
                     .is_err()
-                    {
-                        landed = false;
-                    }
-                    if landed
-                        && (deps.write)(
-                            directory,
-                            SNAPSHOT_HISTORY_DAILY,
-                            &format!("{}\n", stringify(&daily)),
-                        )
-                        .is_err()
-                    {
-                        landed = false;
-                    }
+                {
+                    landed = false;
                 }
-                if landed {
-                    inner.rollups_written = Some(hour_key);
-                }
+            }
+            if landed {
+                inner.rollups_written = Some(hour_key);
             }
         }
         // The setting can change without a restart, so this follows it; unchanged, it is not rewritten.
         let locations = render_snapshot_locations(&chosen.locations);
         let locations_key = format!("{}\n{}", directory, locations);
-        if inner.locations_written.as_deref() != Some(locations_key.as_str()) {
-            if (deps.write)(directory, SNAPSHOT_LOCATIONS, &locations).is_ok() {
-                inner.locations_written = Some(locations_key);
-            }
+        if inner.locations_written.as_deref() != Some(locations_key.as_str())
+            && (deps.write)(directory, SNAPSHOT_LOCATIONS, &locations).is_ok()
+        {
+            inner.locations_written = Some(locations_key);
         }
         // Once per folder and dashboard start; a failed copy is retried after the next sample.
-        if inner.client_synced.as_deref() != Some(directory.as_str()) {
-            if (deps.sync_client)(directory).is_ok() {
-                inner.client_synced = Some(directory.clone());
-            }
+        if inner.client_synced.as_deref() != Some(directory.as_str())
+            && (deps.sync_client)(directory).is_ok()
+        {
+            inner.client_synced = Some(directory.clone());
         }
         Ok(true)
     }
@@ -485,8 +490,7 @@ mod tests {
         let logs = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&logs);
         let mut d = deps(Arc::new(Mutex::new(Vec::new())));
-        d.is_directory =
-            Arc::new(|_| Err(io::Error::new(io::ErrorKind::Other, "stale file handle")));
+        d.is_directory = Arc::new(|_| Err(io::Error::other("stale file handle")));
         d.log = Arc::new(move |event, directory| {
             sink.lock()
                 .expect("logs")

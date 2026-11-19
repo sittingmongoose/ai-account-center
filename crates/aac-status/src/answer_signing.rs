@@ -138,7 +138,7 @@ fn read_key(file: &Path) -> Result<Option<SigningKey>, String> {
         Err(error) => return Err(error.to_string()),
     };
     let der = match pem_rfc7468::decode_vec(pem.as_bytes()) {
-        Ok((label, der)) if label == "PRIVATE KEY" => der,
+        Ok(("PRIVATE KEY", der)) => der,
         _ => return Ok(None),
     };
     // A well-formed key of another algorithm is an error, not a broken file (Node's check).

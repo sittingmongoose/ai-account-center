@@ -317,10 +317,10 @@ impl RenewalReader {
     /// The runner's latest published state in the folder, or None without one.
     pub fn read(&self, folder: Option<&Path>, now: i64) -> Option<Value> {
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((at, value)) = cache.as_ref() {
-            if now - at < CACHE_MS {
-                return value.clone();
-            }
+        if let Some((at, value)) = cache.as_ref()
+            && now - at < CACHE_MS
+        {
+            return value.clone();
         }
         let value = folder.and_then(|folder| {
             let text = read_renewal_file(&folder.join(RENEWAL_FILE))?;

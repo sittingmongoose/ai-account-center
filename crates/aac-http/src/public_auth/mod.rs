@@ -202,6 +202,10 @@ impl DashboardAuth {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the listener modes supply distinct optional runtime owners"
+    )]
     fn edges(
         &self,
         downstream: Router,
@@ -219,24 +223,21 @@ impl DashboardAuth {
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
             #[cfg(unix)]
-            if let Some(root) = cut_root {
-                if matches!(*request.method(), Method::GET | Method::HEAD)
-                    && matches!(
-                        request.uri().path(),
-                        "/api/accounts/settings" | "/api/accounts/settings/"
-                    )
-                {
-                    let session =
-                        request
-                            .extensions()
-                            .get::<DashboardAccess>()
-                            .is_some_and(|access| {
-                                matches!(access.principal, DashboardPrincipal::Browser { .. })
-                            });
-                    let head = request.method() == Method::HEAD;
-                    return native_reads::settings(root, session, request.uri().clone(), head)
-                        .await;
-                }
+            if let Some(root) = cut_root
+                && matches!(*request.method(), Method::GET | Method::HEAD)
+                && matches!(
+                    request.uri().path(),
+                    "/api/accounts/settings" | "/api/accounts/settings/"
+                )
+            {
+                let session = request
+                    .extensions()
+                    .get::<DashboardAccess>()
+                    .is_some_and(|access| {
+                        matches!(access.principal, DashboardPrincipal::Browser { .. })
+                    });
+                let head = request.method() == Method::HEAD;
+                return native_reads::settings(root, session, request.uri().clone(), head).await;
             }
             #[cfg(unix)]
             if let Some(native) = native_owners
@@ -247,13 +248,13 @@ impl DashboardAuth {
             {
                 return native.handle(request).await;
             }
-            if let Some(backend) = backend {
-                if api_path(&request.uri().path().to_ascii_lowercase()) {
-                    if !cut || compose::cut_route(request.method(), request.uri().path()) {
-                        return backend.forward(request).await;
-                    }
-                    return plain(404, "API endpoint was not found.");
+            if let Some(backend) = backend
+                && api_path(&request.uri().path().to_ascii_lowercase())
+            {
+                if !cut || compose::cut_route(request.method(), request.uri().path()) {
+                    return backend.forward(request).await;
                 }
+                return plain(404, "API endpoint was not found.");
             }
             let headers = request.headers();
             let session = (!api_path(&request.uri().path().to_ascii_lowercase()))

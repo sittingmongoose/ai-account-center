@@ -192,6 +192,7 @@ pub(crate) async fn jobs(owner: Arc<AnswersOwned>, stop: Arc<AtomicBool>) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

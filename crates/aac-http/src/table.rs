@@ -358,12 +358,6 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     || row.group != "writes"
                     || roles != [Role::Admin]
                     || row.path != "/api/accounts/preferences"))
-            // The TS route owns the deadline (a Claude source read takes seconds); the work is
-            // one blocking transaction that cannot stop halfway, so the row's budget is 0.
-            || (handler == Handler::ResetClaims
-                && (method != axum::http::Method::POST
-                    || row.path != "/internal/reset-claims"
-                    || row.budget_ms != 0))
             || (handler == Handler::WriteVisibility
                 && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
                     || row.group != "writes"
@@ -439,6 +433,18 @@ mod tests {
         assert_eq!(reset[0].path, "/internal/reset-claims");
         assert_eq!(reset[0].method, axum::http::Method::POST);
         assert_eq!(reset[0].pool, Pool::Reset);
+        assert_eq!(reset[0].budget_ms, 0);
+        for (path, handler) in [
+            ("/internal/collection/recheck", Handler::CollectionRecheck),
+            ("/internal/collection-signin-poll", Handler::SignInPoll),
+            ("/internal/status/answers", Handler::StatusAnswers),
+        ] {
+            assert!(
+                rows.iter()
+                    .any(|row| row.path == path && row.handler == handler && row.budget_ms == 0),
+                "{path} must keep its owner-managed budget",
+            );
+        }
         Ok(())
     }
 

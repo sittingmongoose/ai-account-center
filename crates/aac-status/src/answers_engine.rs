@@ -631,10 +631,7 @@ fn furthest(a: &StepState, b: &StepState) -> StepState {
 }
 
 fn step_from(record: &Json, before: &StepState) -> StepState {
-    let state = match str_of(record, "state") {
-        Some(s @ ("done" | "failed" | "skipped")) => s,
-        _ => "failed",
-    };
+    let state = str_of(record, "state").unwrap_or("failed");
     StepState {
         state: state.into(),
         at: str_of(record, "at").map(str::to_owned),
@@ -1203,11 +1200,11 @@ impl AnswersEngine {
             if !record.is_object() {
                 continue;
             }
-            if str_of(&record, "type") == Some("void") {
-                if let Some(id) = str_of(&record, "line") {
-                    voided.insert(id.to_owned());
-                    continue;
-                }
+            if str_of(&record, "type") == Some("void")
+                && let Some(id) = str_of(&record, "line")
+            {
+                voided.insert(id.to_owned());
+                continue;
             }
             records.push(record);
         }
@@ -1278,36 +1275,34 @@ impl AnswersEngine {
                     str_of(record, "entriesHash"),
                     index,
                     prior,
-                ) {
-                    if index.fract() == 0.0
-                        && index >= 0.0
-                        && (prior.len() as f64) <= index
-                        && prior.iter().all(is_entry_result)
-                    {
-                        let index = index as usize;
-                        let request = match requests.remove(client) {
-                            Some(known) if known.hash == hash => known,
-                            _ => Request {
-                                hash: hash.to_owned(),
-                                slots: Vec::new(),
-                            },
-                        };
-                        let mut request = request;
-                        if request.slots.len() <= index {
-                            request.slots.resize(index + 1, None);
-                        }
-                        for (k, result) in prior.iter().enumerate() {
-                            let slot = index - prior.len() + k;
-                            if request.slots[slot].is_none() {
-                                request.slots[slot] = Some(result.clone());
-                            }
-                        }
-                        request.slots[index] = Some(recorded_result(str_of(&entry.answer, "cardId")));
-                        let results: Vec<Json> = request.slots.iter().map_while(|s| s.clone()).collect();
-                        let hash = request.hash.clone();
-                        requests.insert(client.to_owned(), request);
-                        self.remember(client, at, results, Some(hash), true);
+                ) && index.fract() == 0.0
+                    && index >= 0.0
+                    && (prior.len() as f64) <= index
+                    && prior.iter().all(is_entry_result)
+                {
+                    let index = index as usize;
+                    let request = match requests.remove(client) {
+                        Some(known) if known.hash == hash => known,
+                        _ => Request {
+                            hash: hash.to_owned(),
+                            slots: Vec::new(),
+                        },
+                    };
+                    let mut request = request;
+                    if request.slots.len() <= index {
+                        request.slots.resize(index + 1, None);
                     }
+                    for (k, result) in prior.iter().enumerate() {
+                        let slot = index - prior.len() + k;
+                        if request.slots[slot].is_none() {
+                            request.slots[slot] = Some(result.clone());
+                        }
+                    }
+                    request.slots[index] = Some(recorded_result(str_of(&entry.answer, "cardId")));
+                    let results: Vec<Json> = request.slots.iter().map_while(|s| s.clone()).collect();
+                    let hash = request.hash.clone();
+                    requests.insert(client.to_owned(), request);
+                    self.remember(client, at, results, Some(hash), true);
                 }
                 entries.push(entry);
             } else if kind == Some("send") && str_of(record, "sendId").is_some() {
@@ -1386,10 +1381,7 @@ impl AnswersEngine {
             },
         );
         let now = self.now();
-        loop {
-            let Some((_, oldest)) = self.drafts.first() else {
-                break;
-            };
+        while let Some((_, oldest)) = self.drafts.first() {
             if self.drafts.len() <= MIN_REMEMBERED_ENTRIES || now - oldest.at < REMEMBER_ENTRY_MS {
                 break;
             }
@@ -2573,16 +2565,15 @@ impl AnswersEngine {
             (Some(client), Some(hash)) => self.replay_of(client, hash)?,
             _ => None,
         };
-        if let Some((results, partial)) = &replay {
-            if !partial || results.len() >= entries.len() {
-                return Ok(results.iter().take(entries.len()).cloned().collect());
-            }
+        if let Some((results, partial)) = &replay
+            && (!partial || results.len() >= entries.len())
+        {
+            return Ok(results.iter().take(entries.len()).cloned().collect());
         }
         let mut out: Vec<Json> = replay.map(|(results, _)| results).unwrap_or_default();
         let mut budget = Budget::start(self.timing.send_budget_ms);
         let mut last_stored: isize = out.len() as isize - 1;
-        for index in out.len()..entries.len() {
-            let raw = &entries[index];
+        for (index, raw) in entries.iter().enumerate().skip(out.len()) {
             let before = recorded.len();
             let request = match (client_send_id, entries_hash) {
                 (Some(client), Some(hash)) => Some(json!({

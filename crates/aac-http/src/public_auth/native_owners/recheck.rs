@@ -200,7 +200,7 @@ impl Usage {
         let (promoted, email) = if let Some(profile) = pending {
             match self
                 .recheck_pending(
-                    profile,
+                    *profile,
                     platform.unwrap_or_default(),
                     email.and_then(Value::as_str),
                 )
@@ -301,7 +301,7 @@ impl Usage {
 enum Other {
     Claude {
         label: String,
-        pending: Option<PendingProfile>,
+        pending: Option<Box<PendingProfile>>,
     },
     Unsupported,
 }
@@ -345,7 +345,7 @@ fn resolve_other(root: &Path, id: &str) -> Option<Other> {
         .find(|profile| profile.id == name)?;
     Some(Other::Claude {
         label: profile.label.clone().unwrap_or_else(|| profile.id.clone()),
-        pending: Some(profile),
+        pending: Some(Box::new(profile)),
     })
 }
 

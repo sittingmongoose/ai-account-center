@@ -145,7 +145,6 @@ fn base64_utf16le(text: &str) -> String {
 pub fn linux_cpu_times(line: Option<&str>) -> Option<CpuTimes> {
     let line = line?;
     let values: Vec<f64> = line
-        .trim()
         .split_whitespace()
         .map(|part| part.parse::<f64>().unwrap_or(f64::NAN))
         .collect();
@@ -234,10 +233,10 @@ fn math_round_clamp(value: f64, max: f64) -> i64 {
 pub fn parse_probe(host: HostOs, stdout: &str) -> Option<Sample> {
     let mut values = std::collections::HashMap::new();
     for line in stdout.split(['\r', '\n']) {
-        if let Some(at) = line.find('=') {
-            if at > 0 {
-                values.insert(line[..at].trim().to_owned(), line[at + 1..].trim().to_owned());
-            }
+        if let Some(at) = line.find('=')
+            && at > 0
+        {
+            values.insert(line[..at].trim().to_owned(), line[at + 1..].trim().to_owned());
         }
     }
     let n = |key: &str| -> Option<f64> {
@@ -332,7 +331,7 @@ pub fn busy_between(before: Option<CpuTimes>, after: Option<CpuTimes>) -> Option
     let ratio = (after.busy - before.busy) as f64 / total as f64;
     let percent = aac_num::ecma::math_round(ratio * 100.0);
     #[allow(clippy::cast_possible_truncation)]
-    Some((percent.max(0.0).min(100.0)) as i64)
+    Some((percent.clamp(0.0, 100.0)) as i64)
 }
 
 /// Which host a local read runs on, as `platform` reads: `linux`, `mac`, `windows`.
@@ -401,10 +400,10 @@ pub fn local_sample(reads: &LocalReads<'_>) -> Sample {
         if mem_total.is_none() || mem_avail.is_none() {
             memory_error = Some(MEMORY_ERROR.to_owned());
         }
-    } else if let Some(meminfo) = (reads.read_file)("/proc/meminfo") {
-        if let Some(available) = mem_available_from(&meminfo) {
-            mem_avail = Some(available);
-        }
+    } else if let Some(meminfo) = (reads.read_file)("/proc/meminfo")
+        && let Some(available) = mem_available_from(&meminfo)
+    {
+        mem_avail = Some(available);
     }
     if reads.platform == Platform::Linux {
         cpu_times = (reads.read_file)("/proc/stat")

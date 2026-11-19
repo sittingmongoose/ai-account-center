@@ -294,10 +294,10 @@ fn usage_provider_for(tool: &str, route: Option<&str>, model: Option<&str>) -> &
         return route_provider(Some(route)).unwrap_or("other");
     }
     let name = model.unwrap_or("").trim();
-    if let Some(slash) = name.find('/') {
-        if slash > 0 {
-            return route_provider(Some(&name[..slash])).unwrap_or("other");
-        }
+    if let Some(slash) = name.find('/')
+        && slash > 0
+    {
+        return route_provider(Some(&name[..slash])).unwrap_or("other");
     }
     "other"
 }
@@ -1257,10 +1257,10 @@ impl Accumulator {
         match parts {
             None => self.parts_known = false,
             Some(parts) => {
-                for index in 0..4 {
-                    let next = self.parts[index] + parts[index];
+                for (total, part) in self.parts.iter_mut().zip(parts) {
+                    let next = *total + part;
                     if next.is_finite() {
-                        self.parts[index] = next;
+                        *total = next;
                     } else {
                         self.parts_known = false;
                     }
@@ -1622,24 +1622,25 @@ fn detect_anomalies(days: &[(String, f64)], models: &[DayModelRow]) -> R<Value> 
         .map(|(date, cost)| (date.as_str(), *cost))
         .collect();
     for date in &dates {
-        if let Some(cost) = costs.get(date.as_str()) {
-            if average > 0.0 && *cost > spike_threshold {
-                let multiplier = ecma::math_round((cost / average) * 10.0) / 10.0;
-                items.push(json!({
-                    "date": date,
-                    "type": "cost_spike",
-                    "provider": Value::Null,
-                    "model": Value::Null,
-                    "value": js_num(*cost),
-                    "threshold": js_num(average),
-                    "message": format!(
-                        "Cost {}x above daily average (${} vs ${})",
-                        ecma::to_string(multiplier),
-                        ecma::to_string(ecma::math_round(*cost)),
-                        ecma::to_string(ecma::math_round(average))
-                    ),
-                }));
-            }
+        if let Some(cost) = costs.get(date.as_str())
+            && average > 0.0
+            && *cost > spike_threshold
+        {
+            let multiplier = ecma::math_round((cost / average) * 10.0) / 10.0;
+            items.push(json!({
+                "date": date,
+                "type": "cost_spike",
+                "provider": Value::Null,
+                "model": Value::Null,
+                "value": js_num(*cost),
+                "threshold": js_num(average),
+                "message": format!(
+                    "Cost {}x above daily average (${} vs ${})",
+                    ecma::to_string(multiplier),
+                    ecma::to_string(ecma::math_round(*cost)),
+                    ecma::to_string(ecma::math_round(average))
+                ),
+            }));
         }
         for row in models_by_date.get(date).map(Vec::as_slice).unwrap_or(&[]) {
             let input = row.totals.values[0];
@@ -2115,11 +2116,12 @@ fn project(
     // Per-day model rows: the twelve costliest named models keep their name.
     let mut model_cost: HashMap<String, f64> = HashMap::new();
     for (_, row) in day_models.entries() {
-        if let Some(model) = &row.model {
-            if model != OTHER_MODELS && row.quality == 0.0 {
-                let key = format!("{}\0{model}", row.provider);
-                *model_cost.entry(key).or_insert(0.0) += row.totals.values[4];
-            }
+        if let Some(model) = &row.model
+            && model != OTHER_MODELS
+            && row.quality == 0.0
+        {
+            let key = format!("{}\0{model}", row.provider);
+            *model_cost.entry(key).or_insert(0.0) += row.totals.values[4];
         }
     }
     let mut cost_entries: Vec<(String, f64)> = model_cost.into_iter().collect();
@@ -2169,11 +2171,11 @@ fn project(
                 Ordering::Equal => cmp_str(&a.provider, &b.provider),
                 order => Ok(order),
             })
-            .and_then(|order| match order {
-                Ordering::Equal => Ok(b.totals.values[4]
+            .map(|order| match order {
+                Ordering::Equal => b.totals.values[4]
                     .partial_cmp(&a.totals.values[4])
-                    .unwrap_or(Ordering::Equal)),
-                order => Ok(order),
+                    .unwrap_or(Ordering::Equal),
+                order => order,
             })
             .and_then(|order| match order {
                 Ordering::Equal => cmp_str(
@@ -2206,10 +2208,10 @@ fn project(
                     target.insert(key.clone(), value.clone());
                 }
             }
-            if row.quality != 0.0 {
-                if let Some(target) = out.as_object_mut() {
-                    target.insert("quality".into(), json!(quality_words(row.quality)));
-                }
+            if row.quality != 0.0
+                && let Some(target) = out.as_object_mut()
+            {
+                target.insert("quality".into(), json!(quality_words(row.quality)));
             }
             out
         })
@@ -2276,13 +2278,12 @@ fn project(
                 .map(Vec::as_slice)
                 .unwrap_or(&[])
             {
-                if let Some(name) = valid_model_name(Some(name)) {
-                    if !name.is_empty()
-                        && name != SYNTHETIC_MODEL_NAME
-                        && !models.iter().any(|m| m == name)
-                    {
-                        models.push(name.to_owned());
-                    }
+                if let Some(name) = valid_model_name(Some(name))
+                    && !name.is_empty()
+                    && name != SYNTHETIC_MODEL_NAME
+                    && !models.iter().any(|m| m == name)
+                {
+                    models.push(name.to_owned());
                 }
             }
         } else {
@@ -2348,11 +2349,11 @@ fn project(
                     Ordering::Equal => cmp_str(&a.provider, &b.provider),
                     order => Ok(order),
                 })
-                .and_then(|order| match order {
-                    Ordering::Equal => Ok(b.totals.values[4]
+                .map(|order| match order {
+                    Ordering::Equal => b.totals.values[4]
                         .partial_cmp(&a.totals.values[4])
-                        .unwrap_or(Ordering::Equal)),
-                    order => Ok(order),
+                        .unwrap_or(Ordering::Equal),
+                    order => order,
                 })
                 .and_then(|order| match order {
                     Ordering::Equal => cmp_str(
@@ -2383,7 +2384,8 @@ fn project(
         .collect();
     model_rows.sort_by(|a, b| {
         let token_total = |totals: &Accumulator| -> f64 { totals.values[..4].iter().sum() };
-        let order = b.totals.values[4]
+
+        b.totals.values[4]
             .partial_cmp(&a.totals.values[4])
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
@@ -2404,8 +2406,7 @@ fn project(
                     sort_err = Err(err);
                     Ordering::Equal
                 }
-            });
-        order
+            })
     });
     sort_err?;
     let models: Vec<Value> = model_rows

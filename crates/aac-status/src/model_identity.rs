@@ -84,7 +84,7 @@ pub fn normalize_model(
         }
     }
     // Longest first; equal lengths keep their order (the candidate count decides, not order).
-    suffixes.sort_by(|a, b| utf16_len(b).cmp(&utf16_len(a)));
+    suffixes.sort_by_key(|suffix| std::cmp::Reverse(utf16_len(suffix)));
     let mut candidates: Vec<Resolved> = Vec::new();
     for suffix in &suffixes {
         if !id.ends_with(suffix.as_str()) || utf16_len(id) <= utf16_len(suffix) {

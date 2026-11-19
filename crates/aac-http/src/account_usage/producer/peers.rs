@@ -273,6 +273,10 @@ impl Producer {
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the peer probe retains selected and fallback account bindings"
+    )]
     async fn try_peer(
         &self,
         source: &Source,
@@ -343,7 +347,7 @@ impl Producer {
         ) {
             return false;
         }
-        let Some(sampled) = measured(&reading, now) else {
+        let Some(sampled) = measured(reading, now) else {
             return false;
         };
         if measured(&state["saved"]["reading"], now).is_some_and(|old| old > sampled) {

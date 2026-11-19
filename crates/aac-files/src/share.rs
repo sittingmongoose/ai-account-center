@@ -25,8 +25,7 @@ pub fn write_atomically(directory: &Path, name: &str, body: &str, mode: u32) -> 
     let mut file = staged;
     file.as_file_mut().write_all(body.as_bytes())?;
     file.as_file_mut().flush()?;
-    file.persist(&target)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    file.persist(&target).map_err(io::Error::other)?;
     Ok(())
 }
 

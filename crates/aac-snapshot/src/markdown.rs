@@ -142,10 +142,10 @@ fn window_text(window: &Value, now: i64) -> String {
     {
         parts.push(format!("expires {}", utc(expires)));
     }
-    if member(window, "resetPassed") != &json!(true) {
-        if let Some(burn) = burn_text(member(window, "burn"), now, used_percent) {
-            parts.push(burn);
-        }
+    if member(window, "resetPassed") != &json!(true)
+        && let Some(burn) = burn_text(member(window, "burn"), now, used_percent)
+    {
+        parts.push(burn);
     }
     if parts.is_empty() {
         parts.push("no number reported".into());
@@ -325,18 +325,18 @@ fn render_sign_in_markdown(profiles: &[Value], now: i64) -> Vec<String> {
                     .map(|at| format!("renews by itself from {}", utc(at)))
                     .unwrap_or_else(|| "renews by itself".into()),
             );
-            if member(row, "lastResult").as_str() == Some("renewed") {
-                if let Some(at) = member(row, "lastRenewAt")
+            if member(row, "lastResult").as_str() == Some("renewed")
+                && let Some(at) = member(row, "lastRenewAt")
                     .as_str()
                     .filter(|s| !s.is_empty())
-                {
-                    parts.push(format!("last renewed {}", utc(at)));
-                }
+            {
+                parts.push(format!("last renewed {}", utc(at)));
             }
-            if let Some(result) = member(row, "lastResult").as_str() {
-                if result != "renewed" && !result.is_empty() {
-                    parts.push(format!("last attempt: {}", result.replace('_', " ")));
-                }
+            if let Some(result) = member(row, "lastResult").as_str()
+                && result != "renewed"
+                && !result.is_empty()
+            {
+                parts.push(format!("last attempt: {}", result.replace('_', " ")));
             }
             parts.join("; ")
         } else if state == "ok" {
@@ -525,11 +525,11 @@ pub fn render_snapshot_markdown(snapshot: &Value, sign_in_now: i64) -> String {
                 .unwrap_or("outcome_unknown");
             lines.push(format!("  - {}", cache_reason_words(reason)));
         }
-        if status == "ok" || status == "cached" {
-            if let Some(windows) = member(account, "windows").as_array() {
-                for window in windows {
-                    lines.push(format!("  - {}", window_text(window, now)));
-                }
+        if (status == "ok" || status == "cached")
+            && let Some(windows) = member(account, "windows").as_array()
+        {
+            for window in windows {
+                lines.push(format!("  - {}", window_text(window, now)));
             }
         }
         lines.push(String::new());

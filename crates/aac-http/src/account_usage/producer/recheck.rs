@@ -306,7 +306,7 @@ mod tests {
         );
         fs::write(
             root.join("account-usage-sources.json"),
-            br#"{"version":1,"sources":[{"provider":"bogus","platform":"ubuntu"}]}"#.to_vec(),
+            br#"{"version":1,"sources":[{"provider":"bogus","platform":"ubuntu"}]}"#,
         )
         .expect("manifest");
         fs::set_permissions(

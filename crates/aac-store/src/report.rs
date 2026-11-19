@@ -62,14 +62,14 @@ fn is_target(text: &str) -> bool {
         && text.len() <= 32
         && text
             .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'z').contains(&b) || b == b'-')
+            .all(|b: u8| b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'-')
 }
 
 fn is_fixed_cause(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= 64
-        && text.bytes().all(|b| {
-            b.is_ascii_digit() || (b'a'..=b'z').contains(&b) || b == b'_' || b == b':' || b == b'.' || b == b'-'
+        && text.bytes().all(|b: u8| {
+            b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'_' || b == b':' || b == b'.' || b == b'-'
         })
 }
 
@@ -88,7 +88,7 @@ pub fn cells_from_hourly(hourly: &[Value]) -> Vec<Value> {
                 + as_f64(&b["cacheCreationTokens"])
                 + as_f64(&b["cacheReadTokens"]);
             let cost = as_f64(&b["cost"]);
-            if !(tokens > 0.0) && !(cost > 0.0) {
+            if ![tokens, cost].into_iter().any(|value| value > 0.0) {
                 continue;
             }
             let events = if b["requestCount"].is_number() {
@@ -316,11 +316,11 @@ pub fn build_activity_reports(args: &ReportArgs<'_>) -> Vec<Value> {
         for entry in &data {
             if let Some(cells) = entry["cells"].as_array() {
                 read.extend(cells.iter().cloned());
-            } else if let Some(hourly) = entry["hourly"].as_array() {
-                if !hourly.is_empty() {
-                    derived = true;
-                    read.extend(cells_from_hourly(hourly));
-                }
+            } else if let Some(hourly) = entry["hourly"].as_array()
+                && !hourly.is_empty()
+            {
+                derived = true;
+                read.extend(cells_from_hourly(hourly));
             }
             if let Some(session) = entry["session"].as_array() {
                 session_rows.extend(session.iter().cloned());

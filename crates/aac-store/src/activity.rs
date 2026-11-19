@@ -2196,7 +2196,7 @@ pub fn models(engine: &Engine) -> Result<Json> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let dict = read.open_table(ACT_DICT)?;
-        let mut names = |kind: u8| -> Result<Vec<String>> {
+        let names = |kind: u8| -> Result<Vec<String>> {
             let lo = Key::new().u8(kind).u32(0);
             let hi = Key::new().u8(kind).u32(u32::MAX);
             let mut out = Vec::new();

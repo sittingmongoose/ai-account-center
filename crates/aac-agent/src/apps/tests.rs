@@ -26,7 +26,9 @@ impl Probe for FixtureProbe {
             "powershell.exe" if argv.iter().any(|item| item == "-EncodedCommand") => {
                 let bytes = STANDARD.decode(last).expect("base64 PowerShell script");
                 let text: Vec<_> = bytes
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
                     .collect();
                 let script = String::from_utf16(&text).expect("UTF-16 PowerShell script");

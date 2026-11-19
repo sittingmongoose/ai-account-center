@@ -95,7 +95,7 @@ fn text(value: Option<&Json>, max: usize) -> Option<String> {
 
 fn count(value: Option<&Json>) -> Option<u64> {
     let n = value?.as_f64()?;
-    (n.fract() == 0.0 && n >= 0.0 && n <= 9_007_199_254_740_991.0)
+    (n.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(&n))
         .then(|| u64::try_from(n as i64).ok())
         .flatten()
 }
@@ -177,7 +177,7 @@ fn report_v2(doc: &Json) -> Option<Json> {
             }
             stages.push(Json::Object(stage));
         }
-        if stages.len() < 2 || stages.iter().filter(|row| row["state"] == Json::from("now")).count() > 1 {
+        if stages.len() < 2 || stages.iter().filter(|row| row["state"] == "now").count() > 1 {
             return None;
         }
         out.insert("stages".to_owned(), Json::Array(stages));

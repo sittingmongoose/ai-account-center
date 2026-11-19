@@ -273,6 +273,10 @@ fn valid_scan_answer(answer: &Value, kinds: &[String]) -> bool {
 }
 
 /// The activity scheduler's pass: scan each configured computer, shape and ingest the reports.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the pass borrows its store, source and clock dependencies"
+)]
 async fn activity_pass(
     engine: &aac_store::engine::Engine,
     feeds: &Feeds,
@@ -425,19 +429,19 @@ async fn activity_pass(
     };
     let reports = report::build_activity_reports(&args);
     let (trimmed, remember) = guard.ingestor.trim(&reports);
-    if let Ok(typed) = report::contract_reports(&trimmed) {
-        if !typed.is_empty() {
-            match activity::ingest(engine, &typed) {
-                Ok(result) => {
-                    let refused: HashSet<usize> = result
-                        .refused
-                        .iter()
-                        .filter_map(|r| r["index"].as_u64().map(|i| i as usize))
-                        .collect();
-                    guard.ingestor.accept(remember, &refused);
-                }
-                Err(_) => guard.ingestor.forget(&remember),
+    if let Ok(typed) = report::contract_reports(&trimmed)
+        && !typed.is_empty()
+    {
+        match activity::ingest(engine, &typed) {
+            Ok(result) => {
+                let refused: HashSet<usize> = result
+                    .refused
+                    .iter()
+                    .filter_map(|r| r["index"].as_u64().map(|i| i as usize))
+                    .collect();
+                guard.ingestor.accept(remember, &refused);
             }
+            Err(_) => guard.ingestor.forget(&remember),
         }
     }
     guard.states = states;
@@ -449,13 +453,12 @@ async fn activity_pass(
 fn kinds_set(computers: &[Value]) -> HashSet<String> {
     let mut owned = HashSet::new();
     for computer in computers {
-        if computer["host"].as_str() == Some("ubuntu")
-            || computer["platform"].as_str() == Some("ubuntu")
+        if (computer["host"].as_str() == Some("ubuntu")
+            || computer["platform"].as_str() == Some("ubuntu"))
+            && let Some(kinds) = computer["kinds"].as_array()
         {
-            if let Some(kinds) = computer["kinds"].as_array() {
-                for kind in kinds.iter().filter_map(|v| v.as_str()) {
-                    owned.insert(kind.to_string());
-                }
+            for kind in kinds.iter().filter_map(|v| v.as_str()) {
+                owned.insert(kind.to_string());
             }
         }
     }
@@ -497,29 +500,27 @@ pub(crate) async fn analytics_jobs(
         let enabled = fed_json(&feeds, CONTROL)
             .and_then(|doc| doc["enabled"].as_bool())
             .unwrap_or(false);
-        if enabled {
-            if let Some(engine) = store.analytics_engine() {
-                let now = aac_store::engine::now_ms() as i64;
-                let refresh = refresh_seconds(&ccs_dir);
-                let interval = quota_interval_ms(refresh);
-                {
-                    let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
-                    if now - guard.last_quota_ms >= interval {
-                        quota_pass(&engine, &feeds, &ccs_dir, &mut guard, now);
-                    }
+        if enabled && let Some(engine) = store.analytics_engine() {
+            let now = aac_store::engine::now_ms() as i64;
+            let refresh = refresh_seconds(&ccs_dir);
+            let interval = quota_interval_ms(refresh);
+            {
+                let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
+                if now - guard.last_quota_ms >= interval {
+                    quota_pass(&engine, &feeds, &ccs_dir, &mut guard, now);
                 }
-                activity_pass(
-                    &engine,
-                    &feeds,
-                    &agents,
-                    &state,
-                    &ccs_dir,
-                    &models_dev,
-                    now,
-                    interval,
-                )
-                .await;
             }
+            activity_pass(
+                &engine,
+                &feeds,
+                &agents,
+                &state,
+                &ccs_dir,
+                &models_dev,
+                now,
+                interval,
+            )
+            .await;
         }
         tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
     }

@@ -156,8 +156,11 @@ pub struct HistorySeries {
     /// The amount unit.
     pub unit: Option<String>,
     /// Each point: [minute ISO, used percent, remaining amount, reset ISO or null].
-    pub points: Vec<(String, Option<f64>, Option<f64>, Option<String>)>,
+    pub points: Vec<HistoryPoint>,
 }
+
+/// A history point's time, used percentage, remaining amount and reset time.
+pub type HistoryPoint = (String, Option<f64>, Option<f64>, Option<String>);
 
 impl HistorySeries {
     /// The series as `history.json` writes it.
@@ -315,10 +318,10 @@ pub fn stored_boundaries(records: &[&Value], window: &Value, since: i64) -> Vec<
             if at < since {
                 continue;
             }
-            if let Some(reset) = date_parse(member(entry, "resetAt")) {
-                if !found.contains(&reset) {
-                    found.push(reset);
-                }
+            if let Some(reset) = date_parse(member(entry, "resetAt"))
+                && !found.contains(&reset)
+            {
+                found.push(reset);
             }
         }
     }
@@ -402,10 +405,10 @@ fn upcoming(reading: &Reading) -> bool {
 fn current_period(readings: &[Reading], extra_boundaries: &[i64]) -> Vec<Reading> {
     let mut boundaries: Vec<i64> = Vec::new();
     for reading in readings {
-        if let Some(reset) = reading.reset_at {
-            if !boundaries.contains(&reset) {
-                boundaries.push(reset);
-            }
+        if let Some(reset) = reading.reset_at
+            && !boundaries.contains(&reset)
+        {
+            boundaries.push(reset);
         }
     }
     for reset in extra_boundaries {
@@ -506,11 +509,11 @@ pub fn burn_rate(
         let latest_used = latest.used.unwrap_or(0.0);
         if latest_used >= 100.0 {
             projected_full_at = js::iso_of(latest.at);
-        } else if let Some(pace) = pace {
-            if pace >= MIN_PACE {
-                let full = latest.at as f64 + ((100.0 - latest_used) / pace) * HOUR_MS as f64;
-                projected_full_at = js::iso_of(full as i64);
-            }
+        } else if let Some(pace) = pace
+            && pace >= MIN_PACE
+        {
+            let full = latest.at as f64 + ((100.0 - latest_used) / pace) * HOUR_MS as f64;
+            projected_full_at = js::iso_of(full as i64);
         }
     }
     let reset = reset_at.and_then(js::date_parse_str);
@@ -572,11 +575,11 @@ pub fn usage_history(
         // current reading get a reading and a pace.
         let mut windows: IndexMap<String, Value> = IndexMap::new();
         for record in records {
-            if date_parse(member(record, "sampledAt")).is_some_and(|at| at >= since) {
-                if let Some(entries) = member(record, "windows").as_array() {
-                    for window in entries {
-                        windows.insert(crate::js::window_identity(window), window.clone());
-                    }
+            if date_parse(member(record, "sampledAt")).is_some_and(|at| at >= since)
+                && let Some(entries) = member(record, "windows").as_array()
+            {
+                for window in entries {
+                    windows.insert(crate::js::window_identity(window), window.clone());
                 }
             }
         }

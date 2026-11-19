@@ -126,20 +126,18 @@ pub fn record_deployed_build(
 ) -> io::Result<bool> {
     let Some(build) = build else { return Ok(false) };
     let file = ccs_dir.join(LEDGER);
-    if let Read::Bytes(bytes, _) = read::read(&file, &ReadPolicy::capped(MAX_FILE_BYTES)) {
-        if let Ok(Value::Object(previous)) = serde_json::from_slice::<Value>(&bytes) {
-            let same_commit =
-                previous.get("commit").and_then(Value::as_str) == Some(build.commit.as_str());
-            let same_dirty = previous.get("dirty").and_then(Value::as_bool) == Some(build.dirty);
-            let same_branch = match &build.branch {
-                Some(branch) => {
-                    previous.get("branch").and_then(Value::as_str) == Some(branch.as_str())
-                }
-                None => previous.get("branch") == Some(&Value::Null),
-            };
-            if same_commit && same_dirty && same_branch {
-                return Ok(true);
-            }
+    if let Read::Bytes(bytes, _) = read::read(&file, &ReadPolicy::capped(MAX_FILE_BYTES))
+        && let Ok(Value::Object(previous)) = serde_json::from_slice::<Value>(&bytes)
+    {
+        let same_commit =
+            previous.get("commit").and_then(Value::as_str) == Some(build.commit.as_str());
+        let same_dirty = previous.get("dirty").and_then(Value::as_bool) == Some(build.dirty);
+        let same_branch = match &build.branch {
+            Some(branch) => previous.get("branch").and_then(Value::as_str) == Some(branch.as_str()),
+            None => previous.get("branch") == Some(&Value::Null),
+        };
+        if same_commit && same_dirty && same_branch {
+            return Ok(true);
         }
     }
     let recorded_at = aac_num::ecma::to_iso_string(now_ms).ok_or_else(|| {
