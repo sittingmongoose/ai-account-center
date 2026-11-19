@@ -57,7 +57,13 @@ impl Producer {
         result
     }
 
-    async fn additional_row(&self, source: &Source, legacy: bool, now: i64, force: bool) -> Value {
+    pub(super) async fn additional_row(
+        &self,
+        source: &Source,
+        legacy: bool,
+        now: i64,
+        force: bool,
+    ) -> Value {
         let (host, name) = source_host(&source.platform, source.ssh_host.as_deref());
         let template = || rows::additional(source, &host, &name, None);
         if source.provider == "cursor"

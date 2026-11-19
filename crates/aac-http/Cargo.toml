@@ -62,6 +62,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 url = "2"
 
 [dev-dependencies]
+aac-renewal = { workspace = true, features = ["parity-fixtures"] }
 tempfile.workspace = true
 tokio-tungstenite = "0.29"
 

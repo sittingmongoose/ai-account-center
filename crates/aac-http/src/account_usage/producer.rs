@@ -3,6 +3,7 @@ mod claude;
 mod codex_local;
 mod history;
 mod peers;
+pub mod recheck;
 mod selection;
 
 use super::{AccountUsageCache, Desktop, dashboard, rows, sampler, sources};
@@ -41,12 +42,25 @@ pub struct CompanionInputs {
 #[derive(Clone)]
 pub struct Producer {
     root: PathBuf,
+    /// The service process home the renewal snapshot reads (`HOME` at boot).
+    home: Option<PathBuf>,
     agents: Arc<Agents>,
     collection: Arc<Collection>,
     owners: Owners,
     cursor: Arc<super::cursor::Reader>,
     visibility: Arc<Mutex<Value>>,
     active_identities: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+    /// Per-account forced refresh stamps for a single-row Re-check (the TS debounce).
+    recheck_forced: Arc<std::sync::Mutex<HashMap<String, i64>>>,
+    /// The renewal status the Codex rows read, cached for the TS status TTL (15 s).
+    renewal_status: Arc<
+        std::sync::Mutex<
+            Option<(
+                i64,
+                HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus>,
+            )>,
+        >,
+    >,
 }
 
 impl Producer {
@@ -65,13 +79,22 @@ impl Producer {
     ) -> Self {
         Self {
             root,
+            home: std::env::var_os("HOME").map(PathBuf::from),
             agents,
             collection,
             owners,
             cursor,
             visibility: Arc::new(Mutex::new(dashboard::empty_visibility())),
             active_identities: Arc::default(),
+            recheck_forced: Arc::default(),
+            renewal_status: Arc::default(),
         }
+    }
+
+    /// Point the renewal snapshot's homes at a fixture root (tests only).
+    pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
+        self.home = home;
+        self
     }
 
     async fn ask(
@@ -122,7 +145,8 @@ impl Producer {
             now,
             force,
         );
-        let codex = self.codex_rows(disk.codex, now);
+        let entries = self.renewal_entries(now).await;
+        let codex = self.codex_rows(disk.codex, &entries, now);
         let claude = self.claude_rows(&disk.claude_private, disk.refresh, now);
         let history = self.mac_history_rows(&disk.claude_private, now);
         let (additional, codex, claude, history) = tokio::join!(additional, codex, claude, history);
@@ -217,7 +241,69 @@ impl Producer {
         }
     }
 
-    async fn codex_rows(&self, profiles: Vec<SavedCodex>, now: i64) -> Vec<Value> {
+    /// The renewal status of every saved Codex login from local files only,
+    /// exactly as the TS dashboard reads it (a failed read yields no entries).
+    /// The snapshot scans the shared native login, the saved instances and the
+    /// custom `.codex*` and running-process homes, so notes derived from a
+    /// custom active home match the TS planner.
+    async fn renewal_entries(
+        &self,
+        now: i64,
+    ) -> HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus> {
+        const STATUS_TTL_MS: i64 = 15_000;
+        {
+            let held = self
+                .renewal_status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some((at, entries)) = held.as_ref() {
+                if now.saturating_sub(*at) < STATUS_TTL_MS {
+                    return entries.clone();
+                }
+            }
+        }
+        let root = self.root.clone();
+        let home = self.home.clone();
+        let entries: HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus> =
+            tokio::task::spawn_blocking(move || {
+                let mut env = aac_renewal::planner::CodexRenewalEnvironment {
+                    ccs_dir: root,
+                    ..Default::default()
+                };
+                if let Some(home) = &home {
+                    env.codex_home = Some(home.join(".codex"));
+                    env.home_dir = Some(home.clone());
+                }
+                let options = aac_renewal::renewal::CodexProfileRenewalOptions {
+                    env,
+                    ..Default::default()
+                };
+                aac_renewal::renewal::get_codex_profile_renewal_status(&options)
+                    .map(|status| {
+                        status
+                            .profiles
+                            .into_iter()
+                            .map(|entry| (entry.name.clone(), entry))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+        let mut held = self
+            .renewal_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        held.replace((now, entries.clone()));
+        entries
+    }
+
+    async fn codex_rows(
+        &self,
+        profiles: Vec<SavedCodex>,
+        entries: &HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus>,
+        now: i64,
+    ) -> Vec<Value> {
         use futures_util::{StreamExt, stream};
         if profiles.is_empty() {
             return vec![];
@@ -255,16 +341,20 @@ impl Producer {
             (profile.name, candidate, active)
         });
         let inventory = &inventory;
+        let entries = entries;
         stream::iter(requests)
             .map(move |(name, candidate, active)| async move {
-                let sample = match &candidate {
+                let (sample, failure) = match &candidate {
                     Some(candidate) => {
-                        self.read_primary(platform, None, "codex", candidate, now)
+                        self.read_primary_reply(platform, None, "codex", candidate, now)
                             .await
                     }
-                    None => None,
+                    None => (None, None),
                 };
+                // A rejected login is the TS reauth row, never the bare profile's
+                // local session fallback (that fallback is for an unreadable login).
                 let sample = if name == "default"
+                    && failure.as_deref() != Some("needs_sign_in")
                     && candidate.is_some()
                     && sample.as_ref().is_none_or(|reading| {
                         !matches!(
@@ -284,12 +374,16 @@ impl Producer {
                 };
                 let missing = format!("codex-profile:{name}");
                 let signed_out = inventory_complete(inventory, &missing) && candidate.is_none();
+                let needs_reauth =
+                    row_needs_reauth(signed_out, failure.as_deref(), sample.as_ref());
+                let note = renewal_row_note(entries, &name, active, needs_reauth, now);
                 rows::codex(
                     &name,
                     active,
-                    signed_out,
+                    needs_reauth,
                     candidate.as_ref(),
                     sample.as_ref(),
+                    note.as_ref(),
                 )
             })
             .buffered(3)
@@ -305,17 +399,39 @@ impl Producer {
         candidate: &Value,
         now: i64,
     ) -> Option<Value> {
-        let reply = self
+        self.read_primary_reply(platform, alias, provider, candidate, now)
+            .await
+            .0
+    }
+
+    /// The collect reply's sample and failure code for one candidate. A failed
+    /// read returns no sample; the code lets the Codex rows keep the TS
+    /// `needsReauth` status (`needs_sign_in`) that the helper reports without
+    /// inventing a reading.
+    async fn read_primary_reply(
+        &self,
+        platform: &str,
+        alias: Option<&str>,
+        provider: &str,
+        candidate: &Value,
+        now: i64,
+    ) -> (Option<Value>, Option<String>) {
+        let Some(reply) = self
             .attempt(platform, alias, provider, candidate, None, now)
-            .await?;
-        if confirmed(&reply, candidate) {
-            reply
-                .get("sample")
-                .filter(|sample| sample.is_object())
-                .cloned()
-        } else {
-            None
-        }
+            .await
+        else {
+            return (None, None);
+        };
+        let failure = reply["failureCode"].as_str().map(str::to_owned);
+        let sample = confirmed(&reply, candidate)
+            .then(|| {
+                reply
+                    .get("sample")
+                    .filter(|sample| sample.is_object())
+                    .cloned()
+            })
+            .flatten();
+        (sample, failure)
     }
 
     async fn lock_identities(
@@ -400,6 +516,32 @@ fn now_at_least(started: i64) -> i64 {
     UtcMs::now()
         .ok()
         .map_or(started, |now| started.max(now.get() as i64))
+}
+
+/// The TS row's own `needsReauth` flag: a parked profile (no readable login), a
+/// login OpenAI rejected (the helper reports a failure code with no sample), or
+/// a sample that already says so.
+fn row_needs_reauth(signed_out: bool, failure: Option<&str>, sample: Option<&Value>) -> bool {
+    signed_out
+        || failure == Some("needs_sign_in")
+        || sample.is_some_and(|reading| reading["status"] == "needs_sign_in")
+}
+
+/// The TS note decision for one Codex row: the entry exists, this profile is not
+/// the login Codex is using (Codex renews that itself), its source is not live,
+/// and its renewal state says something the row should show.
+fn renewal_row_note(
+    entries: &HashMap<String, aac_renewal::renewal::CodexProfileRenewalProfileStatus>,
+    name: &str,
+    active: bool,
+    needs_reauth: bool,
+    now: i64,
+) -> Option<aac_renewal::notes::CodexRenewalNote> {
+    entries
+        .get(name)
+        .filter(|_| !active)
+        .filter(|entry| entry.reason != aac_renewal::CodexRenewalReason::Live)
+        .and_then(|entry| aac_renewal::notes::codex_renewal_note(needs_reauth, entry, now))
 }
 
 fn identity_key(root: &Path, provider: &str, identity: &Value) -> String {
@@ -609,4 +751,191 @@ fn source_host(platform: &str, alias: Option<&str>) -> (String, String) {
     let host = known.map(|(id, _)| id.as_str()).unwrap_or(platform);
     let name = table[host]["label"].as_str().unwrap_or(platform);
     (host.into(), name.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aac_renewal::renewal::CodexProfileRenewalProfileStatus;
+    use aac_renewal::{CodexRenewalReason, CodexRenewalState};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn private_bytes(file: &Path, bytes: &[u8]) {
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent).expect("fixture folder");
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).expect("folder mode");
+        }
+        fs::write(file, bytes).expect("fixture file");
+        fs::set_permissions(file, fs::Permissions::from_mode(0o600)).expect("file mode");
+    }
+
+    fn state(word: &str) -> CodexRenewalState {
+        match word {
+            "ok" => CodexRenewalState::Ok,
+            "due" => CodexRenewalState::Due,
+            "renewing" => CodexRenewalState::Renewing,
+            "retrying" => CodexRenewalState::Retrying,
+            "failed" => CodexRenewalState::Failed,
+            _ => CodexRenewalState::Skipped,
+        }
+    }
+
+    #[test]
+    fn a_parked_or_rejected_login_keeps_the_ts_reauth_status() {
+        assert!(row_needs_reauth(true, None, None));
+        assert!(row_needs_reauth(false, Some("needs_sign_in"), None));
+        assert!(row_needs_reauth(
+            false,
+            None,
+            Some(&json!({"status":"needs_sign_in"}))
+        ));
+        assert!(!row_needs_reauth(false, Some("unavailable"), None));
+        assert!(!row_needs_reauth(
+            false,
+            None,
+            Some(&json!({"status":"cached"}))
+        ));
+    }
+
+    /// The TS `codexAccount` goldens: the renewal note overlay, the active-login
+    /// suppression and every status the native collector can produce. The TS
+    /// side is `tests/spec/codex-renewal-row-parity.ts`.
+    #[test]
+    fn codex_rows_match_the_ts_renewal_overlay() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/codex-renewal-rows.json"))
+                .expect("renewal row fixture parses");
+        assert_eq!(fixture["version"], 1);
+        let now = fixture["now"].as_i64().expect("fixture clock");
+        let cases = fixture["cases"].as_array().expect("fixture cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let input = &case["input"];
+            let name = input["name"].as_str().expect("profile name");
+            let active = input["active"].as_bool().expect("active flag");
+            let needs_reauth = !input["authValid"].as_bool().expect("auth flag")
+                || input["needsReauth"].as_bool().expect("reauth flag");
+            let mut entries = HashMap::new();
+            let note = match input["renewal"].as_object() {
+                None => None,
+                Some(entry) => {
+                    let reason =
+                        CodexRenewalReason::from_code(entry["reason"].as_str().expect("reason"))
+                            .expect("known renewal reason");
+                    entries.insert(
+                        name.to_owned(),
+                        CodexProfileRenewalProfileStatus {
+                            name: name.to_owned(),
+                            state: state(entry["state"].as_str().expect("state")),
+                            reason,
+                            message: reason.message(),
+                            last_renewed_at: None,
+                            last_attempt_at: None,
+                            last_outcome: None,
+                            next_attempt_at: None,
+                            access_expires_at: entry["accessExpiresAt"].as_str().map(str::to_owned),
+                        },
+                    );
+                    renewal_row_note(&entries, name, active, needs_reauth, now)
+                }
+            };
+            let sample = json!({
+                "status": if needs_reauth {
+                    "needs_sign_in"
+                } else if input["cached"] == true {
+                    "cached"
+                } else {
+                    "ok"
+                },
+                "usageSource": input["quotaSource"],
+                "windows": input["windows"],
+                "fetchedAt": input["fetchedAt"],
+                "sampledAt": input["sampledAt"],
+            });
+            let candidate = json!({"email": input["email"], "plan": input["plan"]});
+            let row = rows::codex(
+                name,
+                active,
+                needs_reauth,
+                Some(&candidate),
+                Some(&sample),
+                note.as_ref(),
+            );
+            assert_eq!(
+                aac_views::js_json::write(&row),
+                aac_views::js_json::write(&case["row"]),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    /// A saved login copied into a custom `.codex*` home is shared, exactly as the
+    /// TS planner reports it, and the collected row says why renewal leaves it
+    /// alone. The live login and an activated profile never get a note.
+    #[tokio::test]
+    async fn renewal_entries_read_custom_codex_homes_like_the_ts_planner() {
+        use aac_renewal::parity::{Account, LoginSpec, login_buffer};
+
+        let dir = tempfile::tempdir().expect("fixture root");
+        let ccs = dir.path().join(".ccs");
+        let home = dir.path().join("home");
+        let now = aac_core::UtcMs::now().expect("clock").get() as i64;
+        let day = 86_400_000;
+        let login = |account: &str, refresh: &str| LoginSpec {
+            account: Account::Word(account.into()),
+            refresh: refresh.into(),
+            label: account.into(),
+            session: Some(Some(format!("sess-{account}"))),
+            auth_time: None,
+            access_exp: Some(Some(now + 2 * day)),
+            last_refresh: None,
+            access_account_id: None,
+        };
+        let alpha = login("alpha", "refresh-alpha");
+        let bravo = login("bravo", "refresh-bravo");
+        private_bytes(
+            &ccs.join("codex-profiles.yaml"),
+            b"version: '1.0'\ndefault: null\nprofiles:\n  gmail:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n  party:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+        );
+        private_bytes(
+            &ccs.join("codex-instances/gmail/auth.json"),
+            &login_buffer(&alpha),
+        );
+        private_bytes(
+            &ccs.join("codex-instances/party/auth.json"),
+            &login_buffer(&bravo),
+        );
+        // Codex is using bravo; gmail's saved login also lives in a custom home.
+        private_bytes(&home.join(".codex/auth.json"), &login_buffer(&bravo));
+        private_bytes(
+            &home.join(".codex-t3/gmail/auth.json"),
+            &login_buffer(&alpha),
+        );
+        let owners = aac_files::registry::Owners::defaults(
+            aac_files::registry::rows().expect("bundled private files"),
+        );
+        let producer = Producer::new(ccs, owners).with_home(Some(home));
+        let entries = producer.renewal_entries(now).await;
+
+        assert_eq!(
+            entries["gmail"].reason,
+            CodexRenewalReason::SharedFamily,
+            "{entries:?}"
+        );
+        assert_eq!(entries["gmail"].state, CodexRenewalState::Skipped);
+        assert_eq!(entries["party"].reason, CodexRenewalReason::Live);
+        let note = renewal_row_note(&entries, "gmail", false, false, now)
+            .expect("a shared saved login names itself on its row");
+        assert_eq!(note.message, CodexRenewalReason::SharedFamily.message());
+        assert!(
+            renewal_row_note(&entries, "gmail", true, false, now).is_none(),
+            "the login Codex uses never gets a note"
+        );
+        assert!(
+            renewal_row_note(&entries, "party", false, false, now).is_none(),
+            "a live source never gets a note"
+        );
+    }
 }
