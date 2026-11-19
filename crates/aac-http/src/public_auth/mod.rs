@@ -909,6 +909,31 @@ mod tests {
             .into()
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn auth_accepts_a_legacy_private_group_root_and_bar_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let bar = root.join("bar");
+        std::fs::create_dir(&bar).unwrap();
+        std::fs::set_permissions(&bar, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let auth = DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).unwrap();
+        assert!(
+            auth.0
+                .runtime
+                .lock()
+                .unwrap()
+                .files
+                .bar_proof("0123456789abcdef")
+                .is_ok()
+        );
+        drop(auth);
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_err());
+    }
+
     #[test]
     fn public_auth_refuses_a_second_writer_and_a_typescript_session_owner() {
         let home = tempfile::tempdir().unwrap();

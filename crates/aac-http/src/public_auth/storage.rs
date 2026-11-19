@@ -1,6 +1,6 @@
 use super::policy::{Connection, Network};
 use aac_core::Failure;
-use aac_files::read::{Ancestors, Mode, Read, ReadPolicy};
+use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
 use aac_files::{OwnedStore, registry};
 use base64::{
     Engine,
@@ -143,14 +143,22 @@ impl Files {
     fn bytes(&self, name: &str, cap: u64, private: bool) -> Result<Option<Vec<u8>>, StoreError> {
         let mut policy = ReadPolicy::capped(cap).ancestors(Ancestors::NoLinkBelow(&self.root));
         if private {
-            policy = policy.mode(Mode::Private);
+            policy = policy.mode(Mode::Private).owner(Owner::Mine);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 let path = self.root.join(name);
                 let folder = path.parent().ok_or(StoreError)?;
                 let metadata = std::fs::symlink_metadata(folder).map_err(|_| StoreError)?;
-                if !metadata.is_dir() || metadata.permissions().mode() & 0o022 != 0 {
+                // TS may have created CCS_DIR and bar/ under Ubuntu's private-group umask.
+                // The secret leaves still have to be owner-only and the auth/ store has strict
+                // directory permissions.
+                let unsafe_bits = if matches!(name, SECRET | BAR) {
+                    0o002
+                } else {
+                    0o022
+                };
+                if !metadata.is_dir() || metadata.permissions().mode() & unsafe_bits != 0 {
                     return Err(StoreError);
                 }
             }
