@@ -275,6 +275,331 @@
       }
     }
   },
+  "contract/066-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status",
+      "role": "session"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "private, no-cache",
+        "etag": "<etag>",
+        "vary": "Cookie",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "version": 1,
+        "generatedAt": "<timestamp>",
+        "refresh": {
+          "pollSeconds": 30
+        },
+        "headline": {
+          "tone": "warn",
+          "runs": [
+            {
+              "text": "No questions for you"
+            },
+            {
+              "text": " · "
+            },
+            {
+              "text": "6 sources not current",
+              "tone": "warn"
+            }
+          ],
+          "counts": {
+            "openCards": 0,
+            "questions": 0,
+            "decisions": 0,
+            "blockedItems": 0,
+            "workingThreads": 0,
+            "staleSources": 6,
+            "loopingPinned": 0,
+            "waitingPinned": 0
+          },
+          "strip": {
+            "items": [
+              {
+                "key": "questions",
+                "section": "questions",
+                "value": "–",
+                "label": "questions for you",
+                "short": "questions",
+                "tone": "quiet",
+                "detail": "Questions for you are unknown: No agent reports folder at <fixture-home>\\reports."
+              },
+              {
+                "key": "pinned",
+                "value": "–",
+                "label": "pinned threads",
+                "short": "pinned",
+                "tone": "quiet",
+                "section": "pinned",
+                "detail": "Pinned threads are unavailable: the pinned threads have not been read yet."
+              },
+              {
+                "key": "sources",
+                "value": "6",
+                "label": "sources not current",
+                "short": "not current",
+                "tone": "warn",
+                "section": null,
+                "detail": "Not current: Agent reports: No agent reports folder at <fixture-home>\\reports; Machines: Waiting for the first reading; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample; Quota watch (estimates): No quota-watch report at v1/quota/report.json."
+              }
+            ],
+            "worst": null
+          }
+        },
+        "sources": [
+          {
+            "id": "agent-reports",
+            "label": "Agent reports",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 60,
+            "state": "missing",
+            "detail": "No agent reports folder at <fixture-home>\\reports."
+          },
+          {
+            "id": "pm-mail",
+            "label": "pm-mail registry",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 120,
+            "state": "ok",
+            "detail": "Read <clock>."
+          },
+          {
+            "id": "machines",
+            "label": "Machines",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "Waiting for the first reading."
+          },
+          {
+            "id": "browsers",
+            "label": "Browsers and recordings",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "Waiting for the first reading."
+          },
+          {
+            "id": "simlock",
+            "label": "Simlock",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "Waiting for the first reading."
+          },
+          {
+            "id": "usage",
+            "label": "Account usage",
+            "state": "missing",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": null,
+            "detail": "Waiting for the dashboard’s first account sample."
+          },
+          {
+            "id": "quota-watch",
+            "label": "Quota watch (estimates)",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 1800,
+            "state": "missing",
+            "detail": "No quota-watch report at v1/quota/report.json."
+          }
+        ],
+        "cards": {
+          "source": "agent-reports",
+          "open": [],
+          "answerHistoryProblem": null,
+          "answered": [],
+          "batches": [],
+          "complete": false
+        },
+        "pinned": {
+          "unavailable": "the pinned threads have not been read yet"
+        },
+        "spendByStream": {
+          "state": "unavailable",
+          "unavailable": "Spend by stream is unavailable: quota-watch has not written a report this server can read.",
+          "defaultPeriod": null,
+          "asOf": null,
+          "asOfText": null,
+          "periods": []
+        },
+        "projects": [],
+        "threads": {
+          "source": "agent-reports",
+          "also": [
+            "pm-mail"
+          ],
+          "rows": []
+        },
+        "machines": {
+          "source": "machines",
+          "also": [
+            "browsers"
+          ],
+          "rows": [
+            {
+              "id": "vm",
+              "label": "Ubuntu VM",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "mac",
+              "label": "Mac",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "windows",
+              "label": "Windows PC",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "nas1",
+              "label": "Nas1",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "alexis",
+              "label": "Alexis PC",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            }
+          ]
+        },
+        "simlock": {
+          "source": "simlock",
+          "capacity": [],
+          "leases": []
+        },
+        "usage": {
+          "source": "usage",
+          "warnings": [],
+          "accounts": []
+        },
+        "spend": {
+          "source": "quota-watch",
+          "estimate": true,
+          "asOf": null,
+          "generatedAt": null,
+          "writer": null,
+          "methodId": null,
+          "method": null,
+          "periods": [],
+          "budgets": [],
+          "unattributed": [],
+          "machinesNotScanned": [],
+          "overLimitBudgets": 0
+        }
+      }
+    }
+  },
   "contract/066-device.json": {
     "request": {
       "method": "GET",
@@ -291,6 +616,331 @@
       "body": {
         "error": "This action needs a signed-in dashboard session.",
         "code": "device_scope"
+      }
+    }
+  },
+  "contract/066-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status",
+      "role": "bar"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "private, no-cache",
+        "etag": "<etag>",
+        "vary": "Cookie",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "version": 1,
+        "generatedAt": "<timestamp>",
+        "refresh": {
+          "pollSeconds": 30
+        },
+        "headline": {
+          "tone": "warn",
+          "runs": [
+            {
+              "text": "No questions for you"
+            },
+            {
+              "text": " · "
+            },
+            {
+              "text": "6 sources not current",
+              "tone": "warn"
+            }
+          ],
+          "counts": {
+            "openCards": 0,
+            "questions": 0,
+            "decisions": 0,
+            "blockedItems": 0,
+            "workingThreads": 0,
+            "staleSources": 6,
+            "loopingPinned": 0,
+            "waitingPinned": 0
+          },
+          "strip": {
+            "items": [
+              {
+                "key": "questions",
+                "section": "questions",
+                "value": "–",
+                "label": "questions for you",
+                "short": "questions",
+                "tone": "quiet",
+                "detail": "Questions for you are unknown: No agent reports folder at <fixture-home>\\reports."
+              },
+              {
+                "key": "pinned",
+                "value": "–",
+                "label": "pinned threads",
+                "short": "pinned",
+                "tone": "quiet",
+                "section": "pinned",
+                "detail": "Pinned threads are unavailable: the pinned threads have not been read yet."
+              },
+              {
+                "key": "sources",
+                "value": "6",
+                "label": "sources not current",
+                "short": "not current",
+                "tone": "warn",
+                "section": null,
+                "detail": "Not current: Agent reports: No agent reports folder at <fixture-home>\\reports; Machines: Waiting for the first reading; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample; Quota watch (estimates): No quota-watch report at v1/quota/report.json."
+              }
+            ],
+            "worst": null
+          }
+        },
+        "sources": [
+          {
+            "id": "agent-reports",
+            "label": "Agent reports",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 60,
+            "state": "missing",
+            "detail": "No agent reports folder at <fixture-home>\\reports."
+          },
+          {
+            "id": "pm-mail",
+            "label": "pm-mail registry",
+            "asOf": "<timestamp>",
+            "ageSeconds": "<elapsed-seconds>",
+            "staleAfterSeconds": 120,
+            "state": "ok",
+            "detail": "Read <clock>."
+          },
+          {
+            "id": "machines",
+            "label": "Machines",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "Waiting for the first reading."
+          },
+          {
+            "id": "browsers",
+            "label": "Browsers and recordings",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "Waiting for the first reading."
+          },
+          {
+            "id": "simlock",
+            "label": "Simlock",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 180,
+            "state": "missing",
+            "detail": "Waiting for the first reading."
+          },
+          {
+            "id": "usage",
+            "label": "Account usage",
+            "state": "missing",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": null,
+            "detail": "Waiting for the dashboard’s first account sample."
+          },
+          {
+            "id": "quota-watch",
+            "label": "Quota watch (estimates)",
+            "asOf": null,
+            "ageSeconds": null,
+            "staleAfterSeconds": 1800,
+            "state": "missing",
+            "detail": "No quota-watch report at v1/quota/report.json."
+          }
+        ],
+        "cards": {
+          "source": "agent-reports",
+          "open": [],
+          "answerHistoryProblem": null,
+          "answered": [],
+          "batches": [],
+          "complete": false
+        },
+        "pinned": {
+          "unavailable": "the pinned threads have not been read yet"
+        },
+        "spendByStream": {
+          "state": "unavailable",
+          "unavailable": "Spend by stream is unavailable: quota-watch has not written a report this server can read.",
+          "defaultPeriod": null,
+          "asOf": null,
+          "asOfText": null,
+          "periods": []
+        },
+        "projects": [],
+        "threads": {
+          "source": "agent-reports",
+          "also": [
+            "pm-mail"
+          ],
+          "rows": []
+        },
+        "machines": {
+          "source": "machines",
+          "also": [
+            "browsers"
+          ],
+          "rows": [
+            {
+              "id": "vm",
+              "label": "Ubuntu VM",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "mac",
+              "label": "Mac",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "windows",
+              "label": "Windows PC",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "nas1",
+              "label": "Nas1",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "alexis",
+              "label": "Alexis PC",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            }
+          ]
+        },
+        "simlock": {
+          "source": "simlock",
+          "capacity": [],
+          "leases": []
+        },
+        "usage": {
+          "source": "usage",
+          "warnings": [],
+          "accounts": []
+        },
+        "spend": {
+          "source": "quota-watch",
+          "estimate": true,
+          "asOf": null,
+          "generatedAt": null,
+          "writer": null,
+          "methodId": null,
+          "method": null,
+          "periods": [],
+          "budgets": [],
+          "unattributed": [],
+          "machinesNotScanned": [],
+          "overLimitBudgets": 0
+        }
       }
     }
   },
