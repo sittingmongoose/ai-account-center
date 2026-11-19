@@ -1607,7 +1607,9 @@ export class StatusAnswers {
             (this.deps.doorbell ?? pmMailDoorbell())(
               group.to,
               ringSubject(records),
-              ringBody(group.sendId, records, (await this.answerKeyInfo()).keyId),
+              // Synchronous, as before the Rust signer: an await here would let the send return before
+              // its ring goes out. The id is the same key file's either way (proven interop).
+              ringBody(group.sendId, records, this.answerKey().keyId),
               Date.now() + this.timing.ringMs
             ),
             this.timing.ringMs,
