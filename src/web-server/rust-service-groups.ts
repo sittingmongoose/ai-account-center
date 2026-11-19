@@ -17,7 +17,8 @@ export type RustGroup =
   | 'analytics'
   | 'collection'
   | 'writes'
-  | 'app-updates';
+  | 'app-updates'
+  | 'renewal';
 
 /** The group's switch when neither the environment nor the config names it. */
 const DEFAULT: Record<RustGroup, boolean> = {
@@ -28,6 +29,7 @@ const DEFAULT: Record<RustGroup, boolean> = {
   collection: false,
   writes: false,
   'app-updates': false,
+  renewal: false,
 };
 
 export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {

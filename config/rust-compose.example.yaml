@@ -13,6 +13,7 @@ rustService:
     collection: on
     writes: on
     app-updates: on
+    renewal: on
 agentTransport: on
 agentVerbs: on
 agentVerbFamilies:

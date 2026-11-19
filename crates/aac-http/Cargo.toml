@@ -28,6 +28,7 @@ aac-providers.workspace = true
 aac-views.workspace = true
 aac-store.workspace = true
 aac-status.workspace = true
+aac-renewal.workspace = true
 base64 = "0.22"
 indexmap = "2.14.2"
 libc.workspace = true

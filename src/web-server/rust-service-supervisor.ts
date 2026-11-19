@@ -5,6 +5,7 @@
  */
 import fs from 'fs';
 import type http from 'http';
+import os from 'os';
 import path from 'path';
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 import { addEventLoopMonitorFields } from '../utils/event-loop-monitor';
@@ -19,12 +20,15 @@ import {
 } from './rust-service-lifecycle';
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
 import {
+  notifyRustRenewalGaveUp,
   notifyRustStoreGaveUp,
   openRustEvents,
   registerRustStoreConnection,
   requestRust,
   registerRustAgentConnection,
+  setRustRenewalHosted,
   setRustStoreHosted,
+  type RustRenewalBoot,
   type RustStoreBootInput,
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
@@ -110,6 +114,8 @@ export class RustSupervisor {
   private removeStoreConnection: (() => void) | null = null;
   /** R3: the store host's boot input, resolved once in `start`; null keeps the store in TS. */
   protected storeBoot: RustStoreBootInput | null = null;
+  /** G10: the renewal timer's boot input, resolved once in `start`; null keeps the timer in TS. */
+  protected renewalBoot: RustRenewalBoot | null = null;
   protected active = new Set<http.ClientRequest>();
   protected inFlight = 0;
   protected readonly shadowInFlight = new Map<string, number>();
@@ -166,6 +172,16 @@ export class RustSupervisor {
       if (transport !== 'on') return;
     }
     this.binary = binary;
+    // G10: the renewal timer's boot input, resolved once: its own group switch and mode on
+    // (no shadow for the one writer). Reserved before the first await, like the store, so
+    // the TS renewal service defers while the boot config is still loading.
+    if (this.mode === 'on' && rustGroupOn('renewal')) {
+      this.renewalBoot = {
+        codexHome: path.join(os.homedir(), '.codex'),
+        homeDir: os.homedir(),
+      };
+      setRustRenewalHosted(getCcsDir(), true);
+    }
     // R3: the store host's boot input, resolved once: its own switch, mode on (no shadow
     // for the one writer) and the store not disabled. Everything else keeps the store here.
     if (
@@ -217,7 +233,8 @@ export class RustSupervisor {
         this.active,
         this.acquisition.signal,
         this.storeBoot,
-        this.ownedBoot
+        this.ownedBoot,
+        this.renewalBoot
       );
       failure = result.failure;
       if (this.stopped) {
@@ -243,8 +260,11 @@ export class RustSupervisor {
       reason: failure ?? 'unhealthy',
     });
     if (failure === 'unhealthy' || failure === 'spawn') this.scheduleRestart();
-    // R3: no restart is coming for the other failures, so the store falls back at once.
-    else if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
+    // R3/G10: no restart is coming for the other failures, so the hosted jobs fall back at once.
+    else {
+      if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
+      if (this.renewalBoot) notifyRustRenewalGaveUp(getCcsDir());
+    }
   }
 
   stop(): void {
@@ -266,6 +286,7 @@ export class RustSupervisor {
     this.removeEvents?.();
     this.removeEvents = null;
     if (this.storeBoot) setRustStoreHosted(getCcsDir(), false);
+    if (this.renewalBoot) setRustRenewalHosted(getCcsDir(), false);
     this.lease?.close();
     this.lease = null;
   }
@@ -362,6 +383,8 @@ export class RustSupervisor {
       );
       // R3: the dead service released the store lock; TS opens it in process (design 1.3).
       if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
+      // G10: the dead service runs no renewal timer; TS takes it back.
+      if (this.renewalBoot) notifyRustRenewalGaveUp(getCcsDir());
       return;
     }
     const binary = this.binary;
@@ -375,7 +398,8 @@ export class RustSupervisor {
             this.active,
             this.acquisition.signal,
             this.storeBoot,
-            this.ownedBoot
+            this.ownedBoot,
+            this.renewalBoot
           );
           failure = result.failure;
           if (result.lease) {
