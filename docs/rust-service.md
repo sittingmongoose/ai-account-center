@@ -624,3 +624,59 @@ before opening the store. The internal store-method route retains the kernel
 single-writer lock and automatically rolls back to NAPI after five crashes.
 See [store.md, optional Rust store host](store.md#15-optional-rust-store-host-r3)
 for the method contract, caps, shutdown order, fixture drills and turn-on soak.
+
+## R4: owned Status and Scoreboard share readers
+
+`rustService.groups.status: on` **and** `rustService.store: on` under `mode: on` move the
+Status share readers into the service (`AAC_RUST_GROUP_STATUS`, `AAC_RUST_STORE` override);
+`rustService.groups.scoreboard: on` with the store host moves the Scoreboard owner
+(`AAC_RUST_GROUP_SCOREBOARD`). Without the store host the status group stays fed (R2) and the
+scoreboard group stays the envelope read: the report captures and the runs tables need the
+hosted writer. The boot carries `owned: {reportsRoot, registryDir, status, scoreboard}`; the
+service refuses owned flags without a store boot.
+
+- **Status** (`crates/aac-http/src/status_owned.rs`, readers in `aac-status::share`): one
+  blocking pass every 10 s scans the agent reports (thread/tasks/cards), the status documents
+  and the quota report; the pm-mail registry rides every third pass (30 s). The scans keep the
+  TypeScript readers' rules byte for byte — list first, stat then read only what changed, last
+  good copies with the fixed refusal words, `seq` ordering, the two-scan ENOENT/ESTALE rule,
+  the 120 s removal grace, the writer/card/byte limits, board stats — and apply the one secret
+  policy (`src/shared/secret-policy.json`, compiled as aac-store compiles it). Accepted report
+  revisions are captured into the hosted store in process (batch of four, per-row policy
+  retry). `GET /internal/status/inputs` answers `{generation, reports, quota, registry, docs}`;
+  the front door's StatusService forwards those snapshots as the R2 fed generations (the
+  request path, the composer and its cache stay the proven ones), recomposes pinned and
+  spend-by-stream over them, and pushes the merged pins as `owned-pins` for the check file.
+  Each new generation publishes `status-changed` on the event stream. Three failed input
+  fetches in a row restart the TypeScript share readers (they are stateless and catch up in
+  one cycle); the page keeps answering through today's handler meanwhile.
+- **Scoreboard** (`crates/aac-http/src/scoreboard_owned.rs`): the catalog seed at boot (the
+  packaged seeds embedded in the binary; a new file is admitted by hard link, an existing
+  models/aliases file gains only the packaged entries it lacks, in its own layout, re-read
+  before the rename), a catalog scan every 30 s, and the runs ingest pass every two minutes
+  (every second while a backfill has more, a full pass every fifteen): `runsScan` → the one
+  secret policy over paths and texts → `runsRecord`, exactly the TypeScript shuttle's filter.
+  `GET /api/scoreboard` with `x-aac-feed` answers from the store in process: the paged snapshot
+  read with its restart budget and last-complete-read fallback, `normalizeModel` docs over the
+  held catalog, `read_scoreboard::compose` with by-model and groups in process, the 60 s view
+  cache (a hit fills only `cacheAgeSeconds`), the revalidated-view ETag and `x-aac-view:
+  scoreboard@1`. The front door keeps the filter parse and auth, computes the presentation
+  facts once per (generation, catalog, zone) over `GET /internal/scoreboard/inputs` (the
+  unfiltered superset of every filter's rows) and pushes them as `scoreboard-facts`; any
+  decline is today's handler. `scoreboard-changed` carries each new generation.
+- **One readers-check writer** (`aac-status::share::check`, the registry row `readers-check`
+  `movesWith: status`): the status scan's rows and the Scoreboard's runs rows merge into one
+  file per writer, written through the registry's leased 0644 writer. The row flips only when
+  **both** owned groups run (one file, one writer); `catalog-seed` (`movesWith: scoreboard`)
+  flips with the scoreboard group. TypeScript's writers refuse a row they do not own.
+- **Parity**: `tests/spec/share-read-parity.ts` pins the real TypeScript readers' snapshots
+  over a scripted virtual share; `crates/aac-status/tests/share_parity.rs` replays it byte for
+  byte. `tests/spec/model-identity.json` (2016 cases) and `tests/spec/answer-signing.json`
+  pin the display resolution and the Ed25519 signer the same way.
+  `tests/spec/owned-read-parity.mjs` runs both front doors over identical fixture shares:
+  status and scoreboard answers equal up to the scan clocks, the owned path must serve,
+  `runsAudit` ingest parity, readers-check equality, and the kill drill.
+
+The answer signing port (`aac-status::answer_signing`, native verbs `answerKeyLoad`,
+`answerSign`, `answerVerify`) is the G16 producer lane's starting point; the answers service
+prefers it and falls back to the TypeScript signer without the module.
