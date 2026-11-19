@@ -41,10 +41,7 @@ describe('the registry rules', () => {
       'readers-check',
     ])
       expect(ids).toContain(id);
-    // Nothing has moved yet: TS writes every row on the dashboard host.
-    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts' && r.movesWith === null)).toBe(
-      true
-    );
+    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts')).toBe(true);
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {
@@ -79,6 +76,7 @@ describe('the registry rules', () => {
         fs.readFileSync(path.join(root, 'src/web-server/rust-service-routes.json'), 'utf8')
       ).map((r: { group: string }) => r.group)
     );
+    groups.add('public-auth');
     for (const row of files.PRIVATE_FILE_ROWS)
       if (row.movesWith !== null) expect(groups.has(row.movesWith)).toBe(true);
   });
@@ -197,13 +195,13 @@ describe('one writer per file', () => {
     expect(
       files.resolvePrivateFileOwners(rows, (g) => g === 'accounts')['account-visibility']
     ).toBe('rust-service');
-    // A row that moves with no group never leaves TS.
-    expect(files.resolvePrivateFileOwners(rows, () => true)['auth-state']).toBe('ts');
-    // The shipped registry: no row moves, whatever the service mode.
-    for (const owner of Object.values(
-      files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => true)
-    ))
-      expect(owner).toBe('ts');
+    const tcp = files.resolvePrivateFileOwners(rows, (group) => group === 'public-auth');
+    expect(tcp['usage-hub-key']).toBe('ts');
+    expect(tcp['auth-state']).toBe('rust-service');
+    expect(tcp['auth-sessions']).toBe('rust-service');
+    expect(tcp['auth-devices']).toBe('rust-service');
+    expect(tcp['auth-setup-code']).toBe('rust-service');
+    expect(files.resolvePrivateFileOwners(rows, () => false)['auth-state']).toBe('ts');
   });
 
   it('refuses every TS writer of a row the service owns, and writes nothing', async () => {
@@ -223,7 +221,7 @@ describe('one writer per file', () => {
     const writer = new readers.ReadersCheckWriter({ root: () => shareRoot });
     try {
       files.settlePrivateFileOwners(
-        () => true,
+        (group) => group !== 'public-auth',
         moved(['account-visibility', 'account-refresh-settings', 'account-keys', 'readers-check'])
       );
       await expect(visibility.writeAccountVisibility(ccs, empty)).rejects.toBeInstanceOf(
@@ -267,7 +265,9 @@ describe('one writer per file', () => {
       path.join(root, 'src/web-server/rust-service-supervisor.ts'),
       'utf8'
     );
-    expect(supervisor).toMatch(/settlePrivateFileOwners\(\(\) => this\.mode === 'on'\)/);
+    expect(supervisor).toMatch(
+      /settlePrivateFileOwners\(\(group\) => group !== 'public-auth' && this\.mode === 'on'\)/
+    );
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());
   });

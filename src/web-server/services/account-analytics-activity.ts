@@ -1,3 +1,4 @@
+import { broadcastDashboardEvent } from '../dashboard-events';
 import { ANALYTICS_TOOLS, isActivityKind } from '../usage/analytics-tools';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -292,6 +293,8 @@ export function coldScanningSourceStates(): AccountAnalyticsSource[] {
 }
 
 export interface AccountAnalyticsActivityDeps {
+  /** A fresh activity snapshot is available to readers. */
+  onPublished?: () => void;
   /** Dedicated oversized-file worker, independent of normal collection/response budgets. */
   largeCodexReader?: LargeCodexReader;
   largeCodexTimeoutMs?: number;
@@ -1552,6 +1555,7 @@ export class AccountAnalyticsActivityService {
       });
       void this.ingestor().submit(reports);
     }
+    this.deps.onPublished?.();
   }
 
   private ingestorInstance: ActivityIngestor | undefined;
@@ -2414,6 +2418,7 @@ export function getAccountAnalyticsActivity(
 function activityService(): AccountAnalyticsActivityService {
   service ??= new AccountAnalyticsActivityService({
     persistSnapshot: true,
+    onPublished: () => broadcastDashboardEvent({ type: 'analytics-changed' }),
     refreshPricing: startModelsDevRegistryRefresh,
     // The store lives under the default CCS folder only.
     historyStore: async () => (await openAacStore()).store,

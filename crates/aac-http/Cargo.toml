@@ -31,11 +31,25 @@ libc.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
 tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "ws"] }
 futures-util = { version = "0.3", default-features = false }
 sha2.workspace = true
+sha1 = "0.10"
 subtle = "2.6"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+bcrypt = "0.19"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+getrandom = "0.4"
+hmac = "0.13"
+if-addrs = "0.15"
+ipnet = "2"
+regex = { workspace = true, features = ["unicode-gencat"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde_yaml.workspace = true
+url = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio-tungstenite = "0.29"

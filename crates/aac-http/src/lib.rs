@@ -1,4 +1,5 @@
-//! Private Unix-socket HTTP service. The TS front door retains authentication and policy.
+//! Private Unix-socket HTTP service and opt-in M6 dashboard front door.
+pub mod public_auth;
 #[cfg(unix)]
 mod account_reads;
 #[cfg(unix)]

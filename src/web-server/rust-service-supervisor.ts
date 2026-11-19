@@ -117,8 +117,8 @@ export class RustSupervisor {
   ) {
     this.mode = rustServiceMode(mode);
     // L2: each registered private file's writer, resolved once at start and sent in the boot
-    // JSON. A row moves with its route group; the service has one mode for every group today.
-    settlePrivateFileOwners(() => this.mode === 'on');
+    // JSON. The private Unix service never takes the public front door's auth files.
+    settlePrivateFileOwners((group) => group !== 'public-auth' && this.mode === 'on');
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }
