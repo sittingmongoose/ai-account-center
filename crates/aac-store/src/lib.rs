@@ -21,6 +21,7 @@ pub mod observe;
 pub mod ops;
 pub mod pack;
 pub mod read_status;
+pub mod report;
 pub mod run_identity;
 pub mod run_schema;
 pub mod runs;
