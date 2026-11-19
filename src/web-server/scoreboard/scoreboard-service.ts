@@ -152,8 +152,8 @@ export class ScoreboardService {
   }
 
   /**
-   * Share only: every run read, no filters. The flag says the scan outlasted the wait, so the view
-   * holds only part of the share.
+   * Share only: every run read, no filters. The flag says either scan outlasted the wait, so the
+   * view holds only part of the share (runs, catalog, or both).
    */
   private async buildFromShare(
     composer?: ScoreboardComposer
@@ -184,7 +184,7 @@ export class ScoreboardService {
     const view = composer
       ? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)
       : await legacy();
-    return { view, partial: runs.partial === true };
+    return { view, partial: runs.partial === true || catalog.partial === true };
   }
 
   /** The store query of a filter: local days in the dashboard's zone. */
@@ -203,7 +203,7 @@ export class ScoreboardService {
   private async buildFromStore(
     filters: ScoreboardFilters,
     composer?: ScoreboardComposer
-  ): Promise<ScoreboardView> {
+  ): Promise<{ view: ScoreboardView; partial: boolean }> {
     await this.bounded(this.catalog.scan());
     const query = this.query(filters);
     const runs = await this.runsStore.state(query);
@@ -249,9 +249,11 @@ export class ScoreboardService {
     };
     const legacy = () =>
       this.finish({ ...buildScoreboardView(input), ...finish } as ScoreboardView);
-    return composer
-      ? composer.compose(input, { ...finish, native: this.native !== null }, legacy)
-      : legacy();
+    const view = composer
+      ? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)
+      : await legacy();
+    // The runs come from the store (complete); only the catalog scan can outlast the wait here.
+    return { view, partial: catalog.partial === true };
   }
 
   /** One ingest pass now, unless one ran within the cache time. Never rejects. */
@@ -281,9 +283,7 @@ export class ScoreboardService {
       // the share-only view, which says the filters are unavailable.
       building = (
         storeOn
-          ? this.buildFromStore(filters, composer)
-              .then((view) => ({ view, partial: false }))
-              .catch(() => this.buildFromShare(composer))
+          ? this.buildFromStore(filters, composer).catch(() => this.buildFromShare(composer))
           : this.buildFromShare(composer)
       )
         .then(({ view, partial }) => {

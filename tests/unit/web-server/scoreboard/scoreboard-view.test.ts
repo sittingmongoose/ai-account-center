@@ -18,7 +18,7 @@ import { ScoreboardService } from '../../../../src/web-server/scoreboard/scorebo
 import { nodeReaderFs } from '../../../../src/web-server/status/agent-reports-reader';
 import { run as projectRun } from '../../../../src/web-server/status/run-schema';
 import { NOW, tempDirs } from '../status/status-test-helpers';
-import { runDoc } from './scoreboard-test-helpers';
+import { runDoc, writeRun } from './scoreboard-test-helpers';
 
 const dirs = tempDirs();
 afterEach(() => dirs.cleanup());
@@ -888,7 +888,7 @@ describe('service', () => {
     const view = await service.view();
     expect(view.sources.map((source) => [source.state, source.detail])).toEqual([
       ['missing', 'Waiting for the first scan. The scan is still running; this view is partial.'],
-      ['missing', 'Waiting for the first scan.'],
+      ['missing', 'Waiting for the first scan. The scan is still running; this view is partial.'],
     ]);
     expect(view.uses).toEqual([]);
   });
@@ -927,6 +927,75 @@ describe('service', () => {
     expect(second.sources[0].detail).not.toContain('this view is partial');
     expect(second.cacheAgeSeconds).toBe(0);
     expect(second.recent.length).toBeGreaterThan(0);
+  });
+
+  it('a catalog scan that outlasts the wait marks the view partial and never caches it (M2)', async () => {
+    const root = dirs.make('ccs-scoreboard-');
+    writeScoreboardFixture(root, { now: NOW });
+    let now = NOW;
+    let gate: (() => void) | null = null;
+    const waiting = new Promise<void>((open) => {
+      gate = open;
+    });
+    // Only the catalog listing hangs; the runs scan finishes, so the first view has rows but no
+    // catalog. The bounded wait covers both readers, and the cache decision must too.
+    const slow: typeof nodeReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (path.basename(dir) === 'catalog') await waiting;
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const service = new ScoreboardService({
+      root: () => root,
+      now: () => now,
+      timeZone: () => 'UTC',
+      fs: slow,
+      scanWaitMs: 250,
+    });
+    const first = await service.view();
+    expect(first.recent.length).toBeGreaterThan(0);
+    expect(first.sources[1].detail).toContain('The scan is still running; this view is partial.');
+    // The catalog scan finishes; the next read rebuilds complete, not the cached partial view.
+    gate?.();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    now += 30_000; // inside the cache time: a wrongly cached partial view would be served here
+    const second = await service.view();
+    expect(second.sources[1].detail).not.toContain('this view is partial');
+    expect(second.cacheAgeSeconds).toBe(0);
+    expect(second.catalog.models.length).toBeGreaterThan(0);
+  });
+
+  it('the runs Source qualifies a provisional last-known count from a failed listing (M1)', async () => {
+    const root = dirs.make('ccs-scoreboard-');
+    writeRun(root, runDoc('vm.a', 'A'), '2026-11-06');
+    writeRun(root, runDoc('vm.a', 'B'), '2026-11-06');
+    let now = NOW;
+    let fail = false;
+    const flaky: typeof nodeReaderFs = {
+      ...nodeReaderFs,
+      readdir: async (dir) => {
+        if (fail && path.basename(dir) === '2026-11-06')
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        return nodeReaderFs.readdir(dir);
+      },
+    };
+    const catalog = new CatalogReader({ root: () => root, now: () => now, fs: flaky });
+    const reader = new RunsReader({ root: () => root, now: () => now, fs: flaky, limits: { runs: 1 } });
+    await Promise.all([catalog.scan(), reader.scan()]);
+    fail = true;
+    now += 60_000;
+    await reader.scan();
+    const view = buildScoreboardView({
+      now,
+      timeZone: 'UTC',
+      root,
+      catalog: catalog.snapshot(),
+      runs: reader.snapshot(),
+    });
+    expect(view.unscored.scanLimit).toBe(1);
+    expect(view.sources[0].detail).toContain('provisional last-known count');
+    expect(view.sources[0].detail).toContain('not a current count or a guaranteed lower bound');
   });
 
   it('shows a missing share as sources, never a crash', async () => {

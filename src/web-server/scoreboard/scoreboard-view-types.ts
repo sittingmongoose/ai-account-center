@@ -201,8 +201,10 @@ export interface UnscoredExample {
  * `scanLimit` and `unreadable` count run FILES, not runs: a run copied into several date folders
  * counts once per file past a scan cap (`RunsState.skipped.runFiles`: runs, writers or bytes, the
  * newest days kept) or refused (named in the runs Source, and refused in the readers check, with no
- * earlier good copy to score). Past the writer cap, and under a folder that could not be listed,
- * `scanLimit` is a lower bound (the runs Source says so). Every run the scan accepted has at most
+ * earlier good copy to score). Past the writer cap `scanLimit` is a lower bound; under a folder
+ * that could not be listed it is a provisional last-known count (`RunsState.provisionalRunFiles`),
+ * both qualified in the runs Source. The page's head names the unit the total counts (runs, run
+ * files, or both). Every run the scan accepted has at most
  * one reason, in this precedence: `no-model`, `no-task-type`, `unknown-model` (its model resolves
  * to no catalog id), `unknown-task-type` (its task type is not in the catalog). The six counts sum
  * to `total`. `unknownModels` names each raw unknown model id (sorted by runs desc, then id, at

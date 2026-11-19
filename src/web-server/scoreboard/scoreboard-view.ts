@@ -281,9 +281,9 @@ function unreadableRuns(runs: RunsState): number {
 
 /**
  * Run files past any scan cap (run files, writers or bytes) or under a folder this scan could not
- * list, from the reader's structured count. The newest days, and the writers with the newest run
- * dates, are kept; past the writer cap and under an unlistable folder the count is a lower bound.
- * The count is named in the runs Source.
+ * list, from the reader's structured count. The newest days, and the writers with the newest
+ * run-date folders, are kept; past the writer cap the count is a lower bound, and under an
+ * unlistable folder a provisional last-known count. The runs Source names and qualifies both.
  */
 function scanLimitRuns(runs: RunsState): number {
   return runs.skipped?.runFiles ?? 0;

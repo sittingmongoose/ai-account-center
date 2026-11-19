@@ -54,14 +54,20 @@ export class RunsReader {
   /** ENOENT or ESTALE on a folder listing: the race once, a named problem on the next scan too. */
   private readonly listingMisses = new TransientMisses();
   /**
-   * Run files per date folder at its last good listing: what a folder that cannot be listed now
-   * still holds that the reader has no copy of, so those runs stay counted as not read (a lower
-   * bound; the folder problem names why).
+   * The run-file identities (report paths) each date folder held at its last good listing. A folder
+   * that cannot be listed now still counts the files this lists that the reader has no copy or
+   * problem for, reconciled by identity so a grace-held copy of a different file never cancels a
+   * never-read one. A provisional last-known count (files added or removed since are unknown), not
+   * a current count or a guaranteed lower bound; the runs Source says so. Kept for every writer the
+   * writers listing still names, so a writer the cap pushes out keeps its known count for a later
+   * failed listing.
    */
-  private dateFileCounts = new Map<string, number>();
+  private dateFileIds = new Map<string, Set<string>>();
   private state: RunsState['state'] = 'missing';
   private scannedAt: number | null = null;
   private skipped = { runFiles: 0, writerFolders: 0 };
+  /** The part of `skipped.runFiles` counted from failed listings' last good identities (provisional). */
+  private provisionalRunFiles = 0;
   private scanning: Promise<void> | null = null;
 
   constructor(
@@ -158,8 +164,10 @@ export class RunsReader {
       .map((w) => w.name)
       .sort();
     // Every writer's `runs/` date folders: one listing per writer, whichever side of the writer cap
-    // it lands on, because writers rank by their newest run date — not by the `runs/` folder's
-    // mtime, which moves only when a new day starts (a dropped writer could hold newer runs).
+    // it lands on, because writers rank by their newest run-date folder — not by the `runs/` folder's
+    // mtime, which moves only when a new day starts (a dropped writer could hold newer runs). The
+    // folder may be empty: opening past-cap writers' date folders to prove a run supports the date
+    // would lift the listing bound, so the ranking is date-folder based and the cap reason says so.
     const datesOf = async (name: string): Promise<{ name: string; dates: string[] }> => {
       const writerRel = `writers/${name}`;
       const inWriter = await listing(path.join(writersDir, name), writerRel);
@@ -197,7 +205,7 @@ export class RunsReader {
     if (kept.length < ranked.length) {
       folderProblem(
         'limits/run-writers',
-        `${ranked.length - kept.length} writer folders past the limit of ${limits.writers} were not listed (the writers with the newest run dates are kept), so their run files are not read and not counted: the not-read run file count is a lower bound`
+        `${ranked.length - kept.length} writer folders past the limit of ${limits.writers} were not listed (writers rank by their newest run-date folder, which may be empty, so a newer empty date folder can outrank a writer with newer runs), so their run files are not read and not counted: the not-read run file count is a lower bound`
       );
       // A writer the cap pushed out was not listed, so its files leave at once, like a past-cap run
       // file, not after the grace period.
@@ -205,16 +213,20 @@ export class RunsReader {
         this.files.forgetUnder(`writers/${name}/`);
     }
     const candidates: Array<{ date: string; absolute: string; rel: string }> = [];
-    /** Run files listed in one date folder, remembered for a scan whose listing fails. */
-    const listedCounts = new Map<string, number>();
+    /** Run-file identities listed in one date folder, remembered for a scan whose listing fails. */
+    const listedIds = new Map<string, Set<string>>();
     // One writer's run files. Dates under one writer stay listed in order; writers run 16 at a time.
     const collectWriter = async (name: string, dates: string[]) => {
       const out: Array<{ date: string; absolute: string; rel: string }> = [];
       for (const date of dates) {
         const dateRel = `writers/${name}/runs/${date}`;
         const dateDir = path.join(writersDir, name, 'runs', date);
+        const entries = await listing(dateDir, dateRel);
+        // A failed listing keeps the folder's last-known identities (carried forward below); only
+        // a good listing refreshes them.
+        if (entries === null) continue;
         const files: Array<{ date: string; absolute: string; rel: string }> = [];
-        for (const file of (await listing(dateDir, dateRel)) ?? []) {
+        for (const file of entries) {
           if (file.name.startsWith('.') || !file.name.endsWith('.json')) continue;
           if (!runFileNameReadable(file.name)) continue;
           if (!file.isFile()) {
@@ -227,7 +239,7 @@ export class RunsReader {
             rel: `${dateRel}/${file.name}`,
           });
         }
-        listedCounts.set(dateRel, files.length);
+        listedIds.set(dateRel, new Set(files.map((file) => file.rel)));
         out.push(...files);
       }
       return out;
@@ -269,10 +281,20 @@ export class RunsReader {
         admitted.map((candidate) => this.files.visit(candidate.absolute, candidate.rel, seen))
       );
     }
+    // Carry forward every folder whose writer the writers listing still names (a writer the cap
+    // pushed out keeps its known count for a later failed listing), then refresh the folders this
+    // scan listed well. A writer gone from the listing leaves no folder behind.
+    const present = new Set(names);
+    const nextIds = new Map<string, Set<string>>();
+    for (const [folder, ids] of this.dateFileIds) {
+      const writer = folder.split('/')[1];
+      if (writer !== undefined && present.has(writer)) nextIds.set(folder, ids);
+    }
+    for (const [folder, ids] of listedIds) nextIds.set(folder, ids);
     // Runs under a folder this scan could not list: never read, so the files its last good listing
-    // held that the reader has neither a copy nor a problem for stay counted as not read — a lower
-    // bound (files added since that listing are unknown), with the folder problem naming why.
-    const nextCounts = new Map(listedCounts);
+    // named that the reader has neither a copy nor a problem for stay counted as not read. A
+    // provisional last-known count (files added or removed since are unknown), with the folder
+    // problem naming why and the runs Source qualifying the count.
     let unlistedRuns = 0;
     if (unlisted.size > 0) {
       const held = new Set<string>();
@@ -281,18 +303,18 @@ export class RunsReader {
       const folders = new Set<string>();
       for (const rel of unlisted) {
         const prefix = `${rel}/`;
-        for (const folder of this.dateFileCounts.keys())
-          if (folder.startsWith(prefix)) folders.add(folder);
+        for (const folder of nextIds.keys())
+          if (folder === rel || folder.startsWith(prefix)) folders.add(folder);
       }
       for (const folder of folders) {
-        const count = this.dateFileCounts.get(folder) ?? 0;
-        let stillHeld = 0;
-        for (const file of held) if (file.startsWith(`${folder}/`)) stillHeld += 1;
-        unlistedRuns += Math.max(0, count - stillHeld);
-        nextCounts.set(folder, count);
+        // Reconcile by identity: only a file the last good listing named that the reader still holds
+        // is already accounted for. A grace-held copy of a different file the listing no longer
+        // names never cancels a never-read one.
+        for (const file of nextIds.get(folder) ?? []) if (!held.has(file)) unlistedRuns += 1;
       }
     }
-    this.dateFileCounts = nextCounts;
+    this.dateFileIds = nextIds;
+    this.provisionalRunFiles = unlistedRuns;
     const skippedRunFiles = candidates.length - visited + unlistedRuns;
     if (visited < candidates.length)
       folderProblem(
@@ -325,6 +347,7 @@ export class RunsReader {
       state: this.state,
       // While a scan runs the runs are what it has read so far: the view marks that partial.
       ...(this.scanning !== null ? { partial: true } : {}),
+      ...(this.provisionalRunFiles > 0 ? { provisionalRunFiles: this.provisionalRunFiles } : {}),
       scannedAt: this.scannedAt,
       runs,
       writers: new Set(runs.map((run) => run.doc.writer)).size,
