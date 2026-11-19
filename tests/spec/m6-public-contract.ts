@@ -181,12 +181,27 @@ if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')
   });
 }
 
-function normalize(value: unknown, key = '', nativeStatus = false): unknown {
+function normalize(value: unknown, key = '', nativeRoute?: string): unknown {
   if (value === undefined) return value;
   if (key === 'etag') return '<etag>';
   if (key === 'x-ccs-bar-token') return '<bar-proof>';
   // Apply live-field normalization only when the native Status fixture is selected.
-  if (nativeStatus) {
+  if (nativeRoute) {
+    if (
+      nativeRoute === '/api/views/home' &&
+      key === 'commit' &&
+      typeof value === 'string' &&
+      /^[0-9a-f]{8}$/.test(value)
+    )
+      return '<build-commit>';
+    if (
+      nativeRoute === '/api/store/status' &&
+      key === 'lastSequence' &&
+      typeof value === 'number' &&
+      Number.isSafeInteger(value) &&
+      value >= 0
+    )
+      return '<checkpoint-sequence>';
     if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
     if (key === 'redbBytes' || key === 'redbStats') return null;
     if (key === 'instanceId' || key === 'integrity' || key === 'capture' || key === 'storageHealth')
@@ -213,17 +228,17 @@ function normalize(value: unknown, key = '', nativeStatus = false): unknown {
       .replace(/dev_[0-9a-f]{16}/g, '<device-id>')
       .replace(/aacd_[A-Za-z0-9_-]{43}/g, '<device-token>')
       .replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g, '<timestamp>');
-    if (nativeStatus)
+    if (nativeRoute)
       text = text
         .replace(/\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g, '<clock>')
         .replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g, '<day>');
     if (path.sep === '\\' && text.startsWith('<fixture-home>')) text = text.replaceAll('\\', '/');
     return text;
   }
-  if (Array.isArray(value)) return value.map((entry) => normalize(entry, '', nativeStatus));
+  if (Array.isArray(value)) return value.map((entry) => normalize(entry, '', nativeRoute));
   if (value && typeof value === 'object')
     return Object.fromEntries(
-      Object.entries(value).map(([field, child]) => [field, normalize(child, field, nativeStatus)])
+      Object.entries(value).map(([field, child]) => [field, normalize(child, field, nativeRoute)])
     );
   return value;
 }
@@ -405,7 +420,7 @@ try {
           mine && environment.AAC_RUST_CUT_NATIVE_ROUTES === 'on'
             ? overrides['native/contract/' + fixture]
             : undefined;
-        const nativeStatus = statusContract !== undefined;
+        const nativeRoute = statusContract === undefined ? undefined : route.path;
         const contract: Contract =
           (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
           statusContract ??
@@ -413,6 +428,9 @@ try {
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
         const { request } = contract;
         const expected = recordRegistryRow ? structuredClone(contract.response) : contract.response;
+        const expectedBody = nativeRoute
+          ? normalize(expected.body, '', nativeRoute)
+          : expected.body;
         if (recordRegistryRow) {
           const registry = expected.body as {
             providers: { id: string; signIn: { unavailableReason: string } }[];
@@ -471,7 +489,11 @@ try {
                 role,
                 ...(request.body === undefined ? {} : { body: request.body }),
               },
-              response: { status, headers: normalize(selected), body: normalize(body, '', true) },
+              response: {
+                status,
+                headers: normalize(selected),
+                body: normalize(body, '', route.path),
+              },
             } as Contract;
             counts.match++;
             continue;
@@ -485,9 +507,9 @@ try {
         const actual =
           request.method === 'UPGRADE'
             ? { status }
-            : { status, headers: normalize(selected), body: normalize(body, '', nativeStatus) };
+            : { status, headers: normalize(selected), body: normalize(body, '', nativeRoute) };
         try {
-          assert.deepEqual(actual, expected);
+          assert.deepEqual(actual, nativeRoute ? { ...expected, body: expectedBody } : expected);
           if (recordRegistryRow)
             registryRecords['contract/' + fixture] = {
               request,
@@ -499,7 +521,7 @@ try {
         } catch {
           const fields = [
             status !== expected.status ? `status ${status}/${expected.status}` : '',
-            isDeepStrictEqual(normalize(body, '', nativeStatus), expected.body) ? '' : 'body',
+            isDeepStrictEqual(normalize(body, '', nativeRoute), expectedBody) ? '' : 'body',
             ...expectedHeaders.filter(
               (key) =>
                 normalize(selected?.[key], key) !== expected.headers?.[key] &&
@@ -513,8 +535,8 @@ try {
                 fixture +
                 ' ' +
                 JSON.stringify({
-                  actual: normalize(body, '', nativeStatus),
-                  expected: expected.body,
+                  actual: normalize(body, '', nativeRoute),
+                  expected: expectedBody,
                 })
             );
           }
