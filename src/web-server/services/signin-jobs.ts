@@ -223,7 +223,9 @@ export class SignInJobRunner {
     record.native = native;
     const dispatched = native.start(record.job.id, record.spec, command, (job) => {
       if (record.finishedAt !== null || record.job.state !== 'starting') return;
-      record.job.verification = job.verification ? { ...job.verification } : null;
+      record.job.verification = job.verification
+        ? { ...job.verification, expiresAt: record.job.expiresAt }
+        : null;
       this.update(record, job.state);
     });
     record.busy = dispatched;
