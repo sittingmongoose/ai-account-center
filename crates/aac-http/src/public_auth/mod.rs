@@ -116,6 +116,25 @@ pub struct DashboardAccess {
     client_address: Option<String>,
 }
 
+impl DashboardAccess {
+    /// The verified principal the private service's route table adjudicates. The host hop
+    /// carries this exactly as the TypeScript front door carried its own.
+    #[cfg(unix)]
+    pub(super) fn host_principal(&self) -> String {
+        let (kind, role, id) = match &self.principal {
+            DashboardPrincipal::Browser { .. } => (
+                "session",
+                "admin",
+                self.session_id.as_deref().unwrap_or("dashboard"),
+            ),
+            DashboardPrincipal::Device { id, .. } => ("device", "device", id.as_str()),
+            DashboardPrincipal::Hub => ("hub", "hub", "hub"),
+            DashboardPrincipal::Anonymous => ("session", "admin", "dashboard"),
+        };
+        json!({"kind":kind,"id":id,"role":role}).to_string()
+    }
+}
+
 /// Browser or tray identity admitted from a real session cookie or bearer token.
 #[derive(Clone)]
 pub enum DashboardPrincipal {
@@ -479,6 +498,12 @@ pub(crate) async fn run_public_at(
     } else {
         (None, None)
     };
+    let composed = backend.is_some();
+    // The one owner host (AAC_RUST_CUT_NATIVE_ROUTES=on): the running service's descriptor, or
+    // the same service in-process for a worker-less cut boot. Groups register on top of it.
+    #[cfg(unix)]
+    let owner_host =
+        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     // The profile routes and the app-update jobs run on both platforms; the worker's copies of
     // both leave the allowlist in the same cut.
     let (profiles, app_updates) = if cut {
@@ -490,28 +515,50 @@ pub(crate) async fn run_public_at(
         #[cfg(not(unix))]
         let rows: profile_routes::RowsSource = Arc::new(Vec::new);
         (
-            Some(profile_routes::Profiles::start(
-                root.clone(),
-                rows,
-                Arc::clone(&agents),
-            )),
-            Some(app_updates_owner::Owner::start(
-                root.clone(),
-                auth.events(),
-                Arc::clone(&agents),
-            )),
+            Some({
+                #[cfg(unix)]
+                let profiles = match &owner_host {
+                    Some(host) => profile_routes::Profiles::start_with_host(
+                        root.clone(),
+                        rows,
+                        Arc::clone(&agents),
+                        Arc::clone(host),
+                    ),
+                    None => profile_routes::Profiles::start(root.clone(), rows, Arc::clone(&agents)),
+                };
+                #[cfg(not(unix))]
+                let profiles = profile_routes::Profiles::start(root.clone(), rows, Arc::clone(&agents));
+                profiles
+            }),
+            Some({
+                #[cfg(unix)]
+                let app_updates = match &owner_host {
+                    Some(host) => app_updates_owner::Owner::start_with_host(
+                        root.clone(),
+                        auth.events(),
+                        Arc::clone(&agents),
+                        Arc::clone(host),
+                    ),
+                    None => app_updates_owner::Owner::start(
+                        root.clone(),
+                        auth.events(),
+                        Arc::clone(&agents),
+                    ),
+                };
+                #[cfg(not(unix))]
+                let app_updates = app_updates_owner::Owner::start(
+                    root.clone(),
+                    auth.events(),
+                    Arc::clone(&agents),
+                );
+                app_updates
+            }),
         )
     } else {
         (None, None)
     };
     #[cfg(unix)]
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
-    let composed = backend.is_some();
-    // The one owner host (AAC_RUST_CUT_NATIVE_ROUTES=on): the running service's descriptor, or
-    // the same service in-process for a worker-less cut boot. Groups register on top of it.
-    #[cfg(unix)]
-    let owner_host =
-        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let mut api = Router::new();
     if cut || !composed {
         api = api.route(

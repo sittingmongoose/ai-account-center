@@ -53,6 +53,9 @@ pub(super) struct Profiles {
     open: Arc<ClaudeOpen>,
     agents: Arc<Agents>,
     rows: RowsSource,
+    /// The one owner host when this boot answers its groups through it.
+    #[cfg(unix)]
+    host: Option<Arc<super::owner_host::OwnerHost>>,
 }
 
 /// One profile's history read: the reference's three states.
@@ -82,7 +85,52 @@ impl Profiles {
             open,
             agents,
             rows,
+            #[cfg(unix)]
+            host: None,
         }
+    }
+
+    /// The owner for one boot that answers through the shared host.
+    #[cfg(unix)]
+    pub(super) fn start_with_host(
+        root: PathBuf,
+        rows: RowsSource,
+        agents: Arc<Agents>,
+        host: Arc<super::owner_host::OwnerHost>,
+    ) -> Self {
+        Self {
+            host: Some(host),
+            ..Self::start(root, rows, agents)
+        }
+    }
+
+    /// Ask the one owner host; `None` is no owner or an explicit service decline (answer the
+    /// route yourself).
+    #[cfg(unix)]
+    async fn host_request(
+        &self,
+        method: &str,
+        uri: &str,
+        principal: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+    ) -> Option<super::service_link::ServiceReply> {
+        let host = self.host.as_ref()?;
+        let reply = host.request(method, uri, principal, headers, body).await?;
+        (reply.status != 503 || reply.headers.get("x-aac-decline").is_none()).then_some(reply)
+    }
+
+    /// Relay one service JSON reply with the public route's own ETag and cache headers.
+    #[cfg(unix)]
+    fn relay(reply: super::service_link::ServiceReply, no_store: bool) -> Reply {
+        let Ok(value) = serde_json::from_slice::<Value>(&reply.body) else {
+            return super::plain(502, "The service reply could not be read.");
+        };
+        let mut out = super::response(reply.status, value);
+        if no_store {
+            super::set_header(&mut out, "cache-control", "no-store");
+        }
+        out
     }
 
     /// Whether this owner answers the request. Dynamic Open ids are decoded later; the shape
@@ -125,15 +173,17 @@ impl Profiles {
                 self.cleanup(&access, request).await
             }
             (Method::POST, _) => self.open(&access, request).await,
-            (Method::GET | Method::HEAD, "/api/codex/profiles") => self.codex_profiles(&access),
+            (Method::GET | Method::HEAD, "/api/codex/profiles") => {
+                self.codex_profiles(&access).await
+            }
             (Method::GET | Method::HEAD, "/api/codex/profiles/quotas") => {
                 self.codex_quotas(&access).await
             }
             (Method::GET | Method::HEAD, "/api/antigravity/profiles") => {
-                self.antigravity_profiles(&access, &uri)
+                self.antigravity_profiles(&access, &uri).await
             }
             (Method::GET | Method::HEAD, "/api/antigravity/profiles/quotas") => {
-                self.antigravity_quotas(&access, &uri)
+                self.antigravity_quotas(&access, &uri).await
             }
             _ => super::plain(404, "API endpoint was not found."),
         }
@@ -142,6 +192,19 @@ impl Profiles {
     async fn desktop_profiles(&self, access: &DashboardAccess) -> Reply {
         if let Some(reply) = session_guard(access) {
             return reply;
+        }
+        #[cfg(unix)]
+        if let Some(reply) = self
+            .host_request(
+                "GET",
+                "/api/claude/desktop-profiles",
+                &access.host_principal(),
+                &[],
+                None,
+            )
+            .await
+        {
+            return Self::relay(reply, false);
         }
         let root = self.root.clone();
         let open = Arc::clone(&self.open);
@@ -165,6 +228,19 @@ impl Profiles {
         let Some(platform) = usage_platform(uri.query()) else {
             return super::plain(400, "Select a valid Claude desktop platform.");
         };
+        #[cfg(unix)]
+        if let Some(reply) = self
+            .host_request(
+                "GET",
+                &uri.to_string(),
+                &access.host_principal(),
+                &[],
+                None,
+            )
+            .await
+        {
+            return Self::relay(reply, false);
+        }
         let profiles = match list_profiles(&self.root) {
             Ok(profiles) => profiles,
             Err(()) => {
@@ -351,12 +427,35 @@ impl Profiles {
         {
             return super::plain(400, "History snapshot cleanup takes no fields.");
         }
+        #[cfg(unix)]
+        {
+            let service = r#"{"kind":"session","id":"front-door","role":"service"}"#;
+            if let Some(reply) = self
+                .host_request(
+                    "POST",
+                    "/internal/claude-history-cleanup",
+                    service,
+                    &[("content-type", "application/json")],
+                    Some(b"{}"),
+                )
+                .await
+            {
+                return Self::relay(reply, false);
+            }
+        }
         open_reply(self.open.cleanup().await, false)
     }
 
-    fn codex_profiles(&self, access: &DashboardAccess) -> Reply {
+    async fn codex_profiles(&self, access: &DashboardAccess) -> Reply {
         if let Some(reply) = session_guard(access) {
             return reply;
+        }
+        #[cfg(unix)]
+        if let Some(reply) = self
+            .host_request("GET", "/api/codex/profiles", &access.host_principal(), &[], None)
+            .await
+        {
+            return Self::relay(reply, false);
         }
         match codex_facts(&self.root)
             .and_then(|facts| aac_views::codex_profiles::summary(&facts).ok())
@@ -369,6 +468,19 @@ impl Profiles {
     async fn codex_quotas(&self, access: &DashboardAccess) -> Reply {
         if let Some(reply) = session_guard(access) {
             return reply;
+        }
+        #[cfg(unix)]
+        if let Some(reply) = self
+            .host_request(
+                "GET",
+                "/api/codex/profiles/quotas",
+                &access.host_principal(),
+                &[],
+                None,
+            )
+            .await
+        {
+            return Self::relay(reply, false);
         }
         let root = self.root.clone();
         let rows = Arc::clone(&self.rows);
@@ -384,12 +496,19 @@ impl Profiles {
         }
     }
 
-    fn antigravity_profiles(&self, access: &DashboardAccess, uri: &Uri) -> Reply {
+    async fn antigravity_profiles(&self, access: &DashboardAccess, uri: &Uri) -> Reply {
         if let Some(reply) = session_guard(access) {
             return reply;
         }
         if uri.query().is_some_and(|query| !query.is_empty()) {
             return no_store(super::plain(400, "Unexpected inventory query."));
+        }
+        #[cfg(unix)]
+        if let Some(reply) = self
+            .host_request("GET", &uri.to_string(), &access.host_principal(), &[], None)
+            .await
+        {
+            return no_store(Self::relay(reply, true));
         }
         no_store(
             crate::profile_reads::antigravity_inventory(&self.root)
@@ -400,13 +519,20 @@ impl Profiles {
         )
     }
 
-    fn antigravity_quotas(&self, access: &DashboardAccess, uri: &Uri) -> Reply {
+    async fn antigravity_quotas(&self, access: &DashboardAccess, uri: &Uri) -> Reply {
         if let Some(reply) = session_guard(access) {
             return reply;
         }
         let Some(refresh) = refresh_query(uri.query()) else {
             return no_store(super::plain(400, "Select a valid refresh value."));
         };
+        #[cfg(unix)]
+        if let Some(reply) = self
+            .host_request("GET", &uri.to_string(), &access.host_principal(), &[], None)
+            .await
+        {
+            return no_store(Self::relay(reply, true));
+        }
         no_store(
             crate::profile_reads::antigravity_quotas(&self.root, refresh, super::now())
                 .map(|value| super::response(200, value))

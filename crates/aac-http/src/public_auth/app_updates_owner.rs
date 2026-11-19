@@ -16,6 +16,8 @@ use std::{path::PathBuf, sync::Arc};
 #[derive(Clone)]
 pub(super) struct Owner {
     jobs: Arc<BoundJobs>,
+    #[cfg(unix)]
+    host: Option<Arc<super::owner_host::OwnerHost>>,
 }
 
 impl Owner {
@@ -40,6 +42,22 @@ impl Owner {
         );
         Self {
             jobs: Arc::new(BoundJobs::new(Arc::new(LaneHJobs(owner)))),
+            #[cfg(unix)]
+            host: None,
+        }
+    }
+
+    /// The owner for one boot that answers through the shared host.
+    #[cfg(unix)]
+    pub(super) fn start_with_host(
+        root: PathBuf,
+        events: DashboardEvents,
+        agents: Arc<crate::agent_transport::Agents>,
+        host: Arc<super::owner_host::OwnerHost>,
+    ) -> Self {
+        Self {
+            host: Some(host),
+            ..Self::start(root, events, agents)
         }
     }
 
@@ -83,6 +101,33 @@ impl Owner {
                     .is_some_and(|body| body.is_empty())
             {
                 return super::plain(400, "Provide an empty JSON object.");
+            }
+        }
+        #[cfg(unix)]
+        {
+            let path = request.uri().path().to_owned();
+            let _ = &request;
+            let method = match operation {
+                Operation::Status => "GET",
+                Operation::Start | Operation::Cancel => "POST",
+            };
+            let body = matches!(operation, Operation::Status).then_some(&b"{}"[..]);
+            if let Some(host) = self.host.as_ref()
+                && let Some(reply) = host
+                    .request(
+                        method,
+                        &path,
+                        &access.host_principal(),
+                        &[("content-type", "application/json")],
+                        body,
+                    )
+                    .await
+                && (reply.status != 503 || reply.headers.get("x-aac-decline").is_none())
+            {
+                let Ok(value) = serde_json::from_slice::<Value>(&reply.body) else {
+                    return super::plain(502, "The service reply could not be read.");
+                };
+                return super::response(reply.status, value);
             }
         }
         match self.jobs.call(operation).await {
