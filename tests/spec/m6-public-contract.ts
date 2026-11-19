@@ -166,6 +166,10 @@ function normalize(value: unknown, key = ''): unknown {
   if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
   if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
     return '<elapsed-seconds>';
+  // capture.ts nulls the same machine readings when it records the row.
+  if (key === 'cpu' || key === 'memory' || key === 'gpuPct') return null;
+  if (key === 'disk') return [];
+  if (key === 'warnings') return [];
   if (typeof value === 'string' && key === 'set-cookie') {
     return value
       .replace(/^connect\.sid=[^;]+/, 'connect.sid=<session-cookie>')

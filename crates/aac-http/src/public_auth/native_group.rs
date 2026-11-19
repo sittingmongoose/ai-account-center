@@ -641,15 +641,15 @@ async fn status(
     if !routes.hosted().await {
         return super::decline();
     }
-    let Some((time_zone, facts)) = status_zone(routes.root()) else {
+    let Some((time_zone, offsets)) = status_zone(routes.root()) else {
         return super::decline();
     };
     let now = now_ms().to_string();
     let zone = json!({
         "timeZone": time_zone,
-        "from": facts.from,
-        "to": facts.to,
-        "offsets": facts.offsets,
+        "from": offsets.from,
+        "to": offsets.to,
+        "offsets": offsets.offsets,
     })
     .to_string();
     let headers = [
@@ -815,7 +815,7 @@ async fn scoreboard_facts(
     let short: String = catalog_hash.chars().take(12).collect();
     let facts_id = format!("{generation}:{short}:{now}");
     let body = format!(
-        "{{"generation":{},"data":{},"facts":{}}}",
+        "{{\"generation\":{},\"data\":{},\"facts\":{}}}",
         Json::String(facts_id.clone()),
         data_text,
         facts_text
@@ -861,11 +861,6 @@ async fn scoreboard(
         return super::decline();
     };
     let now = now_ms();
-    let Some((generation, catalog_hash, held)) =
-        scoreboard_facts(routes, &time_zone, now).await
-    else {
-        return super::decline();
-    };
     let Some((clock, day)) = offsets.zone.words(i64::try_from(now).unwrap_or(0)) else {
         return super::decline();
     };
@@ -888,36 +883,48 @@ async fn scoreboard(
         }
         None => Json::Null,
     };
-    let feed = json!({
-        "now": now,
-        "clock": clock,
-        "day": day,
-        "timeZone": time_zone,
-        "from": query.from,
-        "to": query.to,
-        "source": query.source,
-        "taskType": query.task_type,
-        "fromMs": from_ms,
-        "toMs": to_ms,
-        "generation": generation,
-        "catalogHash": catalog_hash,
-        "facts": held,
-    })
-    .to_string();
-    match routes
-        .request(
-            "GET",
-            "/api/scoreboard",
-            &principal,
-            &[("x-aac-feed", feed.as_str())],
-            None,
-        )
-        .await
-    {
-        Some(reply) if reply.status == 200 => fed_view(&reply, facts.if_none_match.as_deref()),
-        Some(reply) if reply.declined() => super::decline(),
-        _ => super::decline(),
+    // The service may ingest or rescan between the facts fetch and the answer; its `stale`
+    // decline means fresh facts, exactly as today's handler refetches on the next request.
+    for _ in 0..2 {
+        let Some((generation, catalog_hash, held)) =
+            scoreboard_facts(routes, &time_zone, now).await
+        else {
+            return super::decline();
+        };
+        let feed = json!({
+            "now": now,
+            "clock": clock.clone(),
+            "day": day.clone(),
+            "timeZone": time_zone.clone(),
+            "from": query.from.clone(),
+            "to": query.to.clone(),
+            "source": query.source.clone(),
+            "taskType": query.task_type.clone(),
+            "fromMs": from_ms.clone(),
+            "toMs": to_ms.clone(),
+            "generation": generation,
+            "catalogHash": catalog_hash,
+            "facts": held,
+        })
+        .to_string();
+        match routes
+            .request(
+                "GET",
+                "/api/scoreboard",
+                &principal,
+                &[("x-aac-feed", feed.as_str())],
+                None,
+            )
+            .await
+        {
+            Some(reply) if reply.status == 200 => {
+                return fed_view(&reply, facts.if_none_match.as_deref());
+            }
+            Some(reply) if reply.declined() => continue,
+            _ => return super::decline(),
+        }
     }
+    super::decline()
 }
 
 /// One fed view reply: the service's own bytes, ETag and `x-aac-view`, written with the

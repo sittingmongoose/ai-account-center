@@ -503,6 +503,25 @@ function stableAges(value: unknown): void {
   }
 }
 
+/** A host's live readings (load, free memory and disk) differ every run; the panel's state and
+ * words are the contract. The collectors' numbers have their own tests. */
+function stableMachines(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) stableMachines(item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const map = value as Record<string, unknown>;
+  if ('cpu' in map && 'memory' in map && 'browsers' in map) {
+    map.cpu = null;
+    map.memory = null;
+    map.disk = [];
+    map.gpuPct = null;
+    map.warnings = [];
+  }
+  for (const child of Object.values(map)) stableMachines(child);
+}
+
 function emit(relative: string, data: any, view: string | null = null) {
   const file = path.join(spec, relative);
   const composedRow = composed && /^contract\/[0-9]/.test(relative);
@@ -530,7 +549,10 @@ function emit(relative: string, data: any, view: string | null = null) {
       source[key] = '<elapsed-seconds>';
     }
   }
-  if (owner === 'status-home') stableAges(data.response.body);
+  if (owner === 'status-home') {
+    stableAges(data.response.body);
+    stableMachines(data.response.body);
+  }
   // The store's boot identity (its open instant, segment log and meta clocks) differs per run;
   // the status row's contract is the writer's shape and state, not one boot's ids.
   if (
