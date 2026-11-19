@@ -315,22 +315,16 @@ try {
     await fs.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
   }
-  // Home rows: recorded from the shipped worker's own answer (the native switch off), then
-  // replayed against the native route (the switch on, the view group on).
+  // Home rows: recorded from the shipped cut's own answer (the host answers everything else
+  // natively and leaves Home to the worker), then replayed against the native route.
   if (group === 'store-usage-home') {
     Object.assign(environment, {
-      AAC_RUST_GROUP_HOME: 'on',
+      AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+      AAC_RUST_GROUP_HOME: recordNative ? 'off' : 'on',
+      // The worker's Home answer is the service-fed view when the view group is on.
       AAC_RUST_HOME_VIEW: 'on',
       AAC_AGENT_VERBS: 'off',
       AAC_AGENT_TRANSPORT: 'off',
-      ...(recordNative
-        ? {
-            AAC_RUST_CUT_NATIVE_ROUTES: 'off',
-            AAC_RUST_STORE: 'off',
-            AAC_RUST_GROUP_STATUS: 'off',
-            AAC_RUST_GROUP_SCOREBOARD: 'off',
-          }
-        : { AAC_RUST_CUT_NATIVE_ROUTES: 'on' }),
     });
   }
   if (group === 'status-home' || group === 'status') {
