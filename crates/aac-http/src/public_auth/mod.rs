@@ -1835,10 +1835,7 @@ mod tests {
         let _ = handle.await;
     }
 
-    /// The cut's own settings, preferences and visibility routes: the TS admission sentences
-    /// and the files the existing owners write.
-    #[tokio::test]
-    async fn the_cut_writes_settings_preferences_and_visibility_under_the_ts_guards() {
+    async fn settings_server() -> (tempfile::TempDir, SocketAddr, tokio::task::JoinHandle<()>) {
         let home = tempfile::tempdir().unwrap();
         let root = home.path().to_path_buf();
         let hash = bcrypt::hash("fixture-password", 4).unwrap();
@@ -1874,6 +1871,48 @@ mod tests {
             .await
             .unwrap();
         });
+        (home, addr, handle)
+    }
+
+    #[tokio::test]
+    async fn settings_heads_keep_the_read_headers_without_a_body() {
+        let (_home, addr, handle) = settings_server().await;
+        let session = format!("Cookie: {}\r\n", login(addr).await);
+        for path in [
+            "/api/accounts/settings",
+            "/api/accounts/preferences",
+            "/api/accounts/visibility",
+        ] {
+            let get = request(addr, path, "GET", &session, "").await;
+            let head = request(addr, path, "HEAD", &session, "").await;
+            assert!(get.starts_with("HTTP/1.1 200"), "{get}");
+            assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+            let (get_headers, _) = get.split_once("\r\n\r\n").unwrap();
+            let (head_headers, body) = head.split_once("\r\n\r\n").unwrap();
+            assert!(body.is_empty());
+            for name in [
+                "content-type:",
+                "content-length:",
+                "cache-control:",
+                "etag:",
+            ] {
+                let expected = get_headers
+                    .lines()
+                    .find(|line| line.starts_with(name))
+                    .unwrap();
+                assert!(head_headers.lines().any(|line| line == expected), "{head}");
+            }
+        }
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    /// The cut's own settings, preferences and visibility routes: the TS admission sentences
+    /// and the files the existing owners write.
+    #[tokio::test]
+    async fn the_cut_writes_settings_preferences_and_visibility_under_the_ts_guards() {
+        let (home, addr, handle) = settings_server().await;
+        let root = home.path();
         let cookie = login(addr).await;
         let origin = format!("Origin: http://{addr}\r\n");
         let json = format!("{origin}Content-Type: application/json\r\nCookie: {cookie}\r\n");
