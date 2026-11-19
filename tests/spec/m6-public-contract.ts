@@ -102,7 +102,7 @@ const credentials = { username, password };
 const nonce = 'f'.repeat(32);
 const hub = 'aacu_' + 'f'.repeat(43);
 const environment = fixtureEnvironment();
-if (mode === 'cut-rust-only') {
+if (mode !== 'fixture') {
   // The recorded registry fixture has no Codex CLI. Mask command discovery as well as homes.
   environment.CCS_CODEX_PATH = path.join(root, 'fixture-missing-codex');
 }
