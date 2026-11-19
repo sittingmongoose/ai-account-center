@@ -423,6 +423,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_route.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/analytics_writers.rs",
       "kind": "internal",
       "evidence": [],
@@ -474,6 +480,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/claude_host.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-http/src/claude_open/fixture_tests.rs",
@@ -587,6 +600,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/key_lifecycle.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/lifecycle_policy.rs",
       "kind": "internal",
       "evidence": [],
@@ -617,6 +636,12 @@
       "evidence": [
         "HTTP"
       ]
+    },
+    {
+      "file": "crates/aac-http/src/profile_reads.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/src/public_auth/analytics_routes.rs",
@@ -726,6 +751,13 @@
     },
     {
       "file": "crates/aac-http/src/public_auth/profile_routes.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/tests/analytics.rs",
       "kind": "safety",
       "evidence": [
         "safety"

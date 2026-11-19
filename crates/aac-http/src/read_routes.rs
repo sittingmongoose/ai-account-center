@@ -26,6 +26,7 @@ pub(crate) fn answer(
     query: bool,
     root: &Path,
     bytes: &[u8],
+    cache: Option<&crate::account_usage::AccountUsageCache>,
 ) -> Result<Value, Decline> {
     match handler {
         // D7: Home's view from the page's context and the three answers it reads, in the envelope.
@@ -49,7 +50,7 @@ pub(crate) fn answer(
             if query {
                 return Err(Decline::Unsupported);
             }
-            crate::profile_reads::answer(path, root, bytes).ok_or(Decline::Unsupported)
+            crate::profile_reads::answer(path, root, bytes, cache).ok_or(Decline::Unsupported)
         }
         Handler::Files => crate::read_files::answer(path, bytes).ok_or(Decline::Unsupported),
         // Status and Scoreboard take the presentation envelope (compose) or the reader snapshot.
