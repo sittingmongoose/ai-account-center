@@ -222,8 +222,11 @@ describe('the Leptos dashboard build', () => {
     expect(
       manifest.precompressed.some((entry: { path: string }) => entry.path === 'app/index.html')
     ).toBe(true);
-    expect(mode(path.join(ui, 'app'))).toBe(0o755);
-    expect(mode(path.join(ui, 'app', 'index.html'))).toBe(0o644);
+    // NTFS reports 0o666 for every entry; modes are asserted where the platform has POSIX bits.
+    if (process.platform !== 'win32') {
+      expect(mode(path.join(ui, 'app'))).toBe(0o755);
+      expect(mode(path.join(ui, 'app', 'index.html'))).toBe(0o644);
+    }
     expect(verifyBundle(ui).manifest).toEqual(manifest);
   });
 
