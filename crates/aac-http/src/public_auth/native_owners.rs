@@ -124,7 +124,6 @@ struct Usage {
     #[cfg(unix)]
     usage_snapshot: bool,
     owners: Owners,
-    #[cfg(unix)]
     agents: Arc<Agents>,
     /// The sign-in expiry rows and when they were read (the TS health cache's five minutes).
     #[cfg(unix)]
@@ -228,7 +227,6 @@ impl NativeOwners {
                 #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
                 owners,
-                #[cfg(unix)]
                 agents,
                 #[cfg(unix)]
                 signin_cache: Mutex::new(None),
