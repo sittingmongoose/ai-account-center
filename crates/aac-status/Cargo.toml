@@ -31,7 +31,9 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 serde.workspace = true
 # float_roundtrip: numbers parse to the exact double every JavaScript engine reads (the
 # golden pairs carry 17-digit shares; the fast parser lands one ulp off them).
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+# preserve_order: the NAPI composeByModel/composeGroups TS calls must emit struct member order
+# (the golden's order) when this crate builds alone, not the sorted order a BTreeMap gives.
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 sha2.workspace = true
 
 [build-dependencies]
