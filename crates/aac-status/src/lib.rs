@@ -25,6 +25,7 @@ pub mod model_identity;
 pub mod ops;
 pub mod pinned;
 pub mod pins;
+pub mod produce;
 #[allow(missing_docs)]
 pub mod read_context;
 #[allow(missing_docs)]

@@ -21,7 +21,7 @@ import {
   type StepState,
 } from '../status/answers';
 import { openCardFile, parseByteRange, sendFileBytes } from '../status/status-files';
-import { answerStatusFed, statusFedService } from '../status/status-feed';
+import { answerStatusFed, answerStatusOwned, statusFedService } from '../status/status-feed';
 import { getCcsDir } from '../../utils/config-manager';
 
 /**
@@ -156,10 +156,30 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       typeof current.readRequestInputs === 'function'
         ? await current.readRequestInputs()
         : current.readInputs();
-    // R2 (`rustService.groups.status: on`): the same answer from fed generations; on any decline the handler
-    // below answers from this same read, as before.
+    // G16c (`rustService.groups.status: on`): the service's own producers answer, from the
+    // generations they build. A decline restarts this process's scanners and collectors (it
+    // stopped them for the service) and answers from a fresh local read.
     const fed = statusFedService(res);
-    if (fed && (await answerStatusFed(req, res, fed, input, getCcsDir()))) return;
+    if (fed) {
+      if (await answerStatusOwned(req, res, fed, input)) return;
+      const owner = getStatusService();
+      owner.handBackProducers();
+      const local = owner.readInputs();
+      // R2: the same answer from fed generations this side now produces.
+      if (await answerStatusFed(req, res, fed, local, getCcsDir())) return;
+      sendRevalidatedView(
+        res,
+        await composeWithRust(
+          req,
+          res,
+          '/api/status',
+          () => rustStatusInput(local),
+          () => buildStatusView(local),
+          isRustStatusView
+        )
+      );
+      return;
+    }
     sendRevalidatedView(
       res,
       await composeWithRust(

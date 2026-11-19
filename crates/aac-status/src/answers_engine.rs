@@ -595,7 +595,9 @@ pub struct StepState {
 }
 
 impl StepState {
-    fn pending() -> Self {
+    /// The pending step, as a feed record carries it.
+    #[must_use]
+    pub fn pending() -> Self {
         Self {
             state: "pending".into(),
             at: None,

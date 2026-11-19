@@ -27,6 +27,98 @@ pub fn known_machine(machine: &str, remote_only: bool) -> bool {
     computer(machine).is_some_and(|row| !remote_only || row["sshAlias"].is_string())
 }
 
+/// Every registered computer in its shipped order: `(machineId, os, sshAlias)`.
+#[must_use]
+pub fn machine_rows() -> Vec<(&'static str, &'static str, Option<&'static str>)> {
+    COMPUTERS
+        .as_object()
+        .map(|rows| {
+            rows.values()
+                .filter_map(|row| {
+                    Some((
+                        row["machineId"].as_str()?,
+                        row["os"].as_str()?,
+                        row["sshAlias"].as_str(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `MACHINE_IDS`: the machine ids in the registry's order.
+#[must_use]
+pub fn machine_ids() -> Vec<&'static str> {
+    machine_rows().into_iter().map(|row| row.0).collect()
+}
+
+/// `MACHINE_LABELS`: the machine's `machineLabel`.
+#[must_use]
+pub fn machine_labels() -> Vec<(&'static str, &'static str)> {
+    COMPUTERS
+        .as_object()
+        .map(|rows| {
+            rows.values()
+                .filter_map(|row| Some((row["machineId"].as_str()?, row["machineLabel"].as_str()?)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `namedComputer`: an exact id, alias or name (case-insensitive), else the first non-legacy
+/// computer whose name the host contains.
+#[must_use]
+pub fn named_computer(name: &str) -> Option<&'static str> {
+    let lower = name.to_lowercase();
+    let rows: Vec<(&str, &Value)> = COMPUTERS
+        .as_object()
+        .map(|rows| rows.iter().map(|(id, row)| (id.as_str(), row)).collect())
+        .unwrap_or_default();
+    for (id, row) in &rows {
+        let exact = id.to_lowercase() == lower
+            || row["sshAlias"]
+                .as_str()
+                .is_some_and(|alias| alias.to_lowercase() == lower)
+            || row["names"].as_array().is_some_and(|names| {
+                names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|value| value.to_lowercase() == lower)
+            });
+        if exact {
+            return row["machineId"].as_str();
+        }
+    }
+    let mut fallback = rows;
+    fallback.sort_by_key(|(_, row)| row["legacy"] == Value::Bool(true));
+    fallback
+        .into_iter()
+        .find(|(_, row)| {
+            row["names"].as_array().is_some_and(|names| {
+                names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|value| lower.contains(&value.to_lowercase()))
+            })
+        })
+        .and_then(|(_, row)| row["machineId"].as_str())
+}
+
+/// `localComputer`: this host and platform's computer id, else the platform's default host.
+#[must_use]
+pub fn local_computer(host: &str, platform: &str) -> &'static str {
+    let kind = match platform {
+        "windows" | "win32" => "windows",
+        "mac" | "darwin" | "macos" => "mac",
+        _ => "linux",
+    };
+    match named_computer(host) {
+        Some(id) if computer(id).is_some_and(|row| row["os"] == Value::from(kind)) => id,
+        _ if kind == "linux" => "vm",
+        _ => kind,
+    }
+}
+
 pub fn machine_label(machine: &str) -> &str {
     computer(machine)
         .and_then(|row| row["sentenceLabel"].as_str())

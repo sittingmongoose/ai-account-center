@@ -24,6 +24,7 @@ pub(crate) enum Handler {
     StoreStatus,
     StatusInputs,
     StatusAnswers,
+    StatusUsage,
     ScoreboardInputs,
     Feed,
     FeedStatus,
@@ -48,6 +49,7 @@ impl Handler {
             "store-status" => Handler::StoreStatus,
             "status-inputs" => Handler::StatusInputs,
             "status-answers" => Handler::StatusAnswers,
+            "status-usage" => Handler::StatusUsage,
             "scoreboard-inputs" => Handler::ScoreboardInputs,
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
@@ -215,7 +217,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                 ))
             // G16b: the forwarded answer send is the one other internal write.
             || (method == axum::http::Method::PUT
-                && !matches!(handler, Handler::Feed | Handler::StatusAnswers))
+                && !matches!(
+                    handler,
+                    Handler::Feed | Handler::StatusAnswers | Handler::StatusUsage
+                ))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)

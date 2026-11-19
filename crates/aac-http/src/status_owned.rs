@@ -42,6 +42,16 @@ struct OwnedState {
     docs: Json,
 }
 
+/// G16c: one pass's snapshots for the producers. The front door's `GET
+/// /internal/status/inputs` still reads the JSON the state holds; the producers read these.
+pub(crate) struct Scan {
+    pub generation: u64,
+    pub reports: AgentReportsState,
+    pub docs: StatusDocsState,
+    pub quota: Json,
+    pub registry: Json,
+}
+
 /// One pass's outcome: the typed snapshots the check writer rows, and the JSON the front
 /// door forwards.
 struct Outcome {
@@ -171,8 +181,9 @@ impl StatusOwned {
     }
 
     /// One full pass: scan, capture the new revisions into the hosted store, flush the
-    /// readers-check rows, hold the snapshots and tell the front door.
-    pub(crate) async fn pass(self: &Arc<Self>, registry_due: bool) {
+    /// readers-check rows, hold the snapshots and tell the front door. The snapshots come back
+    /// for the producers that feed the Status generations (G16c).
+    pub(crate) async fn pass(self: &Arc<Self>, registry_due: bool) -> Scan {
         let now = now_ms();
         let owner = Arc::clone(self);
         let outcome = tokio::task::spawn_blocking(move || owner.scan_blocking(now, registry_due))
@@ -206,13 +217,20 @@ impl StatusOwned {
             state.reports = reports::state_json(&outcome.reports);
             state.quota = quota::state_json(&outcome.quota);
             state.docs = status_docs::state_json(&outcome.docs);
-            state.registry = outcome.registry;
+            state.registry = outcome.registry.clone();
         }
         if outcome.changed {
             self.feeds.publish_event(json!({
                 "event": "status-changed",
                 "generation": generation,
             }));
+        }
+        Scan {
+            generation,
+            reports: outcome.reports,
+            docs: outcome.docs,
+            quota: quota::state_json(&outcome.quota),
+            registry: outcome.registry,
         }
     }
 
@@ -451,13 +469,20 @@ fn empty_reports() -> AgentReportsState {
 
 /// The job loop: a pass every 10 s, the registry every third pass, single-flight (the loop
 /// awaits each pass), until the service ends.
-pub(crate) async fn jobs(owner: Arc<StatusOwned>, stop: Arc<std::sync::atomic::AtomicBool>) {
+pub(crate) async fn jobs(
+    owner: Arc<StatusOwned>,
+    produce: Option<Arc<crate::status_produce::Produce>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
     let mut tick: u64 = 0;
     loop {
         if stop.load(Ordering::Acquire) {
             return;
         }
-        owner.pass(tick % REGISTRY_EVERY_PASSES == 0).await;
+        let scan = owner.pass(tick % REGISTRY_EVERY_PASSES == 0).await;
+        if let Some(produce) = &produce {
+            produce.after_scan(scan).await;
+        }
         tick = tick.wrapping_add(1);
         tokio::time::sleep(std::time::Duration::from_millis(SCAN_EVERY_MS)).await;
     }
