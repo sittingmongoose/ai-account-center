@@ -30,6 +30,46 @@ const previous = {};
 for (const [name, env] of [['previous', 'AAC_UPGRADE_PREVIOUS_UI'], ['fix1', 'AAC_UPGRADE_FIX1_UI']]) {
   if (process.env[env]) previous[name] = loadStaticUi(path.resolve(process.env[env]));
 }
+// A second build of this checkout (reload.check.mjs): dist/ui copied with its runtime folder under another id and a
+// new shell stamp, so its worker installs as a different build. Only the ids are rewritten; the precompressed copies
+// are left out (identity serving). Removed when the server stops.
+const SECOND_DIR = path.join(repo, 'dist', '.upgrade-second-ui');
+function secondBuild() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(uiDir, 'ui-build-manifest.json'), 'utf8'));
+  const flip = (id) => id.replace(/[0-9a-f]/g, (c) => ((parseInt(c, 16) + 8) % 16).toString(16));
+  const pkg = manifest.buildId;
+  const stamp = manifest.shellBuildId;
+  const ids = { pkg: flip(pkg), stamp: flip(stamp) };
+  fs.rmSync(SECOND_DIR, { recursive: true, force: true });
+  fs.cpSync(uiDir, SECOND_DIR, {
+    recursive: true,
+    filter: (source) => !/\.(br|gz)$/.test(source),
+  });
+  fs.renameSync(path.join(SECOND_DIR, 'pkg', pkg), path.join(SECOND_DIR, 'pkg', ids.pkg));
+  const rewrite = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) rewrite(file);
+      else if (/\.(html|js|mjs|json)$/.test(entry.name)) {
+        const text = fs.readFileSync(file, 'utf8');
+        let next = text.replaceAll(`pkg/${pkg}/`, `pkg/${ids.pkg}/`).replaceAll(`pkg/${pkg}`, `pkg/${ids.pkg}`);
+        if (entry.name === 'sw.js' && dir === SECOND_DIR) next = next.replace(`'${stamp}'`, `'${ids.stamp}'`);
+        if (next !== text) fs.writeFileSync(file, next);
+      }
+    }
+  };
+  rewrite(SECOND_DIR);
+  const record = { ...manifest, buildId: ids.pkg, shellBuildId: ids.stamp, precompressed: [] };
+  if (manifest.wasm?.path) record.wasm = { ...manifest.wasm, path: manifest.wasm.path.replace(pkg, ids.pkg) };
+  fs.writeFileSync(path.join(SECOND_DIR, 'ui-build-manifest.json'), JSON.stringify(record, null, 2));
+  return loadStaticUi(SECOND_DIR);
+}
+if (fs.existsSync(path.join(uiDir, 'ui-build-manifest.json'))) {
+  previous.second = secondBuild();
+  const drop = () => fs.rmSync(SECOND_DIR, { recursive: true, force: true });
+  process.on('exit', drop);
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => process.exit(0));
+}
 const app = express();
 app.use(express.json());
 

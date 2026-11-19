@@ -40,7 +40,10 @@ public/bridge.js            the classic page's upgrade module: forgets aac-frame
 **Updates of the installed app.** A new build's worker downloads the whole app while installing (`PRECACHE`, the
 page's addresses and every packaged asset, stamped by build-ui.js from `scripts/ui-precache.js` and checked again by
 verify-bundle.js); one failed download fails the install and the installed copy stays. It activates on the next
-launch (DESIGN-MOBILE.md 6.5: no skipWaiting, no prompt) and drops the older build's cache only once its own copy is
+launch, or when the person presses the frame's "New version · Reload": the notice appears only once a worker for that
+build is waiting (fully installed), and Reload asks it to take over (`activate-now`, the only skipWaiting) and reloads
+once on `controllerchange` (frame.rs `hand_over`; a plain reload under the old worker would get the old build back).
+It drops the older build's cache only once its own copy is
 complete, so an offline launch after an update always finds an app. Network reads cannot overwrite that installed
 copy. The installed worker serves that snapshot until activation, except the explicit no-store build probe;
 cache reads stay within one generation rather than mixing it with a waiting install. Entry HTML must

@@ -2,9 +2,11 @@
 // scripts/build-ui.js stamps BUILD_ID (a hash of the shell inputs) and PRECACHE (every address the app needs offline:
 // its page addresses and every packaged asset) into the packaged copy; any shell change then installs a new worker.
 // Installing downloads the whole replacement first: if any part fails, the install fails and the worker in charge,
-// with its cache, stays. The new worker activates on the next launch (no skipWaiting, no update prompt) and only
-// then, with its own copy complete, drops the previous build's caches, so the installed app always has one usable
-// copy offline (review M1). Routing rules live in the pure sw-route.js (tested); this file only runs them against
+// with its cache, stays. The new worker activates on the next launch, or sooner only when the person presses the
+// frame's "New version · Reload" (frame.rs `hand_over`: it asks the waiting worker, whose install completed, to take
+// over, then reloads once). Nothing else calls skipWaiting: a fetch or a plain reload never switches builds. Only once
+// active, with its own copy complete, does it drop the previous build's caches, so the installed app always has one
+// usable copy offline (review M1). Routing rules live in the pure sw-route.js (tested); this file only runs them against
 // fetch/cache. The installed copy is immutable: ordinary network reads never change it.
 importScripts('./sw-route.js');
 
@@ -414,7 +416,26 @@ function copyComplete() {
     });
 }
 
-// Activate (the next launch): the older builds' caches go only once this build's copy is complete. Should the browser
+// The frame's Reload (frame.rs `hand_over`, 2026-11-19): while any page is open the old worker stays in charge and
+// answers a plain reload with its own build, so the "New version" notice came back after every Reload. The page asks
+// this worker, waiting with its install done, to activate now; it does so only when its whole copy is still in its
+// cache. Activation then drops the older caches and claims the open pages (below); the page reloads once on
+// `controllerchange`. A worker already in charge ignores the message (skipWaiting changes nothing for it).
+self.addEventListener('message', function (event) {
+  var data = event.data;
+  if (!data || data.type !== 'activate-now') return;
+  var done = copyComplete().then(function (complete) {
+    if (complete) return self.skipWaiting();
+    return undefined;
+  });
+  try {
+    event.waitUntil(done);
+  } catch {
+    // An event without waitUntil: the promise still runs while the worker lives.
+  }
+});
+
+// Activate (the next launch, or the frame's Reload above): the older builds' caches go only once this build's copy is complete. Should the browser
 // have dropped part of it since the install, they stay, still answering the offline fallbacks (caches.match reads
 // every cache), until a later build's complete copy replaces them.
 self.addEventListener('activate', function (event) {

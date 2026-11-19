@@ -34,7 +34,8 @@ URL.
 
 The installed worker serves its own cached app version until a complete replacement activates, and keeps that
 copy intact during ordinary network reads. The explicit no-store build probe still reads the server. Installation checks that
-all entry pages name the precached runtime and stylesheet; only a complete replacement can activate on the next launch. A failed
+all entry pages name the precached runtime and stylesheet; only a complete replacement can activate, on the next launch or when
+the person presses "New version · Reload" (the frame asks the waiting worker to take over, then reloads once). A failed
 update leaves the old copy usable. The entry page also recovers a retained runtime if a previously installed worker
 saved newer HTML before its wasm arrived. Recovery loads that retained generation's controllers, module imports,
 stylesheet and font dependencies directly from its cache, so an older runtime receives matching view data. Supported `/app/<tab>/` bookmarks use their canonical cached address

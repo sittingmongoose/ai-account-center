@@ -349,10 +349,187 @@ pub(crate) fn should_offer(served: &str, dismissed: &str) -> bool {
     served != dismissed
 }
 
+/// What the service worker can do for a newer build the server has (`worker_state`). The installed app's worker
+/// (public/sw.js) stays in charge while any page is open and answers a plain reload with its own build, so a reload
+/// reaches a newer build only through a worker that finished installing it (2026-11-19: Reload kept bringing the
+/// notice back).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkerState {
+    /// No worker serves this page (none registered, or no worker support): a reload reaches the server.
+    Unmanaged,
+    /// A new worker finished installing its whole copy and waits: Reload hands over to it (`hand_over`).
+    Waiting,
+    /// The worker in charge changed while this page ran (another window handed over): a reload reaches it.
+    Replaced,
+    /// A new worker is still downloading its copy.
+    Installing,
+    /// Only the worker that started this page: nothing newer is installed yet.
+    Current,
+}
+
+impl WorkerState {
+    /// Whether a reload now reaches a newer build, so the frame may offer "New version · Reload".
+    pub(crate) fn ready(self) -> bool {
+        matches!(
+            self,
+            WorkerState::Unmanaged | WorkerState::Waiting | WorkerState::Replaced
+        )
+    }
+}
+
+/// The worker state from what the registration shows: a waiting worker first (handing over to it is what Reload
+/// does), then a worker already replaced while this page ran, then one still installing.
+pub(crate) fn worker_state(
+    registered: bool,
+    waiting: bool,
+    replaced: bool,
+    installing: bool,
+) -> WorkerState {
+    if !registered {
+        WorkerState::Unmanaged
+    } else if waiting {
+        WorkerState::Waiting
+    } else if replaced {
+        WorkerState::Replaced
+    } else if installing {
+        WorkerState::Installing
+    } else {
+        WorkerState::Current
+    }
+}
+
+/// How long the frame waits for a new worker to finish installing (Reload, or a check that found a newer build).
+const INSTALL_WAIT_MS: u32 = 30_000;
+/// How long Reload waits for the waiting worker to take over before reloading anyway.
+const TAKEOVER_WAIT_MS: u32 = 10_000;
+
+thread_local! {
+    /// `controllerchange` events seen since this page started (`watch_workers`): Reload waits for the next one.
+    static CONTROLLER_CHANGES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The worker in charge was replaced by a newer one while this page ran (`watch_workers`).
+    static REPLACED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A Reload's hand-over is under way: a second press, or a resumed check, waits for it.
+    static HANDING_OVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn workers() -> Option<web_sys::ServiceWorkerContainer> {
+    js_sys::Reflect::get(&window().navigator(), &"serviceWorker".into())
+        .ok()
+        .and_then(|w| w.dyn_into::<web_sys::ServiceWorkerContainer>().ok())
+}
+
+async fn registration() -> Option<web_sys::ServiceWorkerRegistration> {
+    let container = workers()?;
+    wasm_bindgen_futures::JsFuture::from(container.get_registration())
+        .await
+        .ok()
+        .and_then(|r| r.dyn_into::<web_sys::ServiceWorkerRegistration>().ok())
+}
+
+fn state_of(registration: Option<&web_sys::ServiceWorkerRegistration>) -> WorkerState {
+    match registration {
+        None => worker_state(false, false, false, false),
+        Some(r) => worker_state(
+            true,
+            r.waiting().is_some(),
+            REPLACED.with(|c| c.get()),
+            r.installing().is_some(),
+        ),
+    }
+}
+
+async fn sleep(ms: u32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32);
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+/// The worker state once a newer build had its chance to install: with nothing newer installing, the frame asks the
+/// browser to look for a new worker (an installed app that is only resumed may not look by itself), then waits up to
+/// `wait_ms` for one to finish installing. Never activates anything.
+async fn prepare(wait_ms: u32) -> (WorkerState, Option<web_sys::ServiceWorkerRegistration>) {
+    let registration = registration().await;
+    let state = state_of(registration.as_ref());
+    let Some(r) = registration else {
+        return (state, None);
+    };
+    if state.ready() {
+        return (state, Some(r));
+    }
+    if state == WorkerState::Current
+        && let Ok(promise) = r.update()
+    {
+        // A failed look (offline, a server error) leaves the state as it is.
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    }
+    let mut waited = 0;
+    loop {
+        let state = state_of(Some(&r));
+        if state.ready() || waited >= wait_ms {
+            return (state, Some(r));
+        }
+        sleep(250).await;
+        waited += 250;
+    }
+}
+
+/// Reload (the notice's button, and a resumed app with nothing being typed): moves to the server's build without
+/// breaking the worker's promises. A waiting worker has its whole copy installed: it is asked to take over (sw.js
+/// `activate-now`; its activation drops the older caches and claims this page), and the page reloads once it has.
+/// With none waiting yet the frame lets a new one install first (`prepare`). If none installs, the page still reloads
+/// as asked; the next check offers the notice again only once a worker is waiting.
+async fn hand_over() {
+    if HANDING_OVER.with(|h| h.replace(true)) {
+        return;
+    }
+    let (state, registration) = prepare(INSTALL_WAIT_MS).await;
+    let waiting = registration
+        .as_ref()
+        .and_then(|r| r.waiting())
+        .filter(|_| state == WorkerState::Waiting);
+    if let Some(waiting) = waiting {
+        let seen = CONTROLLER_CHANGES.with(|c| c.get());
+        let message = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&message, &"type".into(), &"activate-now".into());
+        if waiting.post_message(&message).is_ok() {
+            let mut waited = 0;
+            while CONTROLLER_CHANGES.with(|c| c.get()) == seen && waited < TAKEOVER_WAIT_MS {
+                sleep(100).await;
+                waited += 100;
+            }
+        }
+    }
+    let _ = window().location().reload();
+}
+
+/// Counts `controllerchange` (`WorkerState::Replaced`). A worker that another window handed over to serves this
+/// page's next reload, so the frame checks again and offers the notice here too. A page that started without a
+/// worker (its first visit) is claimed once by the worker that installed this same build: that first change is not
+/// a newer build.
+fn watch_workers(on_change: std::rc::Rc<dyn Fn(bool)>) {
+    let Some(container) = workers() else { return };
+    let first_claim = std::cell::Cell::new(container.controller().is_none());
+    let changed = Closure::<dyn Fn()>::new(move || {
+        CONTROLLER_CHANGES.with(|c| c.set(c.get() + 1));
+        if first_claim.replace(false) {
+            return;
+        }
+        REPLACED.with(|r| r.set(true));
+        if !HANDING_OVER.with(|h| h.get()) {
+            on_change(false);
+        }
+    });
+    let _ = container
+        .add_event_listener_with_callback("controllerchange", changed.as_ref().unchecked_ref());
+    changed.forget();
+}
+
 /// An installed app that iOS resumes keeps the build it started with, for days. So whenever the app comes back on
 /// screen, and every 10 minutes while it is open, the frame asks the server for its page (no cache) and compares the
-/// build. Coming back on screen with nothing being typed, it reloads at once; otherwise it offers "New version ·
-/// Reload", so a note being written is never lost.
+/// build. A newer build is acted on only once a reload can reach it (`WorkerState::ready`: its worker installed);
+/// until then the frame lets the worker install and says nothing. Coming back on screen with nothing being typed, it
+/// hands over at once (`hand_over`); otherwise it offers "New version · Reload", so a note being written is never lost.
 fn watch_build(ctx: FrameCtx) {
     let running = document()
         .query_selector("link[rel=\"modulepreload\"]")
@@ -400,8 +577,14 @@ fn watch_build(ctx: FrameCtx) {
                     if !should_offer(&served, &dismissed) {
                         return;
                     }
+                    // Only a build a reload can reach (2026-11-19): a plain reload under the old worker answers
+                    // with the old build, so the notice would come back after every Reload.
+                    let (state, _) = prepare(INSTALL_WAIT_MS).await;
+                    if !state.ready() || HANDING_OVER.with(|h| h.get()) {
+                        return;
+                    }
                     if resumed && !crate::ui::device::typing() {
-                        let _ = window().location().reload();
+                        hand_over().await;
                     } else {
                         // Store the runtime behind the page the worker just stored, so an
                         // offline start finds it too (review M1).
@@ -424,6 +607,7 @@ fn watch_build(ctx: FrameCtx) {
             .add_event_listener_with_callback("visibilitychange", on_show.as_ref().unchecked_ref());
         on_show.forget();
     }
+    watch_workers(check.clone());
     let poll_check = check.clone();
     let poll = Closure::<dyn Fn()>::new(move || {
         if document().visibility_state() == web_sys::VisibilityState::Visible {
@@ -507,7 +691,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
         <Show when=move || !ctx.new_build.get().is_empty()>
             <div class="new-build" role="status">
                 <span>"New version"</span>
-                <button class="btn primary sm" on:click=move |_| { let _ = window().location().reload(); }>"Reload"</button>
+                <button class="btn primary sm" on:click=move |_| leptos::task::spawn_local(hand_over())>"Reload"</button>
                 <button class="icon-btn bare" aria-label="Later" on:click=move |_| {
                     ctx.dismissed_build.set(ctx.new_build.get_untracked());
                     ctx.new_build.set(String::new());
@@ -719,6 +903,34 @@ mod tests {
         assert!(should_offer("newbuild01", ""));
         assert!(!should_offer("newbuild01", "newbuild01"));
         assert!(should_offer("newer00001", "newbuild01"));
+    }
+
+    #[test]
+    fn the_notice_waits_for_a_worker_that_can_serve_the_new_build() {
+        // 2026-11-19: Reload under the old worker got the old build back, so the notice returned forever.
+        // A reload reaches a newer build only with no worker, a waiting (fully installed) one, or one that
+        // already took over while this page ran.
+        assert_eq!(
+            worker_state(false, false, false, false),
+            WorkerState::Unmanaged
+        );
+        assert_eq!(worker_state(true, true, false, false), WorkerState::Waiting);
+        assert_eq!(worker_state(true, true, true, true), WorkerState::Waiting);
+        assert_eq!(worker_state(true, false, true, true), WorkerState::Replaced);
+        assert_eq!(
+            worker_state(true, false, false, true),
+            WorkerState::Installing
+        );
+        assert_eq!(
+            worker_state(true, false, false, false),
+            WorkerState::Current
+        );
+        assert!(WorkerState::Unmanaged.ready());
+        assert!(WorkerState::Waiting.ready());
+        assert!(WorkerState::Replaced.ready());
+        // still downloading, or nothing newer installed: no notice, no automatic reload
+        assert!(!WorkerState::Installing.ready());
+        assert!(!WorkerState::Current.ready());
     }
 
     #[test]
