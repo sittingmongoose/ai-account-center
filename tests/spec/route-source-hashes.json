@@ -6,7 +6,7 @@
   "src/web-server/routes/account-preferences-routes.ts": "446fc2d8526789f787d54440f3cc2515fe531bbc14049f1c2b44d196baa58550",
   "src/web-server/routes/account-refresh-settings-routes.ts": "252c7e8423c80fef59f42a06827021da9a46da4e808b703ba097c91e39ee5d15",
   "src/web-server/routes/account-route-guards.ts": "8bf5f0d2be2a93de45df196efff48a86d60b18b64bc0a87bcda47bf464fe6d2e",
-  "src/web-server/routes/account-visibility-routes.ts": "ddd6e29488379b65b45ae440bdaf14c48f91dee2e61b8b7cba576d4cb0df0cc6",
+  "src/web-server/routes/account-visibility-routes.ts": "c68d9632d3e35e7eb835f78a41b705c908361753f8b3ec86625ad070d4aee65d",
   "src/web-server/routes/antigravity-routes.ts": "3b696b684328d4b46a4fe4a72b104cbee92bef6ee4e4468d0739c5d26fcc1fb0",
   "src/web-server/routes/api-router.ts": "08bb29961362f1411ff4050741093278341500866c39d736a26c1e30b4d1763c",
   "src/web-server/routes/app-update-routes.ts": "29992da3998ab5f2ec8eaf262f807b31f3a90ad4aa5074dfb34fb41529d03599",

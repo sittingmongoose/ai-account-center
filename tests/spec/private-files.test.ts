@@ -204,11 +204,9 @@ describe('one writer per file', () => {
     ).toBe('rust-service');
     // A row that moves with no group never leaves TS.
     expect(files.resolvePrivateFileOwners(rows, () => true)['auth-state']).toBe('ts');
-    // The shipped registry: no row moves, whatever the service mode.
-    for (const owner of Object.values(
-      files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => true)
-    ))
-      expect(owner).toBe('ts');
+    const shipped = files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => true);
+    for (const row of files.PRIVATE_FILE_ROWS)
+      expect(shipped[row.id]).toBe(row.movesWith === 'writes' ? 'rust-service' : 'ts');
   });
 
   it('refuses every TS writer of a row the service owns, and writes nothing', async () => {
@@ -272,7 +270,11 @@ describe('one writer per file', () => {
       path.join(root, 'src/web-server/rust-service-supervisor.ts'),
       'utf8'
     );
-    expect(supervisor).toMatch(/settlePrivateFileOwners\(\(\) => this\.mode === 'on'\)/);
+    expect(supervisor).toContain("this.mode === 'on'");
+    expect(supervisor).toContain("rustGroupOn('writes')");
+    expect(supervisor).toContain(
+      "settlePrivateFileOwners((group) => group === 'writes' && writes)"
+    );
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());
   });

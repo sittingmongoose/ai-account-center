@@ -91,6 +91,9 @@ fn the_service_starts_only_with_the_registrys_owners() {
     // Without the map (a test harness), and with TS's resolved map: every row's own owner.
     assert!(starts(None));
     assert!(starts(Some(Value::Object(owners()))));
+    let mut settings = owners();
+    settings.insert("account-refresh-settings".into(), json!("rust-service"));
+    assert!(starts(Some(Value::Object(settings))));
     // A row missing, an unknown row, a row given to the service that moves with no group, or
     // an owner word the registry does not know: the boot is refused.
     let mut missing = owners();

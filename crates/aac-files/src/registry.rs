@@ -335,10 +335,11 @@ mod tests {
         }
         assert!(row("unknown").is_err());
         // Nothing has moved yet: TS writes every row on the dashboard host.
-        assert!(
-            rows.iter()
-                .all(|r| r.owner == Role::Ts && r.moves_with.is_none())
-        );
+        let defaults = Owners::defaults(rows);
+        for row in rows {
+            assert_eq!(row.owner, Role::Ts);
+            assert_eq!(defaults.owner(&row.id), Some(Role::Ts));
+        }
     }
 
     #[test]

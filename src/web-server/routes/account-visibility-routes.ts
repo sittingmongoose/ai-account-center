@@ -155,7 +155,9 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
         result = await withPrivateFileLock(
           path.join(directory, ACCOUNT_VISIBILITY_FILE),
           async () => {
-            const reply = await writeWithRust(
+            const reply = await writeWithRust<
+              AccountVisibilityUpdateResult & { folderWarnings?: unknown }
+            >(
               req,
               res,
               '/api/accounts/visibility',
