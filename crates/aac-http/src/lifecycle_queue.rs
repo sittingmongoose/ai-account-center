@@ -1,3 +1,4 @@
+//! Per-boot serialization for lifecycle effects and their rollback.
 use std::{
     collections::HashMap,
     fs::TryLockError,
@@ -15,6 +16,7 @@ pub struct LifecycleQueues {
 }
 
 impl LifecycleQueues {
+    /// Start an empty queue set for the boot's canonical CCS root.
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -22,6 +24,7 @@ impl LifecycleQueues {
         }
     }
 
+    /// Run an effect under a workflow lease until it and its rollback settle.
     pub async fn run<T>(
         &self,
         scope: &str,

@@ -1,17 +1,24 @@
+//! Startup and daily scheduling for account lifecycle maintenance.
 use std::{future::Future, time::Duration};
 use tokio::{
     io::{self, AsyncReadExt},
     time::{self, MissedTickBehavior},
 };
 
-pub const DAILY: Duration = Duration::from_secs(86_400);
+const DAILY: Duration = Duration::from_secs(86_400);
 
+/// One independently retried maintenance action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Step {
+    /// Remove expired Codex sign-in staging.
     CodexStaging,
+    /// Sweep old, unreferenced dashboard-host keys.
     OrphanKeys,
+    /// Remove expired sign-in staging and markers.
     AntigravityStaging,
+    /// Sweep Antigravity profiles whose ownership can be proved.
     AntigravityOrphans,
+    /// Purge due, unprotected Claude trash through the host permit.
     ClaudeTrash,
 }
 

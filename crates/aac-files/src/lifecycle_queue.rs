@@ -1,3 +1,4 @@
+//! Filesystem leases shared by lifecycle maintenance and requested provider effects.
 use crate::{path, require_absolute};
 use aac_core::{Cause, Failure};
 use std::{
