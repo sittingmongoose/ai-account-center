@@ -86,6 +86,8 @@ export const MESSAGES = {
     'npm reported success, but it changed a copy T3 does not run; the copy T3 uses is unchanged. The details name both folders.',
   registry_mismatch:
     "npm installed a version other than the newest published one (an older or mirrored registry?), so the update did not complete. The details list each copy's version.",
+  registry_unreadable:
+    "npm's registry could not be reached, so the packages the shared updater touches could not be checked; nothing was installed. Try Update apps again.",
   prefix_not_writable:
     "The adapters T3 runs are in a folder this account cannot change, so nothing was installed. Update them as that folder's owner, or reinstall them in a folder you own.",
   antigravity_acp_updated:

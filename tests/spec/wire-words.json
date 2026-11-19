@@ -3241,7 +3241,8 @@
     "word": "prefix_not_writable",
     "cause": null,
     "sources": [
-      "scripts/app-updates/app_update_common.py:_CODE_CAUSES"
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_zcode.py:failures[name, index]"
     ]
   },
   {
@@ -3692,6 +3693,7 @@
     "word": "registry_unreadable",
     "cause": null,
     "sources": [
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
       "scripts/app-updates/app_update_zcode.py:reason"
     ]
   },
@@ -5632,6 +5634,7 @@
       "scripts/app-updates/app_update_macos.py:UpdateFailure",
       "scripts/app-updates/app_update_t3.py:UpdateFailure",
       "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:failures[name, index]",
       "scripts/app-updates/app_updates.py:UpdateFailure",
       "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
       "src/web-server/agent-usage/agent-usage-markdown.ts:state",

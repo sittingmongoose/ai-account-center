@@ -470,3 +470,19 @@ it('U13 the scrubbers stay as defence in depth for remaining free text', () => {
   });
   expect(JSON.stringify(owner)).not.toMatch(/horse|battery|staple/);
 });
+
+it('lane D R1-L2 URL credentials on any scheme and bare pwd= values never survive', () => {
+  // The userinfo goes whole, as the http form always has.
+  expect(scrubText('psql: postgres://dbuser:dbpass99@dbhost/db')).toBe('psql: postgres://dbhost/db');
+  expect(scrubText('clone: ssh://gituser:gitpass99@githost/org/repo.git')).toBe(
+    'clone: ssh://githost/org/repo.git'
+  );
+  for (const sample of [
+    'redis: redis://svc:running-pw-77@cache.internal:6379/2',
+    'connect pwd=hunter2pwd ok',
+  ])
+    expect(scrubText(sample)).not.toMatch(/running-pw-77|hunter2pwd/);
+  // Ordinary URLs without credentials, and URLs that merely lost theirs, stay readable.
+  const ordinary = 'fetch https://registry.npmjs.org/zcode-acp-server and postgres://dbhost/db';
+  expect(scrubText(ordinary)).toBe(ordinary);
+});
