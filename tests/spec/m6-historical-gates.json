@@ -1,6 +1,15 @@
 {
   "source": "df2619152437e7939424e51bb286d082f9152bb7",
   "provenance": "Reconstructed from AUDIT.md Appendix C and the M0 inventory selectors.",
+  "notApplicableAfterCut": {
+    "tests/integration/web-server/claude-desktop-profiles-endpoint.test.ts": "The TypeScript profiles endpoint was retired. The native profiles group covers its public contract.",
+    "tests/integration/web-server/codex-profiles-endpoint.test.ts": "The TypeScript Codex endpoint was retired. The native profiles group and Codex profile view tests cover it.",
+    "tests/unit/antigravity/routes.test.ts": "The TypeScript Antigravity router was retired. Native profiles M0 and Antigravity owner tests cover its responses.",
+    "tests/unit/web-server/app-update-registration.test.ts": "The Express app-update registration was retired. Native app-updates M0 checks admission and routing.",
+    "tests/unit/web-server/app-update-routes.test.ts": "The Express app-update handlers were retired. Native app-updates M0 and the Rust HTTP outcome fixture cover the contract.",
+    "tests/unit/web-server/claude-open-progress.test.ts": "The TypeScript Claude Open progress service was retired. The Rust Open operation, socket and profile fixtures cover the owner.",
+    "tests/unit/web-server/codex-routes.test.ts": "The TypeScript Codex profiles router was retired. The native profiles group covers its public routes."
+  },
   "safety": [
     "native/aac-status/tests/reset_history_identity.rs",
     "src/cliproxy/auth/__tests__/auth-token-manager.test.js",

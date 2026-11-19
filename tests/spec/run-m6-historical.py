@@ -27,10 +27,14 @@ RESET_EXECUTABLES = {
 
 def gate_files():
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    return {
+    files = {
         name: [gate for gate in ("safety", "http") if name in manifest[gate]]
         for name in sorted(set(manifest["safety"]) | set(manifest["http"]))
     }
+    retired = manifest.get("notApplicableAfterCut", {})
+    if set(retired) - files.keys():
+        raise ValueError("retired cases must belong to the reconstructed gate")
+    return files, retired
 
 
 def command_for(file):
@@ -87,10 +91,12 @@ def sandbox(tmp, command, binaries, dependencies, reset_executable):
     return cmd + ["--", *command]
 
 
-def run_file(name, gates, binaries, dependencies, logs):
+def run_file(name, gates, binaries, dependencies, logs, retired_reason):
     file = Path(name)
     result = {"file": name, "gates": gates}
     if not file.is_file():
+        if retired_reason:
+            return {**result, "state": "not applicable after the cut", "reason": retired_reason}
         return {**result, "state": "historical file absent"}
     if "/browser/checks/" in name or name.endswith("status-batch-identity-worker.ts"):
         reason = "browser kit" if "/browser/checks/" in name else "invoked by status-server-review"
@@ -148,9 +154,10 @@ def main():
     binaries = {name: Path(shutil.which(name)).resolve() for name in ("node", "bun")}
     dependencies = (ROOT / "node_modules").resolve(strict=True)
     output.mkdir(parents=True, exist_ok=True)
-    items = [(name, gates) for name, gates in gate_files().items() if args.filter in name]
+    files, retired = gate_files()
+    items = [(name, gates) for name, gates in files.items() if args.filter in name]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(run_file, name, gates, binaries, dependencies, output)
+        futures = [pool.submit(run_file, name, gates, binaries, dependencies, output, retired.get(name))
                    for name, gates in items]
         results = []
         for future in futures:
