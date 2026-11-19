@@ -10,12 +10,20 @@
  */
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 
-export type RustGroup = 'home' | 'status' | 'analytics' | 'collection' | 'writes' | 'app-updates';
+export type RustGroup =
+  | 'home'
+  | 'status'
+  | 'scoreboard'
+  | 'analytics'
+  | 'collection'
+  | 'writes'
+  | 'app-updates';
 
 /** The group's switch when neither the environment nor the config names it. */
 const DEFAULT: Record<RustGroup, boolean> = {
   home: true,
   status: false,
+  scoreboard: true,
   analytics: false,
   collection: false,
   writes: false,

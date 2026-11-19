@@ -1,6 +1,7 @@
 import { sendRevalidatedView } from './revalidated-view';
 import { composeWithRust, RustService } from '../rust-service';
 import { rustScoreboardInput, isRustScoreboardView } from '../rust-read-input';
+import { rustGroupOn } from '../rust-service-groups';
 import type { ScoreboardView } from '../scoreboard/scoreboard-view';
 import type { Request, Router } from 'express';
 import { createApiRouter } from './api-router';
@@ -71,7 +72,7 @@ export function createScoreboardRouter(
     try {
       const bridge: unknown = res.locals.rustService;
       const composer =
-        bridge instanceof RustService && bridge.mode !== 'off'
+        bridge instanceof RustService && bridge.mode !== 'off' && rustGroupOn('scoreboard')
           ? {
               mode: bridge.mode,
               compose: (

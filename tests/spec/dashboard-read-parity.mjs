@@ -57,7 +57,11 @@ async function start(service) {
 }
 
 async function query(url, suffix, auth, headers = {}) {
-  const res = await fetch(url + suffix, { headers: { 'x-fixture-auth': auth, ...headers } });
+  const res = await fetch(url + suffix, {
+    // Fetch's default cache mode adds a no-cache directive with If-None-Match.
+    cache: 'force-cache',
+    headers: { 'x-fixture-auth': auth, ...headers },
+  });
   return {
     status: res.status,
     cache: res.headers.get('cache-control'),

@@ -1,4 +1,3 @@
-import { loadOrCreateUnifiedConfig } from '../config/unified-config-loader';
 import { once } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -32,7 +31,12 @@ function launched(child: ChildProcess): Promise<AddressInfo> {
     };
     lines.on('line', (line) => {
       const match = /^aac-http public listening on (\[[0-9a-f:]+\]|[0-9.]+):([0-9]+)$/i.exec(line);
-      if (!match) return;
+      if (!match) {
+        if (line.startsWith('Valid for 60 minutes. Saved in auth/setup-code ')) {
+          process.stdout.write(line + '\n');
+        }
+        return;
+      }
       const address = match[1].replace(/^\[|\]$/g, '');
       dispose();
       resolve({ address, port: Number(match[2]), family: isIP(address) === 6 ? 'IPv6' : 'IPv4' });
@@ -118,9 +122,6 @@ export async function startComposedServer(
   options: ServerOptions,
   binary: string
 ): Promise<ServerInstance & { restartPublic: () => Promise<void> }> {
-  // The retained adapters require the unified-config schema even on a fresh
-  // root. Set it up before Rust can persist the first dashboard credentials.
-  loadOrCreateUnifiedConfig();
   const host = options.host ?? 'localhost';
   const ip =
     host === 'localhost'

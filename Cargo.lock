@@ -110,6 +110,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "if-addrs",
+ "indexmap",
  "ipnet",
  "libc",
  "regex",

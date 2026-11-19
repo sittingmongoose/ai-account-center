@@ -6,6 +6,7 @@ rustService:
   groups:
     home: on
     status: on
+    scoreboard: on
     analytics: on
     collection: on
     writes: on

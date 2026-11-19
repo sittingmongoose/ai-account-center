@@ -262,48 +262,51 @@ impl ScoreboardOwned {
         if full {
             self.last_full_at.store(now, Ordering::Relaxed);
         }
-        let mut safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
-        let mut remember = |path: &str| {
-            if aac_status::secret_policy::find_secret(path).is_none() {
-                safe_paths.insert(path_hash(path), path.to_string());
+        let (files, refused) = {
+            let mut safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
+            let mut remember = |path: &str| {
+                if aac_status::secret_policy::find_secret(path).is_none() {
+                    safe_paths.insert(path_hash(path), path.to_string());
+                }
+            };
+            let mut files: Vec<Json> = Vec::new();
+            let mut refused: Vec<Json> = scan["refused"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            for row in scan["refused"].as_array().cloned().unwrap_or_default() {
+                if let Some(path) = row["path"].as_str() {
+                    remember(path);
+                }
             }
-        };
-        let mut files: Vec<Json> = Vec::new();
-        let mut refused: Vec<Json> = scan["refused"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        for row in scan["refused"].as_array().cloned().unwrap_or_default() {
-            if let Some(path) = row["path"].as_str() {
+            for file in scan["files"].as_array().cloned().unwrap_or_default() {
+                let path = file["path"].as_str().unwrap_or_default();
+                let text = file["text"].as_str().unwrap_or_default();
                 remember(path);
+                // A file's name can hold a credential too: refused, its name kept nowhere.
+                if aac_status::secret_policy::find_secret(path).is_some() {
+                    refused.push(json!({
+                        "path": path,
+                        "size": file["size"],
+                        "mtimeMs": file["mtimeMs"],
+                        "reason": SECRET_NAME_REASON,
+                        "sha256": sha256_text(text),
+                    }));
+                    continue;
+                }
+                match validate::json_from_bytes(text.as_bytes(), RUN_CAP) {
+                    Ok(_) => files.push(file),
+                    Err(reason) => refused.push(json!({
+                        "path": path,
+                        "size": file["size"],
+                        "mtimeMs": file["mtimeMs"],
+                        "reason": reason,
+                        "sha256": sha256_text(text),
+                    })),
+                }
             }
-        }
-        for file in scan["files"].as_array().cloned().unwrap_or_default() {
-            let path = file["path"].as_str().unwrap_or_default();
-            let text = file["text"].as_str().unwrap_or_default();
-            remember(path);
-            // A file's name can hold a credential too: refused, its name kept nowhere.
-            if aac_status::secret_policy::find_secret(path).is_some() {
-                refused.push(json!({
-                    "path": path,
-                    "size": file["size"],
-                    "mtimeMs": file["mtimeMs"],
-                    "reason": SECRET_NAME_REASON,
-                    "sha256": sha256_text(text),
-                }));
-                continue;
-            }
-            match validate::json_from_bytes(text.as_bytes(), RUN_CAP) {
-                Ok(_) => files.push(file),
-                Err(reason) => refused.push(json!({
-                    "path": path,
-                    "size": file["size"],
-                    "mtimeMs": file["mtimeMs"],
-                    "reason": reason,
-                    "sha256": sha256_text(text),
-                })),
-            }
-        }
+            (files, refused)
+        };
         let mut threads = Map::new();
         if let Some(map) = scan["threads"].as_object() {
             for (writer, text) in map {
@@ -324,8 +327,6 @@ impl ScoreboardOwned {
             }
         };
         let read_count = files.len();
-        drop(remember);
-        drop(safe_paths);
         let record = self
             .store
             .call(

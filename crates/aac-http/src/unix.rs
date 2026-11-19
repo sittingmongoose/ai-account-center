@@ -1132,7 +1132,7 @@ async fn serve_inner(
     // Global layer protects even unknown routes and unsupported methods.
     let router = router
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
-        .with_state(state);
+        .with_state(state.clone());
     tracing::info!(target: "aac_http", "private service ready");
     // R3: the hosted store opens beside the HTTP service (its calls wait for the open),
     // its jobs run on TS's cadence, and the engine closes cleanly when the service ends.

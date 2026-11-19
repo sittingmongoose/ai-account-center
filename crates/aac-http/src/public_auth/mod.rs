@@ -283,12 +283,15 @@ pub(crate) async fn run_public_at(
     let auth = DashboardAuth::open(root)?;
     let ui_root = std::env::var_os("AAC_RUST_UI_DIR").map(PathBuf::from);
     let snapshot = std::env::var_os("AAC_RUST_HUB_CACHE").map(PathBuf::from);
-    let api = Router::new().route(
-        "/api/health",
-        axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
-    );
     let backend = compose::Backend::from_env(address)?;
     let composed = backend.is_some();
+    let mut api = Router::new();
+    if !composed {
+        api = api.route(
+            "/api/health",
+            axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
+        );
+    }
     let router = auth.protect(auth.edges(
         api,
         HubCache::default(),
@@ -404,6 +407,11 @@ impl AuthRuntime {
             ));
         }
         update(&mut latest)?;
+        if latest.doc.get("version").is_none() {
+            // Version 2 is the first unified YAML schema. Older auth-only roots
+            // and fresh setup both need a document the retained TS readers can open.
+            latest.doc["version"] = json!(2);
+        }
         Files::save_config(&writer, &latest.doc)?;
         *current = Config::new(latest.doc, &self.env);
         Ok(())

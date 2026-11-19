@@ -58,6 +58,7 @@ export interface UnifiedConfig {
     groups?: {
       home?: 'off' | 'on';
       status?: 'off' | 'on';
+      scoreboard?: 'off' | 'on';
       analytics?: 'off' | 'on';
       collection?: 'off' | 'on';
       writes?: 'off' | 'on';
