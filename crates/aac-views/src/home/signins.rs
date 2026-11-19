@@ -59,6 +59,13 @@ pub fn line(cx: &Ctx, data: &Value, email: Option<&Value>) -> R<String> {
     if rows.is_empty() {
         return Ok(String::new());
     }
+    if let Some(
+        error @ ("Node.js executable not found on the renewal runner."
+        | "Node.js could not be launched on the renewal runner."),
+    ) = r.get("browserError").and_then(Value::as_str)
+    {
+        return Ok(error.into());
+    }
     if needs_count(data, Some(email))? > 0 {
         return Ok("Sign-in renewal needs you".into());
     }

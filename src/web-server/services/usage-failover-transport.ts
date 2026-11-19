@@ -1,4 +1,5 @@
 import { ValidationError, NetworkError } from '../../errors/error-types';
+import { createLogger } from '../../services/logging';
 import { runManagedCommand } from '../../utils/managed-process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -167,7 +168,43 @@ export async function signinHelperBundle(): Promise<string> {
   ].join('\n');
 }
 
-export function parseUsageHelperResponse(text: string): UsageHelperResponse {
+const logger = createLogger('usage-failover-transport');
+
+interface ClaudeHttpStage {
+  stage: 'oauth_profile' | 'oauth_usage' | 'optional_web';
+  status: number | null;
+  retryAfterSeconds: number | null;
+}
+
+function logClaudeHttpStages(value: unknown, emit: (fields: ClaudeHttpStage) => void): void {
+  if (!Array.isArray(value) || value.length > 5) return;
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const { stage, status, retryAfterSeconds } = entry;
+    if (stage !== 'oauth_profile' && stage !== 'oauth_usage' && stage !== 'optional_web') continue;
+    if (
+      status !== null &&
+      (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599)
+    )
+      continue;
+    emit({
+      stage,
+      status,
+      retryAfterSeconds:
+        typeof retryAfterSeconds === 'number' &&
+        Number.isFinite(retryAfterSeconds) &&
+        retryAfterSeconds >= 0 &&
+        retryAfterSeconds <= 86400
+          ? retryAfterSeconds
+          : null,
+    });
+  }
+}
+
+export function parseUsageHelperResponse(
+  text: string,
+  onClaudeHttpStage?: (fields: ClaudeHttpStage) => void
+): UsageHelperResponse {
   if (Buffer.byteLength(text) > MAX_BYTES) throw new ValidationError('Invalid usage response.');
   const value: unknown = JSON.parse(text);
   if (!isRecord(value) || value.version !== 1) throw new ValidationError('Invalid usage response.');
@@ -229,6 +266,7 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
   ) {
     throw new ValidationError('Invalid usage response.');
   }
+  if (onClaudeHttpStage) logClaudeHttpStages(value.claudeHttp, onClaudeHttpStage);
   const retry = value.retryAfterSeconds;
   const refresh = value.refreshAfterSeconds;
   const observedPlan = safeUsageText(value.observedPlan);
@@ -361,7 +399,10 @@ export async function runUsageHelper(
   );
   const python = async (): Promise<UsageHelperResponse> =>
     parseUsageHelperResponse(
-      await runPrivateUsageHelper(host, request, undefined, undefined, deadlineAt)
+      await runPrivateUsageHelper(host, request, undefined, undefined, deadlineAt),
+      request.provider === 'claude' && request.action === 'collect'
+        ? (fields) => logger.info('usage.claude.http', 'Claude quota HTTP read', { ...fields })
+        : undefined
     );
   // The agent's own deadline ends where the reference's reserve begins; Python keeps the caller's.
   const response =

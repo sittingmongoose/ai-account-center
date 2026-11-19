@@ -209,6 +209,7 @@ export class AccountDashboardService {
     return {
       accountId: `claude:${profile.id ?? profile.email}`,
       provider: 'claude',
+      claudeDesktopCadence: primarySources.length > 0,
       ccsDir: scope,
       binding: JSON.stringify(profile),
       expectedEmail: profile.email,

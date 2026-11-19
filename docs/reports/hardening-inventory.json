@@ -610,8 +610,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 459,
-      "coverageRatio": 0.0959,
+      "totalSourceFiles": 460,
+      "coverageRatio": 0.0957,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -627,7 +627,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 263,
+          "count": 264,
           "withLogger": 30
         },
         {
@@ -770,12 +770,12 @@
           "loc": 1154
         },
         {
-          "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1101
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 1084
         },
         {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1053
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 1080
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -783,7 +783,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 992
+          "loc": 993
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",

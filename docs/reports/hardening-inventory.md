@@ -55,7 +55,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 55 (224 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
-| files with createLogger | 44/459 |
+| files with createLogger | 44/460 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
 | files > 600 LOC | 27 |
@@ -89,10 +89,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/analytics-remote-transport.ts` | 1719 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1154 |
-| `src/web-server/status/status-collectors.ts` | 1101 |
-| `src/web-server/services/usage-failover-service.ts` | 1053 |
+| `src/web-server/services/usage-failover-service.ts` | 1084 |
+| `src/web-server/status/status-collectors.ts` | 1080 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
-| `src/web-server/services/account-dashboard-service.ts` | 992 |
+| `src/web-server/services/account-dashboard-service.ts` | 993 |
 | `src/web-server/services/account-analytics-service.ts` | 887 |
 | `src/web-server/status/status-view.ts` | 870 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
