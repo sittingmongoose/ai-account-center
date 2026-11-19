@@ -402,6 +402,51 @@ async fn managed_open_copies_then_launches_with_progress() {
 }
 
 #[tokio::test]
+async fn managed_copy_alone_synchronizes_one_record() {
+    let root = Root::new();
+    root.write_manifest(json!([gmail_entry(Some(policy()))]));
+    let remote = Arc::new(FakeRemote::new());
+    let source = record_value(1, "windows");
+    remote.queue_helper("closed-check", vec![ok_bytes(json!({"closed": true})), ok_bytes(json!({"closed": true}))]);
+    remote.queue_helper(
+        "collect",
+        vec![
+            Ok(snapshot_json("mac", &[])),
+            Ok(snapshot_json("windows", &[source.clone()])),
+            Ok(snapshot_json("windows", &[source.clone()])),
+            Ok(snapshot_json("mac", &[source.clone()])),
+        ],
+    );
+    remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
+    remote.queue_helper("protected-check", vec![ok_bytes(json!({"unchanged": true}))]);
+    remote.queue_helper(
+        "append",
+        vec![ok_bytes(json!({"status": "created_metadata", "createdCount": 1, "protectedBytesUnchanged": true, "writerQuiescent": true}))],
+    );
+    remote.queue_helper(
+        "snapshot-cleanup",
+        vec![ok_bytes(json!({"kept": ["a"], "deleted": [], "skipped": []}))],
+    );
+    let profile = super::manifest::list_profiles(root.path())
+        .expect("manifest")
+        .into_iter()
+        .next()
+        .expect("one profile");
+    let result = super::sync_service::synchronize_before_open(
+        root.path(),
+        &profile,
+        "mac",
+        remote.as_ref(),
+        &super::sync_service::NoObserver,
+        true,
+    )
+    .await;
+    assert_eq!(result["status"], json!("synchronized"), "copy result: {result}");
+    assert_eq!(result["createdCount"], json!(1), "copy result: {result}");
+    assert!(!super::markers::open_held(root.path(), "gmail", "mac"));
+}
+
+#[tokio::test]
 async fn lost_append_receipt_holds_open_as_blocked_uncertain() {
     let root = Root::new();
     root.write_manifest(json!([gmail_entry(Some(policy()))]));

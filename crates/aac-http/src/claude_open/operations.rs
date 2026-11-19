@@ -248,8 +248,11 @@ impl Operations {
         };
         let inner = Arc::clone(&self.inner);
         let now = Arc::clone(&self.options.now);
+        // The TS store calls run(observer) synchronously; only its outcome waits in the
+        // background, so the caller's observer handles exist when start returns.
+        let running = run(observer);
         tokio::spawn(async move {
-            let outcome = run(observer).await;
+            let outcome = running.await;
             let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
             let Some((_, entry)) = guard.entries.iter_mut().find(|(k, _)| *k == entry_key) else {
                 return;
