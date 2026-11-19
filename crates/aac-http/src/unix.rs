@@ -1096,7 +1096,7 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, Default::default()).await
+    serve_inner(boot, shutdown, None, false, Default::default(), None).await
 }
 
 /// Serve the private routes with an app-update job owner supplied by the service binary.
@@ -1105,7 +1105,7 @@ pub async fn serve_with_app_update_jobs(
     shutdown: impl Future<Output = ()> + Send + 'static,
     jobs: Arc<dyn AppUpdateJobs>,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, Some(jobs), false, Default::default()).await
+    serve_inner(boot, shutdown, Some(jobs), false, Default::default(), None).await
 }
 
 /// Same private protocol, with the native app-update owner using this boot's agent pool.
@@ -1113,7 +1113,7 @@ pub async fn serve_composed(
     boot: Boot,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, true, Default::default()).await
+    serve_inner(boot, shutdown, None, true, Default::default(), None).await
 }
 
 /// Run the private service with a shared dashboard cache.
@@ -1122,7 +1122,25 @@ pub async fn serve_with_account_usage_cache(
     shutdown: impl Future<Output = ()> + Send + 'static,
     cache: crate::account_usage::AccountUsageCache,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false, cache).await
+    serve_inner(boot, shutdown, None, false, cache, None).await
+}
+
+/// Native owner callbacks share the dashboard with the public listener, hub and store.
+pub struct NativeAccountUsage {
+    /// Read the current facts published by the adjacent Rust owners.
+    pub companions: Arc<dyn Fn() -> crate::account_usage::producer::CompanionInputs + Send + Sync>,
+    /// Observe each completed cache generation, for example in the usage hub.
+    pub published: Arc<dyn Fn(&crate::account_usage::AccountUsageCache) + Send + Sync>,
+}
+
+/// Boot account collection with the private server's L5 pool and the public listener's cache.
+pub async fn serve_with_native_account_usage(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    cache: crate::account_usage::AccountUsageCache,
+    native: NativeAccountUsage,
+) -> io::Result<()> {
+    serve_inner(boot, shutdown, None, false, cache, Some(native)).await
 }
 
 async fn serve_inner(
@@ -1131,8 +1149,18 @@ async fn serve_inner(
     app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
     native_app_updates: bool,
     cache: crate::account_usage::AccountUsageCache,
+    native: Option<NativeAccountUsage>,
 ) -> io::Result<()> {
     boot.validate()?;
+    let owners = boot.owners()?;
+    if native.is_some()
+        && owners.owner(crate::collection_cache::OBSERVATIONS) != Some(registry::Role::RustService)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "native collection requires its registry owner",
+        ));
+    }
     let rows = crate::table::rows(crate::table::ROUTES)?;
     let identity = Identity::current()?;
     let listener = StdListener::bind(&boot.socket_path)?;
@@ -1152,7 +1180,7 @@ async fn serve_inner(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
-    let feeds = cache.feeds;
+    let feeds = cache.feeds.clone();
     let app_update_jobs = app_update_jobs.or_else(|| {
         native_app_updates.then(|| {
             let jobs = crate::app_updates::AppUpdates::with_pool(
@@ -1167,7 +1195,6 @@ async fn serve_inner(
     let collection = Arc::new(crate::collection::Collection::default());
     // R4: the owned readers run under the store host, with the boot's share roots and the
     // registry writers TS resolved at start.
-    let owners = boot.owners()?;
     // One readers-check writer for both owners (one file per writer carries the status
     // scan's rows and the runs rows), and one flush in flight.
     let check = Arc::new(std::sync::Mutex::new(
@@ -1207,6 +1234,14 @@ async fn serve_inner(
     let owned_reports_root = boot.owned.as_ref().map(|owned| owned.reports_root.clone());
     let renewal = boot.renewal.clone();
     let ccs_dir = boot.ccs_dir.clone();
+    let producer = native.as_ref().map(|_| {
+        crate::account_usage::producer::Producer::shared(
+            boot.ccs_dir.clone(),
+            owners.clone(),
+            agents.clone(),
+            collection.clone(),
+        )
+    });
     let state = AppState(Arc::new(Shared {
         owners,
         cache_writes: Arc::default(),
@@ -1320,12 +1355,44 @@ async fn serve_inner(
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { crate::scoreboard_owned::catalog_jobs(jobs, stop).await });
     }
+    let cancel = aac_transport::CancellationToken::new();
+    let task = producer.zip(native).map(|(producer, native)| {
+        let stop = cancel.clone();
+        let store = store.clone();
+        tokio::spawn(async move {
+            producer
+                .run(
+                    cache,
+                    stop,
+                    || (native.companions)(),
+                    |cache| {
+                        (native.published)(&cache);
+                        let store = store.clone();
+                        async move {
+                            if let Some(store) = store {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    store.record_native_account_usage(&cache)
+                                })
+                                .await;
+                            }
+                        }
+                    },
+                )
+                .await;
+        })
+    });
+    let stopping = cancel.clone();
     let served = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             shutdown.await;
+            stopping.cancel();
             collection.stop();
         })
         .await;
+    cancel.cancel();
+    if let Some(task) = task {
+        let _ = task.await;
+    }
     jobs_stop.store(true, Ordering::Release);
     let _ = jobs_stop_tx.send(true);
     if let Some(host) = store {

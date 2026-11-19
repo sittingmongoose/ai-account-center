@@ -102,6 +102,50 @@ impl Collection {
         Ok(Arc::new(Collected::Value(result)))
     }
 
+    /// The standalone producer uses the same registry, deadline and coalescing as the bridge.
+    pub(crate) async fn read_value(
+        self: &Arc<Self>,
+        agents: Arc<Agents>,
+        platform: &str,
+        ssh_host: Option<&str>,
+        verb: &str,
+        args: &Value,
+    ) -> Result<Value, &'static str> {
+        let deadline = if verb == "failover-collect" {
+            35_000
+        } else {
+            15_000
+        };
+        let bytes = serde_json::to_vec(&json!({
+            "computer":{"platform":platform,"sshHost":ssh_host},
+            "args":args,"deadlineMs":deadline,"timeoutMs":deadline+1000,
+            "maxBytes":MAX_FRAME_BYTES,"callId":"native-account-usage",
+        }))
+        .map_err(|_| "shape")?;
+        let call = Call::parse(&bytes).ok_or("shape")?;
+        let request = call.collection_request(verb).ok_or("shape")?;
+        let reply = self
+            .collect(agents.clone(), &call, request, Instant::now())
+            .await;
+        let result = match reply {
+            Err("unsupported") if verb == "failover-inventory" => {
+                self.read_helper(
+                    &agents,
+                    &call.computer,
+                    args,
+                    Instant::now() + Duration::from_secs(12),
+                    call.max_bytes,
+                )
+                .await?
+            }
+            other => other?,
+        };
+        match result.as_ref() {
+            Collected::Value(value) => Ok(value.clone()),
+            Collected::Failure(_) => Err("reply"),
+        }
+    }
+
     pub(crate) async fn read(
         self: &Arc<Self>,
         agents: Arc<Agents>,

@@ -10,15 +10,15 @@ mod agent_transport;
 pub mod antigravity_host;
 pub mod antigravity_probes;
 pub mod antigravity_quota;
-pub mod antigravity_runtime;
 #[cfg(unix)]
 pub mod antigravity_renewal;
-#[cfg(unix)]
-pub mod claude_lifecycle;
+pub mod antigravity_runtime;
 #[cfg(unix)]
 pub mod app_update_routes;
 #[cfg(unix)]
 pub mod app_updates;
+#[cfg(unix)]
+pub mod claude_lifecycle;
 pub mod cli;
 #[cfg(unix)]
 mod collection;
@@ -39,21 +39,21 @@ mod identity;
 #[cfg(unix)]
 mod json_object;
 #[cfg(unix)]
-mod limits;
-/// Cross-platform: the models.dev fetch job G14's scheduling will run from the service.
-pub mod models_dev;
-#[cfg(unix)]
-pub mod lifecycle_maintenance;
+pub mod key_lifecycle;
 #[cfg(unix)]
 mod lifecycle_effect_pipe;
 #[cfg(unix)]
-pub mod key_lifecycle;
+pub mod lifecycle_maintenance;
 #[cfg(unix)]
 pub mod lifecycle_queue;
 #[cfg(unix)]
 pub mod lifecycle_recheck;
 #[cfg(unix)]
 pub mod lifecycle_signin;
+#[cfg(unix)]
+mod limits;
+/// Cross-platform: the models.dev fetch job G14's scheduling will run from the service.
+pub mod models_dev;
 #[cfg(unix)]
 mod preferences_write;
 #[cfg(unix)]
@@ -69,9 +69,9 @@ mod registered;
 #[cfg(any(unix, test))]
 mod reset_claims;
 #[cfg(unix)]
-mod scoreboard_owned;
-#[cfg(unix)]
 mod reset_source_route;
+#[cfg(unix)]
+mod scoreboard_owned;
 #[cfg(unix)]
 mod status_cache;
 #[cfg(unix)]
@@ -91,4 +91,7 @@ mod visibility_write;
 #[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, serve_composed, serve_with_account_usage_cache, serve_with_app_update_jobs, short_name};
+pub use unix::{
+    Boot, NativeAccountUsage, serve, serve_composed, serve_with_account_usage_cache,
+    serve_with_app_update_jobs, serve_with_native_account_usage, short_name,
+};

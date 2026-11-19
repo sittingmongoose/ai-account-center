@@ -208,6 +208,67 @@ pub fn read_registry(root: &Path) -> Result<Sources, Decline> {
     }
 }
 
+/// Legacy providers use the same identifiers and default source as the TS manifest.
+pub(super) fn legacy(root: &Path) -> Vec<Source> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Override {
+        provider: String,
+        platform: String,
+        ssh_host: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Manifest {
+        version: u32,
+        sources: Vec<Override>,
+    }
+    let file = root.join("account-usage-sources.json");
+    let config: Option<Manifest> = aac_files::read_bounded(&file, 32 * 1024)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let order = [
+        "antigravity",
+        "muse",
+        "cursor",
+        "kimi-code",
+        "qwen",
+        "zai",
+        "opencode-go",
+    ];
+    let mut overrides = BTreeMap::new();
+    if let Some(config) = config.filter(|c| c.version == 1 && c.sources.len() <= order.len()) {
+        for row in config.sources {
+            if !order.contains(&row.provider.as_str())
+                || !["mac", "windows", "ubuntu"].contains(&row.platform.as_str())
+                || row.ssh_host.as_deref().is_some_and(|s| !alias(s))
+                || overrides.insert(row.provider.clone(), row).is_some()
+            {
+                overrides.clear();
+                break;
+            }
+        }
+    }
+    order
+        .into_iter()
+        .map(|provider| {
+            let entry = overrides.remove(provider);
+            Source {
+                id: format!("{provider}:usage"),
+                provider: provider.into(),
+                platform: entry
+                    .as_ref()
+                    .map_or_else(|| "ubuntu".into(), |row| row.platform.clone()),
+                ssh_host: entry.and_then(|row| row.ssh_host),
+                label: None,
+                credential: Credential::Discover,
+                created_at: None,
+                created_by: None,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
