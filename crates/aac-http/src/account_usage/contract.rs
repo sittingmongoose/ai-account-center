@@ -69,7 +69,7 @@ pub fn usage_email(value: &Value) -> Option<String> {
     let at = bytes.iter().position(|b| *b == b'@')?;
     let local = &text[..at];
     let rest = &text[at + 1..];
-    let dot = rest.iter().position(|b| *b == b'.')?;
+    let dot = rest.bytes().position(|b| b == b'.')?;
     let name = &rest[..dot];
     let suffix = &rest[dot + 1..];
     let no_ws = |part: &str| {

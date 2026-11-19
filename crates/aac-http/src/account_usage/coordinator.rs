@@ -38,7 +38,7 @@ impl UsageHost {
         json!({"host": self.host, "platform": self.platform, "sshHost": self.ssh_host.clone().map(Value::String).unwrap_or(Value::Null)})
     }
     fn key(&self) -> String {
-        js_json::write(&json!([self.platform, self.ssh_host]))
+        json_text(&json!([self.platform, self.ssh_host]))
     }
 }
 
@@ -137,6 +137,11 @@ pub struct FailoverCoordinator {
     sign_in_selectors: Mutex<HashMap<String, Vec<String>>>,
     unread_selectors: Mutex<HashMap<String, Vec<String>>>,
     slots: tokio::sync::Semaphore,
+}
+
+/// `JSON.stringify` as a String (`js_json::write` yields bytes).
+fn json_text(value: &Value) -> String {
+    String::from_utf8(js_json::write(value)).unwrap_or_default()
 }
 
 fn computers() -> &'static Value {
@@ -387,7 +392,7 @@ impl FailoverCoordinator {
         let file = format!("{}.json", key);
         let Ok(rows) = aac_files::registry::rows() else { return };
         if let Ok(store) = self.owners.claim(rows, "account-usage-observations", &target.ccs_dir, Some(&file)) {
-            let _ = store.write_private_cache(bytes.as_bytes());
+            let _ = store.write_private_cache(&bytes);
         }
     }
 
@@ -418,7 +423,7 @@ impl FailoverCoordinator {
         if let Some(streak) = merged.claude_429_streak {
             record["claude429Streak"] = json!(streak);
         }
-        let _ = failover::save(&self.owners, ccs_dir, key, js_json::write(&record).as_bytes());
+        let _ = failover::save(&self.owners, ccs_dir, key, &js_json::write(&record));
         merged.until
     }
 
@@ -471,7 +476,7 @@ fn parse_opt(s: Option<&str>) -> f64 {
 
 impl FailoverCoordinator {
     fn inventory_key(&self, target: &UsageFailoverTarget, host: &UsageHost) -> String {
-        js_json::write(&json!([
+        json_text(&json!([
             target.ccs_dir.to_string_lossy(),
             target.provider,
             host.key(),
@@ -584,7 +589,7 @@ impl FailoverCoordinator {
         }
         let mut by_identity: Vec<(String, (UsageHost, UsageCandidate))> = Vec::new();
         for item in found {
-            let id = js_json::write(&json!([item.1.identity.kind, item.1.identity.key]));
+            let id = json_text(&json!([item.1.identity.kind, item.1.identity.key]));
             if !by_identity.iter().any(|(k, _)| *k == id) {
                 by_identity.push((id, item));
             }
@@ -818,7 +823,7 @@ impl FailoverCoordinator {
                     return Ok(());
                 }
             } else {
-                tried.push(js_json::write(&json!([host.key(), candidate.locator])));
+                tried.push(json_text(&json!([host.key(), candidate.locator])));
             }
         }
         for (host, candidates) in self.peer_lists(target, state).await {
@@ -849,7 +854,7 @@ impl FailoverCoordinator {
         if peer_held(self) {
             return "next";
         }
-        let key = js_json::write(&json!([host.key(), candidate.locator]));
+        let key = json_text(&json!([host.key(), candidate.locator]));
         if tried.contains(&key) {
             return "next";
         }
@@ -1163,8 +1168,8 @@ impl FailoverCoordinator {
         let requires_sign_in = code.as_deref().is_some_and(|c| ["needs_sign_in", "no_browser_cookie", "choose_team"].contains(&c));
         if let Some(code) = &code {
             if let Some(message) = message_for(code) {
-                let status = account.get("status").and_then(Value::as_str).unwrap_or("");
-                let provider = account.get("provider").and_then(Value::as_str).unwrap_or("");
+                let status = account.get("status").and_then(Value::as_str).unwrap_or("").to_owned();
+                let provider = account.get("provider").and_then(Value::as_str).unwrap_or("").to_owned();
                 if status != "needs_sign_in" && (!has_usage_value(&account) || (requires_sign_in && provider != "claude")) {
                     account["status"] = json!(if requires_sign_in { "needs_sign_in" } else { "unavailable" });
                     account["message"] = json!(message);
