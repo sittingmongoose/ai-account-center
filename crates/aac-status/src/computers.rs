@@ -7,6 +7,11 @@ static COMPUTERS: LazyLock<Value> = LazyLock::new(|| {
         .expect("packaged computer registry")
 });
 
+/// The packaged registry in its shipped order (`DASHBOARD_HOSTS` is its key list).
+pub fn registry() -> &'static Value {
+    &COMPUTERS
+}
+
 fn find_computer<'a>(registry: &'a Value, machine: &str) -> Option<&'a Value> {
     registry
         .as_object()?

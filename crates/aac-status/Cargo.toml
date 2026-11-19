@@ -31,8 +31,14 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 serde.workspace = true
 # float_roundtrip: numbers parse to the exact double every JavaScript engine reads (the
 # golden pairs carry 17-digit shares; the fast parser lands one ulp off them).
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+# preserve_order: parsed objects keep JavaScript insertion order (the share readers'
+# projections copy raw members in the order JSON.parse holds them).
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
+# The shared report secret policy (native/shared/secret_policy.rs), as aac-store compiles it.
+regex.workspace = true
 sha2.workspace = true
+# Insertion-ordered maps for the share readers' state (serde_json's Map holds JSON values only).
+indexmap = "2.14.2"
 
 [build-dependencies]
 napi-build = "2"
