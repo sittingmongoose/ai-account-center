@@ -3,12 +3,31 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { stageManifest } = require('./build-dashboard-native');
-const { recordBuild } = require('./deploy-lineage');
+const { readSourceBuild, recordBuild } = require('./deploy-lineage');
 
 const root = path.resolve(__dirname, '..');
 
 function stagePackage(destination) {
+  const source = readSourceBuild(root);
+  if (source) {
+    const binary = path.join(
+      root,
+      'dist/native',
+      process.platform === 'win32' ? 'aac-http.exe' : 'aac-http'
+    );
+    const commit = execFileSync(binary, ['--build-commit'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      windowsHide: true,
+    }).trim();
+    if (commit !== source.commit) {
+      throw new Error(
+        'The native dashboard was built from another commit. Rebuild before staging.'
+      );
+    }
+  }
   const directory = path.resolve(destination);
   const parent = fs.realpathSync(path.dirname(directory));
   const resolved = path.join(parent, path.basename(directory));
@@ -36,7 +55,10 @@ function stagePackage(destination) {
     });
   }
   stageManifest(resolved);
-  recordBuild(root, path.join(resolved, 'dist'));
+  const metadata = recordBuild(root, path.join(resolved, 'dist'));
+  if (metadata.commit !== (source?.commit ?? null)) {
+    throw new Error('The source checkout changed while the package was staged.');
+  }
   return resolved;
 }
 

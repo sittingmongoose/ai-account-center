@@ -9,6 +9,10 @@ mod registered_write;
 mod signin_callbacks;
 
 fn main() {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--build-commit")) {
+        println!("{}", env!("AAC_BUILD_COMMIT"));
+        return;
+    }
     #[cfg(unix)]
     match std::env::args_os()
         .nth(1)
