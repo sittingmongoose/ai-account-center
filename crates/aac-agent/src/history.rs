@@ -7,7 +7,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 

@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('../../', import.meta.url)));
@@ -29,11 +29,13 @@ function files(...paths) {
     try { return statSync(full).isDirectory() ? walk(full) : [full]; } catch { return []; }
   });
 }
+/** Repo-relative, forward slashes on every host: the expected names are written that way. */
+const repoPath = (file) => relative(root, file).split(sep).join('/');
 function hits(list, pattern) {
   const found = [];
   for (const file of list) {
     const lines = readFileSync(file, 'utf8').split('\n');
-    lines.forEach((line, index) => { if (pattern.test(line)) found.push(`${relative(root, file)}:${index + 1}: ${line.trim().slice(0, 140)}`); });
+    lines.forEach((line, index) => { if (pattern.test(line)) found.push(`${repoPath(file)}:${index + 1}: ${line.trim().slice(0, 140)}`); });
   }
   return found;
 }
@@ -43,7 +45,7 @@ const PRODUCT = files('src', 'scripts', 'crates', 'native', 'web-dashboard/publi
 const PAGE = files('web-dashboard/public', 'web-dashboard/leptos/src');
 
 test('the scan reads the product sources it guards', () => {
-  const names = PRODUCT.map((file) => relative(root, file));
+  const names = PRODUCT.map(repoPath);
   for (const expected of ['src/antigravity/terminal-signin.ts', 'web-dashboard/public/accounts-view.mjs',
     'web-dashboard/leptos/src/dash.rs', 'docs/antigravity-runtime.md', 'src/commands/antigravity-command.ts'])
     assert.ok(names.includes(expected), expected);
