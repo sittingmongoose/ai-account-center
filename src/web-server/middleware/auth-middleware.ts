@@ -18,6 +18,7 @@ import {
   isDashboardAuthEnabled,
 } from '../../config/config-loader-facade';
 import { effectiveSessionLifetimeDays } from '../../config/schemas/auth';
+import { assertTsWritesFile } from '../../shared/private-files';
 import { bearerToken, guardApiRequest, settleSessionEpoch } from './api-request-guard';
 import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
@@ -106,6 +107,7 @@ function getSessionSecret(): string {
   // 3. Generate and persist new random secret
   const newSecret = crypto.randomBytes(32).toString('hex');
   try {
+    assertTsWritesFile(secretPath, getCcsDir());
     const dir = path.dirname(secretPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
