@@ -1031,10 +1031,10 @@ fn compose_update(
             serde_json::to_value(&doc.blockers).unwrap_or(Json::Null),
         );
     }
-    if let Some(thread) = thread {
-        if !thread.state.is_empty() {
-            additions.insert("state".into(), Json::String(thread.state.clone()));
-        }
+    if let Some(thread) = thread
+        && !thread.state.is_empty()
+    {
+        additions.insert("state".into(), Json::String(thread.state.clone()));
     }
     if let Some(writer) = thread.map(|doc| &doc.writer).or(status.map(|doc| &doc.writer)) {
         additions.insert("writer".into(), Json::String(writer.clone()));
