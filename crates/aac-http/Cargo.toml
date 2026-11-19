@@ -41,7 +41,7 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "json
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
-# The models.dev registry fetch (G15): same client shape as aac-agent's quota reads.
+# Model pricing (G15) and the CLI's local store API fallback.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 sha2.workspace = true
 sha1 = "0.10"
@@ -57,7 +57,6 @@ httpdate = "1"
 if-addrs = "0.15"
 ipnet = "2"
 regex = { workspace = true, features = ["unicode-gencat"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 url = "2"
 
