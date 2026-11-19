@@ -8,7 +8,7 @@
  * Owners are resolved once at start (`settlePrivateFileOwners`) and sent to the service in its
  * boot JSON, which refuses a map that differs from its own registry. TS writers then refuse a
  * row they do not own (`assertTsWritesFile`, `assertTsWritesRow`), so each file has one writer.
- * No row moves yet: every `movesWith` is null, so TS writes everything it wrote before.
+ * The public-auth group is claimed only by the standalone Rust front door.
  */
 import path from 'path';
 import { ConfigError } from '../errors/error-types';
@@ -62,6 +62,8 @@ function idWord(value: unknown): value is string {
 }
 
 function plainPath(value: string): boolean {
+  // Existing credential leaves. Wildcards and all other dotted leaves remain refused.
+  if (value === '.session-secret' || value === 'bar/.auth-token') return true;
   const parts = value.split('/');
   return (
     value.length > 0 &&

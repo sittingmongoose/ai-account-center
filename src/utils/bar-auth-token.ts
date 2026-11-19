@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCcsDir } from '../config/config-loader-facade';
+import { assertTsWritesFile } from '../shared/private-files';
 
 export const BAR_AUTH_TOKEN_HEADER = 'x-ccs-bar-token';
 export const BAR_AUTH_NONCE_HEADER = 'x-ccs-bar-nonce';
@@ -49,6 +50,7 @@ export function getOrCreateBarAuthToken(ccsDir = getCcsDir()): string {
   }
 
   const token = crypto.randomBytes(TOKEN_BYTE_LENGTH).toString('hex');
+  assertTsWritesFile(tokenPath, ccsDir);
   fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
   fs.writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
   return token;

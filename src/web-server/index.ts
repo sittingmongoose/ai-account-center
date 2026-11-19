@@ -11,7 +11,7 @@ import { RustService, type RustServiceMode } from './rust-service';
 import http from 'http';
 import type https from 'https';
 import type { AddressInfo } from 'net';
-import type { Duplex } from 'stream';
+import type { Duplex, Writable } from 'stream';
 import path from 'path';
 import { WebSocketServer } from 'ws';
 import {
@@ -50,7 +50,7 @@ import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
 import { readPackagedBuild, recordRunningBuild } from './services/deployed-build';
 import { getCcsDir } from '../utils/config-manager';
-import { attachDashboardEventServer } from './dashboard-events';
+import { attachDashboardEventFeed, attachDashboardEventServer } from './dashboard-events';
 import { isSecureTransport } from './middleware/secure-transport';
 import {
   configureDashboardTransport,
@@ -87,6 +87,8 @@ export interface ServerOptions {
   rustService?: RustServiceMode;
   /** Optional existing binary; never built or installed at startup. */
   rustServiceBinary?: string;
+  /** Optional inherited stdin of the Rust public dashboard event receiver. */
+  dashboardEventFeed?: Writable;
   host?: string;
   staticDir?: string;
   dev?: boolean;
@@ -340,6 +342,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     sessionEpoch: (request) => (request as express.Request).session?.epoch ?? null,
   });
 
+  const detachRustEvents = options.dashboardEventFeed
+    ? attachDashboardEventFeed(options.dashboardEventFeed)
+    : undefined;
+
   // Combined cleanup function
   const cleanup = () => {
     if (cleaned) return;
@@ -349,6 +355,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopEventLoopMonitor();
     httpsServer?.close();
     detachDashboardEvents();
+    detachRustEvents?.();
     stopAccountLifecycleMaintenance();
     codexRenewal.stop();
     stopAntigravityRuntime();

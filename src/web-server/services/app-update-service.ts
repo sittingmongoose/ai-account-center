@@ -1,3 +1,4 @@
+import { broadcastAppUpdateProgress } from '../dashboard-events';
 import { COMPUTERS, LEGACY_STORAGE_HOSTS } from './dashboard-hosts';
 import { isLegacyMessage, LEGACY_MESSAGES } from './app-update-messages';
 import { createHash, randomUUID } from 'crypto';
@@ -72,6 +73,8 @@ export class AppUpdateBusyError extends Error {
 }
 
 export interface AppUpdateDependencies {
+  /** Receives the live job each time a progress transition is published. */
+  onProgress?: (job: AppUpdateJob) => void;
   runHost(platform: UpdatePlatform, control: HostRunControl): Promise<string>;
   /** Aligns deployed remote helpers with this build; production wires the real sync. */
   sync(platform: UpdatePlatform): Promise<void>;
@@ -194,6 +197,7 @@ export class AppUpdateService {
       this.releaseLock();
       throw error;
     }
+    this.publishProgress();
     const response = this.getStatus().job as AppUpdateJob;
     void this.execute();
     return { job: response };
@@ -228,6 +232,7 @@ export class AppUpdateService {
     } catch {
       /* The in-memory flag still stops queued work; persistence is display-only. */
     }
+    if (first) this.publishProgress();
     return { job: this.getStatus().job, cancelling: true };
   }
 
@@ -425,6 +430,16 @@ export class AppUpdateService {
       this.save();
     } catch {
       /* Never expose filesystem errors to clients; the in-memory job stays right. */
+    }
+    this.publishProgress();
+  }
+
+  private publishProgress(): void {
+    if (!this.job) return;
+    try {
+      this.deps.onProgress?.(this.job);
+    } catch {
+      /* A missed event never changes the update or its saved state. */
     }
   }
 
@@ -784,7 +799,11 @@ export function getAppUpdateService(): AppUpdateService {
   const scope = path.resolve(getCcsDir());
   let service = services.get(scope);
   if (!service) {
-    service = new AppUpdateService({ ccsDir: scope, sync: syncRemoteHelpers });
+    service = new AppUpdateService({
+      ccsDir: scope,
+      sync: syncRemoteHelpers,
+      onProgress: broadcastAppUpdateProgress,
+    });
     services.set(scope, service);
   }
   return service;

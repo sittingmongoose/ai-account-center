@@ -1,3 +1,4 @@
+import { broadcastDashboardEvent } from '../dashboard-events';
 import { getCcsDir } from '../../utils/config-manager';
 import { createHash } from 'crypto';
 import { BoundedCache } from '../../utils/bounded-cache';
@@ -791,6 +792,7 @@ export class AccountAnalyticsService {
           }
       const accounts = [...unique.values()];
       const state = await this.record(accounts, scope);
+      broadcastDashboardEvent({ type: 'analytics-changed' });
       if (sampleListeners.size > 0) {
         const sampledAt = (this.deps.now ?? Date.now)();
         const history = state.usageStore

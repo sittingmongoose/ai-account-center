@@ -169,10 +169,91 @@ pub struct OwnedStore {
     path: PathBuf,
     max_size: usize,
     parents: Parents,
-    _lock: File,
+    _lock: StoreLock,
+}
+
+#[derive(Debug)]
+enum StoreLock {
+    Kernel { _file: File },
+    Config { _guard: ConfigLock },
+}
+
+#[derive(Debug)]
+struct ConfigLock {
+    file: PathBuf,
+    claim: Vec<u8>,
+}
+
+impl ConfigLock {
+    fn take(parent: &Path) -> Result<Self, Failure> {
+        let file = parent.join("config.yaml.lock");
+        // The TypeScript config writer checks the PID and owner token in this exact format.
+        // Publish complete contents atomically, so it never mistakes a new claim for a stale one.
+        let mut pending = tempfile::Builder::new()
+            .prefix(".config-claim-")
+            .tempfile_in(parent)?;
+        set_private(pending.as_file())?;
+        let token = pending
+            .path()
+            .file_name()
+            .ok_or_else(|| Failure::new(Cause::Refused, "missing config claim name"))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Failure::new(Cause::Refused, "invalid config claim clock"))?
+            .as_millis();
+        let claim =
+            format!("{}\n{now}\n{}", std::process::id(), token.to_string_lossy()).into_bytes();
+        pending.as_file_mut().write_all(&claim)?;
+        pending.as_file().sync_all()?;
+        pending
+            .persist_noclobber(&file)
+            .map_err(|_| Failure::new(Cause::Busy, "config writer already active"))?;
+        Ok(Self { file, claim })
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        if read_bounded(&self.file, 1024).is_ok_and(|bytes| bytes == self.claim) {
+            let _ = fs::remove_file(&self.file);
+        }
+    }
 }
 
 impl OwnedStore {
+    /// Acquire the existing cross-language config writer lock for one read-modify-write.
+    /// A pre-existing claim is left for the TypeScript lock's existing recovery path.
+    pub fn claim_dashboard_config(root: &Path) -> Result<Self, Failure> {
+        require_absolute(root)?;
+        ensure_directory(root)?;
+        let path = root.join("config.yaml");
+        reject_special(&path, true)?;
+        Ok(Self {
+            path,
+            max_size: 4 * 1024 * 1024,
+            parents: Parents::Private,
+            _lock: StoreLock::Config {
+                _guard: ConfigLock::take(root)?,
+            },
+        })
+    }
+
+    /// Remove a private store's leaf under its writer lease. A symlink is unlinked as a name,
+    /// never followed, and a directory is refused by the operating system.
+    pub fn remove(&self) -> Result<(), Failure> {
+        require_absolute(&self.path)?;
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| Failure::new(Cause::Refused, "missing store parent"))?;
+        folders(parent, self.parents)?;
+        match fs::remove_file(&self.path) {
+            Ok(()) => sync_directory(parent),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Make the row's folders under `root` by its rule, then take its lease.
     fn open(
         root: &Path,
@@ -215,7 +296,7 @@ impl OwnedStore {
             path: file,
             max_size,
             parents,
-            _lock: lock,
+            _lock: StoreLock::Kernel { _file: lock },
         })
     }
 

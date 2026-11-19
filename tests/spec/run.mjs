@@ -10,6 +10,21 @@ for (const [program, args] of [
   // L2: one file policy (no raw file mechanics outside aac-files) and the shared registry.
   ['node', ['scripts/foundation/one-file-policy.mjs']],
   ['bun', ['test', 'tests/spec/private-files.test.ts']],
+  ...(process.env.AAC_RUST_PUBLIC_BINARY
+    ? [
+        ['bun', ['tests/spec/m6-auth-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        ['bun', ['tests/spec/m6-events-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        ['bun', ['tests/spec/m6-tray-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        [
+          'bun',
+          [
+            'tests/spec/m6-public-contract.ts',
+            process.env.AAC_RUST_PUBLIC_BINARY,
+            ...(process.env.AAC_M6_REQUIRE_COMPLETE === '1' ? ['--require-complete'] : []),
+          ],
+        ],
+      ]
+    : []),
   [
     'bun',
     [
@@ -25,6 +40,17 @@ for (const [program, args] of [
     ],
   ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
+  // M6: the T3 hub, the static/Leptos bundle edges and the CLI entry points, recorded from TS and replayable
+  // against another front door (AAC_M6_TARGET_URL / AAC_M6_TARGET_CLI).
+  [
+    'bun',
+    [
+      'tests/spec/m6-edge-parity.ts',
+      ...(process.env.AAC_RUST_PUBLIC_BINARY && !process.env.AAC_M6_TARGET_URL
+        ? ['--rust-fixture']
+        : []),
+    ],
+  ],
   ...[
     'read-view-parity',
     'read-file-parity',

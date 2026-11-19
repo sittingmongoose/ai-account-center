@@ -365,3 +365,52 @@ steps near 2^38 to 2^53, random bit patterns over all of binary64 and human-size
 exact ties at 0 to 60 places, the Kimi and Z.ai `round(x, 8)` witnesses, and the far-future sign-in milliseconds
 (8796093022210, 9999999999001 and their neighbours). The test also reproduces each deleted copy and shows where it
 disagreed with its reference while aac-num agrees.
+
+## M6 edge contracts
+
+`m6-edge-parity.ts` covers the edges lane M moves: the T3 usage hub (`/v0/management/auth-files`, `api-call`,
+`reset-quota`, every refusal), the dashboard's static files and Leptos bundle (frame pages and aliases, HEAD,
+`no-cache` vs immutable `pkg/<build-id>/`, Brotli/gzip negotiation, ETag revalidation, `.br`/`.gz` never served
+directly, the build manifest never served, `sw.js`/`sw-route.js`, the PWA manifest and icons, the root icon alias,
+the `/api` JSON 404 and the unknown-page redirect), and the CLI entry points (help, version, `dashboard --help`,
+the `config` alias, the retired self-update and profile guidance, and a retired legacy bin name).
+
+The goldens are recorded from today's TS server in `contract/m6-edge.json` (39 HTTP, 7 CLI cases). The server half
+starts the real `startServer` on loopback on a temporary `CCS_HOME` with the standard `fixture.json` seams, a real
+`dist/ui` built by `scripts/build-ui.js` with the fake wasm pack, and a seeded management key. The hub's account
+list is the projection of `m6-dashboard.json` (three synthetic rows), stubbed at `peekAccountDashboard` so no
+collector runs. The CLI half runs the built `dist/ccs.js` under Node on a clean temporary home:
+
+```sh
+bun run build:server            # the CLI goldens run the shipped entry point
+bun tests/spec/m6-edge-parity.ts                 # compare both halves with the goldens
+bun tests/spec/m6-edge-parity.ts --regenerate    # re-record from TS, then review the diff
+```
+
+To run the same cases against another front door, start it on the same fixture home with the same
+`m6-dashboard.json` rows and the same seeded key and set:
+
+```sh
+AAC_M6_TARGET_URL=http://127.0.0.1:PORT bun tests/spec/m6-edge-parity.ts   # HTTP cases only
+AAC_M6_TARGET_CLI=/path/to/other-cli bun tests/spec/m6-edge-parity.ts       # CLI cases as well
+```
+
+The target run discovers the build id from the frame page, then compares the same
+cases. Set both variables in the same invocation to check HTTP and CLI together.
+It verifies the version output's installation path before normalizing it. It
+invokes the native executable under a temporary retired alias for the legacy bin
+case.
+
+For an isolated Rust run, let the fixture build the same UI and seed the same
+management key and account rows:
+
+```sh
+cargo build -p aac-http --locked
+AAC_RUST_PUBLIC_BINARY="$PWD/target/debug/aac-http" \
+  AAC_M6_TARGET_CLI="$PWD/target/debug/ai-account-center" \
+  bun tests/spec/m6-edge-parity.ts --rust-fixture
+```
+
+On Windows use the corresponding .exe paths. The full spec runner selects the
+isolated Rust HTTP fixture when AAC_RUST_PUBLIC_BINARY is set. The
+--regenerate option only records from the TS target.

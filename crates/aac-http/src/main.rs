@@ -1,5 +1,4 @@
-//! Unix-only skeleton service; its boot secret arrives on stdin, never argv or logs.
-#[cfg(unix)]
+//! Private Unix service and the explicitly enabled public TCP front door.
 fn main() {
     // Two async workers; at most 20 blocking threads: the 8 read, 4 store and 4 fed-Status
     // permits, plus spare. The permits, not this cap, are the bound the routes rely on.
@@ -12,7 +11,25 @@ fn main() {
         eprintln!("aac-http: runtime failed");
         std::process::exit(1);
     };
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--public")) {
+        let _ = tracing_subscriber::fmt()
+            .json()
+            .with_writer(std::io::stderr)
+            .try_init();
+        if let Err(error) = runtime.block_on(aac_http::public_auth::run_public()) {
+            eprintln!("aac-http: {error}");
+            std::process::exit(1);
+        }
+        // The optional event feed uses a blocking stdin reader.
+        std::process::exit(0);
+    }
+    #[cfg(unix)]
     runtime.block_on(run());
+    #[cfg(not(unix))]
+    {
+        eprintln!("aac-http: Unix sockets required for the private service");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(unix)]
@@ -52,10 +69,4 @@ async fn run() {
     }
     // Tokio stdin uses a blocking reader; do not wait for it after a termination signal.
     std::process::exit(0);
-}
-
-#[cfg(not(unix))]
-fn main() {
-    eprintln!("aac-http: Unix sockets required; TypeScript fallback remains active");
-    std::process::exit(1);
 }

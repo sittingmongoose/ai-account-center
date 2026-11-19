@@ -146,6 +146,10 @@ impl Row {
 }
 
 fn plain_path(path: &str) -> bool {
+    // Existing credential leaves. Wildcards and all other dotted leaves remain refused.
+    if matches!(path, ".session-secret" | "bar/.auth-token") {
+        return true;
+    }
     let parts: Vec<&str> = path.split('/').collect();
     let last = parts.len().saturating_sub(1);
     !path.is_empty()
@@ -334,11 +338,8 @@ mod tests {
             assert!(row(id).is_ok(), "{id}");
         }
         assert!(row("unknown").is_err());
-        // Nothing has moved yet: TS writes every row on the dashboard host.
-        assert!(
-            rows.iter()
-                .all(|r| r.owner == Role::Ts && r.moves_with.is_none())
-        );
+        // TS still owns the default boot. Public TCP mode has its own ownership group.
+        assert!(rows.iter().all(|r| r.owner == Role::Ts));
     }
 
     #[test]
@@ -355,7 +356,11 @@ mod tests {
             .collect();
         for row in rows().unwrap() {
             if let Some(group) = &row.moves_with {
-                assert!(groups.contains(group.as_str()), "{}", row.id);
+                assert!(
+                    groups.contains(group.as_str()) || group == "public-auth",
+                    "{}",
+                    row.id
+                );
             }
         }
     }
@@ -430,7 +435,7 @@ mod tests {
         let owners = Owners::from_boot(&rows, &files).unwrap();
         assert_eq!(owners.owner(&rows[1].id), Some(Role::RustService));
         let mut flipped = files.clone();
-        flipped.insert(rows[0].id.clone(), "rust-service".into());
+        flipped.insert("usage-hub-key".into(), "rust-service".into());
         assert!(Owners::from_boot(&rows, &flipped).is_err());
         let mut missing = files.clone();
         missing.remove(&rows[2].id);
