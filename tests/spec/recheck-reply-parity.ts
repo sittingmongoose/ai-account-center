@@ -89,8 +89,7 @@ async function envFor(rows: Record<string, unknown>) {
   const env = {
     ccsDir: () => ccsDir,
     now: () => NOW,
-    refreshAdditional: async (id: string) =>
-      id in rows ? structuredClone(rows[id]) : null,
+    refreshAdditional: async (id: string) => (id in rows ? structuredClone(rows[id]) : null),
     replaceRow: (account: unknown) => replaced.push(account),
   } as unknown as LifecycleEnv;
   return { env, replaced };
@@ -150,6 +149,8 @@ for (const [name, id, status] of [
     });
   }
 }
+
+fs.rmSync(root, { recursive: true, force: true });
 
 const fixture = { version: 1, now: NOW, cases };
 const text = `${JSON.stringify(fixture, null, 2)}\n`;

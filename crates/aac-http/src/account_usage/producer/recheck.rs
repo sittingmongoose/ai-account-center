@@ -268,6 +268,43 @@ mod tests {
         }
     }
 
+    /// The version 1 manifest keeps its existing policy: a valid one supplies
+    /// the default source, an invalid one names nothing, and no account is 404.
+    #[tokio::test]
+    async fn a_legacy_manifest_resolves_only_its_valid_defaults() {
+        let dir = tempfile::tempdir().expect("fixture root");
+        let root = fs::canonicalize(dir.path()).expect("canonical root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("root mode");
+        let producer = Producer::new(
+            root.clone(),
+            Owners::defaults(aac_files::registry::rows().expect("bundled private files")),
+        );
+        let resolved = producer
+            .resolve_recheck("cursor:usage")
+            .await
+            .expect("default source");
+        assert!(resolved.legacy);
+        assert_eq!(resolved.source.provider, "cursor");
+        assert_eq!(resolved.source.platform, "ubuntu");
+        assert!(
+            producer
+                .resolve_recheck("cursor:acct:00000000")
+                .await
+                .is_none()
+        );
+        fs::write(
+            root.join("account-usage-sources.json"),
+            br#"{"version":1,"sources":[{"provider":"bogus","platform":"ubuntu"}]}"#.to_vec(),
+        )
+        .expect("manifest");
+        fs::set_permissions(
+            root.join("account-usage-sources.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("manifest mode");
+        assert!(producer.resolve_recheck("cursor:usage").await.is_none());
+    }
+
     /// Lane J's PublishIfCurrent over the shared cache: one row is replaced in
     /// every held selector, unrelated rows of the latest concurrent generation
     /// stay, and a host or credential change publishes nothing.

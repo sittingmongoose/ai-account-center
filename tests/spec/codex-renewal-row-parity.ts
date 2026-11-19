@@ -57,7 +57,11 @@ interface Input {
   fetchedAt: string;
   sampledAt: string;
   windows: unknown[];
-  renewal: { state: CodexRenewalState; reason: CodexRenewalReason; accessExpiresAt?: string } | null;
+  renewal: {
+    state: CodexRenewalState;
+    reason: CodexRenewalReason;
+    accessExpiresAt?: string;
+  } | null;
 }
 
 const base = (over: Partial<Input> = {}): Input => ({
@@ -183,7 +187,6 @@ function renewalOf(input: Input): CodexProfileRenewalProfileStatus | undefined {
   } as CodexProfileRenewalProfileStatus;
 }
 
-
 const casesOut = cases.map((input) => {
   const profile = {
     name: input.name,
@@ -195,17 +198,17 @@ const casesOut = cases.map((input) => {
     codexHome: '/fixture/saved',
   };
   const activated = input.active
-    ? { name: input.name, email: input.email ?? 'active@example.com', plan: 'pro', codexHome: '/fixture/live' }
+    ? {
+        name: input.name,
+        email: input.email ?? 'active@example.com',
+        plan: 'pro',
+        codexHome: '/fixture/live',
+      }
     : null;
   const realNow = Date.now;
   Date.now = () => NOW;
   try {
-    const row = codexAccount(
-      profile as never,
-      activated as never,
-      rowOf(input),
-      renewalOf(input)
-    );
+    const row = codexAccount(profile as never, activated as never, rowOf(input), renewalOf(input));
     const { case: name, ...rest } = input;
     return { name, input: rest, row };
   } finally {

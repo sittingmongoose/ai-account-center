@@ -176,7 +176,7 @@ mod golden_tests {
                 source,
                 move |_| {
                     let mut row = expected.clone();
-                    row.as_object_mut().expect("reply row").remove("lifecycle");
+                    let _ = row.as_object_mut().expect("reply row").remove("lifecycle");
                     std::future::ready(Ok::<_, ()>(Some(row)))
                 },
                 move |_, row| {

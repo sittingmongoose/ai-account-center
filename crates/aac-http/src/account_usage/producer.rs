@@ -343,14 +343,17 @@ impl Producer {
         let entries = entries;
         stream::iter(requests)
             .map(move |(name, candidate, active)| async move {
-                let (mut sample, failure) = match &candidate {
+                let (sample, failure) = match &candidate {
                     Some(candidate) => {
                         self.read_primary_reply(platform, None, "codex", candidate, now)
                             .await
                     }
                     None => (None, None),
                 };
+                // A rejected login is the TS reauth row, never the bare profile's
+                // local session fallback (that fallback is for an unreadable login).
                 let sample = if name == "default"
+                    && failure.as_deref() != Some("needs_sign_in")
                     && candidate.is_some()
                     && sample.as_ref().is_none_or(|reading| {
                         !matches!(
@@ -370,15 +373,8 @@ impl Producer {
                 };
                 let missing = format!("codex-profile:{name}");
                 let signed_out = inventory_complete(inventory, &missing) && candidate.is_none();
-                // The TS note reads the row's own needsReauth flag: a parked
-                // profile (no readable login) or one OpenAI rejected. A 401
-                // arrives as a failure code with no sample, so it must count
-                // before the row is built, not only through the sample status.
-                let needs_reauth = signed_out
-                    || failure.as_deref() == Some("needs_sign_in")
-                    || sample
-                        .as_ref()
-                        .is_some_and(|reading| reading["status"] == "needs_sign_in");
+                let needs_reauth =
+                    row_needs_reauth(signed_out, failure.as_deref(), sample.as_ref());
                 let note = renewal_row_note(entries, &name, active, needs_reauth, now);
                 rows::codex(
                     &name,
@@ -519,6 +515,15 @@ fn now_at_least(started: i64) -> i64 {
     UtcMs::now()
         .ok()
         .map_or(started, |now| started.max(now.get() as i64))
+}
+
+/// The TS row's own `needsReauth` flag: a parked profile (no readable login), a
+/// login OpenAI rejected (the helper reports a failure code with no sample), or
+/// a sample that already says so.
+fn row_needs_reauth(signed_out: bool, failure: Option<&str>, sample: Option<&Value>) -> bool {
+    signed_out
+        || failure == Some("needs_sign_in")
+        || sample.is_some_and(|reading| reading["status"] == "needs_sign_in")
 }
 
 /// The TS note decision for one Codex row: the entry exists, this profile is not
@@ -773,6 +778,23 @@ mod tests {
             "failed" => CodexRenewalState::Failed,
             _ => CodexRenewalState::Skipped,
         }
+    }
+
+    #[test]
+    fn a_parked_or_rejected_login_keeps_the_ts_reauth_status() {
+        assert!(row_needs_reauth(true, None, None));
+        assert!(row_needs_reauth(false, Some("needs_sign_in"), None));
+        assert!(row_needs_reauth(
+            false,
+            None,
+            Some(&json!({"status":"needs_sign_in"}))
+        ));
+        assert!(!row_needs_reauth(false, Some("unavailable"), None));
+        assert!(!row_needs_reauth(
+            false,
+            None,
+            Some(&json!({"status":"cached"}))
+        ));
     }
 
     /// The TS `codexAccount` goldens: the renewal note overlay, the active-login
