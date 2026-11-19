@@ -34,6 +34,10 @@ struct Facts {
 pub(crate) struct UsageSnapshot {
     publisher: Arc<SnapshotPublisher>,
     facts: Arc<Mutex<Option<Facts>>>,
+    /// The boot root, for the saved snapshot setting (the active-sample guard).
+    ccs_dir: PathBuf,
+    /// The hosted store, whose own reads answer the history, long burn and rollups.
+    store: Option<Arc<crate::store_host::StoreHost>>,
 }
 
 fn now_ms() -> i64 {
@@ -67,7 +71,12 @@ fn span(value: &Value) -> LongBurnSpan {
 
 impl UsageSnapshot {
     /// Build the publisher with the service's real file effects under the boot root.
-    pub(crate) fn new(ccs_dir: PathBuf, package_root: PathBuf) -> Self {
+    pub(crate) fn new(
+        ccs_dir: PathBuf,
+        package_root: PathBuf,
+        store: Option<Arc<crate::store_host::StoreHost>>,
+    ) -> Self {
+        let boot_root = ccs_dir.clone();
         let facts: Arc<Mutex<Option<Facts>>> = Arc::new(Mutex::new(None));
         let settings_root = ccs_dir.clone();
         let refresh_root = ccs_dir.clone();
@@ -125,6 +134,8 @@ impl UsageSnapshot {
         Self {
             publisher: Arc::new(SnapshotPublisher::new(deps)),
             facts,
+            ccs_dir: boot_root,
+            store,
         }
     }
 
@@ -134,6 +145,8 @@ impl UsageSnapshot {
     pub(crate) fn accept(&self, bytes: axum::body::Bytes) -> Result<Value, Decline> {
         let publisher = Arc::clone(&self.publisher);
         let facts_slot = Arc::clone(&self.facts);
+        let store = self.store.clone();
+        let boot_root = self.ccs_dir.clone();
         tokio::task::spawn_blocking(move || {
             let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else {
                 tracing::warn!(target: "aac_http", event = "agent_usage_snapshot.sample_unparsable", "A pushed usage sample could not be parsed");
@@ -144,6 +157,14 @@ impl UsageSnapshot {
                 return;
             };
             let sign_in_since = payload["signIn"]["since"].as_i64();
+            let mut event = event;
+            // The native trigger sends the accounts only; this service's own store answers the
+            // history, long burn and rollups, under the publisher's active-sample guard.
+            let native = payload["event"]["history"].is_null() && payload["rollups"].is_null();
+            let active = native && sample_active(&boot_root, event.accounts.len());
+            if active {
+                enrich(store.as_deref(), &mut event);
+            }
             let facts = Facts {
                 sign_in_rows: payload["signIn"]["rows"]
                     .as_array()
@@ -155,7 +176,11 @@ impl UsageSnapshot {
                 } else {
                     Some(payload["signInRenewal"].clone())
                 },
-                rollups: parse_rollups(&payload["rollups"]),
+                rollups: if active {
+                    rollups(store.as_deref(), &event)
+                } else {
+                    parse_rollups(&payload["rollups"])
+                },
             };
             // Every sample's readings count, even one whose write is skipped.
             publisher.note(&event);
@@ -210,6 +235,74 @@ fn parse_rollups(value: &Value) -> Result<Option<(Value, Value)>, ()> {
         return Err(());
     }
     Ok(Some((value["hourly"].clone(), value["daily"].clone())))
+}
+
+/// Whether a sample would publish: a folder is set and there are accounts. The sign-in probes and
+/// the store reads run only then, exactly the publisher's own guards.
+pub(crate) fn sample_active(root: &Path, accounts: usize) -> bool {
+    accounts > 0 && read_settings(root).is_some()
+}
+
+/// The 7-day rolling history the snapshot publishes (`SNAPSHOT_HISTORY_MS`).
+const SNAPSHOT_HISTORY_MS: i64 = 7 * 86_400_000;
+
+/// The facts the front door used to pre-fetch, from the one hosted store: the 7-day history and
+/// the long burn for every live window. The store owner answers both; a failure retries next
+/// sample, exactly as the TypeScript publisher's deps did.
+fn enrich(store: Option<&crate::store_host::StoreHost>, event: &mut SampleEvent) {
+    let Some(engine) = store.and_then(|host| host.analytics_engine()) else {
+        return;
+    };
+    if event.history.is_none() {
+        let query = json!({
+            "fromMs": event.sampled_at.saturating_sub(SNAPSHOT_HISTORY_MS).max(0),
+            "toMs": event.sampled_at.max(0),
+            "nowMs": event.sampled_at.max(0),
+            "thinning": { "kind": "history" },
+        });
+        if let Ok(records) = aac_store::ops::call(&engine, "historyRecords", &query.to_string()) {
+            let collected = records
+                .as_array()
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("sampledAt"))
+                .cloned()
+                .or_else(|| aac_num::ecma::to_iso_string(event.sampled_at).map(Value::String))
+                .unwrap_or(Value::Null);
+            event.history = Some(json!({
+                "schemaVersion": 1,
+                "collectedSince": collected,
+                "records": records,
+            }));
+        }
+    }
+    if event.long_burn.is_none()
+        && let Ok(burns) =
+            aac_snapshot::exports::long_burn_for(&engine, &event.accounts, event.sampled_at)
+    {
+        event.long_burn = Some(burns);
+    }
+}
+
+/// The hourly and daily rollup files for one sample, or the retry signal (`Err`) the publisher
+/// treats as a failed pre-fetch.
+fn rollups(
+    store: Option<&crate::store_host::StoreHost>,
+    event: &SampleEvent,
+) -> Result<Option<(Value, Value)>, ()> {
+    let Some(engine) = store.and_then(|host| host.analytics_engine()) else {
+        return Ok(None);
+    };
+    let projected =
+        aac_snapshot::project_agent_usage(&event.accounts, event.sampled_at, None, true);
+    match aac_snapshot::exports::build_rollup_exports(
+        &engine,
+        &event.accounts,
+        &projected,
+        event.sampled_at,
+    ) {
+        Ok((hourly, daily)) => Ok(Some((hourly, daily))),
+        Err(_) => Err(()),
+    }
 }
 
 /// The saved snapshot setting, or None while no folder is configured (registry row read).

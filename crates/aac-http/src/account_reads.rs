@@ -558,41 +558,8 @@ pub(crate) fn owned_analytics(
     let Some(engine) = store.and_then(|host| host.analytics_engine()) else {
         return Some(Err(aac_views::decline::Decline::Unsupported));
     };
-    let mut reads = EngineStore(engine);
+    let mut reads = crate::analytics_route::EngineStore::new(engine);
     Some(aac_views::analytics_owned::compose(envelope, &mut reads))
-}
-
-/// The hosted Engine as the owned composition's store reads: the one writer's own method contract.
-struct EngineStore(std::sync::Arc<aac_store::engine::Engine>);
-
-impl aac_views::analytics_owned::AnalyticsStore for EngineStore {
-    fn activity_oldest(&mut self) -> Result<Option<u64>, aac_views::decline::Decline> {
-        let value = aac_store::ops::call(&self.0, "activityOldest", "{}")
-            .map_err(|_| aac_views::decline::Decline::Internal)?;
-        Ok(value.as_u64())
-    }
-    fn quota_oldest(&mut self) -> Result<Option<u64>, aac_views::decline::Decline> {
-        let value = aac_store::ops::call(&self.0, "oldest", "{}")
-            .map_err(|_| aac_views::decline::Decline::Internal)?;
-        Ok(value.as_u64())
-    }
-    fn activity_range(&mut self, query: Value) -> Result<Value, aac_views::decline::Decline> {
-        aac_store::ops::call(&self.0, "activityRange", &query.to_string())
-            .map_err(|_| aac_views::decline::Decline::Internal)
-    }
-    fn activity_sources(
-        &mut self,
-        from_ms: u64,
-        to_ms: u64,
-    ) -> Result<Value, aac_views::decline::Decline> {
-        let args = json!({ "fromMs": from_ms, "toMs": to_ms });
-        aac_store::ops::call(&self.0, "activitySources", &args.to_string())
-            .map_err(|_| aac_views::decline::Decline::Internal)
-    }
-    fn history_records(&mut self, query: Value) -> Result<Value, aac_views::decline::Decline> {
-        aac_store::ops::call(&self.0, "historyRecords", &query.to_string())
-            .map_err(|_| aac_views::decline::Decline::Internal)
-    }
 }
 
 #[cfg(test)]

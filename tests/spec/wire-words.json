@@ -697,6 +697,14 @@
     ]
   },
   {
+    "word": "complete",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/signin_driver.py:state",
+      "scripts/antigravity/signin_driver.py:token_state()"
+    ]
+  },
+  {
     "word": "completed",
     "cause": null,
     "sources": [
@@ -5656,6 +5664,8 @@
     "word": "unsafe",
     "cause": null,
     "sources": [
+      "scripts/antigravity/signin_driver.py:state",
+      "scripts/antigravity/signin_driver.py:token_state()",
       "src/codex-auth/codex-renewal-planner.ts:profile.state",
       "src/codex-auth/codex-renewal-planner.ts:state"
     ]

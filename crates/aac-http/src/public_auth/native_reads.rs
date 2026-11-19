@@ -73,10 +73,24 @@ pub(super) async fn publish_usage(
         return;
     };
     if analytics_writers {
+        // The writers' own switch: with the retained worker this repeats its feed; once the
+        // worker is gone this is the only producer, so sampling still starts.
+        endpoint
+            .send(
+                "PUT",
+                "/internal/feed/analytics-writers",
+                json!({
+                    "generation": "native",
+                    "data": { "enabled": true },
+                    "facts": {},
+                }),
+            )
+            .await;
         let Some(generation) = cache.generation(crate::account_usage::Desktop::Mac, false) else {
             return;
         };
-        let dashboards = cache.hub_dashboards(&timestamp, now);
+        // Named by platform: the Analytics read needs the requested platform's own dashboard.
+        let dashboards = cache.labeled_dashboards(&timestamp, now);
         let body = json!({
             "generation":generation,
             "data": { "dashboards":dashboards },
@@ -95,6 +109,22 @@ pub(super) async fn publish_usage(
                 json!({"observations":observations}),
             )
             .await;
+    }
+}
+
+/// One pushed usage sample: the service's share writer takes it on its own blocking task.
+pub(super) async fn usage_sample(root: PathBuf, payload: serde_json::Value) -> bool {
+    let endpoint = tokio::task::spawn_blocking(move || CollectionEndpoint::load(&root))
+        .await
+        .ok()
+        .flatten();
+    match endpoint {
+        Some(endpoint) => {
+            endpoint
+                .send("POST", "/internal/usage-snapshot/sample", payload)
+                .await
+        }
+        None => false,
     }
 }
 

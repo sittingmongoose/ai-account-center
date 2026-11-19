@@ -52,6 +52,8 @@ pub(crate) enum Handler {
     SignInPoll,
     Store,
     UsageSample,
+    /// R5/A2: the native Analytics read (store history, activity, pricing, display zone).
+    Analytics,
     ClaudeOpen,
     ClaudeHistoryCleanup,
 }
@@ -98,6 +100,7 @@ impl Handler {
             "collection-signin-poll" => Handler::SignInPoll,
             "store" => Handler::Store,
             "usage-sample" => Handler::UsageSample,
+            "analytics" => Handler::Analytics,
             "claude-open" => Handler::ClaudeOpen,
             "claude-history-cleanup" => Handler::ClaudeHistoryCleanup,
             _ => return None,

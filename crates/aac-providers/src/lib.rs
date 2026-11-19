@@ -130,6 +130,21 @@ pub fn dashboard_providers() -> impl Iterator<Item = &'static Provider> {
     PROVIDERS.iter().filter(|p| p.dashboard)
 }
 
+/// Analytics' provider table (`defaultAnalyticsProviderTable`): every provider row with an
+/// `analytics` block, in its declared order, as `(id, label, order)`.
+pub fn analytics_provider_table() -> Vec<(&'static str, &'static str, u32)> {
+    let mut rows: Vec<(&'static str, &'static str, u32)> = PROVIDERS
+        .iter()
+        .filter_map(|row| {
+            row.analytics
+                .as_ref()
+                .map(|analytics| (row.id.as_str(), analytics.label, analytics.order))
+        })
+        .collect();
+    rows.sort_by_key(|row| row.2);
+    rows
+}
+
 /// TS `isDashboardProviderId`.
 pub fn is_dashboard_provider(id: &str) -> bool {
     provider(id).is_some_and(|p| p.dashboard)

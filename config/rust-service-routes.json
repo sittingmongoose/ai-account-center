@@ -18,7 +18,7 @@
   { "method": "PUT", "path": "/api/accounts/preferences", "owner": "rust", "group": "writes", "roles": ["admin"], "budgetMs": 400, "handler": "write-preferences" },
   { "method": "PATCH", "path": "/api/accounts/preferences", "owner": "rust", "group": "writes", "roles": ["admin"], "budgetMs": 400, "handler": "write-preferences" },
   { "method": "GET", "path": "/api/accounts/registry", "owner": "rust", "group": "accounts", "roles": ["admin"], "budgetMs": 400, "handler": "accounts" },
-  { "method": "GET", "path": "/api/accounts/analytics", "owner": "rust", "group": "analytics", "roles": ["admin"], "budgetMs": 400, "handler": "accounts" },
+  { "method": "GET", "path": "/api/accounts/analytics", "owner": "rust", "group": "analytics", "roles": ["admin"], "budgetMs": 400, "handler": "analytics" },
   { "method": "GET", "path": "/api/claude/desktop-profiles", "owner": "rust", "group": "profiles", "roles": ["admin", "device"], "budgetMs": 400, "handler": "profiles" },
   { "method": "GET", "path": "/api/claude/desktop-profiles/usage", "owner": "rust", "group": "profiles", "roles": ["admin"], "budgetMs": 400, "handler": "profiles" },
   { "method": "GET", "path": "/api/codex/profiles", "owner": "rust", "group": "profiles", "roles": ["admin"], "budgetMs": 400, "handler": "profiles" },

@@ -18,7 +18,8 @@ use aac_status::read_context::{Context, Envelope, Presentation};
 use serde_json::{Map, Value, json};
 
 type R<T> = Result<T, Decline>;
-type Object = Map<String, Value>;
+/// An ordered JSON object; insertion order is the answer's own key order.
+pub type Object = Map<String, Value>;
 
 const DAY_MS: f64 = 86_400_000.0;
 const RETAINED_MS: f64 = 31.0 * DAY_MS;
@@ -331,6 +332,109 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
 
     // The bounds the TS reader read, re-read here: the oldest stored activity hour or quota
     // sample, never later than the retained window. A failed read is a null candidate, as there.
+    let (oldest, quota_oldest) = bounds(store, now);
+    // Numeric comparison: the envelope's JSON integer and this float are the same time.
+    let sent = opt_num(obj(input.get("bounds"))?.get("oldest"))?;
+    if sent != Some(oldest) {
+        return Err(Decline::Stale);
+    }
+    let retained_from = oldest;
+
+    // The provisional range, re-resolved: any disagreement with the TS read is stale.
+    let provisional = resolve_range(&query, now, retained_from, Some(oldest), &tz, zone.as_ref())?;
+    let expected = Range::decode(input.get("provisional")).map_err(|_| Decline::Stale)?;
+    if provisional != expected {
+        return Err(Decline::Stale);
+    }
+
+    answer(
+        Owned {
+            query,
+            now,
+            tz,
+            available,
+            live,
+            zone,
+            pricing,
+            table,
+            dashboard,
+            oldest,
+            quota_oldest,
+            guard_coverage: input.get("guardCoverage").cloned(),
+            clock: None,
+            provisional,
+        },
+        store,
+    )
+}
+
+/// What the live service knows before the store reads: every value the TS envelope carried, built
+/// here instead of forwarded (R5/A2 live hookup). `None` declines exactly like the envelope path.
+pub struct NativeInput {
+    /// The query object (validated by the route: platform, range, provider, account, refresh, tz).
+    pub query: Object,
+    /// The request clock.
+    pub now: f64,
+    /// The display zone name.
+    pub tz: String,
+    /// The platform's dashboard (`accounts` entry lists, `providers`, `settings`).
+    pub dashboard: Object,
+    /// The activity collector grid; empty lets the store's own reads fill it.
+    pub live_sources: Value,
+    /// A collection pass is running.
+    pub refreshing: bool,
+    /// The proven display-zone offsets.
+    pub zone: Option<intl::Zone>,
+    /// `Resolver::facts_table` over the store dictionary, as a JSON object.
+    pub pricing: Value,
+    /// `analytics_provider_table`, as `{id,label,order}` rows.
+    pub table: Vec<Value>,
+}
+
+/// The owned answer from the native service's own inputs. The bounds and the provisional range are
+/// resolved here from the store, exactly as the composition checks them; no envelope is involved.
+pub fn compose_native(input: NativeInput, store: &mut dyn AnalyticsStore) -> R<Value> {
+    let query = input.query;
+    let now = input.now;
+    let tz = input.tz;
+    if tz != "UTC" && input.zone.is_none() {
+        return Err(Decline::Zone);
+    }
+    let live = LiveState {
+        tz: tz.clone(),
+        sources: input.live_sources,
+        refreshing: input.refreshing,
+        refreshing_remote: Value::Array(Vec::new()),
+    };
+    let pricing = Pricing::decode(Some(&input.pricing))?;
+    let (oldest, quota_oldest) = bounds(store, now);
+    let provisional = resolve_range(&query, now, oldest, Some(oldest), &tz, input.zone.as_ref())?;
+    answer(
+        Owned {
+            query,
+            now,
+            tz,
+            // The store answered its bounds and history; a failed history read declines below.
+            available: true,
+            live,
+            zone: input.zone,
+            pricing,
+            table: input.table,
+            dashboard: input.dashboard,
+            oldest,
+            quota_oldest,
+            guard_coverage: None,
+            clock: Some(now),
+            provisional,
+        },
+        store,
+    )
+}
+
+/// The bounds the TS reader read: the oldest stored activity hour or quota sample, never later
+/// than the retained window, and the quota oldest itself. A failed bound read is a null candidate,
+/// as there.
+fn bounds(store: &mut dyn AnalyticsStore, now: f64) -> (f64, Option<u64>) {
     let activity_oldest = store.activity_oldest().unwrap_or(None);
     let quota_oldest = store.quota_oldest().unwrap_or(None);
     let mut candidates = vec![now - RETAINED_MS];
@@ -342,21 +446,57 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
         .iter()
         .copied()
         .fold(f64::INFINITY, analytics::js_min);
-    // Numeric comparison: the envelope's JSON integer and this float are the same time.
-    let sent = opt_num(obj(input.get("bounds"))?.get("oldest"))?;
-    if sent != Some(oldest) {
-        return Err(Decline::Stale);
-    }
-    let bounds = json!({ "oldest": oldest });
+    (oldest, quota_oldest)
+}
+
+/// The retained window's oldest instant (`bounds`), for a caller that must build its zone facts
+/// before the composition runs. The composition reads the same bounds; both reads are equal.
+pub fn oldest_bound(store: &mut dyn AnalyticsStore, now: f64) -> f64 {
+    bounds(store, now).0
+}
+
+/// The validated owned facts, before the activity and quota reads.
+struct Owned {
+    query: Object,
+    now: f64,
+    tz: String,
+    available: bool,
+    live: LiveState,
+    zone: Option<intl::Zone>,
+    pricing: Pricing,
+    table: Vec<Value>,
+    dashboard: Object,
+    oldest: f64,
+    /// The oldest stored quota sample (`store.quotaOldest`), for the coverage bound.
+    quota_oldest: Option<u64>,
+    /// The guarded selection's coverage the envelope carried; `None` reads it from the store.
+    guard_coverage: Option<Value>,
+    /// The request clock, for an activity answer whose store has no read yet (the native read
+    /// is the only reader; the envelope path has none, as it cannot prove the clock equal).
+    clock: Option<f64>,
+    provisional: Range,
+}
+
+/// The one answer builder both entries share: the activity block, the range, the throttled history
+/// and the part-3 composition of the whole analytics body.
+fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
+    let Owned {
+        query,
+        now,
+        tz,
+        available,
+        live,
+        zone,
+        pricing,
+        table,
+        dashboard,
+        oldest,
+        quota_oldest,
+        guard_coverage,
+        clock,
+        provisional,
+    } = owned;
     let retained_from = oldest;
-
-    // The provisional range, re-resolved: any disagreement with the TS read is stale.
-    let provisional = resolve_range(&query, now, retained_from, Some(oldest), &tz, zone.as_ref())?;
-    let expected = Range::decode(input.get("provisional")).map_err(|_| Decline::Stale)?;
-    if provisional != expected {
-        return Err(Decline::Stale);
-    }
-
     // The activity block: the guarded selection's fixed projection, or the store's own range.
     let (activity_block, coverage_oldest, providers_with_activity, resolution) =
         if activity::activity_selection(&query)? {
@@ -396,6 +536,7 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
                 &live,
                 zone.as_ref(),
                 &pricing,
+                clock,
             )?;
             let mut answered = answered;
             // Before this run's first pass the grid comes from the store's last reads.
@@ -416,13 +557,43 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
                 Some(resolution),
             )
         } else {
-            let guard = obj(input.get("guardCoverage"))?;
-            let coverage_oldest = opt_num(guard.get("oldestHourAt"))?;
-            let providers: Vec<String> =
-                arr(guard.get("providersWithActivity").ok_or(Decline::Shape)?)?
-                    .iter()
-                    .map(|value| text(Some(value)).map(str::to_owned))
-                    .collect::<R<_>>()?;
+            let (coverage_oldest, providers) = match guard_coverage.as_ref() {
+                Some(guard) => {
+                    let guard = obj(Some(guard))?;
+                    let coverage = opt_num(guard.get("oldestHourAt"))?;
+                    let providers: Vec<String> =
+                        arr(guard.get("providersWithActivity").ok_or(Decline::Shape)?)?
+                            .iter()
+                            .map(|value| text(Some(value)).map(str::to_owned))
+                            .collect::<R<_>>()?;
+                    (coverage, providers)
+                }
+                // The native read: the store's own range and attribution answer the coverage.
+                None => {
+                    let from = ms_u64(provisional.from)?;
+                    let to = ms_u64(provisional.to)?;
+                    let daily = provisional.to - provisional.from > activity::HOURLY_RANGE_MS;
+                    let range = store.activity_range(json!({
+                        "fromMs": from,
+                        "toMs": to,
+                        "resolution": if daily { "day" } else { "hour" },
+                        "sessionSample": 200,
+                    }))?;
+                    let sources_state = store.activity_sources(from, to)?;
+                    let answered = activity::store_activity_answer(
+                        &range,
+                        &sources_state,
+                        &query,
+                        provisional.from,
+                        provisional.to,
+                        &live,
+                        zone.as_ref(),
+                        &pricing,
+                        clock,
+                    )?;
+                    (answered.oldest_hour_at, answered.providers_with_activity)
+                }
+            };
             let block = activity::guarded_activity(
                 &query,
                 provisional.from,
@@ -497,7 +668,7 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
         "query": query,
         "now": now,
         "retainedFrom": retained_from,
-        "bounds": bounds,
+        "bounds": { "oldest": oldest },
         "oldestQuota": finite_or_null(oldest_quota),
         "coverageOldestHourAt": finite_or_null(coverage),
         "provisional": {

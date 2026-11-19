@@ -320,6 +320,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-files/src/zoneinfo.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/tests/antigravity_maintenance.rs",
       "kind": "internal",
       "evidence": [],
@@ -610,6 +616,13 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP"
+      ]
+    },
+    {
+      "file": "crates/aac-http/src/public_auth/analytics_routes.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
       ]
     },
     {
@@ -1667,6 +1680,12 @@
     },
     {
       "file": "crates/aac-views/src/spread.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/tests/analytics_native.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
