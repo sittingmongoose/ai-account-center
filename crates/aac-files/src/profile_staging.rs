@@ -1,7 +1,8 @@
 //! The Codex job owns its unique staging name from prepare through cleanup.
 use super::{path, profile_writes::owned_directory, require_absolute, sync_directory};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink},
     path::Path,
     time::{Duration, UNIX_EPOCH},

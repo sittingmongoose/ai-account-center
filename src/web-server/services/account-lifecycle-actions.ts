@@ -1,3 +1,4 @@
+import { editRegistry, keyProbeOutcome } from './account-lifecycle-transitions';
 import { lifecyclePlan } from '../../shared/private-file-lease';
 import type { DashboardProvider } from './account-dashboard-types';
 import { isDashboardProviderId } from './dashboard-provider-table';
@@ -166,29 +167,28 @@ export async function addAccount(
       await readSourceManifestFile(env.ccsDir()).catch(() => null)
     );
     const source = manifest.sources.find((candidate) => candidate.provider === provider);
-    const registry = await updateAccountRegistry(env.ccsDir(), (current) => {
-      if (current.accounts.some((entry) => entry.provider === provider)) {
-        throw new LifecycleHttpError(409, 'single_account_provider');
-      }
-      if (current.accounts.length >= MAX_REGISTRY_ACCOUNTS) {
-        throw new LifecycleHttpError(409, 'too_many_accounts');
-      }
-      return {
-        ...current,
-        accounts: [
-          ...current.accounts,
-          {
-            id: `${provider}:usage`,
-            provider,
-            platform: source?.platform ?? 'ubuntu',
-            sshHost: source?.sshHost ?? null,
-            label: null,
-            credential: { kind: 'discover' },
-            createdAt: new Date(env.now()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
-            createdBy: null,
-          },
-        ],
-      };
+    const root = env.ccsDir();
+    const registry = await updateAccountRegistry(root, (current) => {
+      const edit = editRegistry(root, current, {
+        kind: 'insert',
+        uniqueProvider: true,
+        entry: {
+          id: `${provider}:usage`,
+          provider,
+          platform: source?.platform ?? 'ubuntu',
+          sshHost: source?.sshHost ?? null,
+          label: null,
+          credential: { kind: 'discover' },
+          createdAt: new Date(env.now()).toISOString().replace(/\\.\\d{3}Z$/, 'Z'),
+          createdBy: null,
+        },
+      });
+      if ('refusal' in edit)
+        throw new LifecycleHttpError(
+          409,
+          edit.refusal === 'missing' ? 'write_failed' : edit.refusal
+        );
+      return edit.registry;
     }).catch((error) => {
       throw error instanceof LifecycleHttpError
         ? error
@@ -248,16 +248,12 @@ async function addApiKey(
       createdAt: new Date(env.now()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
       createdBy: 'dashboard',
     };
-    const without = (current: { version: 2; accounts: RegistryAccount[] }) => ({
-      ...current,
-      accounts: current.accounts.filter((candidate) => candidate.id !== entry.id),
-    });
+    const root = env.ccsDir();
     try {
-      await updateAccountRegistry(env.ccsDir(), (current) => {
-        if (current.accounts.length >= MAX_REGISTRY_ACCOUNTS) {
-          throw new LifecycleHttpError(409, 'too_many_accounts');
-        }
-        return { ...current, accounts: [...current.accounts, entry] };
+      await updateAccountRegistry(root, (current) => {
+        const edit = editRegistry(root, current, { kind: 'insert', entry, uniqueProvider: false });
+        if ('refusal' in edit) throw new LifecycleHttpError(409, 'too_many_accounts');
+        return edit.registry;
       });
     } catch (error) {
       await store.delete(provider, keyId).catch(() => undefined);
@@ -266,12 +262,15 @@ async function addApiKey(
         : new LifecycleHttpError(500, 'write_failed');
     }
     const reading = await env.probe(registrySource(entry));
-    if (reading.status === 'needs_sign_in') {
-      await updateAccountRegistry(env.ccsDir(), without).catch(() => undefined);
+    const check = keyProbeOutcome(root, reading.status);
+    if (check === 'rejected') {
+      await updateAccountRegistry(root, (current) => {
+        const edit = editRegistry(root, current, { kind: 'remove', id: entry.id });
+        return 'refusal' in edit ? current : edit.registry;
+      }).catch(() => undefined);
       await store.delete(provider, keyId).catch(() => undefined);
       throw new LifecycleHttpError(422, 'key_rejected');
     }
-    const check = reading.status === 'ok' || reading.status === 'cached' ? 'ok' : 'unverified';
     env.audit('accounts.add', { provider, kind: 'api-key' });
     env.onChanged();
     return {
@@ -352,8 +351,9 @@ export async function replaceKey(
     try {
       const trial: RegistryAccount = { ...entry, credential: { kind: 'aac-key', keyId: trialId } };
       const reading = await env.probe(registrySource(trial));
-      if (reading.status === 'needs_sign_in') throw new LifecycleHttpError(422, 'key_rejected');
-      check = reading.status === 'ok' || reading.status === 'cached' ? 'ok' : 'unverified';
+      const decision = keyProbeOutcome(env.ccsDir(), reading.status);
+      if (decision === 'rejected') throw new LifecycleHttpError(422, 'key_rejected');
+      check = decision;
       // The account must still exist before its key is written (never a key without an account).
       await currentKeyEntry(env, entry);
       info = await store.put(provider, keyId, secret).catch(() => {

@@ -13,10 +13,12 @@ const INPUT_MAX: u64 = 256 * 1024;
     deny_unknown_fields
 )]
 enum Request {
-    Label {
+    RegistryEdit {
         registry: Value,
-        id: String,
-        label: Option<String>,
+        edit: Edit,
+    },
+    KeyProbe {
+        status: String,
     },
     AddAdmission {
         multi_account: bool,
@@ -39,6 +41,32 @@ enum Request {
         min_age: i64,
         named: Vec<String>,
         files: Vec<Deadline>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum Edit {
+    Label {
+        id: String,
+        label: Option<String>,
+    },
+    Insert {
+        entry: Value,
+        unique_provider: bool,
+        limit: usize,
+    },
+    Remove {
+        id: String,
+    },
+    Restore {
+        entry: Value,
+        index: usize,
     },
 }
 
@@ -71,26 +99,12 @@ pub(crate) fn run() -> i32 {
 
 fn evaluate(request: Request) -> Option<Value> {
     Some(match request {
-        Request::Label {
-            mut registry,
-            id,
-            label,
-        } => {
-            if registry.get("version").and_then(Value::as_u64) != Some(2) {
-                return None;
-            }
-            let accounts = registry.get_mut("accounts")?.as_array_mut()?;
-            let entry = accounts
-                .iter_mut()
-                .find(|account| account.get("id").and_then(Value::as_str) == Some(id.as_str()));
-            match entry {
-                Some(entry) => {
-                    entry.as_object_mut()?.insert("label".into(), json!(label));
-                    registry
-                }
-                None => Value::Null,
-            }
-        }
+        Request::RegistryEdit { registry, edit } => return edit_registry(registry, edit),
+        Request::KeyProbe { status } => json!(match status.as_str() {
+            "needs_sign_in" => "rejected",
+            "ok" | "cached" => "ok",
+            _ => "unverified",
+        }),
         Request::AddAdmission {
             multi_account,
             count,
@@ -145,4 +159,58 @@ fn evaluate(request: Request) -> Option<Value> {
             )
         }
     })
+}
+
+fn edit_registry(mut registry: Value, edit: Edit) -> Option<Value> {
+    if registry.get("version").and_then(Value::as_u64) != Some(2) {
+        return None;
+    }
+    let accounts = registry.get_mut("accounts")?.as_array_mut()?;
+    let position = match edit {
+        Edit::Label { id, label } => {
+            let Some(entry) = accounts
+                .iter_mut()
+                .find(|entry| entry["id"].as_str() == Some(id.as_str()))
+            else {
+                return Some(json!({"refusal":"missing"}));
+            };
+            entry.as_object_mut()?.insert("label".into(), json!(label));
+            None
+        }
+        Edit::Insert {
+            entry,
+            unique_provider,
+            limit,
+        } => {
+            if unique_provider
+                && accounts
+                    .iter()
+                    .any(|row| row["provider"] == entry["provider"])
+            {
+                return Some(json!({"refusal":"single_account_provider"}));
+            }
+            if accounts.len() >= limit {
+                return Some(json!({"refusal":"too_many_accounts"}));
+            }
+            accounts.push(entry);
+            None
+        }
+        Edit::Remove { id } => {
+            let Some(index) = accounts
+                .iter()
+                .position(|entry| entry["id"].as_str() == Some(id.as_str()))
+            else {
+                return Some(json!({"refusal":"missing"}));
+            };
+            accounts.remove(index);
+            Some(index)
+        }
+        Edit::Restore { entry, index } => {
+            if !accounts.iter().any(|row| row["id"] == entry["id"]) {
+                accounts.insert(index.min(accounts.len()), entry);
+            }
+            None
+        }
+    };
+    Some(json!({"registry":registry, "position":position}))
 }

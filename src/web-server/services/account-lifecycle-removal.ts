@@ -1,3 +1,4 @@
+import { editRegistry } from './account-lifecycle-transitions';
 import { CONFIRMATION_TOKEN_PATTERN, stateFingerprint } from './account-confirmations';
 import { isKeyProvider } from './account-key-store';
 import {
@@ -253,12 +254,11 @@ async function removeWallet(
   if (entry) {
     const removed = entry;
     await updateAccountRegistry(env.ccsDir(), (current) => {
-      position = current.accounts.findIndex((candidate) => candidate.id === id);
-      if (position < 0) throw new LifecycleHttpError(409, 'confirmation_stale');
-      return {
-        ...current,
-        accounts: current.accounts.filter((candidate) => candidate.id !== id),
-      };
+      const edit = editRegistry(env.ccsDir(), current, { kind: 'remove', id });
+      if ('refusal' in edit || edit.position === null)
+        throw new LifecycleHttpError(409, 'confirmation_stale');
+      position = edit.position;
+      return edit.registry;
     }).catch((error) => {
       throw error instanceof LifecycleHttpError
         ? error
@@ -268,10 +268,12 @@ async function removeWallet(
       await deleteOpencodeWalletSource(env.ccsDir());
     } catch {
       await updateAccountRegistry(env.ccsDir(), (current) => {
-        if (current.accounts.some((candidate) => candidate.id === id)) return current;
-        const accounts = [...current.accounts];
-        accounts.splice(Math.min(position, accounts.length), 0, removed);
-        return { ...current, accounts };
+        const edit = editRegistry(env.ccsDir(), current, {
+          kind: 'restore',
+          entry: removed,
+          index: position,
+        });
+        return 'refusal' in edit ? current : edit.registry;
       }).catch(() => undefined);
       throw new LifecycleHttpError(500, 'remove_failed');
     }
@@ -316,12 +318,11 @@ async function removeAdditional(
   if (keyed && !store) throw new LifecycleHttpError(500, 'remove_failed');
   let position = -1;
   await updateAccountRegistry(env.ccsDir(), (current) => {
-    position = current.accounts.findIndex((candidate) => candidate.id === entry.id);
-    if (position < 0) throw new LifecycleHttpError(409, 'confirmation_stale');
-    return {
-      ...current,
-      accounts: current.accounts.filter((candidate) => candidate.id !== entry.id),
-    };
+    const edit = editRegistry(env.ccsDir(), current, { kind: 'remove', id: entry.id });
+    if ('refusal' in edit || edit.position === null)
+      throw new LifecycleHttpError(409, 'confirmation_stale');
+    position = edit.position;
+    return edit.registry;
   }).catch((error) => {
     throw error instanceof LifecycleHttpError
       ? error
@@ -332,10 +333,12 @@ async function removeAdditional(
       await store.delete(entry.provider, credential.keyId);
     } catch {
       await updateAccountRegistry(env.ccsDir(), (current) => {
-        if (current.accounts.some((candidate) => candidate.id === entry.id)) return current;
-        const accounts = [...current.accounts];
-        accounts.splice(Math.min(position, accounts.length), 0, entry);
-        return { ...current, accounts };
+        const edit = editRegistry(env.ccsDir(), current, {
+          kind: 'restore',
+          entry,
+          index: position,
+        });
+        return 'refusal' in edit ? current : edit.registry;
       }).catch(() => undefined);
       throw new LifecycleHttpError(500, 'remove_failed');
     }

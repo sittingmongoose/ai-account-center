@@ -8,7 +8,8 @@ import {
   type LifecycleEnv,
   type LifecycleResult,
 } from './account-lifecycle-env';
-import { parseAccountRegistry, updateAccountRegistry } from './account-registry-v2';
+import { updateAccountRegistry } from './account-registry-v2';
+import { editRegistry } from './account-lifecycle-transitions';
 import { SIGNIN_CODE_PATTERN } from './signin-jobs';
 import {
   entryView,
@@ -40,23 +41,10 @@ export async function relabel(
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
   const root = env.ccsDir();
   const registry = await updateAccountRegistry(root, (current) => {
-    const reply = lifecyclePlan(root, { operation: 'label', registry: current, id, label: name });
-    if (reply !== undefined) {
-      if (reply === null) throw new LifecycleHttpError(404, 'unknown_account');
-      const next = parseAccountRegistry(reply);
-      if (!next) throw new LifecycleHttpError(500, 'write_failed');
-      return next;
-    }
+    const edit = editRegistry(root, current, { kind: 'label', id, label: name });
     // Removed between the lookup and the write: nothing to label.
-    if (!current.accounts.some((entry) => entry.id === id)) {
-      throw new LifecycleHttpError(404, 'unknown_account');
-    }
-    return {
-      ...current,
-      accounts: current.accounts.map((entry) =>
-        entry.id === id ? { ...entry, label: name } : entry
-      ),
-    };
+    if ('refusal' in edit) throw new LifecycleHttpError(404, 'unknown_account');
+    return edit.registry;
   }).catch((error) => {
     throw error instanceof LifecycleHttpError ? error : new LifecycleHttpError(500, 'write_failed');
   });

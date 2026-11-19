@@ -140,12 +140,11 @@ export function lifecyclePlan(root: string, request: object): unknown {
     windowsHide: true,
   });
   if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-  if (result.status !== 0 || typeof result.stdout !== 'string')
-    throw new ConfigError('The account lifecycle decision could not be confirmed.');
+  if (result.status !== 0 || typeof result.stdout !== 'string') return undefined;
   try {
     return JSON.parse(result.stdout) as unknown;
   } catch {
-    throw new ConfigError('The account lifecycle decision was invalid.');
+    return undefined;
   }
 }
 
