@@ -25,6 +25,7 @@ pub mod report;
 pub mod run_identity;
 pub mod run_schema;
 pub mod runs;
+pub mod sampler;
 #[path = "../../../native/shared/secret_policy.rs"]
 pub mod secret_policy;
 // Compatibility for callers from the original capture implementation.

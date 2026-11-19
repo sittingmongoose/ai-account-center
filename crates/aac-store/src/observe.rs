@@ -329,7 +329,8 @@ pub fn store_window(value: &Value) -> Option<WindowObs> {
 /// measured time and only inside the retention; no time in the future.
 pub fn observation_from_account(account: &Value, now: i64, retention_ms: i64) -> Option<Sampled> {
     let row = object(account)?;
-    let cutoff = now - retention_ms;
+    // Infinity retention (the live sampler) saturates to the earliest time, keeping every reading.
+    let cutoff = now.saturating_sub(retention_ms);
     let status = row.get("status")?.as_str()?;
     let healthy = status == "ok" || status == "cached";
     let mut windows: Vec<WindowObs> = Vec::new();
