@@ -477,11 +477,12 @@ describe('page routes and deep links', () => {
     const query = await raw('GET', `/accounts?${rawQuery}`);
     const body = query.body.toString();
     expect([200, 400]).toContain(query.status);
-    if (query.status === 200) expect(body).toBe(PAGE());
-    expect(body).not.toContain('provider=');
-    expect(body).not.toContain('view=');
-    expect(body).not.toContain('<b>x</b>');
-    expect(body).not.toContain('%3Cb%3Ex%3C%2Fb%3E');
+    if (query.status === 200) {
+      expect(body).toBe(PAGE());
+    } else {
+      expect(body).not.toMatch(/(?:provider|view)=|<script>|%3cscript%3e|&lt;script&gt;/i);
+      expect(body).not.toMatch(/<b>x<\/b>|%3cb%3ex%3c%2fb%3e|&lt;b&gt;x&lt;\/b&gt;/i);
+    }
   });
 
   it.each([
