@@ -329,6 +329,7 @@ export class ClaudeAccountLifecycle {
         });
       if (outcome === 'cross_volume') throw new ClaudeLifecycleError('trash_cross_volume', host);
       moved[host] = detail;
+      return true;
     });
     return { trashId, purgeAfter };
   }
@@ -399,6 +400,7 @@ export class ClaudeAccountLifecycle {
         await this.deps.transport.restore(host, { profileId: id, ...detail }).catch(() => {
           throw new ClaudeLifecycleError('restore_failed', host);
         });
+        return true;
       });
       return {
         next: entries.filter((candidate) => candidate.trashId !== trashId),
