@@ -61,10 +61,6 @@ pub(super) struct Groups {
 }
 
 impl Groups {
-    pub(super) fn lifecycle_available(self) -> bool {
-        self.collection && self.writes
-    }
-
     pub(super) fn from_config(config: &Value) -> Self {
         let on = |name: &str, env: &str| match std::env::var_os(env) {
             Some(value) => value == "on",
@@ -146,8 +142,6 @@ struct Usage {
     signins: ClaudeSignInRenewalReader,
     antigravity: Option<Arc<crate::antigravity_host::Host>>,
     server: Value,
-    worker_directory: Option<PathBuf>,
-    native_lifecycle: bool,
     store: bool,
     analytics_writers: bool,
     #[cfg(unix)]
@@ -164,6 +158,28 @@ struct LifecycleUsage {
     cache: AccountUsageCache,
     producer: Option<Arc<Producer>>,
     antigravity: Option<Arc<crate::antigravity_host::Host>>,
+}
+
+fn lifecycle_facts() -> crate::account_usage::dashboard::Lifecycle {
+    use ProviderId::{Antigravity, Claude, Codex, Muse};
+    let claude = std::env::var("CCS_CLAUDE_HOST_LIFECYCLE").as_deref() == Ok("on");
+    let mut lifecycle = crate::account_usage::dashboard::Lifecycle {
+        mounted: true,
+        recheck_disabled: vec![Codex, Claude, Antigravity],
+        ..Default::default()
+    };
+    if !claude {
+        lifecycle.remove_disabled.push(Claude);
+        lifecycle
+            .blocked
+            .insert("claude".into(), json!("not_implemented"));
+    }
+    if std::env::var("CCS_MUSE_SIGNIN").as_deref() != Ok("on") {
+        lifecycle
+            .blocked
+            .insert(Muse.as_str().into(), json!("not_implemented"));
+    }
+    lifecycle
 }
 
 impl NativeOwners {
@@ -206,8 +222,16 @@ impl NativeOwners {
                 let owner = if (groups.collection
                     && row.moves_with.as_deref() == Some("collection"))
                     || (groups.writes && row.moves_with.as_deref() == Some("writes"))
-                    || (groups.lifecycle && row.moves_with.as_deref() == Some("lifecycle"))
-                {
+                    || (groups.lifecycle
+                        && (row.moves_with.as_deref() == Some("lifecycle")
+                            || matches!(
+                                row.id.as_str(),
+                                "account-registry"
+                                    | "account-keys"
+                                    | "claude-desktop-profiles"
+                                    | "claude-pending"
+                                    | "claude-trash"
+                            ))) {
                     Role::RustService
                 } else {
                     row.owner
@@ -228,9 +252,7 @@ impl NativeOwners {
                 queues.clone(),
             ))
         });
-        if groups.writes
-            && let Some(trash) = trash.clone()
-        {
+        if let Some(trash) = trash.clone() {
             jobs.maintenance = Some(lifecycle_maintenance::start(
                 root.clone(),
                 owners.clone(),
@@ -247,24 +269,6 @@ impl NativeOwners {
             if groups.home && worker_directory.is_some() {
                 server["views"] = json!(["home"]);
             }
-            use ProviderId::{Antigravity, Claude, Codex, Muse};
-            let claude = std::env::var("CCS_CLAUDE_HOST_LIFECYCLE").as_deref() == Ok("on");
-            let mut lifecycle = crate::account_usage::dashboard::Lifecycle {
-                mounted: true,
-                recheck_disabled: vec![Codex, Claude, Antigravity],
-                ..Default::default()
-            };
-            if !claude {
-                lifecycle.remove_disabled.push(Claude);
-                lifecycle
-                    .blocked
-                    .insert("claude".into(), json!("not_implemented"));
-            }
-            if std::env::var("CCS_MUSE_SIGNIN").as_deref() != Ok("on") {
-                lifecycle
-                    .blocked
-                    .insert(Muse.as_str().into(), json!("not_implemented"));
-            }
             let collection = Arc::new(Collection::default());
             let usage = Arc::new(Usage {
                 producer: Arc::new(Producer::shared(
@@ -277,14 +281,12 @@ impl NativeOwners {
                 cache: AccountUsageCache::default(),
                 hub,
                 events: events.clone(),
-                lifecycle: Mutex::new(lifecycle),
+                lifecycle: Mutex::new(lifecycle_facts()),
                 recheck_limit: Mutex::default(),
                 signins: ClaudeSignInRenewalReader::new(root.clone(), Default::default()),
                 antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
                 server,
                 store: groups.store && worker_directory.is_some(),
-                worker_directory,
-                native_lifecycle: groups.lifecycle,
                 analytics_writers: groups.analytics_writers,
                 #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
@@ -408,6 +410,46 @@ impl NativeOwners {
                 maintenance: Some(maintenance),
             },
         )
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn private_companions(
+        &self,
+        mut facts: CompanionInputs,
+        refresh: bool,
+    ) -> CompanionInputs {
+        facts.lifecycle = lifecycle_facts();
+        if let Some(jobs) = &self.lifecycle_jobs {
+            for job in jobs.running(false) {
+                if let Some(id) = job.account_id {
+                    let state = if job.state == "verifying" {
+                        "verifying"
+                    } else {
+                        "signing_in"
+                    };
+                    facts
+                        .lifecycle
+                        .jobs
+                        .insert(id, json!({"state":state,"jobId":job.id}));
+                }
+            }
+        }
+        if let Some(host) = self
+            .lifecycle_usage
+            .as_ref()
+            .and_then(|usage| usage.antigravity.clone())
+        {
+            let root = self.root().to_owned();
+            facts.antigravity = tokio::task::spawn_blocking(move || {
+                crate::antigravity_runtime::has_profiles(&root)
+                    .then(|| host.accounts(refresh, super::now()))
+                    .flatten()
+            })
+            .await
+            .ok()
+            .flatten();
+        }
+        facts
     }
 
     pub(super) fn owns(&self, method: &Method, path: &str) -> bool {
@@ -613,15 +655,6 @@ impl Usage {
         let fallback = self.companions();
         tokio::task::spawn_blocking(move || {
             let mut facts = self.companions();
-            // The remaining lifecycle adapters may supply capability preflight. Collection
-            // and Re-check still run with the Rust facts if that worker is absent.
-            if let Some(directory) = &self.worker_directory
-                && !self.native_lifecycle
-            {
-                let active = facts.lifecycle.jobs.clone();
-                facts.load_lifecycle(directory);
-                facts.lifecycle.jobs.extend(active);
-            }
             facts.signins = self.signins.read().map(|report| report.to_json());
             facts.antigravity = self.antigravity.as_ref().and_then(|host| {
                 crate::antigravity_runtime::has_profiles(&self.root)
