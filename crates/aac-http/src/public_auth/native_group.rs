@@ -519,13 +519,32 @@ async fn status(
         ("x-aac-now", now.as_str()),
         ("x-aac-zone", zone.as_str()),
     ];
-    match routes
-        .request("GET", "/api/status", &principal, &headers, None)
-        .await
-    {
-        Some(reply) if reply.status == 200 => fed_view(&reply, facts.if_none_match.as_deref()),
-        _ => super::decline(),
+    // The first owned Status request can beat the service's first report scan; retry a cold
+    // `unsupported`/`stale`/`busy` for a moment instead of declining to nobody.
+    for attempt in 0..6 {
+        match routes
+            .request("GET", "/api/status", &principal, &headers, None)
+            .await
+        {
+            Some(reply) if reply.status == 200 => {
+                return fed_view(&reply, facts.if_none_match.as_deref());
+            }
+            Some(reply) if declined(&reply) => {
+                let reason = decline_reason(&reply).unwrap_or("");
+                tracing::warn!(reason, "the owned Status read declined");
+                if !matches!(reason, "unsupported" | "stale" | "busy") {
+                    return decline_because("status");
+                }
+                if attempt < 5 {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    continue;
+                }
+                return decline_because("status");
+            }
+            _ => return decline_because("status"),
+        }
     }
+    decline_because("status")
 }
 
 /// The service principal internal routes admit (`VerifiedPrincipal::valid`).
