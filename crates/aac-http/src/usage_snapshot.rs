@@ -106,7 +106,10 @@ impl UsageSnapshot {
             }),
             rollup_exports: Arc::new(move |_event| {
                 let guard = rollup_facts.lock().unwrap_or_else(|e| e.into_inner());
-                guard.as_ref().map(|facts| facts.rollups.clone()).unwrap_or(Ok(None))
+                guard
+                    .as_ref()
+                    .map(|facts| facts.rollups.clone())
+                    .unwrap_or(Ok(None))
             }),
             now_ms: Arc::new(now_ms),
             hostname: Arc::new(hostname),
@@ -142,9 +145,16 @@ impl UsageSnapshot {
             };
             let sign_in_since = payload["signIn"]["since"].as_i64();
             let facts = Facts {
-                sign_in_rows: payload["signIn"]["rows"].as_array().cloned().unwrap_or_default(),
+                sign_in_rows: payload["signIn"]["rows"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default(),
                 sign_in_failed: payload["signIn"]["failed"].as_bool().unwrap_or(false),
-                renewal: if payload["signInRenewal"].is_null() { None } else { Some(payload["signInRenewal"].clone()) },
+                renewal: if payload["signInRenewal"].is_null() {
+                    None
+                } else {
+                    Some(payload["signInRenewal"].clone())
+                },
                 rollups: parse_rollups(&payload["rollups"]),
             };
             // Every sample's readings count, even one whose write is skipped.
