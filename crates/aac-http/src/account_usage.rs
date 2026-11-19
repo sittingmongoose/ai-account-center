@@ -1,4 +1,5 @@
 //! Dashboard snapshot publication shared by Accounts, Home, the usage hub and store sampling.
+pub(crate) mod cursor;
 pub mod failover;
 pub(crate) mod helper;
 pub mod provider_caches;

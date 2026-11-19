@@ -16,6 +16,8 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ProviderError } from '../../errors/error-types';
+import { privateFileOwners } from '../../shared/private-files';
+import { readRustCursorAccount } from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import type { DashboardAccount } from './account-dashboard-types';
 import type { AnalyticsRemoteRow } from './analytics-remote-transport';
@@ -244,6 +246,24 @@ export async function readCursorAccount(
   const cacheDir = options.cacheDir ?? path.join(getCcsDir(), 'cache');
   const ccsDir = options.ccsDir ?? getCcsDir();
   const run = options.run ?? runCursorAccount;
+  if (
+    !options.run &&
+    !options.now &&
+    path.resolve(cacheDir) === path.resolve(ccsDir, 'cache') &&
+    privateFileOwners()['cursor-account-observation'] === 'rust-service'
+  ) {
+    const owned = await readRustCursorAccount(ccsDir, {
+      sinceMs: Math.floor(sinceMs),
+      untilMs: Math.floor(untilMs),
+      force: options.force ?? false,
+    });
+    if (owned === null) {
+      const previous = loadRead(cacheDir);
+      if (previous) return previous;
+      throw new Error('reader_failed');
+    }
+    if (owned !== undefined) return owned as CursorAccountRead;
+  }
   const previous = loadRead(cacheDir);
   if (
     previous &&

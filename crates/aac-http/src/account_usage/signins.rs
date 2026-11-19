@@ -1,4 +1,7 @@
 //! Cross-host sign-in expiry and Claude renewal projection.
+pub mod poll;
+mod profile_rows;
+
 use aac_views::{decline::Decline, js::parse_date};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};

@@ -42,6 +42,11 @@ pub(crate) struct Selector {
     platform: String,
     ssh_host: Option<String>,
 }
+impl Selector {
+    pub(crate) fn new(platform: String, ssh_host: Option<String>) -> Self {
+        Self { platform, ssh_host }
+    }
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Call {

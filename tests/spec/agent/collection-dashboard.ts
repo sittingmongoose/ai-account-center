@@ -1,6 +1,7 @@
 /** H2 snapshot projection on the actual TS adapters and private Rust socket. */
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { writeFileSync } from 'node:fs';
 import type {
   UsageHelperResponse,
   UsageFailoverTarget,
@@ -25,7 +26,7 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
 });
 const { settlePrivateFileOwners } = await import('../../../src/shared/private-files');
-const { projectRustSignIns, registerRustAgentConnection } =
+const { pollRustSignIns, projectRustSignIns, registerRustAgentConnection } =
   await import('../../../src/web-server/rust-service-transport');
 const { collectQuotaWithFallback, runQuotaAgent } =
   await import('../../../src/web-server/services/agent-verbs');
@@ -39,7 +40,7 @@ const { UsageFailoverService } =
 const { runFailoverInventoryAgent } =
   await import('../../../src/web-server/services/usage-failover-transport');
 
-const { cacheTtlFor, downgradeCrossedRows, mergeRenewal } =
+const { cacheTtlFor, downgradeCrossedRows, mergeRenewal, parseRows } =
   await import('../../../src/web-server/services/signin-health-service');
 type Health = import('../../../src/web-server/services/signin-health-service').SignInHealth;
 type Renewal = import('../../../src/web-server/services/claude-signin-renewal').ClaudeSignInRenewal;
@@ -163,6 +164,41 @@ try {
   const restored = await collectFailover(true).collect(target(fixture.root), template);
   assert.deepEqual(restored, owned);
   assert.equal(inventories, 1, 'the cold coordinator reused the Rust-written observation');
+
+  const raw = {
+    schemaVersion: 1,
+    profiles: [
+      {
+        name: 'Alice',
+        configDir: 'x'.repeat(199) + 'ðŸ˜€',
+        provider: 'codex',
+        state: 'unsupported',
+        fieldsAvailable: ['tokens', 'fixture-field'],
+        fixCommand: 'line\nbreak',
+        accessExpiresAt: '2026-02-30T00:00:00.000Z',
+      },
+      {
+        name: 'Alice',
+        state: 'unavailable',
+        error: 'fixture private message',
+        fixCommand: 'fixture command',
+        refreshExpiresAt: '2026-01-01T05:30:00.000+05:30',
+      },
+      { name: 'Alice-2', state: 'ok' },
+      { name: 'Alice ', state: 'ok' },
+      { name: 'ðŸ˜€', state: 'ok' },
+    ],
+  };
+  writeFileSync(path.join(fixture.root, 'signin-fixture.json'), JSON.stringify(raw));
+  writeFileSync(path.join(fixture.root, 'scenario'), 'signin-rows');
+  const scheduled = await pollRustSignIns(fixture.root, [
+    { host: 'ubuntu', platform: 'ubuntu', sshHost: 'fixture' },
+    { host: 'mac', platform: 'mac', sshHost: 'unconfigured' },
+  ]);
+  assert.deepEqual(scheduled, {
+    machines: { ubuntu: JSON.parse(JSON.stringify(parseRows(JSON.stringify(raw), 'ubuntu'))) },
+    referenceHosts: ['mac'],
+  });
 
   const settledAt = at + 5000;
   const machines: Health['machines'] = {

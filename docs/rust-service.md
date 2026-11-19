@@ -658,6 +658,14 @@ computer. The service uses the same L5 registry and pool.
 - `GET /internal/collection-sources` reads the private account registry v2.
   `PUT /internal/collection-provider-cache` takes a Claude profile ID and
   manifest hash or an OpenCode wallet binding hash.
+- `PUT /internal/collection-cursor` runs the digest-checked Cursor reader
+  locally, with a 120-second process bound and one pending read. It saves the
+  previous observation's layout, uses the ten-minute TTL, and keeps dated
+  last-good rows on an unavailable result. A manual refresh bypasses the TTL.
+  The existing TS reader serves when the Rust collection group is off.
+- `PUT /internal/collection-signin-poll` runs the bounded cross-host L5
+  sign-in read, sanitizes rows and names the hosts that need the reference.
+  The standalone listener can use `account_usage::signins::poll::Reader`.
 - `PUT /internal/collection-signins` settles host results and computes their
   expiry TTL or merges the current Claude renewal report into those results.
 - `POST /internal/collect/failover-collect` can run a selected **remote**

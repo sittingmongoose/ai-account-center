@@ -26,11 +26,11 @@ const VERBS: [&str; 4] = [
 ];
 const MAX_PENDING: usize = 16;
 type Key = [u8; 32];
-enum Collected {
+pub(crate) enum Collected {
     Value(Value),
     Failure(Failure),
 }
-type Reply = Result<Arc<Collected>, &'static str>;
+pub(crate) type Reply = Result<Arc<Collected>, &'static str>;
 type Pending = watch::Sender<Option<Reply>>;
 
 pub(crate) struct Collection {
@@ -222,7 +222,7 @@ impl Call {
     }
 }
 
-async fn read_agent(
+pub(crate) async fn read_agent(
     agents: &Agents,
     computer: crate::agent_transport::Selector,
     request: Request,

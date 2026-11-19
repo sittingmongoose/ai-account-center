@@ -31,7 +31,9 @@ pub(crate) enum Handler {
     CollectionTick,
     CollectionSources,
     SignInHealth,
+    SignInPoll,
     ProviderCache,
+    CursorAccount,
     CollectionCache,
     AgentControl,
     Store,
@@ -57,7 +59,9 @@ impl Handler {
             "collection-cache" => Handler::CollectionCache,
             "collect" => Handler::Collect,
             "collection-provider-cache" => Handler::ProviderCache,
+            "collection-cursor" => Handler::CursorAccount,
             "collection-signins" => Handler::SignInHealth,
+            "collection-signin-poll" => Handler::SignInPoll,
             "collection-sources" => Handler::CollectionSources,
             "collection-tick" => Handler::CollectionTick,
             "agent" => Handler::Agent,
@@ -214,6 +218,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::Agent
                         | Handler::Collect
                         | Handler::CollectionTick
+                        | Handler::CursorAccount
+                        | Handler::SignInPoll
                         | Handler::Store
                 ))
             || (row.group == "internal" && !internal)
@@ -226,7 +232,9 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::CollectionTick
                         | Handler::CollectionSources
                         | Handler::SignInHealth
+                        | Handler::SignInPoll
                         | Handler::ProviderCache
+                        | Handler::CursorAccount
                         | Handler::Collect
                 ))
             || internal != roles.iter().all(|r| *r == Role::Service)
@@ -244,7 +252,9 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::CollectionCache
                         | Handler::CollectionTick
                         | Handler::ProviderCache
+                        | Handler::CursorAccount
                         | Handler::SignInHealth
+                        | Handler::SignInPoll
                 ))
             || rows
                 .iter()
@@ -286,6 +296,8 @@ mod tests {
                     | Handler::Agent
                     | Handler::Collect
                     | Handler::CollectionTick
+                    | Handler::CursorAccount
+                    | Handler::SignInPoll
                     | Handler::Store
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));

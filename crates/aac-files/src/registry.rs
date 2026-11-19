@@ -342,6 +342,7 @@ mod tests {
         assert_eq!(
             moved,
             [
+                ("cursor-account-observation", "collection"),
                 ("account-usage-observations", "collection"),
                 ("claude-live-snapshots", "collection"),
             ]

@@ -144,7 +144,7 @@ pub fn bound_muse_peer(
         .any(|p| p["host"] == host && &p["identity"] == peer))
 }
 
-fn counter(value: &Value) -> Option<u64> {
+pub(crate) fn counter(value: &Value) -> Option<u64> {
     value.as_u64().filter(|n| *n <= 9_007_199_254_740_991)
 }
 
@@ -170,26 +170,34 @@ fn cursor_row(row: &Value) -> bool {
             .is_some_and(|n| n.is_finite() && n >= 0.0)
 }
 
-/// Read the saved Cursor account summary. This function only reads the existing cache.
-pub fn cursor_account(root: &Path) -> Result<Option<Value>, Decline> {
-    let Some(value) = load(root, "cursor-account-observation", None, true)? else {
-        return Ok(None);
-    };
-    let Some(state) = value["state"].as_str().filter(|state| {
+pub(crate) fn cursor_state(value: &Value) -> Option<&str> {
+    value.as_str().filter(|state| {
         ["no_key", "key_rejected", "read", "unavailable", "no_reader"].contains(state)
-    }) else {
-        return Ok(None);
-    };
-    let Some(checked) = value["checkedAt"].as_str() else {
-        return Ok(None);
-    };
-    let rows: Vec<_> = value["rows"]
+    })
+}
+
+pub(crate) fn cursor_rows(value: &Value) -> Vec<&Value> {
+    value
         .as_array()
         .into_iter()
         .flatten()
         .filter(|row| cursor_row(row))
         .take(100_000)
-        .collect();
+        .collect()
+}
+
+/// Read the saved Cursor account summary. This function only reads the existing cache.
+pub fn cursor_account(root: &Path) -> Result<Option<Value>, Decline> {
+    let Some(value) = load(root, "cursor-account-observation", None, true)? else {
+        return Ok(None);
+    };
+    let Some(state) = cursor_state(&value["state"]) else {
+        return Ok(None);
+    };
+    let Some(checked) = value["checkedAt"].as_str() else {
+        return Ok(None);
+    };
+    let rows = cursor_rows(&value["rows"]);
     let key = match (
         value["key"]["last4"].as_str(),
         value["key"]["fingerprint"].as_str(),

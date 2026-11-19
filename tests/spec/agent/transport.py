@@ -40,7 +40,7 @@ class UnixHttp(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 class Service:
-    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False, remote_env=None):
+    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False, remote_env=None, cursor_fixture=False):
         self.temp = tempfile.TemporaryDirectory(prefix='a5-')
         self.root = Path(self.temp.name)
         self.agent = str(Path(agent).resolve())
@@ -75,6 +75,10 @@ class Service:
         scp.chmod(0o700)
         env = {**os.environ, 'PATH': str(self.root) + ':' + os.environ.get('PATH', os.defpath),
                'AAC_AGENT_PACKAGE_ROOT': str(ROOT), 'AAC_AGENT_CATALOG': str(self.root / 'catalog.json')}
+        if cursor_fixture:
+            package = self.root / 'cursor-package'
+            install_cursor_fixture(package, self.root)
+            env['AAC_AGENT_PACKAGE_ROOT'] = str(package)
         env.pop('AAC_AGENT_TRANSPORT', None)
         self.child = subprocess.Popen([str(Path(service).resolve())], stdin=subprocess.PIPE,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
@@ -125,6 +129,94 @@ class Service:
     def __enter__(self): return self
     def __exit__(self, *unused): self.close()
 
+def install_cursor_fixture(package, root):
+    target = 'x86_64-unknown-linux-gnu'
+    folder = package / 'dist/native/aac-cursor-account'
+    binary = folder / target / 'aac-cursor-account'
+    binary.parent.mkdir(parents=True)
+    source = """#!/usr/bin/python3
+import json, sys, time
+from pathlib import Path
+assert sys.argv == [sys.argv[0], 'read', '--ccs-dir', ROOT]
+root = Path(ROOT)
+bounds = json.load(sys.stdin)
+with (root / 'cursor-trace.jsonl').open('a') as trace:
+    trace.write(json.dumps(bounds) + '\\n')
+if (root / 'cursor-failure').exists():
+    print(json.dumps({'state':'unavailable','cause':'fixture_failure'}))
+    sys.exit(1)
+if (root / 'cursor-slow').exists():
+    until = time.monotonic() + 10
+    while not (root / 'cursor-barrier').exists():
+        assert time.monotonic() < until
+        time.sleep(.01)
+rows = [{'h':'2026-01-01 00:00','m':'fixture-model','i':3,'o':0,'cr':0,'cw':0,
+         'n':1,'uncosted':0,'cents':2}, {'h':'bad'}]
+print(json.dumps({'state':'read','readAt':bounds['untilMs'],'account':'fixture',
+                  'key':{'last4':'long-ab12','fingerprint':'fixture'},'rows':rows,
+                  'events':1,'unmeasured':2}))
+"""
+    binary.write_text(source.replace("ROOT", repr(str(root))))
+    binary.chmod(0o700)
+    body = binary.read_bytes()
+    manifest = {'name':'aac-cursor-account','targets':{target:{
+        'file':f'{target}/aac-cursor-account','size':len(body),
+        'sha256':hashlib.sha256(body).hexdigest(),
+    }}}
+    (folder / 'manifest.json').write_text(json.dumps(manifest))
+
+
+def cursor_gates(agent, service):
+    route = '/internal/collection-cursor'
+    since, until = 1_767_225_600_000, 1_767_229_200_000
+    payload = {'sinceMs':since,'untilMs':until,'force':False}
+    with Service(agent, service, cursor_fixture=True) as fixture:
+        assert fixture.ask(route, payload, method='PUT')[0] == 503
+        assert not (fixture.root / 'cursor-trace.jsonl').exists()
+    with Service(agent, service, collection=True, cursor_fixture=True) as fixture:
+        trace = fixture.root / 'cursor-trace.jsonl'
+        public = {'kind':'session','id':'fixture-admin','role':'admin'}
+        assert fixture.ask(route, payload, method='PUT', principal=public)[0] == 401
+        assert fixture.ask(route, dict(payload, sinceMs=until+1), method='PUT')[0] == 503
+        assert not trace.exists()
+        (fixture.root / 'cursor-slow').touch()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(fixture.ask, route, payload, method='PUT')
+            until_spawn = time.monotonic() + 5
+            while not trace.exists():
+                assert time.monotonic() < until_spawn
+                time.sleep(.01)
+            b = pool.submit(fixture.ask, route, dict(payload, force=True), method='PUT')
+            time.sleep(.1)
+            (fixture.root / 'cursor-barrier').touch()
+            status, raw = a.result()
+            assert status == 200 and b.result() == (status, raw)
+        first = json.loads(raw)
+        assert first['state'] == 'read' and first['readAt'] == '2026-01-01T01:00:00.000Z'
+        assert first['key']['last4'] == 'ab12' and len(first['rows']) == 1
+        assert first['events'] == 1 and first['unmeasured'] == 2
+        assert fixture.ask(route, payload, method='PUT') == (200, raw)
+        assert trace.read_text().splitlines() == [json.dumps({'sinceMs':since,'untilMs':until})]
+        (fixture.root / 'cursor-failure').touch()
+        status, raw = fixture.ask(route, dict(payload, force=True), method='PUT')
+        failed = json.loads(raw)
+        assert status == 200 and failed['state'] == 'unavailable'
+        assert failed['cause'] == 'fixture_failure'
+        for name in ('rows', 'readAt', 'account', 'events', 'unmeasured', 'key'):
+            assert failed[name] == first[name]
+        saved = fixture.root / 'cache/cursor-account-v1.json'
+        assert json.loads(saved.read_text()) == failed
+        assert saved.stat().st_mode & 0o777 == 0o600
+        binary = (fixture.root / 'cursor-package/dist/native/aac-cursor-account'
+                  / 'x86_64-unknown-linux-gnu/aac-cursor-account')
+        binary.write_bytes(binary.read_bytes() + b'\n# changed after packaging\n')
+        status, raw = fixture.ask(route, dict(payload, force=True), method='PUT')
+        missing = json.loads(raw)
+        assert status == 200 and missing['state'] == 'no_reader' and missing['rows'] == []
+        assert len(trace.read_text().splitlines()) == 2
+    print('PASS H2 Cursor: digest-bound local reader, shared pending read, TTL, atomic save and last-good rows')
+
+
 def record(root, agent):
     if '-G' in sys.argv[1:]:
         sys.exit(0)  # No-connect capability probes are not agent launcher calls.
@@ -153,6 +245,12 @@ def record(root, agent):
             identity['version'] = '0.0.0'
             print(json.dumps(identity)); sys.exit(0)
         os.execv(agent, [agent, '--version'])
+    if scenario == 'signin-rows':
+        request = json.loads(sys.stdin.buffer.readline())
+        assert request['verb'] == 'signin-expiry'
+        value = json.loads((root / 'signin-fixture.json').read_text())
+        print(json.dumps({'type':'result','protocol':1,'id':request['id'],'value':value}))
+        sys.exit(0)
     if scenario == 'collect-slow':
         request = json.loads(sys.stdin.buffer.readline())
         while not (root / 'barrier').exists():
@@ -445,7 +543,7 @@ def collection_projection(agent, service):
                 env = {**os.environ, 'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config')}
                 subprocess.run(command, input=json.dumps(payload), env=env, text=True, check=True)
                 assert len(Handler.calls) == 2 and not Handler.queue
-                assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'run']
+                assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'run', 'run']
             finally:
                 server.shutdown()
 
@@ -456,6 +554,7 @@ def main():
     if collection:
         collection_gates(agent, service)
         collection_projection(agent, service)
+        cursor_gates(agent, service)
     else:
         gates(agent, service)
     if '--gates-only' in sys.argv: return
