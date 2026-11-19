@@ -540,15 +540,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 688,
+      "totalThrows": 687,
       "typedThrows": 227,
       "plainThrows": 47,
-      "otherThrows": 414,
-      "adoptionRatio": 0.3299,
+      "otherThrows": 413,
+      "adoptionRatio": 0.3304,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 405,
+          "count": 404,
           "typed": 174,
           "plain": 7
         },
@@ -610,8 +610,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 460,
-      "coverageRatio": 0.0957,
+      "totalSourceFiles": 459,
+      "coverageRatio": 0.0959,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -627,7 +627,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 264,
+          "count": 263,
           "withLogger": 30
         },
         {
@@ -755,7 +755,7 @@
         },
         {
           "file": "src/web-server/status/answers.ts",
-          "loc": 1941
+          "loc": 1744
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
@@ -770,12 +770,12 @@
           "loc": 1154
         },
         {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1084
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 1109
         },
         {
-          "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1080
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 1053
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -783,7 +783,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 993
+          "loc": 992
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",
@@ -791,7 +791,7 @@
         },
         {
           "file": "src/web-server/status/status-view.ts",
-          "loc": 871
+          "loc": 870
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",

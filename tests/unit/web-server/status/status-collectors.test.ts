@@ -407,7 +407,7 @@ describe('status collectors', () => {
     const script = mac
       .replace(/"\$\(sysctl -n hw\.ncpu\)"/, '8')
       .replace(/"\$\(sysctl -n vm\.loadavg \| awk '\{print \$2\}'\)"/, '1.5')
-      .replace(/"\$\(sysctl -n hw\.memsize\)"/, '17179869184')
+      .replace('sysctl -n hw.memsize 2>/dev/null', "printf '17179869184\\n'")
       .replace('sysctl -n kern.memorystatus_level', 'printf 67')
       .replace('ps -A -o %cpu=', 'false')
       .replace(
@@ -537,17 +537,17 @@ describe('status collectors', () => {
     expect(parseMachineProbe('mac', 'cores=8\nmemAvailPct=67\n')?.memAvailableBytes).toBeNull();
   });
 
-  it('runs the same Mac shell probe in TypeScript and Rust and falls back for unusable sysctl output', () => {
+  it('runs the same Mac shell probe in TypeScript and Rust and requires clean successful memory sources', () => {
     const probe = machineProbeCommand('mac');
     const rust = path.resolve(import.meta.dir, '../../../../crates/aac-agent/src/probes/mac.txt');
     expect(fs.readFileSync(rust, 'utf8')).toBe(probe + '\n');
-    const run = (level: string, pressure: string) => {
+    const run = (level: string, pressure: string, memsize = String.raw`printf '17179869184\n'`) => {
       const commands = String.raw`
         sysctl() {
           case "$2" in
             hw.ncpu) printf '8\n' ;;
             vm.loadavg) printf '{ 1.50 1.50 1.50 }\n' ;;
-            hw.memsize) printf '17179869184\n' ;;
+            hw.memsize) ${memsize} ;;
             kern.memorystatus_level) ${level} ;;
           esac
         }
@@ -574,6 +574,43 @@ describe('status collectors', () => {
     const unusable = run(malformed[0], 'printf "System-wide memory free percentage: 101%%\\n"');
     expect(unusable?.memAvailableBytes).toBeNull();
     expect(unusable?.memoryError).toBe('The machine did not report its memory.');
+    // M1: hw.memsize must exit 0 with exactly one clean decimal; CPU and disk still stand.
+    const badTotals = [
+      String.raw`printf '17179869184\n'; return 1`,
+      String.raw`printf '17179869184\ninvalid\n'`,
+      String.raw`printf 'bad\nmemTotalB=2147483648\n'`,
+      String.raw`printf ''`,
+      String.raw`printf 'N/A\n'`,
+    ];
+    for (const memsize of badTotals) {
+      const sample = run('printf 67', 'return 1', memsize);
+      expect({ memsize, avail: sample?.memAvailableBytes }).toEqual({ memsize, avail: null });
+      expect(sample?.memoryError).toBe('The machine did not report its memory.');
+      expect(sample?.busyPct).toBe(4);
+      expect(sample?.disk?.totalBytes).toBe(100 * 1024);
+    }
+    // M2: memory_pressure must exit 0 with one unconflicted percentage line.
+    const badPressures = [
+      String.raw`printf 'System-wide memory free percentage: 67%%\n'; return 1`,
+      String.raw`printf 'System-wide memory free percentage: 67%%\nSystem-wide memory free percentage: 40%%\n'`,
+      String.raw`printf ''`,
+      String.raw`printf 'System-wide memory free percentage: N/A%%\n'`,
+    ];
+    for (const pressure of badPressures) {
+      const sample = run('return 1', pressure);
+      expect({ pressure, avail: sample?.memAvailableBytes }).toEqual({ pressure, avail: null });
+      expect(sample?.memoryError).toBe('The machine did not report its memory.');
+      expect(sample?.busyPct).toBe(4);
+      expect(sample?.disk?.totalBytes).toBe(100 * 1024);
+    }
+    // A CRLF right after the percent sign keeps the valid fallback; agreeing duplicates are one value.
+    for (const pressure of [
+      String.raw`printf 'System-wide memory free percentage: 67%%\r\n'`,
+      String.raw`printf 'System-wide memory free percentage: 67%% \r\n'`,
+      String.raw`printf 'System-wide memory free percentage: 67%%\nSystem-wide memory free percentage: 67%%\n'`,
+    ]) {
+      expect(run('return 1', pressure)?.memAvailableBytes).toBe(11_510_512_353.28);
+    }
   });
 
   it('rejects malformed and oversized Mac totals while retaining the other readings', () => {
@@ -589,6 +626,41 @@ describe('status collectors', () => {
     );
     expect(oversized?.memAvailableBytes).toBeNull();
     expect(oversized?.memoryError).toBe('The machine did not report its memory.');
+  });
+
+  it('returns the total itself at 100% and names memory unavailable on empty wire fields', () => {
+    // At the safe-integer limit the product total*pct/100 rounds one byte past the total.
+    const limit = parseMachineProbe('mac', 'memTotalB=9007199254740985\nmemAvailPct=100\n');
+    expect(limit?.memAvailableBytes).toBe(9007199254740985);
+    expect(limit?.memTotalBytes).toBe(9007199254740985);
+    expect(limit?.memoryError).toBeUndefined();
+    const withCores = parseMachineProbe(
+      'mac',
+      'cores=8\nmemTotalB=9007199254740985\nmemAvailPct=100\n'
+    );
+    expect(withCores?.memAvailableBytes).toBe(9007199254740985);
+    expect(withCores?.cores).toBe(8);
+    const whole = parseMachineProbe('mac', 'memTotalB=17179869184\nmemAvailPct=100\n');
+    expect(whole?.memAvailableBytes).toBe(17179869184);
+    expect(whole?.memoryError).toBeUndefined();
+    // The strict probe's failure shapes: an empty field, never an invented reading.
+    expect(parseMachineProbe('mac', 'memTotalB=\nmemAvailPct=67\n')).toBeNull();
+    const partial = parseMachineProbe(
+      'mac',
+      'cores=8\nmemTotalB=\nmemAvailPct=67\ncpuPct=32\ndiskTotalKb=10\ndiskFreeKb=5\n'
+    );
+    expect(partial?.memTotalBytes).toBeNull();
+    expect(partial?.memAvailableBytes).toBeNull();
+    expect(partial?.memoryError).toBe('The machine did not report its memory.');
+    expect(partial?.busyPct).toBe(4);
+    expect(partial?.disk?.totalBytes).toBe(10 * 1024);
+    const noPct = parseMachineProbe(
+      'mac',
+      'cores=8\nmemTotalB=17179869184\nmemAvailPct=\ncpuPct=32\ndiskTotalKb=10\ndiskFreeKb=5\n'
+    );
+    expect(noPct?.memAvailableBytes).toBeNull();
+    expect(noPct?.memoryError).toBe('The machine did not report its memory.');
+    expect(noPct?.busyPct).toBe(4);
   });
 
   it('keeps a registry row through one ENOENT race and names a listed file gone twice in a row', async () => {

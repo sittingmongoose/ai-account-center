@@ -666,7 +666,9 @@ export const REMOTE_MACHINES = Object.freeze(
 
 const LINUX_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk / | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
-const MAC_MEMORY_PROBE = String.raw`printf 'memTotalB=%s\n' "$(sysctl -n hw.memsize)"; m=$(sysctl -n kern.memorystatus_level 2>/dev/null) || m=; case "$m" in ''|*[!0-9]*) m=;; *) [ "$m" -le 100 ] 2>/dev/null || m=;; esac; if [ -z "$m" ]; then m=$(memory_pressure 2>/dev/null | awk '/^System-wide memory free percentage:[[:space:]]+[0-9]+%[[:space:]]*$/ && $5+0 <= 100 {sub(/%$/, "", $5); print $5; exit}'); fi; printf 'memAvailPct=%s\n' "$m"`;
+// Each memory source must succeed with one clean value: a failed or multi-line hw.memsize, or a
+// failed or self-conflicting memory_pressure, publishes no memory reading (never an invented one).
+const MAC_MEMORY_PROBE = String.raw`t=$(sysctl -n hw.memsize 2>/dev/null) || t=; case "$t" in ''|*[!0-9]*) t=;; esac; printf 'memTotalB=%s\n' "$t"; m=$(sysctl -n kern.memorystatus_level 2>/dev/null) || m=; case "$m" in ''|*[!0-9]*) m=;; *) [ "$m" -le 100 ] 2>/dev/null || m=;; esac; if [ -z "$m" ]; then p=$(memory_pressure 2>/dev/null) && m=$(printf '%s\n' "$p" | awk '{sub(/\r+$/, "")} /^System-wide memory free percentage:[[:space:]]+[0-9]+%[[:space:]]*$/ {v=$5+0; if (v<=100) {if (!have) {have=1; val=v} else if (val!=v) bad=1}} END {if (have && !bad) print val}'); fi; printf 'memAvailPct=%s\n' "$m"`;
 
 const MAC_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(sysctl -n hw.ncpu)"; printf 'load=%s\n' "$(sysctl -n vm.loadavg | awk '{print $2}')"; ${MAC_MEMORY_PROBE}; c=$(ps -A -o %cpu=) && p=$(printf '%s\n' "$c" | awk '$1 ~ /^[0-9]+([.][0-9]+)?$/ {s+=$1; n++} END {if (n) print s}') && [ -n "$p" ] && printf 'cpuPct=%s\n' "$p"; d=/System/Volumes/Data; [ -d "$d" ] || d=/; df -Pk "$d" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
@@ -781,7 +783,13 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
     const total = unsigned('memTotalB');
     memTotal = total !== null && total > 0 && Number.isSafeInteger(total) ? total : null;
     const pct = unsigned('memAvailPct');
-    memAvail = memTotal !== null && pct !== null && pct <= 100 ? (memTotal * pct) / 100 : null;
+    // 100% returns the total itself: the product rounds one byte past it at the safe-integer limit.
+    memAvail =
+      memTotal !== null && pct !== null && pct <= 100
+        ? pct === 100
+          ? memTotal
+          : (memTotal * pct) / 100
+        : null;
   }
   const diskTotal = kib('diskTotalKb') ?? n('diskTotalB');
   const diskFree = kib('diskFreeKb') ?? n('diskFreeB');
