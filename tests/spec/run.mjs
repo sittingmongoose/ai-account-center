@@ -24,6 +24,13 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  [
+    'bun',
+    [
+      'tests/spec/settings-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   ...[
     'read-view-parity',
