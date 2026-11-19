@@ -146,9 +146,18 @@ pub(super) fn claim_registry(
     owners: &Owners,
 ) -> Result<(aac_files::OwnedStore, Vec<sources::Source>), SaveError> {
     let rows = registry::rows().map_err(|_| SaveError::Write)?;
-    let writer = owners
-        .claim(rows, "account-registry", root, None)
-        .map_err(|_| SaveError::Write)?;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let writer = loop {
+        match owners.claim(rows, "account-registry", root, None) {
+            Ok(writer) => break writer,
+            Err(error)
+                if error.cause == aac_core::Cause::Busy && std::time::Instant::now() < until =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            Err(_) => return Err(SaveError::Write),
+        }
+    };
     // Re-resolve under the same registered lock the compatibility writer takes.
     let accounts = match sources::read_registry(root).map_err(|_| SaveError::Write)? {
         sources::Sources::V2(accounts) => accounts,
@@ -166,6 +175,17 @@ pub(super) fn claim_registry(
         }
     };
     Ok((writer, accounts))
+}
+
+pub(super) async fn claim_registry_async(
+    root: &Path,
+    owners: &Owners,
+) -> Result<(aac_files::OwnedStore, Vec<sources::Source>), SaveError> {
+    let root = root.to_owned();
+    let owners = owners.clone();
+    tokio::task::spawn_blocking(move || claim_registry(&root, &owners))
+        .await
+        .map_err(|_| SaveError::Write)?
 }
 
 pub(super) fn save_registry(

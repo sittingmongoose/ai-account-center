@@ -3,7 +3,7 @@ use super::{
     NativeOwners, lifecycle_antigravity as antigravity,
     lifecycle_codex::{self as codex, RemoveError},
     lifecycle_keys::{KeyStore, key_binding, key_id},
-    lifecycle_label::{claim_registry, save_registry},
+    lifecycle_label::{claim_registry, claim_registry_async, save_registry},
 };
 use crate::{
     account_reads::public_account_id,
@@ -467,39 +467,29 @@ async fn remove(native: &NativeOwners, source: &Source) -> Result<(), Refusal> {
     }
     let store = KeyStore { native, source };
     let root = native.agents.root();
-    let removed = std::sync::Mutex::new(None);
+    // Keep the same registry lease for the mutation and its compensation.
+    let (writer, entries) = claim_registry_async(root, &native.owners)
+        .await
+        .map_err(|_| Refusal::Failed)?;
+    let mut remaining = entries.clone();
+    let position = remaining
+        .iter()
+        .position(|entry| key_binding(entry, source))
+        .ok_or(Refusal::Stale)?;
+    remaining.remove(position);
     key_lifecycle::run(Workflow::Remove, |step| {
-        let (store, removed) = (&store, &removed);
+        let (store, writer, entries, remaining) = (&store, &writer, &entries, &remaining);
         async move {
             match step {
                 Effect::Unpublish => {
-                    let (writer, mut entries) =
-                        claim_registry(root, &native.owners).map_err(|_| Refusal::Failed)?;
-                    let i = entries
-                        .iter()
-                        .position(|entry| key_binding(entry, source))
-                        .ok_or(Refusal::Stale)?;
-                    *removed.lock().map_err(|_| Refusal::Failed)? = Some((i, entries.remove(i)));
-                    save_registry(&writer, &entries).map_err(|_| Refusal::Failed)?;
+                    save_registry(writer, remaining).map_err(|_| Refusal::Failed)?
                 }
                 Effect::Discard => {
                     if let Some(key) = key {
                         store.delete(key).await.map_err(|_| Refusal::Failed)?;
                     }
                 }
-                Effect::Publish => {
-                    let (writer, mut entries) =
-                        claim_registry(root, &native.owners).map_err(|_| Refusal::Failed)?;
-                    if !entries.iter().any(|entry| entry.id == source.id) {
-                        let (i, entry) = removed
-                            .lock()
-                            .map_err(|_| Refusal::Failed)?
-                            .take()
-                            .ok_or(Refusal::Failed)?;
-                        entries.insert(i.min(entries.len()), entry);
-                        save_registry(&writer, &entries).map_err(|_| Refusal::Failed)?;
-                    }
-                }
+                Effect::Publish => save_registry(writer, entries).map_err(|_| Refusal::Failed)?,
                 Effect::Store | Effect::Probe => return Err(Refusal::Failed),
             }
             Ok(true)

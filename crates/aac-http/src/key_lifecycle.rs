@@ -54,12 +54,14 @@ where
                 let _ = perform(Discard).await;
                 return Err(error);
             }
-            let accepted = perform(Probe).await?;
-            if !accepted {
-                let _ = perform(Unpublish).await;
-                let _ = perform(Discard).await;
+            let probe = perform(Probe).await;
+            if !matches!(probe, Ok(true)) {
+                // The registry row is a retry record while it still names the key.
+                // A delete may only follow a completed Unpublish.
+                perform(Unpublish).await?;
+                perform(Discard).await?;
             }
-            Ok(accepted)
+            probe
         }
         Workflow::Replace => {
             perform(Store).await?;
@@ -73,7 +75,7 @@ where
         Workflow::Remove => {
             perform(Unpublish).await?;
             if let Err(error) = perform(Discard).await {
-                let _ = perform(Publish).await;
+                perform(Publish).await?;
                 return Err(error);
             }
             Ok(true)
@@ -93,4 +95,25 @@ pub async fn compatibility_pipe(mode: &str) -> io::Result<()> {
     let pipe = crate::lifecycle_effect_pipe::Pipe::new();
     let result = run(workflow, |effect| pipe.perform(effect.wire_name())).await;
     crate::lifecycle_effect_pipe::finish(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_unpublish_keeps_the_key_for_a_retry() {
+        let mut steps = Vec::new();
+        let result = run(Workflow::Add, |step| {
+            steps.push(step.wire_name());
+            std::future::ready(match step {
+                Effect::Probe => Ok(false),
+                Effect::Unpublish => Err("registry busy"),
+                _ => Ok(true),
+            })
+        })
+        .await;
+        assert_eq!(result, Err("registry busy"));
+        assert_eq!(steps, ["store", "publish", "probe", "unpublish"]);
+    }
 }
