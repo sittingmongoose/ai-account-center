@@ -55,13 +55,12 @@ pub struct Display {
 /// Node's lenient base64url decode: indifferent padding and non-canonical trailing bits accepted.
 /// Encoding is unpadded, the JWT form.
 fn b64() -> base64::engine::GeneralPurpose {
-    use base64::engine::{DecodePaddingMode, EncodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
     GeneralPurpose::new(
         &base64::alphabet::URL_SAFE,
         GeneralPurposeConfig::new()
             .with_decode_padding_mode(DecodePaddingMode::Indifferent)
-            .with_decode_allow_trailing_bits(true)
-            .with_encode_padding_mode(EncodePaddingMode::None),
+            .with_decode_allow_trailing_bits(true),
     )
 }
 
@@ -353,7 +352,7 @@ mod tests {
     use serde_json::json;
 
     fn part(value: &Value) -> String {
-        b64().encode(serde_json::to_vec(value).unwrap())
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap())
     }
 
     fn token(email: &str, account: Option<&str>, plan: &str, principal: &Value) -> String {
