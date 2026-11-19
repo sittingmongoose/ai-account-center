@@ -72,11 +72,13 @@ name = "aac-files"
 version = "0.1.0"
 dependencies = [
  "aac-core",
+ "base64 0.22.1",
  "fs2",
  "libc",
  "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
