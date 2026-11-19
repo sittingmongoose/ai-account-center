@@ -335,10 +335,15 @@ mod tests {
             assert!(row(id).is_ok(), "{id}");
         }
         assert!(row("unknown").is_err());
-        // Nothing has moved yet: TS writes every row on the dashboard host.
+        // R4: the readers-check row moves with the status group and the catalog seed with
+        // the scoreboard group; every other row stays TS-written on the dashboard host.
+        assert!(rows.iter().all(|r| r.owner == Role::Ts));
+        assert_eq!(row("readers-check").unwrap().moves_with.as_deref(), Some("status"));
+        assert_eq!(row("catalog-seed").unwrap().moves_with.as_deref(), Some("scoreboard"));
         assert!(
             rows.iter()
-                .all(|r| r.owner == Role::Ts && r.moves_with.is_none())
+                .filter(|r| r.id != "readers-check" && r.id != "catalog-seed")
+                .all(|r| r.moves_with.is_none())
         );
     }
 
