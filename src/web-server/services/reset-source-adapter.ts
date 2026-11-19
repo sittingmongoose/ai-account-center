@@ -7,6 +7,7 @@ import { ProviderError } from '../../errors/error-types';
 import { getCodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
 import { loadNativeStatus } from '../../status-native/native-loader';
 import type { ResetSource, ResetWrite } from './reset-source-contract';
+import type { NativeStatusHandle } from '../../status-native/native-loader';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 import { isDefaultClaudeDataFolder } from './claude-account-records';
 import { sshLaunch } from './ssh-policy';
@@ -19,7 +20,9 @@ import { getCcsDir } from '../../utils/config-manager';
 import type { UsageHelperRequest, UsageHost } from './usage-failover-contract';
 
 export function createResetSourceAdapter(): ResetSource {
-  async function native(method: string, input: unknown) {
+  /** A ticketed read uses the route's claims-file writer; a write never opens that file. */
+  async function native(method: string, input: unknown, file?: NativeStatusHandle) {
+    if (file) return JSON.parse(await file.call(method, JSON.stringify(input)));
     const loaded = loadNativeStatus();
     if (!loaded.module) throw new ProviderError('Reset module unavailable.', 'reset-claims');
     return JSON.parse(await new loaded.module.NativeStatus().call(method, JSON.stringify(input)));
@@ -27,9 +30,11 @@ export function createResetSourceAdapter(): ResetSource {
   async function execute(
     account: string,
     write?: ResetWrite,
-    beforeHostDispatch?: () => void
+    beforeHostDispatch?: () => void,
+    claimsFile?: NativeStatusHandle
   ): Promise<unknown> {
     let context: { dbPath: string; routeAccount: string } | undefined;
+    const file = write ? undefined : claimsFile;
     if (!write) {
       const dir = path.join(getCcsDir(), 'account-usage', 'reset-claims');
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -44,14 +49,18 @@ export function createResetSourceAdapter(): ResetSource {
           'credential-host-unavailable: Exact saved profile unavailable.',
           'codex'
         );
-      return native('resetCodexSource', {
-        home: profile.codexHome,
-        expectedAccount: profile.accountId,
-        profile: profile.name,
-        host: localUsageHost().host,
-        write: write ?? null,
-        ...context,
-      });
+      return native(
+        'resetCodexSource',
+        {
+          home: profile.codexHome,
+          expectedAccount: profile.accountId,
+          profile: profile.name,
+          host: localUsageHost().host,
+          write: write ?? null,
+          ...context,
+        },
+        file
+      );
     }
     if (!account.startsWith('claude:'))
       throw new ProviderError('provider-read-only: Provider read only.', 'reset-claims');
@@ -97,13 +106,17 @@ export function createResetSourceAdapter(): ResetSource {
     }
     const command = await privateUsageInvocation(host, transportRequest, source, input);
     // The native helper spawns exactly the probed ssh file, checked just before the call.
-    return native('resetClaudeSource', {
-      ...context,
-      command: { ...command, executable: await sshLaunch(command.executable, command.args) },
-    });
+    return native(
+      'resetClaudeSource',
+      {
+        ...context,
+        command: { ...command, executable: await sshLaunch(command.executable, command.args) },
+      },
+      file
+    );
   }
   return {
-    read: (account) => execute(account),
+    read: (account, claimsFile) => execute(account, undefined, undefined, claimsFile),
     send: async (write) => {
       let dispatched = false;
       try {

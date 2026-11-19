@@ -8,7 +8,7 @@ import { broadcastResetClaimChange } from '../dashboard-events';
 import { ProviderError } from '../../errors/error-types';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { Router } from 'express';
+import type { Response, Router } from 'express';
 import type { NativeStatusHandle } from '../../status-native/native-loader';
 import { loadNativeStatus } from '../../status-native/native-loader';
 import { getCcsDir } from '../../utils/config-manager';
@@ -17,6 +17,7 @@ import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware
 import { callerKey } from './caller-key';
 import { createApiRouter } from './api-router';
 import { createResetSourceAdapter } from '../services/reset-source-adapter';
+import { rustResetClaimsFile } from '../rust-service';
 import type { ResetSource, ResetWrite } from '../services/reset-source-contract';
 
 export type { ResetSource, ResetWrite };
@@ -56,16 +57,30 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
   const router = createApiRouter();
   let handle = deps.native;
   const now = deps.now ?? Date.now;
-  async function call(op: string, account: string, args: Record<string, unknown> = {}) {
+  /** The claims file's one writer: the injected or in-process native module while TS owns the
+   * `reset-claims` row, else the Rust service (M5 lane K), which derives the path itself. */
+  function claimsFile(res: Response): NativeStatusHandle {
+    if (deps.native) return deps.native;
+    const rust = rustResetClaimsFile(res);
+    if (rust) return rust;
     if (!handle) {
       const loaded = loadNativeStatus();
       if (!loaded.module) throw new ProviderError('Reset backend unavailable.', 'reset-claims');
       handle = new loaded.module.NativeStatus();
     }
+    return handle;
+  }
+  async function call(
+    res: Response,
+    op: string,
+    account: string,
+    args: Record<string, unknown> = {}
+  ) {
+    const file = claimsFile(res);
     const dir = path.join(deps.ccsDir ?? getCcsDir(), 'account-usage', 'reset-claims');
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     return JSON.parse(
-      await handle.call(
+      await file.call(
         'resetClaims',
         JSON.stringify({
           dbPath: path.join(dir, 'claims.sqlite'),
@@ -78,10 +93,11 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       )
     );
   }
-  async function readSnapshot(account: string): Promise<unknown> {
+  async function readSnapshot(res: Response, account: string): Promise<unknown> {
     const source = deps.source;
     if (!source) throw new ProviderError('Reset source unavailable.', 'reset-claims');
-    const snapshot = await source.read(account);
+    // The ticketed read writes the claims file too, so it uses the same writer.
+    const snapshot = await source.read(account, deps.native ? undefined : claimsFile(res));
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new ProviderError('Reset source unavailable.', 'reset-claims');
     }
@@ -129,7 +145,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
     try {
       const account = String(req.params.accountId);
       if (!deps.source) {
-        const recovery = await call('pending', account);
+        const recovery = await call(res, 'pending', account);
         res.json({
           ...recovery,
           status: 'unavailable',
@@ -140,10 +156,10 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       }
       let snapshot: unknown;
       try {
-        snapshot = await readSnapshot(account);
+        snapshot = await readSnapshot(res, account);
       } catch (error) {
         // Recovery and audit come from one native transaction, including on read failure.
-        const recovery = await call('pending', account);
+        const recovery = await call(res, 'pending', account);
         res.json({
           ...recovery,
           status: 'unavailable',
@@ -153,7 +169,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         return;
       }
       // The native transaction binds the account and returns inventory, recovery, audit and revision together.
-      res.json(await call('inventory', account, { snapshot }));
+      res.json(await call(res, 'inventory', account, { snapshot }));
     } catch {
       res.status(503).json({ status: 'unavailable', code: 'reset-inventory-unavailable' });
     }
@@ -169,14 +185,14 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       let sent = false;
       try {
         if (op !== 'check') {
-          await call(op === 'prepare' ? 'prepareGate' : 'claimGate', account, {
+          await call(res, op === 'prepare' ? 'prepareGate' : 'claimGate', account, {
             key: req.body.grantKey,
           });
         }
-        const snapshot = await readSnapshot(account);
+        const snapshot = await readSnapshot(res, account);
         if (op === 'prepare') {
           res.json(
-            await call('prepare', account, {
+            await call(res, 'prepare', account, {
               key: req.body.grantKey,
               caller: callerKey(req),
               snapshot,
@@ -185,10 +201,10 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
           return;
         }
         if (op === 'check') {
-          res.json(await call('check', account, { key: req.body.attemptKey, snapshot }));
+          res.json(await call(res, 'check', account, { key: req.body.attemptKey, snapshot }));
           return;
         }
-        const write = (await call('begin', account, {
+        const write = (await call(res, 'begin', account, {
           key: req.body.grantKey,
           caller: callerKey(req),
           token: req.body.confirmationToken,
@@ -211,13 +227,13 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         let after: unknown = null;
         if (sent) {
           try {
-            after = await readSnapshot(account);
+            after = await readSnapshot(res, account);
           } catch {
             // Provider success remains unconfirmed when the post-claim read fails.
           }
         }
         res.json(
-          await call('finish', account, {
+          await call(res, 'finish', account, {
             key: write.attemptKey,
             outcome: result.outcome,
             retryAfterMs: result.retryAfterMs ?? null,
@@ -229,7 +245,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         // leaves no authoritative evidence; the client retains its independent send/read obligations.
         let evidence: unknown = null;
         try {
-          evidence = (await call('pending', account)).evidence ?? null;
+          evidence = (await call(res, 'pending', account)).evidence ?? null;
         } catch {
           // Do not invent evidence when recovery storage cannot be read.
         }
