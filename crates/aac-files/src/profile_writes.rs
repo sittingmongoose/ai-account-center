@@ -2,7 +2,7 @@
 use super::{read_bounded, require_absolute, set_private, sync_directory};
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -73,6 +73,59 @@ impl LegacyLease {
             Err(error) => return Err(error),
         }
         fs::rename(previous, next)?;
+        let _ = sync_directory(&parent);
+        Ok(())
+    }
+
+    /// Preserve one staged removal under the same activation lease. The backup
+    /// must be vacant and must name the same profile as the staged directory.
+    pub fn codex_preserve(
+        &self,
+        root: &Path,
+        home: &Path,
+        staged: &str,
+        backup: &str,
+    ) -> io::Result<()> {
+        self.check(&home.join(".ccs-activation.lock"))?;
+        let profile = codex_removal_name(staged, ".deleting.").ok_or_else(refused)?;
+        if codex_removal_name(backup, ".preserved.") != Some(profile) {
+            return Err(refused());
+        }
+        let parent = root.join("codex-instances");
+        let source = parent.join(staged);
+        let target = parent.join(backup);
+        owned_directory(&source)?;
+        super::private_builder().create(&target)?;
+        match copy_profile_entries(&source, &target) {
+            Ok(()) => {
+                let _ = sync_directory(&parent);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(target);
+                Err(error)
+            }
+        }
+    }
+
+    /// Discard a staged removal or a preservation copy. The live profile
+    /// name and sign-in staging area are outside this operation's scope.
+    pub fn codex_discard(&self, root: &Path, home: &Path, name: &str) -> io::Result<()> {
+        self.check(&home.join(".ccs-activation.lock"))?;
+        if codex_removal_name(name, ".deleting.").is_none()
+            && codex_removal_name(name, ".preserved.").is_none()
+        {
+            return Err(refused());
+        }
+        let parent = root.join("codex-instances");
+        owned_directory(&parent)?;
+        let target = parent.join(name);
+        match owned_directory(&target) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        fs::remove_dir_all(target)?;
         let _ = sync_directory(&parent);
         Ok(())
     }
@@ -164,6 +217,52 @@ fn codex_location(name: &str) -> bool {
             });
     }
     codex_profile(name)
+}
+
+fn codex_removal_name<'a>(name: &'a str, divider: &str) -> Option<&'a str> {
+    let (profile, _) = name.split_once(divider)?;
+    codex_location(name).then_some(profile)
+}
+
+fn copy_profile_entries(source: &Path, target: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        let expected = fs::symlink_metadata(&from)?;
+        if expected.file_type().is_symlink() {
+            let link = fs::read_link(&from)?;
+            // Match the legacy copy's absolute link destination, without following it.
+            let link = crate::path::node::resolve(source, &link).map_err(|_| refused())?;
+            symlink(link, &to)?;
+        } else if expected.is_dir() {
+            owned_directory(&from)?;
+            super::private_builder().create(&to)?;
+            copy_profile_entries(&from, &to)?;
+        } else if expected.is_file() {
+            let mut input = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&from)?;
+            let actual = input.metadata()?;
+            if !actual.is_file() || (actual.dev(), actual.ino()) != (expected.dev(), expected.ino())
+            {
+                return Err(refused());
+            }
+            let mode = actual.mode() & 0o777;
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(mode)
+                .open(&to)?;
+            io::copy(&mut input, &mut output)?;
+            output.set_permissions(fs::Permissions::from_mode(mode))?;
+            output.sync_all()?;
+        } else {
+            return Err(refused());
+        }
+    }
+    sync_directory(target).map_err(|_| refused())
 }
 
 fn antigravity_profile(name: &str) -> bool {

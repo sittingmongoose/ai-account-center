@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ConfigError } from '../errors/error-types';
@@ -120,6 +120,41 @@ export function writeProviderFile(
     throw new ConfigError('The provider file could not be saved safely.');
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+/** Scoped profile tree operations keep the activation lease through child exit. */
+export async function writeProviderDirectory(
+  root: string,
+  marker: string,
+  action:
+    | ['codex-preserve', home: string, staged: string, backup: string]
+    | ['codex-discard', home: string, target: string]
+): Promise<boolean> {
+  const canonical = canonicalLeaseRoot(root);
+  const writer = writers.get(canonical);
+  if (!writer) return false;
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  const descriptor = await fs.promises.open(marker, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  try {
+    const [operation, ...args] = action;
+    const child = spawn(writer.binary, ['--provider-write', operation, canonical, ...args], {
+      stdio: ['ignore', 'ignore', descriptor.fd],
+      windowsHide: true,
+    });
+    const committed = await new Promise<boolean>((resolve, reject) => {
+      const refused = () =>
+        reject(new ConfigError('The provider directory change could not be confirmed.'));
+      child.once('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') resolve(false);
+        else refused();
+      });
+      child.once('exit', (code) => (code === 0 ? resolve(true) : refused()));
+    });
+    if (committed) writer.committed();
+    return committed;
+  } finally {
+    await descriptor.close();
   }
 }
 

@@ -40,6 +40,16 @@ pub(crate) fn commit() -> i32 {
             LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)
                 .and_then(|lease| lease.codex_move(Path::new(root), home, previous, next))
         }
+        ["codex-preserve", root, home, staged, backup] if input.is_empty() => {
+            let home = Path::new(home);
+            LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)
+                .and_then(|lease| lease.codex_preserve(Path::new(root), home, staged, backup))
+        }
+        ["codex-discard", root, home, target] if input.is_empty() => {
+            let home = Path::new(home);
+            LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)
+                .and_then(|lease| lease.codex_discard(Path::new(root), home, target))
+        }
         ["codex-login", root, home, profile, mode] if matches!(*mode, "saved" | "live") => {
             let home = Path::new(home);
             let Ok(lease) = LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)

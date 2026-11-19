@@ -4,6 +4,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import {
   canonicalLeaseRoot,
   signInStaging,
+  writeProviderDirectory,
   writeProviderFile,
 } from '../../shared/private-file-lease';
 import path from 'path';
@@ -585,9 +586,26 @@ export class CodexAccountLifecycle {
       const registry = this.registry();
       if (!registry.hasProfile(name)) throw new CodexLifecycleError('unknown_account');
       if (registry.listProfiles().length <= 1) throw new CodexLifecycleError('last_account');
+      const root = canonicalLeaseRoot(getCcsDir());
+      const realHome = canonicalLeaseRoot(home);
+      const marker = path.join(realHome, '.ccs-activation.lock');
+      const scoped = (target: string) =>
+        canonicalLeaseRoot(path.dirname(target)) === path.join(root, 'codex-instances');
       await removeCodexProfileUnderLock(registry, name, home, {
         warn: () => undefined,
         move: (from, to) => this.moveProfile(from, to),
+        preserve: async (staged, backup) =>
+          scoped(staged) &&
+          scoped(backup) &&
+          writeProviderDirectory(root, marker, [
+            'codex-preserve',
+            realHome,
+            path.basename(staged),
+            path.basename(backup),
+          ]),
+        discard: async (target) =>
+          scoped(target) &&
+          writeProviderDirectory(root, marker, ['codex-discard', realHome, path.basename(target)]),
       });
     } catch (error) {
       if (error instanceof CodexLifecycleError) throw error;
