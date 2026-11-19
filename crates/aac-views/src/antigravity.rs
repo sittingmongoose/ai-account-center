@@ -568,6 +568,45 @@ fn plan_display(plan: Option<String>, sampled: Option<i64>, clock: f64) -> (Valu
     )
 }
 
+/// `antigravityPlanDisplay(displayText(plan, 80), verifiedAt).plan`: the plan's label when plan.ts
+/// knows it, else the accepted text; null when the text is refused or absent.
+pub fn public_plan(plan: Option<&Value>) -> Value {
+    plan_display(display_text(plan, 80), None, 0.0).0
+}
+
+/// `timestamp(profile.verifiedAt)` for a stored ISO word: canonical `toISOString`, or null.
+fn canonical_timestamp(value: Option<&Value>) -> Option<String> {
+    let text = value?.as_str()?;
+    if utf16_len(text) > 40 || !timestamp_shape(text) {
+        return None;
+    }
+    let ms = crate::js::parse_date(text).ok()??;
+    if !(YEAR_2000..YEAR_2201).contains(&ms) {
+        return None;
+    }
+    aac_num::ecma::to_iso_string(ms)
+}
+
+/// `publicProfile(profile)` (`usage-normalization.ts`) for the runtime's own row: the public
+/// inventory member with every capability gated on the verified identity. `verifiedAt` is a stored
+/// ISO word (registry identities are normalized on save).
+pub fn public_profile(input: &Value) -> Option<Value> {
+    let id = safe_id(input.get("id"))?;
+    let email = email(input.get("email"))?;
+    let flag = |key: &str| is_true(input.get(key));
+    let verified = flag("identityVerified");
+    Some(json!({
+        "id": id,
+        "email": email,
+        "plan": public_plan(input.get("plan")),
+        "available": verified && flag("available"),
+        "selected": verified && flag("selected"),
+        "runtimeVerified": verified && flag("runtimeVerified"),
+        "verifiedAt": canonical_timestamp(input.get("verifiedAt")).map_or(Value::Null, Value::String),
+        "hostId": "ubuntu",
+    }))
+}
+
 /// `publicDashboardAccount(value)` then `markPassedResets(account, now)`.
 fn account(ctx: &Context, value: &Value, now: f64, clock: f64) -> Admit<Value> {
     let value = req(value.as_object())?;
