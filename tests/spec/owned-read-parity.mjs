@@ -325,6 +325,8 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   await compare('first status read', '/api/status', { view: 'status@1' });
   report.pinsProbe = await owned.command('pins');
+  // Data-aware: both fixture days' runs are in the owned store before the first read.
+  await owned.command('wait-scoreboard', { runs: 4 });
   await compare('first scoreboard read', '/api/scoreboard', { view: 'scoreboard@1' });
   await compare(
     'filtered scoreboard',
@@ -382,9 +384,16 @@ try {
     report.failures.push(
       `readers check: different writer files (today [${checkNames}] owned [${ownedNames}])`
     );
+  // The check file's own `writtenAt` is when each process flushed it (two processes, two
+  // instants); every row inside it is compared.
+  const checkFile = (text) => {
+    const doc = JSON.parse(text ?? 'null');
+    if (doc && typeof doc === 'object') doc.writtenAt = null;
+    return normalize(doc);
+  };
   for (const name of checkNames) {
-    const a = normalize(JSON.parse(checkToday.files[name]));
-    const b = normalize(JSON.parse(checkOwned.files[name] ?? 'null'));
+    const a = checkFile(checkToday.files[name]);
+    const b = checkFile(checkOwned.files[name]);
     if (JSON.stringify(a) !== JSON.stringify(b)) {
       const keys = [...new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])];
       const diff = keys.filter((k) => JSON.stringify(a?.[k]) !== JSON.stringify(b?.[k]));
