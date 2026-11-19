@@ -62,6 +62,7 @@ export interface RustRequestOptions {
   raw?: boolean;
   cap?: number;
   text?: string;
+  signal?: AbortSignal;
 }
 
 /** One keep-alive agent per boot (L1): the hop costs a request, not a connection. */
@@ -107,6 +108,7 @@ function once(
       socketPath: connection.socketPath,
       path: route,
       method,
+      signal: options.signal,
       agent: connection.agent ?? false,
       headers: {
         ...options.headers,
@@ -301,6 +303,7 @@ const agentConnections = new Map<
     root: string;
     connection: RustConnection;
     active: Set<http.ClientRequest>;
+    cacheWrites: Map<string, Promise<boolean>>;
     health: { replied?: () => void; failed?: (kind: RustFailureKind) => void };
   }
 >();
@@ -318,6 +321,11 @@ export function canonicalRoot(root: string): string {
   }
 }
 
+function rustAgentConnection(root: string) {
+  const scope = canonicalRoot(root);
+  return [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
+}
+
 export function registerRustAgentConnection(
   root: string,
   connection: RustConnection,
@@ -325,8 +333,84 @@ export function registerRustAgentConnection(
   health: { replied?: () => void; failed?: (kind: RustFailureKind) => void } = {}
 ): () => void {
   const key = Symbol();
-  agentConnections.set(key, { root, connection, active, health });
+  agentConnections.set(key, { root, connection, active, health, cacheWrites: new Map() });
   return () => agentConnections.delete(key);
+}
+
+/** Hold the idle sampling interval on Rust's clock, with no pooled socket or read breaker. */
+export function scheduleRustCollection(
+  root: string,
+  intervalMs: number,
+  settled: (due: boolean) => void
+): (() => void) | undefined {
+  const held = rustAgentConnection(root);
+  if (!held) return undefined;
+  const stop = new AbortController();
+  void once(
+    { ...held.connection, agent: undefined },
+    '/internal/collection-tick',
+    FRONT_DOOR_PRINCIPAL,
+    held.active,
+    JSON.stringify({ intervalMs }),
+    'PUT',
+    1024,
+    Date.now() + intervalMs + RUST_DEADLINE_MS,
+    { signal: stop.signal }
+  ).then(
+    (reply) => {
+      if (!stop.signal.aborted)
+        settled(reply.status === 200 && (reply.body as { due?: unknown } | null)?.due === true);
+    },
+    () => {
+      if (!stop.signal.aborted) settled(false);
+    }
+  );
+  return () => stop.abort();
+}
+
+/** Save only through the owner selected at boot. A lost service leaves the in-memory quota usable. */
+export async function writeRustCollectionCache(
+  root: string,
+  kind: 'account-usage-observations' | 'claude-live-snapshots',
+  key: string,
+  bytes: string
+): Promise<boolean> {
+  const held = rustAgentConnection(root);
+  if (!held) return false;
+  const id = `${kind}/${key}`;
+  const write = async () => {
+    try {
+      const reply = await requestRust(
+        held.connection,
+        `/internal/collection-cache/${kind}/${encodeURIComponent(key)}`,
+        FRONT_DOOR_PRINCIPAL,
+        held.active,
+        undefined,
+        'PUT',
+        { text: bytes, cap: 1024 }
+      );
+      return reply.status === 200 && (reply.body as { saved?: unknown } | null)?.saved === true;
+    } catch {
+      return false;
+    }
+  };
+  // A later cooldown or completed result must not be overwritten by the
+  // earlier "attempt started" record on a different socket.
+  const pending = (held.cacheWrites.get(id) ?? Promise.resolve()).then(write);
+  held.cacheWrites.set(id, pending);
+  try {
+    return await pending;
+  } finally {
+    if (held.cacheWrites.get(id) === pending) held.cacheWrites.delete(id);
+  }
+}
+
+/** A native quota read may have reached the provider before its reply was lost. */
+export class CollectionReadIndeterminate extends Error {
+  constructor() {
+    super('Account usage request failed.');
+    this.name = 'CollectionReadIndeterminate';
+  }
 }
 
 /**
@@ -345,17 +429,21 @@ export async function requestRustAgent(
     maxBytes: number;
     callId: string;
   },
-  onProgress?: (data: unknown) => void
+  onProgress?: (data: unknown) => void,
+  collect = false
 ): Promise<string | null | undefined> {
-  const scope = canonicalRoot(root);
-  const held = [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
+  const held = rustAgentConnection(root);
   if (!held) return undefined;
   const bytes = JSON.stringify(payload);
   if (Buffer.byteLength(bytes) > 8 * 1024 * 1024 + 8192) return null;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    // A disconnected quota read may have already reached the provider. Allow a
+    // reference read only when this service could prove the native call declined.
+    const ambiguous = () =>
+      collect && verb === 'quota-read' ? reject(new CollectionReadIndeterminate()) : resolve(null);
     const request = http.request({
       socketPath: held.connection.socketPath,
-      path: `/internal/agent/${encodeURIComponent(verb)}`,
+      path: `/internal/${collect ? 'collect' : 'agent'}/${encodeURIComponent(verb)}`,
       method: 'POST',
       agent: held.connection.agent ?? false,
       headers: {
@@ -376,13 +464,14 @@ export async function requestRustAgent(
     });
     request.once('error', (error: NodeJS.ErrnoException) => {
       held.health.failed?.(rustFailureKind(error));
-      resolve(['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '') ? undefined : null);
+      if (['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '')) resolve(undefined);
+      else ambiguous();
     });
     request.once('response', (response) => {
       if (response.headers['x-aac-service-boot'] !== held.connection.bootId) {
         response.resume();
         held.health.failed?.('boot');
-        resolve(null);
+        ambiguous();
         return;
       }
       // Headers can precede a stalled NDJSON body. Only a completed response resets L1's
@@ -398,19 +487,20 @@ export async function requestRustAgent(
         !String(response.headers['content-type']).startsWith('application/x-ndjson')
       ) {
         response.resume();
-        resolve(null);
+        ambiguous();
         return;
       }
       let size = 0;
       let buffer = '';
       let terminal = false;
       let result: string | null = null;
+      let safeDecline = false;
       response.setEncoding('utf8');
       response.on('data', (chunk: string) => {
         size += Buffer.byteLength(chunk);
         if (size > payload.maxBytes) {
           request.destroy();
-          resolve(null);
+          ambiguous();
           return;
         }
         buffer += chunk;
@@ -432,19 +522,25 @@ export async function requestRustAgent(
                 JSON.stringify(event.value) === '{"fallback":"python"}'
                   ? null
                   : JSON.stringify(event.value);
-            } else if (!['fallback', 'failure'].includes(event.type))
+            } else if (event.type === 'fallback') {
+              safeDecline = ['shape', 'unavailable', 'busy', 'unsupported'].includes(event.reason);
+            } else if (event.type !== 'failure') {
               throw new RustTransportError('reply', 'Invalid agent stream');
+            }
           } catch {
             result = null;
             request.destroy();
-            resolve(null);
+            ambiguous();
             return;
           }
         }
       });
-      response.once('end', () => resolve(terminal && buffer === '' ? result : null));
-      response.once('error', () => resolve(null));
-      response.once('aborted', () => resolve(null));
+      response.once('end', () => {
+        if (terminal && buffer === '' && (result !== null || safeDecline)) resolve(result);
+        else ambiguous();
+      });
+      response.once('error', ambiguous);
+      response.once('aborted', ambiguous);
     });
     request.end(bytes);
   });

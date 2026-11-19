@@ -4,6 +4,10 @@ mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
 #[cfg(unix)]
+mod collection;
+#[cfg(unix)]
+mod collection_cache;
+#[cfg(unix)]
 mod feed;
 #[cfg(unix)]
 mod home_fed;

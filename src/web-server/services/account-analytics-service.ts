@@ -1,3 +1,5 @@
+import { privateFileOwners } from '../../shared/private-files';
+import { scheduleRustCollection } from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import { createHash } from 'crypto';
 import { BoundedCache } from '../../utils/bounded-cache';
@@ -265,6 +267,7 @@ export class AccountAnalyticsService {
   /** Computations in the order they started. */
   private sequence = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private cancelRustTick: (() => void) | undefined;
   private pendingSample: Promise<void> | null = null;
   private running = false;
   private generation = 0;
@@ -825,15 +828,43 @@ export class AccountAnalyticsService {
     const interval = Number.isFinite(configured)
       ? Math.min(3_600_000, Math.max(30_000, configured))
       : 60_000;
-    // Node's Timeout and Bun's Timer are both real timers. One annotation covers the call.
-    this.timer = (this.deps.schedule ?? setTimeout)(() => {
+    const poll = () => {
       if (!this.running || generation !== this.generation) return;
       this.timer = undefined;
+      this.cancelRustTick = undefined;
       void this.sample()
         .catch(() => {})
         .finally(() => this.schedule(generation));
-    }, interval) as ReturnType<typeof setTimeout>;
-    this.timer.unref?.();
+    };
+    const scheduleReference = (delay: number) => {
+      this.timer = (this.deps.schedule ?? setTimeout)(poll, delay) as ReturnType<typeof setTimeout>;
+      this.timer.unref?.();
+    };
+    if (
+      !this.deps.schedule &&
+      privateFileOwners()['account-usage-observations'] === 'rust-service'
+    ) {
+      const began = performance.now();
+      this.cancelRustTick = scheduleRustCollection(
+        (this.deps.scope ?? getCcsDir)(),
+        Math.trunc(interval),
+        (due) => {
+          this.cancelRustTick = undefined;
+          if (!this.running || generation !== this.generation) return;
+          if (due) poll();
+          else scheduleReference(Math.max(0, interval - (performance.now() - began)));
+        }
+      );
+      if (this.cancelRustTick) return;
+    }
+    scheduleReference(interval);
+  }
+
+  private clearSamplingTimer(): void {
+    this.cancelRustTick?.();
+    this.cancelRustTick = undefined;
+    (this.deps.cancelSchedule ?? clearTimeout)(this.timer);
+    this.timer = undefined;
   }
 
   start(): void {
@@ -848,16 +879,14 @@ export class AccountAnalyticsService {
   /** Changing settings replaces the deadline without letting an old poll fork timers. */
   reschedule(): void {
     if (!this.running) return;
-    (this.deps.cancelSchedule ?? clearTimeout)(this.timer);
-    this.timer = undefined;
+    this.clearSamplingTimer();
     this.schedule(++this.generation);
   }
 
   stop(): void {
     this.running = false;
     ++this.generation;
-    (this.deps.cancelSchedule ?? clearTimeout)(this.timer);
-    this.timer = undefined;
+    this.clearSamplingTimer();
   }
 }
 

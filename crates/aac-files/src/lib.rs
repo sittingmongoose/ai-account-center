@@ -232,6 +232,98 @@ impl OwnedStore {
         self.write_with(|out| out.write_all(bytes))
     }
 
+    /// Replace an owner-only cache, refusing hard links and loose existing modes.
+    #[cfg(unix)]
+    pub fn write_private_cache(&self, bytes: &[u8]) -> Result<(), Failure> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        let owner = fs::symlink_metadata(parent)?;
+        if !private_cache_metadata(&owner, true) {
+            return Err(Failure::new(
+                Cause::Refused,
+                "cache directory is not private",
+            ));
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(meta)
+                if private_cache_metadata(&meta, false) && meta.len() <= self.max_size as u64 => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            _ => return Err(Failure::new(Cause::Refused, "cache file is not private")),
+        }
+        self.write(bytes)
+    }
+
+    /// Keep at most `count` validated cache records, including the file just written.
+    /// The writer holds its folder lease. Unknown or changed entries are left in place.
+    #[cfg(unix)]
+    pub fn prune_private_cache(&self, count: usize, matches: impl Fn(&str, &[u8]) -> bool) {
+        use std::os::unix::fs::MetadataExt;
+        let Some(parent) = self.path.parent() else {
+            return;
+        };
+        let Ok(folder) = self._lock.metadata() else {
+            return;
+        };
+        let same = |a: &fs::Metadata, b: &fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+        let unchanged = || {
+            fs::symlink_metadata(parent)
+                .is_ok_and(|meta| private_cache_metadata(&meta, true) && same(&meta, &folder))
+        };
+        if count == 0 || !unchanged() {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(parent) else {
+            return;
+        };
+        let entries = entries.take(4097).collect::<Result<Vec<_>, _>>();
+        let Ok(entries) = entries else { return };
+        if entries.len() <= count || entries.len() > 4096 {
+            return;
+        }
+        let policy = ReadPolicy::capped(self.max_size as u64)
+            .mode(read::Mode::Private)
+            .owner(read::Owner::Mine);
+        let mut records = Vec::new();
+        for entry in entries {
+            let name = entry.file_name();
+            let Some(name) = name.to_str().filter(|n| n.ends_with(".json")) else {
+                continue;
+            };
+            let path = entry.path();
+            let Ok(stat) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !private_cache_metadata(&stat, false) {
+                continue;
+            }
+            let Read::Bytes(bytes, _) = read::read(&path, &policy) else {
+                continue;
+            };
+            if matches(name, &bytes) {
+                records.push((path, stat));
+            }
+        }
+        records.sort_unstable_by(|(a, am), (b, bm)| {
+            (a == &self.path, am.modified().ok(), a).cmp(&(b == &self.path, bm.modified().ok(), b))
+        });
+        let excess = records.len().saturating_sub(count);
+        for (path, before) in records.into_iter().take(excess) {
+            if !unchanged() {
+                return;
+            }
+            if fs::symlink_metadata(&path).is_ok_and(|after| {
+                private_cache_metadata(&after, false)
+                    && same(&before, &after)
+                    && before.len() == after.len()
+                    && before.modified().ok() == after.modified().ok()
+            }) {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
     /// Stage bytes through a capped writer in a new 0600 file beside the target (`O_EXCL`, a
     /// random `.<name>.<random>.tmp` name), fsync them, rename on the same filesystem, then
     /// fsync the folder on Unix. Closure failure or unwinding removes the staging file.
@@ -368,6 +460,18 @@ pub fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, Failure> {
             "file changed while it was opened",
         )),
     }
+}
+
+#[cfg(unix)]
+fn private_cache_metadata(meta: &fs::Metadata, directory: bool) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.mode() & 0o077 == 0
+        && meta.uid() == path::uid()
+        && if directory {
+            meta.is_dir()
+        } else {
+            meta.is_file() && meta.nlink() == 1
+        }
 }
 
 fn reject_special(path: &Path, missing_ok: bool) -> Result<(), Failure> {

@@ -25,7 +25,7 @@ import {
   type RustStoreBootInput,
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
-import { rustStoreSwitchOn } from './rust-service-groups';
+import { rustGroupOn, rustStoreSwitchOn } from './rust-service-groups';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
@@ -117,8 +117,11 @@ export class RustSupervisor {
   ) {
     this.mode = rustServiceMode(mode);
     // L2: each registered private file's writer, resolved once at start and sent in the boot
-    // JSON. A row moves with its route group; the service has one mode for every group today.
-    settlePrivateFileOwners(() => this.mode === 'on');
+    // JSON. H2 is independently opt-in and owns only its declared cache rows.
+    const collectionOn = this.mode === 'on' && rustGroupOn('collection');
+    settlePrivateFileOwners((group) =>
+      group === 'collection' ? collectionOn : this.mode === 'on'
+    );
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }

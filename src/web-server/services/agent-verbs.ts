@@ -3,7 +3,8 @@ import fs from 'fs';
 import { ConfigError } from '../../errors/error-types';
 import path from 'path';
 import { createHash, randomBytes } from 'crypto';
-import { requestRustAgent } from '../rust-service-transport';
+import { CollectionReadIndeterminate, requestRustAgent } from '../rust-service-transport';
+import { privateFileOwners } from '../../shared/private-files';
 import transportPolicy from '../../../config/tables/agent-transport-policy.json';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
@@ -134,6 +135,13 @@ export function localAgentReady(
   }
 }
 
+function serviceCollects(verb: AgentVerb): boolean {
+  return (
+    ['quota-read', 'signin-expiry', 'failover-inventory'].includes(verb) &&
+    privateFileOwners()['account-usage-observations'] === 'rust-service'
+  );
+}
+
 /** Every unavailable, unproven or failed agent delegates to the labelled Python helper. */
 export async function runAgentVerb(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
@@ -157,7 +165,8 @@ export async function runAgentVerb(
           maxBytes: options.maxBytes,
           callId: randomBytes(16).toString('hex'),
         },
-        options.onProgress
+        options.onProgress,
+        serviceCollects(verb)
       );
       if (result !== undefined) return result;
       logger.info('agent.transport.fallback', 'fallback: typescript transport', { verb });
@@ -170,7 +179,8 @@ export async function runAgentVerb(
       });
     }
     return runAgentVerbTsFallback(host, verb, verbArgs, options);
-  } catch {
+  } catch (error) {
+    if (error instanceof CollectionReadIndeterminate) throw error;
     return null;
   }
 }
@@ -312,8 +322,11 @@ export async function runQuotaAgent(
     row.provider !== args.provider ||
     row.platform !== args.platform ||
     row.id !== (args.account ?? `plan-${args.provider}-${args.platform}`)
-  )
+  ) {
+    if (agentTransport() === 'on' && serviceCollects('quota-read'))
+      throw new CollectionReadIndeterminate();
     return null;
+  }
   logger.info('agent.verbs.result', 'Agent verb collected', { verb: 'quota-read' });
   return value;
 }
@@ -325,7 +338,8 @@ export async function collectQuotaWithFallback(
   try {
     const result = await agent();
     if (result !== null) return result;
-  } catch {
+  } catch (error) {
+    if (error instanceof CollectionReadIndeterminate) throw error;
     /* Python remains authoritative. */
   }
   logger.info('agent.verbs.fallback', 'fallback: python', { verb: 'quota-read' });

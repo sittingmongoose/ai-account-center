@@ -70,9 +70,12 @@ pub struct Boot {
 struct Shared {
     boot: Boot,
     limits: Limits,
+    owners: Owners,
+    cache_writes: Arc<tokio::sync::Mutex<()>>,
     identity: Identity,
     feeds: Feeds,
     agents: Arc<crate::agent_transport::Agents>,
+    collection: Arc<crate::collection::Collection>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
 }
@@ -306,6 +309,78 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
+        Handler::CollectionTick => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let body =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 64)).await;
+            let Ok(Ok(bytes)) = body else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared.collection.next_tick(&bytes).await {
+                Ok(()) => Json(json!({"due": true})).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CollectionCache => {
+            let Some((kind, key)) = req
+                .uri()
+                .path()
+                .strip_prefix("/internal/collection-cache/")
+                .and_then(|p| p.split_once('/'))
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let owners = shared.owners.clone();
+            let Ok(Ok(bytes)) = tokio::time::timeout(
+                Duration::from_secs(2),
+                to_bytes(req.into_body(), 256 * 1024),
+            )
+            .await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            let writer = shared.cache_writes.clone().lock_owned().await;
+            let saved = shared
+                .limits
+                .blocking(row.pool, move || {
+                    let _writer = writer;
+                    Ok(crate::collection_cache::write(&owners, &root, &kind, &key, &bytes).is_ok())
+                })
+                .await
+                .unwrap_or(false);
+            Json(json!({"saved": saved})).into_response()
+        }
+        Handler::Collect => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let verb = req
+                .uri()
+                .path()
+                .strip_prefix("/internal/collect/")
+                .unwrap_or("")
+                .to_owned();
+            let body = tokio::time::timeout(
+                Duration::from_secs(2),
+                to_bytes(req.into_body(), aac_protocol::MAX_FRAME_BYTES + 4096),
+            )
+            .await;
+            let Ok(Ok(bytes)) = body else {
+                return decline(row.handler, Decline::Shape);
+            };
+            shared
+                .collection
+                .read(shared.agents.clone(), &verb, &bytes)
+                .await
+        }
         Handler::Agent | Handler::AgentControl => {
             let path = req.uri().path().to_owned();
             let cap = if row.handler == Handler::AgentControl {
@@ -615,12 +690,16 @@ pub async fn serve(
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
+    let collection = Arc::new(crate::collection::Collection::default());
     let state = AppState(Arc::new(Shared {
+        owners: boot.owners()?,
+        cache_writes: Arc::default(),
         boot,
         limits: Limits::new(),
         identity,
         feeds: Feeds::new(),
         agents,
+        collection: collection.clone(),
         store: store.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
@@ -664,7 +743,10 @@ pub async fn serve(
         tokio::spawn(async move { store_jobs(jobs, stop).await });
     }
     let served = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            collection.stop();
+        })
         .await;
     jobs_stop.store(true, Ordering::Release);
     if let Some(host) = store {

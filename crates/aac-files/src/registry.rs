@@ -334,10 +334,17 @@ mod tests {
             assert!(row(id).is_ok(), "{id}");
         }
         assert!(row("unknown").is_err());
-        // Nothing has moved yet: TS writes every row on the dashboard host.
-        assert!(
-            rows.iter()
-                .all(|r| r.owner == Role::Ts && r.moves_with.is_none())
+        assert!(rows.iter().all(|r| r.owner == Role::Ts));
+        let moved: Vec<_> = rows
+            .iter()
+            .filter_map(|r| r.moves_with.as_ref().map(|g| (r.id.as_str(), g.as_str())))
+            .collect();
+        assert_eq!(
+            moved,
+            [
+                ("account-usage-observations", "collection"),
+                ("claude-live-snapshots", "collection"),
+            ]
         );
     }
 

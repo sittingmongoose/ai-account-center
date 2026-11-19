@@ -41,10 +41,25 @@ describe('the registry rules', () => {
       'readers-check',
     ])
       expect(ids).toContain(id);
-    // Nothing has moved yet: TS writes every row on the dashboard host.
-    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts' && r.movesWith === null)).toBe(
-      true
+    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts')).toBe(true);
+    const moved = files.resolvePrivateFileOwners(
+      files.PRIVATE_FILE_ROWS,
+      (g) => g === 'collection'
     );
+    expect(Object.keys(moved).filter((id) => moved[id] === 'rust-service')).toEqual([
+      'account-usage-observations',
+      'claude-live-snapshots',
+    ]);
+    expect(
+      files.privateFileRowFor(path.join(home, 'account-usage-failover', 'cooldown-key.json'), home)
+        ?.id
+    ).toBe('account-usage-cooldown');
+    expect(
+      files.privateFileRowFor(
+        path.join(home, 'account-usage-failover', 'key.muse-peers.json'),
+        home
+      )?.id
+    ).toBe('muse-usage-peer-links');
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {
@@ -199,11 +214,11 @@ describe('one writer per file', () => {
     ).toBe('rust-service');
     // A row that moves with no group never leaves TS.
     expect(files.resolvePrivateFileOwners(rows, () => true)['auth-state']).toBe('ts');
-    // The shipped registry: no row moves, whatever the service mode.
-    for (const owner of Object.values(
-      files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => true)
-    ))
-      expect(owner).toBe('ts');
+    const shippedWithCollectionOff = files.resolvePrivateFileOwners(
+      files.PRIVATE_FILE_ROWS,
+      (group) => group !== 'collection'
+    );
+    for (const owner of Object.values(shippedWithCollectionOff)) expect(owner).toBe('ts');
   });
 
   it('refuses every TS writer of a row the service owns, and writes nothing', async () => {
@@ -267,7 +282,8 @@ describe('one writer per file', () => {
       path.join(root, 'src/web-server/rust-service-supervisor.ts'),
       'utf8'
     );
-    expect(supervisor).toMatch(/settlePrivateFileOwners\(\(\) => this\.mode === 'on'\)/);
+    expect(supervisor).toContain("this.mode === 'on' && rustGroupOn('collection')");
+    expect(supervisor).toContain("group === 'collection' ? collectionOn : this.mode === 'on'");
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());
   });

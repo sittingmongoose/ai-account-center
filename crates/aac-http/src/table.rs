@@ -26,6 +26,9 @@ pub(crate) enum Handler {
     FeedStatus,
     Events,
     Agent,
+    Collect,
+    CollectionTick,
+    CollectionCache,
     AgentControl,
     Store,
 }
@@ -46,6 +49,9 @@ impl Handler {
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
             "events" => Handler::Events,
+            "collection-cache" => Handler::CollectionCache,
+            "collect" => Handler::Collect,
+            "collection-tick" => Handler::CollectionTick,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "store" => Handler::Store,
@@ -194,17 +200,28 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
-            || internal != (row.group == "internal")
+                && !matches!(
+                    handler,
+                    Handler::Events
+                        | Handler::Agent
+                        | Handler::Collect
+                        | Handler::CollectionTick
+                        | Handler::Store
+                ))
+            || internal != matches!(row.group.as_str(), "internal" | "collection")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
             || (method == axum::http::Method::POST
                 && !matches!(
                     handler,
-                    Handler::Agent | Handler::AgentControl | Handler::Store
+                    Handler::Agent | Handler::AgentControl | Handler::Collect | Handler::Store
                 ))
-            || (method == axum::http::Method::PUT && handler != Handler::Feed)
+            || (method == axum::http::Method::PUT
+                && !matches!(
+                    handler,
+                    Handler::Feed | Handler::CollectionCache | Handler::CollectionTick
+                ))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)
@@ -239,7 +256,14 @@ mod tests {
         let rows = rows(ROUTES)?;
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
         assert!(rows.iter().all(|r| r.budget_ms > 0
-            || matches!(r.handler, Handler::Events | Handler::Agent | Handler::Store)));
+            || matches!(
+                r.handler,
+                Handler::Events
+                    | Handler::Agent
+                    | Handler::Collect
+                    | Handler::CollectionTick
+                    | Handler::Store
+            )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         Ok(())
     }

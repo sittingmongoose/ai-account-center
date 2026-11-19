@@ -624,3 +624,31 @@ before opening the store. The internal store-method route retains the kernel
 single-writer lock and automatically rolls back to NAPI after five crashes.
 See [store.md, optional Rust store host](store.md#15-optional-rust-store-host-r3)
 for the method contract, caps, shutdown order, fixture drills and turn-on soak.
+
+
+## H2 quota collection
+
+Enable `rustService.groups.collection: on` (or `AAC_RUST_GROUP_COLLECTION=on`)
+under `rustService.mode: on`. Native agent reads also require `agentVerbs: on`
+and `agentTransport: on`, and an existing verified agent on the configured
+computer. The service uses the same L5 registry and pool.
+
+- `PUT /internal/collection-tick` waits the configured 30–3600-second interval
+  after a dashboard sampling pass. A changed interval cancels the pending wait.
+  The TypeScript fallback waits the rest of the same interval if the service
+  goes away. Normal dashboard and Home reads share the existing generation.
+- `POST /internal/collect/{verb}` takes the L5 request envelope for
+  `quota-read`, `signin-expiry` or `failover-inventory` with action `inventory`.
+  Matching in-flight requests share one bounded pass. Existing DTO validation
+  and fallback apply. An indeterminate quota response ends that attempt to
+  avoid a duplicate provider read.
+- `PUT /internal/collection-cache/{kind}/{key}` saves a validated observation
+  or Windows Claude snapshot to the original path through the registry lease.
+  The selected owner is fixed for the service boot. Turning the group off
+  returns writes to TypeScript using the same cache files.
+
+The front door still selects accounts, applies identity-bound failover and
+projects the dashboard for both consumers. Selected-account collection that
+requires an agent verb beyond the three M2 readers still uses its existing
+collector. Claude Desktop's persisted identity cooldown and retry arithmetic
+run in the same coordinator as before, independently of the Rust cache switch.

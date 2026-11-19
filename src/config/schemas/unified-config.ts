@@ -32,7 +32,7 @@ export interface UnifiedConfig {
    */
   rustService?: {
     mode?: 'off' | 'shadow' | 'on';
-    groups?: { home?: 'off' | 'on'; status?: 'off' | 'on' };
+    groups?: { home?: 'off' | 'on'; status?: 'off' | 'on'; collection?: 'off' | 'on' };
     store?: 'off' | 'on';
   };
   /** Config version */

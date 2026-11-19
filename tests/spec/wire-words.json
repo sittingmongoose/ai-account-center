@@ -2775,7 +2775,8 @@
     "sources": [
       "src/codex-auth/codex-renewal-status-store.ts:typeof record.consecutiveFailures",
       "src/web-server/index.ts:status",
-      "src/web-server/services/analytics-remote-transport.ts:typeof failure.code"
+      "src/web-server/services/analytics-remote-transport.ts:typeof failure.code",
+      "src/web-server/services/usage-failover-transport.ts:typeof status"
     ]
   },
   {
@@ -4654,6 +4655,7 @@
       "src/web-server/services/account-dashboard-types.ts:UsageCacheReason",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
       "src/web-server/services/usage-failover-service.ts:response.failureCode",
+      "src/web-server/services/usage-failover-service.ts:state.primaryFailure",
       "src/web-server/services/usage-failover-transport.ts:value.failureCode"
     ]
   },

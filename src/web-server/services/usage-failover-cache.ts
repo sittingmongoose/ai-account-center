@@ -1,6 +1,11 @@
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { tsWritesRow } from '../../shared/private-files';
+import { createLogger } from '../../services/logging';
+import { writeRustCollectionCache } from '../rust-service-transport';
+
+const logger = createLogger('usage-failover-cache');
 
 const MAX_BYTES = 256 * 1024;
 const MAX_OBSERVATIONS = 256;
@@ -93,6 +98,7 @@ function observation(value: unknown, key: string): boolean {
         'freshUntil',
         'primaryFailure',
         'primarySignIn',
+        'primarySignIn',
         'observedPlan',
         'observedPlanAt',
         'observedPlanPeer',
@@ -157,7 +163,21 @@ function pruneObservations(current: string, parent: fs.Stats): void {
   }
 }
 
-export function writeUsageCache(file: string, value: unknown): void {
+export function writeUsageCache(file: string, value: unknown): void | Promise<void> {
+  const observationKey = OBSERVATION_NAME.exec(path.basename(file))?.[1];
+  const ccsDir = path.dirname(path.dirname(file));
+  if (observationKey && !tsWritesRow('account-usage-observations')) {
+    const payload = JSON.stringify(value);
+    if (Buffer.byteLength(payload) > MAX_BYTES) return;
+    return writeRustCollectionCache(
+      ccsDir,
+      'account-usage-observations',
+      observationKey,
+      payload
+    ).then((saved) => {
+      if (!saved) logger.info('collection.cache.unavailable', 'Could not save quota observation');
+    });
+  }
   const temporary = `${file}.${randomUUID()}.tmp`;
   const safeDestination = () => {
     try {
