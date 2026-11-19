@@ -1866,7 +1866,7 @@ body { min-height: 100dvh; }
 }
 
 /* model usage (the donut) */
-.donut-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 0 20px 16px; flex: 1; align-content: center; }
+.donut-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 0 20px 16px; flex: 1; align-content: start; }
 .donut-box { position: relative; display: grid; justify-items: center; min-height: 180px; }
 .donut-svg { display: block; overflow: visible; }
 .donut-svg .arcs { transform-origin: center; animation: donut-in 700ms cubic-bezier(.2, .8, .2, 1) 160ms both; }
@@ -1874,7 +1874,7 @@ body { min-height: 100dvh; }
 .donut-svg path.dim { opacity: .3; }
 @keyframes donut-in { from { opacity: 0; transform: rotate(-24deg) scale(.96); } to { opacity: 1; transform: none; } }
 .donut-centre { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: grid; gap: 3px; text-align: center; pointer-events: none; }
-.donut-centre b { font-size: 22px; font-weight: 640; font-variation-settings: 'wght' 640; line-height: 1.1; }
+.donut-centre b { font-size: clamp(15px, 5cqi, 32px); font-weight: 640; font-variation-settings: 'wght' 640; line-height: 1.1; }
 .donut-centre span { font-size: 12px; color: var(--ink-3); line-height: 1.3; overflow-wrap: anywhere; }
 .donut-legend { display: grid; gap: 0; align-content: start; }
 .dl-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 52px; gap: 9px; align-items: center; min-height: 29px; padding: 0 8px; border: 0; border-radius: 7px;
@@ -1887,9 +1887,6 @@ body { min-height: 100dvh; }
 .dl-name .chev.up { transform: rotate(180deg); }
 .dl-row b { text-align: right; font-weight: 600; font-variation-settings: 'wght' 600; }
 .dl-share { text-align: right; }
-@container card (min-width: 520px) and (max-width: 899.98px) {
-  .donut-body { grid-template-columns: minmax(200px, 42%) minmax(0, 1fr); align-items: center; }
-}
 
 /* sessions */
 .stats3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
@@ -2536,15 +2533,10 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .um.inline .um-tick { top: 1px; bottom: 1px; }
 .um.inline .um-sub { margin-top: 5px; }
 /* The hover card: what a meter can't say in its cell (the exact reset, when it was sampled, where it came from). */
-.um-card { display: none; }
-@media (hover: hover) {
-  .um-card { display: block; position: absolute; z-index: 40; top: calc(100% + 8px); left: -10px; width: 270px; padding: 11px 14px 12px; background: var(--paper);
-    border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: var(--fs-small); color: var(--ink-2);
-    visibility: hidden; opacity: 0; transition: opacity 120ms, visibility 0s linear 120ms; pointer-events: none; white-space: normal; }
-  .um:hover > .um-card { visibility: visible; opacity: 1; transition: opacity 140ms 90ms, visibility 0s linear 90ms; }
-  .hcell:last-child .um-card { left: auto; right: -10px; }
-  .hcard .um-card { left: 0; right: 0; width: auto; }
-}
+.um:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.um-card { position: fixed; inset: auto; margin: 0; box-sizing: border-box; padding: 11px 14px 12px; background: var(--paper);
+  border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: var(--fs-small); color: var(--ink-2);
+  overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; white-space: normal; cursor: default; }
 .um-card > b { display: block; color: var(--ink); font-size: 13.5px; }
 .um-card-sub { display: block; color: var(--ink-3); overflow-wrap: anywhere; }
 .um-card dl { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 5px 10px; margin-top: 9px; }
