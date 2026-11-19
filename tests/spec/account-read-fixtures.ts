@@ -565,7 +565,7 @@ export function dashboardAccounts(): DashboardAccount[] {
   ];
 }
 
-function dashboard(accounts = dashboardAccounts()) {
+export function dashboard(accounts = dashboardAccounts()) {
   const facts = {
     lifecycleRoutes: true,
     secureTransport: false,
@@ -866,7 +866,7 @@ const permissionDenied = {
  * pass's full-read age); Nas1's Claude folder is permission denied and its OMP is not installed;
  * Alexis has only partial reads (no complete read recorded).
  */
-async function prepareRemoteCaches(cacheDir: string): Promise<void> {
+export async function prepareRemoteCaches(cacheDir: string): Promise<void> {
   if (fs.existsSync(path.join(cacheDir, 'analytics-remote-v1'))) return;
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   const passes = [NOW - 2 * HOUR, NOW - HOUR];
