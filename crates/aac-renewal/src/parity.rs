@@ -811,6 +811,7 @@ fn visit_files(dir: &Path, root: &Path, out: &mut Map<String, Value>) {
 pub fn files_map(root: &Path) -> Value {
     let mut out = Map::new();
     visit_files(root, root, &mut out);
+    out.sort_keys();
     Value::Object(out)
 }
 

@@ -275,7 +275,11 @@ function filesMap(root: string): Record<string, string> {
     }
   };
   visit(root);
-  return out;
+  return Object.fromEntries(
+    Object.keys(out)
+      .sort()
+      .map((file) => [file, out[file]])
+  );
 }
 
 function credFrom(value: Record<string, unknown>): NativeCredential {
