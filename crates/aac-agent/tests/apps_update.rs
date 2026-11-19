@@ -18,12 +18,17 @@ const PYTHON_REF: &str = concat!(
     "/../../tests/spec/agent/app-update.py"
 );
 
-fn root() -> TempDir {
+fn temp_root() -> TempDir {
     #[cfg(unix)]
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().expect("temp parent"))
         .expect("fixture temp root");
     #[cfg(windows)]
     let root = tempfile::tempdir().expect("fixture temp root");
+    root
+}
+
+fn root() -> TempDir {
+    let root = temp_root();
     put(&root, "app-updates-fixture", "AAC fixture installers v1");
     root
 }
@@ -331,7 +336,7 @@ async fn all_app_fixtures_match_python_and_respect_parallel_installer_gates() {
 
 #[tokio::test]
 async fn production_backend_streams_the_one_app_worker_and_routes_cancel() {
-    let root = tempfile::tempdir().expect("production test root");
+    let root = temp_root();
     put(&root, "fake-python-installer-root", "");
     put(&root, "hold-fixture-worker", "");
     let python = std::env::var_os("AAC_TEST_PYTHON").unwrap_or_else(|| {
