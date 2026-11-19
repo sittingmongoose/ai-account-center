@@ -929,11 +929,34 @@ computer. The service uses the same L5 registry and pool.
   avoid a duplicate provider read.
 - `PUT /internal/collection-cache/{kind}/{key}` saves a validated observation
   or Windows Claude snapshot to the original path through the registry lease.
+  The same lease-backed path owns OpenCode's workspace pointer and identity
+  cooldown holds. A wallet pointer is saved only for the current configured source.
   The selected owner is fixed for the service boot. Turning the group off
   returns writes to TypeScript using the same cache files.
 
-The front door still selects accounts, applies identity-bound failover and
-projects the dashboard for both consumers. Selected-account collection that
-requires an agent verb beyond the three M2 readers still uses its existing
-collector. Claude Desktop's persisted identity cooldown and retry arithmetic
-run in the same coordinator as before, independently of the Rust cache switch.
+- `GET /api/accounts/dashboard` uses the prepared generation that also serves
+  Home. The TypeScript front door preserves validation, session and device
+  authorization, no-store, ETag and the byte-equal fallback.
+- `AccountUsageCache` can be supplied to `serve_with_account_usage_cache` to
+  share generations with the native listener. Its `hub_dashboards` returns
+  the Mac and Windows neutral snapshots in that order. Its `store_observations`
+  maps dashboard windows to the existing history store's observations.
+  With the Rust store hosted, the TS boot job also uses that conversion.
+- `GET /internal/collection-sources` reads the private account registry v2.
+  `PUT /internal/collection-provider-cache` takes a Claude profile ID and
+  manifest hash, an OpenCode wallet binding hash, or a wallet-source read.
+- `PUT /internal/collection-cursor` runs the digest-checked Cursor reader
+  locally, with a 120-second process bound and one pending read. It saves the
+  previous observation's layout, uses the ten-minute TTL, and keeps dated
+  last-good rows on an unavailable result. A manual refresh bypasses the TTL.
+  The existing TS reader serves when the Rust collection group is off.
+- `POST /internal/collect/failover-collect` can run a selected
+  provider helper over the same L5 pool, with at most three active helpers.
+  The release bundles the existing Python source, including OpenCode wallet inventory. A refusal before launch
+  allows the TypeScript fallback. An indeterminate reply ends the attempt.
+
+The TypeScript collector still selects sources, applies identity-bound failover
+and publishes complete dashboard inputs. The standalone Rust sampler takes a
+source producer and publication callback. The full native source producer is a separate step. The TS peer and identity
+coordinator applies the original wave 67 retry rules and Rust persists its holds
+when the collection group owns the cache.

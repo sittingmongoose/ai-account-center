@@ -166,6 +166,9 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE)
+    ? [['node', ['tests/spec/dashboard-read-parity.mjs']]]
+    : []),
   // R1: Home fed against today's handler, end to end on the real binary, under Node.
   [
     'node',

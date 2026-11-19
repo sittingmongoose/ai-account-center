@@ -4,6 +4,8 @@ mod account_approvals;
 #[cfg(unix)]
 mod account_reads;
 #[cfg(unix)]
+pub mod account_usage;
+#[cfg(unix)]
 mod agent_transport;
 pub mod antigravity_quota;
 pub mod antigravity_runtime;
@@ -20,6 +22,8 @@ mod collection;
 mod collection_cache;
 #[cfg(unix)]
 mod dashboard_fed;
+#[cfg(unix)]
+pub mod dashboard_observations;
 #[cfg(unix)]
 mod feed;
 #[cfg(unix)]
@@ -77,4 +81,4 @@ mod visibility_write;
 #[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, serve_composed, serve_with_app_update_jobs, short_name};
+pub use unix::{Boot, serve, serve_composed, serve_with_account_usage_cache, serve_with_app_update_jobs, short_name};

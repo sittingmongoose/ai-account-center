@@ -1,6 +1,7 @@
 /** H2 snapshot projection on the actual TS adapters and private Rust socket. */
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import type {
   UsageHelperResponse,
   UsageFailoverTarget,
@@ -36,6 +37,8 @@ const { AccountDashboardService, withPassedResetsAt } =
 
 const { UsageFailoverService } =
   await import('../../../src/web-server/services/usage-failover-service');
+const { holdUsageCooldown, readUsageCooldownState, settleUsageCooldown } =
+  await import('../../../src/web-server/services/usage-failover-cooldown');
 const { runFailoverInventoryAgent } =
   await import('../../../src/web-server/services/usage-failover-transport');
 
@@ -158,6 +161,44 @@ try {
   const restored = await collectFailover(true).collect(target(fixture.root), template);
   assert.deepEqual(restored, owned);
   assert.equal(inventories, 1, 'the cold coordinator reused the Rust-written observation');
+
+  const cooldownKey = 'ca'.repeat(32);
+  assert.equal(holdUsageCooldown(fixture.root, cooldownKey, at + 120_000, at, 1), at + 120_000);
+  await settleUsageCooldown(fixture.root, cooldownKey);
+  assert.deepEqual(readUsageCooldownState(fixture.root, cooldownKey, at), {
+    until: at + 120_000,
+    claude429Streak: 1,
+  });
+  assert.equal(
+    holdUsageCooldown(fixture.root, cooldownKey, at + 360_000, at + 130_000, 2),
+    at + 360_000
+  );
+  await settleUsageCooldown(fixture.root, cooldownKey);
+  assert.deepEqual(readUsageCooldownState(fixture.root, cooldownKey, at + 361_000), {
+    until: 0,
+    claude429Streak: 2,
+  });
+  holdUsageCooldown(fixture.root, cooldownKey, at + 361_000, at + 361_000, 0);
+  await settleUsageCooldown(fixture.root, cooldownKey);
+  assert.deepEqual(readUsageCooldownState(fixture.root, cooldownKey, at + 362_000), {
+    until: 0,
+    claude429Streak: 0,
+  });
+
+  const cooldownFile = path.join(
+    fixture.root,
+    'account-usage-failover',
+    'cooldown-' + cooldownKey + '.json'
+  );
+  assert.deepEqual(JSON.parse(readFileSync(cooldownFile, 'utf8')), {
+    version: 1,
+    key: cooldownKey,
+    until: at + 361_000,
+    claude429Streak: 0,
+  });
+  console.log(
+    'PASS H2 identity cooldown: native persistence keeps the expired streak and verified reset'
+  );
 
   console.log(
     'PASS H2 dashboard and Home input bytes, inventory identity and cold cache restoration on the Kimi fixture'

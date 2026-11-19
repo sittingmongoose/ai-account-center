@@ -1,6 +1,11 @@
 import { broadcastDashboardEvent } from '../dashboard-events';
 import { privateFileOwners } from '../../shared/private-files';
-import { scheduleRustCollection } from '../rust-service-transport';
+import { publishSampledDashboard } from '../views/dashboard-feed';
+import {
+  requestRustStore,
+  rustStoreConnection,
+  scheduleRustCollection,
+} from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import { createHash } from 'crypto';
 import { BoundedCache } from '../../utils/bounded-cache';
@@ -396,6 +401,26 @@ export class AccountAnalyticsService {
       state.backfilled = true;
     }
     const now = (this.deps.now ?? Date.now)();
+    const hosted =
+      privateFileOwners()['account-usage-observations'] === 'rust-service'
+        ? rustStoreConnection(scope)
+        : null;
+    if (hosted) {
+      try {
+        await requestRustStore(
+          hosted,
+          'recordDashboard',
+          JSON.stringify({
+            now,
+            accounts: accounts.slice(0, MAX_ACCOUNTS_PER_SAMPLE),
+          })
+        );
+        state.available = true;
+        return;
+      } catch {
+        // record is idempotent if the reply was lost after the store committed.
+      }
+    }
     const observations = accounts.slice(0, MAX_ACCOUNTS_PER_SAMPLE).flatMap((account) => {
       const observation = storeObservationFromAccount(account, now, Number.POSITIVE_INFINITY);
       return observation ? [observation] : [];
@@ -813,11 +838,21 @@ export class AccountAnalyticsService {
     if (this.pendingSample) return this.pendingSample;
     const scope = (this.deps.scope ?? getCcsDir)();
     this.pendingSample = (async () => {
+      const platforms = ['mac', 'windows'] as const;
       const dashboards = await Promise.allSettled(
-        ['mac', 'windows'].map((platform) =>
-          (this.deps.getDashboard ?? getAccountDashboard)(platform as 'mac' | 'windows', false)
+        platforms.map((platform) =>
+          (this.deps.getDashboard ?? getAccountDashboard)(platform, false)
         )
       );
+      if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+        void Promise.allSettled(
+          dashboards.map((result, index) =>
+            result.status === 'fulfilled'
+              ? publishSampledDashboard(scope, platforms[index], result.value)
+              : undefined
+          )
+        );
+      }
       const unique = new Map<string, DashboardAccount>();
       for (const result of dashboards)
         if (result.status === 'fulfilled')

@@ -257,6 +257,22 @@ impl Call {
     }
 
     pub(crate) fn valid(&self, verb: &str) -> bool {
+        [
+            "health",
+            "inventory",
+            "signin-expiry",
+            "quota-read",
+            "scan-usage",
+            "t3-pins",
+            "key-store",
+            "claude-history",
+            "failover-inventory",
+        ]
+        .contains(&verb)
+            && self.bounded(verb)
+    }
+
+    pub(crate) fn bounded(&self, verb: &str) -> bool {
         word(&self.call_id)
             && [
                 "health",
@@ -269,6 +285,7 @@ impl Call {
                 "key-store",
                 "claude-history",
                 "failover-inventory",
+                "failover-collect",
                 "launch",
                 "claude-host",
                 "signin-session",
@@ -299,6 +316,10 @@ impl Call {
 }
 
 impl Agents {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(crate) fn permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         self.slots.clone().try_acquire_owned().ok()
     }

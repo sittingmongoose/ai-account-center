@@ -101,6 +101,7 @@ struct Shared {
     app_update_jobs: Option<BoundJobs>,
     agents: Arc<crate::agent_transport::Agents>,
     collection: Arc<crate::collection::Collection>,
+    cursor: Arc<crate::account_usage::cursor::Reader>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
     /// R4: the owned Status readers, when the boot carries their config.
@@ -415,6 +416,72 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 .await
             {
                 Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CursorAccount => {
+            use crate::account_usage::cursor::{ROW, Request};
+            if shared.owners.owner(ROW) != Some(registry::Role::RustService) {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let Ok(Ok(bytes)) =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let request = match Request::parse(&bytes) {
+                Ok(request) => request,
+                Err(reason) => return decline(row.handler, reason),
+            };
+            let root = shared.boot.ccs_dir.clone();
+            let owners = shared.owners.clone();
+            let reader = shared.cursor.clone();
+            let task = tokio::spawn(async move { reader.read(root, owners, request).await });
+            match tokio::time::timeout(Duration::from_secs(123), task).await {
+                Ok(Ok(Ok(value))) => Json(value.as_ref()).into_response(),
+                Ok(Ok(Err(reason))) => decline(row.handler, reason),
+                _ => decline(row.handler, Decline::Internal),
+            }
+        }
+        Handler::ProviderCache => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::account_usage::provider_caches::answer(&root, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CollectionSources => {
+            use crate::account_usage::sources::{self, Sources};
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || sources::read_registry(&root))
+                .await
+            {
+                Ok(Sources::Legacy) => Json(json!({"state":"absent"})).into_response(),
+                Ok(Sources::V2(accounts)) => Json(json!({
+                    "state":"ok","registry":{"version": 2,"accounts":accounts},
+                }))
+                .into_response(),
                 Err(reason) => decline(row.handler, reason),
             }
         }
@@ -989,7 +1056,7 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, false).await
+    serve_inner(boot, shutdown, None, false, Default::default()).await
 }
 
 /// Serve the private routes with an app-update job owner supplied by the service binary.
@@ -998,7 +1065,7 @@ pub async fn serve_with_app_update_jobs(
     shutdown: impl Future<Output = ()> + Send + 'static,
     jobs: Arc<dyn AppUpdateJobs>,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, Some(jobs), false).await
+    serve_inner(boot, shutdown, Some(jobs), false, Default::default()).await
 }
 
 /// Same private protocol, with the native app-update owner using this boot's agent pool.
@@ -1006,7 +1073,16 @@ pub async fn serve_composed(
     boot: Boot,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    serve_inner(boot, shutdown, None, true).await
+    serve_inner(boot, shutdown, None, true, Default::default()).await
+}
+
+/// Run the private service with a shared dashboard cache.
+pub async fn serve_with_account_usage_cache(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    cache: crate::account_usage::AccountUsageCache,
+) -> io::Result<()> {
+    serve_inner(boot, shutdown, None, false, cache).await
 }
 
 async fn serve_inner(
@@ -1014,6 +1090,7 @@ async fn serve_inner(
     shutdown: impl Future<Output = ()> + Send + 'static,
     app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
     native_app_updates: bool,
+    cache: crate::account_usage::AccountUsageCache,
 ) -> io::Result<()> {
     boot.validate()?;
     let rows = crate::table::rows(crate::table::ROUTES)?;
@@ -1035,7 +1112,7 @@ async fn serve_inner(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
-    let feeds = Feeds::new();
+    let feeds = cache.feeds;
     let app_update_jobs = app_update_jobs.or_else(|| {
         native_app_updates.then(|| {
             let jobs = crate::app_updates::AppUpdates::with_pool(
@@ -1101,6 +1178,7 @@ async fn serve_inner(
         app_update_jobs: app_update_jobs.map(BoundJobs::new),
         agents,
         collection: collection.clone(),
+        cursor: Arc::default(),
         store: store.clone(),
         status_owned: status_owned.clone(),
         scoreboard_owned: scoreboard_owned.clone(),

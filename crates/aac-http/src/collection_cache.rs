@@ -1,5 +1,6 @@
 //! The write boundary for dashboard-scope quota observations and remote snapshots.
-use aac_core::{Cause, Failure};
+use crate::account_usage::provider_caches::{WALLET_ACCOUNT, wallet_pointer, wallet_source};
+use aac_core::{Cause, Failure, sha256_hex};
 use aac_files::registry::{self, Owners};
 use serde_json::Value;
 use std::path::Path;
@@ -64,19 +65,27 @@ pub(crate) fn write(
     key: &str,
     bytes: &[u8],
 ) -> Result<(), Failure> {
+    if kind == crate::account_usage::failover::ROW {
+        return crate::account_usage::failover::save(owners, root, key, bytes);
+    }
     let refused = || Failure::new(Cause::Refused, "invalid collection cache");
     let value: Value = serde_json::from_slice(bytes).map_err(|_| refused())?;
     let registered = match kind {
         OBSERVATIONS if digest(key) && observation(key, &value) => OBSERVATIONS,
         SNAPSHOTS if snapshot(key, &value) => SNAPSHOTS,
+        WALLET_ACCOUNT if wallet_pointer(key, &value).is_some() => {
+            let source = wallet_source(root)
+                .map_err(|_| refused())?
+                .ok_or_else(refused)?;
+            if sha256_hex(source.to_string()) != key {
+                return Err(refused());
+            }
+            WALLET_ACCOUNT
+        }
         _ => return Err(refused()),
     };
-    let store = owners.claim(
-        registry::rows()?,
-        registered,
-        root,
-        Some(&format!("{key}.json")),
-    )?;
+    let name = (registered != WALLET_ACCOUNT).then(|| format!("{key}.json"));
+    let store = owners.claim(registry::rows()?, registered, root, name.as_deref())?;
     store.write_private_cache(bytes)?;
     if registered == OBSERVATIONS {
         store.prune_private_cache(

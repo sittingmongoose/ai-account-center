@@ -1,3 +1,5 @@
+import { privateFileOwners } from '../../shared/private-files';
+import { writeRustCollectionCache } from '../rust-service-transport';
 import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,6 +16,7 @@ interface UsageCooldown {
 }
 
 const inProcessCooldowns = new Map<string, UsageCooldown>();
+const pendingCooldownWrites = new Map<string, Promise<void>>();
 const memoryKey = (ccsDir: string, key: string) => JSON.stringify([path.resolve(ccsDir), key]);
 
 /** Native and alternate collectors use the same private provider/account gate. */
@@ -130,6 +133,11 @@ export function readUsageCooldown(ccsDir: string, key: string, now: number): num
   return readUsageCooldownState(ccsDir, key, now).until;
 }
 
+/** Wait for the persisted hold before handing a helper slot to another account. */
+export async function settleUsageCooldown(ccsDir: string, key: string): Promise<void> {
+  await pendingCooldownWrites.get(memoryKey(ccsDir, key));
+}
+
 /** Keep the longer provider cooldown; a failed save does not erase the in-memory one. */
 export function holdUsageCooldown(
   ccsDir: string,
@@ -147,6 +155,21 @@ export function holdUsageCooldown(
   if (inProcessCooldowns.size > 2048)
     for (const [id, entry] of inProcessCooldowns)
       if (entry.until <= now) inProcessCooldowns.delete(id);
+  if (privateFileOwners()['account-usage-cooldown'] === 'rust-service') {
+    const pending = writeRustCollectionCache(
+      ccsDir,
+      'account-usage-cooldown',
+      key,
+      JSON.stringify({ now, ...record })
+    ).then((saved) => {
+      if (saved && inProcessCooldowns.get(id) === record) inProcessCooldowns.set(id, { until });
+    });
+    pendingCooldownWrites.set(id, pending);
+    void pending.finally(() => {
+      if (pendingCooldownWrites.get(id) === pending) pendingCooldownWrites.delete(id);
+    });
+    return until;
+  }
   const destination = file(ccsDir, key);
   const temporary = `${destination}.${randomUUID()}.tmp`;
   try {

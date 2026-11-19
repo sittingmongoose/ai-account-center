@@ -34,6 +34,9 @@ pub(crate) enum Handler {
     Agent,
     Collect,
     CollectionTick,
+    CollectionSources,
+    ProviderCache,
+    CursorAccount,
     CollectionCache,
     AgentControl,
     Approvals,
@@ -67,6 +70,9 @@ impl Handler {
             "events" => Handler::Events,
             "collection-cache" => Handler::CollectionCache,
             "collect" => Handler::Collect,
+            "collection-provider-cache" => Handler::ProviderCache,
+            "collection-cursor" => Handler::CursorAccount,
+            "collection-sources" => Handler::CollectionSources,
             "collection-tick" => Handler::CollectionTick,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
@@ -230,6 +236,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::Collect
                         | Handler::CollectionTick
                         | Handler::ResetClaims
+                        | Handler::CursorAccount
                         | Handler::Store
                 ))
             || (row.group == "internal" && !internal)
@@ -240,6 +247,9 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     Handler::Dashboard
                         | Handler::CollectionCache
                         | Handler::CollectionTick
+                        | Handler::CollectionSources
+                        | Handler::ProviderCache
+                        | Handler::CursorAccount
                         | Handler::Collect
                 ))
             || internal != roles.iter().all(|r| *r == Role::Service)
@@ -265,6 +275,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::WriteSettings
                         | Handler::WriteVisibility
                         | Handler::WritePreferences
+                        | Handler::ProviderCache
+                        | Handler::CursorAccount
                 ))
             || (handler == Handler::WriteSettings
                 && (method != axum::http::Method::PUT
@@ -352,6 +364,7 @@ mod tests {
                     | Handler::Collect
                     | Handler::CollectionTick
                     | Handler::ResetClaims
+                    | Handler::CursorAccount
                     | Handler::Store
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));

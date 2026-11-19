@@ -19,6 +19,7 @@ aac-api.workspace = true
 aac-diag.workspace = true
 aac-files.workspace = true
 aac-log.workspace = true
+aac-num.workspace = true
 aac-core.workspace = true
 aac-config.workspace = true
 aac-protocol.workspace = true

@@ -93,6 +93,7 @@ dependencies = [
  "aac-diag",
  "aac-files",
  "aac-log",
+ "aac-num",
  "aac-protocol",
  "aac-providers",
  "aac-status",

@@ -369,6 +369,92 @@ export function rustAgentConnected(root: string): boolean {
   return [...agentConnections.values()].some((entry) => entry.root === scope);
 }
 
+/** Only an old or absent service can delegate a Cursor provider read to TS. */
+export async function readRustCursorAccount(
+  root: string,
+  input: { sinceMs: number; untilMs: number; force: boolean }
+): Promise<unknown> {
+  const held = rustAgentConnection(root);
+  if (!held) return undefined;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-cursor',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      input,
+      'PUT',
+      { cap: 32 * 1024 * 1024, deadlineMs: 126_000 }
+    );
+    if (
+      reply.status === 404 ||
+      (reply.status === 503 && ['shape', 'unsupported'].includes(reply.decline ?? ''))
+    )
+      return undefined;
+    return reply.status === 200 ? reply.body : null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    return code === 'ECONNREFUSED' || code === 'ENOENT' ? undefined : null;
+  }
+}
+
+/** Read a provider cache by a private binding. Undefined leaves the reference reader in charge. */
+export async function readRustProviderCache(
+  root: string,
+  input:
+    { profileId: string; manifestHash: string } | { bindingHash: string } | { walletSource: true }
+): Promise<unknown> {
+  const held = rustAgentConnection(root);
+  if (!held) return undefined;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-provider-cache',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      input,
+      'PUT',
+      { cap: 128 * 1024 }
+    );
+    return reply.status === 200 ? (reply.body as { value?: unknown } | null)?.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The collector's source registry is a private read bound to this boot root. */
+export async function readRustCollectionSources(root: string): Promise<unknown> {
+  const held = rustAgentConnection(root);
+  if (!held) return null;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-sources',
+      FRONT_DOOR_PRINCIPAL,
+      held.active
+    );
+    return reply.status === 200 ? reply.body : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Publish a background dashboard to the same boot and feed used by the interactive views. */
+export async function publishCollectionFeed(
+  root: string,
+  source: string,
+  generation: string,
+  data: string,
+  facts: string
+): Promise<void> {
+  const held = rustAgentConnection(root);
+  if (held) {
+    await pushRustFeedText(held.connection, source, generation, data, facts, held.active).catch(
+      () => undefined
+    );
+  }
+}
+
 /** Hold the idle sampling interval on Rust's clock, with no pooled socket or read breaker. */
 export function scheduleRustCollection(
   root: string,
@@ -403,7 +489,11 @@ export function scheduleRustCollection(
 /** Save only through the owner selected at boot. A lost service leaves the in-memory quota usable. */
 export async function writeRustCollectionCache(
   root: string,
-  kind: 'account-usage-observations' | 'claude-live-snapshots',
+  kind:
+    | 'account-usage-observations'
+    | 'claude-live-snapshots'
+    | 'opencode-wallet-account'
+    | 'account-usage-cooldown',
   key: string,
   bytes: string
 ): Promise<boolean> {
@@ -471,7 +561,7 @@ export async function requestRustAgent(
   if (Buffer.byteLength(bytes) > 8 * 1024 * 1024 + 8192) return null;
   return new Promise((resolve, reject) => {
     const uncertain = () => {
-      if (collect && verb === 'quota-read') reject(new CollectionReadIndeterminate());
+      if (collect && ['quota-read', 'failover-collect'].includes(verb)) reject(new CollectionReadIndeterminate());
       else if (singleShot)
         reject(new RustTransportError('reply', 'Agent write outcome unconfirmed'));
       else resolve(null);
