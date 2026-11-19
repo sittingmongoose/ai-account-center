@@ -445,6 +445,12 @@ function emit(relative: string, data: any) {
         response.body?.code ?? '',
       ].join(' ')
     );
+  } else if (composed && relative === 'routes.json') {
+    // Stack-frame locations vary by Bun platform and build. Compare the actual
+    // method, path, roles, write admission and milestone on every platform.
+    const shape = (rows: typeof inventory) =>
+      rows.map(({ handlerFile: _stackLocation, ...route }) => route);
+    assert.deepEqual(shape(data), shape(JSON.parse(fs.readFileSync(file, 'utf8'))));
   } else if (!composed || relative !== 'route-source-hashes.json')
     assert.equal(
       fs.readFileSync(file, 'utf8'),
