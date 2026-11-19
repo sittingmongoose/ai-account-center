@@ -329,7 +329,10 @@ export async function answerHomeFed(
       antigravity: input.inventory,
     });
     if (!produced) return declined('feed');
-    if ('declined' in produced) return declined(produced.declined);
+    if ('declined' in produced) {
+      service.producerDeclined(ROUTE, produced.declined);
+      return false;
+    }
     generations = [
       { generation: produced.dashboard },
       { generation: produced.opens },

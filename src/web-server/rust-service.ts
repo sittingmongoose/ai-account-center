@@ -828,6 +828,11 @@ export class RustService extends RustSupervisor {
     }
   }
 
+  /** G17: count a named response from the Rust feed producer like a fed view decline. */
+  producerDeclined(route: string, reason: string): void {
+    this.fallback(route, { kind: 'fedDeclined', reason });
+  }
+
   async respond(
     req: Request,
     res: Response,
