@@ -295,7 +295,12 @@ fn collect_quota(
         limited["retryAfterSeconds"] = json!(ceil_div(until - now, 1000));
         return Some(limited);
     }
-    let snapshot = Snapshot::from_value(&worker(profile_id)?);
+    // The composition answers an unavailable snapshot when the native read throws, so the row
+    // keeps the sign-in plan and the service reports the read as unavailable, not failed.
+    let Some(answer) = worker(profile_id) else {
+        return Some(unavailable(record, "unavailable", "unavailable"));
+    };
+    let snapshot = Snapshot::from_value(&answer);
     let sample_email = snapshot
         .email
         .as_deref()
@@ -489,8 +494,6 @@ fn apply_sample(profile: &Profile, sample: Option<&Value>, cache: &mut Cache, no
         result["statusReason"] = json!("identity_unbound");
         result["message"] = json!(IDENTITY_UNBOUND_MESSAGE);
     } else {
-        let plan_text = display_text_value(Some(&json!(snapshot.plan)), 80)
-            .or_else(|| result["plan"].as_str().map(str::to_owned));
         if let Some(seconds) = snapshot.integer_retry() {
             retry_after = seconds.min(86_400) * 1000;
             reported_backoff = true;
@@ -499,6 +502,14 @@ fn apply_sample(profile: &Profile, sample: Option<&Value>, cache: &mut Cache, no
             "fresh" | "ok" => "ok",
             "cached" | "needs_sign_in" | "unavailable" => snapshot.status.as_str(),
             _ => "error",
+        };
+        // A fresh read decides the plan: one that names no tier shows it unknown, never the label
+        // saved at sign-in. Only a read that is not fresh keeps the fallback row's plan.
+        let plan_text = display_text_value(Some(&json!(snapshot.plan)), 80);
+        let plan_text = if status == "ok" {
+            plan_text
+        } else {
+            plan_text.or_else(|| result["plan"].as_str().map(str::to_owned))
         };
         result["status"] = json!(status);
         result["fetchedAt"] = timestamp_value(snapshot.fetched_at.as_deref());

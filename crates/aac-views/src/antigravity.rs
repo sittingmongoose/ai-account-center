@@ -17,8 +17,8 @@ type Object = Map<String, Value>;
 /// 2000-01-01T00:00:00Z and 2201-01-01T00:00:00Z: `timestamp` keeps UTC years 2000..=2200.
 const YEAR_2000: i64 = 946_684_800_000;
 const YEAR_2201: i64 = 7_289_654_400_000;
-/// `Date.parse('2026-11-02T00:00:00Z')`, plan.ts `MODEL_REMOVAL_AT`.
-const MODEL_REMOVAL_AT: f64 = 1_793_577_600_000.0;
+/// `Date.parse('2026-12-01T00:00:00Z')`, plan.ts `MODEL_REMOVAL_AT`.
+const MODEL_REMOVAL_AT: f64 = 1_796_083_200_000.0;
 const MAX_WINDOWS: usize = 256;
 const MAX_MODEL_IDS: usize = 64;
 
@@ -324,10 +324,11 @@ fn pool_window_inner(value: &Value, time: TimeSource<'_>) -> Admit<Option<(Objec
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Models {
     Consumer,
+    Trial,
     PaidConsumer,
     UltraConsumer,
     Gemini,
-    None,
+    Flash,
 }
 
 struct Plan {
@@ -340,11 +341,36 @@ struct Plan {
     credits: bool,
 }
 
-const DUAL_WINDOW: &str = "Refreshes every 5 hours up to a weekly limit.";
+const STARTER: &str = "Weekly quota only; no 5-hour refresh.";
 const NO_QUOTA: &str = "This plan does not include Antigravity coding quota.";
 const CLI_QUOTA: &str = "This plan includes separate Gemini CLI quota that AAC does not read; no Antigravity coding quota.";
-const POOLED: &str = "Gemini models use a rolling 7-day shared project credit pool.";
-const GEMINI_MODELS: [&str; 4] = [
+const POOLED: &str =
+    "Gemini models use pooled edition seat credits; Claude models need administrator opt-in.";
+const FLASH_MODELS: [&str; 1] = ["Gemini 3.8 Flash"];
+/// Paid Google AI Pro (not a trial): docs/models, 2026-11-19.
+const PRO_GEMINI_MODELS: [&str; 6] = [
+    "Gemini 4 Neon",
+    "Gemini 4 Argon",
+    "Gemini 4 Hydrogen",
+    "Orchestrator (Neon)",
+    "Orchestrator (Argon)",
+    "Gemini 3.8 Flash",
+];
+const ULTRA_GEMINI_MODELS: [&str; 8] = [
+    "Gemini 4 Neon",
+    "Gemini 4 Carbon",
+    "Gemini 4 Argon",
+    "Gemini 4 Hydrogen",
+    "Orchestrator (Neon)",
+    "Orchestrator (Carbon)",
+    "Orchestrator (Argon)",
+    "Gemini 3.8 Flash",
+];
+const ENTERPRISE_GEMINI_MODELS: [&str; 8] = [
+    "Gemini 4 Neon",
+    "Gemini 4 Carbon",
+    "Gemini 4 Argon",
+    "Gemini 4 Hydrogen",
     "Gemini 3.8 Flash",
     "Gemini 3.7 Flash",
     "Gemini 3.6 Flash",
@@ -352,7 +378,6 @@ const GEMINI_MODELS: [&str; 4] = [
 ];
 const RETIRING_MODELS: [&str; 3] = ["Claude Sonnet 4.6", "Claude Opus 4.6", "GPT-OSS-120B"];
 const PAID_CLAUDE_MODELS: [&str; 2] = ["Claude Sonnet 5.5", "Claude Opus 5.5"];
-const PRO_GEMINI_MODELS: [&str; 2] = ["Gemini 4 Argon", "Gemini 4 Hydrogen"];
 
 /// plan.ts `PLANS`, in its key order. `tests/spec/profile-read-parity.ts` compares every label
 /// and alias (and respellings) with the running TS `antigravityPlanDisplay`.
@@ -362,7 +387,7 @@ const PLANS: &[Plan] = &[
         label: "Free",
         aliases: &["free-tier", "Antigravity Starter Quota"],
         policy: "weekly",
-        summary: "Weekly quota only; no 5-hour refresh.",
+        summary: STARTER,
         models: Models::Consumer,
         credits: false,
     },
@@ -371,7 +396,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Plus",
         aliases: &["plus"],
         policy: "weekly",
-        summary: "Weekly quota only; no 5-hour refresh.",
+        summary: STARTER,
         models: Models::Consumer,
         credits: false,
     },
@@ -380,8 +405,8 @@ const PLANS: &[Plan] = &[
         label: "Google AI Pro (trial)",
         aliases: &["pro-trial", "Google AI Pro trial"],
         policy: "five-hour-weekly",
-        summary: DUAL_WINDOW,
-        models: Models::Consumer,
+        summary: "Refreshes every 5 hours up to a weekly limit. Gemini 4 Neon, Gemini 4 Argon and their Orchestrators only on trials with eligible premium devices; no Gemini 4 Hydrogen or Claude 5.5 during a trial.",
+        models: Models::Trial,
         credits: false,
     },
     Plan {
@@ -389,7 +414,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Pro",
         aliases: &["pro", "Gemini Code Assist in Google One AI Pro"],
         policy: "five-hour-weekly",
-        summary: "Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.",
+        summary: "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.",
         models: Models::PaidConsumer,
         credits: true,
     },
@@ -398,7 +423,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Ultra",
         aliases: &["ultra", "Gemini Code Assist in Google One AI Ultra"],
         policy: "five-hour-weekly",
-        summary: DUAL_WINDOW,
+        summary: "Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.",
         models: Models::UltraConsumer,
         credits: true,
     },
@@ -407,7 +432,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Ultra 5x",
         aliases: &["ultra-5x"],
         policy: "five-hour-weekly",
-        summary: "5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.",
+        summary: "5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.",
         models: Models::UltraConsumer,
         credits: true,
     },
@@ -416,7 +441,7 @@ const PLANS: &[Plan] = &[
         label: "Google AI Ultra 20x",
         aliases: &["ultra-20x"],
         policy: "five-hour-weekly",
-        summary: "20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.",
+        summary: "20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.",
         models: Models::UltraConsumer,
         credits: true,
     },
@@ -471,7 +496,7 @@ const PLANS: &[Plan] = &[
         aliases: &[],
         policy: "none",
         summary: CLI_QUOTA,
-        models: Models::Gemini,
+        models: Models::Flash,
         credits: false,
     },
     Plan {
@@ -480,7 +505,7 @@ const PLANS: &[Plan] = &[
         aliases: &[],
         policy: "none",
         summary: CLI_QUOTA,
-        models: Models::Gemini,
+        models: Models::Flash,
         credits: false,
     },
     Plan {
@@ -500,9 +525,9 @@ const PLANS: &[Plan] = &[
             "Workspace Enterprise Standard",
             "Workspace Enterprise Plus",
         ],
-        policy: "none",
-        summary: NO_QUOTA,
-        models: Models::None,
+        policy: "weekly",
+        summary: "Antigravity Starter Quota: Weekly quota only; no 5-hour refresh. Workspace plans add no higher limits or AI credits.",
+        models: Models::Consumer,
         credits: false,
     },
 ];
@@ -573,18 +598,23 @@ fn display_for(
     ) {
         third_party.extend(PAID_CLAUDE_MODELS);
     }
-    if before_removal && matches!(definition.models, Models::Consumer | Models::PaidConsumer) {
+    if before_removal
+        && matches!(
+            definition.models,
+            Models::Consumer | Models::Trial | Models::PaidConsumer
+        )
+    {
         third_party.extend(RETIRING_MODELS);
     }
     if before_removal && definition.models == Models::UltraConsumer {
         third_party.push("GPT-OSS-120B");
     }
     let mut models: Vec<&str> = Vec::new();
-    if definition.models != Models::None {
-        models.extend(GEMINI_MODELS);
-    }
-    if definition.class == "pro" {
-        models.extend(PRO_GEMINI_MODELS);
+    match definition.models {
+        Models::PaidConsumer => models.extend(PRO_GEMINI_MODELS),
+        Models::UltraConsumer => models.extend(ULTRA_GEMINI_MODELS),
+        Models::Gemini => models.extend(ENTERPRISE_GEMINI_MODELS),
+        Models::Consumer | Models::Trial | Models::Flash => models.extend(FLASH_MODELS),
     }
     models.extend(third_party.iter().copied());
     (
@@ -1051,17 +1081,17 @@ mod tests {
             Some("workspace")
         );
         assert!(known("Google Workspace\u{e9}").is_none());
-        let (plan, detail) = plan_display(Some("pro".into()), Some(1_793_577_599_999), 0.0);
+        let (plan, detail) = plan_display(Some("pro".into()), Some(1_796_083_199_999), 0.0);
         assert_eq!(plan, json!("Google AI Pro"));
         assert_eq!(
             detail.expect("pro plan")["models"],
             json!([
-                "Gemini 3.8 Flash",
-                "Gemini 3.7 Flash",
-                "Gemini 3.6 Flash",
-                "Gemini 3.1 Pro",
+                "Gemini 4 Neon",
                 "Gemini 4 Argon",
                 "Gemini 4 Hydrogen",
+                "Orchestrator (Neon)",
+                "Orchestrator (Argon)",
+                "Gemini 3.8 Flash",
                 "Claude Sonnet 5.5",
                 "Claude Opus 5.5",
                 "Claude Sonnet 4.6",
@@ -1069,6 +1099,74 @@ mod tests {
                 "GPT-OSS-120B"
             ])
         );
+    }
+
+    /// plan.test.ts: the 2026-11-19 model table per tier, and the end-of-Nov-30 removal.
+    #[test]
+    fn tiers_follow_the_2026_11_19_model_table() {
+        let models = |plan: &str, at: i64| {
+            plan_display(Some(plan.into()), Some(at), 0.0)
+                .1
+                .expect(plan)
+        };
+        let before = 1_796_083_199_999;
+        let after = 1_796_083_200_000;
+        for plan in ["free", "plus", "pro-trial", "Google Workspace"] {
+            assert_eq!(
+                models(plan, before)["models"],
+                json!([
+                    "Gemini 3.8 Flash",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                ])
+            );
+            assert_eq!(models(plan, after)["models"], json!(["Gemini 3.8 Flash"]));
+            assert_eq!(models(plan, after)["thirdPartyModels"], json!(false));
+        }
+        assert_eq!(
+            models("Google Workspace", after)["quotaPolicy"],
+            json!("weekly")
+        );
+        for plan in ["ultra", "ultra-5x", "ultra-20x"] {
+            assert_eq!(
+                models(plan, after)["models"],
+                json!([
+                    "Gemini 4 Neon",
+                    "Gemini 4 Carbon",
+                    "Gemini 4 Argon",
+                    "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Orchestrator (Carbon)",
+                    "Orchestrator (Argon)",
+                    "Gemini 3.8 Flash",
+                    "Claude Sonnet 5.5",
+                    "Claude Opus 5.5"
+                ])
+            );
+            assert_eq!(models(plan, before)["models"][10], json!("GPT-OSS-120B"));
+        }
+        assert_eq!(
+            models("Gemini Enterprise Plus", after)["models"],
+            json!([
+                "Gemini 4 Neon",
+                "Gemini 4 Carbon",
+                "Gemini 4 Argon",
+                "Gemini 4 Hydrogen",
+                "Gemini 3.8 Flash",
+                "Gemini 3.7 Flash",
+                "Gemini 3.6 Flash",
+                "Gemini 3.1 Pro"
+            ])
+        );
+        assert_eq!(
+            models("Gemini Code Assist Standard", after)["models"],
+            json!(["Gemini 3.8 Flash"])
+        );
+        // An empty tier shows no plan at all, never a guessed one.
+        assert_eq!(plan_display(None, Some(before), 0.0), (Value::Null, None));
+        assert_eq!(public_plan(None), Value::Null);
+        assert_eq!(public_plan(Some(&json!(""))), Value::Null);
     }
 }
 
