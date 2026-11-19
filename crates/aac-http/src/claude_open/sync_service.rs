@@ -499,30 +499,29 @@ async fn run_sync(
         .lock()
         .ok()
         .and_then(|sequence| sequence.stop_reason.clone());
-    if let Some(reason) = stop_reason {
-        if result["status"] == json!("refused")
-            && result["reason"] == json!("create_only_transaction_refused")
-            && result["recoveryRequired"] != json!(true)
-        {
-            let full = reason == "history_marker_store_full";
-            if full {
-                tracing::warn!(target: "aac_http", reason, platform, "claude.history.marker_store_full");
-            } else {
-                tracing::info!(target: "aac_http", reason, platform, "claude.history.copy_stopped");
-            }
-            let mut out = result.as_object().cloned()?;
-            out.insert("reason".into(), json!(reason));
-            return Some(Value::Object(out));
+    if let Some(reason) = stop_reason
+        && result["status"] == json!("refused")
+        && result["reason"] == json!("create_only_transaction_refused")
+        && result["recoveryRequired"] != json!(true)
+    {
+        let full = reason == "history_marker_store_full";
+        if full {
+            tracing::warn!(target: "aac_http", reason, platform, "claude.history.marker_store_full");
+        } else {
+            tracing::info!(target: "aac_http", reason, platform, "claude.history.copy_stopped");
         }
+        let mut out = result.as_object().cloned()?;
+        out.insert("reason".into(), json!(reason));
+        return Some(Value::Object(out));
     }
     if result["status"] == json!("partial") {
         tracing::info!(target: "aac_http", platform, "claude.history.copy_budget_reached");
     }
     // The marker releases on every path (the core's finally).
-    if let Ok(mut sequence) = adapters.sequence.lock() {
-        if let Some(marker) = sequence.marker.as_mut() {
-            marker.release();
-        }
+    if let Ok(mut sequence) = adapters.sequence.lock()
+        && let Some(marker) = sequence.marker.as_mut()
+    {
+        marker.release();
     }
     Some(result)
 }

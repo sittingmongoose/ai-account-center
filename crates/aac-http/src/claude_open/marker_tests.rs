@@ -55,26 +55,11 @@ fn held(root: &Root) -> bool {
     pending_marker_state(root.path(), PROFILE, "windows").held
 }
 
-fn write_finished(root: &Root, profile: &str, platform: &str, nonce_digit: char) {
-    let marker_root = root.marker_root();
-    fs::create_dir_all(&marker_root).expect("mkdir");
-    fs::set_permissions(&marker_root, fs::Permissions::from_mode(0o700)).expect("chmod");
-    let nonce: String = std::iter::repeat(nonce_digit).take(32).collect();
-    let record = json!({
-        "version": 1, "profileId": profile, "targetPlatform": platform, "nonce": nonce,
-        "state": "finished", "createdAt": "2026-10-02T00:00:00Z",
-        "finishedAt": "2026-10-02T00:00:01Z", "terminalReceiptSha256": "0".repeat(64)
-    });
-    let file = marker_root.join(format!("{profile}-{platform}-{nonce}.json"));
-    fs::write(&file, serde_json::to_vec(&record).expect("json")).expect("write");
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("chmod");
-}
-
 fn write_pending(root: &Root, profile: &str, platform: &str, nonce_digit: char) -> PathBuf {
     let marker_root = root.marker_root();
     fs::create_dir_all(&marker_root).expect("mkdir");
     fs::set_permissions(&marker_root, fs::Permissions::from_mode(0o700)).expect("chmod");
-    let nonce: String = std::iter::repeat(nonce_digit).take(32).collect();
+    let nonce: String = std::iter::repeat_n(nonce_digit, 32).collect();
     let record = json!({
         "version": 1, "profileId": profile, "targetPlatform": platform, "nonce": nonce,
         "state": "pending", "createdAt": "2026-10-02T00:00:00.000Z"
@@ -115,7 +100,7 @@ fn lost_append_retains_hold_and_blocks_a_second_writer() {
     marker.release();
     assert!(held(&root));
     assert_eq!(
-        PendingMarker::arm(root.path(), PROFILE, "windows").unwrap_err(),
+        PendingMarker::arm(root.path(), PROFILE, "windows").expect_err("arm must refuse"),
         MarkerRefused::AppendPending
     );
     assert_eq!(fs::read_dir(root.marker_root()).expect("dir").count(), 1);
@@ -258,7 +243,7 @@ fn nonprivate_root_prevents_append_without_a_hold() {
     let root = Root::new();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).expect("chmod");
     assert_eq!(
-        PendingMarker::arm(root.path(), PROFILE, "windows").unwrap_err(),
+        PendingMarker::arm(root.path(), PROFILE, "windows").expect_err("arm must refuse"),
         MarkerRefused::Unavailable
     );
     assert!(!held(&root));
@@ -284,7 +269,7 @@ fn full_store_skips_with_its_own_reason() {
     }
     assert!(!held(&root));
     assert_eq!(
-        PendingMarker::arm(root.path(), PROFILE, "windows").unwrap_err(),
+        PendingMarker::arm(root.path(), PROFILE, "windows").expect_err("arm must refuse"),
         MarkerRefused::StoreFull
     );
     assert!(!held(&root));
@@ -313,14 +298,14 @@ fn batch_sequence_rearms_one_marker_slot() {
 fn rearm_refuses_before_finish_after_release_and_after_second_finish() {
     let root = Root::new();
     let mut pending = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
-    assert_eq!(pending.rearm().unwrap_err(), MarkerRefused::AppendPending);
+    assert_eq!(pending.rearm().expect_err("rearm must refuse"), MarkerRefused::AppendPending);
     assert!(held(&root));
     pending.release();
     fs::remove_dir_all(root.marker_root()).expect("rm");
     let mut released = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
     released.finish(&receipt(json!({}))).expect("finish");
     released.release();
-    assert_eq!(released.rearm().unwrap_err(), MarkerRefused::AppendPending);
+    assert_eq!(released.rearm().expect_err("rearm must refuse"), MarkerRefused::AppendPending);
     assert!(!held(&root));
     fs::remove_dir_all(root.marker_root()).expect("rm");
     let mut twice = PendingMarker::arm(root.path(), PROFILE, "windows").expect("arm");
@@ -337,7 +322,7 @@ fn rearm_refuses_while_another_operation_holds() {
     marker.finish(&receipt(json!({}))).expect("finish");
     let finished = fs::read(root.marker_file()).expect("read");
     let foreign = write_pending(&root, PROFILE, "windows", 'f');
-    assert_eq!(marker.rearm().unwrap_err(), MarkerRefused::AppendPending);
+    assert_eq!(marker.rearm().expect_err("rearm must refuse"), MarkerRefused::AppendPending);
     marker.release();
     let own = fs::read_dir(root.marker_root())
         .expect("dir")
@@ -431,7 +416,7 @@ fn interrupted_rearm_leaves_an_empty_marker_that_holds() {
     assert_eq!(fs::metadata(&file).expect("meta").len(), 0);
     assert!(held(&root));
     assert_eq!(
-        PendingMarker::arm(root.path(), PROFILE, "windows").unwrap_err(),
+        PendingMarker::arm(root.path(), PROFILE, "windows").expect_err("arm must refuse"),
         MarkerRefused::AppendPending
     );
     assert_eq!(fs::read_dir(root.marker_root()).expect("dir").count(), 1);

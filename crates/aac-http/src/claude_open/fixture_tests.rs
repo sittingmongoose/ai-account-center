@@ -361,9 +361,9 @@ async fn managed_open_copies_then_launches_with_progress() {
         "collect",
         vec![
             Ok(snapshot_json("mac", &[])),
-            Ok(snapshot_json("windows", &[source.clone()])),
-            Ok(snapshot_json("windows", &[source.clone()])),
-            Ok(snapshot_json("mac", &[source.clone()])),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
+            Ok(snapshot_json("mac", std::slice::from_ref(&source))),
         ],
     );
     remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
@@ -412,9 +412,9 @@ async fn managed_copy_alone_synchronizes_one_record() {
         "collect",
         vec![
             Ok(snapshot_json("mac", &[])),
-            Ok(snapshot_json("windows", &[source.clone()])),
-            Ok(snapshot_json("windows", &[source.clone()])),
-            Ok(snapshot_json("mac", &[source.clone()])),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
+            Ok(snapshot_json("mac", std::slice::from_ref(&source))),
         ],
     );
     remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
@@ -467,8 +467,8 @@ async fn lost_append_receipt_holds_open_as_blocked_uncertain() {
         "collect",
         vec![
             Ok(snapshot_json("mac", &[])),
-            Ok(snapshot_json("windows", &[source.clone()])),
-            Ok(snapshot_json("windows", &[source.clone()])),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
         ],
     );
     remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);
@@ -568,8 +568,8 @@ async fn policy_change_stops_the_copy_but_open_proceeds() {
         "collect",
         vec![
             Ok(snapshot_json("mac", &[])),
-            Ok(snapshot_json("windows", &[source.clone()])),
-            Ok(snapshot_json("windows", &[source.clone()])),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
+            Ok(snapshot_json("windows", std::slice::from_ref(&source))),
         ],
     );
     remote.queue_helper("verify-transcripts", vec![ok_bytes(json!({"verified": true}))]);

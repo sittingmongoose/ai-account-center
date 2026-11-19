@@ -119,10 +119,8 @@ fn read_launcher(value: &Value, windows: bool) -> Option<Launcher> {
             *slot = Some(read_text(value, 4096)?.to_string());
         }
     }
-    if windows {
-        if let Some(value) = map.get("startMenuPath") {
-            launcher.start_menu_path = Some(read_text(value, 4096)?.to_string());
-        }
+    if windows && let Some(value) = map.get("startMenuPath") {
+        launcher.start_menu_path = Some(read_text(value, 4096)?.to_string());
     }
     if let Some(value) = map.get("isDefault") {
         launcher.is_default = Some(value.as_bool()?);
@@ -480,7 +478,7 @@ pub fn is_default_data_folder(profile_path: Option<&str>) -> bool {
     };
     let trimmed = path.trim_end_matches(['\\', '/']);
     let last = trimmed.split(['\\', '/']).next_back().unwrap_or("");
-    last.to_ascii_lowercase() == "claude"
+    last.eq_ignore_ascii_case("claude")
 }
 
 /// `claudeWindowsLauncherAccountList`: the default Windows profile first, then every other

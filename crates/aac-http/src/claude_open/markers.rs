@@ -370,13 +370,12 @@ pub fn open_held_without_core(directory: &Path, profile_id: &str, platform: &str
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if let Some(tail) = name.strip_prefix(&prefix) {
-            if tail.len() == 37
-                && tail.ends_with(".json")
-                && tail[..32].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            {
-                return true;
-            }
+        if let Some(tail) = name.strip_prefix(&prefix)
+            && tail.len() == 37
+            && tail.ends_with(".json")
+            && tail[..32].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return true;
         }
     }
     false

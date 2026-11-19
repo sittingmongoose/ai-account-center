@@ -4,6 +4,9 @@
 //! progress store (`operations`), the manifest and pending reads (`manifest`), the private
 //! policy revalidation (`policy`) and the copy/retention wrapper (`sync_service`). The
 //! TypeScript path stays intact until the cut; every unproven input declines back to it.
+// The helper boundary's errors are opaque by design: no error detail may cross it, exactly
+// as the TS adapters throw untyped errors the core reduces to fixed reason tokens.
+#![allow(clippy::result_unit_err)]
 pub mod js;
 pub mod manifest;
 pub mod markers;

@@ -216,7 +216,7 @@ struct TableAdapters {
     state: Mutex<SequenceState>,
 }
 
-fn pick<'a>(list: &'a Value, index: usize) -> Option<&'a Value> {
+fn pick(list: &Value, index: usize) -> Option<&Value> {
     // The generator's pick repeats the last scripted entry past the list's end.
     list.as_array()
         .filter(|items| !items.is_empty())

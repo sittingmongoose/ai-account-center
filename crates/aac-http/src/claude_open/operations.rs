@@ -214,10 +214,10 @@ impl Operations {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         self.prune(&mut inner);
         let entry_key = key(scope, profile_id, platform);
-        if let Some((_, entry)) = inner.entries.iter().find(|(k, _)| *k == entry_key) {
-            if entry.finished_at.is_none() {
-                return entry.operation.clone();
-            }
+        if let Some((_, entry)) = inner.entries.iter().find(|(k, _)| *k == entry_key)
+            && entry.finished_at.is_none()
+        {
+            return entry.operation.clone();
         }
         let id = operation_id();
         let operation = Operation {
@@ -384,10 +384,10 @@ pub struct Observer {
 impl Observer {
     fn update(&self, patch: impl FnOnce(&mut Operation)) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, entry)) = inner.entries.iter_mut().find(|(k, _)| *k == self.key) {
-            if entry.finished_at.is_none() {
-                patch(&mut entry.operation);
-            }
+        if let Some((_, entry)) = inner.entries.iter_mut().find(|(k, _)| *k == self.key)
+            && entry.finished_at.is_none()
+        {
+            patch(&mut entry.operation);
         }
     }
 

@@ -128,9 +128,7 @@ pub fn load_policy(
     }
     // Rebind the launcher paths/hosts to the entry the authenticated Open selected.
     for (platform, expected) in [("mac", mac), ("windows", windows)] {
-        let Some(expected) = expected else {
-            return None;
-        };
+        let expected = expected?;
         let actual = entry.get(platform).filter(|value| value.is_object())?;
         if !launcher_field_matches(&actual["sshHost"], expected.ssh_host)
             || !launcher_field_matches(&actual["profilePath"], expected.profile_path)

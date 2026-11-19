@@ -114,7 +114,7 @@ fn is_object(value: &Value) -> bool {
     value.is_object()
 }
 
-fn text<'a>(value: &'a Value) -> Option<&'a str> {
+fn text(value: &Value) -> Option<&str> {
     value.as_str()
 }
 
@@ -389,10 +389,10 @@ pub fn neutral(source: &Value, source_platform: &str, target_platform: &str, pol
         json!({"sshHost": policy["ssh"][target_platform]["alias"]}),
     );
     descriptor.insert("sshRemoteTranscriptPath".into(), json!(reference));
-    if let Some(model) = text(&source["model"]) {
-        if model_shape(model) {
-            descriptor.insert("model".into(), json!(model));
-        }
+    if let Some(model) = text(&source["model"])
+        && model_shape(model)
+    {
+        descriptor.insert("model".into(), json!(model));
     }
     if matches!(
         text(&source["effort"]),
@@ -664,11 +664,10 @@ async fn run_sequence(
     if text(&policy["sourcePlatform"]) != Some(source_platform) {
         return Ok(skipped("history_policy_unverified"));
     }
-    if adapters
+    if !adapters
         .is_target_closed(profile_id, target_platform)
         .await
         .map_err(|_| reject("unavailable"))?
-        != true
     {
         return Ok(skipped("profile_already_open_or_unknown"));
     }
@@ -702,11 +701,10 @@ async fn run_sequence(
         out.extend(public_counts(&plan));
         return Ok(Value::Object(out));
     }
-    if adapters
+    if !adapters
         .verify_transcript_references(profile_id, source_platform, &plan.records)
         .await
         .map_err(|_| reject("unavailable"))?
-        != true
     {
         return Ok(skipped("transcript_metadata_unverified"));
     }
@@ -731,19 +729,17 @@ async fn run_sequence(
     while offset < total_count {
         let batch = &plan.records[offset..(offset + MICROBATCH_RECORDS).min(total_count)];
         // The core's guard(): closed state and protected baseline before every batch.
-        if adapters
+        if !adapters
             .is_target_closed(profile_id, target_platform)
             .await
             .map_err(|_| reject("unavailable"))?
-            != true
         {
             return Err(reject("target_opened"));
         }
-        if adapters
+        if !adapters
             .target_protected_state_unchanged(&batch_target)
             .await
             .map_err(|_| reject("unavailable"))?
-            != true
         {
             return Err(reject("target_state_changed"));
         }
