@@ -6,10 +6,7 @@
 //! Windows; the M0 fixture owner replaces it only in a `parity-fixtures` build.
 
 use super::{DashboardAccess, DashboardEvents, DashboardPrincipal, Reply};
-#[cfg(not(feature = "parity-fixtures"))]
-use crate::app_update_routes::LaneHJobs;
-use crate::app_update_routes::{BoundJobs, Operation};
-#[cfg(not(feature = "parity-fixtures"))]
+use crate::app_update_routes::{BoundJobs, LaneHJobs, Operation};
 use crate::app_updates::AppUpdates;
 use axum::{extract::Request, http::Method};
 use serde_json::{Map, Value};
@@ -30,14 +27,16 @@ impl Owner {
         events: DashboardEvents,
         agents: Arc<crate::agent_transport::Agents>,
     ) -> Self {
-        // A parity-fixtures build is the M0 recorder/fixture binary: it must never launch a real
-        // updater. The production features omit this arm entirely; no env can select it there.
+        // Only the M0 fixture uses canned jobs. The integration tests also use this binary
+        // with the real owner and a disabled provider transport.
         #[cfg(feature = "parity-fixtures")]
-        let jobs = {
-            let _ = (root, events, agents);
-            Arc::new(crate::app_update_routes::M0Jobs)
-        };
-        #[cfg(not(feature = "parity-fixtures"))]
+        if std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
+            return Self {
+                jobs: Arc::new(BoundJobs::new(Arc::new(crate::app_update_routes::M0Jobs))),
+                #[cfg(unix)]
+                host: None,
+            };
+        }
         let jobs = Arc::new(LaneHJobs(AppUpdates::with_events(
             root,
             agents,
