@@ -2543,6 +2543,7 @@ pub(crate) fn store_activity_answer(
     live: &LiveState,
     zone: Option<&intl::Zone>,
     pricing: &Pricing,
+    clock: Option<f64>,
 ) -> R<StoreAnswer> {
     let daily = to - from > HOURLY_RANGE_MS;
     let day_starts = if daily {
@@ -2569,11 +2570,14 @@ pub(crate) fn store_activity_answer(
             oldest = Some(oldest.map_or(ms, |min: f64| min.min(ms)));
         }
     }
-    // The store's last read stamps the answer; without one TS reads its own clock, which this
-    // request cannot prove equal, so the TS computation answers.
-    if last_read == 0.0 {
-        return Err(Decline::Stale);
-    }
+    // The store's last read stamps the answer; without one TS read its own clock. The native
+    // read passes the request clock (it is the only reader); the envelope path passes none,
+    // because it cannot prove its clock equal to the TS computation's.
+    let last_read = if last_read == 0.0 {
+        clock.ok_or(Decline::Stale)?
+    } else {
+        last_read
+    };
     let fetched_at = iso(last_read)?;
     let sources = range_to_sources(range, daily, &fetched_at, pricing)?;
     let status = if !sources.is_empty() {
@@ -2744,71 +2748,4 @@ pub(crate) fn activity_selection(query: &Object) -> R<bool> {
         .unwrap_or(false);
     let order = usage_provider_order();
     Ok(refresh || (account == "all" && (provider == "all" || order.contains(&provider))))
-}
-
-#[cfg(test)]
-pub(crate) fn debug_steps(range: &Value, sources_state: &Value, query: &Object) {
-    //! Temporary: print each store_activity_answer step's result.
-    let now = 1_795_046_400_000.0f64;
-    let from = now - 7.0 * HOURLY_RANGE_MS;
-    match local_day_starts(from, now, "UTC", None) {
-        Ok(starts) => eprintln!("day_starts {:?}", starts.len()),
-        Err(e) => eprintln!("day_starts Err({e:?})"),
-    }
-    match coverage_of(sources_state) {
-        Ok(v) => eprintln!("coverage {}", v),
-        Err(e) => eprintln!("coverage Err({e:?})"),
-    }
-    let pricing = match Pricing::decode(Some(&json!({}))) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("pricing Err({e:?})");
-            return;
-        }
-    };
-    let sources = match range_to_sources(range, true, "2026-11-19T00:00:00.000Z", &pricing) {
-        Ok(s) => {
-            eprintln!("sources {}", s.len());
-            s
-        }
-        Err(e) => {
-            eprintln!("sources Err({e:?})");
-            return;
-        }
-    };
-    let options = ProjectionOptions {
-        tz: "UTC",
-        zone: None,
-        pricing: &pricing,
-        sources: json!([]),
-        refreshing: false,
-        refreshing_remote: json!([]),
-    };
-    match project(&sources, query, from, now, "ok", "fixture", &options) {
-        Ok(v) => eprintln!(
-            "project keys {:?}",
-            v.as_object().map(|o| o.keys().collect::<Vec<_>>())
-        ),
-        Err(e) => eprintln!("project Err({e:?})"),
-    }
-    match session_counts(range) {
-        Ok(counts) => eprintln!("counts {}", counts.len()),
-        Err(e) => eprintln!("counts Err({e:?})"),
-    }
-    eprintln!(
-        "quality {}",
-        arr(Some(
-            obj(range)
-                .and_then(|r| r.get("quality"))
-                .unwrap_or(&Value::Null)
-        ))
-        .is_ok()
-    );
-    let sessions = obj(obj(range)
-        .and_then(|r| r.get("sessions"))
-        .unwrap_or(&Value::Null));
-    match sessions {
-        Ok(s) => eprintln!("sessions keys {:?}", s.keys().collect::<Vec<_>>()),
-        Err(e) => eprintln!("sessions Err({e:?})"),
-    }
 }

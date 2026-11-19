@@ -361,6 +361,7 @@ pub fn compose(envelope: Envelope, store: &mut dyn AnalyticsStore) -> R<Value> {
             oldest,
             quota_oldest,
             guard_coverage: input.get("guardCoverage").cloned(),
+            clock: None,
             provisional,
         },
         store,
@@ -423,6 +424,7 @@ pub fn compose_native(input: NativeInput, store: &mut dyn AnalyticsStore) -> R<V
             oldest,
             quota_oldest,
             guard_coverage: None,
+            clock: Some(now),
             provisional,
         },
         store,
@@ -469,6 +471,9 @@ struct Owned {
     quota_oldest: Option<u64>,
     /// The guarded selection's coverage the envelope carried; `None` reads it from the store.
     guard_coverage: Option<Value>,
+    /// The request clock, for an activity answer whose store has no read yet (the native read
+    /// is the only reader; the envelope path has none, as it cannot prove the clock equal).
+    clock: Option<f64>,
     provisional: Range,
 }
 
@@ -488,6 +493,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
         oldest,
         quota_oldest,
         guard_coverage,
+        clock,
         provisional,
     } = owned;
     let retained_from = oldest;
@@ -530,6 +536,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
                 &live,
                 zone.as_ref(),
                 &pricing,
+                clock,
             )?;
             let mut answered = answered;
             // Before this run's first pass the grid comes from the store's last reads.
@@ -582,6 +589,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
                         &live,
                         zone.as_ref(),
                         &pricing,
+                        clock,
                     )?;
                     (answered.oldest_hour_at, answered.providers_with_activity)
                 }
@@ -698,125 +706,4 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
     let map = composed.as_object_mut().ok_or(Decline::Shape)?;
     map.insert("activity".into(), activity_block);
     Ok(composed)
-}
-
-#[cfg(test)]
-mod probe {
-    //! Temporary: locate a native-input decline step by step.
-    use super::*;
-
-    struct Empty;
-    impl AnalyticsStore for Empty {
-        fn activity_oldest(&mut self) -> R<Option<u64>> {
-            Ok(Some((1_795_046_400_000i64 - 2 * 86_400_000) as u64))
-        }
-        fn quota_oldest(&mut self) -> R<Option<u64>> {
-            Ok(Some((1_795_046_400_000i64 - 3 * 86_400_000) as u64))
-        }
-        fn activity_range(&mut self, _q: Value) -> R<Value> {
-            Ok(json!({
-                "tools": [], "routes": [], "models": [], "rows": [],
-                "sessions": {"signatures": [], "total": 0, "truncated": false},
-                "quality": [],
-            }))
-        }
-        fn activity_sources(&mut self, _f: u64, _t: u64) -> R<Value> {
-            Ok(
-                json!({"computers": [{"computer": "ubuntu", "oldestMs": 1_795_046_400_000i64 - 2 * 86_400_000, "newestMs": 1_795_046_400_000i64, "lastReadMs": 1_795_046_400_000i64, "gaps": []}], "sources": []}),
-            )
-        }
-        fn history_records(&mut self, _q: Value) -> R<Value> {
-            Ok(json!([]))
-        }
-    }
-
-    #[test]
-    fn steps() {
-        let now = 1_795_046_400_000.0f64;
-        let mut query = Object::new();
-        query.insert("platform".into(), json!("mac"));
-        query.insert("range".into(), json!("7d"));
-        query.insert("provider".into(), json!("all"));
-        query.insert("account".into(), json!("all"));
-        query.insert("tz".into(), json!("UTC"));
-        let table: Vec<Value> = aac_providers::analytics_provider_table()
-            .into_iter()
-            .map(|(id, label, order)| json!({"id": id, "label": label, "order": order}))
-            .collect();
-        let mut store = Empty;
-        let (oldest, quota) = bounds(&mut store, now);
-        let provisional = resolve_range(&query, now, oldest, Some(oldest), "UTC", None);
-        eprintln!("range {provisional:?}");
-        eprintln!(
-            "presentation {:?}",
-            presentation(
-                &[],
-                &table,
-                &[now, now - 7.0 * DAY_MS, now, now - 3.0 * DAY_MS]
-            )
-            .as_ref()
-            .map(|_| "ok")
-            .map_err(|e| format!("{e:?}"))
-        );
-        let live = LiveState {
-            tz: "UTC".into(),
-            sources: json!([]),
-            refreshing: false,
-            refreshing_remote: json!([]),
-        };
-        let pricing = Pricing::decode(Some(&json!({}))).expect("pricing");
-        let range = store.activity_range(json!({})).expect("range");
-        let sources = store.activity_sources(0, 0).expect("sources");
-        eprintln!(
-            "activity {:?}",
-            activity::store_activity_answer(
-                &range,
-                &sources,
-                &query,
-                now - 7.0 * DAY_MS,
-                now,
-                &live,
-                None,
-                &pricing
-            )
-            .as_ref()
-            .map(|a| a.activity.as_object().map(|o| o.keys().collect::<Vec<_>>()))
-            .map_err(|e| *e)
-        );
-        eprintln!(
-            "records {:?}",
-            record_entries(&json!([])).map(|r| r.len()).map_err(|e| e)
-        );
-        let owned = Owned {
-            query: query.clone(),
-            now,
-            tz: "UTC".into(),
-            available: true,
-            live: LiveState {
-                tz: "UTC".into(),
-                sources: json!([]),
-                refreshing: false,
-                refreshing_remote: json!([]),
-            },
-            zone: None,
-            pricing: Pricing::decode(Some(&json!({}))).expect("pricing"),
-            table: table.clone(),
-            dashboard: json!({"accounts": [], "providers": [], "settings": {}})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            oldest,
-            quota_oldest: quota,
-            guard_coverage: None,
-            provisional: provisional.expect("range"),
-        };
-        let result = answer(owned, &mut store);
-        eprintln!(
-            "answer {:?}",
-            result
-                .as_ref()
-                .map(|value| value.as_object().map(|o| o.keys().collect::<Vec<_>>()))
-                .map_err(|e| *e)
-        );
-    }
 }
