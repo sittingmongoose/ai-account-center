@@ -6,6 +6,8 @@ mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
 #[cfg(unix)]
+pub mod app_update_routes;
+#[cfg(unix)]
 mod feed;
 #[cfg(unix)]
 mod home_fed;
@@ -40,4 +42,4 @@ mod visibility_write;
 #[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, short_name};
+pub use unix::{Boot, serve, serve_with_app_update_jobs, short_name};

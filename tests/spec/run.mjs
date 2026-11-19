@@ -38,6 +38,13 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  [
+    'bun',
+    [
+      'tests/spec/app-update-http-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? ['--rust-unbound'] : []),
+    ],
+  ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   ...[
     'read-view-parity',

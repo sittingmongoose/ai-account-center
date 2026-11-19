@@ -9,7 +9,7 @@
   "src/web-server/routes/account-visibility-routes.ts": "c68d9632d3e35e7eb835f78a41b705c908361753f8b3ec86625ad070d4aee65d",
   "src/web-server/routes/antigravity-routes.ts": "3b696b684328d4b46a4fe4a72b104cbee92bef6ee4e4468d0739c5d26fcc1fb0",
   "src/web-server/routes/api-router.ts": "08bb29961362f1411ff4050741093278341500866c39d736a26c1e30b4d1763c",
-  "src/web-server/routes/app-update-routes.ts": "29992da3998ab5f2ec8eaf262f807b31f3a90ad4aa5074dfb34fb41529d03599",
+  "src/web-server/routes/app-update-routes.ts": "45a0869d51d172b88471f2c8372213c09d8ebef7313db3213a5e56c4d54d3d36",
   "src/web-server/routes/auth-device-routes.ts": "64b8ee8ca35ad8f53e2bed618b8220c97fbe964941662958debf529a3e0d1f03",
   "src/web-server/routes/auth-lifetime-routes.ts": "88693e6e406c9458657d6fcd95b20366661b42820bf93d3ec8e2e232b2a0f685",
   "src/web-server/routes/auth-network-routes.ts": "4ffea36751b0d8512c7d05501c8b38cd9504c8ab4fe897037681a57f4b677e69",
@@ -31,9 +31,9 @@
   "src/web-server/routes/store-routes.ts": "b7f7b45814d7b252a4fb1204eda744cc1c2b231b285ea07c8b4c2c337b18ba20",
   "src/web-server/rust-service-health.ts": "05a67c876dea55b6f9a17e9d9132d9b954f02ec748a3334ce42798a030d21c39",
   "src/web-server/rust-service-lifecycle.ts": "d60cc409499852a0047f7a88eb0a53e96f1d637405ebecf2215b2540b467ebae",
-  "src/web-server/rust-service-routes.json": "adf5367b0e22d6db607544edf02e4921bcc6f2c6d2bea834eddb2389d82589e9",
+  "src/web-server/rust-service-routes.json": "7c9e912c51e19ae664ab55f3eda14d4e45fb2f8492832a9403a71f58db08b0bd",
   "src/web-server/rust-service-supervisor.ts": "6b4e54a616bc6f4980fb22a9cc44c1ac5c6e3074d41f77e30965fff34252f866",
   "src/web-server/rust-service-transport.ts": "857dfccfcdf63dbfa67996310bd9f1f9730c687592deb9be3acefd60f33d93f0",
-  "src/web-server/rust-service.ts": "16bbbdf9f59db2f0b0e694f97ef9fc6a768ccf8203f99d951dec033a2f425b24",
+  "src/web-server/rust-service.ts": "9aa1ca587f0ee224f9bec3f7b6e5d99cf612bb6e7f606f99fb25a86efff58980",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
 }

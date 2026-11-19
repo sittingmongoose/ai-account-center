@@ -6,10 +6,10 @@
  */
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 
-export type RustGroup = 'home' | 'status' | 'writes';
+export type RustGroup = 'home' | 'status' | 'writes' | 'app-updates';
 
 export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {
-  let value: unknown = env[`AAC_RUST_GROUP_${group.toUpperCase()}`];
+  let value: unknown = env[`AAC_RUST_GROUP_${group.toUpperCase().replace(/-/g, '_')}`];
   if (value === undefined) {
     try {
       const groups = (loadUnifiedConfig()?.rustService as { groups?: unknown } | undefined)?.groups;

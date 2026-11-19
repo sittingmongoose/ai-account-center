@@ -1,4 +1,5 @@
 use crate::{
+    app_update_routes::{AppUpdateJobs, Operation as AppUpdateOperation},
     feed::Feeds,
     identity::{self, Identity},
     limits::Limits,
@@ -73,6 +74,7 @@ struct Shared {
     identity: Identity,
     feeds: Feeds,
     approvals: crate::account_approvals::Approvals,
+    app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
@@ -308,6 +310,44 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
+        Handler::AppUpdates => {
+            let Some(operation) = AppUpdateOperation::from_route(&row.method, &row.path) else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            if !matches!(operation, AppUpdateOperation::Status) {
+                let query = req.uri().query().is_some_and(|query| !query.is_empty());
+                let body = to_bytes(req.into_body(), 1024).await;
+                if query || !body.is_ok_and(|body| {
+                    crate::json_object::from_slice::<serde_json::Map<String, serde_json::Value>>(
+                        &body,
+                        &[],
+                    )
+                    .is_ok()
+                }) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "Provide an empty JSON object."})),
+                    )
+                        .into_response();
+                }
+            }
+            let Some(jobs) = shared.app_update_jobs.clone() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-aac-decline", "unsupported")],
+                    Json(json!({"error": "App update jobs are unbound"})),
+                )
+                    .into_response();
+            };
+            match shared
+                .limits
+                .blocking(row.pool, move || Ok(operation.invoke(jobs.as_ref())))
+                .await
+            {
+                Ok(response) => response,
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         Handler::Approvals => {
             if req.uri().query().is_some() {
                 return decline(row.handler, Decline::Shape);
@@ -706,6 +746,23 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
+    serve_inner(boot, shutdown, None).await
+}
+
+/// Serve the private routes with an app-update job owner supplied by the service binary.
+pub async fn serve_with_app_update_jobs(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    jobs: Arc<dyn AppUpdateJobs>,
+) -> io::Result<()> {
+    serve_inner(boot, shutdown, Some(jobs)).await
+}
+
+async fn serve_inner(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
+) -> io::Result<()> {
     boot.validate()?;
     let rows = crate::table::rows(crate::table::ROUTES)?;
     let identity = Identity::current()?;
@@ -733,6 +790,7 @@ pub async fn serve(
         identity,
         feeds: Feeds::new(),
         approvals: crate::account_approvals::Approvals::default(),
+        app_update_jobs,
         agents,
         store: store.clone(),
     }));

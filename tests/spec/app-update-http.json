@@ -1,0 +1,99 @@
+{
+  "job": {
+    "id": "fixture-job",
+    "state": "running",
+    "cancelRequested": false
+  },
+  "cases": [
+    {
+      "op": "status",
+      "outcome": "idle",
+      "http": 200,
+      "body": {
+        "job": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": "running",
+      "http": 200,
+      "body": {
+        "job": {
+          "id": "fixture-job",
+          "state": "running",
+          "cancelRequested": false
+        }
+      }
+    },
+    {
+      "op": "start",
+      "outcome": "running",
+      "http": 202,
+      "body": {
+        "job": {
+          "id": "fixture-job",
+          "state": "running",
+          "cancelRequested": false
+        }
+      }
+    },
+    {
+      "op": "start",
+      "outcome": "busy",
+      "http": 409,
+      "body": {
+        "error": "An app update is already running.",
+        "job": {
+          "id": "fixture-job",
+          "state": "running",
+          "cancelRequested": false
+        }
+      }
+    },
+    {
+      "op": "start",
+      "outcome": "failed",
+      "http": 500,
+      "body": {
+        "error": "App updates could not start safely."
+      }
+    },
+    {
+      "op": "cancel",
+      "outcome": "idle",
+      "http": 200,
+      "body": {
+        "job": null,
+        "cancelling": false
+      }
+    },
+    {
+      "op": "cancel",
+      "outcome": "not_owner",
+      "http": 409,
+      "body": {
+        "error": "This update is run by another dashboard process, so it cannot be cancelled here.",
+        "code": "not_owner",
+        "job": {
+          "id": "fixture-job",
+          "state": "running",
+          "cancelRequested": false
+        },
+        "cancelling": false
+      }
+    },
+    {
+      "op": "cancel",
+      "outcome": "cancelling",
+      "http": 202,
+      "body": {
+        "job": {
+          "id": "fixture-job",
+          "state": "running",
+          "cancelRequested": true
+        },
+        "cancelling": true
+      }
+    }
+  ]
+}

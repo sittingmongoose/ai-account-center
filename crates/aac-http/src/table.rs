@@ -30,6 +30,7 @@ pub(crate) enum Handler {
     Agent,
     AgentControl,
     Approvals,
+    AppUpdates,
     Store,
 }
 
@@ -54,6 +55,7 @@ impl Handler {
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "account-approvals" => Handler::Approvals,
+            "app-updates" => Handler::AppUpdates,
             "store" => Handler::Store,
             _ => return None,
         })
@@ -209,7 +211,11 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (method == axum::http::Method::POST
                 && !matches!(
                     handler,
-                    Handler::Agent | Handler::AgentControl | Handler::Approvals | Handler::Store
+                    Handler::Agent
+                        | Handler::AgentControl
+                        | Handler::AppUpdates
+                        | Handler::Approvals
+                        | Handler::Store
                 ))
             || (method == axum::http::Method::PUT
                 && !matches!(
@@ -224,6 +230,11 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         row.path.as_str(),
                         "/api/accounts/settings" | "/api/accounts/analytics/capture"
                     )))
+            || (handler == Handler::AppUpdates
+                && (row.group != "app-updates"
+                    || roles != [Role::Admin]
+                    || crate::app_update_routes::Operation::from_route(&method, &row.path)
+                        .is_none()))
             || (handler == Handler::Approvals
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/account-confirmations"))

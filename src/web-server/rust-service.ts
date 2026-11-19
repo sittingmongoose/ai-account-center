@@ -9,6 +9,7 @@ import {
   type ConfirmationBinding,
 } from './services/account-confirmations';
 import routes from './rust-service-routes.json';
+import { rustGroupOn } from './rust-service-groups';
 import { tsWritesRow } from '../shared/private-files';
 import { getCcsDir } from '../utils/config-manager';
 import type { RustLease } from './rust-service-lifecycle';
@@ -44,6 +45,9 @@ function routeRoles(route: string): readonly string[] {
 const now = () => performance.now();
 
 export class RustService extends RustSupervisor {
+  private readonly appUpdatesOn =
+    this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('app-updates');
+
   /**
    * The shared forwarding gate of every read method: an owned GET/HEAD route, a running service,
    * a verified principal the table admits, a closed breaker and a free in-flight slot. Anything
@@ -472,6 +476,63 @@ export class RustService extends RustSupervisor {
     this.record(route, { kind: 'served' });
     this.pair(route, null, now() - started);
     return result.body;
+  }
+
+  /** Called after the dashboard guards. The unbound reply proves no job operation ran.
+   * A lost or malformed reply might follow a started or cancelled job. */
+  async appUpdate(
+    req: Request,
+    operation: 'status' | 'start' | 'cancel'
+  ): Promise<{ status: number; body: unknown } | null> {
+    if (!this.appUpdatesOn) return null;
+    const route = '/api/app-updates/' + operation;
+    const method = operation === 'status' ? 'GET' : 'POST';
+    const registered = routes.some(
+      (row) => row.path === route && row.method === method && row.handler === 'app-updates'
+    );
+    const verified = principal(req, route);
+    if (
+      !registered ||
+      !verified ||
+      verified.role !== 'admin' ||
+      this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir()) ||
+      this.inFlight >= IN_FLIGHT
+    )
+      throw new Error('Rust app update jobs unavailable');
+    let reply: RustReply;
+    try {
+      reply = await this.forward(
+        route,
+        verified,
+        method === 'POST' ? {} : undefined,
+        '',
+        undefined,
+        method
+      );
+    } catch (error) {
+      this.failed(route, error);
+      throw error;
+    }
+    if (
+      reply.status === 503 &&
+      reply.decline === 'unsupported' &&
+      reply.bytes.toString('utf8') === '{"error":"App update jobs are unbound"}'
+    ) {
+      this.declined(route, reply);
+      return null;
+    }
+    const statusCodes =
+      operation === 'status' ? [200] : operation === 'start' ? [202, 409, 500] : [200, 202, 409];
+    if (
+      !statusCodes.includes(reply.status) ||
+      !reply.body ||
+      typeof reply.body !== 'object' ||
+      Array.isArray(reply.body)
+    )
+      throw new Error('Rust app update reply refused');
+    this.stats.served++;
+    this.record(route, { kind: 'served' });
+    return { status: reply.status, body: reply.body };
   }
 
   /** The lifecycle router calls this after its session, origin and body guards. */
