@@ -40,6 +40,18 @@ def restart_environment(context):
     return strip_dashboard_secrets(values)
 
 
+# What an SSH login sets. Update all reaches the Mac over SSH, so a captured CLI context can
+# carry them; the Terminal child execs the CLI with exactly the brokered environment, and the
+# Antigravity CLI (and others) then takes a local GUI terminal for a remote session (2026-11-19).
+# Same names as app_update_common.SSH_SESSION_ENV, which strips them from `open` itself.
+MAC_TERMINAL_DROPPED_ENV = ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK", "SSH_ORIGINAL_COMMAND")
+
+
+def mac_terminal_environment(context):
+    """restart_environment for a CLI reopened in the Mac's own Terminal: without the SSH session."""
+    return {key: value for key, value in restart_environment(context).items() if key.upper() not in MAC_TERMINAL_DROPPED_ENV}
+
+
 def check_terminal(platform, contexts):
     if not contexts:
         return
@@ -73,7 +85,8 @@ def _broker_terminal(install, context, args):
         endpoint.chmod(0o600)
         server.listen(1)
         server.settimeout(25)
-    packet = {"argv": [str(install.path), *args], "cwd": context.cwd, "env": restart_environment(context)}
+    environment = mac_terminal_environment(context) if install.platform == "mac" else restart_environment(context)
+    packet = {"argv": [str(install.path), *args], "cwd": context.cwd, "env": environment}
     complete, failures = threading.Event(), []
     def serve():
         try:
