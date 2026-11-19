@@ -635,7 +635,7 @@ fn answer(owned: Owned, store: &mut dyn AnalyticsStore) -> R<Value> {
 
     // The quota history, read here for the final range (90 days of it, thinned to the buckets).
     let quota_from = analytics::js_max(range.from, now - STORE_RETENTION_MS);
-    let bucket_ms = range.bucket_minutes * 60_000.0;
+    let bucket_ms = ms_u64(range.bucket_minutes * 60_000.0)?;
     let history_query = json!({
         "fromMs": ms_u64(analytics::js_max(0.0, quota_from.floor()))?,
         "toMs": ms_u64(analytics::js_max(0.0, range.to.ceil()))?,
