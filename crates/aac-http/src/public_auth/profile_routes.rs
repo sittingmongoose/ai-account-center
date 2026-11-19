@@ -127,7 +127,8 @@ impl Profiles {
     /// How many times this owner asked the private-service host (tests only).
     #[cfg(all(test, unix))]
     pub(super) fn host_requests(&self) -> usize {
-        self.host_requests.load(std::sync::atomic::Ordering::Relaxed)
+        self.host_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Ask the one owner host; `None` is no owner or an explicit service decline (answer the
@@ -485,10 +486,11 @@ impl Profiles {
         let root = self.root.clone();
         let now = super::now();
         let rows = quota_rows_for(&self.quota_rows, Arc::clone(&self.rows), now).await;
-        let value = tokio::task::spawn_blocking(move || crate::codex_quotas::answer(&root, rows, now))
-            .await
-            .ok()
-            .flatten();
+        let value =
+            tokio::task::spawn_blocking(move || crate::codex_quotas::answer(&root, rows, now))
+                .await
+                .ok()
+                .flatten();
         match value {
             Some(value) => super::response(200, value),
             None => super::plain(500, "Codex profile usage could not be read safely."),
