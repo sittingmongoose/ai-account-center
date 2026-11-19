@@ -66,6 +66,10 @@ export const MESSAGES = {
     'The official ZCode release could not be checked; no update was attempted. Try Update apps again.',
   model_catalog_unrefreshed:
     'Muse did not refresh its model catalog; the new models are not registered yet. Check Muse sign-in on this computer, then run Update apps again.',
+  muse_quota_exhausted:
+    'Updated Muse. Its quota is used up, so the new models appear after its next session.',
+  muse_quota_current:
+    'Muse is current. Its quota is used up, so the new models appear after its next session.',
   mac_keychain_locked:
     'The app could not access the login Keychain even in the Mac GUI session. Unlock the login Keychain or approve its access on the Mac, then run Update apps again.',
   mac_gui_unavailable:

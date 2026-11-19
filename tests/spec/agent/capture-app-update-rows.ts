@@ -28,6 +28,21 @@ const cases: [UpdatePlatform, UpdateAppId, Record<string, unknown>][] = [
   ['nas1', 'omp', { status:'unknown', messageCode:'host_timeout' }],
   ['ubuntu', 'antigravity-acp', { status:'action_required', messageCode:'antigravity_acp_signin_hold', heldVersion:'1.5.3' }],
   ['alexis', 'claude-code', { status:'updated', messageCode:'unlisted', version:'2.4.1', manager:'native' }],
+  ['ubuntu', 'muse-code', {
+    status: 'updated', messageCode: 'muse_quota_exhausted', previousVersion: '1.4.2',
+    version: '1.5.0', manager: 'native', updateAttempted: true, quotaReset: '2026-11-20 05:00 UTC',
+  }],
+  ['mac', 'muse-code', {
+    status: 'current', messageCode: 'muse_quota_current', previousVersion: '1.4.2',
+    version: '1.4.2', manager: 'native', updateAttempted: true, quotaReset: '2026-11-20 05:00 UTC',
+  }],
+  ['windows', 'muse-code', {
+    status: 'updated', messageCode: 'muse_quota_exhausted', version: '1.5.0', manager: 'native',
+  }],
+  ['nas1', 'muse-code', {
+    status: 'updated', messageCode: 'muse_quota_exhausted', version: '1.5.0', manager: 'native',
+    quotaReset: '5 pm\nquota',
+  }],
 ];
 const golden = cases.map(([host, app, facts]) => {
   const row = { appId:app, platform:host === 'nas1' ? 'ubuntu' : host === 'alexis' ? 'windows' : host, ...facts };

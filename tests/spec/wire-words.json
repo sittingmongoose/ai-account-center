@@ -2206,6 +2206,14 @@
     ]
   },
   {
+    "word": "muse_quota_exhausted",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_updates.py:UpdateFailure",
+      "scripts/app-updates/app_updates.py:error.code"
+    ]
+  },
+  {
     "word": "native",
     "cause": null,
     "sources": [

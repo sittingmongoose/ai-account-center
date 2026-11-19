@@ -368,5 +368,118 @@
       "forcedStops": 0,
       "restartTargets": []
     }
+  },
+  {
+    "host": "ubuntu",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "muse_quota_exhausted",
+      "previousVersion": "1.4.2",
+      "version": "1.5.0",
+      "manager": "native",
+      "updateAttempted": true,
+      "quotaReset": "2026-11-20 05:00 UTC"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "previousVersion": "1.4.2",
+      "version": "1.5.0",
+      "manager": "native",
+      "message": "Updated Muse. Its quota is used up until 2026-11-20 05:00 UTC, so the new models appear after its next session.",
+      "updateAttempted": true,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "quotaReset": "2026-11-20 05:00 UTC",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "mac",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "mac",
+      "status": "current",
+      "messageCode": "muse_quota_current",
+      "previousVersion": "1.4.2",
+      "version": "1.4.2",
+      "manager": "native",
+      "updateAttempted": true,
+      "quotaReset": "2026-11-20 05:00 UTC"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "mac",
+      "status": "current",
+      "previousVersion": "1.4.2",
+      "version": "1.4.2",
+      "manager": "native",
+      "message": "Muse is current. Its quota is used up until 2026-11-20 05:00 UTC, so the new models appear after its next session.",
+      "updateAttempted": true,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "quotaReset": "2026-11-20 05:00 UTC",
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "windows",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "windows",
+      "status": "updated",
+      "messageCode": "muse_quota_exhausted",
+      "version": "1.5.0",
+      "manager": "native"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "windows",
+      "status": "updated",
+      "previousVersion": null,
+      "version": "1.5.0",
+      "manager": "native",
+      "message": "Updated Muse. Its quota is used up, so the new models appear after its next session.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
+  },
+  {
+    "host": "nas1",
+    "app": "muse-code",
+    "row": {
+      "appId": "muse-code",
+      "platform": "ubuntu",
+      "status": "updated",
+      "messageCode": "muse_quota_exhausted",
+      "version": "1.5.0",
+      "manager": "native",
+      "quotaReset": "5 pm\nquota"
+    },
+    "expected": {
+      "appId": "muse-code",
+      "appLabel": "Muse Code",
+      "platform": "nas1",
+      "status": "failed",
+      "previousVersion": null,
+      "version": null,
+      "manager": null,
+      "message": "The update helper returned an unsupported result.",
+      "updateAttempted": false,
+      "restartedProcesses": 0,
+      "forcedStops": 0,
+      "restartTargets": []
+    }
   }
 ]

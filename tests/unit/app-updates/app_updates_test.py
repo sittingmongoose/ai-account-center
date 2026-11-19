@@ -1040,6 +1040,59 @@ class MuseCatalogWarmTests(unittest.TestCase):
         run.assert_called_once()
         self.assertEqual((value['status'], value['messageCode']), ('restart_failed', 'model_catalog_unrefreshed'))
 
+    def test_changed_update_with_quota_exhausted_warm_stays_updated(self):
+        # Muse's used-up subscription quota (HTTP 429 underneath) is not a broken
+        # install: the binary moved and its sessions restarted, so the row stays
+        # updated and passes on the reset time Muse itself printed.
+        value, run = self._update(self.refreshed, common.UpdateFailure(output=(
+            'Error: Subscription quota exhausted. '
+            'Your usage window resets at 2026-11-20 05:00 UTC\n')))
+        run.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
+                         ('updated', 'muse_quota_exhausted', '1.5.0', True))
+        self.assertEqual(value.get('quotaReset'), '2026-11-20 05:00 UTC')
+
+    def test_changed_update_with_quota_exhausted_and_no_reset_time(self):
+        # Muse printed no reset time: the row still says updated with the quota
+        # note, and no reset time is invented.
+        value, run = self._update(self.refreshed, common.UpdateFailure(output=(
+            'Error: Subscription quota exhausted.\n')))
+        run.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode']), ('updated', 'muse_quota_exhausted'))
+        self.assertNotIn('quotaReset', value)
+
+    def test_changed_update_with_signin_warm_failure_keeps_catalog_words(self):
+        # Regression guard: only the quota answer is excused; a real sign-in
+        # failure keeps the honest catalog row that asks to check the sign-in.
+        value, run = self._update(self.refreshed, common.UpdateFailure(output=(
+            'Error: not signed in. Run muse login to continue. (HTTP 401)\n')))
+        run.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode']), ('restart_failed', 'model_catalog_unrefreshed'))
+        self.assertNotIn('quotaReset', value)
+
+    def test_heal_path_quota_exhausted_stays_current(self):
+        # The next Update all click after a quota-marked update takes the heal
+        # path; a still-exhausted quota must not fail that job either. The
+        # version never changed, so the row stays current, never "updated".
+        self._warmed()  # stale: written before the install start
+        value, run = self._update(self.install, common.UpdateFailure(output=(
+            'Error: Subscription quota exhausted. '
+            'Your usage window resets at 2026-11-20 05:00 UTC\n')))
+        run.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode']), ('current', 'muse_quota_current'))
+        self.assertEqual(value.get('quotaReset'), '2026-11-20 05:00 UTC')
+
+    def test_quota_classification_reads_only_muses_own_words(self):
+        quota = 'Subscription quota exhausted. Your usage window resets at 2026-11-20 05:00 UTC'
+        self.assertEqual(updater.muse_quota_reset(quota), (True, '2026-11-20 05:00 UTC'))
+        self.assertEqual(updater.muse_quota_reset('Subscription quota exhausted.'), (True, None))
+        self.assertEqual(updater.muse_quota_reset('Error: not signed in (HTTP 401)'), (False, None))
+        self.assertEqual(updater.muse_quota_reset(''), (False, None))
+        # A reset time too long to pass on verbatim is dropped, never truncated
+        # into a time Muse did not print.
+        lengthy = 'Subscription quota exhausted. Your usage window resets at ' + 'x' * 80
+        self.assertEqual(updater.muse_quota_reset(lengthy), (True, None))
+
     def test_current_with_fresh_catalog_skips_the_warm(self):
         value, run = self._update(self.install, lambda argv, **kwargs: self.fail('warm must not run'),
                                    lambda item, deadline=None: self._warmed())
