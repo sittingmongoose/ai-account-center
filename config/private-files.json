@@ -31,6 +31,7 @@
     { "id": "analytics-capture", "root": "ccs", "path": "analytics-capture.json", "class": "setting", "maxBytes": 4096, "mode": "0600", "owner": "ts", "agent": false, "movesWith": "writes", "parents": "private", "lease": "file" },
     { "id": "status-answer-log", "root": "ccs", "path": "status/answers.jsonl", "class": "history", "maxBytes": 524288, "mode": "0600", "owner": "ts", "agent": false, "movesWith": "writes", "parents": "private", "lease": "file" },
     { "id": "reset-claims", "root": "ccs", "path": "account-usage/reset-claims/claims.sqlite", "class": "state", "maxBytes": 67108864, "mode": "0600", "owner": "ts", "agent": false, "movesWith": "writes", "parents": "private", "lease": "file" },
-    { "id": "readers-check", "root": "share", "path": "v1/readers/aac/*.json", "class": "state", "maxBytes": 1048576, "mode": "0644", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" }
+    { "id": "readers-check", "root": "share", "path": "v1/readers/aac/*.json", "class": "state", "maxBytes": 1048576, "mode": "0644", "owner": "ts", "agent": false, "movesWith": "status", "parents": "private", "lease": "file" },
+    { "id": "catalog-seed", "root": "share", "path": "v1/catalog/*.json", "class": "state", "maxBytes": 262144, "mode": "0644", "owner": "ts", "agent": false, "movesWith": "scoreboard", "parents": "private", "lease": "file" }
   ]
 }

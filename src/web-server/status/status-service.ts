@@ -12,6 +12,12 @@
  * A change reaches `/ws` clients as `{ type: 'status-changed' }`, at most one every 5 seconds.
  */
 import { broadcastDashboardEvent } from '../dashboard-events';
+import { rustOwnedStatusOn } from '../rust-service-groups';
+import { onRustServiceEvent } from '../rust-service-events';
+import type { RustService } from '../rust-service';
+import type { AgentReportsState } from './agent-reports-reader';
+import type { QuotaReportState } from './quota-report';
+import { getCcsDir } from '../../utils/config-manager';
 import {
   getAacStore,
   storeErrorCode,
@@ -194,6 +200,19 @@ export class StatusService {
     StatusInputs['reports']['threads'][number],
     StatusInputs['reports']['threads'][number]
   >();
+  /** R4: the service reads the share itself; this side forwards its snapshots. */
+  private readonly owned: boolean;
+  private ownedInputs: {
+    generation: number;
+    reports: AgentReportsState;
+    quota: QuotaReportState;
+    registry: Collected<RegistryThread[]>;
+    docs: StatusDocsState;
+  } | null = null;
+  private ownedFallenBack = false;
+  private ownedFailures = 0;
+  private removeOwnedEvents: (() => void) | null = null;
+  private readonly fallbackTimers: Array<ReturnType<typeof setInterval>> = [];
 
   constructor(private readonly deps: StatusServiceDeps = {}) {
     this.reader = deps.reader ?? new AgentReportsReader();
@@ -233,6 +252,7 @@ export class StatusService {
       const opened = openStatusHandle();
       this.spendNative = 'unavailable' in opened ? null : opened;
     }
+    this.owned = rustOwnedStatusOn();
   }
 
   private now(): number {
@@ -396,13 +416,13 @@ export class StatusService {
   private async composeSpendByStream(): Promise<void> {
     if (!this.spendNative) return;
     const now = this.now();
-    const reports = this.reader.snapshot();
+    const reports = this.ownedReports();
     const panel = await composeSpendByStream(
       {
         nowMs: now,
         utcOffsetMinutes: zoneOffsetMinutes(this.timeZone(), now),
         accountOrder: this.usage ? this.usage.accounts.map((account) => account.id) : [],
-        spend: buildSpend(this.quotaReader.snapshot(), streamLabelsOf(reports)),
+        spend: buildSpend(this.ownedQuota(), streamLabelsOf(reports)),
       },
       { handle: this.spendNative }
     );
@@ -643,9 +663,31 @@ export class StatusService {
       await this.pinned.collect();
       await this.scanningReports;
       await this.publishStatus();
+      this.pushOwnedPins();
     } catch {
       /* The panel keeps its last good pins and its last composed view. */
     }
+  }
+
+  /**
+   * R4: the merged pins the service's readers-check writer matches reports against (the
+   * pinned collector stays here until `t3-pins` runs through the agent transport). Pushed
+   * as the `owned-pins` feed source; the service reads the latest at its check flush.
+   */
+  private pushOwnedPins(): void {
+    if (!this.owned || this.ownedFallenBack) return;
+    const service = rustServiceForStatus;
+    const boot = service?.feedBoot(getCcsDir());
+    if (!service || !boot) return;
+    const pins = this.pinned.pins().map((pin) => ({ id: pin.id, title: pin.title }));
+    lastPinsGeneration = Math.max(lastPinsGeneration + 1, Date.now() * 1000);
+    void service.pushFeed(
+      boot,
+      'owned-pins',
+      String(lastPinsGeneration),
+      JSON.stringify(pins),
+      'null'
+    );
   }
 
   private wanted(): boolean {
@@ -709,7 +751,10 @@ export class StatusService {
       now,
       timeZone: this.timeZone(),
       reports: { ...reports, threads },
-      registry: this.registry,
+      registry:
+        this.owned && !this.ownedFallenBack && this.ownedInputs
+          ? this.ownedInputs.registry
+          : this.registry,
       machines: this.machines,
       browsers: this.browsers,
       simlock: this.simlock,
@@ -718,7 +763,7 @@ export class StatusService {
       sends,
       answerHistoryProblem,
       hiddenThreadNames: [DOORBELL_SENDER],
-      quota: this.quotaReader.snapshot(),
+      quota: this.ownedQuota(),
       pinned: view.pinned,
       spendByStream: this.spendByStream,
     };
@@ -726,6 +771,98 @@ export class StatusService {
 
   view(): StatusView {
     return buildStatusView(this.readInputs());
+  }
+
+  /** The reports snapshot the view reads: the service's owned scan, or this side's reader. */
+  private ownedReports(): AgentReportsState {
+    return this.owned && !this.ownedFallenBack && this.ownedInputs
+      ? this.ownedInputs.reports
+      : this.reader.snapshot();
+  }
+
+  private ownedQuota(): QuotaReportState {
+    return this.owned && !this.ownedFallenBack && this.ownedInputs
+      ? this.ownedInputs.quota
+      : this.quotaReader.snapshot();
+  }
+
+  /**
+   * R4: fetch the service's owned snapshots when its generation moves (the timer and the
+   * `status-changed` event both call this; overlapping calls share nothing — the fetch is
+   * cheap and the generation check drops stale answers). Three failed fetches in a row mean
+   * the service is down past its restart budget: this side restarts its own share readers.
+   */
+  private async ownedRefresh(): Promise<void> {
+    const service = rustServiceForStatus;
+    if (!this.owned || this.ownedFallenBack || !service) return;
+    const answer = (await service.internalJson('/internal/status/inputs')) as {
+      generation?: unknown;
+      reports?: AgentReportsState & { boards?: Record<string, number | null> };
+      quota?: QuotaReportState;
+      registry?: Collected<RegistryThread[]>;
+      docs?: StatusDocsState;
+    } | null;
+    if (
+      !answer ||
+      typeof answer.generation !== 'number' ||
+      !answer.reports ||
+      !answer.quota ||
+      !answer.registry ||
+      !answer.docs
+    ) {
+      this.ownedFailures += 1;
+      if (this.ownedFailures >= 3) this.fallBackToShareReaders();
+      return;
+    }
+    this.ownedFailures = 0;
+    if (this.ownedInputs && answer.generation === this.ownedInputs.generation) return;
+    this.ownedInputs = {
+      generation: answer.generation,
+      reports: {
+        ...answer.reports,
+        boards: new Map(Object.entries(answer.reports.boards ?? {})),
+      },
+      quota: answer.quota,
+      registry: answer.registry,
+      docs: answer.docs,
+    };
+    try {
+      const { reports, docs } = this.ownedInputs;
+      await this.publishStatus({ reports, docs, shared: this.answers.sharedAnswersFor(reports.cards) });
+      this.pushOwnedPins();
+    } catch {
+      /* The panel keeps its last composed view. */
+    }
+    await this.composeSpendByStream();
+    this.changed();
+  }
+
+  /** The service stayed down: the stateless share readers catch up in one cycle (design 1.2). */
+  private fallBackToShareReaders(): void {
+    if (this.ownedFallenBack) return;
+    this.ownedFallenBack = true;
+    this.removeOwnedEvents?.();
+    this.removeOwnedEvents = null;
+    logger.warn(
+      'status.owned_fallback',
+      'The Rust service stayed down; the Status share readers restart in TypeScript'
+    );
+    const every = (ms: number, work: () => Promise<void>) => {
+      let running = false;
+      const timer = setInterval(() => {
+        if (running) return;
+        running = true;
+        void work()
+          .catch(() => undefined)
+          .finally(() => {
+            running = false;
+          });
+      }, ms);
+      timer.unref?.();
+      this.fallbackTimers.push(timer);
+    };
+    every(REPORTS_EVERY_MS, () => this.scanReports());
+    every(REGISTRY_EVERY_MS, () => this.scanRegistry());
   }
 
   /** Starts the timers; returns the stop call. */
@@ -751,8 +888,15 @@ export class StatusService {
     void ensureReportsLayout(this.reader.root)
       .then(() => publishSchemas(this.reader.root))
       .catch(() => undefined);
-    every(REPORTS_EVERY_MS, () => this.scanReports());
-    every(REGISTRY_EVERY_MS, () => this.scanRegistry());
+    if (this.owned) {
+      every(REPORTS_EVERY_MS, () => this.ownedRefresh());
+      this.removeOwnedEvents = onRustServiceEvent((event) => {
+        if (event.event === 'status-changed') void this.ownedRefresh();
+      });
+    } else {
+      every(REPORTS_EVERY_MS, () => this.scanReports());
+      every(REGISTRY_EVERY_MS, () => this.scanRegistry());
+    }
     every(COLLECT_EVERY_MS, async () => {
       if (this.wanted()) await this.collect();
     });
@@ -762,6 +906,9 @@ export class StatusService {
       this.answers.flushCompletions();
       for (const timer of timers) clearInterval(timer);
       unsubscribe();
+      this.removeOwnedEvents?.();
+      this.removeOwnedEvents = null;
+      for (const timer of this.fallbackTimers) clearInterval(timer);
       if (this.hintTimer) clearTimeout(this.hintTimer);
       this.hintTimer = null;
     };
@@ -769,6 +916,17 @@ export class StatusService {
 }
 
 let service: StatusService | null = null;
+
+/** The process-wide Rust service, set by the server at start (the owned refresh reads it). */
+let rustServiceForStatus: RustService | null = null;
+
+/** The server hands its Rust service to the Status owner's background refresh. */
+export function setStatusRustService(service: RustService | null): void {
+  rustServiceForStatus = service;
+}
+
+/** The last `owned-pins` generation this process issued (numeric, only forward). */
+let lastPinsGeneration = 0;
 
 export function getStatusService(): StatusService {
   service ??= new StatusService();

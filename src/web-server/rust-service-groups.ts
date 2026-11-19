@@ -72,3 +72,22 @@ export function rustComposeSelected(env: NodeJS.ProcessEnv = process.env): boole
     return false;
   }
 }
+
+/**
+ * R4 (DESIGN-M3-COMPLETE 1.2): the owned Status readers. The status group's fed path (R2) stays the
+ * request path; with the store host on as well, the service reads the share itself and the front door
+ * forwards its snapshots instead of reading the share in TypeScript. Without the store host the group
+ * stays fed: report captures need the hosted writer.
+ */
+export function rustOwnedStatusOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return process.platform !== 'win32' && rustGroupOn('status', env) && rustStoreSwitchOn(env);
+}
+
+/**
+ * R4 (DESIGN-M3-COMPLETE 1.4): the owned Scoreboard. With the scoreboard group and the store host on,
+ * the service seeds the catalog, ingests the runs and answers the view from the store in process;
+ * TypeScript keeps the filter parse and auth, and forwards. Without the store host nothing moves.
+ */
+export function rustOwnedScoreboardOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return process.platform !== 'win32' && rustGroupOn('scoreboard', env) && rustStoreSwitchOn(env);
+}

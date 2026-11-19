@@ -15,6 +15,7 @@ import {
   acquireRustServiceDetailed,
   PUBLIC_HEALTH_PRINCIPAL,
   type RustLease,
+  type RustOwnedBoot,
 } from './rust-service-lifecycle';
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
 import {
@@ -28,7 +29,16 @@ import {
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
 import { registerFileWriter, rememberFileLeaseBinary } from '../shared/private-file-lease';
-import { rustComposeSelected, rustGroupOn, rustStoreSwitchOn } from './rust-service-groups';
+import {
+  rustComposeSelected,
+  rustGroupOn,
+  rustOwnedScoreboardOn,
+  rustOwnedStatusOn,
+  rustStoreSwitchOn,
+} from './rust-service-groups';
+import { dispatchRustServiceEvent } from './rust-service-events';
+import { agentReportsRoot } from './status/agent-reports-reader';
+import { pmMailRegistryDir } from './status/status-collectors';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
@@ -98,7 +108,6 @@ export class RustSupervisor {
   protected lease: RustLease | null = null;
   private removeAgentConnection: (() => void) | null = null;
   private removeStoreConnection: (() => void) | null = null;
-  private closeEvents: (() => void) | null = null;
   /** R3: the store host's boot input, resolved once in `start`; null keeps the store in TS. */
   protected storeBoot: RustStoreBootInput | null = null;
   protected active = new Set<http.ClientRequest>();
@@ -116,6 +125,9 @@ export class RustSupervisor {
   protected checking = false;
   /** Transport timeouts in a row on the current lease, any route (review L3). */
   protected timeouts = 0;
+  /** R4: the owned readers' boot config, resolved once in `start`; null keeps them in TS. */
+  protected ownedBoot: RustOwnedBoot | null = null;
+  private removeEvents: (() => void) | null = null;
 
   /** `options` exists for tests: a clock for the breakers and the restart budget, and delays. */
   constructor(
@@ -123,14 +135,16 @@ export class RustSupervisor {
     options: { now?: () => number; restartDelaysMs?: readonly number[] } = {}
   ) {
     this.mode = rustServiceMode(mode);
-    // L2: the writer assignment sent in the private boot. Writes have their own switch and
-    // need the Unix service. Shadow keeps the TS writer.
-    this.writesOn = this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('writes');
-    const collectionOn =
-      this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('collection');
-    settlePrivateFileOwners(
-      (group) => (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn)
-    );
+    const native = this.mode === 'on' && process.platform !== 'win32';
+    this.writesOn = native && rustGroupOn('writes');
+    const collectionOn = native && rustGroupOn('collection');
+    // One readers-check file carries the Status and Scoreboard writers.
+    settlePrivateFileOwners((group) => {
+      if (!native) return false;
+      if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
+      if (group === 'scoreboard') return rustOwnedScoreboardOn();
+      return (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn);
+    });
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }
@@ -182,6 +196,15 @@ export class RustSupervisor {
       if (this.stopped) return;
       this.storeBoot.snapshotDirectory = snapshotDirectory;
     }
+    // R4: the owned readers run under the store host; resolve their share roots once.
+    if (this.storeBoot && (rustOwnedStatusOn() || rustOwnedScoreboardOn())) {
+      this.ownedBoot = {
+        reportsRoot: agentReportsRoot(),
+        registryDir: pmMailRegistryDir(),
+        status: rustOwnedStatusOn(),
+        scoreboard: rustOwnedScoreboardOn(),
+      };
+    }
     this.minuteTimer = setInterval(() => this.logMinute(), 60_000);
     this.minuteTimer.unref();
     // The Rust child's RSS joins the event-loop monitor's minute line (design 4.2).
@@ -193,7 +216,8 @@ export class RustSupervisor {
         binary,
         this.active,
         this.acquisition.signal,
-        this.storeBoot
+        this.storeBoot,
+        this.ownedBoot
       );
       failure = result.failure;
       if (this.stopped) {
@@ -239,8 +263,8 @@ export class RustSupervisor {
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
-    this.closeEvents?.();
-    this.closeEvents = null;
+    this.removeEvents?.();
+    this.removeEvents = null;
     if (this.storeBoot) setRustStoreHosted(getCcsDir(), false);
     this.lease?.close();
     this.lease = null;
@@ -285,23 +309,23 @@ export class RustSupervisor {
         ? registerFileWriter(lease.connection.ccsDir, this.binary, () => this.registeredWrites++)
         : null;
     this.lease = lease;
-    this.closeEvents?.();
-    this.closeEvents = null;
-    if (rustComposeSelected() && rustGroupOn('app-updates')) {
-      const events = openRustEvents(lease.connection, ({ type, job }) => {
-        if (this.lease !== lease || type !== 'app-update-job' || !job || typeof job !== 'object')
-          return;
-        // The private Rust owner sends only its public progress DTO. The Rust
-        // listener validates this envelope again and applies its session policy.
+    lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
+    this.removeEvents?.();
+    const appUpdates = rustComposeSelected() && rustGroupOn('app-updates');
+    const events = openRustEvents(lease.connection, (event) => {
+      if (this.lease !== lease) return;
+      dispatchRustServiceEvent(event);
+      const { type, job } = event;
+      if (appUpdates && type === 'app-update-job' && job && typeof job === 'object') {
+        // The public Rust listener validates this DTO again and applies the session policy.
         broadcastDashboardEvent({
           type,
           job: job as Extract<DashboardEvent, { type: 'app-update-job' }>['job'],
         });
-      });
-      this.closeEvents = events.close;
-      void events.ready.catch(events.close);
-    }
-    lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
+      }
+    });
+    void events.ready.catch(events.close);
+    this.removeEvents = events.close;
   }
 
   /** The service died or stopped answering: TS answers until a restart succeeds (L1). */
@@ -313,8 +337,8 @@ export class RustSupervisor {
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
-    this.closeEvents?.();
-    this.closeEvents = null;
+    this.removeEvents?.();
+    this.removeEvents = null;
     this.lease = null;
     lease.close();
     logger.warn('rust.service.lost', 'Rust service stopped; TypeScript answers', {
@@ -350,7 +374,8 @@ export class RustSupervisor {
             binary,
             this.active,
             this.acquisition.signal,
-            this.storeBoot
+            this.storeBoot,
+            this.ownedBoot
           );
           failure = result.failure;
           if (result.lease) {

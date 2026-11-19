@@ -361,6 +361,8 @@ mod tests {
             assert!(row(id).is_ok(), "{id}");
         }
         assert!(row("unknown").is_err());
+        assert_eq!(row("readers-check").unwrap().moves_with.as_deref(), Some("status"));
+        assert_eq!(row("catalog-seed").unwrap().moves_with.as_deref(), Some("scoreboard"));
         // The default owner map keeps all groups with TS.
         let defaults = Owners::defaults(rows);
         for row in rows {

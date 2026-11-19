@@ -39,6 +39,7 @@ describe('the registry rules', () => {
       'claude-desktop-profiles',
       'account-refresh-settings',
       'readers-check',
+      'catalog-seed',
     ])
       expect(ids).toContain(id);
     expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts')).toBe(true);
@@ -55,6 +56,9 @@ describe('the registry rules', () => {
       (g) => g === 'collection'
     );
     expect(Object.keys(moved).filter((id) => moved[id] === 'rust-service')).toEqual([
+      'opencode-wallet-account',
+      'cursor-account-observation',
+      'account-usage-cooldown',
       'account-usage-observations',
       'claude-live-snapshots',
     ]);
@@ -68,6 +72,8 @@ describe('the registry rules', () => {
         home
       )?.id
     ).toBe('muse-usage-peer-links');
+    expect(files.PRIVATE_FILE_ROWS.find((r) => r.id === 'readers-check')?.movesWith).toBe('status');
+    expect(files.PRIVATE_FILE_ROWS.find((r) => r.id === 'catalog-seed')?.movesWith).toBe('scoreboard');
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {
@@ -302,6 +308,10 @@ describe('one writer per file', () => {
       "group === 'writes' && this.writesOn"
     );
     expect(supervisor).toContain("group === 'collection' && collectionOn");
+    // R4: the settle is group-aware (the readers-check row flips only when both owned
+    // groups run; the catalog seed with the scoreboard group).
+    expect(supervisor).toMatch(/settlePrivateFileOwners\(\(group\) => \{/);
+    expect(supervisor).toMatch(/rustOwnedStatusOn\(\) && rustOwnedScoreboardOn\(\)/);
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());
   });

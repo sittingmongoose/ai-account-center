@@ -145,6 +145,60 @@ fn parse_status(args: &str) -> Result<Json> {
     }
 }
 
+/// The answer keys this process loaded, by directory (the key file's writer lock is held by
+/// the caller; the cache only avoids re-reading the PEM on every signature).
+static ANSWER_KEYS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, crate::answer_signing::AnswerKey>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn answer_key(dir: &str) -> Result<crate::answer_signing::AnswerKey> {
+    if let Some(key) = ANSWER_KEYS.lock().unwrap_or_else(|p| p.into_inner()).get(dir) {
+        return Ok(key.clone());
+    }
+    let key = crate::answer_signing::load_or_create_answer_key(std::path::Path::new(dir))
+        .map_err(|e| crate::error::Error::new("io", e))?;
+    ANSWER_KEYS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(dir.to_string(), key.clone());
+    Ok(key)
+}
+
+fn answer_key_load(args: &str) -> Result<Json> {
+    #[derive(Deserialize)]
+    struct Args {
+        dir: String,
+    }
+    let args: Args = parse(args)?;
+    let key = answer_key(&args.dir)?;
+    Ok(json!({"publicKeyPem": key.public_key_pem, "keyId": key.key_id}))
+}
+
+fn answer_sign(args: &str) -> Result<Json> {
+    #[derive(Deserialize)]
+    struct Args {
+        dir: String,
+        unsigned: Json,
+    }
+    let args: Args = parse(args)?;
+    let key = answer_key(&args.dir)?;
+    Ok(crate::answer_signing::sign_answer(&args.unsigned, &key))
+}
+
+fn answer_verify(args: &str) -> Result<Json> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        text: String,
+        public_key_pem: String,
+        schema: String,
+    }
+    let args: Args = parse(args)?;
+    match crate::answer_signing::verify_signed_document(args.text.as_bytes(), &args.public_key_pem, &args.schema) {
+        Ok(answer) => Ok(json!({"ok": true, "answer": answer})),
+        Err(reason) => Ok(json!({"ok": false, "reason": reason})),
+    }
+}
+
 pub fn dispatch(method: &str, args: &str) -> Result<String> {
     let answer = match method {
         "resetCodexSource" => crate::reset_source::dispatch(args)
@@ -164,6 +218,9 @@ pub fn dispatch(method: &str, args: &str) -> Result<String> {
         "composeByModel" => compose_by_model(args)?,
         "composeGroups" => compose_groups(args)?,
         "parseStatus" => parse_status(args)?,
+        "answerKeyLoad" => answer_key_load(args)?,
+        "answerSign" => answer_sign(args)?,
+        "answerVerify" => answer_verify(args)?,
         _ => fail!("unknown_method", "unknown method"),
     };
     let mut answer = answer;

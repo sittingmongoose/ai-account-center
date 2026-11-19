@@ -262,7 +262,7 @@ impl ScoreboardOwned {
         if full {
             self.last_full_at.store(now, Ordering::Relaxed);
         }
-        let (files, refused) = {
+        let (files, refused, threads, read_count) = {
             let mut safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
             let mut remember = |path: &str| {
                 if aac_status::secret_policy::find_secret(path).is_none() {
@@ -305,19 +305,20 @@ impl ScoreboardOwned {
                     })),
                 }
             }
-            (files, refused)
-        };
-        let mut threads = Map::new();
-        if let Some(map) = scan["threads"].as_object() {
-            for (writer, text) in map {
-                let text = text.as_str().unwrap_or_default();
-                if aac_status::secret_policy::find_secret(writer).is_none()
-                    && validate::json_from_bytes(text.as_bytes(), THREAD_CAP).is_ok()
-                {
-                    threads.insert(writer.clone(), json!(text));
+            let mut threads = Map::new();
+            if let Some(map) = scan["threads"].as_object() {
+                for (writer, text) in map {
+                    let text = text.as_str().unwrap_or_default();
+                    if aac_status::secret_policy::find_secret(writer).is_none()
+                        && validate::json_from_bytes(text.as_bytes(), THREAD_CAP).is_ok()
+                    {
+                        threads.insert(writer.clone(), json!(text));
+                    }
                 }
             }
-        }
+            let read_count = files.len();
+            (files, refused, threads, read_count)
+        };
         let catalog_text = |value: &Json| -> Json {
             match value.as_str() {
                 Some(text) if validate::json_from_bytes(text.as_bytes(), CATALOG_CAP).is_ok() => {
@@ -326,7 +327,6 @@ impl ScoreboardOwned {
                 _ => Json::Null,
             }
         };
-        let read_count = files.len();
         let record = self
             .store
             .call(

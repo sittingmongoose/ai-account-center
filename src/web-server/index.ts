@@ -75,7 +75,7 @@ import {
   startAacStoreMaintenance,
 } from '../store/store-service';
 import { startScoreboardService } from './scoreboard/scoreboard-service';
-import { startStatusService } from './status/status-service';
+import { setStatusRustService, startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
@@ -241,6 +241,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // REST API routes (modularized); big JSON answers are encoded on the way out.
   app.use('/api', apiCompression());
   const rustService = new RustService(options.rustService);
+  setStatusRustService(rustService);
   const rustServiceReady = rustService.start(options.rustServiceBinary);
   app.use('/api', (_req, res, next) => {
     res.locals.rustService = rustService;
