@@ -86,6 +86,7 @@ pub(crate) const ADMITTED_TIME_ZONES: &[&str] = &[
 /// TS reader treats every folder as private there; so does this one.
 #[cfg(unix)]
 pub(crate) fn store_folder(root: &Path) -> Option<Vec<Value>> {
+    use std::os::unix::fs::MetadataExt;
     let meta = fs::symlink_metadata(root).ok()?;
     if !meta.is_dir() || meta.file_type().is_symlink() || meta.mode() & 0o002 != 0 {
         return None;
