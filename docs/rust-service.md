@@ -99,6 +99,44 @@ never applies the folder warning in shadow mode, and every TS reader or composer
 exactly once per request. Requests with bodies keep part 2's 4 MiB input and 2 MiB
 reply caps; larger answers use the TS fallback.
 
+## Owned Analytics (R5 + A2)
+
+`rustService.groups.analytics: on` (`AAC_RUST_GROUP_ANALYTICS` overrides), with the service `on`
+and the store hosted (`store: on`), lets Rust answer the whole `/api/accounts/analytics` read
+from the hosted Engine in process: the quota history (`historyRecords`, thinned to the range's
+buckets), the oldest stored quota sample and activity hour, the activity range and sources
+(`activityRange`/`activitySources`), and the composition of both blocks. The TS computation
+remains the fallback for every request Rust declines; off, shadow, or an unhosted store keeps
+today's fed composition (part 3) unchanged.
+
+The owned envelope (`data.owned: true`, `rustAnalyticsOwnedInput`) carries only what stays in TS
+until H2: the dashboard accounts (as the part-3 spread entries), the live collector state (the
+source grid, `refreshing`, `refreshingRemote` — the same `ownedLive` the activity answer itself
+reads, refresh trigger included), the resolved pricing facts over the store dictionary's
+model/route superset (`activityModels`, answered by the same `getModelPricingWithSource` lookup),
+and the query's zone as proven UTC-offset segments (the server-side form of the page's
+`homeZoneFacts`, bounded to the `Zone` proof's 64 segments). It also carries the bounds and
+provisional range the TS computation read; Rust re-reads both from the Engine and re-resolves the
+range, and any disagreement is a `stale` decline. The presentation facts are empty: the owned
+composer builds its own `Date.parse` epochs and `toISOString` words from the store's ISO strings
+(`aac-num`, the proven engine-independent forms) and the provider-id ranks from the CLDR root
+order (`aac_num::intl::ascii_compare`); a non-ASCII model name or session key is a `collation`
+decline, an instant outside the zone window a `zone` decline.
+
+The activity block is the port of the store-fed answer (`src/store/activity-answer.ts`,
+`activity-coverage.ts`, the attribution, projection and anomalies services):
+`rangeToSources` → attribution → projection → session-count override, with the guarded
+selection's fixed unavailable projection and the TS-published snapshot's coverage. A store with
+no last read yet declines (`stale`): TS's answer would stamp its own clock, which one request
+cannot prove equal. The quota composition reuses the part-3 port (`analyticsAvailableRange` +
+`composeAccountAnalytics`) with `stored: true`; the answer memo stays ineffective exactly as in
+the TS store path (each activity read is a fresh result), and `get()`'s flights, saved views and
+`stale`/`refreshing` read state wrap the owned answer unchanged.
+
+The spec: `tests/spec/analytics-owned-parity.ts` — every range preset, filter and zone against
+the same request's pure TS computation, byte-equal, served with no TS composer call; a case Rust
+cannot prove falls back and stays equal.
+
 ## Profile reads (M3 part 4)
 
 Account switching was removed on 2026-11-13, so these GETs only read and report:

@@ -8,6 +8,7 @@ import { readDashboardPreferences } from './dashboard-preferences';
 import {
   fixedAnalyticsSourceEntries,
   getAccountAnalyticsActivity,
+  getAccountAnalyticsActivityLive,
   startAccountAnalyticsActivityBackground,
   stopAccountAnalyticsActivityBackground,
   type AccountAnalyticsActivityResult,
@@ -55,6 +56,7 @@ import {
   MAX_ACCOUNTS_PER_SAMPLE,
   storeObservationFromAccount,
 } from '../../store/usage-observations';
+import type { AnalyticsOwnedActivity, AnalyticsOwnedFacts } from '../rust-analytics-owned-input';
 import { backfillUsageHistory } from '../../store/usage-backfill';
 import { AnalyticsSavedViews } from './account-analytics-saved-views';
 import { createLogger } from '../../services/logging';
@@ -76,6 +78,12 @@ export interface AccountAnalyticsDeps {
     to: number,
     options?: { tz?: string }
   ) => Promise<AccountAnalyticsActivityResult>;
+  /** The owned read's live collector state (R5/A2); absent keeps the TS computation. */
+  getActivityLive?: (
+    query: AccountAnalyticsQuery,
+    from: number,
+    to: number
+  ) => AnalyticsOwnedActivity;
   /** The server's provider table; a dashboard registry, when present, overrides labels and order. */
   providerTable?: () => AnalyticsProviderEntry[];
   createHistoryStore?: (scope: string) => AccountAnalyticsHistoryStore;
@@ -114,6 +122,13 @@ export type AccountAnalyticsComposer = (
   legacy: () => AccountAnalyticsComposed
 ) => Promise<AccountAnalyticsComposed>;
 
+/**
+ * Hands the whole computation to the owned Rust read (R5/A2): it reads the hosted store itself
+ * and answers the full answer, activity included, or null to keep this file's computation.
+ */
+export type AccountAnalyticsOwnedComposer = (
+  facts: AnalyticsOwnedFacts
+) => Promise<AccountAnalytics | null>;
 /** A computation slower than this is logged with its phases (`analytics.read_timing`). */
 const SLOW_READ_MS = 1_000;
 
@@ -426,7 +441,8 @@ export class AccountAnalyticsService {
    */
   async get(
     requested: AccountAnalyticsQuery,
-    composer?: AccountAnalyticsComposer
+    composer?: AccountAnalyticsComposer,
+    owned?: AccountAnalyticsOwnedComposer
   ): Promise<AccountAnalytics> {
     // Malformed ranges and zones fail before any collector or history read.
     validateAccountAnalyticsRangeShape(requested);
@@ -473,7 +489,7 @@ export class AccountAnalyticsService {
       const started = new Promise<void>((resolve) => setImmediate(resolve)).then(() => {
         const begin = elapsed();
         const sequence = ++this.sequence;
-        return this.compute(query, scope, tz, composer).then(
+        return this.compute(query, scope, tz, composer, owned).then(
           (answer) => {
             this.computeMs.set(flightKey, elapsed() - begin);
             this.settle(flightKey, sequence, false);
@@ -620,7 +636,8 @@ export class AccountAnalyticsService {
     query: AccountAnalyticsQuery,
     scope: string,
     tz: string,
-    composer?: AccountAnalyticsComposer
+    composer?: AccountAnalyticsComposer,
+    owned?: AccountAnalyticsOwnedComposer
   ): Promise<AccountAnalytics> {
     const clock = this.deps.now ?? Date.now;
     const elapsed = this.deps.elapsedMs ?? (() => performance.now());
@@ -634,6 +651,35 @@ export class AccountAnalyticsService {
     };
     const dashboard = await (this.deps.getDashboard ?? getAccountDashboard)(query.platform, false);
     lap('dashboardMs');
+    // The owned read (R5/A2): Rust reads the hosted store itself and composes the whole answer.
+    // It runs before this file's history and activity reads; a decline keeps them, unchanged.
+    if (owned && this.deps.getActivityLive) {
+      const ownedNow = clock();
+      const ownedBounds = await this.storedBounds(scope, ownedNow);
+      const ownedRetained = ownedBounds
+        ? ownedBounds.oldest
+        : ownedNow - ACCOUNT_ANALYTICS_RETAINED_MS;
+      const provisional = resolveAccountAnalyticsRange(
+        query,
+        ownedNow,
+        ownedRetained,
+        ownedBounds ?? undefined
+      );
+      const ownedState = this.state(scope);
+      const answer = await owned({
+        query,
+        scope,
+        now: ownedNow,
+        tz,
+        available: ownedState.available,
+        bounds: ownedBounds,
+        provisional,
+        dashboard,
+        providerTable: (this.deps.providerTable ?? defaultAnalyticsProviderTable)(),
+        activity: this.deps.getActivityLive(query, provisional.from, provisional.to),
+      });
+      if (answer) return answer;
+    }
     const state = this.state(scope);
     // Reads initialise history but never append observations; the sampler owns writes.
     if (!state.loaded) {
@@ -865,14 +911,18 @@ export class AccountAnalyticsService {
 
 let service: AccountAnalyticsService | undefined;
 function singleton(): AccountAnalyticsService {
-  service ??= new AccountAnalyticsService({ persistViews: true });
+  service ??= new AccountAnalyticsService({
+    persistViews: true,
+    getActivityLive: getAccountAnalyticsActivityLive,
+  });
   return service;
 }
 export function getAccountAnalytics(
   query: AccountAnalyticsQuery,
-  composer?: AccountAnalyticsComposer
+  composer?: AccountAnalyticsComposer,
+  owned?: AccountAnalyticsOwnedComposer
 ): Promise<AccountAnalytics> {
-  return singleton().get(query, composer);
+  return singleton().get(query, composer, owned);
 }
 export function startAccountAnalyticsSampling(): void {
   singleton().start();

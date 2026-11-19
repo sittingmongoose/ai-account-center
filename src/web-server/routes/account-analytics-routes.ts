@@ -5,10 +5,15 @@ import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware
 import {
   getAccountAnalytics,
   type AccountAnalyticsComposer,
+  type AccountAnalyticsOwnedComposer,
 } from '../services/account-analytics-service';
 import type { AccountAnalyticsComposed } from '../services/account-analytics-compose';
-import { composeWithRust } from '../rust-service';
+import { RustService, composeWithRust } from '../rust-service';
 import { isRustAnalyticsComposed, rustAnalyticsInput } from '../rust-account-input';
+import { isRustAnalyticsOwned, rustAnalyticsOwnedInput } from '../rust-analytics-owned-input';
+import { rustGroupOn } from '../rust-service-groups';
+import { rustStoreHosted } from '../rust-service-transport';
+import { openAacStore } from '../../store/store-service';
 import { defaultAnalyticsProviderIds } from '../services/account-analytics-providers';
 import {
   ACCOUNT_ANALYTICS_RANGE_PRESETS,
@@ -31,7 +36,8 @@ const QUERY_KEYS = ['platform', 'range', 'provider', 'account', 'refresh', 'tz',
 export interface AccountAnalyticsRouterDeps {
   getAnalytics?: (
     query: AccountAnalyticsQuery,
-    composer?: AccountAnalyticsComposer
+    composer?: AccountAnalyticsComposer,
+    owned?: AccountAnalyticsOwnedComposer
   ) => Promise<AccountAnalytics>;
   /** Provider ids the server reports; `all` is always accepted as well. */
   providerIds?: () => readonly string[];
@@ -117,7 +123,27 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
           legacy,
           isRustAnalyticsComposed
         )) as AccountAnalyticsComposed;
-      res.json(await (deps.getAnalytics ?? getAccountAnalytics)(request, composer));
+      // R5/A2: with the analytics group on and the store hosted, Rust reads the store itself
+      // and composes the whole answer. Off, shadow, unhosted or any decline keeps the TS path.
+      const owned: AccountAnalyticsOwnedComposer = async (facts) => {
+        const service: unknown = res.locals.rustService;
+        if (!(service instanceof RustService) || service.mode !== 'on') return null;
+        if (!rustGroupOn('analytics') || !rustStoreHosted(facts.scope)) return null;
+        const store = (await openAacStore({ ccsDir: facts.scope })).store;
+        if (!store) return null;
+        const input = await rustAnalyticsOwnedInput(facts, store);
+        if (!input) return null;
+        const answer = await composeWithRust(
+          req,
+          res,
+          '/api/accounts/analytics',
+          input,
+          () => null,
+          isRustAnalyticsOwned
+        );
+        return (answer as AccountAnalytics | null) ?? null;
+      };
+      res.json(await (deps.getAnalytics ?? getAccountAnalytics)(request, composer, owned));
     } catch (error) {
       if (error instanceof AccountAnalyticsQueryError) {
         reject(error.code);
