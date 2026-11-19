@@ -3,6 +3,8 @@
  * --cut uses the shipped CLI with its private worker. --cut-rust-only disables the worker.
  * Unix cut modes require a parity-fixtures binary for the original synthetic app jobs.
  * --require-complete fails for any changed answer or explicit unmounted route.
+ * --route-group=<name> selects one worker-removal lane and implies --require-complete.
+ * --composed-golden applies the platform's existing recorder overrides.
  */
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
@@ -32,6 +34,39 @@ const routes = JSON.parse(await fs.readFile(path.join(spec, 'routes.json'), 'utf
   method: string;
   roles: string[];
 }[];
+const groups = {
+  resets: /^\w+ \/api\/accounts\/[^/]+\/reset-claims(?:\/|$)/,
+  'store-usage-home': /^\w+ \/api\/(store\/status|usage\/[^/]+|views\/home)$/,
+  status: /^\w+ \/api\/(status(?:\/|$)|scoreboard$)/,
+  profiles:
+    /^\w+ \/api\/(antigravity\/profiles|codex\/profiles|claude\/desktop-profiles|claude\/history-snapshots\/cleanup)(?:\/|$)/,
+  analytics: /^\w+ \/api\/accounts\/analytics(?:\/|$)/,
+  settings: /^\w+ \/api\/accounts\/(settings|preferences|visibility)$/,
+  lifecycle:
+    /^(?:PUT \/api\/accounts\/:id\/key|PATCH \/api\/accounts\/:id|\w+ \/api\/accounts\/(add|registry|signin-command|signin-jobs(?:\/.*)?|trash(?:\/.*)?|:id\/(?:open|remove|signin-again)))$/,
+  collection: /^\w+ \/api\/accounts\/(dashboard|:id\/recheck)$/,
+  'app-updates': /^\w+ \/api\/app-updates\//,
+} satisfies Record<string, RegExp>;
+const group = process.argv.find((arg) => arg.startsWith('--route-group='))?.split('=', 2)[1];
+const selectedRoutes = [...routes.entries()].filter(([, route]) => {
+  if (group === undefined) return true;
+  assert.equal(mode, 'cut-rust-only', 'A worker-removal group requires --cut-rust-only.');
+  assert(Object.hasOwn(groups, group), `Unknown worker-removal group ${group}.`);
+  return groups[group as keyof typeof groups].test(route.method + ' ' + route.path);
+});
+assert(selectedRoutes.length > 0, 'At least one M0 route is required.');
+const overrides: Record<string, Contract> = process.argv.includes('--composed-golden')
+  ? JSON.parse(
+      await fs.readFile(
+        path.join(
+          spec,
+          'contract',
+          `m0-composed-${process.platform === 'win32' ? 'windows' : 'unix'}.json`
+        ),
+        'utf8'
+      )
+    )
+  : {};
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-m6-contract-'));
 const username = 'fixture-admin';
 const password = 'fixture-password-only';
@@ -211,13 +246,13 @@ try {
   );
   let rust = await startRustFixture(binary, root, environment, false, mode);
   try {
-    for (const [index, route] of routes.entries()) {
+    for (const [index, route] of selectedRoutes) {
       const name = route.method + ' ' + route.path;
       for (const role of route.roles) {
         const fixture = String(index).padStart(3, '0') + '-' + role + '.json';
-        const contract: Contract = JSON.parse(
-          await fs.readFile(path.join(spec, 'contract', fixture), 'utf8')
-        );
+        const contract: Contract =
+          overrides['contract/' + fixture] ??
+          JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
         const { request, response: expected } = contract;
         const headers = await roleHeaders(rust.url, role);
         let status: number;
@@ -313,8 +348,10 @@ console.log(
   `Rust public M0: ${counts.match} matching replies, ${counts.decline} explicit declines across ${declined.size} routes, ${counts.different} differences.`
 );
 console.log(`M6-owned M0 rows: ${owned.match} matched, ${owned.failed} failed.`);
+if (group !== undefined)
+  console.log(`M0 worker-removal group ${group}: ${selectedRoutes.length} routes.`);
 console.log('M0 declines: ' + [...declined].join(', '));
 if (different.length) console.log('M0 differences:\n' + different.join('\n'));
 assert.equal(owned.failed, 0, 'M6-owned M0 contract');
-if (process.argv.includes('--require-complete'))
+if (group !== undefined || process.argv.includes('--require-complete'))
   assert.equal(counts.decline + counts.different, 0, 'Rust M0 cutover gate');

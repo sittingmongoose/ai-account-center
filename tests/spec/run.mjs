@@ -1,6 +1,16 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const cwd = fileURLToPath(new URL('../..', import.meta.url));
+if (process.argv.includes('--cut-rust-only')) {
+  const binary = process.env.AAC_M6_TARGET_CLI;
+  if (!binary) throw new Error('Set AAC_M6_TARGET_CLI to the native dashboard command.');
+  execFileSync(
+    'bun',
+    ['tests/spec/m6-public-contract.ts', binary, '--require-complete', ...process.argv.slice(2)],
+    { cwd, stdio: 'inherit' }
+  );
+  process.exit(0);
+}
 for (const [program, args] of [
   ['node', ['scripts/foundation/generate-id-vectors.mjs', '--check']],
   ['python3', ['tests/spec/parsers.py']],
