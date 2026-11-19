@@ -279,6 +279,7 @@ pub fn open(path: &Path, policy: &ReadPolicy) -> Result<(File, Meta), Read> {
 
 /// The path the kernel holds for an open descriptor (`/proc/self/fd/N`), for readers whose
 /// reference confines the resolved path; `None` where the platform cannot say.
+#[allow(unsafe_code)]
 pub fn opened_path(file: &File) -> Option<PathBuf> {
     #[cfg(unix)]
     {
@@ -291,7 +292,7 @@ pub fn opened_path(file: &File) -> Option<PathBuf> {
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
         };
-        let handle = file.as_raw_handle() as isize;
+        let handle = file.as_raw_handle() as *mut std::ffi::c_void;
         let mut buffer = vec![0u16; 512];
         let mut length = 0;
         loop {

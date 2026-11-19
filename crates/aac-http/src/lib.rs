@@ -51,7 +51,6 @@ mod owners;
 mod preferences_write;
 mod profile_reads;
 pub mod public_auth;
-#[cfg(unix)]
 mod read_files;
 #[cfg(unix)]
 mod read_routes;

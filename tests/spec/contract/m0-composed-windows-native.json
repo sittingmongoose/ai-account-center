@@ -18,6 +18,25 @@
       }
     }
   },
+  "contract/062-session.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/files/fixture/missing.txt",
+      "role": "session"
+    },
+    "response": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "error": "This file is not available.",
+        "code": "not_found"
+      }
+    }
+  },
   "contract/062-device.json": {
     "request": {
       "method": "GET",
@@ -34,6 +53,25 @@
       "body": {
         "error": "This action needs a signed-in dashboard session.",
         "code": "device_scope"
+      }
+    }
+  },
+  "contract/062-bar.json": {
+    "request": {
+      "method": "GET",
+      "path": "/api/status/files/fixture/missing.txt",
+      "role": "bar"
+    },
+    "response": {
+      "status": 404,
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "etag": "<etag>",
+        "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      },
+      "body": {
+        "error": "This file is not available.",
+        "code": "not_found"
       }
     }
   },
