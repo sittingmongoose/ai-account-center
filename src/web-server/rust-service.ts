@@ -519,10 +519,15 @@ export class RustService extends RustSupervisor {
     try {
       // R4: the owned inputs (every report, or the whole runs state) are far past a GET's 64 KiB
       // and, on a large home, past the hop's 500 ms: a view's cap and the inputs rows' budget.
-      const result = await requestRust(lease.connection, path, FRONT_DOOR_PRINCIPAL, this.active, undefined, 'GET', {
-        cap: RUST_VIEW_CAP,
-        deadlineMs: RUST_INPUTS_DEADLINE_MS,
-      });
+      const result = await requestRust(
+        lease.connection,
+        path,
+        FRONT_DOOR_PRINCIPAL,
+        this.active,
+        undefined,
+        'GET',
+        { cap: RUST_VIEW_CAP, deadlineMs: RUST_INPUTS_DEADLINE_MS }
+      );
       this.replied(lease);
       return result.status === 200 ? result.body : null;
     } catch (error) {
