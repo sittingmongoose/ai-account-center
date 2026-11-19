@@ -283,10 +283,13 @@ pub enum SocketState {
     Unknown,
 }
 
-#[cfg(unix)]
+/// `probeRuntimeSocket`: only absence or a refused connect is `stopped`, and only on Linux.
+#[cfg(target_os = "linux")]
 pub fn socket_state(socket_path: &Path, timeout_ms: u64) -> SocketState {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    let uid = unsafe { libc::getuid() };
+    let Some(uid) = current_uid() else {
+        return SocketState::Unknown;
+    };
     let directory = std::fs::symlink_metadata(socket_path.parent().unwrap_or(Path::new(".")));
     match directory {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return SocketState::Stopped,
@@ -329,7 +332,8 @@ pub fn socket_state(socket_path: &Path, timeout_ms: u64) -> SocketState {
 }
 
 /// [`socket_state`] on a host without Unix sockets: always `unknown`.
-#[cfg(not(unix))]
+/// [`socket_state`] on any host that is not Linux: always `unknown`.
+#[cfg(not(target_os = "linux"))]
 pub fn socket_state(_socket_path: &Path, _timeout_ms: u64) -> SocketState {
     SocketState::Unknown
 }
@@ -577,15 +581,11 @@ pub fn native_update_paused(
     value
 }
 
+/// The process's uid without an `unsafe` call: `/proc/self/status`'s first `Uid:` field.
 fn current_uid() -> Option<u32> {
-    #[cfg(unix)]
-    {
-        Some(unsafe { libc::getuid() })
-    }
-    #[cfg(not(unix))]
-    {
-        None
-    }
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("Uid:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
 }
 
 #[cfg(test)]
@@ -721,7 +721,7 @@ mod tests {
         assert_eq!(calls.get(), 2);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_present_socket_silences_the_reader() {
         let temp = tempfile::tempdir().unwrap();
