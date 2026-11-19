@@ -413,6 +413,13 @@ pub fn respond(request: Request) -> Result<Vec<u8>, Decline> {
 }
 
 impl Dashboard {
+    /// Render the Accounts response from the same prepared generation Home uses.
+    pub fn render(&self, updated_at: &str, now: i64) -> Vec<u8> {
+        let mut writer = Writer::plain(self.parts_len());
+        write_dashboard(&mut writer, self, updated_at, now);
+        writer.into_bytes()
+    }
+
     /// The template's size, for the answer's buffer.
     fn parts_len(&self) -> usize {
         self.parts

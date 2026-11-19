@@ -1,5 +1,6 @@
 [
   { "method": "GET", "path": "/api/health", "owner": "rust", "group": "core", "roles": ["public", "admin", "device", "hub"], "budgetMs": 400, "handler": "health" },
+  { "method": "GET", "path": "/api/accounts/dashboard", "owner": "rust", "group": "collection", "roles": ["admin", "device"], "budgetMs": 400, "handler": "dashboard" },
   { "method": "GET", "path": "/api/accounts/settings", "owner": "rust", "group": "core", "roles": ["admin"], "budgetMs": 400, "handler": "settings" },
   { "method": "GET", "path": "/api/diag", "owner": "rust", "group": "core", "roles": ["admin"], "budgetMs": 400, "handler": "diag" },
   { "method": "GET", "path": "/api/store/status", "owner": "rust", "group": "store", "roles": ["admin", "device"], "budgetMs": 400, "handler": "store-status" },

@@ -17,6 +17,7 @@ pub(crate) enum Handler {
     Settings,
     Home,
     Accounts,
+    Dashboard,
     Profiles,
     Files,
     Status,
@@ -41,6 +42,7 @@ impl Handler {
             "settings" => Handler::Settings,
             "home" => Handler::Home,
             "accounts" => Handler::Accounts,
+            "dashboard" => Handler::Dashboard,
             "profiles" => Handler::Profiles,
             "files" => Handler::Files,
             "status" => Handler::Status,
@@ -208,7 +210,16 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::CollectionTick
                         | Handler::Store
                 ))
-            || internal != matches!(row.group.as_str(), "internal" | "collection")
+            || (row.group == "internal" && !internal)
+            || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
+            || (row.group == "collection"
+                && !matches!(
+                    handler,
+                    Handler::Dashboard
+                        | Handler::CollectionCache
+                        | Handler::CollectionTick
+                        | Handler::Collect
+                ))
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))

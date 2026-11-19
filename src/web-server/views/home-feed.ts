@@ -72,7 +72,7 @@ function seen(held: string): void {
 }
 const boots = new WeakMap<RustService, BootFeeds>();
 
-function feedsOf(service: RustService, boot: string): BootFeeds {
+export function feedsOf(service: RustService, boot: string): BootFeeds {
   let feeds = boots.get(service);
   if (!feeds || feeds.boot !== boot) {
     feeds = new BootFeeds(boot);
@@ -212,6 +212,33 @@ export function passFaithful(dashboard: AccountDashboard): boolean {
   return true;
 }
 
+/** Shared generation for Accounts, trays and Home. */
+export function ensureDashboardFeed(
+  service: RustService,
+  feeds: BootFeeds,
+  platform: 'mac' | 'windows',
+  secure: boolean,
+  dashboard: AccountDashboard
+): Promise<Generation> {
+  const dashboardText = JSON.stringify({ ...dashboard, updatedAt: '' });
+  return ensure(
+    service,
+    feeds,
+    `home-dashboard-${platform}-${secure ? 1 : 0}`,
+    dashboardText,
+    () =>
+      jsonExact(dashboard)
+        ? {
+            data: dashboardText,
+            facts: JSON.stringify({
+              order: localeRanks(homeSortWords(dashboard)),
+              epochs: resetEpochs(dashboard),
+            }),
+          }
+        : null
+  );
+}
+
 export interface HomeFedRequest {
   platform: 'mac' | 'windows';
   secure: boolean;
@@ -247,7 +274,6 @@ export async function answerHomeFed(
   if (input.context && !homeZoneAgrees(input.context)) return declined('zone');
   if (!passFaithful(dashboard)) return declined('input');
   const feeds = feedsOf(service, boot);
-  const dashboardText = JSON.stringify({ ...dashboard, updatedAt: '' });
   const opens = JSON.stringify(getClaudeOpenOperations().forScope(input.scope));
   // R1b: the inventory's own JSON text is its change key: its ISO envelope (`rustReadInput`) is a function of
   // that text, so it is computed only when the key changes. A value JSON cannot carry exactly is pushed as null.
@@ -256,22 +282,7 @@ export async function answerHomeFed(
     ? `inventory:${JSON.stringify(input.inventory)}`
     : 'inexact';
   const generations = await Promise.all([
-    ensure(
-      service,
-      feeds,
-      `home-dashboard-${input.platform}-${input.secure ? 1 : 0}`,
-      dashboardText,
-      () =>
-        jsonExact(dashboard)
-          ? {
-              data: dashboardText,
-              facts: JSON.stringify({
-                order: localeRanks(homeSortWords(dashboard)),
-                epochs: resetEpochs(dashboard),
-              }),
-            }
-          : null
-    ),
+    ensureDashboardFeed(service, feeds, input.platform, input.secure, dashboard),
     ensure(service, feeds, 'home-opens', opens, () => ({ data: opens, facts: 'null' })),
     ensure(service, feeds, 'home-antigravity', antigravityKey, () => ({
       data: inventoryExact

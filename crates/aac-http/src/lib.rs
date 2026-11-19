@@ -8,6 +8,8 @@ mod collection;
 #[cfg(unix)]
 mod collection_cache;
 #[cfg(unix)]
+mod dashboard_fed;
+#[cfg(unix)]
 mod feed;
 #[cfg(unix)]
 mod home_fed;

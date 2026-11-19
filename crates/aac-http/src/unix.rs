@@ -532,6 +532,37 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        Handler::Dashboard => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let query = req.uri().query().is_some();
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(feed), false, true) = (feed, query, body.is_empty()) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let feeds = shared.feeds.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::dashboard_fed::answer(&feeds, &feed)
+                })
+                .await
+            {
+                Ok((bytes, identity)) => crate::view_reply::respond_bytes(
+                    crate::dashboard_fed::VIEW,
+                    crate::dashboard_fed::VERSION,
+                    bytes,
+                    &identity,
+                ),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         // R1: Home from the fed generations (no body; the ids, clock and context in headers). Without
         // `x-aac-feed` it is D7's envelope read below, which TS's own handler still uses.
         Handler::Home if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
