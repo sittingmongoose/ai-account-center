@@ -32,6 +32,8 @@ mod table;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
+mod usage_snapshot;
+#[cfg(unix)]
 pub mod view_reply;
 #[cfg(unix)]
 pub use identity::PROTOCOL;

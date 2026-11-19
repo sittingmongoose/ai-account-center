@@ -28,6 +28,7 @@ pub(crate) enum Handler {
     Agent,
     AgentControl,
     Store,
+    UsageSample,
 }
 
 impl Handler {
@@ -49,6 +50,7 @@ impl Handler {
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
             "store" => Handler::Store,
+            "usage-sample" => Handler::UsageSample,
             _ => return None,
         })
     }
@@ -194,7 +196,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
+                && !matches!(
+                    handler,
+                    Handler::Events | Handler::Agent | Handler::Store | Handler::UsageSample
+                ))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
@@ -202,7 +207,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (method == axum::http::Method::POST
                 && !matches!(
                     handler,
-                    Handler::Agent | Handler::AgentControl | Handler::Store
+                    Handler::Agent | Handler::AgentControl | Handler::Store | Handler::UsageSample
                 ))
             || (method == axum::http::Method::PUT && handler != Handler::Feed)
             || rows

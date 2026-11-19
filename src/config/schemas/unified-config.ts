@@ -26,13 +26,14 @@ export interface UnifiedConfig {
   /**
    * The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. `groups.home`
    * (R1, `AAC_RUST_GROUP_HOME` overrides): Home is built from fed generations when the mode is on; `groups.status`
-   * (R2, `AAC_RUST_GROUP_STATUS` overrides): the same for Status. `store` (R3, `AAC_RUST_STORE` overrides)
-   * hosts the history store when the mode is on. Off keeps the in-process store; exhausting the restart
-   * budget automatically falls back to it on the same files.
+   * (R2, `AAC_RUST_GROUP_STATUS` overrides): the same for Status; `groups.usageSnapshot` (G18,
+   * `AAC_RUST_GROUP_USAGESNAPSHOT` overrides): the aac-usage share writer runs in the service when the mode is on.
+   * `store` (R3, `AAC_RUST_STORE` overrides) hosts the history store when the mode is on. Off keeps the
+   * in-process store; exhausting the restart budget automatically falls back to it on the same files.
    */
   rustService?: {
     mode?: 'off' | 'shadow' | 'on';
-    groups?: { home?: 'off' | 'on'; status?: 'off' | 'on' };
+    groups?: { home?: 'off' | 'on'; status?: 'off' | 'on'; usageSnapshot?: 'off' | 'on' };
     store?: 'off' | 'on';
   };
   /** Config version */

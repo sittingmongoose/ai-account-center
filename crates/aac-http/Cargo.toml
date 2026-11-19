@@ -26,10 +26,11 @@ aac-providers.workspace = true
 aac-views.workspace = true
 aac-store.workspace = true
 aac-status.workspace = true
+aac-snapshot.workspace = true
 base64 = "0.22"
 libc.workspace = true
 serde.workspace = true
-serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
+serde_json = { workspace = true, features = ["raw_value", "preserve_order", "float_roundtrip"] }
 tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 futures-util = { version = "0.3", default-features = false }

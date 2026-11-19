@@ -75,6 +75,8 @@ struct Shared {
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
+    /// G18: the aac-usage share snapshot publisher, fed by the front door's samples.
+    usage: Arc<crate::usage_snapshot::UsageSnapshot>,
 }
 
 #[derive(Clone)]
@@ -528,6 +530,19 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             );
             response
         }
+        // G18: one pushed analytics sample; accept spawns the parse and publish onto its own
+        // blocking task and replies at once, so neither holds a read permit.
+        Handler::UsageSample => {
+            let Ok(bytes) =
+                to_bytes(req.into_body(), crate::usage_snapshot::USAGE_SAMPLE_CAP).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared.usage.accept(bytes) {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         read => {
             let path = req.uri().path().to_owned();
             let query = req.uri().query().is_some();
@@ -549,7 +564,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     }
 }
 
-fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
+pub(crate) fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
     let (file, policy) =
         crate::registered::file(root, "account-refresh-settings").ok_or(Decline::Unsupported)?;
     let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
@@ -615,6 +630,16 @@ pub async fn serve(
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
+    // The package root the binary runs from: `<root>/dist/native/aac-http` (a dev build under
+    // `target/` resolves to the checkout, which records nothing, as the TS reader does).
+    let package_root = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.parent()?.to_path_buf()))
+        .unwrap_or_else(|| boot.ccs_dir.clone());
+    let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(
+        boot.ccs_dir.clone(),
+        package_root.clone(),
+    ));
     let state = AppState(Arc::new(Shared {
         boot,
         limits: Limits::new(),
@@ -622,6 +647,7 @@ pub async fn serve(
         feeds: Feeds::new(),
         agents,
         store: store.clone(),
+        usage,
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -653,6 +679,24 @@ pub async fn serve(
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state);
     tracing::info!(target: "aac_http", "private service ready");
+    // G20: only a build that is actually serving becomes the one installers must keep.
+    let running_build = aac_files::deployed_build::read_packaged_build(&package_root);
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    let record_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let unrecorded = aac_files::deployed_build::record_running_build(
+        &state.0.boot.ccs_dir,
+        running_build.as_ref(),
+        std::env::var("CCS_DIR").ok().as_deref(),
+        std::env::var("CCS_HOME").ok().as_deref(),
+        &home,
+        record_now,
+    );
+    if unrecorded > 0 {
+        tracing::warn!(target: "aac_http", "web.deployed_build.unrecorded", "Running build could not be recorded");
+    }
     // R3: the hosted store opens beside the HTTP service (its calls wait for the open),
     // its jobs run on TS's cadence, and the engine closes cleanly when the service ends.
     let jobs_stop = Arc::new(AtomicBool::new(false));

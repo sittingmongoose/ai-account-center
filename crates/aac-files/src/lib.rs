@@ -10,9 +10,11 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+pub mod deployed_build;
 pub mod path;
 pub mod read;
 pub mod registry;
+pub mod share;
 
 use read::{Read, ReadPolicy};
 
