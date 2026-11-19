@@ -320,31 +320,25 @@ impl Produce {
                 *machine == local,
             ));
         }
-        let mut results = HashMap::new();
+        // Every machine at once, as the collector's `Promise.all` did.
+        let mut pending = Vec::with_capacity(reads.len());
         for (machine, host, alias, is_local) in reads {
-            let sample = if is_local {
-                tokio::task::spawn_blocking(local_sample)
-                    .await
-                    .unwrap_or_else(|_| Err("The machine did not answer.".to_owned()))
-            } else {
-                let Some(host) = host else {
-                    results.insert(
-                        machine,
-                        Err("No ssh host is configured for this machine.".to_owned()),
-                    );
-                    continue;
+            pending.push(async move {
+                let sample = if is_local {
+                    tokio::task::spawn_blocking(local_sample)
+                        .await
+                        .unwrap_or_else(|_| Err("The machine did not answer.".to_owned()))
+                } else {
+                    match (host, alias.clone()) {
+                        (Some(host), Some(alias)) => read_remote(host, &alias).await,
+                        _ => Err("No ssh host is configured for this machine.".to_owned()),
+                    }
                 };
-                let Some(alias) = alias else {
-                    results.insert(
-                        machine,
-                        Err("No ssh host is configured for this machine.".to_owned()),
-                    );
-                    continue;
-                };
-                read_remote(host, &alias).await
-            };
-            results.insert(machine, sample);
+                (machine, sample)
+            });
         }
+        let results: Vec<(String, Result<Sample, String>)> =
+            futures_util::future::join_all(pending).await;
         let (browsers_result, simlock_result) = tokio::join!(read_browsers(), read_simlock());
         let pins = read_pins(&rows, local).await;
         let now_i64 = clamp_i64(now);
@@ -362,7 +356,8 @@ impl Produce {
             }
             match browsers_result {
                 Ok(rows) => {
-                    let merged = browsers::merge_rows(inner.browsers.data.as_deref(), rows, now_i64);
+                    let merged =
+                        browsers::merge_rows(inner.browsers.data.as_deref(), rows, now_i64);
                     let problems = browsers::problems(&merged);
                     inner.browsers = Collected::succeeded(merged, now_i64).with_problems(problems);
                 }
@@ -1014,15 +1009,32 @@ fn simlock_problems(
 async fn read_pins(rows: &[(String, String, Option<String>)], local: String) -> Pins {
     let mut pins = Pins::default();
     let now = now_ms();
-    let mut lists = Vec::new();
+    let mut pending = Vec::with_capacity(rows.len());
     for (machine, os, alias) in rows {
-        let outcome = if *machine == local {
-            local_pins()
-        } else {
-            match (HostOs::of(os), alias.as_deref()) {
-                (Some(host), Some(alias)) => remote_pins(machine, host, alias).await,
-                _ => Err("did_not_answer".to_owned()),
-            }
+        let machine = machine.clone();
+        let os = HostOs::of(os);
+        let alias = alias.clone();
+        let local_machine = machine == local;
+        pending.push(async move {
+            let outcome = if local_machine {
+                local_pins()
+            } else {
+                match (os, alias) {
+                    (Some(host), Some(alias)) => remote_pins(&machine, host, &alias).await,
+                    _ => Err("did_not_answer".to_owned()),
+                }
+            };
+            (machine, outcome)
+        });
+    }
+    let outcomes: Vec<(String, Result<aac_status::pins::PinsRead, String>)> =
+        futures_util::future::join_all(pending).await;
+    let by_machine: HashMap<String, Result<aac_status::pins::PinsRead, String>> =
+        outcomes.into_iter().collect();
+    let mut lists = Vec::new();
+    for (machine, _, _) in rows {
+        let Some(outcome) = by_machine.get(machine) else {
+            continue;
         };
         let state = pins.machines.entry(machine.clone()).or_default();
         match outcome {
@@ -1033,7 +1045,7 @@ async fn read_pins(rows: &[(String, String, Option<String>)], local: String) -> 
                 state.problem = None;
                 lists.push(aac_status::pins::MachinePins {
                     name: machine.clone(),
-                    pinned: read.pinned,
+                    pinned: read.pinned.clone(),
                 });
             }
             Err(code) => {
@@ -1046,9 +1058,9 @@ async fn read_pins(rows: &[(String, String, Option<String>)], local: String) -> 
                     let since = state
                         .problem
                         .as_ref()
-                        .filter(|(held, _)| held == &code)
+                        .filter(|(held, _)| held == code)
                         .map_or(now, |(_, since)| *since);
-                    state.problem = Some((code, since));
+                    state.problem = Some((code.clone(), since));
                 }
             }
         }

@@ -9,15 +9,15 @@
 //! values are compared.
 
 use aac_status::answers_engine::{HistoryEntry, StepState};
+use aac_status::pins::MergedPin;
 use aac_status::produce::answers_feed::{AnswersFeed, merge_shared};
 use aac_status::produce::browsers::{self, BrowserMachine};
 use aac_status::produce::facts::ZoneFacts;
 use aac_status::produce::machines::{self, HostOs};
+use aac_status::produce::pinned_input;
 use aac_status::produce::simlock;
 use aac_status::produce::sources::{self, Readings};
 use aac_status::produce::usage::UsageInput;
-use aac_status::produce::pinned_input;
-use aac_status::pins::MergedPin;
 use aac_status::share::Problem;
 use aac_status::share::reports::{AgentReportsState, SeenReport};
 use aac_status::share::status_docs::StatusDocsState;
@@ -154,10 +154,7 @@ fn canonical(value: &Json) -> String {
                 .collect();
             format!("{{{}}}", parts.join(","))
         }
-        Json::Array(items) => format!(
-            "[{}]",
-            items.iter().map(canonical).collect::<Vec<_>>().join(",")
-        ),
+        Json::Array(items) => format!("[{}]", items.iter().map(canonical).collect::<Vec<_>>().join(",")),
         other => aac_status::share::js_text(other),
     }
 }
@@ -187,12 +184,7 @@ fn the_pinned_composer_gets_the_input_the_collector_built() {
         state: "ok",
         scanned_at: reports["scannedAt"].as_u64(),
         complete: true,
-        threads: reports["threads"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(seen)
-            .collect(),
+        threads: reports["threads"].as_array().unwrap().iter().map(seen).collect(),
         tasks: reports["tasks"].as_array().unwrap().iter().map(seen).collect(),
         cards: reports["cards"].as_array().unwrap().iter().map(seen).collect(),
         problems: Vec::new(),
@@ -239,11 +231,7 @@ fn the_pinned_composer_gets_the_input_the_collector_built() {
     )
     .expect("the fixture composes");
     let rust = serde_json::to_value(&input).expect("serializes");
-    assert_eq!(
-        canonical(&rust),
-        canonical(&vectors["pinned"]["input"]),
-        "pinned input"
-    );
+    assert_eq!(canonical(&rust), canonical(&vectors["pinned"]["input"]), "pinned input");
 }
 
 #[test]
