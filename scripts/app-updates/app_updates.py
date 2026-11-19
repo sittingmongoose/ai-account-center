@@ -1255,6 +1255,16 @@ def read_task_request(request_path):
         return None, None
 
 
+def inventory_payload(platform):
+    installations = detect(platform)
+    return {"inventory": True, "apps": [
+        {"appId": app_id, "installed": install is not None, "version": install.version if install else None, "manager": install.manager if install else None,
+         **({"parts": install.parts} if getattr(install, "parts", None) is not None else {}),
+         **({"strays": install.strays} if getattr(install, "strays", None) else {})}
+        for app_id, install in installations.items()
+    ]}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Inventory or explicitly update the fixed installed app set")
     mode = parser.add_mutually_exclusive_group()
@@ -1302,13 +1312,7 @@ def main():
     emit = remember
     try:
         if not args.apply:
-            installations = detect(args.platform)
-            payload = {"inventory": True, "apps": [
-                {"appId": app_id, "installed": install is not None, "version": install.version if install else None, "manager": install.manager if install else None,
-                 **({"parts": install.parts} if getattr(install, "parts", None) is not None else {}),
-                 **({"strays": install.strays} if getattr(install, "strays", None) else {})}
-                for app_id, install in installations.items()
-            ]}
+            payload = inventory_payload(args.platform)
         elif args.platform == "windows" and not args.task_child:
             payload = windows_interactive_apply(emit, cancelled, agy_reviewed)
         else:

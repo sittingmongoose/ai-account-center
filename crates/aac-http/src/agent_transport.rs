@@ -269,6 +269,7 @@ impl Agents {
             || ![
                 "health",
                 "inventory",
+                "apps",
                 "signin-expiry",
                 "quota-read",
                 "scan-usage",

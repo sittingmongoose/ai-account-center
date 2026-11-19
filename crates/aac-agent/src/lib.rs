@@ -1,4 +1,5 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
+mod apps;
 mod failover;
 mod files;
 mod history;
@@ -214,6 +215,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     }
     if request.verb == "scan-usage" {
         return scan::run(&request.args).await;
+    }
+    if request.verb == "apps" {
+        return apps::run(&request.args).await;
     }
     if request.verb == "inventory" {
         return inventory::run(&request.args).await;
