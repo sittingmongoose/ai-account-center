@@ -3629,6 +3629,15 @@
       ]
     },
     {
+      "file": "tests/unit/web-server/api-auth-hardening.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP",
+        "table"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/api-compression.test.ts",
       "kind": "HTTP",
       "evidence": [
@@ -3849,6 +3858,13 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-devices.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
       ]
     },
     {
@@ -4228,6 +4244,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/settings-review-r2.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "tests/unit/web-server/shutdown.test.ts",
