@@ -171,6 +171,10 @@ impl OwnerHost {
             if let Some(store) = owners.store.clone() {
                 let _ = tokio::task::spawn_blocking(move || store.open_at_boot()).await;
             }
+            if let Some(owner) = &owners.scoreboard_owned {
+                // The first request sees a catalog and runs from the same prepared generation.
+                owner.prepare_local().await;
+            }
             if let Some(owner) = &owners.status_owned {
                 let owner = owner.clone();
                 let produce = owners.status_produce.clone();
@@ -180,14 +184,14 @@ impl OwnerHost {
             if let Some(owner) = &owners.scoreboard_owned {
                 let catalog = owner.clone();
                 let stop = self.local_stop.clone();
-                tokio::spawn(
-                    async move { crate::scoreboard_owned::catalog_jobs(catalog, stop).await },
-                );
+                tokio::spawn(async move {
+                    crate::scoreboard_owned::catalog_jobs(catalog, stop, false).await
+                });
                 let ingest = owner.clone();
                 let stop = self.local_stop.clone();
-                tokio::spawn(
-                    async move { crate::scoreboard_owned::ingest_jobs(ingest, stop).await },
-                );
+                tokio::spawn(async move {
+                    crate::scoreboard_owned::ingest_jobs(ingest, stop, false).await
+                });
             }
             if let Some(answers) = &owners.answers_owned {
                 let answers = answers.clone();
@@ -322,6 +326,10 @@ impl OwnerHost {
         #[cfg(unix)]
         {
             let _ = self.link().await;
+        }
+        #[cfg(not(unix))]
+        if enabled() {
+            let _ = self.local().await;
         }
     }
 

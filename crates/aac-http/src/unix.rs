@@ -2029,10 +2029,10 @@ async fn serve_inner(
         .await;
         let jobs = Arc::clone(owner);
         let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(async move { crate::scoreboard_owned::ingest_jobs(jobs, stop).await });
+        tokio::spawn(async move { crate::scoreboard_owned::ingest_jobs(jobs, stop, true).await });
         let jobs = Arc::clone(owner);
         let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(async move { crate::scoreboard_owned::catalog_jobs(jobs, stop).await });
+        tokio::spawn(async move { crate::scoreboard_owned::catalog_jobs(jobs, stop, true).await });
     }
     let cancel = aac_transport::CancellationToken::new();
     let lifecycle_owner = state.0.lifecycle.clone();
