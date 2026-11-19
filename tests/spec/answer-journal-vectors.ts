@@ -90,9 +90,8 @@ fs.fsyncSync = ((fd: number) => {
 const { AgentReportsReader } = await import('../../src/web-server/status/agent-reports-reader');
 const answersModule = await import('../../src/web-server/status/answers');
 const { StatusAnswers, deliveryView, summarySteps } = answersModule;
-const { parseAnswerEntry, normalizeNote } = await import(
-  '../../src/web-server/status/answer-entries'
-);
+const { parseAnswerEntry, normalizeNote } =
+  await import('../../src/web-server/status/answer-entries');
 const { findSecretIn } = await import('../../src/web-server/status/schema-helpers');
 const { findTypedSecret } = await import('../../src/web-server/status/typed-secrets');
 const { canonicalJson } = await import('../../src/web-server/status/answer-signing');
@@ -238,7 +237,10 @@ const cardFile = (doc: ReturnType<typeof cardDoc>) => ({
   text: `${JSON.stringify(doc, null, 2)}\n`,
 });
 const sha = (doc: ReturnType<typeof cardDoc>) =>
-  crypto.createHash('sha256').update(`${JSON.stringify(doc, null, 2)}\n`).digest('hex');
+  crypto
+    .createHash('sha256')
+    .update(`${JSON.stringify(doc, null, 2)}\n`)
+    .digest('hex');
 const entry = (doc: ReturnType<typeof cardDoc>, fields: Record<string, unknown> = {}) => ({
   cardId: doc.id,
   cardSeq: doc.seq,
@@ -333,8 +335,18 @@ const scenarios: unknown[] = [];
       cardFile(r2),
       cardFile(r3),
       cardFile(r4),
-      { op: 'submit', device: 'Mac', clientSendId: 'client-send-0001', entries: [entry(r1), entry(r2)] },
-      { op: 'submit', device: 'Mac', clientSendId: 'client-send-0001', entries: [entry(r1), entry(r2)] },
+      {
+        op: 'submit',
+        device: 'Mac',
+        clientSendId: 'client-send-0001',
+        entries: [entry(r1), entry(r2)],
+      },
+      {
+        op: 'submit',
+        device: 'Mac',
+        clientSendId: 'client-send-0001',
+        entries: [entry(r1), entry(r2)],
+      },
       { op: 'submit', device: 'Mac', clientSendId: 'client-send-0001', entries: [entry(r3)] },
       { op: 'submit', device: 'Mac', entries: [draftNote] },
       { op: 'clock', now: NOW + 60_000 },
@@ -346,7 +358,12 @@ const scenarios: unknown[] = [];
       },
       check(),
       { op: 'reopen' },
-      { op: 'submit', device: 'Mac', clientSendId: 'client-send-0001', entries: [entry(r1), entry(r2)] },
+      {
+        op: 'submit',
+        device: 'Mac',
+        clientSendId: 'client-send-0001',
+        entries: [entry(r1), entry(r2)],
+      },
       { op: 'submit', device: 'Mac', entries: [draftNote] },
       check(),
     ])
@@ -468,13 +485,23 @@ const scenarios: unknown[] = [];
       cardFile(h1),
       cardFile(h2),
       { op: 'write', path: 'v1/answers', text: 'not a folder' },
-      { op: 'submit', device: 'Windows', clientSendId: 'client-send-0003', entries: [entry(h1), entry(h2)] },
+      {
+        op: 'submit',
+        device: 'Windows',
+        clientSendId: 'client-send-0003',
+        entries: [entry(h1), entry(h2)],
+      },
       { op: 'reopen' },
       { op: 'remove', path: 'v1/answers' },
       { op: 'clock', now: NOW + 60_000 },
       { op: 'retry' },
       check(),
-      { op: 'submit', device: 'Windows', clientSendId: 'client-send-0003', entries: [entry(h1), entry(h2)] },
+      {
+        op: 'submit',
+        device: 'Windows',
+        clientSendId: 'client-send-0003',
+        entries: [entry(h1), entry(h2)],
+      },
       check(),
     ])
   );
