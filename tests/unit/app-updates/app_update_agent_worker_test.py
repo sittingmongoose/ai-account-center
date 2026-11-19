@@ -1,6 +1,7 @@
 """Tests of the bounded single-app helper used by the Rust agent."""
 import contextlib
 import ctypes
+import json
 import os
 import pathlib
 import subprocess
@@ -116,6 +117,49 @@ class AgentWorkerTest(unittest.TestCase):
         row = result["results"][0]
         self.assertEqual(row["heldVersion"], "1.2.4")
         self.assertEqual(row["status"], "held")
+
+
+    def test_windows_interactive_task_accepts_one_app_and_a_bound_cancel(self):
+        with tempfile.TemporaryDirectory(prefix="aac-task-fixture-") as directory:
+            path = pathlib.Path(directory)
+            root = path / ".ccs/app-updates"
+            root.mkdir(parents=True)
+            request_file = root / "windows-task-request.json"
+            cancel_file = root / "windows-task-cancel.json"
+            app = "codex-desktop"
+            events = []
+            started = False
+
+            def powershell(command, **_):
+                nonlocal started
+                if "Start-ScheduledTask" not in command:
+                    self.assertFalse(started)
+                    return "123"
+                started = True
+                request = json.loads(request_file.read_text())
+                self.assertEqual((request["appId"], request["workerSeconds"]), (app, 45))
+                common.write_private_json(root / "windows-task-progress.json", {
+                    "nonce":request["nonce"], "events":[{"event":"app","appId":app,"phase":"downloading"}]
+                })
+                return ""
+
+            def sleep(_seconds):
+                request = json.loads(request_file.read_text())
+                self.assertEqual(json.loads(cancel_file.read_text()), {"nonce":request["nonce"]})
+                common.write_private_json(root / "windows-task-result.json", {
+                    "nonce":request["nonce"], "results":[common.result(
+                        app, "windows", "skipped", code="skipped_cancelled")]
+                })
+
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(pathlib.Path, "home", return_value=path))
+                stack.enter_context(mock.patch.object(updates, "execution_lock", contextlib.nullcontext))
+                stack.enter_context(mock.patch.object(updates, "powershell", powershell))
+                stack.enter_context(mock.patch.object(updates.time, "sleep", sleep))
+                answer = updates.windows_interactive_apply(events.append, lambda:True, app=app, budget=45)
+            self.assertEqual([event["phase"] for event in events], ["downloading"])
+            self.assertEqual(len(answer["results"]), 1)
+            self.assertEqual(answer["results"][0]["messageCode"], "skipped_cancelled")
 
 
 if __name__ == "__main__":
