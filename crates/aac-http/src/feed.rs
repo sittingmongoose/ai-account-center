@@ -311,6 +311,12 @@ impl Feeds {
         }
     }
 
+    /// G14: the latest generation held for a source, whatever its id (the writers' job reads the
+    /// freshest fed input each pass, not a generation a request named).
+    pub(crate) fn latest(&self, source: &str) -> Option<Arc<Generation>> {
+        self.held.lock().ok()?.get(source).cloned()
+    }
+
     /// The generation held for a source, or `stale` when none is.
     pub(crate) fn status(&self, source: &str) -> Result<serde_json::Value, Decline> {
         let held = self.held.lock().map_err(|_| Decline::Internal)?;

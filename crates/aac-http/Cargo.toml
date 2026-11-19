@@ -44,7 +44,8 @@ futures-util = { version = "0.3", default-features = false }
 # Model pricing (G15) and the CLI's local store API fallback.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 sha2.workspace = true
-sha1 = "0.10"
+sha1.workspace = true
+flate2 = "1"
 subtle = "2.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }

@@ -1476,7 +1476,7 @@ async fn serve_inner(
         producer: Arc::new(crate::home_producer::HomeProducer::default()),
         account_usage: cache.clone(),
         native_usage: native.is_some(),
-        agents,
+        agents: agents.clone(),
         collection: collection.clone(),
         cursor,
         store: store.clone(),
@@ -1513,6 +1513,9 @@ async fn serve_inner(
         router = router.route(&path, method_router);
     }
     // Global layer protects even unknown routes and unsupported methods.
+    // G14: the Analytics writers read the fed inputs and the boot's root beside the service.
+    let writers_feeds = state.0.feeds.clone();
+    let writers_ccs = state.0.boot.ccs_dir.clone();
     let router = router
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state.clone());
@@ -1568,6 +1571,20 @@ async fn serve_inner(
         let jobs = Arc::clone(host);
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { store_jobs(jobs, stop).await });
+        // G14: the quota sampler and activity scheduler run when the front door feeds them on.
+        let writers_host = Arc::clone(host);
+        let writers_stop = Arc::clone(&jobs_stop);
+        let writers_agents = Arc::clone(&agents);
+        tokio::spawn(async move {
+            crate::analytics_writers::analytics_jobs(
+                writers_host,
+                writers_feeds,
+                writers_agents,
+                writers_ccs,
+                writers_stop,
+            )
+            .await
+        });
     }
     // R4: the owned readers' jobs, and the catalog seed before the first ingest pass.
     if let Some(owner) = &status_owned {

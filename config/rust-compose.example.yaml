@@ -10,6 +10,7 @@ rustService:
     status: on
     scoreboard: on
     analytics: on
+    analytics-writers: on
     collection: on
     writes: on
     app-updates: on

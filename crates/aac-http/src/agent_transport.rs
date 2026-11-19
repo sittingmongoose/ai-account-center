@@ -779,6 +779,64 @@ impl Agents {
         result.map_err(|failure| failure.cause)
     }
 
+    /// G14: an in-process `scan-usage` call for the activity scheduler. Returns the scanner's
+    /// answer value (the v2 response) or a named error. Unlike [`Self::call`], it collects the
+    /// terminal frame instead of streaming NDJSON to the front door: the scheduler owns the
+    /// cadence and reads the rows itself, so no front-door control channel is registered.
+    pub(crate) async fn scan_usage(
+        self: &Arc<Self>,
+        platform: &str,
+        ssh_host: Option<&str>,
+        args: &Value,
+        deadline_ms: u64,
+        max_bytes: usize,
+        call_id: &str,
+    ) -> Result<Value, String> {
+        let selector = Selector {
+            platform: platform.to_string(),
+            ssh_host: ssh_host.map(str::to_string),
+        };
+        let started = tokio::time::Instant::now();
+        let budget = deadline_ms
+            .checked_sub(FRONT_DOOR_MARGIN_MS)
+            .filter(|ms| *ms > 0)
+            .ok_or_else(|| "deadline".to_string())?;
+        let permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "busy".to_string())?;
+        let deadline = started + Duration::from_millis(budget);
+        let registry = self.registered(deadline).await;
+        let client = registry
+            .as_deref()
+            .and_then(|result| result.as_ref().ok())
+            .and_then(|registry| registry.client(&selector))
+            .ok_or_else(|| "unavailable".to_string())?;
+        let args_text = serde_json::to_string(args).map_err(|_| "shape".to_string())?;
+        let wire = format!(
+            "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":{args_text}}}"
+        );
+        let request = serde_json::from_str::<Request>(&wire).map_err(|_| "shape".to_string())?;
+        let mut options = CallOptions::new(Duration::ZERO, max_bytes);
+        options.deadline = deadline;
+        options.scan = true;
+        let (_input, controls) = mpsc::channel(8);
+        let (progress, _events) = mpsc::channel(4);
+        let _permit = permit;
+        let events = client
+            .call_controlled_encoded(&request, wire.as_bytes(), &options, controls, progress)
+            .await
+            .map_err(|_| "transport".to_string())?;
+        match events.last() {
+            Some(Event::Result { value, .. }) if value != &json!({"fallback":"python"}) => {
+                Ok(value.clone())
+            }
+            Some(Event::Failure { failure, .. }) => Err(format!("{:?}", failure.cause)),
+            _ => Err("reply".to_string()),
+        }
+    }
+
     pub(crate) async fn control(&self, id: &str, bytes: &[u8]) -> Response {
         let Some((control, frame)) = control_line(bytes) else {
             return Json(json!({"accepted":false})).into_response();

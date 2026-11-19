@@ -9,7 +9,6 @@
 import type { AacStore } from '../store/store-service';
 import { rustInputText } from './rust-read-input';
 import { rustAnalyticsOwnedDashboard } from './rust-account-input';
-import { defaultAccountAnalyticsPricing } from './services/account-analytics-pricing';
 import type { AnalyticsProviderEntry } from './services/account-analytics-providers';
 import type { ResolvedAccountAnalyticsRange } from './services/account-analytics-range';
 import type {
@@ -24,8 +23,6 @@ const DAY = 86_400_000;
 const STEP = 6 * 3_600_000;
 /** The proven zone shape's segment bound (`aac_num::intl::Zone::proven`). */
 const MAX_SEGMENTS = 64;
-/** A pathological dictionary never builds an envelope over the input cap. */
-const MAX_PRICING_PAIRS = 8_000;
 
 /** The live collector state the owned read forwards (`storeActivityAnswer`'s `live`). */
 export interface AnalyticsOwnedLive {
@@ -123,25 +120,16 @@ export function analyticsZoneFacts(
 }
 
 /**
- * The resolved pricing facts over the store dictionary's model/route superset: every pair the
- * owned read can ask for, answered by the same lookup the TS projection uses. Null when the
- * dictionary is too large or the read fails.
+ * The resolved pricing facts over the store dictionary's model/route superset, answered in Rust
+ * (`Resolver::facts_table`, byte-equal to the TS lookup the projection uses). Null when the
+ * dictionary is too large or the read fails; the bridge then logs the fallback and TS answers.
  */
 async function pricingFacts(store: AacStore): Promise<Record<string, unknown> | null> {
-  let dictionary: { models: string[]; routes: string[] };
   try {
-    dictionary = await store.activityModels();
+    return await store.activityPricingFacts();
   } catch {
     return null;
   }
-  const routes = [...dictionary.routes, ''];
-  if (dictionary.models.length * routes.length > MAX_PRICING_PAIRS) return null;
-  const table: Record<string, unknown> = {};
-  for (const model of dictionary.models)
-    for (const route of routes) {
-      table[`${model}\0${route}`] = defaultAccountAnalyticsPricing(model, route || undefined);
-    }
-  return table;
 }
 
 /**

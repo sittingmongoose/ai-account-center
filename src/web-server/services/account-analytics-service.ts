@@ -12,6 +12,12 @@ import { BoundedCache } from '../../utils/bounded-cache';
 import { getAccountDashboard } from './account-dashboard-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import { readDashboardPreferences } from './dashboard-preferences';
+import { rustAnalyticsWritersOn } from '../rust-service-groups';
+import {
+  startAnalyticsWriterFeeds,
+  stopAnalyticsWriterFeeds,
+} from './analytics-writer-feeds';
+import type { RustService } from '../rust-service';
 import {
   fixedAnalyticsSourceEntries,
   getAccountAnalyticsActivity,
@@ -988,12 +994,19 @@ export function getAccountAnalytics(
 ): Promise<AccountAnalytics> {
   return singleton().get(query, composer, owned);
 }
-export function startAccountAnalyticsSampling(): void {
+export function startAccountAnalyticsSampling(rustService?: RustService): void {
+  // G14: with the writers group on, the Rust service samples quota and collects activity; the
+  // front door feeds it the inputs and stands its own writers down so nothing writes twice.
+  if (rustService?.mode === 'on' && rustAnalyticsWritersOn()) {
+    startAnalyticsWriterFeeds(rustService);
+    return;
+  }
   singleton().start();
   // Usage history is collected in the background too, so it grows while no page is open.
   startAccountAnalyticsActivityBackground();
 }
 export function stopAccountAnalyticsSampling(): void {
+  stopAnalyticsWriterFeeds();
   stopAccountAnalyticsActivityBackground();
   service?.stop();
   service?.flushSavedViews();

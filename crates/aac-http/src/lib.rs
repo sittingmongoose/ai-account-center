@@ -31,6 +31,8 @@ mod dashboard_fed;
 #[cfg(unix)]
 pub mod dashboard_observations;
 #[cfg(unix)]
+mod analytics_writers;
+#[cfg(unix)]
 mod feed;
 #[cfg(unix)]
 mod home_fed;

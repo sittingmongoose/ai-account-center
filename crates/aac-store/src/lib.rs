@@ -8,6 +8,7 @@
 pub mod activity;
 pub mod capture;
 pub mod contract;
+pub mod collect;
 pub mod db;
 pub mod engine;
 pub mod error;
@@ -17,12 +18,15 @@ pub mod fsx;
 pub mod legacy;
 pub mod log;
 pub mod msgpack;
+pub mod observe;
 pub mod ops;
 pub mod pack;
 pub mod read_status;
+pub mod report;
 pub mod run_identity;
 pub mod run_schema;
 pub mod runs;
+pub mod sampler;
 #[path = "../../../native/shared/secret_policy.rs"]
 pub mod secret_policy;
 // Compatibility for callers from the original capture implementation.

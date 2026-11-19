@@ -15,6 +15,7 @@ export type RustGroup =
   | 'status'
   | 'scoreboard'
   | 'analytics'
+  | 'analytics-writers'
   | 'collection'
   | 'writes'
   | 'app-updates'
@@ -28,6 +29,7 @@ const DEFAULT: Record<RustGroup, boolean> = {
   status: false,
   scoreboard: true,
   analytics: false,
+  'analytics-writers': false,
   collection: false,
   writes: false,
   'app-updates': false,
@@ -96,4 +98,14 @@ export function rustOwnedStatusOn(env: NodeJS.ProcessEnv = process.env): boolean
  */
 export function rustOwnedScoreboardOn(env: NodeJS.ProcessEnv = process.env): boolean {
   return process.platform !== 'win32' && rustGroupOn('scoreboard', env) && rustStoreSwitchOn(env);
+}
+
+/** G14: move the writers only to a supported host with the analytics group and store on. */
+export function rustAnalyticsWritersOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    process.platform !== 'win32' &&
+    rustGroupOn('analytics-writers', env) &&
+    rustGroupOn('analytics', env) &&
+    rustStoreSwitchOn(env)
+  );
 }

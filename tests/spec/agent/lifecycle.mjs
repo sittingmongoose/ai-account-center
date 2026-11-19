@@ -17,6 +17,7 @@ const keys = ['KIMI_CODE_API_KEY', 'KIMI_API_KEY', 'ZAI_API_KEY', 'ZHIPU_API_KEY
   'BAILIAN_TOKEN_PLAN_API_KEY', 'OPENCODE_GO_API_KEY', 'OPENCODE_API_KEY'];
 if (!process.env.AAC_L5_FIXTURE_CHILD) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-l5-lifecycle-'));
+  let result;
   try {
     const pkg = path.join(scratch, 'package');
     fs.mkdirSync(pkg);
@@ -31,7 +32,7 @@ if (!process.env.AAC_L5_FIXTURE_CHILD) {
     fs.symlinkSync(fs.realpathSync(path.join(repo, 'node_modules')), path.join(pkg, 'node_modules'));
     const home = path.join(scratch, 'home');
     fs.mkdirSync(path.join(home, '.ccs'), { recursive: true, mode: 0o700 });
-    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), path.resolve(agent), path.resolve(binary), selected], {
+    result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), path.resolve(agent), path.resolve(binary), selected], {
       stdio: 'inherit', timeout: 60_000,
       env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
         HOME: home, USER: 'fixture-user', LOGNAME: 'fixture-user', LANG: 'C.UTF-8', TZ: 'UTC',
@@ -43,7 +44,10 @@ if (!process.env.AAC_L5_FIXTURE_CHILD) {
         ...Object.fromEntries(keys.map((key) => [key, 'fixture-only-provider-key'])) },
     });
     assert.equal(result.status, 0, `lifecycle fixture ${selected} failed`);
-  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+  } finally {
+    if (result?.status === 0) fs.rmSync(scratch, { recursive: true, force: true });
+    else console.error(`lifecycle scratch kept for diagnosis: ${scratch}`);
+  }
 } else {
   const pkg = process.env.AAC_L5_FIXTURE_CHILD;
   const home = process.env.HOME;
@@ -55,14 +59,15 @@ if (!process.env.AAC_L5_FIXTURE_CHILD) {
   const artifact = { file: agent, sha256: createHash('sha256').update(fs.readFileSync(agent)).digest('hex'),
     target: identity.target, version: identity.version };
   fs.writeFileSync(path.join(pkg, 'dist/web-server/services/agent-artifacts.json'), JSON.stringify({ artifacts: [artifact] }));
-  fs.writeFileSync(path.join(ccs, 'config.yaml'), JSON.stringify({ agentTransport: 'on', agentVerbs: 'on',
+  fs.writeFileSync(path.join(ccs, 'config.yaml'), JSON.stringify({ version: 1, agentTransport: 'on', agentVerbs: 'on',
     computers: { local: { label: 'Local fixture', os: 'linux', transport: { kind: 'local' } },
       remote: { label: 'Remote fixture', os: 'linux', sshAlias: 'fixture',
-        transport: { kind: 'ssh', host: 'fixture.invalid', key: path.join(home, 'no-key'), user: null, port: null } } },
+        transport: { kind: 'ssh', host: 'fixture.invalid', key: path.join(home, 'no-key') } } },
     agentTransportSsh: { knownHostsFile: path.join(home, 'no-known-hosts') } }));
   const recorder = path.join(home, 'ssh');
   fs.writeFileSync(recorder, `#!/usr/bin/python3
 import sys,os,json,re,shlex,time
+if '-G' in sys.argv[1:]: sys.exit(0)  # capability probe, not an agent launcher call
 with open(${JSON.stringify(trace)},'a') as f:f.write(json.dumps(sys.argv[1:])+'\\n')
 command=shlex.split(sys.argv[-1])[-1]
 stage=re.search(r"case '(probe|prepare|commit|run)'",command)
