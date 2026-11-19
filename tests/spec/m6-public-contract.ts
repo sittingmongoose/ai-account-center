@@ -315,6 +315,24 @@ try {
     await fs.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
   }
+  // Home rows: recorded from the shipped worker's own answer (the native switch off), then
+  // replayed against the native route (the switch on, the view group on).
+  if (group === 'store-usage-home') {
+    Object.assign(environment, {
+      AAC_RUST_GROUP_HOME: 'on',
+      AAC_RUST_HOME_VIEW: 'on',
+      AAC_AGENT_VERBS: 'off',
+      AAC_AGENT_TRANSPORT: 'off',
+      ...(recordNative
+        ? {
+            AAC_RUST_CUT_NATIVE_ROUTES: 'off',
+            AAC_RUST_STORE: 'off',
+            AAC_RUST_GROUP_STATUS: 'off',
+            AAC_RUST_GROUP_SCOREBOARD: 'off',
+          }
+        : { AAC_RUST_CUT_NATIVE_ROUTES: 'on' }),
+    });
+  }
   if (group === 'status-home' || group === 'status') {
     for (const key of Object.keys(environment))
       if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
