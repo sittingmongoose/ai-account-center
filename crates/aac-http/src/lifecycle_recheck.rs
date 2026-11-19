@@ -1,4 +1,5 @@
 //! A single-account Re-check publishes a reading only if its source still matches.
+use serde_json::{Value, json};
 use std::future::Future;
 use tokio::io;
 
@@ -24,6 +25,48 @@ where
     perform(Effect::PublishIfCurrent).await
 }
 
+/// The resolved v2 account source captured before a Re-check.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Source {
+    /// Registry account id.
+    pub id: String,
+    /// Provider whose collector owns the reading.
+    pub provider: String,
+    /// The platform of the registered account.
+    pub platform: String,
+    /// The registered SSH alias, when configured.
+    pub ssh_host: Option<String>,
+    /// The registered credential reference, without any credential bytes.
+    pub credential: Value,
+}
+
+/// The native route's collect-and-publish path. `collect` returns one normalized
+/// public dashboard row and keeps the collector's debounce and backoff.
+/// `publish_if_current` compares the complete registry source under its publication
+/// guard before replacing the row. False means the source changed during the read.
+pub async fn account<E, C, P>(
+    source: Source,
+    collect: impl FnOnce(Source) -> C,
+    publish_if_current: impl FnOnce(Source, Value) -> P,
+) -> Result<Option<Value>, E>
+where
+    C: Future<Output = Result<Option<Value>, E>>,
+    P: Future<Output = Result<bool, E>>,
+{
+    let Some(mut row) = collect(source.clone()).await? else {
+        return Ok(None);
+    };
+    if row["id"].as_str() != Some(source.id.as_str())
+        || row["provider"].as_str() != Some(source.provider.as_str())
+        || row["platform"].as_str() != Some(source.platform.as_str())
+        || !publish_if_current(source, row.clone()).await?
+    {
+        return Ok(None);
+    }
+    row["lifecycle"] = json!({"state":"ready","jobId":null});
+    Ok(Some(row))
+}
+
 /// Compatibility dispatch protocol; only effect names and result flags cross the pipe.
 #[doc(hidden)]
 pub async fn compatibility_pipe() -> io::Result<()> {
@@ -41,6 +84,43 @@ pub async fn compatibility_pipe() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_unbound_or_replaced_source_never_produces_a_recheck_reply() {
+        let source = Source {
+            id: "zai:usage".into(),
+            provider: "zai".into(),
+            platform: "ubuntu".into(),
+            ssh_host: None,
+            credential: json!({"kind":"discover"}),
+        };
+        let row = |provider: &str| json!({"id":"zai:usage","provider":provider,"platform":"ubuntu","status":"cached"});
+        let reply = account(
+            source.clone(),
+            |_| std::future::ready(Ok::<_, ()>(Some(row("cursor")))),
+            |_, _| async {
+                panic!("a foreign provider reading reached publication");
+            },
+        )
+        .await;
+        assert_eq!(reply, Ok(None));
+        let reply = account(
+            source.clone(),
+            |_| std::future::ready(Ok::<_, ()>(Some(row("zai")))),
+            |_, _| std::future::ready(Ok(false)),
+        )
+        .await;
+        assert_eq!(reply, Ok(None));
+        let reply = account(
+            source,
+            |_| std::future::ready(Ok::<_, ()>(Some(row("zai")))),
+            |_, _| std::future::ready(Ok(true)),
+        )
+        .await
+        .expect("fixture collection")
+        .expect("current matching reading");
+        assert_eq!(reply["lifecycle"], json!({"state":"ready","jobId":null}));
+    }
 
     #[tokio::test]
     async fn a_missing_collection_does_not_reach_the_publish_effect() {

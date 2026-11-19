@@ -24,7 +24,12 @@ fn main() {
         Some("--antigravity-staging") => std::process::exit(provider_write::staging(true)),
         Some("--claude-workflow") => std::process::exit(provider_workflow(false)),
         Some("--key-workflow") => std::process::exit(provider_workflow(true)),
-        Some("--additional-recheck") => std::process::exit(additional_recheck()),
+        Some("--additional-recheck") => std::process::exit(run_lifecycle_pipe(
+            aac_http::lifecycle_recheck::compatibility_pipe(),
+        )),
+        Some("--antigravity-renew-login") => std::process::exit(run_lifecycle_pipe(
+            aac_http::antigravity_renewal::compatibility_pipe(),
+        )),
         Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
         Some("--lifecycle-queue") => std::process::exit(lifecycle_queue()),
         Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
@@ -68,22 +73,17 @@ fn provider_workflow(key: bool) -> i32 {
     let Some(mode) = std::env::args().nth(2) else {
         return 74;
     };
-    let runtime = tokio::runtime::Builder::new_current_thread().build();
-    let result = runtime.and_then(|runtime| {
-        if key {
-            runtime.block_on(aac_http::key_lifecycle::compatibility_pipe(&mode))
-        } else {
-            runtime.block_on(aac_http::claude_lifecycle::compatibility_pipe(&mode))
-        }
-    });
-    if result.is_ok() { 0 } else { 74 }
+    if key {
+        run_lifecycle_pipe(aac_http::key_lifecycle::compatibility_pipe(&mode))
+    } else {
+        run_lifecycle_pipe(aac_http::claude_lifecycle::compatibility_pipe(&mode))
+    }
 }
 
 #[cfg(unix)]
-fn additional_recheck() -> i32 {
+fn run_lifecycle_pipe(pipe: impl std::future::Future<Output = std::io::Result<()>>) -> i32 {
     let runtime = tokio::runtime::Builder::new_current_thread().build();
-    let result = runtime
-        .and_then(|runtime| runtime.block_on(aac_http::lifecycle_recheck::compatibility_pipe()));
+    let result = runtime.and_then(|runtime| runtime.block_on(pipe));
     if result.is_ok() { 0 } else { 74 }
 }
 

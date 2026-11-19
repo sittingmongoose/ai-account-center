@@ -11,6 +11,7 @@ import type { SignInFlowSpec } from '../../src/web-server/services/signin-job-ty
 const root = await mkdtemp(path.join(tmpdir(), 'aac-signin-dispatch-'));
 const socketPath = path.join(root, 'agent.sock');
 const calls: Array<{ path: string; action: string | null }> = [];
+let startOutcome: 'install' | 'lost' | 'unavailable' = 'install';
 const stamp = '2026-11-19T00:00:00.000Z';
 let finishSettlement!: () => void;
 const settled = new Promise<void>((resolve) => (finishSettlement = resolve));
@@ -20,6 +21,10 @@ const server = http.createServer(async (request, response) => {
   const call = JSON.parse(input);
   const route = request.url ?? '';
   calls.push({ path: route, action: call.args?.action ?? null });
+  if (route === '/internal/agent/lifecycle-signin' && startOutcome === 'lost') {
+    response.destroy();
+    return;
+  }
   response.writeHead(200, {
     'x-aac-service-boot': 'fixture',
     'content-type': 'application/x-ndjson',
@@ -29,6 +34,10 @@ const server = http.createServer(async (request, response) => {
     assert.equal(call.args.provider, 'muse');
     assert.equal(call.args.platform, 'mac');
     assert.equal(call.args.ccs, undefined);
+    if (startOutcome === 'unavailable') {
+      response.end(JSON.stringify({ ...base, type: 'fallback', reason: 'unavailable' }) + '\n');
+      return;
+    }
     const job = {
       ...call.args,
       id: call.args.jobId,
@@ -98,7 +107,36 @@ try {
       { path: '/internal/agent/lifecycle-signin', action: null },
       { path: '/internal/agent/signin-session', action: 'settle' },
     ]);
-    console.log('sign-in dispatch: native start, guarded install and journal settlement passed');
+    startOutcome = 'lost';
+    let lostCleanup!: () => void;
+    const lost = new Promise<void>((resolve) => (lostCleanup = resolve));
+    const uncertain = runner.start({ ...spec, cleanup: async () => lostCleanup() });
+    await lost;
+    assert.equal(runner.get(uncertain.id)?.error?.code, 'server_restarted');
+    assert.equal(installed, 1);
+
+    startOutcome = 'unavailable';
+    let startedLegacy!: () => void;
+    const legacy = new Promise<void>((resolve) => (startedLegacy = resolve));
+    const fallback = new SignInJobRunner({
+      nativeSession: () => remote,
+      spawn: () => {
+        startedLegacy();
+        return {
+          onData: () => undefined,
+          onExit: () => undefined,
+          write: () => false,
+          kill: () => undefined,
+        };
+      },
+    });
+    const legacyJob = fallback.start({ ...spec, cleanup: async () => {} });
+    await legacy;
+    assert.equal(fallback.cancel(legacyJob.id)?.state, 'cancelled');
+    assert.equal(installed, 1);
+    console.log(
+      'sign-in dispatch: start, install, settle, no replay and pre-dispatch fallback passed'
+    );
   } finally {
     release();
   }

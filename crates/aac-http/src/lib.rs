@@ -12,6 +12,8 @@ pub mod antigravity_probes;
 pub mod antigravity_quota;
 pub mod antigravity_runtime;
 #[cfg(unix)]
+pub mod antigravity_renewal;
+#[cfg(unix)]
 pub mod claude_lifecycle;
 #[cfg(unix)]
 pub mod app_update_routes;
