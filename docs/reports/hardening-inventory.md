@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1098 |
-| Sync fs files affected (all) | 111 |
-| Sync fs occurrences (runtime hotpaths) | 526 |
-| Sync fs files affected (runtime hotpaths) | 61 |
+| Sync fs occurrences (all) | 1103 |
+| Sync fs files affected (all) | 112 |
+| Sync fs occurrences (runtime hotpaths) | 531 |
+| Sync fs files affected (runtime hotpaths) | 62 |
 | Legacy shim markers | 209 |
 | Legacy shim files affected | 62 |
 
@@ -55,7 +55,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 55 (224 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 13 |
-| files with createLogger | 44/461 |
+| files with createLogger | 44/462 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
 | files > 600 LOC | 27 |
@@ -84,7 +84,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 4028 |
 | `src/web-server/services/account-analytics-activity.ts` | 2431 |
-| `src/web-server/services/analytics-remote-sources.ts` | 2342 |
+| `src/web-server/services/analytics-remote-sources.ts` | 2398 |
 | `src/web-server/status/answers.ts` | 1985 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1719 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |

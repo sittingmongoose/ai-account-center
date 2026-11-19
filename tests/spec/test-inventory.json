@@ -560,6 +560,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-status/tests/scoreboard_reviews.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-status/tests/spend.rs",
       "kind": "internal",
       "evidence": [],
@@ -3074,6 +3080,12 @@
     },
     {
       "file": "tests/unit/web-server/codex-native-usage-collector.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/codex-plan-detection.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
