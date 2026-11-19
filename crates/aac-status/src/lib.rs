@@ -18,6 +18,7 @@
 pub mod computers;
 pub mod answer_delivery;
 pub mod answer_signing;
+pub mod answers_engine;
 pub mod error;
 pub mod http_views;
 pub mod model_identity;
@@ -41,6 +42,7 @@ pub mod spend;
 pub mod status_doc;
 pub mod validate;
 pub mod share;
+pub mod writer_lock;
 
 #[cfg(feature = "node")]
 mod node;

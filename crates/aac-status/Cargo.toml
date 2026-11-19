@@ -46,6 +46,10 @@ spki = { version = "0.7", features = ["pem"] }
 pem-rfc7468 = { version = "0.7", features = ["alloc"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 
+[target.'cfg(unix)'.dependencies]
+# G16b: the answer store's writer lock (kill(pid, 0), gethostname).
+libc.workspace = true
+
 [build-dependencies]
 napi-build = "2"
 
