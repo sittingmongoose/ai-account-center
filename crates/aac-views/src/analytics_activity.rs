@@ -2745,3 +2745,70 @@ pub(crate) fn activity_selection(query: &Object) -> R<bool> {
     let order = usage_provider_order();
     Ok(refresh || (account == "all" && (provider == "all" || order.contains(&provider))))
 }
+
+#[cfg(test)]
+pub(crate) fn debug_steps(range: &Value, sources_state: &Value, query: &Object) {
+    //! Temporary: print each store_activity_answer step's result.
+    let now = 1_795_046_400_000.0f64;
+    let from = now - 7.0 * HOURLY_RANGE_MS;
+    match local_day_starts(from, now, "UTC", None) {
+        Ok(starts) => eprintln!("day_starts {:?}", starts.len()),
+        Err(e) => eprintln!("day_starts Err({e:?})"),
+    }
+    match coverage_of(sources_state) {
+        Ok(v) => eprintln!("coverage {}", v),
+        Err(e) => eprintln!("coverage Err({e:?})"),
+    }
+    let pricing = match Pricing::decode(Some(&json!({}))) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("pricing Err({e:?})");
+            return;
+        }
+    };
+    let sources = match range_to_sources(range, true, "2026-11-19T00:00:00.000Z", &pricing) {
+        Ok(s) => {
+            eprintln!("sources {}", s.len());
+            s
+        }
+        Err(e) => {
+            eprintln!("sources Err({e:?})");
+            return;
+        }
+    };
+    let options = ProjectionOptions {
+        tz: "UTC",
+        zone: None,
+        pricing: &pricing,
+        sources: json!([]),
+        refreshing: false,
+        refreshing_remote: json!([]),
+    };
+    match project(&sources, query, from, now, "ok", "fixture", &options) {
+        Ok(v) => eprintln!(
+            "project keys {:?}",
+            v.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        ),
+        Err(e) => eprintln!("project Err({e:?})"),
+    }
+    match session_counts(range) {
+        Ok(counts) => eprintln!("counts {}", counts.len()),
+        Err(e) => eprintln!("counts Err({e:?})"),
+    }
+    eprintln!(
+        "quality {}",
+        arr(Some(
+            obj(range)
+                .and_then(|r| r.get("quality"))
+                .unwrap_or(&Value::Null)
+        ))
+        .is_ok()
+    );
+    let sessions = obj(obj(range)
+        .and_then(|r| r.get("sessions"))
+        .unwrap_or(&Value::Null));
+    match sessions {
+        Ok(s) => eprintln!("sessions keys {:?}", s.keys().collect::<Vec<_>>()),
+        Err(e) => eprintln!("sessions Err({e:?})"),
+    }
+}

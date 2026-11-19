@@ -532,10 +532,7 @@ mod tests {
             "account=-bad",
             "refresh=yes",
         ] {
-            assert!(matches!(
-                admitted_analytics(Some(query), &PROVIDERS),
-                Err(_)
-            ));
+            assert!(admitted_analytics(Some(query), &PROVIDERS).is_err());
         }
         for query in [
             "range=8d",

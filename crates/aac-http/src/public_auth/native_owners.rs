@@ -447,7 +447,10 @@ impl Usage {
                         let _ = &cache;
                         // G18: the native sample triggers the share writer itself: the store's
                         // history, long burn and rollups are added by the service, and the
-                        // sign-in facts are collected here (only while a folder is set).
+                        // sign-in facts are collected here (only while a folder is set). The
+                        // publisher and its facts are the Unix service's; Windows keeps the TS
+                        // writer.
+                        #[cfg(unix)]
                         if owner.usage_snapshot && owner.analytics_writers {
                             owner.push_usage_sample(&cache).await;
                         }
@@ -457,6 +460,7 @@ impl Usage {
             .await;
     }
 
+    #[cfg(unix)]
     /// G18: push this sample to the service's share writer. Every sample's readings count, even
     /// one whose write the service skips, so the reading ring sees the same cadence; the sign-in
     /// probes and the store facts run only while a folder is set and there are accounts.
@@ -497,6 +501,7 @@ impl Usage {
         super::native_reads::usage_sample(self.root.clone(), payload).await;
     }
 
+    #[cfg(unix)]
     /// The sign-in expiry rows of every configured computer, under the publisher's 60 s limit; a
     /// failed or timed-out pass is named (`failed`), never sent as an empty success.
     async fn sign_in_facts(self: &Arc<Self>) -> Value {
@@ -591,6 +596,7 @@ impl Usage {
     }
 }
 
+#[cfg(unix)]
 /// The computers a sign-in poll reads, in the account collectors' order: this one, then every
 /// remote whose packaged alias is set (`configuredUsageHosts`). The same packaged registry
 /// (`web-dashboard/public/computers.json`) the collectors and the coordinator read.
