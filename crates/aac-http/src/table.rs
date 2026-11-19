@@ -330,7 +330,6 @@ mod tests {
         ] {
             assert!(rows(&format!("[{bad},{tail}]")).is_err(), "{bad}");
         }
-        Ok(())
     }
 
     #[test]
