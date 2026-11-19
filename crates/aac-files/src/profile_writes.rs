@@ -2,7 +2,7 @@
 use super::{read_bounded, require_absolute, set_private, sync_directory};
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -77,6 +77,59 @@ impl LegacyLease {
         Ok(())
     }
 
+    /// Preserve one staged removal under the same activation lease. The backup
+    /// must be vacant and must name the same profile as the staged directory.
+    pub fn codex_preserve(
+        &self,
+        root: &Path,
+        home: &Path,
+        staged: &str,
+        backup: &str,
+    ) -> io::Result<()> {
+        self.check(&home.join(".ccs-activation.lock"))?;
+        let profile = codex_removal_name(staged, ".deleting.").ok_or_else(refused)?;
+        if codex_removal_name(backup, ".preserved.") != Some(profile) {
+            return Err(refused());
+        }
+        let parent = root.join("codex-instances");
+        let source = parent.join(staged);
+        let target = parent.join(backup);
+        owned_directory(&source)?;
+        super::private_builder().create(&target)?;
+        match copy_profile_entries(&source, &target) {
+            Ok(()) => {
+                let _ = sync_directory(&parent);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(target);
+                Err(error)
+            }
+        }
+    }
+
+    /// Discard a staged removal or a preservation copy. The live profile
+    /// name and sign-in staging area are outside this operation's scope.
+    pub fn codex_discard(&self, root: &Path, home: &Path, name: &str) -> io::Result<()> {
+        self.check(&home.join(".ccs-activation.lock"))?;
+        if codex_removal_name(name, ".deleting.").is_none()
+            && codex_removal_name(name, ".preserved.").is_none()
+        {
+            return Err(refused());
+        }
+        let parent = root.join("codex-instances");
+        owned_directory(&parent)?;
+        let target = parent.join(name);
+        match owned_directory(&target) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        fs::remove_dir_all(target)?;
+        let _ = sync_directory(&parent);
+        Ok(())
+    }
+
     /// Replace an attested saved login and, when required, the same live login.
     pub fn codex_login(
         &self,
@@ -93,6 +146,46 @@ impl LegacyLease {
         let profile = root.join("codex-instances").join(profile).join("auth.json");
         let live = live.then(|| home.join("auth.json"));
         install_login(&profile, live.as_deref(), bytes, replace)
+    }
+
+    /// Delete only the credential files belonging to an unpublished profile.
+    /// Returns the count of entries that could not be proved or removed.
+    pub fn antigravity_discard(&self, root: &Path, profile: &str) -> io::Result<usize> {
+        self.check(&root.join("antigravity-profiles/.transaction-lock"))?;
+        if !antigravity_profile(profile) {
+            return Err(refused());
+        }
+        let instances = root.join("antigravity-instances");
+        private_profile_directory(&instances)?;
+        Ok(discard_antigravity_files(&instances.join(profile)))
+    }
+
+    /// Retry cleanup of Antigravity profiles absent from the validated registry.
+    /// Returns the number removed and the number of unproved entries retained.
+    pub fn antigravity_sweep(&self, root: &Path, saved: &[String]) -> io::Result<(usize, usize)> {
+        self.check(&root.join("antigravity-profiles/.transaction-lock"))?;
+        if saved.iter().any(|id| !antigravity_profile(id)) {
+            return Err(refused());
+        }
+        let instances = root.join("antigravity-instances");
+        private_profile_directory(&instances)?;
+        let mut removed = 0;
+        let mut left = 0;
+        for entry in fs::read_dir(&instances)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .is_some_and(|id| antigravity_profile(id) && !saved.iter().any(|saved| saved == id))
+            {
+                let profile = entry.path();
+                left += discard_antigravity_files(&profile);
+                if !profile.exists() {
+                    removed += 1;
+                }
+            }
+        }
+        Ok((removed, left))
     }
 
     /// Save a new immutable Antigravity credential generation under its transaction lock.
@@ -166,12 +259,107 @@ fn codex_location(name: &str) -> bool {
     codex_profile(name)
 }
 
+fn codex_removal_name<'a>(name: &'a str, divider: &str) -> Option<&'a str> {
+    let (profile, _) = name.split_once(divider)?;
+    codex_location(name).then_some(profile)
+}
+
+fn copy_profile_entries(source: &Path, target: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        let expected = fs::symlink_metadata(&from)?;
+        if expected.file_type().is_symlink() {
+            let link = fs::read_link(&from)?;
+            // Match the legacy copy's absolute link destination, without following it.
+            let link = crate::path::node::resolve(source, &link).map_err(|_| refused())?;
+            symlink(link, &to)?;
+        } else if expected.is_dir() {
+            owned_directory(&from)?;
+            super::private_builder().create(&to)?;
+            copy_profile_entries(&from, &to)?;
+        } else if expected.is_file() {
+            let mut input = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&from)?;
+            let actual = input.metadata()?;
+            if !actual.is_file() || (actual.dev(), actual.ino()) != (expected.dev(), expected.ino())
+            {
+                return Err(refused());
+            }
+            let mode = actual.mode() & 0o777;
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(mode)
+                .open(&to)?;
+            io::copy(&mut input, &mut output)?;
+            output.set_permissions(fs::Permissions::from_mode(mode))?;
+            output.sync_all()?;
+        } else {
+            return Err(refused());
+        }
+    }
+    sync_directory(target).map_err(|_| refused())
+}
+
 fn antigravity_profile(name: &str) -> bool {
     name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && name.len() <= 48
         && name
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
+}
+
+fn private_profile_directory(directory: &Path) -> io::Result<()> {
+    owned_directory(directory)?;
+    if fs::symlink_metadata(directory)?.mode() & 0o077 != 0 {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+fn discard_antigravity_files(profile: &Path) -> usize {
+    let host = profile.join("ubuntu");
+    let entries = private_profile_directory(profile)
+        .and_then(|()| private_profile_directory(&host))
+        .and_then(|()| fs::read_dir(&host));
+    let entries = match entries {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return 0,
+        Err(_) => return 1,
+    };
+    let mut left = 0;
+    for entry in entries {
+        let delete = (|| {
+            let entry = entry?;
+            let name = entry.file_name();
+            let fingerprint = name
+                .to_str()
+                .and_then(|name| name.strip_prefix("credential-"))
+                .and_then(|name| name.strip_suffix(".bin"));
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path)?;
+            if !fingerprint.is_some_and(|id| id.len() == 64 && id.bytes().all(lower_hex))
+                || !meta.is_file()
+                || meta.mode() & 0o777 != 0o600
+                || meta.uid() != crate::path::uid()
+                || meta.len() > MAX_PROFILE_BYTES as u64
+            {
+                return Err(refused());
+            }
+            fs::remove_file(path)
+        })();
+        if delete.is_err() {
+            left += 1;
+        }
+    }
+    for directory in [host.as_path(), profile] {
+        let _ = fs::remove_dir(directory);
+    }
+    left
 }
 
 fn stage(parent: &Path, bytes: &[u8]) -> io::Result<NamedTempFile> {

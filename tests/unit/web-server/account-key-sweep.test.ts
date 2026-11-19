@@ -82,6 +82,20 @@ describe('sweepOrphanKeys', () => {
     expect(await sweepOrphanKeys(ccsDir, () => NOW)).toBe(0);
   });
 
+  it('ignores links and removes a regular unreferenced file at the age cutoff', async () => {
+    registry([]);
+    await key('zai', 'aaaaaaaa', ORPHAN_KEY_AGE_MS);
+    const directory = path.join(ccsDir, 'account-usage', 'keys');
+    const outside = path.join(root, 'unrelated');
+    fs.writeFileSync(outside, 'fixture');
+    const nonregular = path.join(directory, 'zai-bbbbbbbb.json');
+    if (process.platform === 'win32') fs.mkdirSync(nonregular);
+    else fs.symlinkSync(outside, nonregular);
+    expect(await sweepOrphanKeys(ccsDir, () => NOW)).toBe(1);
+    expect(keyFiles()).toEqual(['zai-bbbbbbbb.json']);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('fixture');
+  });
+
   it('deletes nothing without a readable version 2 registry', async () => {
     await key('zai', 'bbbbbbbb', ORPHAN_KEY_AGE_MS * 2);
     expect(await sweepOrphanKeys(ccsDir, () => NOW)).toBe(0);

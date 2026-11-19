@@ -42,6 +42,8 @@ export interface CodexProfileRemovalOptions {
   /** Where the CLI prints its warnings; the dashboard passes a no-op. */
   warn?: (line: string) => void;
   move?: (from: string, to: string) => boolean;
+  preserve?: (staged: string, backup: string) => Promise<boolean>;
+  discard?: (target: string) => Promise<boolean>;
 }
 
 const defaultWarn = (line: string) => {
@@ -109,10 +111,15 @@ export async function removeCodexProfileUnderLock(
   }
 
   try {
-    await fs.promises.cp(stagedDeleteDir, preservationDir, { recursive: true, errorOnExist: true });
+    if (!(await options.preserve?.(stagedDeleteDir, preservationDir))) {
+      await fs.promises.cp(stagedDeleteDir, preservationDir, {
+        recursive: true,
+        errorOnExist: true,
+      });
+    }
   } catch (err) {
     const restored = restoreProfileDir(stagedDeleteDir, profileDir, warn, options.move);
-    await removePathBestEffort(preservationDir);
+    await removePathBestEffort(preservationDir, options.discard);
     const preservedPath = restored ? profileDir : stagedDeleteDir;
     const msg = err instanceof Error ? err.message : String(err);
     throw new CodexProfileRemovalError(
@@ -127,7 +134,7 @@ export async function removeCodexProfileUnderLock(
     registry.removeProfile(profileName, { forceDefault: force });
   } catch (err) {
     const restored = restoreProfileDir(stagedDeleteDir, profileDir, warn, options.move);
-    await removePathBestEffort(preservationDir);
+    await removePathBestEffort(preservationDir, options.discard);
     const preservedPath = restored ? profileDir : stagedDeleteDir;
     const msg = err instanceof Error ? err.message : String(err);
     // The CLI text is unchanged; the reason tells the dashboard what refused it.
@@ -139,8 +146,8 @@ export async function removeCodexProfileUnderLock(
   }
 
   try {
-    await fs.promises.rm(stagedDeleteDir, { recursive: true, force: true });
-    await fs.promises.rm(preservationDir, { recursive: true, force: true });
+    await discardPath(stagedDeleteDir, options.discard);
+    await discardPath(preservationDir, options.discard);
   } catch (err) {
     const restoreSource = fs.existsSync(preservationDir) ? preservationDir : stagedDeleteDir;
     const restoredDir = restoreProfileDir(restoreSource, profileDir, warn, options.move);
@@ -152,7 +159,7 @@ export async function removeCodexProfileUnderLock(
       warn
     );
     if (restoredDir && restoreSource === preservationDir) {
-      await removePathBestEffort(stagedDeleteDir);
+      await removePathBestEffort(stagedDeleteDir, options.discard);
     }
     const preservedPath = restoredDir ? profileDir : stagedDeleteDir;
     const msg = err instanceof Error ? err.message : String(err);
@@ -165,9 +172,19 @@ export async function removeCodexProfileUnderLock(
   }
 }
 
-async function removePathBestEffort(targetPath: string): Promise<void> {
+async function discardPath(
+  target: string,
+  discard: CodexProfileRemovalOptions['discard']
+): Promise<void> {
+  if (!(await discard?.(target))) await fs.promises.rm(target, { recursive: true, force: true });
+}
+
+async function removePathBestEffort(
+  targetPath: string,
+  discard: CodexProfileRemovalOptions['discard']
+): Promise<void> {
   try {
-    await fs.promises.rm(targetPath, { recursive: true, force: true });
+    await discardPath(targetPath, discard);
   } catch {
     // best-effort cleanup after data has already been preserved elsewhere
   }

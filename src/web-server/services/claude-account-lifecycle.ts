@@ -330,7 +330,7 @@ export class ClaudeAccountLifecycle {
         });
       if (outcome === 'cross_volume') throw new ClaudeLifecycleError('trash_cross_volume', host);
       moved[host] = detail;
-      return undefined;
+      return true;
     });
     return { trashId, purgeAfter };
   }
@@ -401,7 +401,7 @@ export class ClaudeAccountLifecycle {
         await this.deps.transport.restore(host, { profileId: id, ...detail }).catch(() => {
           throw new ClaudeLifecycleError('restore_failed', host);
         });
-        return undefined;
+        return true;
       });
       return {
         next: entries.filter((candidate) => candidate.trashId !== trashId),
@@ -573,18 +573,28 @@ export class ClaudeAccountLifecycle {
       const listed = (await readInventoryEntries(this.ccsDir())).some((entry) => entry.id === id);
       return listed ? { promoted: true, email: null } : null;
     }
-    let state: 'signed-in' | 'signed-out';
-    try {
-      state = await this.deps.transport.sessionState(platform, {
-        launcher: pending[platform],
-      });
-    } catch {
-      throw new ClaudeLifecycleError('host_unreachable', platform);
-    }
-    if (state === 'signed-out') return { promoted: false, email: pending.expectedEmail };
-    const address = email ?? pending.expectedEmail;
-    if (!isClaudeEmail(address)) return { promoted: false, email: null };
-    await this.confirmPending(id, address);
-    return { promoted: true, email: address };
+    let reply: { promoted: boolean; email: string | null } = {
+      promoted: false,
+      email: pending.expectedEmail,
+    };
+    await runClaudeWorkflow(this.ccsDir(), 'recheck', async (effect) => {
+      if (effect === 'commit') {
+        if (!reply.email) throw new ClaudeLifecycleError('write_failed');
+        await this.confirmPending(id, reply.email);
+        reply = { ...reply, promoted: true };
+        return;
+      }
+      if (effect !== 'session') throw new ClaudeLifecycleError('write_failed');
+      const state = await this.deps.transport
+        .sessionState(platform, { launcher: pending[platform] })
+        .catch(() => {
+          throw new ClaudeLifecycleError('host_unreachable', platform);
+        });
+      if (state === 'signed-out') return false;
+      const address = email ?? pending.expectedEmail;
+      reply = { promoted: false, email: isClaudeEmail(address) ? address : null };
+      return reply.email !== null;
+    });
+    return reply;
   }
 }

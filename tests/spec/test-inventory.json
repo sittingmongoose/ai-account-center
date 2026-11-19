@@ -283,6 +283,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-files/tests/antigravity_maintenance.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/tests/codex_preservation.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/tests/files.rs",
       "kind": "internal",
       "evidence": [],
@@ -502,6 +514,12 @@
       "evidence": [
         "table"
       ]
+    },
+    {
+      "file": "crates/aac-http/tests/lifecycle_queue.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-http/tests/profile_reads.rs",

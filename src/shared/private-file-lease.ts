@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ConfigError } from '../errors/error-types';
@@ -59,6 +59,30 @@ export function commitWithFileLease(
     throw new RegisteredWriteUnclearError('The private file write could not be confirmed.');
   throw new ConfigError('The private file could not be saved safely.');
 }
+/** Sweep key metadata while the caller holds the registered key-folder lease. */
+export function sweepKeysWithFileLease(
+  root: string,
+  lease: FileLease,
+  input: { provider: string; nowMs: number; named: string[] }
+): number | undefined {
+  const writer = writers.get(root);
+  if (!writer || lease.descriptor === undefined) return undefined;
+  const result = spawnSync(writer.binary, ['--sweep-orphan-keys', root], {
+    input: JSON.stringify(input),
+    stdio: ['pipe', 'pipe', lease.descriptor],
+    timeout: 5000,
+    maxBuffer: 64,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  const count = Number(result.stdout?.trim());
+  if (result.status !== 0 || !Number.isSafeInteger(count) || count < 0)
+    throw new ConfigError('The orphan key sweep could not be confirmed.');
+  if (count > 0) writer.committed();
+  return count;
+}
+
 type ProviderWrite =
   | ['codex-metadata']
   | ['codex-move', home: string, previous: string, next: string]
@@ -96,6 +120,75 @@ export function writeProviderFile(
     throw new ConfigError('The provider file could not be saved safely.');
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+/** Scoped profile tree operations keep the activation lease through child exit. */
+export async function writeProviderDirectory(
+  root: string,
+  marker: string,
+  action:
+    | ['codex-preserve', home: string, staged: string, backup: string]
+    | ['codex-discard', home: string, target: string]
+): Promise<boolean> {
+  const canonical = canonicalLeaseRoot(root);
+  if (!writers.has(canonical)) return false;
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  const descriptor = await fs.promises.open(marker, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  try {
+    const writer = writers.get(canonical);
+    if (!writer) return false;
+    const [operation, ...args] = action;
+    const child = spawn(writer.binary, ['--provider-write', operation, canonical, ...args], {
+      stdio: ['ignore', 'ignore', descriptor.fd],
+      windowsHide: true,
+    });
+    const committed = await new Promise<boolean>((resolve, reject) => {
+      const refused = () =>
+        reject(new ConfigError('The provider directory change could not be confirmed.'));
+      child.once('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') resolve(false);
+        else refused();
+      });
+      child.once('exit', (code) => (code === 0 ? resolve(true) : refused()));
+    });
+    if (committed) writer.committed();
+    return committed;
+  } finally {
+    await descriptor.close();
+  }
+}
+
+/** Run only against the validated Antigravity registry under its transaction lock. */
+export function maintainAntigravityProfiles(
+  root: string,
+  marker: string,
+  action: { action: 'discard'; profile: string } | { action: 'sweep'; saved: string[] }
+): { removed: number; leftInPlace: number } | undefined {
+  const canonical = canonicalLeaseRoot(root);
+  const writer = writers.get(canonical);
+  if (!writer) return undefined;
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  const descriptor = fs.openSync(marker, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  try {
+    const result = spawnSync(writer.binary, ['--antigravity-maintenance', canonical], {
+      input: JSON.stringify(action),
+      stdio: ['pipe', 'pipe', descriptor],
+      timeout: 5000,
+      maxBuffer: 64,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    const counts = /^(\d+) (\d+)$/.exec(result.stdout?.trim());
+    const removed = Number(counts?.[1]);
+    const leftInPlace = Number(counts?.[2]);
+    if (result.status !== 0 || !Number.isSafeInteger(removed) || !Number.isSafeInteger(leftInPlace))
+      throw new ConfigError('Antigravity cleanup could not be confirmed.');
+    writer.committed();
+    return { removed, leftInPlace };
+  } finally {
+    fs.closeSync(descriptor);
   }
 }
 

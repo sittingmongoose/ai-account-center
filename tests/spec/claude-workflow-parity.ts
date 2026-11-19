@@ -20,6 +20,8 @@ const cases: Array<[ClaudeWorkflow, ClaudeEffect | null, string[]]> = [
   ['restore', 'commit', ['apply-mac', 'apply-windows', 'commit']],
   ['purge', 'apply-mac', ['apply-mac', 'apply-windows']],
   ['purge', null, ['apply-mac', 'apply-windows', 'commit']],
+  ['recheck', null, ['session', 'commit']],
+  ['recheck', 'session', ['session']],
 ];
 
 for (const mode of ['off', 'shadow', 'on']) {
@@ -38,7 +40,13 @@ for (const mode of ['off', 'shadow', 'on']) {
       else await operation;
       assert.deepEqual(seen, expected, workflow + ' ' + failAt);
     }
-    console.log('Claude workflow ' + mode + ': ' + cases.length + '/' + cases.length);
+    const signedOut: string[] = [];
+    await runClaudeWorkflow(root, 'recheck', async (effect) => {
+      signedOut.push(effect);
+      return false;
+    });
+    assert.deepEqual(signedOut, ['session']);
+    console.log('Claude workflow ' + mode + ': ' + (cases.length + 1) + '/' + (cases.length + 1));
   } finally {
     releaseWriter();
     await rm(root, { recursive: true, force: true });

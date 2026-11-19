@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { writeProviderFile } from '../shared/private-file-lease';
+import { maintainAntigravityProfiles, writeProviderFile } from '../shared/private-file-lease';
 import { createHash, randomBytes } from 'crypto';
 import {
   HOLDER_RECORD_BYTES,
@@ -1112,6 +1112,19 @@ export class AntigravityProfileRegistry {
     if (state.active?.profileId === profileId) throw new PrivateStorageError('unsafe');
     state.profiles = state.profiles.filter((profile) => profile.id !== profileId);
     this.publish(state);
+    if (this.options.lifecycleWrites && this.heldDirectory) {
+      try {
+        this.instances();
+        const native = maintainAntigravityProfiles(
+          this.ccsDirectory,
+          path.join(this.profilesDirectory, LOCK_NAME),
+          { action: 'discard', profile: profileId }
+        );
+        if (native) return { leftInPlace: native.leftInPlace };
+      } catch {
+        return { leftInPlace: 1 };
+      }
+    }
     return { leftInPlace: this.deleteProfileFiles(profileId) };
   }
 
@@ -1125,6 +1138,14 @@ export class AntigravityProfileRegistry {
     if (!this.lockHeld) throw new PrivateStorageError('unsafe');
     const saved = new Set(this.readState().profiles.map((profile) => profile.id));
     this.instances();
+    if (this.options.lifecycleWrites && this.heldDirectory) {
+      const native = maintainAntigravityProfiles(
+        this.ccsDirectory,
+        path.join(this.profilesDirectory, LOCK_NAME),
+        { action: 'sweep', saved: [...saved] }
+      );
+      if (native) return native;
+    }
     let removed = 0;
     let leftInPlace = 0;
     for (const name of fs.readdirSync(this.instancesDirectory)) {

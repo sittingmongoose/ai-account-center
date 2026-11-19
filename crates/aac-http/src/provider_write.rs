@@ -40,6 +40,16 @@ pub(crate) fn commit() -> i32 {
             LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)
                 .and_then(|lease| lease.codex_move(Path::new(root), home, previous, next))
         }
+        ["codex-preserve", root, home, staged, backup] if input.is_empty() => {
+            let home = Path::new(home);
+            LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)
+                .and_then(|lease| lease.codex_preserve(Path::new(root), home, staged, backup))
+        }
+        ["codex-discard", root, home, target] if input.is_empty() => {
+            let home = Path::new(home);
+            LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)
+                .and_then(|lease| lease.codex_discard(Path::new(root), home, target))
+        }
         ["codex-login", root, home, profile, mode] if matches!(*mode, "saved" | "live") => {
             let home = Path::new(home);
             let Ok(lease) = LegacyLease::verify(&home.join(".ccs-activation.lock"), descriptor)
@@ -72,6 +82,49 @@ pub(crate) fn commit() -> i32 {
         _ => return 74,
     };
     if result.is_ok() { 0 } else { 75 }
+}
+
+pub(crate) fn antigravity_maintenance() -> i32 {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
+    enum Request {
+        Discard { profile: String },
+        Sweep { saved: Vec<String> },
+    }
+    let mut args = std::env::args_os().skip(2);
+    let (Some(root), None) = (args.next(), args.next()) else {
+        return 74;
+    };
+    let root = Path::new(&root);
+    let Ok(descriptor) = io::stderr().as_fd().try_clone_to_owned() else {
+        return 74;
+    };
+    let Ok(lease) = LegacyLease::verify(
+        &root.join("antigravity-profiles/.transaction-lock"),
+        File::from(descriptor),
+    ) else {
+        return 74;
+    };
+    let mut bytes = Vec::new();
+    if io::stdin().take(16_385).read_to_end(&mut bytes).is_err() || bytes.len() > 16_384 {
+        return 74;
+    }
+    let Ok(request) = serde_json::from_slice::<Request>(&bytes) else {
+        return 74;
+    };
+    let result = match request {
+        Request::Discard { profile } => lease
+            .antigravity_discard(root, &profile)
+            .map(|left| (0, left)),
+        Request::Sweep { saved } => lease.antigravity_sweep(root, &saved),
+    };
+    match result {
+        Ok((removed, left)) => {
+            println!("{removed} {left}");
+            0
+        }
+        Err(_) => 75,
+    }
 }
 
 pub(crate) fn staging(antigravity: bool) -> i32 {
