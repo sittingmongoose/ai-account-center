@@ -259,6 +259,12 @@
       ]
     },
     {
+      "file": "crates/aac-files/src/deployed_build.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/src/lib.rs",
       "kind": "internal",
       "evidence": [],
@@ -284,6 +290,12 @@
     },
     {
       "file": "crates/aac-files/src/registry.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/src/share.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -782,6 +794,55 @@
     },
     {
       "file": "crates/aac-renewal/tests/parity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/src/history.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/src/js.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/src/projection.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/src/publisher.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "crates/aac-snapshot/src/renewal.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/src/settings.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/src/snapshot.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-snapshot/tests/parity.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

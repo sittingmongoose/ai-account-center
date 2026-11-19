@@ -24,6 +24,7 @@ aac-config = { path = "crates/aac-config" }
 aac-transport = { path = "crates/aac-transport" }
 aac-views = { path = "crates/aac-views" }
 aac-renewal = { path = "crates/aac-renewal" }
+aac-snapshot = { path = "crates/aac-snapshot" }
 # R3: the store and Status crates joined the workspace (one lock for the host and the NAPI
 # modules). Dependents take them without the Node binding; the `.node` builds use each
 # package's own default features.
@@ -31,6 +32,7 @@ aac-store = { path = "crates/aac-store", default-features = false }
 aac-status = { path = "crates/aac-status", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+indexmap = "2"
 sha2 = "0.11"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case"] }
 tempfile = "3"

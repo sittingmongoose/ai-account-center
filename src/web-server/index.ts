@@ -67,6 +67,8 @@ import {
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { startRustUsageSnapshotFeed } from './agent-usage/agent-usage-rust-feed';
+import { rustGroupOn } from './rust-service-groups';
 import {
   closeAacStore,
   onStoreHostFallback,
@@ -461,23 +463,28 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         );
       }
       // Agent usage snapshot (off until a folder is set): written after every analytics sample.
-      stopAgentUsageSnapshot = startAgentUsageSnapshot({
-        signIn: async () => {
-          const health = await getSignInHealth();
-          return Object.values(health.machines).flat();
-        },
-        signInRenewal: async () => {
-          const renewal = await readClaudeSignInRenewal();
-          return renewal
-            ? {
-                runner: renewal.runner,
-                generatedAt: renewal.generatedAt,
-                stale: renewal.stale,
-                needsYou: renewal.needsYou,
-              }
-            : null;
-        },
-      });
+      // G18: with the service on and groups.usageSnapshot on, the Rust service owns the writer
+      // and the front door pushes each sample to it; otherwise the TypeScript publisher writes.
+      stopAgentUsageSnapshot =
+        process.platform !== 'win32' && rustService.mode === 'on' && rustGroupOn('usageSnapshot')
+          ? startRustUsageSnapshotFeed(rustService)
+          : startAgentUsageSnapshot({
+              signIn: async () => {
+                const health = await getSignInHealth();
+                return Object.values(health.machines).flat();
+              },
+              signInRenewal: async () => {
+                const renewal = await readClaudeSignInRenewal();
+                return renewal
+                  ? {
+                      runner: renewal.runner,
+                      generatedAt: renewal.generatedAt,
+                      stale: renewal.stale,
+                      needsYou: renewal.needsYou,
+                    }
+                  : null;
+              },
+            });
       // The history store (docs/store.md): opened before the first sample, which waits for it;
       // without the native module the dashboard runs as before, without stored history.
       // R3: while the service hosts the store, its jobs run there; this loop starts only

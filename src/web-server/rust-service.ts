@@ -766,6 +766,33 @@ export class RustService extends RustSupervisor {
   }
 
   /**
+   * G18: push one finished analytics sample (already JSON text) to the service's snapshot
+   * writer. The service accepts it onto its own publish task and replies at once; true means
+   * the sample reached the current boot. A transport failure tells the supervisor, as any
+   * request's does. The body carries the quota history, so it has its own cap and deadline.
+   */
+  async pushUsageSample(payload: string): Promise<boolean> {
+    const lease = this.lease;
+    if (!lease || this.stopped) return false;
+    try {
+      const reply = await requestRust(
+        lease.connection,
+        '/internal/usage-snapshot/sample',
+        FRONT_DOOR_PRINCIPAL,
+        this.active,
+        undefined,
+        'POST',
+        { text: payload, payloadCap: 40 * 1024 * 1024, cap: 64 * 1024, deadlineMs: 5000 }
+      );
+      this.replied(lease);
+      return reply.status === 200;
+    } catch (error) {
+      this.transportFailed(lease, rustFailureKind(error));
+      return false;
+    }
+  }
+
+  /**
    * R1: a view Rust answers from fed generations. The request has no body: `headers` carry the generation ids,
    * the clock and the page's context. The finished bytes, ETag and view version come back unparsed. Anything
    * else is counted and the caller's TS handler answers: a named decline returns its word (`stale` tells the

@@ -47,6 +47,7 @@ Object.assign(process.env, {
         // is qualified separately with fixture installers rather than live hosts.
         AAC_RUST_GROUP_APP_UPDATES: 'off',
         AAC_RUST_GROUP_RENEWAL: 'on',
+        AAC_RUST_GROUP_USAGESNAPSHOT: 'on',
         AAC_AGENT_TRANSPORT: 'off',
         AAC_AGENT_VERBS: 'off',
       }

@@ -75,6 +75,7 @@ name = "aac-files"
 version = "0.1.0"
 dependencies = [
  "aac-core",
+ "aac-num",
  "fs2",
  "libc",
  "rustix",
@@ -97,6 +98,7 @@ dependencies = [
  "aac-protocol",
  "aac-providers",
  "aac-renewal",
+ "aac-snapshot",
  "aac-status",
  "aac-store",
  "aac-transport",
@@ -186,6 +188,21 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aac-snapshot"
+version = "0.1.0"
+dependencies = [
+ "aac-core",
+ "aac-files",
+ "aac-num",
+ "aac-store",
+ "aac-views",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

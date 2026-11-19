@@ -10,6 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+pub mod deployed_build;
 #[cfg(unix)]
 pub mod history_snapshots;
 #[cfg(unix)]
@@ -25,6 +26,7 @@ pub mod profile_staging;
 pub mod profile_writes;
 pub mod read;
 pub mod registry;
+pub mod share;
 
 use read::{Read, ReadPolicy};
 

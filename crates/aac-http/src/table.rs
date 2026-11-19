@@ -45,6 +45,7 @@ pub(crate) enum Handler {
     /// M5 lane K: the reset claims file (ledger and ticketed source reads).
     ResetClaims,
     Store,
+    UsageSample,
 }
 
 impl Handler {
@@ -82,6 +83,7 @@ impl Handler {
             "app-updates" => Handler::AppUpdates,
             "reset-claims" => Handler::ResetClaims,
             "store" => Handler::Store,
+            "usage-sample" => Handler::UsageSample,
             _ => return None,
         })
     }
@@ -240,6 +242,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ResetClaims
                         | Handler::CursorAccount
                         | Handler::Store
+                        | Handler::UsageSample
                 ))
             || (row.group == "internal" && !internal)
             || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
@@ -267,6 +270,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::Approvals
                         | Handler::ResetClaims
                         | Handler::Store
+                        | Handler::UsageSample
                 ))
             || (method == axum::http::Method::PUT
                 && !matches!(
@@ -302,6 +306,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (handler == Handler::ResetClaims
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/reset-claims"
+                    || row.budget_ms != 0))
+            || (handler == Handler::UsageSample
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/usage-snapshot/sample"
                     || row.budget_ms != 0))
             || (method == axum::http::Method::PATCH
                 && !matches!(
@@ -369,6 +377,7 @@ mod tests {
                     | Handler::ResetClaims
                     | Handler::CursorAccount
                     | Handler::Store
+                    | Handler::UsageSample
             )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.

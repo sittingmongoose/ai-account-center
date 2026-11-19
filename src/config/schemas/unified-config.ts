@@ -53,6 +53,7 @@ export interface UnifiedConfig {
    * budget automatically falls back to it on the same files. `homeProducer` (G17, `AAC_RUST_HOME_PRODUCER`
    * overrides): the Rust service produces the Home feed generations from the raw inputs; off by default
    * until the collection feeds it, and the TS producer stays available until the cut.
+   * G18 runs the usage share writer in Rust when the usageSnapshot group is on.
    */
   rustService?: {
     frontDoor?: 'ts' | 'rust';
@@ -65,6 +66,8 @@ export interface UnifiedConfig {
       collection?: 'off' | 'on';
       writes?: 'off' | 'on';
       'app-updates'?: 'off' | 'on';
+      renewal?: 'off' | 'on';
+      usageSnapshot?: 'off' | 'on';
     };
     store?: 'off' | 'on';
     homeProducer?: 'off' | 'on';

@@ -1,7 +1,7 @@
 {
   "src/web-server/compose-request.ts": "3b0b2c5bc1fe0f05e449b415956d70c2fc86a1698b1fa4644ef816e32a7f89a4",
   "src/web-server/compose-server.ts": "ffdb5cbb2460087b7bb19fcce88dd4f3e15daa2d528ea67e500dc02568a5a917",
-  "src/web-server/index.ts": "635f717999eb5e1640533a39f5bd9aa45cbd71a9fcaf81fdc872d2e9227ed958",
+  "src/web-server/index.ts": "c291669ae3c1c7c38fb492a526da101f5504f32ce91ed3a62235e4b3584a744d",
   "src/web-server/routes/account-analytics-routes.ts": "a4daee027847dcaa7aa7649f1c10af734f97a79b31d2ef6856af6ef72c2bb1b6",
   "src/web-server/routes/account-dashboard-routes.ts": "181ab43db5cf1dcf3b709cbcc973c0bbb39f58a06c272b7372aa130ab11a3362",
   "src/web-server/routes/account-lifecycle-routes.ts": "63b227987076621fd3033f8d58d8224f729699740c907f929533553f8d47040f",
@@ -33,9 +33,9 @@
   "src/web-server/routes/store-routes.ts": "b7f7b45814d7b252a4fb1204eda744cc1c2b231b285ea07c8b4c2c337b18ba20",
   "src/web-server/rust-service-health.ts": "05a67c876dea55b6f9a17e9d9132d9b954f02ec748a3334ce42798a030d21c39",
   "src/web-server/rust-service-lifecycle.ts": "a454f22d5c40b645f4f9d22402051f341631d37b63d04073466b8130282822c5",
-  "src/web-server/rust-service-routes.json": "fcb877b11072348e50ccba9a4cc80fc3f8b2e455df7964a2531ea3398d40f2ec",
+  "src/web-server/rust-service-routes.json": "1aebf55f34869c01b2fc9e95e70a7cbe29ae80437b8c8ad207d5940dc9dbba29",
   "src/web-server/rust-service-supervisor.ts": "e54aa209ccb0b3b5b847e1275a63f6056ae9cb2d0d7685da988a456f72cb301a",
-  "src/web-server/rust-service-transport.ts": "ec45a850df3fbc9b005ffea97c874db78d1434bde8cd26fe18deb5bdfffc9da6",
-  "src/web-server/rust-service.ts": "904ab882a0084b72a988f2c36991216fc74b535f0dba391350cbbd166899ec81",
+  "src/web-server/rust-service-transport.ts": "d2487669c6646031ac28453ed307bd3137f8bdba1f4154552433d05a4c83e879",
+  "src/web-server/rust-service.ts": "492c88db905ccb99e7e02d56fd956aee7aa1b637629be641bdd8510839040da0",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
 }

@@ -59,7 +59,8 @@ export const RUST_VIEW_CAP = 8 * 1024 * 1024;
 /**
  * R1 request options: extra private headers (the fed request's ids, clock and page context), a reply passed
  * through as bytes without parsing (`raw`: `body` is then null), its cap, and a body already written as text (a
- * feed push whose data TS serialized once, for its change key).
+ * feed push whose data TS serialized once, for its change key). G18: the usage sample push carries a larger
+ * body (the quota history) and its own deadline.
  */
 export interface RustRequestOptions {
   headers?: Record<string, string>;
@@ -69,6 +70,7 @@ export interface RustRequestOptions {
   /** M5 lane K: a longer total deadline for a write whose work takes seconds (a reset source read). */
   deadlineMs?: number;
   signal?: AbortSignal;
+  payloadCap?: number;
 }
 
 /**
@@ -199,7 +201,7 @@ export function requestRust(
   options: RustRequestOptions = {}
 ): Promise<RustReply> {
   const payload = options.text ?? (input === undefined ? undefined : JSON.stringify(input));
-  if (payload !== undefined && Buffer.byteLength(payload) > 4 * 1024 * 1024)
+  if (payload !== undefined && Buffer.byteLength(payload) > (options.payloadCap ?? 4 * 1024 * 1024))
     return Promise.reject(new RustTransportError('cap', 'Rust service request cap'));
   const cap = options.cap ?? (payload === undefined ? 64 * 1024 : 2 * 1024 * 1024);
   const deadline = Date.now() + (options.deadlineMs ?? RUST_DEADLINE_MS);

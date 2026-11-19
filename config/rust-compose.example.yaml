@@ -14,6 +14,7 @@ rustService:
     writes: on
     app-updates: on
     renewal: on
+    usageSnapshot: on
 agentTransport: on
 agentVerbs: on
 agentVerbFamilies:
