@@ -42,7 +42,10 @@ function poolOf(socketPath: string): Pool {
 function takeIdle(pool: Pool): net.Socket | null {
   while (pool.idle.length > 0) {
     const socket = pool.idle.pop() as net.Socket;
-    if (!socket.destroyed && socket.writable) return socket;
+    if (!socket.destroyed && socket.writable) {
+      socket.removeAllListeners('close');
+      return socket;
+    }
     socket.destroy();
   }
   return null;
@@ -96,13 +99,15 @@ function drain(pool: Pool, socketPath: string): void {
       pool.busy++;
       const fresh = net.connect(socketPath);
       fresh.setNoDelay(true);
-      fresh.once('error', () => {
+      const fail = () => {
         pool.busy--;
         fresh.destroy();
         pool.waiters.unshift(waiter);
         drain(pool, socketPath);
-      });
+      };
+      fresh.once('error', fail);
       fresh.once('connect', () => {
+        fresh.removeListener('error', fail);
         fresh.ref();
         waiter(fresh);
       });
@@ -119,6 +124,12 @@ function release(pool: Pool, socketPath: string, socket: net.Socket): void {
   if (!socket.destroyed && socket.writable) {
     socket.unref();
     pool.idle.push(socket);
+    // A service that closes an idle keep-alive socket drops it from the pool at once, so the
+    // next call connects fresh instead of writing into a half-closed socket (as the agent did).
+    socket.once('close', () => {
+      const at = pool.idle.indexOf(socket);
+      if (at >= 0) pool.idle.splice(at, 1);
+    });
   } else {
     socket.destroy();
   }
