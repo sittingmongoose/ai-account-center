@@ -110,7 +110,8 @@ export class RustService extends RustSupervisor {
     input?: unknown,
     query = '',
     headers?: Record<string, string>,
-    method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET'
+    method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET',
+    requestOptions?: { deadlineMs?: number }
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -130,7 +131,10 @@ export class RustService extends RustSupervisor {
         input,
         method,
         // R1: a fed view carries its ids in headers and comes back as bytes, never parsed here.
-        headers ? { headers, raw: true, cap: RUST_VIEW_CAP } : {}
+        {
+          ...(headers ? { headers, raw: true, cap: RUST_VIEW_CAP } : {}),
+          ...(requestOptions ?? {}),
+        }
       );
     } catch (error) {
       pending = Promise.reject(error);
@@ -615,7 +619,9 @@ export class RustService extends RustSupervisor {
         { id, platform, respondAsync },
         '',
         undefined,
-        'POST'
+        'POST',
+        // A sync Open waits out the copy budget, retention and the launcher.
+        { deadlineMs: 180_000 }
       );
     } catch (error) {
       this.failed(route, error);
@@ -637,7 +643,9 @@ export class RustService extends RustSupervisor {
     const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
     let reply: RustReply;
     try {
-      reply = await this.forward(route, verified, {}, '', undefined, 'POST');
+      reply = await this.forward(route, verified, {}, '', undefined, 'POST', {
+        deadlineMs: 180_000,
+      });
     } catch (error) {
       this.failed(route, error);
       throw error;
