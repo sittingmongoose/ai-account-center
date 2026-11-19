@@ -327,6 +327,21 @@ def collection_gates(agent, service):
         link.hardlink_to(disk)
         assert s.ask(route, {**sample, 'nextAttempt': 5678}, method='PUT') == (200, '{"saved":false}')
         assert json.loads(disk.read_text()) == sample
+        # Invalid files and peer/cooldown state are outside observation retention.
+        for n in range(257):
+            old = format(n, '064x')
+            entry = disk.with_name(old + '.json')
+            entry.write_text(json.dumps({**sample, 'key': old}))
+            entry.chmod(0o600)
+        name = 'c' * 64
+        cooldown = disk.with_name('cooldown-' + name + '.json')
+        cooldown.write_text('{}')
+        write_route = '/internal/collection-cache/account-usage-observations/' + name
+        assert s.ask(write_route, {**sample, 'key': name}, method='PUT') == (200, '{"saved":true}')
+        assert disk.exists() and link.exists() and cooldown.exists()
+        valid = [p for p in disk.parent.iterdir()
+                 if re.fullmatch('[a-f0-9]{64}.json', p.name) and p.stat().st_nlink == 1]
+        assert len(valid) == 256 and disk.with_name(name + '.json') in valid
         profile = 'fixture-profile'
         remote_route = '/internal/collection-cache/claude-live-snapshots/' + profile
         remote = {'schemaVersion':1, 'manifestHash':'b'*64,

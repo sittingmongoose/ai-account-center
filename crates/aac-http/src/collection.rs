@@ -1,5 +1,6 @@
 //! H2: a single bounded collection pass per matching request, on the shared L5 registry.
 use crate::agent_transport::{Agents, Call, FRONT_DOOR_MARGIN_MS, fallback, line, response};
+use aac_core::Failure;
 use aac_protocol::{Event, MAX_FRAME_BYTES, Request};
 use aac_transport::{CallOptions, CancellationToken};
 use aac_views::decline::Decline;
@@ -20,7 +21,11 @@ use tokio::{
 const VERBS: [&str; 3] = ["quota-read", "signin-expiry", "failover-inventory"];
 const MAX_PENDING: usize = 16;
 type Key = [u8; 32];
-type Reply = Result<Arc<Value>, &'static str>;
+enum Collected {
+    Value(Value),
+    Failure(Failure),
+}
+type Reply = Result<Arc<Collected>, &'static str>;
 type Pending = watch::Sender<Option<Reply>>;
 
 pub(crate) struct Collection {
@@ -78,9 +83,14 @@ impl Collection {
             None => Err("shape"),
         };
         let bytes = match reply {
-            Ok(value) => line(&json!({
-                "type": "result", "protocol": 1, "id": call.call_id, "value": value.as_ref()
-            })),
+            Ok(outcome) => match outcome.as_ref() {
+                Collected::Value(value) => line(&json!({
+                    "type": "result", "protocol": 1, "id": call.call_id, "value": value
+                })),
+                Collected::Failure(failure) => line(&json!({
+                    "type": "failure", "protocol": 1, "id": call.call_id, "failure": failure
+                })),
+            },
             Err(reason) => fallback(&call.call_id, reason),
         };
         if bytes.len() <= call.max_bytes {
@@ -201,7 +211,8 @@ async fn read_agent(
         Some(Event::Result { value, .. }) if value == json!({"fallback": "python"}) => {
             Err("unsupported")
         }
-        Some(Event::Result { value, .. }) => Ok(Arc::new(value)),
+        Some(Event::Result { value, .. }) => Ok(Arc::new(Collected::Value(value))),
+        Some(Event::Failure { failure, .. }) => Ok(Arc::new(Collected::Failure(failure))),
         _ => Err("reply"),
     }
 }

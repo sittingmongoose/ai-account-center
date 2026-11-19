@@ -79,12 +79,15 @@ pub(crate) fn write(
     )?;
     store.write_private_cache(bytes)?;
     if registered == OBSERVATIONS {
-        store.prune_private_cache(256, |name, bytes| {
-            name.strip_suffix(".json").is_some_and(|old| {
-                digest(old)
-                    && serde_json::from_slice(bytes).is_ok_and(|value| observation(old, &value))
-            })
-        });
+        store.prune_private_cache(
+            256,
+            |name| name.strip_suffix(".json").is_some_and(digest),
+            |name, bytes| {
+                name.strip_suffix(".json").is_some_and(|key| {
+                    serde_json::from_slice(bytes).is_ok_and(|value| observation(key, &value))
+                })
+            },
+        );
     }
     Ok(())
 }

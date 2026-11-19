@@ -258,7 +258,12 @@ impl OwnedStore {
     /// Keep at most `count` validated cache records, including the file just written.
     /// The writer holds its folder lease. Unknown or changed entries are left in place.
     #[cfg(unix)]
-    pub fn prune_private_cache(&self, count: usize, matches: impl Fn(&str, &[u8]) -> bool) {
+    pub fn prune_private_cache(
+        &self,
+        count: usize,
+        matches_name: impl Fn(&str) -> bool,
+        matches_record: impl Fn(&str, &[u8]) -> bool,
+    ) {
         use std::os::unix::fs::MetadataExt;
         let Some(parent) = self.path.parent() else {
             return;
@@ -282,16 +287,21 @@ impl OwnedStore {
         if entries.len() <= count || entries.len() > 4096 {
             return;
         }
+        let entries = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                matches_name(&name).then(|| (entry.path(), name))
+            })
+            .collect::<Vec<_>>();
+        if entries.len() <= count {
+            return;
+        }
         let policy = ReadPolicy::capped(self.max_size as u64)
             .mode(read::Mode::Private)
             .owner(read::Owner::Mine);
         let mut records = Vec::new();
-        for entry in entries {
-            let name = entry.file_name();
-            let Some(name) = name.to_str().filter(|n| n.ends_with(".json")) else {
-                continue;
-            };
-            let path = entry.path();
+        for (path, name) in entries {
             let Ok(stat) = fs::symlink_metadata(&path) else {
                 continue;
             };
@@ -301,7 +311,7 @@ impl OwnedStore {
             let Read::Bytes(bytes, _) = read::read(&path, &policy) else {
                 continue;
             };
-            if matches(name, &bytes) {
+            if matches_record(&name, &bytes) {
                 records.push((path, stat));
             }
         }
