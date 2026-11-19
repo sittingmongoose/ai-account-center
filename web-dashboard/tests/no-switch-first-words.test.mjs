@@ -29,11 +29,13 @@ function files(...paths) {
     try { return statSync(full).isDirectory() ? walk(full) : [full]; } catch { return []; }
   });
 }
+/** A file's path under the repo with forward slashes, the shape the checks below name (Windows returns `\`). */
+const rel = (file) => relative(root, file).split('\\').join('/');
 function hits(list, pattern) {
   const found = [];
   for (const file of list) {
     const lines = readFileSync(file, 'utf8').split('\n');
-    lines.forEach((line, index) => { if (pattern.test(line)) found.push(`${relative(root, file)}:${index + 1}: ${line.trim().slice(0, 140)}`); });
+    lines.forEach((line, index) => { if (pattern.test(line)) found.push(`${rel(file)}:${index + 1}: ${line.trim().slice(0, 140)}`); });
   }
   return found;
 }
@@ -43,7 +45,7 @@ const PRODUCT = files('src', 'scripts', 'crates', 'native', 'web-dashboard/publi
 const PAGE = files('web-dashboard/public', 'web-dashboard/leptos/src');
 
 test('the scan reads the product sources it guards', () => {
-  const names = PRODUCT.map((file) => relative(root, file));
+  const names = PRODUCT.map(rel);
   for (const expected of ['src/antigravity/terminal-signin.ts', 'web-dashboard/public/accounts-view.mjs',
     'web-dashboard/leptos/src/dash.rs', 'docs/antigravity-runtime.md', 'src/commands/antigravity-command.ts'])
     assert.ok(names.includes(expected), expected);

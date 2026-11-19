@@ -227,6 +227,13 @@ describe('the Leptos dashboard build', () => {
     expect(verifyBundle(ui).manifest).toEqual(manifest);
   });
 
+  it('asks for a build when dist/ui was never built', () => {
+    const root = fixture();
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
+      'The dashboard is not built. Run bun run ui:build first.'
+    );
+  });
+
   it('refuses a source change after the build', () => {
     const root = fixture();
     build({ repoRoot: root, run: runner([]) });

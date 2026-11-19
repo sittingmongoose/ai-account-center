@@ -559,7 +559,14 @@ class ReleaseBoundaryFixtures(unittest.TestCase):
             self.assertEqual(runtime.sessions,{})
 
     def test_tui_email_without_native_status_never_proves_runtime_identity(self):
-        from ubuntu_runtime_factory import create_ubuntu_resident_broker
+        try:
+            from ubuntu_runtime_factory import create_ubuntu_resident_broker
+        except ModuleNotFoundError as exc:
+            # the resident runtime's VT observer needs the hash-pinned parser
+            if exc.name not in ('pyte', 'wcwidth'):
+                raise
+            self.skipTest(f'the resident runtime parser needs {exc.name}; install '
+                          'scripts/antigravity/runtime/requirements.txt to run this test')
         with patch('ubuntu_runtime_factory.NativeHeader',return_value=SimpleNamespace(account_email='fixture@example.com')):
             broker=create_ubuntu_resident_broker(binary='/fixture/agy',database='/fixture/db',socket_path='/fixture/socket')
             try:
