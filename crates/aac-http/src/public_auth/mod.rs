@@ -12,6 +12,7 @@ mod native_owners;
 mod native_reads;
 mod policy;
 mod request_log;
+mod reset_routes;
 mod routes;
 mod sidecar;
 mod static_ui;
@@ -435,17 +436,23 @@ pub(crate) async fn run_public_at(
     if cut {
         api = api.route("/api/diag", axum::routing::get(cut_diagnostics));
     }
+    let edges = auth.edges(
+        api,
+        hub,
+        ui_root,
+        snapshot,
+        !composed,
+        backend,
+        cut.then(|| root.clone()),
+        #[cfg(unix)]
+        native,
+    );
     let router = auth
-        .protect(auth.edges(
-            api,
-            hub,
-            ui_root,
-            snapshot,
-            !composed,
-            backend,
-            cut.then(|| root.clone()),
-            #[cfg(unix)]
-            native,
+        .protect(reset_routes::mount(
+            edges,
+            root.clone(),
+            auth.events(),
+            log.clone(),
         ))
         .layer(middleware::from_fn_with_state(
             request_log::Audit {

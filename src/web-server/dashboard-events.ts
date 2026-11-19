@@ -1,7 +1,6 @@
 import type { IncomingMessage } from 'http';
 import type { Writable } from 'node:stream';
 import type { AppUpdateHostProgress, AppUpdateJob } from './services/app-update-contract';
-import { randomBytes } from 'crypto';
 import { WebSocket, type WebSocketServer } from 'ws';
 import type { RequestAuthKind } from './middleware/request-auth';
 import type { SignInJob } from './services/signin-jobs';
@@ -248,10 +247,4 @@ export function closeStaleSessionClients(isCurrent: (epoch: number | null) => bo
     }
   }
   return closed;
-}
-
-/** Reset state hints contain no account data and go only to signed-in browser sessions. */
-export function broadcastResetClaimChange(): number {
-  const event = { type: 'reset-claims-changed' as const, id: randomBytes(16).toString('hex') };
-  return broadcastDashboardEvent(event);
 }

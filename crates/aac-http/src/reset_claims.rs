@@ -1,10 +1,4 @@
-//! M5 lane K: the reset claims file on the private socket. The TS route keeps every public
-//! guard (browser session, origin, no query, the exact 64-hex body), the account resolution and
-//! the one provider send. This service owns the claims SQLite while the registry assigns it the
-//! `reset-claims` row: it holds that row's writer lease for the life of the boot and runs every
-//! transaction that writes the file (the ledger operations and the two ticketed source reads)
-//! through `aac_status::reset::service_call`, the native ABI unchanged with the path it owns.
-#![cfg_attr(not(unix), allow(dead_code))]
+//! Exclusive writer lease and native ledger dispatch shared by the public and private listeners.
 use aac_files::{OwnedStore, registry::Owners};
 use aac_views::decline::Decline;
 use serde_json::{Map, Value, json};
@@ -13,7 +7,27 @@ use std::{path::Path, sync::Mutex};
 /// The registry row this module writes.
 pub(crate) const ROW: &str = "reset-claims";
 /// The largest request: a private snapshot with its grants and windows, or a helper command.
+#[cfg(unix)]
 pub(crate) const BODY_CAP: usize = 1024 * 1024;
+
+/// The public listener owns this row regardless of the remaining worker's feature flags.
+pub(crate) fn public_owners(rows: &[aac_files::registry::Row]) -> Result<Owners, Decline> {
+    Owners::from_boot(
+        rows,
+        &rows
+            .iter()
+            .map(|row| {
+                let owner = if row.id == ROW {
+                    "rust-service"
+                } else {
+                    row.owner.word()
+                };
+                (row.id.clone(), owner.to_owned())
+            })
+            .collect(),
+    )
+    .map_err(|_| Decline::Internal)
+}
 
 /// The boot's claim on the claims file, taken on first use and held until the service ends.
 /// SQLite serializes this process's connections (each call opens its own, as the native ABI
@@ -23,7 +37,7 @@ pub(crate) struct ResetClaims(Mutex<Option<OwnedStore>>);
 
 impl ResetClaims {
     /// The claims file's path, claiming the row's lease if this boot does not hold it yet.
-    fn path(&self, root: &Path, owners: &Owners) -> Result<std::path::PathBuf, Decline> {
+    pub(crate) fn path(&self, root: &Path, owners: &Owners) -> Result<std::path::PathBuf, Decline> {
         let mut held = self.0.lock().map_err(|_| Decline::Internal)?;
         if held.is_none() {
             let rows = aac_files::registry::rows().map_err(|_| Decline::Internal)?;
@@ -43,6 +57,7 @@ impl ResetClaims {
     /// One call. A refusal is `{"ok":false,"code":<fixed word>}` so the front door raises the
     /// same `<code>: ...` error the native ABI raises; an answer is `{"ok":true,"value":...}`
     /// with its object keys in the native module's order (sorted).
+    #[cfg(any(unix, test))]
     pub(crate) fn apply(
         &self,
         root: &Path,
@@ -52,15 +67,15 @@ impl ResetClaims {
         let path = self.path(root, owners)?;
         // G11: the account resolution and the provider send run here too; their reads write
         // this same file through the native capture transactions.
-        #[cfg(unix)]
         let answer = if source_op(body) {
-            crate::reset_source_route::SourceContext::from_env(root)
-                .and_then(|ctx| crate::reset_source_route::call(&ctx, &path, body))
+            crate::reset_source_route::call(
+                &crate::reset_source_route::SourceContext::from_env(root, None),
+                &path,
+                body,
+            )
         } else {
             aac_status::reset::service_call(&path, body)
         };
-        #[cfg(not(unix))]
-        let answer = aac_status::reset::service_call(&path, body);
         Ok(match answer {
             Ok(value) => json!({"ok": true, "value": sorted(value)}),
             Err(code) => json!({"ok": false, "code": code}),
@@ -69,7 +84,7 @@ impl ResetClaims {
 }
 
 /// `sourceRead`/`sourceSend` (G11): resolved and sent by the service, not the front door.
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 fn source_op(body: &[u8]) -> bool {
     serde_json::from_slice::<Value>(body).is_ok_and(|v| {
         matches!(
@@ -125,31 +140,7 @@ mod tests {
         let body =
             json!({"op":"pending","account":"codex:fixture","nowMs":1,"entropy":"0".repeat(64)})
                 .to_string();
-        // Defaults keep TS the writer: the service declines and never opens the file.
-        let defaults = Owners::defaults(rows);
-        assert_eq!(
-            ResetClaims::default()
-                .apply(&root, &defaults, body.as_bytes())
-                .unwrap_err(),
-            Decline::Unsupported
-        );
-        assert!(
-            !root
-                .join("account-usage/reset-claims/claims.sqlite")
-                .exists()
-        );
-        let files = rows
-            .iter()
-            .map(|r| {
-                let word = if r.id == ROW {
-                    "rust-service"
-                } else {
-                    r.owner.word()
-                };
-                (r.id.clone(), word.to_owned())
-            })
-            .collect();
-        let owners = Owners::from_boot(rows, &files).unwrap();
+        let owners = public_owners(rows).unwrap();
         let claims = ResetClaims::default();
         let answer = claims.apply(&root, &owners, body.as_bytes()).unwrap();
         assert_eq!(answer["ok"], true);

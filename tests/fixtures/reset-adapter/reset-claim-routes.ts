@@ -1,24 +1,24 @@
+// Historical TypeScript HTTP reference. Only the test recorder and parity suites mount it.
 /** Thin authenticated HTTP/native adapter. Policy and durable coordination live in Rust.
  * A source must read PRIVATE exact-grant snapshots on the credential-owning host and
  * verify the bound identity again immediately before send. Public usage rows are never
  * a source. Until that seam exists the production router is explicitly unavailable.
  */
 import { randomBytes } from 'crypto';
-import { broadcastResetClaimChange } from '../dashboard-events';
-import { ProviderError } from '../../errors/error-types';
+import { broadcastDashboardEvent } from '../../../src/web-server/dashboard-events';
+import { ProviderError } from '../../../src/errors/error-types';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { Response, Router } from 'express';
-import type { NativeStatusHandle } from '../../status-native/native-loader';
-import { loadNativeStatus } from '../../status-native/native-loader';
-import { getCcsDir } from '../../utils/config-manager';
-import { authKind } from '../middleware/request-auth';
-import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
+import type { Router } from 'express';
+import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
+import { loadNativeStatus } from '../../../src/status-native/native-loader';
+import { getCcsDir } from '../../../src/utils/config-manager';
+import { authKind } from '../../../src/web-server/middleware/request-auth';
+import { isDashboardWebSocketOriginAllowed } from '../../../src/web-server/middleware/auth-middleware';
 import { callerKey } from './caller-key';
-import { createApiRouter } from './api-router';
-import { createResetSourceAdapter } from '../services/reset-source-adapter';
-import { rustResetClaimsFile } from '../rust-service';
-import type { ResetSource, ResetWrite } from '../services/reset-source-contract';
+import { createApiRouter } from '../../../src/web-server/routes/api-router';
+import { createResetSourceAdapter } from './reset-source-adapter';
+import type { ResetSource, ResetWrite } from './reset-source-contract';
 
 export type { ResetSource, ResetWrite };
 export interface ResetRouteDeps {
@@ -26,21 +26,8 @@ export interface ResetRouteDeps {
   source?: ResetSource;
   ccsDir?: string;
   now?: () => number;
-  /** G11: while the Rust service owns the claims file, it resolves the account and runs the
-   * reads and the one send itself; `source` is used only while TS owns the file. */
-  rustSource?: boolean;
 }
 
-/** The Rust service as the reset source (G11). Its replies are the adapter's: a snapshot, or
- * the send's `{outcome, retryAfterMs?}`; a refusal raises `<code>: ...` like the adapter. */
-function rustResetSource(file: NativeStatusHandle): ResetSource {
-  return {
-    read: async (account) =>
-      JSON.parse(await file.call('resetSourceRead', JSON.stringify({ routeAccount: account }))),
-    send: async (write) =>
-      JSON.parse(await file.call('resetSourceSend', JSON.stringify({ write }))),
-  };
-}
 /** Fixed native refusal codes the browser may word for the owner. They name no account, grant or host. */
 const SAFE_REASONS = new Set([
   'check-again-required',
@@ -72,12 +59,8 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
   const router = createApiRouter();
   let handle = deps.native;
   const now = deps.now ?? Date.now;
-  /** The claims file's one writer: the injected or in-process native module while TS owns the
-   * `reset-claims` row, else the Rust service (M5 lane K), which derives the path itself. */
-  function claimsFile(res: Response): NativeStatusHandle {
+  function claimsFile(): NativeStatusHandle {
     if (deps.native) return deps.native;
-    const rust = rustResetClaimsFile(res);
-    if (rust) return rust;
     if (!handle) {
       const loaded = loadNativeStatus();
       if (!loaded.module) throw new ProviderError('Reset backend unavailable.', 'reset-claims');
@@ -85,13 +68,8 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
     }
     return handle;
   }
-  async function call(
-    res: Response,
-    op: string,
-    account: string,
-    args: Record<string, unknown> = {}
-  ) {
-    const file = claimsFile(res);
+  async function call(op: string, account: string, args: Record<string, unknown> = {}) {
+    const file = claimsFile();
     const dir = path.join(deps.ccsDir ?? getCcsDir(), 'account-usage', 'reset-claims');
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     return JSON.parse(
@@ -108,21 +86,9 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       )
     );
   }
-  /** The source for this request: the Rust service while it owns the claims file (G11). */
-  function sourceFor(res: Response): { source: ResetSource | undefined; rust: boolean } {
-    if (deps.rustSource && !deps.native) {
-      const rust = rustResetClaimsFile(res);
-      if (rust) return { source: rustResetSource(rust), rust: true };
-    }
-    return { source: deps.source, rust: false };
-  }
-  async function readSnapshot(res: Response, account: string): Promise<unknown> {
-    const { source, rust } = sourceFor(res);
-    if (!source) throw new ProviderError('Reset source unavailable.', 'reset-claims');
-    // The ticketed read writes the claims file too, so it uses the same writer.
-    const snapshot = rust
-      ? await source.read(account)
-      : await source.read(account, deps.native ? undefined : claimsFile(res));
+  async function readSnapshot(account: string): Promise<unknown> {
+    if (!deps.source) throw new ProviderError('Reset source unavailable.', 'reset-claims');
+    const snapshot = await deps.source.read(account, deps.native ? undefined : claimsFile());
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new ProviderError('Reset source unavailable.', 'reset-claims');
     }
@@ -170,7 +136,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
     try {
       const account = String(req.params.accountId);
       if (!deps.source) {
-        const recovery = await call(res, 'pending', account);
+        const recovery = await call('pending', account);
         res.json({
           ...recovery,
           status: 'unavailable',
@@ -181,10 +147,10 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       }
       let snapshot: unknown;
       try {
-        snapshot = await readSnapshot(res, account);
+        snapshot = await readSnapshot(account);
       } catch (error) {
         // Recovery and audit come from one native transaction, including on read failure.
-        const recovery = await call(res, 'pending', account);
+        const recovery = await call('pending', account);
         res.json({
           ...recovery,
           status: 'unavailable',
@@ -194,7 +160,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         return;
       }
       // The native transaction binds the account and returns inventory, recovery, audit and revision together.
-      res.json(await call(res, 'inventory', account, { snapshot }));
+      res.json(await call('inventory', account, { snapshot }));
     } catch {
       res.status(503).json({ status: 'unavailable', code: 'reset-inventory-unavailable' });
     }
@@ -209,17 +175,17 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       // Set just before the one provider write: a failure after it may have spent the chosen grant.
       let sent = false;
       try {
-        const sender = sourceFor(res).source ?? deps.source;
+        const sender = deps.source;
         if (!sender) throw new ProviderError('Reset source unavailable.', 'reset-claims');
         if (op !== 'check') {
-          await call(res, op === 'prepare' ? 'prepareGate' : 'claimGate', account, {
+          await call(op === 'prepare' ? 'prepareGate' : 'claimGate', account, {
             key: req.body.grantKey,
           });
         }
-        const snapshot = await readSnapshot(res, account);
+        const snapshot = await readSnapshot(account);
         if (op === 'prepare') {
           res.json(
-            await call(res, 'prepare', account, {
+            await call('prepare', account, {
               key: req.body.grantKey,
               caller: callerKey(req),
               snapshot,
@@ -228,16 +194,19 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
           return;
         }
         if (op === 'check') {
-          res.json(await call(res, 'check', account, { key: req.body.attemptKey, snapshot }));
+          res.json(await call('check', account, { key: req.body.attemptKey, snapshot }));
           return;
         }
-        const write = (await call(res, 'begin', account, {
+        const write = (await call('begin', account, {
           key: req.body.grantKey,
           caller: callerKey(req),
           token: req.body.confirmationToken,
           snapshot,
         })) as ResetWrite;
-        broadcastResetClaimChange();
+        broadcastDashboardEvent({
+          type: 'reset-claims-changed',
+          id: randomBytes(16).toString('hex'),
+        });
         let result: { outcome: string; retryAfterMs?: number } = { outcome: 'ambiguous' };
         sent = true;
         try {
@@ -254,13 +223,13 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         let after: unknown = null;
         if (sent) {
           try {
-            after = await readSnapshot(res, account);
+            after = await readSnapshot(account);
           } catch {
             // Provider success remains unconfirmed when the post-claim read fails.
           }
         }
         res.json(
-          await call(res, 'finish', account, {
+          await call('finish', account, {
             key: write.attemptKey,
             outcome: result.outcome,
             retryAfterMs: result.retryAfterMs ?? null,
@@ -272,7 +241,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         // leaves no authoritative evidence; the client retains its independent send/read obligations.
         let evidence: unknown = null;
         try {
-          evidence = (await call(res, 'pending', account)).evidence ?? null;
+          evidence = (await call('pending', account)).evidence ?? null;
         } catch {
           // Do not invent evidence when recovery storage cannot be read.
         }
@@ -285,10 +254,13 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         });
       } finally {
         // Prepare, settlement, and token burns invalidate every signed-in reset view.
-        broadcastResetClaimChange();
+        broadcastDashboardEvent({
+          type: 'reset-claims-changed',
+          id: randomBytes(16).toString('hex'),
+        });
       }
     });
   }
   return router;
 }
-export default createResetClaimRouter({ source: createResetSourceAdapter(), rustSource: true });
+export default createResetClaimRouter({ source: createResetSourceAdapter() });

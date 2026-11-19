@@ -623,6 +623,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/tls.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/read_files.rs",
       "kind": "internal",
       "evidence": [],
@@ -2770,7 +2777,8 @@
       "file": "tests/unit/config/dashboard-auth-persistence.test.ts",
       "kind": "safety",
       "evidence": [
-        "safety"
+        "safety",
+        "helper"
       ]
     },
     {
@@ -4221,14 +4229,6 @@
       "file": "tests/unit/web-server/reset-capture-native.test.ts",
       "kind": "HTTP",
       "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/reset-claims-rust-owner.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety",
         "HTTP"
       ]
     },

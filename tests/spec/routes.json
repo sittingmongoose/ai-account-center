@@ -23,7 +23,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/reset_routes.rs",
     "writes": true,
     "milestone": "M5"
   },
@@ -37,7 +37,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/reset_routes.rs",
     "writes": true,
     "milestone": "M5"
   },
@@ -51,7 +51,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/reset_routes.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -65,7 +65,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/reset_routes.rs",
     "writes": true,
     "milestone": "M5"
   },

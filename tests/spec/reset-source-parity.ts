@@ -1,6 +1,6 @@
 /**
  * M5 lane K, gap G11: the reset source in the Rust service against the TS reset-source-adapter.
- * The production router runs whole claims for a saved Codex profile and a Windows Claude launcher:
+ * The historical router and the worker-free Rust listener run whole claims for a saved Codex profile and a Windows Claude launcher:
  * first with the TS adapter (and the native module as the claims file's writer), then with the
  * Rust service owning the claims file, resolving the accounts and sending. Fixtures only:
  * `codex` is tests/fixtures/reset-source/any-usage-codex, `ssh` is
@@ -18,6 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import { Database } from 'bun:sqlite';
+import { startResetFixture } from './reset-http-fixture';
 
 const tsOnly = process.argv.includes('--ts-only');
 const repo = path.resolve(import.meta.dir, '../..');
@@ -66,11 +67,8 @@ Object.assign(process.env, {
 });
 assert.ok(process.env.AAC_STATUS_MODULE, 'AAC_STATUS_MODULE must name the built native module');
 
-const { createResetClaimRouter } = await import('../../src/web-server/routes/reset-claim-routes');
-const { createResetSourceAdapter } =
-  await import('../../src/web-server/services/reset-source-adapter');
-const { RustService } = await import('../../src/web-server/rust-service');
-const { tsWritesRow } = await import('../../src/shared/private-files');
+const { createResetClaimRouter } = await import('../fixtures/reset-adapter/reset-claim-routes');
+const { createResetSourceAdapter } = await import('../fixtures/reset-adapter/reset-source-adapter');
 
 const CODEX = 'codex:fixture';
 const CLAUDE = 'claude:fixture-claude';
@@ -146,24 +144,31 @@ interface Reply {
   body: unknown;
 }
 
-async function scenario(root: string, rust: InstanceType<typeof RustService> | null, hang = false) {
-  process.env.CCS_DIR = root;
+async function startReference() {
   const app = express();
   app.use(express.json());
-  app.use((req: any, res, next) => {
+  app.use((req: any, _res, next) => {
     req.session = { authenticated: true };
     req.sessionID = 'fixture-browser';
-    if (rust) res.locals.rustService = rust;
     next();
   });
-  // Exactly the production wiring (the default export), on this root.
-  app.use(
-    '/api/accounts',
-    createResetClaimRouter({ source: createResetSourceAdapter(), rustSource: true })
-  );
+  app.use('/api/accounts', createResetClaimRouter({ source: createResetSourceAdapter() }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
-  const origin = `http://127.0.0.1:${(server.address() as any).port}`;
+  return {
+    url: `http://127.0.0.1:${(server.address() as any).port}`,
+    cookie: '',
+    async stop() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+async function scenario(root: string, rust: boolean, hang = false) {
+  process.env.CCS_DIR = root;
+  const fixture = rust ? await startResetFixture(repo, root) : await startReference();
+  const origin = fixture.url;
   const steps: Record<string, Reply> = {};
   try {
     for (const account of [CODEX, CLAUDE]) {
@@ -171,20 +176,20 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
       const send = async (suffix: string, body?: unknown): Promise<Reply> => {
         const response = await fetch(url + suffix, {
           method: body === undefined ? 'GET' : 'POST',
-          headers: body === undefined ? {} : { origin, 'Content-Type': 'application/json' },
+          headers:
+            body === undefined
+              ? { cookie: fixture.cookie }
+              : { cookie: fixture.cookie, origin, 'Content-Type': 'application/json' },
           body: body === undefined ? undefined : JSON.stringify(body),
         });
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
         return { status: response.status, body: await response.json() };
       };
       const tag = account.split(':')[0];
       steps[`${tag}.before`] = await send('');
       const grants = (steps[`${tag}.before`].body as any).grants;
-      assert.ok(
-        grants?.length >= 1,
-        `${account}: ${JSON.stringify(steps[`${tag}.before`])} ${
-          rust ? JSON.stringify((rust.diagnostics() as any).routes?.['/internal/reset-claims']) : ''
-        }`
-      );
+      assert.ok(grants?.length >= 1, `${account}: ${JSON.stringify(steps[`${tag}.before`])}`);
       const key = grants[0].grantKey as string;
       steps[`${tag}.prepare`] = await send('/prepare', { grantKey: key });
       const token = (steps[`${tag}.prepare`].body as any).confirmationToken as string;
@@ -195,8 +200,7 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
       if (attempt) steps[`${tag}.check`] = await send('/check', { attemptKey: attempt });
     }
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fixture.stop();
   }
   const db = new Database(path.join(root, 'account-usage', 'reset-claims', 'claims.sqlite'), {
     readonly: true,
@@ -235,7 +239,7 @@ function comparable(value: unknown): unknown {
   return walk(value);
 }
 
-async function directSends(rust: InstanceType<typeof RustService> | null) {
+async function directSends() {
   const write = (routeAccount: string) => ({
     method: 'x',
     body: {},
@@ -247,13 +251,7 @@ async function directSends(rust: InstanceType<typeof RustService> | null) {
   const out: Record<string, unknown> = {};
   for (const account of ['claude:missing', 'codex:missing', 'cursor:any']) {
     try {
-      out[account] = rust
-        ? JSON.parse(
-            await rust
-              .resetClaimsFile()!
-              .call('resetSourceSend', JSON.stringify({ write: write(account) }))
-          )
-        : await createResetSourceAdapter().send(write(account));
+      out[account] = await createResetSourceAdapter().send(write(account));
     } catch (error) {
       out[account] = `throws ${String((error as Error).message).split(':', 1)[0]}`;
     }
@@ -274,17 +272,13 @@ const explicit = (root: string) => ({
   agentTransportSsh: { knownHostsFile: path.join(path.dirname(root), 'known_hosts') },
 });
 
-let service: InstanceType<typeof RustService> | null = null;
 const results: Record<string, any> = {};
 try {
-  assert.equal(tsWritesRow('reset-claims'), true);
   const variants = [
     ['plain', false, undefined, false],
     ['explicit-old-client', false, explicit, true],
     ['claude-hang', true, undefined, false],
   ] as const;
-  // Every TS run first: once a service is constructed the registry gives it the claims file,
-  // and the TS route then fails closed instead of writing it.
   for (const mode of tsOnly ? ['ts'] : ['ts', 'rust']) {
     for (const [name, hang, configure, oldClient] of variants) {
       const root = path.join(scratch, `${name}-${mode}`);
@@ -298,27 +292,7 @@ try {
         path.join(bin, 'ssh'),
         oldClient ? Buffer.concat([original, Buffer.from('# older client\n')]) : original
       );
-      if (mode === 'rust' && !service) {
-        process.env.CCS_DIR = root;
-        service = new RustService('on');
-        assert.equal(tsWritesRow('reset-claims'), false);
-      }
-      if (mode === 'rust') {
-        // One service boot per root: restart it on this root.
-        service!.stop();
-        process.env.CCS_DIR = root;
-        service = new RustService('on');
-        await service.start(
-          process.env.AAC_RUST_SERVICE_BINARY ?? path.resolve(repo, 'target/debug/aac-http')
-        );
-        assert.ok(service.resetClaimsFile(), 'Rust ownership must be active');
-      }
-      const served = service?.stats.served ?? 0;
-      const run = await scenario(root, mode === 'rust' ? service : null, hang);
-      if (mode === 'rust') {
-        assert.ok(service!.stats.served - served >= 10, 'the Rust source answered');
-        assert.equal(service!.stats.fallbacks, 0);
-      }
+      const run = await scenario(root, mode === 'rust', hang);
       results[`${name}.${mode}`] = run;
       if (mode === 'rust' && oldClient) {
         // G21: the service's own tracing event (the capability downgrade) is a log entry under
@@ -376,16 +350,12 @@ try {
       );
     }
   }
-  const tsDirect = await directSends(null);
+  const tsDirect = await directSends();
   assert.deepEqual(tsDirect, {
     'claude:missing': { outcome: 'not-sent' },
     'codex:missing': 'throws credential-host-unavailable',
     'cursor:any': 'throws provider-read-only',
   });
-  if (!tsOnly) {
-    const rustDirect = await directSends(service);
-    assert.deepEqual(rustDirect, tsDirect, 'direct send rules');
-  }
   const argv = results['explicit-old-client.ts'].sshArgv[0] as string[];
   assert.ok(argv.includes('Hostname=192.0.2.10') && argv.includes('Port=2222'));
   assert.ok(!argv.includes('KnownHostsCommand=none') && argv.includes('SetEnv=AAC_SSH_POLICY=1'));
@@ -393,6 +363,5 @@ try {
     `reset source parity: 3 root variants x ${Object.keys(results['plain.ts'].steps).length} replies, ssh argv/payloads, ledger identities, one send per claim, direct send rules (${tsOnly ? 'TS' : 'TS/Rust'})`
   );
 } finally {
-  service?.stop();
   fs.rmSync(scratch, { recursive: true, force: true });
 }

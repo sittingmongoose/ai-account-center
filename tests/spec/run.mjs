@@ -1,12 +1,21 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const cwd = fileURLToPath(new URL('../..', import.meta.url));
-if (process.argv.includes('--cut-rust-only')) {
-  const binary = process.env.AAC_M6_TARGET_CLI;
+const legacyResetGroup = process.argv.includes('--group=reset-claims');
+if (process.argv.includes('--cut-rust-only') || legacyResetGroup) {
+  const binary =
+    process.env.AAC_M6_TARGET_CLI ??
+    (legacyResetGroup ? process.env.AAC_RUST_PUBLIC_BINARY : undefined);
   if (!binary) throw new Error('Set AAC_M6_TARGET_CLI to the native dashboard command.');
   execFileSync(
     'bun',
-    ['tests/spec/m6-public-contract.ts', binary, '--require-complete', ...process.argv.slice(2)],
+    [
+      'tests/spec/m6-public-contract.ts',
+      binary,
+      '--cut-rust-only',
+      '--require-complete',
+      ...process.argv.slice(2),
+    ],
     { cwd, stdio: 'inherit' }
   );
   process.exit(0);
@@ -63,26 +72,13 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
-  // M5 lane K: the reset claim route with the native module, then the Rust service, as the
-  // claims file's writer (Unix: the fake Codex CLI and the private socket).
-  ...(process.platform === 'win32'
+  // K/G11: offline provider fixtures compare the historical HTTP adapter to the Rust listener.
+  ...(process.platform === 'win32' || !process.env.AAC_STATUS_MODULE
     ? []
-    : [
-        [
-          'bun',
-          [
-            'tests/spec/reset-claim-parity.ts',
-            ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
-          ],
-        ],
-        [
-          'bun',
-          [
-            'tests/spec/reset-source-parity.ts',
-            ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
-          ],
-        ],
-      ]),
+    : ['reset-claim-parity', 'reset-source-parity'].map((name) => [
+        'bun',
+        [`tests/spec/${name}.ts`, ...(process.env.AAC_RUST_PUBLIC_BINARY ? [] : ['--ts-only'])],
+      ])),
   [
     'bun',
     [

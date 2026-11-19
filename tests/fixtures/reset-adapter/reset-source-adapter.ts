@@ -3,21 +3,24 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { ProviderError } from '../../errors/error-types';
-import { getCodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
-import { loadNativeStatus } from '../../status-native/native-loader';
+import { ProviderError } from '../../../src/errors/error-types';
+import { getCodexAuthProfilesSummary } from '../../../src/codex-auth/codex-auth-dashboard-service';
+import { loadNativeStatus } from '../../../src/status-native/native-loader';
 import type { ResetSource, ResetWrite } from './reset-source-contract';
-import type { NativeStatusHandle } from '../../status-native/native-loader';
-import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
-import { isDefaultClaudeDataFolder } from './claude-account-records';
-import { sshLaunch } from './ssh-policy';
+import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
+import { listClaudeDesktopProfiles } from '../../../src/web-server/services/claude-desktop-profile-service';
+import { isDefaultClaudeDataFolder } from '../../../src/web-server/services/claude-account-records';
+import { sshLaunch } from '../../../src/web-server/services/ssh-policy';
 import {
   localUsageHost,
   privateUsageInvocation,
   runPrivateUsageHelper,
-} from './usage-failover-transport';
-import { getCcsDir } from '../../utils/config-manager';
-import type { UsageHelperRequest, UsageHost } from './usage-failover-contract';
+} from '../../../src/web-server/services/usage-failover-transport';
+import { getCcsDir } from '../../../src/utils/config-manager';
+import type {
+  UsageHelperRequest,
+  UsageHost,
+} from '../../../src/web-server/services/usage-failover-contract';
 
 export function createResetSourceAdapter(): ResetSource {
   /** A ticketed read uses the route's claims-file writer; a write never opens that file. */

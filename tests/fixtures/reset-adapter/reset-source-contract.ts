@@ -1,6 +1,6 @@
 /** The private reset source seam, shared by the reset claim route and its source adapter. Types only: the route
  * re-exports them, so the adapter needs no import of an HTTP route module (src/web-server stays acyclic). */
-import type { NativeStatusHandle } from '../../status-native/native-loader';
+import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
 
 export interface ResetSource {
   /** Fresh identity-bound private Snapshot JSON; never include credentials or email.

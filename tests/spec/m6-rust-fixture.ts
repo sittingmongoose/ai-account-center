@@ -90,7 +90,7 @@ export async function startRustFixture(
     return { url, audit, pipe: child.stdin, stop: () => stop(child) };
   } catch (error) {
     await stop(child);
-    throw error;
+    throw new Error(audit.join('').trim() || String(error), { cause: error });
   }
 }
 

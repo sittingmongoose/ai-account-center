@@ -41,10 +41,8 @@ mock.module(transportPath, () => ({
     });
   },
 }));
-const { createResetSourceAdapter } =
-  await import('../../../src/web-server/services/reset-source-adapter');
-const { createResetClaimRouter } =
-  await import('../../../src/web-server/routes/reset-claim-routes');
+const { createResetSourceAdapter } = await import('./reset-source-adapter');
+const { createResetClaimRouter } = await import('./reset-claim-routes');
 const write = {
   routeAccount: 'claude:adapter-fixture',
   method: 'claude.reset_rate_limits',

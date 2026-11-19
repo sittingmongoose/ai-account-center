@@ -55,11 +55,12 @@ cached account card label. Provider `reset` without proof is
 `claimed-unconfirmed`; `providerSuccess` distinguishes this from a timeout.
 Missing spent grants remain unconfirmed rather than inferring a zero count.
 
-The native module (`crates/aac-status/src/reset*.rs`) owns policy, normalization,
+The reset ledger (`crates/aac-status/src/reset*.rs`) owns policy, normalization,
 confirmation consumption, limits, durable account serialization and audit.
-The TypeScript router only delegates I/O and native calls. The private
-`reset-source-adapter` resolves accounts from the existing registry/manifest;
-public balance rows never establish claim identity.
+The Rust dashboard listener admits browser requests and resolves accounts from
+the existing registry and manifest. Public balance rows never establish claim
+identity. The listener holds the claims file's writer lease and completes an
+admitted claim even if the browser disconnects.
 
 Claude initially uses the manifest's existing Windows profile and credentials,
 locally or through the existing SSH-streamed Python helper. It verifies the same

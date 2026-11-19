@@ -12,11 +12,10 @@ use aac_status::reset_claude_source::HelperCommand;
 use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
-    ffi::{CString, OsStr, OsString},
-    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    ffi::{OsStr, OsString},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -68,7 +67,7 @@ pub(crate) struct SourceContext {
     /// The canonical private root the service owns.
     pub ccs: PathBuf,
     /// The package root (`AAC_AGENT_PACKAGE_ROOT`), for `scripts/account-usage/claude_usage.py`.
-    pub package: PathBuf,
+    pub package: Option<PathBuf>,
     /// `CCS_HOME ?? HOME`, the default known-hosts pin's home.
     pub home: OsString,
     /// `AAC_AGENT_IDENTITY_FILE`.
@@ -79,39 +78,32 @@ pub(crate) struct SourceContext {
     pub hostname: String,
     /// The PATH the SSH client is found on and runs with.
     pub path: OsString,
+    log: Option<Arc<aac_log::Log>>,
 }
 
 impl SourceContext {
-    pub(crate) fn from_env(ccs: &Path) -> Res<Self> {
+    pub(crate) fn from_env(ccs: &Path, package_root: Option<PathBuf>) -> Self {
         let package = std::env::var_os("AAC_AGENT_PACKAGE_ROOT")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
-            .ok_or("credential-host-unavailable")?;
-        Ok(Self {
+            .or(package_root);
+        Self {
             ccs: ccs.to_path_buf(),
             package,
             home: std::env::var_os("CCS_HOME")
-                .or_else(|| std::env::var_os("HOME"))
+                .or_else(|| std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }))
                 .unwrap_or_default(),
             identity_file: std::env::var("AAC_AGENT_IDENTITY_FILE").ok(),
             known_hosts_file: std::env::var("AAC_AGENT_KNOWN_HOSTS_FILE").ok(),
-            hostname: hostname(),
+            hostname: aac_files::process::hostname().unwrap_or_default(),
             path: std::env::var_os("PATH").unwrap_or_default(),
-        })
+            log: None,
+        }
     }
-}
-
-fn hostname() -> String {
-    let mut buffer = [0u8; 256];
-    // SAFETY: the buffer outlives the call and its length is passed; the result is truncated
-    // to the first NUL below.
-    #[allow(unsafe_code)]
-    let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-    if status != 0 {
-        return String::new();
+    pub(crate) fn with_log(mut self, log: Arc<aac_log::Log>) -> Self {
+        self.log = Some(log);
+        self
     }
-    let end = buffer.iter().position(|b| *b == 0).unwrap_or(buffer.len());
-    String::from_utf8_lossy(&buffer[..end]).into_owned()
 }
 
 // ---- resolution ------------------------------------------------------------------------------
@@ -128,7 +120,7 @@ pub(crate) enum Target {
         email: String,
         profile_dir: Option<String>,
         is_default: bool,
-        ssh_host: String,
+        ssh_host: Option<String>,
     },
 }
 
@@ -291,7 +283,10 @@ fn claude_profile(ccs: &Path, account: &str) -> Res<Target> {
     }
     let profile = found.ok_or(unavailable)?;
     let windows = profile.windows.ok_or(unavailable)?;
-    let ssh_host = windows.ssh_host.clone().ok_or(unavailable)?;
+    let ssh_host = windows.ssh_host;
+    if ssh_host.is_none() && !cfg!(windows) {
+        return Err(unavailable);
+    }
     let is_default = windows.is_default == Some(true)
         || windows
             .profile_path
@@ -434,7 +429,9 @@ fn default_claude_data_folder(path: &str) -> bool {
 
 /// `localComputer()`: the computer table's id for this host name on this OS.
 pub(crate) fn local_computer(hostname: &str) -> String {
-    let kind = if cfg!(target_os = "macos") {
+    let kind = if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
         "mac"
     } else {
         "linux"
@@ -489,7 +486,11 @@ static PROBES: Mutex<Option<HashMap<PathBuf, Probe>>> = Mutex::new(None);
 /// The child environment of an SSH run: `sshEnvironment()` with the context's PATH.
 fn ssh_environment(command: &mut Command, path: &OsStr) {
     command.env_clear();
-    for name in ["HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"] {
+    let mut names = vec!["HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"];
+    if cfg!(windows) {
+        names.extend(["SYSTEMROOT", "USERPROFILE", "WINDIR"]);
+    }
+    for name in names {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
         }
@@ -503,6 +504,9 @@ fn executable_identity(candidate: &Path) -> Res<(PathBuf, String)> {
     if !meta.is_file() {
         return Err("ssh-unavailable");
     }
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    #[cfg(unix)]
     let identity = format!(
         "{}\0{}\0{}\0{}\0{}.{}\0{}.{}",
         file.display(),
@@ -514,14 +518,22 @@ fn executable_identity(candidate: &Path) -> Res<(PathBuf, String)> {
         meta.ctime(),
         meta.ctime_nsec()
     );
+    #[cfg(not(unix))]
+    let identity = format!(
+        "{}\0{}\0{:?}\0{:?}",
+        file.display(),
+        meta.len(),
+        meta.created(),
+        meta.modified()
+    );
     Ok((file, identity))
 }
 
-fn probe(file: &Path, path: &OsStr) -> Result<Vec<String>, ()> {
+fn probe(file: &Path, ctx: &SourceContext) -> Result<Vec<String>, ()> {
     let mut args = Vec::new();
     for option in CAPABILITY_OPTIONS {
         let mut command = Command::new(file);
-        ssh_environment(&mut command, path);
+        ssh_environment(&mut command, &ctx.path);
         let mut child = command
             .args(["-G", "-F", "none", "-o", option, "--", "localhost"])
             .stdin(Stdio::null())
@@ -551,10 +563,20 @@ fn probe(file: &Path, path: &OsStr) -> Result<Vec<String>, ()> {
         if status.success() {
             args.extend(["-o".to_owned(), option.to_owned()]);
         } else if stderr.to_lowercase().contains("bad configuration option:") {
-            tracing::warn!(
-                option = option.split('=').next(),
-                "ssh capability unsupported; compatibility downgrade"
-            );
+            let word = option.split('=').next();
+            let message = "ssh capability unsupported; compatibility downgrade";
+            if let Some(log) = &ctx.log {
+                log.write(
+                    "rust-service",
+                    aac_log::Level::Warn,
+                    module_path!(),
+                    message,
+                    &Map::from_iter([("option".to_owned(), json!(word))]),
+                    &aac_log::Extra::default(),
+                );
+            } else {
+                tracing::warn!(option = word, "{message}");
+            }
         } else {
             return Err(());
         }
@@ -562,26 +584,34 @@ fn probe(file: &Path, path: &OsStr) -> Result<Vec<String>, ()> {
     Ok(args)
 }
 
+fn ssh_executable(candidate: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        CString::new(candidate.as_os_str().as_bytes()).is_ok_and(|path| {
+            // SAFETY: the path is NUL-terminated and remains alive for the call.
+            #[allow(unsafe_code)]
+            let ok = unsafe { libc::access(path.as_ptr(), libc::X_OK) } == 0;
+            ok
+        })
+    }
+    #[cfg(not(unix))]
+    candidate.is_file()
+}
+
 /// `capabilities()`: the PATH candidate and the capability options probed for its current file.
-fn capabilities(path: &OsStr) -> Res<(PathBuf, Vec<String>)> {
+fn capabilities(ctx: &SourceContext) -> Res<(PathBuf, Vec<String>)> {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let executable = std::env::split_paths(path)
+    let executable = std::env::split_paths(&ctx.path)
         .map(|dir| {
             if dir.is_absolute() {
                 dir
             } else {
                 cwd.join(dir)
             }
-            .join("ssh")
+            .join(if cfg!(windows) { "ssh.exe" } else { "ssh" })
         })
-        .find(|candidate| {
-            CString::new(candidate.as_os_str().as_bytes()).is_ok_and(|c| {
-                // SAFETY: a valid NUL-terminated path for the duration of the call.
-                #[allow(unsafe_code)]
-                let ok = unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0;
-                ok
-            })
-        })
+        .find(|candidate| ssh_executable(candidate))
         .ok_or("ssh-unavailable")?;
     for _ in 0..3 {
         let (file, identity) = executable_identity(&executable)?;
@@ -592,7 +622,7 @@ fn capabilities(path: &OsStr) -> Res<(PathBuf, Vec<String>)> {
                 || (entry.result.is_err() && entry.at.elapsed() >= PROBE_FAILURE_TTL)
         });
         if stale {
-            let result = probe(&file, path);
+            let result = probe(&file, ctx);
             probes.insert(
                 file.clone(),
                 Probe {
@@ -615,8 +645,8 @@ fn capabilities(path: &OsStr) -> Res<(PathBuf, Vec<String>)> {
 }
 
 /// `sshLaunch('ssh', args)`: the probed file, refused when the argv was built for another one.
-fn ssh_launch(path: &OsStr, args: &[String]) -> Res<PathBuf> {
-    let (file, current) = capabilities(path)?;
+fn ssh_launch(ctx: &SourceContext, args: &[String]) -> Res<PathBuf> {
+    let (file, current) = capabilities(ctx)?;
     if CAPABILITY_OPTIONS
         .iter()
         .any(|option| current.iter().any(|a| a == option) != args.iter().any(|a| a == option))
@@ -782,7 +812,7 @@ fn raw_config(ccs: &Path) -> Option<Value> {
 /// `sshArgv(alias, command, {interval: 5, countMax: 3})`.
 fn ssh_argv(ctx: &SourceContext, alias: &str, command: &str) -> Res<Vec<String>> {
     let connection = connection_options(ctx, alias)?;
-    let (_, capabilities) = capabilities(&ctx.path)?;
+    let (_, capabilities) = capabilities(ctx)?;
     let mut argv = vec!["-T".to_owned()];
     for value in SSH_ISOLATION {
         argv.extend(["-o".to_owned(), value.to_owned()]);
@@ -826,7 +856,10 @@ pub(crate) fn windows_helper_command() -> String {
 /// The adapter's `source`: the packaged Claude helper wrapped so it runs `reset_host(request)`.
 fn claude_helper_source(ctx: &SourceContext) -> Res<String> {
     let bytes = read_file(
-        &ctx.package.join("scripts/account-usage/claude_usage.py"),
+        &ctx.package
+            .as_deref()
+            .ok_or("credential-host-unavailable")?
+            .join("scripts/account-usage/claude_usage.py"),
         2 * 1024 * 1024,
     )
     .ok()
@@ -862,7 +895,7 @@ fn claude_input(target: &Target, write: Option<&Value>) -> Value {
         "expectedEmail": email,
         "profileDir": profile_dir,
         "isDefault": is_default,
-        "host": format!("windows:{ssh_host}"),
+        "host": format!("windows:{}", ssh_host.as_deref().unwrap_or("local")),
         "write": write.cloned().unwrap_or(Value::Null),
     })
 }
@@ -870,14 +903,29 @@ fn claude_input(target: &Target, write: Option<&Value>) -> Value {
 /// `privateUsageInvocation` + `sshLaunch`: the exact command the native helper spawns.
 fn claude_command(
     ctx: &SourceContext,
-    ssh_host: &str,
+    ssh_host: Option<&str>,
     helper_source: String,
     input: Value,
 ) -> Res<HelperCommand> {
-    let args = ssh_argv(ctx, ssh_host, &windows_helper_command())?;
-    let executable = ssh_launch(&ctx.path, &args)?;
+    let (executable, args) = if let Some(ssh_host) = ssh_host {
+        let args = ssh_argv(ctx, ssh_host, &windows_helper_command())?;
+        let executable = ssh_launch(ctx, &args)?;
+        (
+            executable.to_str().ok_or("ssh-unavailable")?.to_owned(),
+            args,
+        )
+    } else {
+        let venv = std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .map(|home| home.join(".ccs/claude-session-migration/venv/Scripts/python.exe"));
+        let executable = venv
+            .filter(|path| path.is_file())
+            .and_then(|path| path.into_os_string().into_string().ok())
+            .unwrap_or_else(|| "python".to_owned());
+        (executable, vec!["-c".to_owned(), BOOTSTRAP.to_owned()])
+    };
     Ok(HelperCommand {
-        executable: executable.to_str().ok_or("ssh-unavailable")?.to_owned(),
+        executable,
         args,
         payload: json!({"helperSource": helper_source, "request": input}),
     })
@@ -886,6 +934,7 @@ fn claude_command(
 // ---- operations ------------------------------------------------------------------------------
 
 /// `sourceRead` and `sourceSend` on the claims file at `db`.
+#[cfg(any(unix, test))]
 pub(crate) fn call(ctx: &SourceContext, db: &Path, body: &[u8]) -> Res<Value> {
     let input: Map<String, Value> = serde_json::from_slice(body).map_err(|_| "shape")?;
     match input.get("op").and_then(Value::as_str) {
@@ -908,7 +957,7 @@ pub(crate) fn call(ctx: &SourceContext, db: &Path, body: &[u8]) -> Res<Value> {
 }
 
 /// A ticketed read through the native capture transactions on the claims file.
-fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> {
+pub(crate) fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> {
     let target = resolve(ctx, account)?;
     let body = match &target {
         Target::Codex {
@@ -925,7 +974,12 @@ fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> {
         }),
         Target::Claude { ssh_host, .. } => {
             let source = claude_helper_source(ctx)?;
-            let command = claude_command(ctx, ssh_host, source, claude_input(&target, None))?;
+            let command = claude_command(
+                ctx,
+                ssh_host.as_deref(),
+                source,
+                claude_input(&target, None),
+            )?;
             json!({
                 "op": "sourceClaudeRead",
                 "routeAccount": account,
@@ -937,7 +991,7 @@ fn read(ctx: &SourceContext, db: &Path, account: &str) -> Res<Value> {
 }
 
 /// The one provider send for an attempt the ledger began. Never retried here.
-fn send(ctx: &SourceContext, write: &Value) -> Res<Value> {
+pub(crate) fn send(ctx: &SourceContext, write: &Value) -> Res<Value> {
     let account = write
         .get("routeAccount")
         .and_then(Value::as_str)
@@ -957,8 +1011,8 @@ fn send(ctx: &SourceContext, write: &Value) -> Res<Value> {
         };
         let input = claude_input(&target, Some(write));
         // Dispatched from here: a failure may follow a spend, so it is an error (ambiguous).
-        let command =
-            claude_command(ctx, ssh_host, source, input.clone()).map_err(|_| "host-unconfirmed")?;
+        let command = claude_command(ctx, ssh_host.as_deref(), source, input.clone())
+            .map_err(|_| "host-unconfirmed")?;
         return aac_status::reset_claude_source::run(&command, input, CLAIM_TIMEOUT)
             .map_err(|_| "host-unconfirmed");
     }
@@ -1025,6 +1079,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn local_computer_follows_the_shared_table() {
         assert_eq!(local_computer("ubuntuserver"), "ubuntu");
@@ -1032,6 +1087,25 @@ mod tests {
         assert_eq!(local_computer("somebox"), "ubuntu");
         // A Windows name on a Linux host is not that computer.
         assert_eq!(local_computer("AlexisGamingPC"), "ubuntu");
+    }
+
+    #[test]
+    fn unresolved_sources_keep_their_confirmed_send_outcomes() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = SourceContext::from_env(root.path(), None);
+        let write = |account: &str| json!({"routeAccount": account});
+        assert_eq!(
+            send(&ctx, &write("claude:missing")).unwrap(),
+            json!({"outcome":"not-sent"})
+        );
+        assert_eq!(
+            send(&ctx, &write("codex:missing")).unwrap_err(),
+            "credential-host-unavailable"
+        );
+        assert_eq!(
+            send(&ctx, &write("cursor:any")).unwrap_err(),
+            "provider-read-only"
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
+import { startResetFixture } from './reset-http-fixture';
 
 const tsOnly = process.argv.includes('--ts-only');
 const repo = path.resolve(import.meta.dir, '../..');
@@ -52,11 +53,10 @@ Object.assign(process.env, {
 });
 assert.ok(process.env.AAC_STATUS_MODULE, 'AAC_STATUS_MODULE must name the built native module');
 
-const { createResetClaimRouter } = await import('../../src/web-server/routes/reset-claim-routes');
-const { RustService } = await import('../../src/web-server/rust-service');
-const { tsWritesRow } = await import('../../src/shared/private-files');
+const { createResetClaimRouter } = await import('../fixtures/reset-adapter/reset-claim-routes');
+const { localUsageHost } = await import('../../src/web-server/services/usage-failover-transport');
 const { loadNativeStatus } = await import('../../src/status-native/native-loader');
-import type { ResetSource } from '../../src/web-server/routes/reset-claim-routes';
+import type { ResetSource } from '../fixtures/reset-adapter/reset-claim-routes';
 
 const ROUTE = 'codex:fixture';
 
@@ -65,11 +65,37 @@ interface Reply {
   body: unknown;
 }
 
-/** One whole claim on a fresh root. `rust` puts the service in `res.locals`, as the front door does. */
-async function scenario(root: string, rust: InstanceType<typeof RustService> | null) {
+async function startReference(source: ResetSource) {
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res, next) => {
+    req.session = { authenticated: true };
+    req.sessionID = 'fixture-browser';
+    next();
+  });
+  app.use('/api/accounts', createResetClaimRouter({ source }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  return {
+    url: `http://127.0.0.1:${(server.address() as any).port}`,
+    cookie: '',
+    async stop() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+/** One whole claim on a fresh root. */
+async function scenario(root: string, rust: boolean) {
   process.env.CCS_DIR = root;
-  const home = path.join(root, 'profile');
-  fs.mkdirSync(home, { mode: 0o700 });
+  const home = path.join(root, 'codex-instances', 'fixture');
+  fs.mkdirSync(home, { mode: 0o700, recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'codex-profiles.yaml'),
+    "version: '1'\ndefault: fixture\nprofiles:\n  fixture:\n    type: codex\n    created: '2026-11-01T00:00:00Z'\n    last_used: null\n"
+  );
+  if (rust) fs.writeFileSync(path.join(home, 'allow-fixture-send'), '1');
   const claims = Buffer.from(
     JSON.stringify({
       email: 'fixture-account-x',
@@ -102,7 +128,7 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
             home,
             expectedAccount: 'account-x',
             profile: 'fixture',
-            host: 'fixture-host',
+            host: localUsageHost().host,
             write: null,
             dbPath: path.join(dir, 'claims.sqlite'),
             routeAccount: account,
@@ -117,25 +143,20 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
       return { outcome: 'reset' };
     },
   };
-  const app = express();
-  app.use(express.json());
-  app.use((req: any, res, next) => {
-    req.session = { authenticated: true };
-    req.sessionID = 'fixture-browser';
-    if (rust) res.locals.rustService = rust;
-    next();
-  });
-  app.use('/api/accounts', createResetClaimRouter({ source }));
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise<void>((resolve) => server.once('listening', resolve));
-  const origin = `http://127.0.0.1:${(server.address() as any).port}`;
+  const fixture = rust ? await startResetFixture(repo, root) : await startReference(source);
+  const origin = fixture.url;
   const url = `${origin}/api/accounts/${encodeURIComponent(ROUTE)}/reset-claims`;
   const send = async (suffix: string, body?: unknown, from = origin): Promise<Reply> => {
     const response = await fetch(url + suffix, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: body === undefined ? {} : { origin: from, 'Content-Type': 'application/json' },
+      headers:
+        body === undefined
+          ? { cookie: fixture.cookie }
+          : { cookie: fixture.cookie, origin: from, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
     return { status: response.status, body: await response.json() };
   };
   const steps: Record<string, Reply> = {};
@@ -162,9 +183,10 @@ async function scenario(root: string, rust: InstanceType<typeof RustService> | n
     steps.reused = await send('', { grantKey: key, confirmationToken: token });
     steps.final = await send('');
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fixture.stop();
   }
+  if (rust)
+    sends = fs.readFileSync(path.join(home, 'fixture-sends'), 'utf8').trim().split('\n').length;
   assert.equal(sends, 1, 'exactly one synthetic provider send');
   assert.equal(fs.existsSync(path.join(home, 'unexpected-send')), false);
   return steps;
@@ -189,12 +211,10 @@ function comparable(steps: Record<string, Reply>): unknown {
   return walk(steps);
 }
 
-let service: InstanceType<typeof RustService> | null = null;
 try {
-  assert.equal(tsWritesRow('reset-claims'), true, 'TS owns the row before the service settles it');
   const tsRoot = path.join(scratch, 'ts');
   fs.mkdirSync(tsRoot, { mode: 0o700 });
-  const ts = await scenario(tsRoot, null);
+  const ts = await scenario(tsRoot, false);
   assert.equal((ts.claim.body as any).outcome, 'claimed', JSON.stringify(ts.claim));
   assert.equal(ts.wrongToken.status, 409);
   assert.equal((ts.prepareAgain.body as any).reason, 'claim-token-outstanding');
@@ -203,20 +223,10 @@ try {
   if (!tsOnly) {
     const rustRoot = path.join(scratch, 'rust');
     fs.mkdirSync(rustRoot, { mode: 0o700 });
-    process.env.CCS_DIR = rustRoot;
-    service = new RustService('on');
-    assert.equal(tsWritesRow('reset-claims'), false, 'writes on: the service owns the claims file');
-    await service.start(
-      process.env.AAC_RUST_SERVICE_BINARY ?? path.resolve(repo, 'target/debug/aac-http')
-    );
-    assert.ok(service.resetClaimsFile(), 'Rust ownership must be active');
-    const rust = await scenario(rustRoot, service);
-    // The service holds the row's lease; every claims-file call reached it and none fell back.
+    const rust = await scenario(rustRoot, true);
     assert.ok(
       fs.existsSync(path.join(rustRoot, 'account-usage', 'reset-claims', 'claims.sqlite.lock'))
     );
-    assert.ok(service.stats.served >= 20, `served ${service.stats.served}`);
-    assert.equal(service.stats.fallbacks, 0);
     assert.deepEqual(comparable(rust), comparable(ts));
     // Byte order too: the route's JSON text is the same after normalization.
     assert.equal(JSON.stringify(comparable(rust)), JSON.stringify(comparable(ts)));
@@ -225,6 +235,5 @@ try {
     `reset claim parity: ${Object.keys(ts).length} replies over one whole claim (${tsOnly ? 'TS' : 'TS/Rust'})`
   );
 } finally {
-  service?.stop();
   fs.rmSync(scratch, { recursive: true, force: true });
 }

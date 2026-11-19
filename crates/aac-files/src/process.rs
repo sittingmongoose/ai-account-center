@@ -39,7 +39,8 @@ pub fn host_boot() -> Option<(String, u64)> {
 
 #[cfg(unix)]
 #[allow(unsafe_code)]
-fn hostname() -> Option<String> {
+/// The local machine hostname reported by the operating system.
+pub fn hostname() -> Option<String> {
     let mut bytes = [0u8; 256];
     let result = unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) };
     if result != 0 {
@@ -52,7 +53,8 @@ fn hostname() -> Option<String> {
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
-fn hostname() -> Option<String> {
+/// The local machine hostname reported by the operating system.
+pub fn hostname() -> Option<String> {
     use windows_sys::Win32::System::SystemInformation::{
         ComputerNamePhysicalDnsHostname, GetComputerNameExW,
     };
@@ -70,7 +72,8 @@ fn hostname() -> Option<String> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn hostname() -> Option<String> {
+/// The local machine hostname reported by the operating system.
+pub fn hostname() -> Option<String> {
     None
 }
 

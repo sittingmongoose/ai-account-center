@@ -567,7 +567,7 @@ fn weak_etag(value: &str) -> &str {
     value.trim().strip_prefix("W/").unwrap_or(value.trim())
 }
 
-fn fresh(headers: &HeaderMap, etag: &str, modified: Option<SystemTime>) -> bool {
+pub(super) fn fresh(headers: &HeaderMap, etag: &str, modified: Option<SystemTime>) -> bool {
     if header(headers, "cache-control").is_some_and(|value| {
         value
             .split(',')

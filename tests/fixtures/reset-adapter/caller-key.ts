@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import type { Request } from 'express';
-import { authKind, requestDevice } from '../middleware/request-auth';
+import { authKind, requestDevice } from '../../../src/web-server/middleware/request-auth';
 
 /**
  * Who asked: a paired device, a signed-in browser session (by a hash of its

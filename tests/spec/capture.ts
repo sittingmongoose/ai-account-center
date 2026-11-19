@@ -26,16 +26,16 @@ let matched = 0;
 let declines = 0;
 const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
 const nativePrivate = composed && process.platform !== 'win32';
-const nativeReset =
-  nativePrivate ||
-  (composed &&
-    (await import('../../src/status-native/native-loader')).loadNativeStatus().module !== null);
+const nativeReset = composed;
 const composedGolden = path.join(
   spec,
   'contract',
   `m0-composed-${nativePrivate ? 'unix' : 'windows'}.json`
 );
-type ComposedRecord = { request: { method: string; path: string; role: string }; response: unknown };
+type ComposedRecord = {
+  request: { method: string; path: string; role: string };
+  response: unknown;
+};
 const recorded: Record<string, ComposedRecord> = {};
 const savedComposed: Record<string, ComposedRecord> =
   composed && !recordComposed ? JSON.parse(fs.readFileSync(composedGolden, 'utf8')) : {};
@@ -297,7 +297,12 @@ const portableRoot = root.split(path.sep).join('/');
 function routeHandlerFile(): string {
   const frame = (new Error().stack ?? '')
     .split('\n')
-    .map((line) => line.split('\\').join('/').replace(/file:\/\/\//g, ''))
+    .map((line) =>
+      line
+        .split('\\')
+        .join('/')
+        .replace(/file:\/\/\//g, '')
+    )
     .find((line) => line.includes(`${portableRoot}/src/`) && !line.includes('api-router.ts'));
   if (!frame) return 'unknown';
   const fromRoot = frame.slice(frame.indexOf(`${portableRoot}/src/`) + portableRoot.length + 1);
@@ -362,6 +367,10 @@ fs.mkdirSync(ui);
 // The Leptos app frame is the dashboard page (static-ui.ts APP_ENTRY); every page route answers with it.
 fs.mkdirSync(path.join(ui, 'app'));
 fs.writeFileSync(path.join(ui, 'app', 'index.html'), '<div id="aac-app-fixture"></div>');
+const { apiRoutes } = await import('../../src/web-server/routes');
+const { default: referenceResetRoutes } =
+  await import('../fixtures/reset-adapter/reset-claim-routes');
+apiRoutes.use('/accounts', referenceResetRoutes);
 const { startServer } = await import('../../src/web-server');
 const serverOptions = { port: 0, host: '127.0.0.1', staticDir: ui, rustServiceBinary: rustBinary };
 const instance = composed
@@ -372,7 +381,6 @@ const instance = composed
 const base =
   'http://127.0.0.1:' +
   (instance.publicAddress ?? (instance.server.address() as import('net').AddressInfo)).port;
-const { apiRoutes } = await import('../../src/web-server/routes');
 const codexSummary = await import('../../src/codex-auth/codex-auth-dashboard-service');
 const { pairDevice } = await import('../../src/web-server/services/dashboard-device-store');
 
@@ -414,7 +422,9 @@ function walk(router: any, prefix: string) {
       method: record.method.toUpperCase(),
       path: routePath,
       roles,
-      handlerFile: record.handlerFile,
+      handlerFile: routePath.includes('/reset-claims')
+        ? 'crates/aac-http/src/public_auth/reset_routes.rs'
+        : record.handlerFile,
       writes: !['get', 'head', 'options'].includes(record.method),
     });
   }
@@ -480,7 +490,10 @@ function emit(relative: string, data: any, view: string | null = null) {
     for (const [source, key] of clocks) {
       const value = source[key];
       if (value === undefined || value === null) continue;
-      assert.ok(typeof value === 'number' && Number.isFinite(value) && value >= 0, `invalid Scoreboard ${key}`);
+      assert.ok(
+        typeof value === 'number' && Number.isFinite(value) && value >= 0,
+        `invalid Scoreboard ${key}`
+      );
       source[key] = '<elapsed-seconds>';
     }
   }
@@ -604,6 +617,8 @@ try {
     path.join(root, 'src/web-server/rust-service-supervisor.ts'),
     path.join(root, 'src/web-server/rust-service-health.ts'),
     path.join(root, 'config/rust-service-routes.json'),
+    path.join(root, 'crates/aac-http/src/public_auth/reset_routes.rs'),
+    path.join(root, 'tests/fixtures/reset-adapter/reset-claim-routes.ts'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))
       .filter((f) => f.endsWith('.ts'))

@@ -47,7 +47,9 @@ const groups = {
   collection: /^\w+ \/api\/accounts\/(dashboard|:id\/recheck)$/,
   'app-updates': /^\w+ \/api\/app-updates\//,
 } satisfies Record<string, RegExp>;
-const group = process.argv.find((arg) => arg.startsWith('--route-group='))?.split('=', 2)[1];
+const group =
+  process.argv.find((arg) => arg.startsWith('--route-group='))?.split('=', 2)[1] ??
+  (process.argv.includes('--group=reset-claims') ? 'resets' : undefined);
 const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   if (group === undefined) return true;
   assert.equal(mode, 'cut-rust-only', 'A worker-removal group requires --cut-rust-only.');
@@ -55,18 +57,22 @@ const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   return groups[group as keyof typeof groups].test(route.method + ' ' + route.path);
 });
 assert(selectedRoutes.length > 0, 'At least one M0 route is required.');
-const overrides: Record<string, Contract> = process.argv.includes('--composed-golden')
-  ? JSON.parse(
-      await fs.readFile(
-        path.join(
-          spec,
-          'contract',
-          `m0-composed-${process.platform === 'win32' ? 'windows' : 'unix'}.json`
-        ),
-        'utf8'
+const composedGolden = process.argv.includes('--composed-golden');
+const nativeReset = (method: string, route: string) =>
+  mode !== 'fixture' && groups.resets.test(method + ' ' + route);
+const overrides: Record<string, Contract> =
+  composedGolden || mode !== 'fixture'
+    ? JSON.parse(
+        await fs.readFile(
+          path.join(
+            spec,
+            'contract',
+            `m0-composed-${process.platform === 'win32' ? 'windows' : 'unix'}.json`
+          ),
+          'utf8'
+        )
       )
-    )
-  : {};
+    : {};
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-m6-contract-'));
 const username = 'fixture-admin';
 const password = 'fixture-password-only';
@@ -193,6 +199,7 @@ function upgrade(base: string, headers: Headers): Promise<number> {
 
 const counts = { match: 0, decline: 0, different: 0 };
 const owned = { match: 0, failed: 0 };
+const resets = { match: 0, failed: 0 };
 const owns = (route: string) =>
   route.startsWith('/api/auth/') ||
   route.startsWith('/v0/management/') ||
@@ -244,14 +251,27 @@ try {
     }),
     { mode: 0o600 }
   );
+  if (group === 'resets') {
+    Object.assign(environment, {
+      CCS_HOME: root,
+      AAC_RUST_GROUP_COLLECTION: 'off',
+      AAC_RUST_GROUP_APP_UPDATES: 'off',
+      AAC_RUST_CUT_APP_UPDATES_FIXTURE: '0',
+      AAC_RUST_STORE: 'off',
+      AAC_RUST_GROUP_WRITES: 'off',
+      AAC_AGENT_TRANSPORT: 'off',
+      AAC_AGENT_VERBS: 'off',
+    });
+  }
   let rust = await startRustFixture(binary, root, environment, false, mode);
   try {
     for (const [index, route] of selectedRoutes) {
       const name = route.method + ' ' + route.path;
+      const ownsReset = nativeReset(route.method, route.path);
       for (const role of route.roles) {
         const fixture = String(index).padStart(3, '0') + '-' + role + '.json';
         const contract: Contract =
-          overrides['contract/' + fixture] ??
+          (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
         const { request, response: expected } = contract;
         const headers = await roleHeaders(rust.url, role);
@@ -282,6 +302,7 @@ try {
           if (status === 503 && (body as { code?: string } | null)?.code === 'route_unavailable') {
             counts.decline++;
             if (owns(route.path)) owned.failed++;
+            if (ownsReset) resets.failed++;
             declined.add(name);
             continue;
           }
@@ -305,6 +326,7 @@ try {
           assert.deepEqual(actual, expected);
           counts.match++;
           if (owns(route.path)) owned.match++;
+          if (ownsReset) resets.match++;
         } catch {
           const fields = [
             status !== expected.status ? `status ${status}/${expected.status}` : '',
@@ -329,6 +351,7 @@ try {
           }
           counts.different++;
           if (owns(route.path)) owned.failed++;
+          if (ownsReset) resets.failed++;
         }
       }
       // Capture clears the in-memory limiter before each case. Its malformed login cases
@@ -348,10 +371,13 @@ console.log(
   `Rust public M0: ${counts.match} matching replies, ${counts.decline} explicit declines across ${declined.size} routes, ${counts.different} differences.`
 );
 console.log(`M6-owned M0 rows: ${owned.match} matched, ${owned.failed} failed.`);
+if (mode !== 'fixture')
+  console.log(`Rust reset M0 rows: ${resets.match} matched, ${resets.failed} failed.`);
 if (group !== undefined)
   console.log(`M0 worker-removal group ${group}: ${selectedRoutes.length} routes.`);
 console.log('M0 declines: ' + [...declined].join(', '));
 if (different.length) console.log('M0 differences:\n' + different.join('\n'));
 assert.equal(owned.failed, 0, 'M6-owned M0 contract');
+assert.equal(resets.failed, 0, 'Rust reset M0 contract');
 if (group !== undefined || process.argv.includes('--require-complete'))
   assert.equal(counts.decline + counts.different, 0, 'Rust M0 cutover gate');
