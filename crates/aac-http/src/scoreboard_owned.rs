@@ -262,116 +262,19 @@ impl ScoreboardOwned {
         if full {
             self.last_full_at.store(now, Ordering::Relaxed);
         }
-        let (files, refused, threads, read_count) = {
+        let request = {
             let mut safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
-            let mut remember = |path: &str| {
-                if aac_status::secret_policy::find_secret(path).is_none() {
-                    safe_paths.insert(path_hash(path), path.to_string());
-                }
-            };
-            let mut files: Vec<Json> = Vec::new();
-            let mut refused: Vec<Json> = scan["refused"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            for row in scan["refused"].as_array().cloned().unwrap_or_default() {
-                if let Some(path) = row["path"].as_str() {
-                    remember(path);
-                }
-            }
-            for file in scan["files"].as_array().cloned().unwrap_or_default() {
-                let path = file["path"].as_str().unwrap_or_default();
-                let text = file["text"].as_str().unwrap_or_default();
-                remember(path);
-                // A file's name can hold a credential too: refused, its name kept nowhere.
-                if aac_status::secret_policy::find_secret(path).is_some() {
-                    refused.push(json!({
-                        "path": path,
-                        "size": file["size"],
-                        "mtimeMs": file["mtimeMs"],
-                        "reason": SECRET_NAME_REASON,
-                        "sha256": sha256_text(text),
-                    }));
-                    continue;
-                }
-                match validate::json_from_bytes(text.as_bytes(), RUN_CAP) {
-                    Ok(_) => files.push(file),
-                    Err(reason) => refused.push(json!({
-                        "path": path,
-                        "size": file["size"],
-                        "mtimeMs": file["mtimeMs"],
-                        "reason": reason,
-                        "sha256": sha256_text(text),
-                    })),
-                }
-            }
-            let mut threads = Map::new();
-            if let Some(map) = scan["threads"].as_object() {
-                for (writer, text) in map {
-                    let text = text.as_str().unwrap_or_default();
-                    if aac_status::secret_policy::find_secret(writer).is_none()
-                        && validate::json_from_bytes(text.as_bytes(), THREAD_CAP).is_ok()
-                    {
-                        threads.insert(writer.clone(), json!(text));
-                    }
-                }
-            }
-            let read_count = files.len();
-            (files, refused, threads, read_count)
-        };
-        let catalog_text = |value: &Json| -> Json {
-            match value.as_str() {
-                Some(text) if validate::json_from_bytes(text.as_bytes(), CATALOG_CAP).is_ok() => {
-                    json!(text)
-                }
-                _ => Json::Null,
-            }
+            ingest_request(&scan, now, &mut safe_paths)
         };
         let record = self
             .store
-            .call(
-                "runsRecord".to_string(),
-                json!({
-                    "files": files,
-                    "refused": refused,
-                    "threads": Json::Object(threads),
-                    "catalog": {
-                        "models": catalog_text(&scan["catalog"]["models"]),
-                        "aliases": catalog_text(&scan["catalog"]["aliases"]),
-                    },
-                    "nowMs": now,
-                })
-                .to_string(),
-            )
+            .call("runsRecord".to_string(), request.record.to_string())
             .await;
         let record: Json = match record {
             Ok(text) => serde_json::from_str(&text).unwrap_or(Json::Null),
             Err(_) => return,
         };
-        let mut problems: Vec<Json> = scan["problems"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .map(|problem| {
-                json!({
-                    "file": shown(problem["file"].as_str().unwrap_or_default()),
-                    "reason": problem["reason"],
-                    "since": now,
-                })
-            })
-            .collect();
-        let more = scan["more"].as_bool().unwrap_or(false);
-        if more {
-            problems.push(json!({
-                "file": "limits/import",
-                "reason": format!(
-                    "Importing run history: {} files read this pass; the rest follow in the next passes.",
-                    read_count + refused.len()
-                ),
-                "since": now,
-            }));
-        }
+        let (problems, more) = (request.problems, request.more);
         let generation = record["generation"].as_u64().unwrap_or(0);
         let catalog_hash = record["catalogHash"].as_str().unwrap_or_default().to_string();
         let changed = {
@@ -841,6 +744,129 @@ impl ScoreboardOwned {
             "identity": identity,
             "seedFailures": seed_failures,
         }))
+    }
+}
+
+/// G16b: the ingest's decision step between `runsScan` and `runsRecord` (`RunsStore.runPass`):
+/// every path and writer folder through the secret filter, every text through
+/// `json_from_bytes`, the refusals with their fixed reasons, and the pass problems. A pure
+/// function of the scan and the clock, so the runs-ingest gate replays the TS ingest on it.
+pub(crate) struct IngestRequest {
+    /// The `runsRecord` arguments.
+    pub(crate) record: Json,
+    /// The pass's problems.
+    pub(crate) problems: Vec<Json>,
+    /// Whether the backfill has more to read.
+    pub(crate) more: bool,
+}
+
+pub(crate) fn ingest_request(
+    scan: &Json,
+    now: u64,
+    safe_paths: &mut HashMap<String, String>,
+) -> IngestRequest {
+    let (files, refused, threads, read_count) = {
+        let mut remember = |path: &str| {
+            if aac_status::secret_policy::find_secret(path).is_none() {
+                safe_paths.insert(path_hash(path), path.to_string());
+            }
+        };
+        let mut files: Vec<Json> = Vec::new();
+        let mut refused: Vec<Json> = scan["refused"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for row in scan["refused"].as_array().cloned().unwrap_or_default() {
+            if let Some(path) = row["path"].as_str() {
+                remember(path);
+            }
+        }
+        for file in scan["files"].as_array().cloned().unwrap_or_default() {
+            let path = file["path"].as_str().unwrap_or_default();
+            let text = file["text"].as_str().unwrap_or_default();
+            remember(path);
+            // A file's name can hold a credential too: refused, its name kept nowhere.
+            if aac_status::secret_policy::find_secret(path).is_some() {
+                refused.push(json!({
+                    "path": path,
+                    "size": file["size"],
+                    "mtimeMs": file["mtimeMs"],
+                    "reason": SECRET_NAME_REASON,
+                    "sha256": sha256_text(text),
+                }));
+                continue;
+            }
+            match validate::json_from_bytes(text.as_bytes(), RUN_CAP) {
+                Ok(_) => files.push(file),
+                Err(reason) => refused.push(json!({
+                    "path": path,
+                    "size": file["size"],
+                    "mtimeMs": file["mtimeMs"],
+                    "reason": reason,
+                    "sha256": sha256_text(text),
+                })),
+            }
+        }
+        let mut threads = Map::new();
+        if let Some(map) = scan["threads"].as_object() {
+            for (writer, text) in map {
+                let text = text.as_str().unwrap_or_default();
+                if aac_status::secret_policy::find_secret(writer).is_none()
+                    && validate::json_from_bytes(text.as_bytes(), THREAD_CAP).is_ok()
+                {
+                    threads.insert(writer.clone(), json!(text));
+                }
+            }
+        }
+        let read_count = files.len();
+        (files, refused, threads, read_count)
+    };
+    let catalog_text = |value: &Json| -> Json {
+        match value.as_str() {
+            Some(text) if validate::json_from_bytes(text.as_bytes(), CATALOG_CAP).is_ok() => {
+                json!(text)
+            }
+            _ => Json::Null,
+        }
+    };
+    let record = json!({
+        "files": files,
+        "refused": refused,
+        "threads": Json::Object(threads),
+        "catalog": {
+            "models": catalog_text(&scan["catalog"]["models"]),
+            "aliases": catalog_text(&scan["catalog"]["aliases"]),
+        },
+        "nowMs": now,
+    });
+    let mut problems: Vec<Json> = scan["problems"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|problem| {
+            json!({
+                "file": shown(problem["file"].as_str().unwrap_or_default()),
+                "reason": problem["reason"],
+                "since": now,
+            })
+        })
+        .collect();
+    let more = scan["more"].as_bool().unwrap_or(false);
+    if more {
+        problems.push(json!({
+            "file": "limits/import",
+            "reason": format!(
+                "Importing run history: {} files read this pass; the rest follow in the next passes.",
+                read_count + refused.len()
+            ),
+            "since": now,
+        }));
+    }
+    IngestRequest {
+        record,
+        problems,
+        more,
     }
 }
 

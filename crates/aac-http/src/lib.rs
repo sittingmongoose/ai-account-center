@@ -25,6 +25,8 @@ mod read_routes;
 mod registered;
 #[cfg(unix)]
 mod scoreboard_owned;
+#[cfg(all(unix, test))]
+mod runs_ingest_gate;
 #[cfg(unix)]
 mod status_cache;
 #[cfg(unix)]
