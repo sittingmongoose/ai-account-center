@@ -301,6 +301,11 @@ try {
       report.failures.push(
         `${name}: differs at [${diff.join(', ')}]; ${k}: today=${sample(pa[k])} owned=${sample(pb[k])}`
       );
+      if (!report.diffDir) {
+        report.diffDir = scratch;
+        fs.writeFileSync(path.join(scratch, 'diff-today.json'), a.body);
+        fs.writeFileSync(path.join(scratch, 'diff-owned.json'), b.body);
+      }
     }
     if (!served) report.failures.push(`${name}: the owned path did not serve (x-aac-view)`);
     return b;
@@ -308,6 +313,8 @@ try {
 
   await today.command('scan');
   await owned.command('wait-owned');
+  // Let both owners' first collector tick (pinned, machines, simlock) land before comparing.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   await compare('first status read', '/api/status', { view: 'status@1' });
   await compare('first scoreboard read', '/api/scoreboard', { view: 'scoreboard@1' });
   await compare(
@@ -322,6 +329,7 @@ try {
     scoreboardGeneration: inputsProbe.scoreboard?.generation ?? null,
     scoreboardCatalog: inputsProbe.scoreboard?.catalog ? 'present' : 'null',
   };
+  report.factsProbe = await owned.command('facts');
 
   // A new report on both shares; each side rescans in its own way.
   for (const mode of ['today', 'owned']) {
@@ -341,7 +349,7 @@ try {
     );
   }
   await today.command('scan');
-  await owned.command('wait-owned');
+  await owned.command('wait-owned', { marker: 'mac.second' });
   await compare('a new report scanned', '/api/status', { view: 'status@1' });
 
   // Ingest parity: the store's runs audit after each side's passes over the same share.
@@ -349,7 +357,9 @@ try {
   const auditOwned = await owned.command('audit');
   report.steps.push({ name: 'runs audit', ok: auditToday.ok && auditOwned.ok });
   if (!auditToday.ok || !auditOwned.ok) report.failures.push('runs audit: a side refused');
-  else if (JSON.stringify(normalize(auditToday.data)) !== JSON.stringify(normalize(auditOwned.data)))
+  else if (
+    JSON.stringify(normalize(auditToday.data)) !== JSON.stringify(normalize(auditOwned.data))
+  )
     report.failures.push('runs audit: the owned ingest differs from the TS ingest');
 
   // The readers-check file: one file per writer, the same rows up to the read clocks.

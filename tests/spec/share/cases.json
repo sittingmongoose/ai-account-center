@@ -2,7 +2,7 @@
   "version": 1,
   "root": "/fixture/agent-reports",
   "registryDir": "/fixture/registry",
-  "nativeStatusDocs": false,
+  "nativeStatusDocs": true,
   "steps": [
     {
       "name": "empty share",
@@ -19,8 +19,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -94,8 +94,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -195,8 +195,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -280,8 +280,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -365,8 +365,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -525,8 +525,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -630,8 +630,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -709,8 +709,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -788,8 +788,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -873,8 +873,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -952,8 +952,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":{\"reason\":\"its folder could not be listed\",\"since\":1793982600000}}],\"problems\":[{\"file\":\"writers/vm.lead/status.json\",\"reason\":\"its folder could not be listed\",\"since\":1793982600000}]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1031,8 +1031,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":{\"reason\":\"its folder could not be listed\",\"since\":1793982600000}}],\"problems\":[{\"file\":\"writers/vm.lead/status.json\",\"reason\":\"its folder could not be listed\",\"since\":1793982600000}]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1110,8 +1110,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":{\"reason\":\"its folder could not be listed on two scans in a row (the share says it is gone or stale)\",\"since\":1793982600000}}],\"problems\":[{\"file\":\"writers/vm.lead/status.json\",\"reason\":\"its folder could not be listed on two scans in a row (the share says it is gone or stale)\",\"since\":1793982600000}]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1175,8 +1175,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982660000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"title\":\"A status\",\"writer\":\"vm.lead\",\"seq\":2,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Half done.\",\"percent\":50,\"done\":[{\"id\":\"d1\",\"title\":\"Done one\"}],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"b40d96431a03b2f32df9d5b3da62ac9e6982a58023f14485a401ac9c1c94b206\",\"seq\":2,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":{\"reason\":\"its folder could not be listed on two scans in a row (the share says it is gone or stale)\",\"since\":1793982600000}}],\"problems\":[{\"file\":\"writers/vm.lead/status.json\",\"reason\":\"its folder could not be listed on two scans in a row (the share says it is gone or stale)\",\"since\":1793982600000}]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982660000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1240,8 +1240,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982780001,\"docs\":[],\"problems\":[]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982780001,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1328,8 +1328,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1437,8 +1437,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1535,8 +1535,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1646,8 +1646,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1743,8 +1743,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[{\"file\":\"writers/NotAWriter/status.json\",\"reason\":\"folder name is not a writer name\",\"since\":1793982600000}]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1834,8 +1834,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[{\"file\":\"writers/NotAWriter/status.json\",\"reason\":\"folder name is not a writer name\",\"since\":1793982600000}]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -1925,8 +1925,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[{\"file\":\"writers/NotAWriter/status.json\",\"reason\":\"folder name is not a writer name\",\"since\":1793982600000}]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2016,8 +2016,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[{\"file\":\"writers/NotAWriter/status.json\",\"reason\":\"folder name is not a writer name\",\"since\":1793982600000}]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2091,8 +2091,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982780002,\"docs\":[],\"problems\":[]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982780002,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2300,8 +2300,8 @@
           "problems": [],
           "changed": true
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2417,8 +2417,8 @@
           ],
           "changed": true
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2520,8 +2520,8 @@
           "problems": [],
           "changed": true
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2599,8 +2599,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"models.json\",\"model-aliases.json\",\"task-types.json\",\"measures.json\",\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":5,\"models\":[],\"aliases\":{},\"effortSuffixes\":[],\"taskTypes\":[],\"measures\":[],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2720,8 +2720,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"missingFiles\":[\"uses.json\",\"benchmarks.json\"],\"problems\":[],\"minRuns\":3,\"models\":[{\"model\":\"openai/gpt-6.1-sol\",\"label\":\"GPT-6.1 Sol\",\"family\":\"gpt\",\"runtimes\":[\"codex\"],\"efforts\":[\"high\",\"max\"],\"prices\":null,\"notes\":null}],\"aliases\":{\"gpt-6.1-sol\":\"openai/gpt-6.1-sol\"},\"effortSuffixes\":[\"-high\",\"-max\"],\"taskTypes\":[{\"id\":\"review\",\"label\":\"Review\",\"description\":null,\"unit\":\"task\",\"measures\":[],\"byProcess\":false}],\"measures\":[{\"id\":\"quality\",\"label\":\"Quality\",\"better\":\"higher\",\"unit\":\"%\",\"description\":null,\"metric\":{\"of\":\"reviews\",\"per\":\"run\"},\"preliminaryUnless\":null}],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2831,8 +2831,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[],\"problems\":[]}",
+        "docsChanged": false,
         "catalog": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"missingFiles\":[\"uses.json\",\"benchmarks.json\"],\"problems\":[{\"file\":\"catalog/models.json\",\"reason\":\"not valid JSON\",\"since\":1793982600000}],\"minRuns\":3,\"models\":[{\"model\":\"openai/gpt-6.1-sol\",\"label\":\"GPT-6.1 Sol\",\"family\":\"gpt\",\"runtimes\":[\"codex\"],\"efforts\":[\"high\",\"max\"],\"prices\":null,\"notes\":null}],\"aliases\":{\"gpt-6.1-sol\":\"openai/gpt-6.1-sol\"},\"effortSuffixes\":[\"-high\",\"-max\"],\"taskTypes\":[{\"id\":\"review\",\"label\":\"Review\",\"description\":null,\"unit\":\"task\",\"measures\":[],\"byProcess\":false}],\"measures\":[{\"id\":\"quality\",\"label\":\"Quality\",\"better\":\"higher\",\"unit\":\"%\",\"description\":null,\"metric\":{\"of\":\"reviews\",\"per\":\"run\"},\"preliminaryUnless\":null}],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -2916,8 +2916,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"writer\":\"vm.lead\",\"seq\":5,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Newer.\",\"percent\":null,\"done\":[],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"2b1016fcacff2a7c41c1ad5abca7cf3b51e1d964983c841b4f2986977dd07434\",\"seq\":5,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":null}],\"problems\":[]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"uses.json\",\"benchmarks.json\"],\"problems\":[{\"file\":\"catalog/models.json\",\"reason\":\"not valid JSON\",\"since\":1793982600000}],\"minRuns\":3,\"models\":[{\"model\":\"openai/gpt-6.1-sol\",\"label\":\"GPT-6.1 Sol\",\"family\":\"gpt\",\"runtimes\":[\"codex\"],\"efforts\":[\"high\",\"max\"],\"prices\":null,\"notes\":null}],\"aliases\":{\"gpt-6.1-sol\":\"openai/gpt-6.1-sol\"},\"effortSuffixes\":[\"-high\",\"-max\"],\"taskTypes\":[{\"id\":\"review\",\"label\":\"Review\",\"description\":null,\"unit\":\"task\",\"measures\":[],\"byProcess\":false}],\"measures\":[{\"id\":\"quality\",\"label\":\"Quality\",\"better\":\"higher\",\"unit\":\"%\",\"description\":null,\"metric\":{\"of\":\"reviews\",\"per\":\"run\"},\"preliminaryUnless\":null}],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -3001,8 +3001,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"writer\":\"vm.lead\",\"seq\":5,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Newer.\",\"percent\":null,\"done\":[],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"2b1016fcacff2a7c41c1ad5abca7cf3b51e1d964983c841b4f2986977dd07434\",\"seq\":5,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":{\"reason\":\"status.json its seq is lower than one already read, so this copy is ignored\",\"since\":1793982600000}}],\"problems\":[{\"file\":\"writers/vm.lead/status.json\",\"reason\":\"status.json its seq is lower than one already read, so this copy is ignored\",\"since\":1793982600000}]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"uses.json\",\"benchmarks.json\"],\"problems\":[{\"file\":\"catalog/models.json\",\"reason\":\"not valid JSON\",\"since\":1793982600000}],\"minRuns\":3,\"models\":[{\"model\":\"openai/gpt-6.1-sol\",\"label\":\"GPT-6.1 Sol\",\"family\":\"gpt\",\"runtimes\":[\"codex\"],\"efforts\":[\"high\",\"max\"],\"prices\":null,\"notes\":null}],\"aliases\":{\"gpt-6.1-sol\":\"openai/gpt-6.1-sol\"},\"effortSuffixes\":[\"-high\",\"-max\"],\"taskTypes\":[{\"id\":\"review\",\"label\":\"Review\",\"description\":null,\"unit\":\"task\",\"measures\":[],\"byProcess\":false}],\"measures\":[{\"id\":\"quality\",\"label\":\"Quality\",\"better\":\"higher\",\"unit\":\"%\",\"description\":null,\"metric\":{\"of\":\"reviews\",\"per\":\"run\"},\"preliminaryUnless\":null}],\"uses\":[],\"benchmarks\":[]}"
       }
     },
@@ -3086,8 +3086,8 @@
         "registry": {
           "error": "The pm-mail registry folder is missing."
         },
-        "docs": null,
-        "docsChanged": null,
+        "docs": "{\"state\":\"ok\",\"scannedAt\":1793982600000,\"docs\":[{\"writer\":\"vm.lead\",\"doc\":{\"writer\":\"vm.lead\",\"seq\":5,\"writtenAt\":\"2026-11-06T16:29:30.000Z\",\"t3Thread\":\"thread-1\",\"summary\":\"Newer.\",\"percent\":null,\"done\":[],\"left\":[],\"blockers\":[],\"looping\":null},\"sha256\":\"2b1016fcacff2a7c41c1ad5abca7cf3b51e1d964983c841b4f2986977dd07434\",\"seq\":5,\"writtenAtMs\":1793982570000,\"firstSeenAt\":1793982600000,\"problem\":{\"reason\":\"status.json stages is missing or not valid\",\"since\":1793982600000}}],\"problems\":[{\"file\":\"writers/vm.lead/status.json\",\"reason\":\"status.json stages is missing or not valid\",\"since\":1793982600000}]}",
+        "docsChanged": true,
         "catalog": "{\"state\":\"missing\",\"scannedAt\":1793982600000,\"missingFiles\":[\"uses.json\",\"benchmarks.json\"],\"problems\":[{\"file\":\"catalog/models.json\",\"reason\":\"not valid JSON\",\"since\":1793982600000}],\"minRuns\":3,\"models\":[{\"model\":\"openai/gpt-6.1-sol\",\"label\":\"GPT-6.1 Sol\",\"family\":\"gpt\",\"runtimes\":[\"codex\"],\"efforts\":[\"high\",\"max\"],\"prices\":null,\"notes\":null}],\"aliases\":{\"gpt-6.1-sol\":\"openai/gpt-6.1-sol\"},\"effortSuffixes\":[\"-high\",\"-max\"],\"taskTypes\":[{\"id\":\"review\",\"label\":\"Review\",\"description\":null,\"unit\":\"task\",\"measures\":[],\"byProcess\":false}],\"measures\":[{\"id\":\"quality\",\"label\":\"Quality\",\"better\":\"higher\",\"unit\":\"%\",\"description\":null,\"metric\":{\"of\":\"reviews\",\"per\":\"run\"},\"preliminaryUnless\":null}],\"uses\":[],\"benchmarks\":[]}"
       }
     }
