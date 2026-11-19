@@ -283,6 +283,7 @@ pub enum SocketState {
     Unknown,
 }
 
+/// Check an owned runtime socket with a bounded connect probe.
 #[cfg(unix)]
 pub fn socket_state(socket_path: &Path, timeout_ms: u64) -> SocketState {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
