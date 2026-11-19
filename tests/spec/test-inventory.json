@@ -3399,6 +3399,14 @@
       ]
     },
     {
+      "file": "tests/unit/web-server/reset-claims-rust-owner.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/reset-claims.test.ts",
       "kind": "safety",
       "evidence": [
