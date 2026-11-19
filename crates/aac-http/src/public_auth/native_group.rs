@@ -41,6 +41,9 @@ pub(super) struct Routes {
     /// them to the compatibility worker. Off until the cutover flips it in the service unit, so
     /// the shipped worker-enabled gates keep answering through the adapters they recorded.
     enabled: bool,
+    /// Start the in-process service for a worker-less cut boot (`dashboard` with no backend).
+    /// A composition fixture has a backend and its own supervisor: never a second service there.
+    embed: bool,
     link: std::sync::Mutex<Option<ServiceLink>>,
     embedded: tokio::sync::Mutex<Option<Embedded>>,
 }
@@ -58,10 +61,11 @@ fn random_hex<const N: usize>() -> Option<String> {
 }
 
 impl Routes {
-    pub(super) fn new(root: PathBuf) -> Self {
+    pub(super) fn new(root: PathBuf, embed: bool) -> Self {
         Self {
             root,
             enabled: std::env::var("AAC_RUST_CUT_NATIVE_ROUTES").as_deref() == Ok("on"),
+            embed,
             link: std::sync::Mutex::new(None),
             embedded: tokio::sync::Mutex::new(None),
         }
@@ -97,6 +101,9 @@ impl Routes {
         }
         if let Some(link) = ServiceLink::load(&self.root) {
             return Some(self.remember(link));
+        }
+        if !self.embed {
+            return None;
         }
         let mut embedded = self.embedded.lock().await;
         if embedded.is_none() {
@@ -250,6 +257,7 @@ fn owns_route(method: &Method, path: &str) -> bool {
     }
     path == "/api/status"
         || path == "/api/status/answers"
+        || path == "/api/scoreboard"
         || path == "/api/store/status"
         || path == "/api/usage/history"
         || path == "/api/usage/at"
@@ -444,6 +452,7 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
         }
         "/api/status/answers" => answers_read(routes, access, raw).await,
         "/api/status" => status(routes, access, raw, &facts).await,
+        "/api/scoreboard" => scoreboard(routes, access, raw, &facts).await,
         "/api/status/deliverable" => deliverable(routes, access, req, &facts, raw).await,
         _ => match media(&path) {
             Some((writer, relative)) => {
@@ -657,6 +666,260 @@ async fn status(
     }
 }
 
+/// The service principal internal routes admit (`VerifiedPrincipal::valid`).
+const SERVICE: &str = r#"{"kind":"session","id":"front-door","role":"service"}"#;
+struct ScoreboardQuery {
+    from: Option<String>,
+    to: Option<String>,
+    source: String,
+    task_type: Option<String>,
+}
+
+const FILTER_KEYS: [&str; 4] = ["from", "to", "source", "taskType"];
+const FILTER_UNEXPECTED: &str = "This request takes only from, to, source and taskType.";
+const FILTER_ONCE: &str = "Each filter may be given once.";
+const FILTER_DAY: &str = "Dates are days written YYYY-MM-DD.";
+const FILTER_ORDER: &str = "The first day is after the last day.";
+const FILTER_SOURCE: &str = "Source is all, real or benchmark.";
+const FILTER_TASK: &str = "The task type is not a task type id.";
+
+fn query_decode(value: &str) -> Option<String> {
+    percent_decode(&value.replace('+', " "))
+}
+
+/// The route's own filter contract (`parseScoreboardQuery`).
+fn scoreboard_query(raw: Option<&str>) -> Result<ScoreboardQuery, (&'static str, &'static str)> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for part in raw.unwrap_or_default().split('&').filter(|part| !part.is_empty()) {
+        let (key, value) = part.split_once('=').unwrap_or((part, ""));
+        let key = query_decode(key).ok_or(("unexpected_query", FILTER_UNEXPECTED))?;
+        if !FILTER_KEYS.contains(&key.as_str()) {
+            return Err(("unexpected_query", FILTER_UNEXPECTED));
+        }
+        if pairs.iter().any(|(held, _)| *held == key) {
+            return Err(("invalid_filter", FILTER_ONCE));
+        }
+        let value = query_decode(value).ok_or(("invalid_filter", FILTER_DAY))?;
+        pairs.push((key, value));
+    }
+    let get = |key: &str| {
+        pairs
+            .iter()
+            .find(|(held, _)| held == key)
+            .map(|(_, value)| value.clone())
+    };
+    let from = get("from");
+    let to = get("to");
+    for day in [from.as_deref(), to.as_deref()].into_iter().flatten() {
+        if !crate::zone_facts::is_calendar_date(day) {
+            return Err(("invalid_filter", FILTER_DAY));
+        }
+    }
+    if let (Some(first), Some(last)) = (from.as_deref(), to.as_deref())
+        && first > last
+    {
+        return Err(("invalid_filter", FILTER_ORDER));
+    }
+    let source = get("source").unwrap_or_else(|| "all".to_owned());
+    if !matches!(source.as_str(), "all" | "real" | "benchmark") {
+        return Err(("invalid_filter", FILTER_SOURCE));
+    }
+    let task_type = get("taskType");
+    if let Some(task) = task_type.as_deref() {
+        let valid = (1..=64).contains(&task.len())
+            && task.as_bytes()[0].is_ascii_alphanumeric()
+            && task
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte));
+        if !valid {
+            return Err(("invalid_filter", FILTER_TASK));
+        }
+    }
+    Ok(ScoreboardQuery {
+        from,
+        to,
+        source,
+        task_type,
+    })
+}
+
+/// The Scoreboard's presentation facts: the service's unfiltered input, the envelope facts over
+/// it in the display zone, and the held generation id. `None` declines to the route's 503.
+async fn scoreboard_facts(
+    routes: &Routes,
+    time_zone: &str,
+    now: u64,
+) -> Option<(u64, String, String)> {
+    let reply = routes
+        .request(
+            "GET",
+            "/internal/scoreboard/inputs",
+            SERVICE,
+            &[],
+            None,
+        )
+        .await?;
+    if reply.status != 200 {
+        return None;
+    }
+    let input = reply.json()?;
+    let generation = input.get("generation")?.as_u64()?;
+    let catalog_hash = input.get("catalogHash")?.as_str()?.to_owned();
+    let catalog = input.get("catalog")?.clone();
+    let runs = input.get("runs")?.clone();
+    let docs = input.get("docs")?.clone();
+    if catalog.is_null() || runs.is_null() || docs.is_null() {
+        return None;
+    }
+    let task_types: Vec<Json> = catalog
+        .get("taskTypes")
+        .and_then(Json::as_array)
+        .map(|types| {
+            types
+                .iter()
+                .map(|kind| {
+                    json!({
+                        "id": kind.get("id").cloned().unwrap_or(Json::Null),
+                        "label": kind.get("label").cloned().unwrap_or(Json::Null),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let data = json!({
+        "now": now,
+        "timeZone": time_zone,
+        "root": "",
+        "catalog": catalog,
+        "runs": runs,
+        "joinReviews": [],
+        "seedFailures": input.get("seedFailures").cloned().unwrap_or_else(|| json!([])),
+        "docs": docs,
+        "finish": {
+            "filters": {
+                "from": Json::Null,
+                "to": Json::Null,
+                "source": "all",
+                "taskType": Json::Null,
+                "available": true,
+                "taskTypes": task_types,
+            },
+            "identity": input.get("identity").cloned().unwrap_or(Json::Null),
+            "history": {"store": "on", "runs": Json::Null, "importing": false},
+        },
+    });
+    let offsets = crate::zone_facts::server_zone_facts(time_zone, i64::try_from(now).ok()?)?;
+    let facts = aac_status::produce::facts::Facts::of(&[&data], Some(&offsets.zone));
+    let data_text = json!({ "timeZone": time_zone }).to_string();
+    let facts_text = facts.to_text();
+    let short: String = catalog_hash.chars().take(12).collect();
+    let facts_id = format!("{generation}:{short}:{now}");
+    let body = format!(
+        "{{"generation":{},"data":{},"facts":{}}}",
+        Json::String(facts_id.clone()),
+        data_text,
+        facts_text
+    );
+    let reply = routes
+        .request(
+            "PUT",
+            "/internal/feed/scoreboard-facts",
+            SERVICE,
+            &[("content-type", "application/json")],
+            Some(body.as_bytes()),
+        )
+        .await?;
+    if reply.status != 200 {
+        return None;
+    }
+    let held = reply.json()?.get("generation")?.as_str()?.to_owned();
+    Some((generation, catalog_hash, held))
+}
+
+/// `GET /api/scoreboard`: the filters, the display zone's facts for the service's unfiltered
+/// input, and the owned answer (bytes, ETag, view).
+async fn scoreboard(
+    routes: &Routes,
+    access: &DashboardAccess,
+    raw: Option<&str>,
+    facts: &Facts,
+) -> Reply {
+    if let Some(reply) = browser_only(access) {
+        return reply;
+    }
+    let query = match scoreboard_query(raw) {
+        Ok(query) => query,
+        Err((code, error)) => return no_store(super::error(400, code, error)),
+    };
+    let Some(principal) = access.service_principal() else {
+        return super::decline();
+    };
+    if !routes.hosted().await {
+        return super::decline();
+    }
+    let Some((time_zone, offsets)) = status_zone(routes.root()) else {
+        return super::decline();
+    };
+    let now = now_ms();
+    let Some((generation, catalog_hash, held)) =
+        scoreboard_facts(routes, &time_zone, now).await
+    else {
+        return super::decline();
+    };
+    let Some((clock, day)) = offsets.zone.words(i64::try_from(now).unwrap_or(0)) else {
+        return super::decline();
+    };
+    let from_ms = match query.from.as_deref() {
+        Some(day) => match crate::zone_facts::local_midnight(day, &time_zone) {
+            Some(ms) => Json::from(ms),
+            None => return super::decline(),
+        },
+        None => Json::Null,
+    };
+    let to_ms = match query.to.as_deref() {
+        Some(day) => {
+            let Some(next) = crate::zone_facts::next_day(day) else {
+                return super::decline();
+            };
+            match crate::zone_facts::local_midnight(&next, &time_zone) {
+                Some(ms) => Json::from(ms - 1000),
+                None => return super::decline(),
+            }
+        }
+        None => Json::Null,
+    };
+    let feed = json!({
+        "now": now,
+        "clock": clock,
+        "day": day,
+        "timeZone": time_zone,
+        "from": query.from,
+        "to": query.to,
+        "source": query.source,
+        "taskType": query.task_type,
+        "fromMs": from_ms,
+        "toMs": to_ms,
+        "generation": generation,
+        "catalogHash": catalog_hash,
+        "facts": held,
+    })
+    .to_string();
+    match routes
+        .request(
+            "GET",
+            "/api/scoreboard",
+            &principal,
+            &[("x-aac-feed", feed.as_str())],
+            None,
+        )
+        .await
+    {
+        Some(reply) if reply.status == 200 => fed_view(&reply, facts.if_none_match.as_deref()),
+        Some(reply) if reply.declined() => super::decline(),
+        _ => super::decline(),
+    }
+}
+
 /// One fed view reply: the service's own bytes, ETag and `x-aac-view`, written with the
 /// revalidated-view headers and the `If-None-Match` 304 (`rust-view-reply.ts`).
 fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
@@ -846,7 +1109,7 @@ fn deliverable_path(raw: Option<&str>) -> Option<String> {
     let allowed = (parts[0] == "share" && parts.len() > 1)
         || (parts.len() > 5
             && parts[..3] == ["agent-reports", "v1", "writers"]
-            && parts[3].len() <= 128
+            && (1..=128).contains(&parts[3].len())
             && parts[3].as_bytes()[0].is_ascii_alphanumeric()
             && parts[3]
                 .bytes()

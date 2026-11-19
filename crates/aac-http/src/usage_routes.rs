@@ -268,22 +268,22 @@ fn string(series: &Json, field: &str) -> Json {
     series.get(field).cloned().unwrap_or(Json::Null)
 }
 
-struct Burn<'a> {
+struct Burn {
     filter: Filter,
-    names: Vec<&'a str>,
+    names: Vec<String>,
     spans: Vec<u64>,
 }
 
-fn burn_query<'a>(raw: Option<&'a str>) -> Option<Burn<'a>> {
+fn burn_query(raw: Option<&str>) -> Option<Burn> {
     let query = parse(raw, &["account", "window", "provider", "span"])?;
     let filter = filter(&query)?;
-    let names: Vec<&str> = match query.get("span") {
-        Some(value) => value.split(',').collect(),
-        None => SPANS.iter().map(|(name, _)| *name).collect(),
+    let names: Vec<String> = match query.get("span") {
+        Some(value) => value.split(',').map(str::to_owned).collect(),
+        None => SPANS.iter().map(|(name, _)| (*name).to_owned()).collect(),
     };
     let mut spans: Vec<u64> = Vec::with_capacity(names.len());
     for name in &names {
-        let Some((_, span)) = SPANS.iter().find(|(held, _)| held == name) else {
+        let Some((_, span)) = SPANS.iter().find(|(held, _)| *held == name.as_str()) else {
             return None;
         };
         spans.push(*span);
@@ -359,7 +359,7 @@ pub(crate) async fn burn(host: &StoreHost, raw: Option<&str>, now: u64) -> Resul
                             .is_some_and(|value| value >= 0.5)
                             .then(|| span.get("rate").cloned().unwrap_or(Json::Null));
                         json!({
-                            "span": names.get(position).copied().unwrap_or(""),
+                            "span": names.get(position).map(String::as_str).unwrap_or(""),
                             "consumed": span.get("consumed").cloned().unwrap_or(Json::Null),
                             "rate": rate.unwrap_or(Json::Null),
                             "coverage": coverage,

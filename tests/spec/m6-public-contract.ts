@@ -160,6 +160,12 @@ function normalize(value: unknown, key = ''): unknown {
     assert(Number.isInteger(seconds) && seconds >= 1 && seconds <= 900);
     return '<retry-after-seconds>';
   }
+  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
+  // A store boot's own identity: its open instant and its log/meta clocks (capture.ts nulls
+  // the same members when it records the row).
+  if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
+  if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
+    return '<elapsed-seconds>';
   if (typeof value === 'string' && key === 'set-cookie') {
     return value
       .replace(/^connect\.sid=[^;]+/, 'connect.sid=<session-cookie>')

@@ -488,6 +488,21 @@ function composedOwner({ method, path, role }: ComposedRecord['request']) {
   return undefined;
 }
 
+/** Every cache age in a view is the recorder's own clock, a second or a minute apart per run. */
+function stableAges(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) stableAges(item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const map = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(map)) {
+    if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof child === 'number')
+      map[key] = '<elapsed-seconds>';
+    else stableAges(child);
+  }
+}
+
 function emit(relative: string, data: any, view: string | null = null) {
   const file = path.join(spec, relative);
   const composedRow = composed && /^contract\/[0-9]/.test(relative);
@@ -515,6 +530,21 @@ function emit(relative: string, data: any, view: string | null = null) {
       source[key] = '<elapsed-seconds>';
     }
   }
+  if (owner === 'status-home') stableAges(data.response.body);
+  // The store's boot identity (its open instant, segment log and meta clocks) differs per run;
+  // the status row's contract is the writer's shape and state, not one boot's ids.
+  if (
+    owner === 'status-home' &&
+    data.request.method === 'GET' &&
+    data.request.path === '/api/store/status'
+  ) {
+    const body = data.response.body;
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      body.openedAt = null;
+      body.logs = null;
+      body.meta = null;
+    }
+  }
   const bytes = JSON.stringify(data, null, 2) + '\n';
   if (regenerate) fs.writeFileSync(file, bytes);
   else if (composedRow) {
@@ -532,7 +562,11 @@ function emit(relative: string, data: any, view: string | null = null) {
         assert.deepEqual(data.response.body?.grants, []);
       }
       if (owner === 'scoreboard') {
-        assert.equal(data.response.headers.vary, 'Cookie, Accept-Encoding');
+        // The native front door answers from the service without the TS compression layer.
+        assert.equal(
+          data.response.headers.vary,
+          process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on' ? 'Cookie' : 'Cookie, Accept-Encoding'
+        );
       }
       if (owner === 'home') assert.equal(data.response.body?.schemaVersion, 1);
       recorded[relative] = data;
@@ -590,6 +624,9 @@ function normalize(value: any, key = ''): any {
     );
     return '<retry-after-seconds>';
   }
+  // The usage routes' own clock fields are numbers; the reference and the native answer
+  // are taken at different instants.
+  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
   if (typeof value === 'string' && key === 'set-cookie')
     return value
       .replace(/^[^=]+=[^;]+/, 'connect.sid=<session-cookie>')

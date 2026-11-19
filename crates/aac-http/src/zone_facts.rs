@@ -64,6 +64,70 @@ pub(crate) fn server_zone_facts(time_zone: &str, now: i64) -> Option<ZoneOffsets
     })
 }
 
+/// `isCalendarDate`: a real `YYYY-MM-DD` day, 1970 or later.
+pub(crate) fn is_calendar_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes[..4].iter().all(u8::is_ascii_digit)
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || !bytes[8..10].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+    let parsed = (value[..4].parse::<i32>(), value[5..7].parse::<u32>(), value[8..10].parse::<u32>());
+    let (Ok(year), Ok(month), Ok(day)) = parsed else {
+        return false;
+    };
+    year >= 1970 && chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
+}
+
+/// The next calendar day's text (`addCalendarDays(date, 1)`).
+pub(crate) fn next_day(date: &str) -> Option<String> {
+    let year = date.get(0..4)?.parse::<i32>().ok()?;
+    let month = date.get(5..7)?.parse::<u32>().ok()?;
+    let day = date.get(8..10)?.parse::<u32>().ok()?;
+    let next = chrono::NaiveDate::from_ymd_opt(year, month, day)?.succ_opt()?;
+    Some(next.format("%Y-%m-%d").to_string())
+}
+
+/// `localMidnight(date, zone)`: the first instant of a local calendar day, DST skips
+/// included. The instant is found on the zone's own rules, for any date (the Signboard's
+/// filters are not bounded by the page's offset window).
+pub(crate) fn local_midnight(date: &str, time_zone: &str) -> Option<i64> {
+    let zone: chrono_tz::Tz = time_zone.parse().ok()?;
+    let year = date.get(0..4)?.parse::<i32>().ok()?;
+    let month = date.get(5..7)?.parse::<u32>().ok()?;
+    let day = date.get(8..10)?.parse::<u32>().ok()?;
+    let target = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
+    let local = |ms: i64| -> Option<chrono::NaiveDate> {
+        let at = chrono::DateTime::from_timestamp_millis(ms)?;
+        Some(at.with_timezone(&zone).date_naive())
+    };
+    // The day is inside [UTC midnight - 26 h, UTC midnight + 26 h] for every zone.
+    let utc = target.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis();
+    let (mut lo, mut hi) = (utc - 26 * 3_600_000, utc + 26 * 3_600_000);
+    if local(hi)? < target {
+        return None;
+    }
+    while hi - lo > 1000 {
+        let mid = lo + (hi - lo) / 2;
+        if local(mid)? >= target {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    // The first whole second whose local date is the target (a skipped midnight starts the
+    // day at the transition instant, which is whole-second in every IANA zone).
+    let mut at = lo - (lo.rem_euclid(1000));
+    while local(at)? < target {
+        at += 1000;
+    }
+    Some(at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +144,27 @@ mod tests {
         assert_eq!(utc.zone.offset_minutes(winter), Some(0));
         assert_eq!(utc.zone.offset_minutes(summer), Some(0));
         assert!(server_zone_facts("Not/AZone", winter).is_none());
+    }
+
+    #[test]
+    fn local_midnight_is_the_zones_own_day_start() {
+        assert_eq!(
+            local_midnight("2026-01-01", "UTC"),
+            Some(1_767_225_600_000)
+        );
+        assert_eq!(
+            local_midnight("2026-01-01", "America/New_York"),
+            Some(1_767_225_600_000 + 5 * 3_600_000)
+        );
+        assert_eq!(
+            local_midnight("2026-07-01", "America/New_York"),
+            Some(1_782_864_000_000 + 4 * 3_600_000)
+        );
+        assert_eq!(local_midnight("2026-02-30", "UTC"), None);
+        assert_eq!(next_day("2026-12-31").as_deref(), Some("2027-01-01"));
+        assert!(is_calendar_date("2026-02-28"));
+        assert!(!is_calendar_date("2026-02-30"));
+        assert!(!is_calendar_date("1969-12-31"));
     }
 
     /// The documented window: the past 120 days and the next 400, day-aligned.
