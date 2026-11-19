@@ -468,20 +468,18 @@ pub(crate) async fn run_public_at(
     // The group's one hop to the owner host: the running service's descriptor, or the
     // in-process service a worker-less boot starts. No second link.
     #[cfg(unix)]
-    let analytics_hop: Option<analytics_routes::Hop> = owner_host.as_ref().map(|host| {
-        let host = std::sync::Arc::clone(host);
-        let hop: analytics_routes::Hop =
+    let analytics_hop: Option<analytics_routes::Hop> =
+        owner_host.as_ref().map(|host| -> analytics_routes::Hop {
+            let host = std::sync::Arc::clone(host);
             std::sync::Arc::new(move |uri: String, principal: String| {
                 let host = std::sync::Arc::clone(&host);
-                let future: analytics_routes::HopFuture = Box::pin(async move {
+                Box::pin(async move {
                     host.request("GET", &uri, &principal, &[], None)
                         .await
                         .map(|reply| (reply.status, reply.body))
-                });
-                future
-            });
-        hop
-    });
+                }) as analytics_routes::HopFuture
+            })
+        });
     #[cfg(not(unix))]
     let analytics_hop: Option<analytics_routes::Hop> = None;
     let mut api = Router::new();
