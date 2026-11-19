@@ -10,7 +10,7 @@ use crate::{
         producer,
         sources::{self, Credential, Source},
     },
-    agent_transport::Selector,
+    agent_transport::{MutationReply, Selector},
     key_lifecycle::{self, Effect, Workflow},
     public_auth::{
         self, DashboardAccess, Method, Reply, Request, error, lifecycle, now, response, storage,
@@ -213,7 +213,10 @@ async fn admit_add(native: &NativeOwners, secure: bool, body: Map<String, Value>
         return Failure::InvalidBody.reply();
     };
     let name = provider.id.as_str();
-    if (provider.key_store || matches!(name, "codex" | "muse" | "antigravity")) && !secure {
+    if name == "antigravity" {
+        return super::lifecycle_login::add_antigravity(native, &body, secure).await;
+    }
+    if (provider.key_store || matches!(name, "codex" | "muse")) && !secure {
         if name == "codex" {
             return super::no_store(response(
                 403,
@@ -446,7 +449,7 @@ impl KeyStore<'_> {
         let reply = self.remote("put", id, Some(secret)).await?;
         if reply["ok"] != true
             || reply["fingerprint"] != fingerprint(secret)
-            || reply["last4"] != &secret[secret.len() - 4..]
+            || reply["last4"] != secret[secret.len() - 4..]
             || reply.as_object().is_none_or(|body| body.len() != 3)
         {
             return Err(Failure::KeyStore);
@@ -467,6 +470,25 @@ impl KeyStore<'_> {
     async fn remote(&self, action: &str, id: &str, secret: Option<&str>) -> Result<Value, Failure> {
         let alias = self.source.ssh_host.as_deref().ok_or(Failure::KeyStore)?;
         let selector = Selector::usage(&self.source.platform, Some(alias));
+        let mut args = json!({"action":action,"provider":self.source.provider,"keyId":id});
+        if let Some(secret) = secret {
+            args["secret"] = json!(secret);
+        }
+        match self
+            .native
+            .agents
+            .call_mutation("key-store", &selector, args, 20_000)
+            .await
+        {
+            MutationReply::Result(value) if action != "delete" => return Ok(value),
+            MutationReply::Result(value)
+                if value["ok"] == true && value.as_object().is_some_and(|row| row.len() == 1) =>
+            {
+                return Ok(Value::Null);
+            }
+            MutationReply::NotDispatched => {}
+            MutationReply::Result(_) | MutationReply::Uncertain => return Err(Failure::KeyStore),
+        }
         let argv = remote_argv(&self.source.platform, action, &self.source.provider, id);
         let result = self
             .native
@@ -512,8 +534,12 @@ fn remote_argv(platform: &str, action: &str, provider: &str, id: &str) -> Vec<st
 }
 
 async fn probe(native: &NativeOwners, source: &Source) -> Value {
-    if let Some(usage) = &native.usage {
-        return usage.producer.probe_key(source, now()).await;
+    if let Some(producer) = native
+        .lifecycle_usage
+        .as_ref()
+        .and_then(|usage| usage.producer.as_ref())
+    {
+        return producer.probe_key(source, now()).await;
     }
     Value::Null
 }
@@ -671,4 +697,60 @@ async fn replace(native: &NativeOwners, source: &Source, secret: &str) -> Result
     let info = key_receipt(secret, &source.platform);
     let account = entry_view(source, Some(info), true, None).ok_or(Failure::Write)?;
     Ok(json!({"account":account,"check":checked_status(&reading)}))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use crate::public_auth::{DashboardEvents, HubCache};
+
+    #[tokio::test]
+    async fn lifecycle_key_replacement_keeps_one_registered_credential_and_echoes_no_secret() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let (native, jobs) = NativeOwners::start(
+            root.clone(),
+            super::super::Groups {
+                writes: true,
+                ..Default::default()
+            },
+            HubCache::default(),
+            DashboardEvents(tokio::sync::broadcast::channel(4).0),
+            None,
+            true,
+        )
+        .unwrap();
+        let provider = "zai";
+        let old = "fixture-key-before";
+        let new = "fixture-key-after";
+        let added = add(&native, provider, old, Some("Work".into()))
+            .await
+            .unwrap();
+        assert_eq!(added["check"], "unverified");
+        assert!(!added.to_string().contains(old));
+        let entries = registry_entries(&root).unwrap();
+        assert_eq!(entries.len(), 1);
+        let source = &entries[0];
+        assert_eq!(added["account"]["id"], source.id);
+        assert!(matches!(
+            add(&native, provider, old, None).await,
+            Err(Failure::Duplicate)
+        ));
+        let replaced = replace(&native, source, new).await.unwrap();
+        assert_eq!(replaced["account"]["id"], source.id);
+        assert_eq!(
+            replaced["account"]["credential"]["fingerprint"],
+            fingerprint(new)
+        );
+        assert!(!replaced.to_string().contains(new));
+        assert_eq!(registry_entries(&root).unwrap().len(), 1);
+        let files = std::fs::read_dir(root.join("account-usage/keys"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|file| file.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(files, 1);
+        jobs.stop().await;
+    }
 }

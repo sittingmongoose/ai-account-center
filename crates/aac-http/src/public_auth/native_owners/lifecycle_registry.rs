@@ -1,7 +1,7 @@
 //! Project the account registry from the shared native collection generation.
-use super::{NativeOwners, Usage, lifecycle_jobs::Jobs, lifecycle_label::local_key_info};
+use super::{NativeOwners, lifecycle_jobs::Jobs, lifecycle_label::local_key_info};
 use crate::{
-    account_usage::{Desktop, sources},
+    account_usage::{AccountUsageCache, Desktop, sources},
     claude_open::manifest,
     public_auth::{Method, Reply, Request, error, lifecycle, now, set_header, storage},
 };
@@ -28,13 +28,13 @@ pub(super) async fn handle(native: &NativeOwners, jobs: &Jobs, request: Request)
     if request.uri().query().is_some() {
         return lifecycle::unexpected_query();
     }
-    let Some(usage) = &native.usage else {
+    let Some(usage) = &native.lifecycle_usage else {
         return unavailable();
     };
-    let Some(dashboard) = dashboard(usage, secure).await else {
+    let Some(dashboard) = dashboard(&usage.cache, secure).await else {
         return unavailable();
     };
-    let root = usage.root.clone();
+    let root = native.agents.root().to_owned();
     let jobs = jobs.running(secure);
     let result = tokio::task::spawn_blocking(move || listing(&root, dashboard, jobs)).await;
     let Ok(Some(body)) = result else {
@@ -57,26 +57,26 @@ fn unavailable() -> Reply {
     )
 }
 
-async fn dashboard(usage: &Usage, secure: bool) -> Option<Value> {
-    let mut events = usage.events.0.subscribe();
-    tokio::time::timeout(Duration::from_secs(4), async {
-        loop {
-            let at = now();
-            let timestamp = storage::iso(at)?;
-            if let Ok(bytes) = usage.cache.render(Desktop::Mac, secure, &timestamp, at) {
-                return serde_json::from_slice(&bytes).ok();
-            }
-            if matches!(
-                events.recv().await,
-                Err(tokio::sync::broadcast::error::RecvError::Closed)
-            ) {
-                return None;
-            }
-        }
-    })
-    .await
-    .ok()
-    .flatten()
+async fn dashboard(cache: &AccountUsageCache, secure: bool) -> Option<Value> {
+    let render = || {
+        let at = now();
+        let bytes = cache
+            .render(Desktop::Mac, secure, &storage::iso(at)?, at)
+            .ok()?;
+        serde_json::from_slice(&bytes).ok()
+    };
+    if let Some(dashboard) = render() {
+        return Some(dashboard);
+    }
+    cache.request_refresh();
+    if cache
+        .await_generation(Desktop::Mac, secure, Duration::from_secs(4))
+        .await
+    {
+        render()
+    } else {
+        None
+    }
 }
 
 fn listing(

@@ -1,9 +1,16 @@
 //! The Codex job owns its unique staging name from prepare through cleanup.
-use super::{path, profile_writes::owned_directory, require_absolute, sync_directory};
+use super::{
+    path,
+    profile_writes::{file_key, open_leaf, owned_directory},
+    require_absolute, sync_directory,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, symlink as symlink_file};
+#[cfg(windows)]
+use std::os::windows::fs::symlink_file;
 use std::{
     fs,
     io::{self, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, symlink},
     path::Path,
     time::{Duration, UNIX_EPOCH},
 };
@@ -24,18 +31,17 @@ pub fn prepare(root: &Path, name: &str, shared: &Path) -> io::Result<()> {
         return Err(io::Error::other("invalid staging layout"));
     }
     let parent = root.join("codex-instances");
-    match fs::DirBuilder::new().mode(0o700).create(&parent) {
+    match super::private_builder().create(&parent) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error),
     }
     owned_directory(&parent)?;
     let stage = parent.join(name);
-    fs::DirBuilder::new().mode(0o700).create(&stage)?;
-    fs::set_permissions(&stage, fs::Permissions::from_mode(0o700))?;
+    private_folder(&stage)?;
     // The unchanged optional config link is owned by this job.
     if fs::metadata(shared).is_ok_and(|value| value.is_file()) {
-        let _ = symlink(shared, stage.join("config.toml"));
+        let _ = symlink_file(shared, stage.join("config.toml"));
     }
     let _ = sync_directory(&parent);
     Ok(())
@@ -116,8 +122,10 @@ fn antigravity_name(name: &str) -> bool {
 }
 
 fn private_folder(target: &Path) -> io::Result<()> {
-    fs::DirBuilder::new().mode(0o700).create(target)?;
-    fs::set_permissions(target, fs::Permissions::from_mode(0o700))
+    super::private_builder().create(target)?;
+    #[cfg(unix)]
+    fs::set_permissions(target, fs::Permissions::from_mode(0o700))?;
+    Ok(())
 }
 
 /// Prepare the common terminal and dashboard sign-in directory.
@@ -128,6 +136,7 @@ pub fn antigravity_root(root: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => owned_directory(&parent)?,
         other => other?,
     }
+    #[cfg(unix)]
     if fs::symlink_metadata(parent)?.mode() & 0o077 != 0 {
         return Err(io::Error::other("sign-in directory is not private"));
     }
@@ -135,11 +144,14 @@ pub fn antigravity_root(root: &Path) -> io::Result<()> {
 }
 
 fn create_file(path: &Path, content: &[u8], mode: u32) -> io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(mode)
-        .open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(mode);
+    #[cfg(windows)]
+    let _ = mode;
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
     file.set_permissions(fs::Permissions::from_mode(mode))?;
     file.write_all(content)?;
     file.sync_all()
@@ -234,13 +246,13 @@ pub fn claim_antigravity_marker(
         return Err(io::Error::other("invalid sign-in marker"));
     }
     let path = parent.join(temp);
-    let mut file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)?;
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&path)?;
     let result = (|| {
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        super::set_private(&file).map_err(|_| io::Error::other("sign-in marker is not private"))?;
         file.write_all(holder)?;
         file.sync_all()?;
         match fs::hard_link(&path, parent.join(name)) {
@@ -262,8 +274,8 @@ pub fn remove_antigravity_marker(root: &Path, name: &str, dev: u64, ino: u64) ->
         return Err(io::Error::other("invalid sign-in marker"));
     }
     let file = parent.join(name);
-    match fs::symlink_metadata(&file) {
-        Ok(meta) if meta.dev() == dev && meta.ino() == ino && !meta.is_dir() => {
+    match marker_identity(&file) {
+        Ok(key) if key == (dev, ino) => {
             fs::remove_file(file)?;
             let _ = sync_directory(&parent);
             Ok(true)
@@ -271,6 +283,44 @@ pub fn remove_antigravity_marker(root: &Path, name: &str, dev: u64, ino: u64) ->
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
         _ => Ok(false),
     }
+}
+
+/// The current marker identity, without following links.
+pub fn marker_identity(path: &Path) -> io::Result<(u64, u64)> {
+    let (device, inode, _) = file_key(&open_leaf(path, false)?)?;
+    Ok((device, inode))
+}
+
+/// Validate and read the complete staged login without accepting linked credentials.
+pub fn antigravity_token(root: &Path, staging_name: &str) -> Option<Vec<u8>> {
+    if !antigravity_name(staging_name) {
+        return None;
+    }
+    let path = root
+        .join("antigravity-signin")
+        .join(staging_name)
+        .join("home/.gemini/antigravity-cli/antigravity-oauth-token");
+    let policy = super::read::ReadPolicy::capped(16_384)
+        .mode(super::read::Mode::Private)
+        .owner(super::read::Owner::Mine)
+        .ancestors(super::read::Ancestors::NoLinkBelow(root));
+    let held = open_leaf(&path, false).ok()?;
+    let files = file_key(&held).ok()?;
+    if files.2 != 1 {
+        return None;
+    }
+    let super::read::Read::Bytes(bytes, _metadata) = super::read::read(&path, &policy) else {
+        return None;
+    };
+    if bytes.is_empty() || file_key(&open_leaf(&path, false).ok()?).ok()? != files {
+        return None;
+    }
+    #[cfg(unix)]
+    if _metadata.dev() != files.0 || _metadata.ino() != files.1 || _metadata.mode() & 0o777 != 0o600
+    {
+        return None;
+    }
+    Some(bytes)
 }
 
 /// Sweep expired Antigravity marker drafts and markers whose holder is gone or
@@ -306,7 +356,10 @@ pub fn sweep_antigravity_markers(
         } else {
             marker_temp(name) && meta.is_file() && age > 60 * 60_000
         };
-        if stale && remove_antigravity_marker(root, name, meta.dev(), meta.ino()).unwrap_or(false) {
+        if stale
+            && let Ok((device, inode)) = marker_identity(&entry.path())
+            && remove_antigravity_marker(root, name, device, inode).unwrap_or(false)
+        {
             count += 1;
         }
     }

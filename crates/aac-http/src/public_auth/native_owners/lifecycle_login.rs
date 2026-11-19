@@ -1,6 +1,9 @@
 //! Sign in again and provider preparation for Lane G's existing interactive session.
 use super::{
-    NativeOwners, lifecycle_codex as codex, lifecycle_jobs::Jobs, lifecycle_registry::codex_cli,
+    NativeOwners, lifecycle_antigravity as antigravity, lifecycle_codex as codex,
+    lifecycle_jobs::Jobs,
+    lifecycle_maintenance,
+    lifecycle_registry::{antigravity_preflight, codex_cli},
     recheck,
 };
 use crate::{
@@ -32,6 +35,11 @@ pub(super) enum Flow {
         alias: String,
         home_id: Option<String>,
     },
+    Antigravity {
+        name: String,
+        add: bool,
+        stage: Option<Arc<antigravity::Stage>>,
+    },
 }
 
 impl Flow {
@@ -51,13 +59,25 @@ impl Flow {
                 source.id.clone(),
                 "mac",
             ),
+            Self::Antigravity { name, add, .. } => (
+                "antigravity",
+                if *add { "add" } else { "signin-again" },
+                (!*add).then(|| format!("antigravity:profile:{name}")),
+                name.clone(),
+                "ubuntu",
+            ),
         };
         let now = now();
         let stamp = storage::iso(now)?;
         Some(DashboardSignInJob {
             id,
             provider: provider.into(),
-            kind: "device-code".into(),
+            kind: if matches!(self, Self::Antigravity { .. }) {
+                "supervised-cli"
+            } else {
+                "device-code"
+            }
+            .into(),
             mode: mode.into(),
             account_id,
             profile_name: Some(name),
@@ -72,7 +92,11 @@ impl Flow {
         })
     }
 
-    pub(super) async fn prepare(&self, agents: &Arc<Agents>, id: &str) -> Result<Value, ErrorCode> {
+    pub(super) async fn prepare(
+        &mut self,
+        agents: &Arc<Agents>,
+        id: &str,
+    ) -> Result<Value, ErrorCode> {
         match self {
             Self::Codex { cli, .. } => {
                 let cli = cli.clone();
@@ -112,6 +136,18 @@ impl Flow {
                     .collect();
                 Ok(json!({"file":file,"args":argv,"env":env,"pty":false}))
             }
+            Self::Antigravity { name, stage, .. } => {
+                let root = agents.root().to_owned();
+                let id = id.to_owned();
+                let name = name.clone();
+                let (prepared, command) = tokio::task::spawn_blocking(move || {
+                    antigravity::Stage::prepare(root, &id, &name)
+                })
+                .await
+                .map_err(|_| ErrorCode::WriteFailed)??;
+                *stage = Some(Arc::new(prepared));
+                Ok(command)
+            }
         }
     }
 
@@ -123,18 +159,20 @@ impl Flow {
                 "https://auth.meta.com",
                 "https://www.meta.ai",
             ],
+            Self::Antigravity { .. } => &[antigravity::ORIGIN],
         }
     }
 
     pub(super) async fn install(
         &self,
-        agents: &Arc<Agents>,
+        native: &NativeOwners,
         jobs: Arc<Jobs>,
         id: &str,
     ) -> Result<Value, ErrorCode> {
         if jobs.stopped(id) {
             return Err(ErrorCode::Timeout);
         }
+        let agents = &native.agents;
         match self {
             Self::Codex { name, add, .. } => {
                 let name = name.clone();
@@ -202,12 +240,39 @@ impl Flow {
                 }
                 Ok(json!({"accountId":source.id,"email":email,"plan":null}))
             }
+            Self::Antigravity { name, add, stage } => {
+                let stage = stage.clone().ok_or(ErrorCode::WriteFailed)?;
+                let name = name.clone();
+                let add = *add;
+                let native = native.clone();
+                let id = id.to_owned();
+                tokio::task::spawn_blocking(move || {
+                    let identity =
+                        antigravity::install(&native, &stage, &name, add, || jobs.stopped(&id))?;
+                    if let Some(home) = std::env::home_dir() {
+                        let root = native.agents.root().to_owned();
+                        tokio::task::spawn_blocking(move || {
+                            crate::cli::antigravity::refresh_after_signin(&root, &home)
+                        });
+                    }
+                    Ok(json!({"accountId":format!("antigravity:profile:{name}"),
+                        "email":identity.email,"plan":identity.plan}))
+                })
+                .await
+                .map_err(|_| ErrorCode::WriteFailed)?
+            }
         }
     }
 
-    pub(super) async fn cleanup(&self, root: PathBuf, id: String) {
-        if matches!(self, Self::Codex { .. }) {
-            let _ = tokio::task::spawn_blocking(move || codex::cleanup(&root, &id)).await;
+    pub(super) async fn cleanup(self, root: PathBuf, id: String) {
+        match self {
+            Self::Codex { .. } => {
+                let _ = tokio::task::spawn_blocking(move || codex::cleanup(&root, &id)).await;
+            }
+            Self::Antigravity { stage, .. } => {
+                let _ = tokio::task::spawn_blocking(move || drop(stage)).await;
+            }
+            Self::Muse { .. } => {}
         }
     }
 }
@@ -264,6 +329,9 @@ pub(super) async fn handle(native: &NativeOwners, raw_id: &str, request: Request
                 return terminal("ubuntu", "codex login --device-auth");
             }
             return codex_start(native, name, false).await;
+        }
+        if let Some(name) = id.strip_prefix("antigravity:profile:") {
+            return antigravity_start(native, name, false, secure).await;
         }
         return not_implemented();
     }
@@ -337,6 +405,77 @@ pub(super) async fn add_codex(native: &NativeOwners, body: &Map<String, Value>) 
         return lifecycle::invalid_action_body();
     };
     codex_start(native, name, true).await
+}
+
+pub(super) async fn add_antigravity(
+    native: &NativeOwners,
+    body: &Map<String, Value>,
+    secure: bool,
+) -> Reply {
+    let Some(name) = body
+        .get("profileName")
+        .and_then(Value::as_str)
+        .filter(|name| body.len() == 2 && crate::antigravity_runtime::profile_id_ok(name))
+    else {
+        return lifecycle::invalid_action_body();
+    };
+    antigravity_start(native, name, true, secure).await
+}
+
+async fn antigravity_start(native: &NativeOwners, name: &str, add: bool, secure: bool) -> Reply {
+    let name = name.to_owned();
+    let root = native.agents.root().to_owned();
+    let gate = tokio::task::spawn_blocking(move || {
+        let unavailable = || error(500, "registry_unavailable", "Account list could not be read safely.");
+        let (document, parsed) = antigravity::current(&root).map_err(|_| unavailable())?;
+        if add && parsed.as_ref().is_some_and(|parsed| parsed.profile(&name).is_some()) {
+            return Err(error(409, "id_in_use", "That name is already used by another account."));
+        }
+        if add && parsed.as_ref().is_some_and(|parsed| parsed.profiles.len() >= 16) {
+            return Err(error(409,"too_many_accounts","This provider already has the most accounts allowed."));
+        }
+        let fallback = format!("ai-account-center antigravity signin {name}");
+        let home = std::env::home_dir();
+        let preflight = secure.then(|| antigravity_preflight(home.as_deref())).flatten();
+        if add && !secure {
+            return Err(terminal("ubuntu", &fallback));
+        }
+        if preflight == Some("tool_missing") {
+            return Err(error(409, "tool_missing", "The sign-in tool is not installed on the dashboard computer."));
+        }
+        let race = || {
+            let lock = aac_files::read::entry_exists(&root.join("antigravity-profiles/.transaction-lock"))
+                .map_err(|_| unavailable())?;
+            if lock || !document["transaction"].is_null() {
+                return Err(error(409,"activation_running","Another change to these saved logins is running. Wait for it to finish."));
+            }
+            if lifecycle_maintenance::antigravity_signin_running(&root, &name) {
+                return Err(error(409,"signin_running","A sign-in for this account is running."));
+            }
+            Ok(())
+        };
+        if !add { race()?; }
+        if !secure {
+            return Err(terminal("ubuntu", &fallback));
+        }
+        if preflight.is_some() {
+            return Err(super::no_store(response(409, json!({
+                "error":"Sign in to this provider from a terminal on Ubuntu with the command shown.",
+                "code":"preflight_failed","fallback":{"kind":"terminal","host":"ubuntu","command":fallback}
+            }))));
+        }
+        if add { race()?; }
+        Ok(Flow::Antigravity { name, add, stage: None })
+    }).await;
+    match gate {
+        Ok(Ok(flow)) => start(native, flow),
+        Ok(Err(reply)) => reply,
+        Err(_) => error(
+            500,
+            "registry_unavailable",
+            "Account list could not be read safely.",
+        ),
+    }
 }
 
 async fn codex_start(native: &NativeOwners, name: &str, add: bool) -> Reply {

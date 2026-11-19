@@ -38,40 +38,10 @@ pub(super) fn admit(request: &Request) -> Result<&DashboardAccess, Reply> {
     }
 }
 
-#[cfg(unix)]
 pub(super) async fn mutation_body(
     request: Request,
 ) -> Result<serde_json::Map<String, serde_json::Value>, Reply> {
-    use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
-
-    let access = admit(&request)?;
-    if request.uri().query().is_some() {
-        return Err(unexpected_query());
-    }
-    if !access.origin_present || !access.same_origin {
-        return Err(error(
-            403,
-            "origin_required",
-            "This change requires the dashboard origin.",
-        ));
-    }
-    let declared = request.headers().get(CONTENT_LENGTH);
-    if (declared.is_none() && !request.headers().contains_key(TRANSFER_ENCODING))
-        || !super::native_owners::json_content(&request)
-    {
-        return Err(error(
-            415,
-            "json_required",
-            "This change requires application/json.",
-        ));
-    }
-    const BODY_CAP: usize = 8 * 1024;
-    if declared
-        .and_then(|length| length.to_str().ok()?.parse::<usize>().ok())
-        .is_some_and(|length| length > BODY_CAP)
-    {
-        return Err(super::invalid_body());
-    }
+    mutation_admission(&request)?;
     // The front door already imposed Express's parser cap. Lifecycle also checks
     // the serialized object, including when the request was sent in chunks.
     let bytes = axum::body::to_bytes(request.into_body(), 100 * 1024)
@@ -86,6 +56,41 @@ pub(super) async fn mutation_body(
         return Err(super::invalid_body());
     }
     Ok(body)
+}
+
+const BODY_CAP: usize = 8 * 1024;
+
+pub(super) fn mutation_admission(request: &Request) -> Result<(), Reply> {
+    use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
+
+    let access = admit(request)?;
+    if request.uri().query().is_some() {
+        return Err(unexpected_query());
+    }
+    if !access.origin_present || !access.same_origin {
+        return Err(error(
+            403,
+            "origin_required",
+            "This change requires the dashboard origin.",
+        ));
+    }
+    let declared = request.headers().get(CONTENT_LENGTH);
+    if (declared.is_none() && !request.headers().contains_key(TRANSFER_ENCODING))
+        || !super::native_owners::json_content(request)
+    {
+        return Err(error(
+            415,
+            "json_required",
+            "This change requires application/json.",
+        ));
+    }
+    if declared
+        .and_then(|length| length.to_str().ok()?.parse::<usize>().ok())
+        .is_some_and(|length| length > BODY_CAP)
+    {
+        return Err(super::invalid_body());
+    }
+    Ok(())
 }
 
 fn signin_command(query: &str) -> Reply {

@@ -86,7 +86,7 @@ impl Groups {
 }
 
 #[derive(Clone)]
-pub(super) struct NativeOwners {
+pub(crate) struct NativeOwners {
     agents: Arc<Agents>,
     owners: Owners,
     queues: Arc<crate::lifecycle_queue::LifecycleQueues>,
@@ -94,13 +94,14 @@ pub(super) struct NativeOwners {
     trash: Option<Arc<lifecycle_trash::Trash>>,
     events: DashboardEvents,
     usage: Option<Arc<Usage>>,
+    lifecycle_usage: Option<LifecycleUsage>,
     #[cfg(unix)]
     apps: Option<Arc<BoundJobs>>,
     writes: bool,
     limits: Limits,
 }
 
-pub(super) struct Jobs {
+pub(crate) struct Jobs {
     cancel: CancellationToken,
     sampling: Option<JoinHandle<()>>,
     signins: Option<JoinHandle<()>>,
@@ -108,7 +109,7 @@ pub(super) struct Jobs {
 }
 
 impl Jobs {
-    pub(super) async fn stop(self) {
+    pub(crate) async fn stop(self) {
         self.cancel.cancel();
         if let Some(task) = self.signins {
             task.abort();
@@ -125,20 +126,27 @@ impl Jobs {
 
 struct Usage {
     root: PathBuf,
-    producer: Producer,
+    producer: Arc<Producer>,
     cache: AccountUsageCache,
     hub: HubCache,
     events: DashboardEvents,
     lifecycle: Mutex<crate::account_usage::dashboard::Lifecycle>,
     recheck_limit: Mutex<recheck::Limit>,
     signins: ClaudeSignInRenewalReader,
-    antigravity: Option<crate::antigravity_host::Host>,
+    antigravity: Option<Arc<crate::antigravity_host::Host>>,
     server: Value,
     worker_directory: Option<PathBuf>,
     store: bool,
     analytics_writers: bool,
     owners: Owners,
     agents: Arc<Agents>,
+}
+
+#[derive(Clone)]
+struct LifecycleUsage {
+    cache: AccountUsageCache,
+    producer: Option<Arc<Producer>>,
+    antigravity: Option<Arc<crate::antigravity_host::Host>>,
 }
 
 impl NativeOwners {
@@ -148,6 +156,7 @@ impl NativeOwners {
         hub: HubCache,
         events: DashboardEvents,
         worker_directory: Option<PathBuf>,
+        owns_lifecycle_here: bool,
     ) -> io::Result<(Self, Jobs)> {
         let root = root.canonicalize()?;
         let agents = Arc::new(Agents::with_default(root.clone(), true));
@@ -181,8 +190,7 @@ impl NativeOwners {
                 let owner = if (groups.collection
                     && row.moves_with.as_deref() == Some("collection"))
                     || (groups.writes && row.moves_with.as_deref() == Some("writes"))
-                    || (worker_directory.is_none()
-                        && row.moves_with.as_deref() == Some("lifecycle"))
+                    || (owns_lifecycle_here && row.moves_with.as_deref() == Some("lifecycle"))
                 {
                     Role::RustService
                 } else {
@@ -193,14 +201,13 @@ impl NativeOwners {
             .collect();
         let owners = Owners::from_boot(rows, &files).map_err(io::Error::other)?;
         let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
-        let lifecycle_jobs = worker_directory
-            .is_none()
-            .then(|| Arc::new(lifecycle_jobs::Jobs::default()));
-        let trash = worker_directory.is_none().then(|| {
+        let lifecycle_jobs = owns_lifecycle_here.then(|| Arc::new(lifecycle_jobs::Jobs::default()));
+        let trash = owns_lifecycle_here.then(|| {
             Arc::new(lifecycle_trash::Trash::new(
                 root.clone(),
                 owners.clone(),
                 agents.clone(),
+                queues.clone(),
             ))
         });
         if groups.writes
@@ -242,20 +249,20 @@ impl NativeOwners {
             }
             let collection = Arc::new(Collection::default());
             let usage = Arc::new(Usage {
-                producer: Producer::shared(
+                producer: Arc::new(Producer::shared(
                     root.clone(),
                     owners.clone(),
                     agents.clone(),
                     collection,
                     Arc::default(),
-                ),
+                )),
                 cache: AccountUsageCache::default(),
                 hub,
                 events: events.clone(),
                 lifecycle: Mutex::new(lifecycle),
                 recheck_limit: Mutex::default(),
                 signins: ClaudeSignInRenewalReader::new(root.clone(), Default::default()),
-                antigravity: crate::antigravity_host::Host::from_root(&root),
+                antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
                 server,
                 store: groups.store && worker_directory.is_some(),
                 worker_directory,
@@ -280,6 +287,11 @@ impl NativeOwners {
                 lifecycle_jobs,
                 trash,
                 events,
+                lifecycle_usage: usage.as_ref().map(|usage| LifecycleUsage {
+                    cache: usage.cache.clone(),
+                    producer: Some(usage.producer.clone()),
+                    antigravity: usage.antigravity.clone(),
+                }),
                 usage,
                 #[cfg(unix)]
                 apps,
@@ -290,23 +302,86 @@ impl NativeOwners {
         ))
     }
 
+    pub(crate) fn owns_lifecycle(method: &Method, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        super::lifecycle::Route::of(method, path).is_some()
+            || lifecycle_open::route(method, path).is_some()
+            || lifecycle_label::route(method, path).is_some()
+            || lifecycle_jobs::route(method, path).is_some()
+            || lifecycle_registry::route(method, path)
+            || lifecycle_keys::route(method, path).is_some()
+            || lifecycle_remove::route(method, path).is_some()
+            || lifecycle_login::route(method, path).is_some()
+            || lifecycle_trash::route(method, path).is_some()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn root(&self) -> &std::path::Path {
+        self.agents.root()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn for_private_lifecycle(
+        agents: Arc<Agents>,
+        owners: Owners,
+        cache: AccountUsageCache,
+        producer: Option<Arc<Producer>>,
+        approvals: Arc<crate::account_approvals::Approvals>,
+    ) -> (Self, Jobs) {
+        let root = agents.root().to_owned();
+        let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
+        let trash = Arc::new(lifecycle_trash::Trash::with_approvals(
+            root.clone(),
+            owners.clone(),
+            agents.clone(),
+            queues.clone(),
+            approvals,
+        ));
+        let cancel = CancellationToken::new();
+        let maintenance = lifecycle_maintenance::start(
+            root.clone(),
+            owners.clone(),
+            trash.clone(),
+            cancel.clone(),
+        );
+        (
+            Self {
+                agents,
+                owners,
+                queues,
+                lifecycle_jobs: Some(Arc::new(lifecycle_jobs::Jobs::default())),
+                trash: Some(trash),
+                events: DashboardEvents(tokio::sync::broadcast::channel(64).0),
+                usage: None,
+                lifecycle_usage: Some(LifecycleUsage {
+                    cache,
+                    producer,
+                    antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
+                }),
+                apps: None,
+                writes: true,
+                limits: Limits::new(),
+            },
+            Jobs {
+                cancel,
+                sampling: None,
+                signins: None,
+                maintenance: Some(maintenance),
+            },
+        )
+    }
+
     pub(super) fn owns(&self, method: &Method, path: &str) -> bool {
         Self::dashboard_route(method, path)
             || recheck::route(method, path).is_some()
             || lifecycle_open::route(method, path).is_some()
             || lifecycle_label::route(method, path).is_some()
-            || (self.lifecycle_jobs.is_some()
-                && (lifecycle_jobs::route(method, path).is_some()
-                    || lifecycle_registry::route(method, path)
-                    || lifecycle_keys::route(method, path).is_some()
-                    || lifecycle_remove::route(method, path).is_some()
-                    || lifecycle_login::route(method, path).is_some()))
-            || (self.trash.is_some() && lifecycle_trash::route(method, path).is_some())
+            || (self.lifecycle_jobs.is_some() && Self::owns_lifecycle(method, path))
             || Self::app_operation(method, path).is_some()
     }
 
     fn changed(&self) {
-        if let Some(usage) = &self.usage {
+        if let Some(usage) = &self.lifecycle_usage {
             usage.cache.request_refresh();
         }
         self.events.publish(DashboardEvent::AccountsChanged {});
@@ -331,7 +406,7 @@ impl NativeOwners {
         None
     }
 
-    pub(super) async fn handle(&self, request: Request) -> Reply {
+    pub(crate) async fn handle(&self, request: Request) -> Reply {
         let path = request.uri().path().trim_end_matches('/');
         let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
             return super::service_error();

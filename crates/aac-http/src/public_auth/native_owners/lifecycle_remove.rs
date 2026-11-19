@@ -335,7 +335,7 @@ async fn wallet(native: &NativeOwners, id: &str, session: &str, token: Option<&s
         if removed.is_some() {
             save_registry(&writer, &entries).map_err(|_| Refusal::Failed)?;
         }
-        if source.clear_private_cache().is_err() {
+        if source.remove_settings().is_err() {
             if let (Some(i), Some(entry)) = (position, removed) {
                 entries.insert(i, entry);
                 let _ = save_registry(&writer, &entries);

@@ -118,6 +118,7 @@ impl OwnerHost {
         hub: HubCache,
         events: DashboardEvents,
         worker_directory: Option<PathBuf>,
+        local_lifecycle: bool,
     ) -> std::io::Result<()> {
         let (native, jobs) = native_owners::NativeOwners::start(
             self.root.clone(),
@@ -125,6 +126,7 @@ impl OwnerHost {
             hub,
             events,
             worker_directory,
+            local_lifecycle,
         )?;
         *self.public.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(PublicOwners { native, jobs });

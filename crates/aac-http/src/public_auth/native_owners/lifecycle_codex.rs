@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 pub(super) fn home() -> Option<PathBuf> {
-    Some(std::env::home_dir()?.join(".codex"))
+    Some(std::env::home_dir()?.canonicalize().ok()?.join(".codex"))
 }
 
 fn auth(root: &Path, profile: &str) -> PathBuf {
@@ -79,7 +79,7 @@ pub(super) fn install(
     let metadata = CodexLease::registry(root).map_err(|_| ErrorCode::WriteFailed)?;
     let mut registry = registry(root)?;
     if add {
-        if name_in_use(root, name, &registry) {
+        if registry.profiles.len() >= 16 || name_in_use(root, name, &registry) {
             return Err(ErrorCode::WriteFailed);
         }
     } else {
@@ -274,11 +274,15 @@ fn fingerprint(
 
 pub(super) fn remove(root: &Path, name: &str, reviewed: &str) -> Result<(), RemoveError> {
     let home = home().ok_or(RemoveError::Failed)?;
-    let activation = CodexLease::activation(&home).map_err(|_| RemoveError::Busy)?;
+    remove_in(root, &home, name, reviewed)
+}
+
+fn remove_in(root: &Path, home: &Path, name: &str, reviewed: &str) -> Result<(), RemoveError> {
+    let activation = CodexLease::activation(home).map_err(|_| RemoveError::Busy)?;
     let metadata = CodexLease::registry(root).map_err(|_| RemoveError::Failed)?;
     let mut current = registry(root).map_err(|_| RemoveError::Failed)?;
-    review_current(root, &home, name, &current)?;
-    if fingerprint(root, &home, name, &current)? != reviewed {
+    review_current(root, home, name, &current)?;
+    if fingerprint(root, home, name, &current)? != reviewed {
         return Err(RemoveError::Stale);
     }
     let original = codex_registry::emit(&current).ok_or(RemoveError::Failed)?;
@@ -297,33 +301,78 @@ pub(super) fn remove(root: &Path, name: &str, reviewed: &str) -> Result<(), Remo
     let backup = format!("{name}.preserved.{pid}.{tail}");
     let writer = activation.writer();
     writer
-        .codex_move(root, &home, name, &staged)
+        .codex_move(root, home, name, &staged)
         .map_err(|_| RemoveError::Failed)?;
     let prepare = || {
         writer
-            .codex_preserve(root, &home, &staged, &backup)
+            .codex_preserve(root, home, &staged, &backup)
             .map_err(|_| RemoveError::Failed)?;
         inactive(&home.join("auth.json"), &auth(root, &staged))?;
         publish(&next).map_err(|_| RemoveError::Failed)
     };
     if let Err(error) = prepare() {
-        let _ = writer.codex_move(root, &home, &staged, name);
-        let _ = writer.codex_discard(root, &home, &backup);
+        if writer.codex_move(root, home, &staged, name).is_ok() {
+            let _ = writer.codex_discard(root, home, &backup);
+        }
         return Err(error);
     }
-    if writer.codex_discard(root, &home, &staged).is_err()
-        || writer.codex_discard(root, &home, &backup).is_err()
+    if writer.codex_discard(root, home, &staged).is_err()
+        || writer.codex_discard(root, home, &backup).is_err()
     {
         let restore_from = if read::entry_exists(&parent.join(&backup)).unwrap_or_default() {
             &backup
         } else {
             &staged
         };
-        if writer.codex_move(root, &home, restore_from, name).is_ok() {
-            let _ = writer.codex_discard(root, &home, &staged);
+        if writer.codex_move(root, home, restore_from, name).is_ok() {
+            let _ = writer.codex_discard(root, home, &staged);
         }
         let _ = publish(&original);
         return Err(RemoveError::Failed);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn lifecycle_remove_compares_the_review_again_under_the_provider_locks() {
+        let scope = tempfile::tempdir().unwrap();
+        let base = scope.path().canonicalize().unwrap();
+        let root = base.join("ccs");
+        let home = base.join("native-home");
+        let profile = root.join("codex-instances/work");
+        let other = root.join("codex-instances/keep");
+        for folder in [&home, &profile, &other] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        std::fs::write(profile.join("data"), b"work-profile").unwrap();
+        std::fs::write(other.join("data"), b"other-profile").unwrap();
+        let file = root.join("codex-profiles.yaml");
+        let mut current = Registry::empty();
+        for name in ["work", "keep"] {
+            current
+                .create(name, "2026-11-19T17:00:00Z", vec![])
+                .unwrap();
+        }
+        std::fs::write(&file, codex_registry::emit(&current).unwrap()).unwrap();
+        let reviewed = fingerprint(&root, &home, "work", &current).unwrap();
+        current.default = Some("keep".into());
+        std::fs::write(&file, codex_registry::emit(&current).unwrap()).unwrap();
+        assert!(matches!(
+            remove_in(&root, &home, "work", &reviewed),
+            Err(RemoveError::Stale)
+        ));
+        assert!(profile.is_dir());
+        let refreshed = fingerprint(&root, &home, "work", &current).unwrap();
+        remove_in(&root, &home, "work", &refreshed).unwrap();
+        assert!(!profile.exists());
+        assert_eq!(std::fs::read(other.join("data")).unwrap(), b"other-profile");
+        let saved = codex_registry::read(&file).unwrap();
+        assert_eq!(saved.list(), vec!["keep"]);
+        assert_eq!(saved.default.as_deref(), Some("keep"));
+    }
 }

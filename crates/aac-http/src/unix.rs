@@ -129,7 +129,8 @@ struct Shared {
     cache_writes: Arc<tokio::sync::Mutex<()>>,
     identity: Identity,
     feeds: Feeds,
-    approvals: crate::account_approvals::Approvals,
+    approvals: Arc<crate::account_approvals::Approvals>,
+    lifecycle: Option<crate::public_auth::native_owners::NativeOwners>,
     /// M5 lane K: the claims file's writer lease, held from first use to the end of the boot.
     reset_claims: crate::reset_claims::ResetClaims,
     app_update_jobs: Option<BoundJobs>,
@@ -446,6 +447,22 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Some(value) => Json(value).into_response(),
                 None => decline(row.handler, Decline::Shape),
             }
+        }
+        Handler::Lifecycle => {
+            use crate::public_auth::lifecycle_host::{self, PACKET_CAP};
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Some(owner) = &shared.lifecycle else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Some(principal) = req.extensions().get::<VerifiedPrincipal>().cloned() else {
+                return unauthorized();
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), PACKET_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            lifecycle_host::receive(owner, &principal, &bytes).await
         }
         Handler::ResetClaims => {
             if req.uri().query().is_some() {
@@ -1673,6 +1690,20 @@ async fn serve_inner(
             Box::new(move || crate::claude_open::open::snapshot_cleanup_auto(&ccs_dir)),
         ))
     });
+    let approvals = Arc::new(crate::account_approvals::Approvals::default());
+    let lifecycle = (std::env::var("AAC_RUST_CUT_NATIVE_ROUTES").as_deref() == Ok("on")
+        && owners.owner("account-registry") == Some(registry::Role::RustService)
+        && owners.owner("opencode-wallet-source") == Some(registry::Role::RustService))
+    .then(|| {
+        crate::public_auth::native_owners::NativeOwners::for_private_lifecycle(
+            agents.clone(),
+            owners.clone(),
+            cache.clone(),
+            producer.clone(),
+            approvals.clone(),
+        )
+    });
+    let (lifecycle, lifecycle_jobs) = lifecycle.unzip();
     let state = AppState(Arc::new(Shared {
         owners,
         cache_writes: Arc::default(),
@@ -1680,7 +1711,8 @@ async fn serve_inner(
         limits: Limits::new(),
         identity,
         feeds,
-        approvals: crate::account_approvals::Approvals::default(),
+        approvals,
+        lifecycle,
         reset_claims: crate::reset_claims::ResetClaims::default(),
         app_update_jobs: app_update_jobs.map(BoundJobs::new),
         producer: Arc::new(crate::home_producer::HomeProducer::default()),
@@ -1878,6 +1910,9 @@ async fn serve_inner(
     cancel.cancel();
     if let Some(task) = task {
         let _ = task.await;
+    }
+    if let Some(jobs) = lifecycle_jobs {
+        jobs.stop().await;
     }
     jobs_stop.store(true, Ordering::Release);
     let _ = jobs_stop_tx.send(true);

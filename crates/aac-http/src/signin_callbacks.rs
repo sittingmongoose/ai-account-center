@@ -444,6 +444,7 @@ pub(crate) fn antigravity_sandbox(
 }
 
 /// One registry mutation under the caller-held directory lease.
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(
     tag = "edit",
@@ -466,6 +467,7 @@ enum RegistryEdit {
 }
 
 /// A metadata field value: a string or null.
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum FieldValue {
@@ -475,6 +477,7 @@ enum FieldValue {
     Null,
 }
 
+#[cfg(unix)]
 impl From<FieldValue> for aac_files::codex_registry::Field {
     fn from(value: FieldValue) -> Self {
         match value {
@@ -484,6 +487,7 @@ impl From<FieldValue> for aac_files::codex_registry::Field {
     }
 }
 
+#[cfg(unix)]
 fn apply_edit(
     registry: &mut aac_files::codex_registry::Registry,
     edit: RegistryEdit,
@@ -512,6 +516,7 @@ fn apply_edit(
 
 /// Apply a registry mutation while the caller holds the registry directory lease (inherited on
 /// stderr). Prints `committed` or `refused`; exit 74 declines so TypeScript answers.
+#[cfg(unix)]
 pub fn registry_edit() -> i32 {
     use std::os::fd::AsFd;
     let Some(root) = std::env::args_os()

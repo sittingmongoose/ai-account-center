@@ -1,7 +1,6 @@
 //! Private service HTTP core and opt-in M6 dashboard front door.
 //! The collection, settings and account-read owners build on every platform the dashboard does;
 //! the private Unix protocol and the services it alone serves stay on Unix.
-#[cfg(unix)]
 mod account_approvals;
 mod account_reads;
 pub mod account_usage;
@@ -13,7 +12,6 @@ mod answers_owned;
 pub mod antigravity_host;
 pub mod antigravity_probes;
 pub mod antigravity_quota;
-#[cfg(unix)]
 pub mod antigravity_renewal;
 pub mod antigravity_runtime;
 #[cfg(unix)]
@@ -21,7 +19,6 @@ pub mod app_update_routes;
 #[cfg(unix)]
 pub mod app_updates;
 mod claude_account_store;
-#[cfg(unix)]
 pub mod claude_lifecycle;
 pub mod claude_open;
 pub mod cli;
@@ -36,14 +33,10 @@ mod home_fed;
 mod home_producer;
 mod identity;
 mod json_object;
-#[cfg(unix)]
 pub mod key_lifecycle;
 mod lifecycle_effect_pipe;
-#[cfg(unix)]
 pub mod lifecycle_maintenance;
-#[cfg(unix)]
 pub mod lifecycle_policy;
-#[cfg(unix)]
 pub mod lifecycle_queue;
 pub mod lifecycle_recheck;
 pub mod lifecycle_signin;
@@ -64,7 +57,6 @@ mod reset_source_route;
 mod runs_ingest_gate;
 #[cfg(unix)]
 mod scoreboard_owned;
-#[cfg(unix)]
 pub mod signin_callbacks;
 mod signins;
 mod status_cache;

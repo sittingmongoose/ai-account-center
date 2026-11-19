@@ -7,7 +7,8 @@ mod dashboard_events;
 mod devices;
 mod hub;
 mod lifecycle;
-mod native_owners;
+pub(crate) mod lifecycle_host;
+pub(crate) mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
@@ -20,7 +21,6 @@ mod request_log;
 mod reset_routes;
 mod routes;
 #[cfg(unix)]
-#[allow(dead_code)]
 mod service_link;
 mod sidecar;
 mod static_ui;
@@ -199,7 +199,17 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream, cache, ui_root, None, false, None, None, None, None,
+            downstream,
+            cache,
+            ui_root,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            #[cfg(unix)]
+            None,
         )
     }
 
@@ -218,12 +228,22 @@ impl DashboardAuth {
         cut_root: Option<PathBuf>,
         native_owners: Option<native_owners::NativeOwners>,
         native_settings: Option<native_settings::Settings>,
+        #[cfg(unix)] external_owner: Option<Arc<owner_host::OwnerHost>>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
+            #[cfg(unix)]
+            if let Some(host) = &external_owner
+                && native_owners::NativeOwners::owns_lifecycle(
+                    request.method(),
+                    request.uri().path(),
+                )
+            {
+                return lifecycle_host::public(host, request).await;
+            }
             if let Some(root) = cut_root.as_deref()
                 && let Some(route) = lifecycle::Route::of(request.method(), request.uri().path())
             {
@@ -399,13 +419,18 @@ pub(crate) async fn run_public_at(
     let composed = backend.is_some();
     let owner_host =
         owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    #[cfg(unix)]
+    let has_external = owner_host.is_some() && service_link::ServiceLink::load(&root).is_some();
+    #[cfg(not(unix))]
+    let has_external = false;
+    let local_lifecycle = cut && !composed && !has_external;
     let (native, native_jobs) = if let Some(groups) = groups {
         let worker_directory = snapshot
             .as_deref()
             .and_then(std::path::Path::parent)
             .map(std::path::Path::to_owned);
         if let Some(host) = &owner_host {
-            host.start_public(groups, hub.clone(), auth.events(), worker_directory)?;
+            host.start_public(groups, hub.clone(), auth.events(), worker_directory, local_lifecycle)?;
             (host.public_owners(), None)
         } else {
             let (native, jobs) = native_owners::NativeOwners::start(
@@ -414,6 +439,7 @@ pub(crate) async fn run_public_at(
                 hub.clone(),
                 auth.events(),
                 worker_directory,
+                local_lifecycle,
             )?;
             (Some(native), Some(jobs))
         }
@@ -445,6 +471,8 @@ pub(crate) async fn run_public_at(
         cut.then(|| root.clone()),
         native,
         native_settings,
+        #[cfg(unix)]
+        owner_host.clone().filter(|_| cut && has_external),
     );
     let router = auth
         .protect(reset_routes::mount(

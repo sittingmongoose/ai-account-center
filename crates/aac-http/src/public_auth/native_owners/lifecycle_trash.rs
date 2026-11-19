@@ -118,18 +118,33 @@ pub(super) struct Trash {
     root: PathBuf,
     owners: Owners,
     agents: Arc<Agents>,
-    queues: LifecycleQueues,
-    approvals: Approvals,
+    queues: Arc<LifecycleQueues>,
+    approvals: Arc<Approvals>,
 }
 
 impl Trash {
-    pub(super) fn new(root: PathBuf, owners: Owners, agents: Arc<Agents>) -> Self {
+    pub(super) fn new(
+        root: PathBuf,
+        owners: Owners,
+        agents: Arc<Agents>,
+        queues: Arc<LifecycleQueues>,
+    ) -> Self {
+        Self::with_approvals(root, owners, agents, queues, Arc::default())
+    }
+
+    pub(super) fn with_approvals(
+        root: PathBuf,
+        owners: Owners,
+        agents: Arc<Agents>,
+        queues: Arc<LifecycleQueues>,
+        approvals: Arc<Approvals>,
+    ) -> Self {
         Self {
-            queues: LifecycleQueues::new(root.clone()),
+            queues,
             root,
             owners,
             agents,
-            approvals: Approvals::default(),
+            approvals,
         }
     }
 
@@ -573,111 +588,6 @@ fn save(writer: &OwnedStore, document: &Value) -> Result<(), Refusal> {
     writer.replace_settings(&bytes).map_err(|_| Refusal::WRITE)
 }
 
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-    use super::*;
-
-    const ID: &str = "tr_0123456789abcdef";
-
-    fn fixture() -> (tempfile::TempDir, Trash, Value) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let rows = registry::rows().unwrap();
-        let files = rows
-            .iter()
-            .map(|row| {
-                let owner = if row.moves_with.as_deref() == Some("writes") {
-                    registry::Role::RustService
-                } else {
-                    row.owner
-                };
-                (row.id.clone(), owner.word().to_owned())
-            })
-            .collect();
-        let owners = Owners::from_boot(rows, &files).unwrap();
-        let owner = Trash::new(
-            root.clone(),
-            owners,
-            Arc::new(Agents::with_default(root, true)),
-        );
-        let entry = json!({
-            "trashId":ID,"provider":"claude","accountId":"claude:work","label":"Work",
-            "source":"inventory","hosts":{},"entry":{"id":"work","email":"person@example.test"},
-            "trashedAt":"2026-11-19T00:00:00Z","purgeAfter":"2026-12-19T00:00:00Z",
-            "state":"trashed"
-        });
-        (dir, owner, entry)
-    }
-
-    #[tokio::test]
-    async fn restore_checks_the_reviewed_state_then_restores_the_exact_inventory_entry() {
-        let (_dir, owner, entry) = fixture();
-        let writer = owner
-            .claim("claude-trash")
-            .unwrap_or_else(|_| panic!("trash lease"));
-        save(&writer, &json!({"version":1,"entries":[entry]}))
-            .unwrap_or_else(|_| panic!("trash write"));
-        drop(writer);
-        let denied = owner.restore(ID, &"0".repeat(64)).await.unwrap_err();
-        assert_eq!(denied.code, "confirmation_stale");
-        assert!(profile_exists(&owner.root, "work", true).is_ok_and(|exists| !exists));
-        assert_eq!(
-            owner
-                .restore(ID, &fingerprint(&entry))
-                .await
-                .unwrap_or_else(|_| panic!("restore")),
-            "claude:work"
-        );
-        let inventory = profile_document(&owner.root, "claude-desktop-profiles")
-            .unwrap_or_else(|_| panic!("inventory"));
-        assert_eq!(inventory["profiles"], json!([entry["entry"]]));
-        assert!(read_trash(&owner.root).unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn purge_reuses_the_session_bound_one_shot_approval_and_protects_defaults() {
-        let (_dir, owner, mut entry) = fixture();
-        entry["entry"]["mac"] = json!({"profilePath":"/fixture/Application Support/Claude"});
-        let writer = owner
-            .claim("claude-trash")
-            .unwrap_or_else(|_| panic!("trash lease"));
-        save(&writer, &json!({"version":1,"entries":[entry]}))
-            .unwrap_or_else(|_| panic!("trash write"));
-        drop(writer);
-        let fingerprint = fingerprint(&entry);
-        let token = "a".repeat(43);
-        assert!(
-            owner
-                .approval(
-                    "issue",
-                    Action::Purge.wire(),
-                    ID,
-                    "session-a",
-                    &fingerprint,
-                    &token
-                )
-                .is_some()
-        );
-        for session in ["session-b", "session-a"] {
-            let result = owner
-                .approval(
-                    "consume",
-                    Action::Purge.wire(),
-                    ID,
-                    session,
-                    &fingerprint,
-                    &token,
-                )
-                .unwrap();
-            assert_eq!(result["consumed"], false);
-        }
-        let denied = owner.purge(ID, &fingerprint, None).await.unwrap_err();
-        assert_eq!(denied.code, "account_protected");
-        assert_eq!(read_trash(&owner.root).unwrap(), vec![entry]);
-    }
-}
-
 pub(super) async fn add_claude(native: &NativeOwners, body: &Map<String, Value>) -> Reply {
     use crate::{account_usage::sources, claude_account_store::pending_id};
     if body
@@ -1023,9 +933,7 @@ pub(super) async fn remove_claude(
     let native = native.clone();
     let id = id.to_owned();
     match tokio::spawn(async move {
-        if let Err(refusal) = owner.remove_refusal(&profile).await {
-            return Err(refusal);
-        }
+        owner.remove_refusal(&profile).await?;
         if super::lifecycle_remove::running(&native, &account) {
             return Err(Refusal::new(
                 409,
@@ -1180,5 +1088,111 @@ impl Trash {
             }
         }).await?;
         Ok(json!({"removed":true,"trashId":trash_id,"purgeAfter":purge_after}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    const ID: &str = "tr_0123456789abcdef";
+
+    fn fixture() -> (tempfile::TempDir, Trash, Value) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let rows = registry::rows().unwrap();
+        let files = rows
+            .iter()
+            .map(|row| {
+                let owner = if row.moves_with.as_deref() == Some("writes") {
+                    registry::Role::RustService
+                } else {
+                    row.owner
+                };
+                (row.id.clone(), owner.word().to_owned())
+            })
+            .collect();
+        let owners = Owners::from_boot(rows, &files).unwrap();
+        let owner = Trash::new(
+            root.clone(),
+            owners,
+            Arc::new(Agents::with_default(root.clone(), true)),
+            Arc::new(LifecycleQueues::new(root)),
+        );
+        let entry = json!({
+            "trashId":ID,"provider":"claude","accountId":"claude:work","label":"Work",
+            "source":"inventory","hosts":{},"entry":{"id":"work","email":"person@example.test"},
+            "trashedAt":"2026-11-19T00:00:00Z","purgeAfter":"2026-12-19T00:00:00Z",
+            "state":"trashed"
+        });
+        (dir, owner, entry)
+    }
+
+    #[tokio::test]
+    async fn restore_checks_the_reviewed_state_then_restores_the_exact_inventory_entry() {
+        let (_dir, owner, entry) = fixture();
+        let writer = owner
+            .claim("claude-trash")
+            .unwrap_or_else(|_| panic!("trash lease"));
+        save(&writer, &json!({"version":1,"entries":[entry]}))
+            .unwrap_or_else(|_| panic!("trash write"));
+        drop(writer);
+        let denied = owner.restore(ID, &"0".repeat(64)).await.unwrap_err();
+        assert_eq!(denied.code, "confirmation_stale");
+        assert!(profile_exists(&owner.root, "work", true).is_ok_and(|exists| !exists));
+        assert_eq!(
+            owner
+                .restore(ID, &fingerprint(&entry))
+                .await
+                .unwrap_or_else(|_| panic!("restore")),
+            "claude:work"
+        );
+        let inventory = profile_document(&owner.root, "claude-desktop-profiles")
+            .unwrap_or_else(|_| panic!("inventory"));
+        assert_eq!(inventory["profiles"], json!([entry["entry"]]));
+        assert!(read_trash(&owner.root).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn purge_reuses_the_session_bound_one_shot_approval_and_protects_defaults() {
+        let (_dir, owner, mut entry) = fixture();
+        entry["entry"]["mac"] = json!({"profilePath":"/fixture/Application Support/Claude"});
+        let writer = owner
+            .claim("claude-trash")
+            .unwrap_or_else(|_| panic!("trash lease"));
+        save(&writer, &json!({"version":1,"entries":[entry]}))
+            .unwrap_or_else(|_| panic!("trash write"));
+        drop(writer);
+        let fingerprint = fingerprint(&entry);
+        let token = "a".repeat(43);
+        assert!(
+            owner
+                .approval(
+                    "issue",
+                    Action::Purge.wire(),
+                    ID,
+                    "session-a",
+                    &fingerprint,
+                    &token
+                )
+                .is_some()
+        );
+        for session in ["session-b", "session-a"] {
+            let result = owner
+                .approval(
+                    "consume",
+                    Action::Purge.wire(),
+                    ID,
+                    session,
+                    &fingerprint,
+                    &token,
+                )
+                .unwrap();
+            assert_eq!(result["consumed"], false);
+        }
+        let denied = owner.purge(ID, &fingerprint, None).await.unwrap_err();
+        assert_eq!(denied.code, "account_protected");
+        assert_eq!(read_trash(&owner.root).unwrap(), vec![entry]);
     }
 }

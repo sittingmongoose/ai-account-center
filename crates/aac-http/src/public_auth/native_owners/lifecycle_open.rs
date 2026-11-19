@@ -3,10 +3,10 @@ use super::recheck;
 use crate::{
     account_reads::public_account_id,
     account_usage::{producer, sources},
-    agent_transport::{Agents, Selector},
+    agent_transport::{Agents, MutationReply, Selector},
     public_auth::{Reply, error, lifecycle, response},
 };
-use axum::{body::to_bytes, extract::Request, http::Method};
+use axum::{extract::Request, http::Method};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -95,40 +95,14 @@ fn not_configured() -> Reply {
 }
 
 async fn launch(agents: &Arc<Agents>, alias: &str) -> bool {
-    let mut random = [0_u8; 16];
-    if getrandom::fill(&mut random).is_err() {
-        return false;
-    }
-    let id = super::super::storage::hex(&random);
     let selector = Selector::usage("mac", Some(alias));
-    let call = json!({
-        "computer":selector,"args":{},"deadlineMs":30000,"timeoutMs":32000,
-        "maxBytes":4096,"callId":id
-    });
-    let reply = agents
-        .call("cursor-open", call.to_string().as_bytes())
-        .await;
-    let Ok(bytes) = to_bytes(reply.into_body(), 4096).await else {
-        return false;
-    };
-    let Ok(terminal) = serde_json::from_slice::<Value>(&bytes) else {
-        return false;
-    };
-    if terminal["protocol"] != 1 || terminal["id"] != id {
-        return false;
-    }
-    if terminal["type"] == "result" && terminal["value"]["opened"] == true {
-        return true;
-    }
-    // An uncertain terminal frame can follow a successful launch. Repeat only a
-    // proved refusal before dispatch, or a host with an older agent.
-    if terminal["type"] != "fallback"
-        || !matches!(
-            terminal["reason"].as_str(),
-            Some("shape" | "unavailable" | "busy" | "unsupported")
-        )
+    match agents
+        .call_mutation("cursor-open", &selector, json!({}), 30_000)
+        .await
     {
-        return false;
+        MutationReply::Result(value) => return value["opened"] == true,
+        MutationReply::NotDispatched => {}
+        MutationReply::Uncertain => return false,
     }
     agents
         .reference(
@@ -147,7 +121,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::public_auth::{DashboardAccess, DashboardPrincipal};
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
 
     #[tokio::test]
     async fn validates_the_json_shape_and_resolves_the_account_before_opening() {

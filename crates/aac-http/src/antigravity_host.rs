@@ -225,6 +225,22 @@ impl Host {
         self.quota.validate_credential(credential)
     }
 
+    pub(crate) fn install_native_credential(&self, credential: &[u8], expected: &str) -> bool {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        self.home
+            .to_str()
+            .and_then(|home| {
+                self.native.invoke_with(
+                    &["--home", home],
+                    &json!({"operation":"install","credentialBase64":STANDARD.encode(credential),
+                "expectedFingerprint":expected}),
+                )
+            })
+            .is_some_and(|receipt| {
+                receipt["installedFingerprint"].as_str() == Some(&sha256_hex(credential))
+            })
+    }
+
     /// The public inventory, with the paused and runtime-service probes attached.
     pub fn inventory(&self, now: i64) -> Value {
         let live = self.live_identity(now);

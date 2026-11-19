@@ -3,7 +3,7 @@ use crate::registry;
 use aac_core::{Cause, Failure};
 use std::{
     collections::HashSet,
-    fs::{self, File},
+    fs,
     path::Path,
     time::{Duration, SystemTime},
 };
@@ -20,12 +20,13 @@ fn key_id(id: &str) -> bool {
 /// Sweep one provider under its workflow queue and inherited folder lease.
 /// Callers obtain the named keys from a validated v2 registry before invoking
 /// this function. Key bytes are never read.
+#[cfg(unix)]
 pub fn sweep(
     root: &Path,
     provider: &str,
     named: &[String],
     now_ms: u64,
-    lease: File,
+    lease: fs::File,
 ) -> Result<usize, Failure> {
     let marker = format!("{provider}-00000000.json");
     let store = registry::inherit_writer("account-keys", root, Some(&marker), lease)?;

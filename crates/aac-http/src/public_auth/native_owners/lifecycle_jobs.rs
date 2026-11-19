@@ -39,6 +39,7 @@ pub(super) fn route<'a>(method: &Method, path: &'a str) -> Option<(Action, &'a s
 struct Record {
     job: DashboardSignInJob,
     code_sent: bool,
+    installing: bool,
     stop_requested: bool,
     finished_at: Option<i64>,
 }
@@ -76,6 +77,7 @@ impl Jobs {
         let id = job.id.clone();
         let previous = jobs.get(&id).and_then(Option::as_ref);
         let code_sent = previous.is_some_and(|record| record.code_sent);
+        let installing = finish.is_none() && previous.is_some_and(|record| record.installing);
         let stop_requested = previous.is_some_and(|record| record.stop_requested);
         if previous.is_some_and(|record| record.finished_at.is_some()) && finish.is_none() {
             return;
@@ -85,6 +87,7 @@ impl Jobs {
             Some(Record {
                 job,
                 code_sent,
+                installing,
                 stop_requested,
                 finished_at: finish,
             }),
@@ -199,28 +202,24 @@ impl Jobs {
             return answer(record.job.clone(), secure);
         }
         record.stop_requested = true;
+        if record.installing {
+            return answer(record.job.clone(), secure);
+        }
         let agents = native.agents.clone();
         tokio::spawn(async move {
             if !control(&agents, &id, json!({"cancel":true}), "cancelled").await {
-                let reply = journal(&agents, json!({"action":"cancel","jobId":id})).await;
-                if reply.is_some_and(|reply| reply["job"]["state"] == "verifying") {
-                    let _ = journal(&agents,json!({
-                        "action":"settle","jobId":id,"state":"cancelled","result":null,"error":null
-                    })).await;
-                }
+                let _ = journal(&agents, json!({"action":"cancel","jobId":id})).await;
             }
         });
-        if record.job.state != "verifying" {
-            record.job.state = "cancelled".into();
-            record.job.verification = None;
-            record.finished_at = Some(now());
-            if let Some(at) = storage::iso(now()) {
-                record.job.updated_at = at;
-            }
-            native.events.publish(DashboardEvent::SigninJob {
-                job: Box::new(record.job.clone()),
-            });
+        record.job.state = "cancelled".into();
+        record.job.verification = None;
+        record.finished_at = Some(now());
+        if let Some(at) = storage::iso(now()) {
+            record.job.updated_at = at;
         }
+        native.events.publish(DashboardEvent::SigninJob {
+            job: Box::new(record.job.clone()),
+        });
         answer(record.job.clone(), secure)
     }
 
@@ -352,14 +351,25 @@ fn recovered_job(value: &Value, id: &str) -> Option<DashboardSignInJob> {
 }
 
 impl Jobs {
+    fn begin_install(&self, id: &str) -> bool {
+        let Ok(mut jobs) = self.0.lock() else {
+            return false;
+        };
+        let Some(record) = jobs.get_mut(id).and_then(Option::as_mut) else {
+            return false;
+        };
+        if stopped(record) {
+            return false;
+        }
+        record.installing = true;
+        true
+    }
+
     pub(super) fn stopped(&self, id: &str) -> bool {
-        self.0.lock().ok().is_none_or(|jobs| {
-            jobs.get(id).and_then(Option::as_ref).is_none_or(|record| {
-                record.stop_requested
-                    || record.finished_at.is_some()
-                    || storage::timestamp(&record.job.expires_at).is_none_or(|end| end <= now())
-            })
-        })
+        self.0
+            .lock()
+            .ok()
+            .is_none_or(|jobs| jobs.get(id).and_then(Option::as_ref).is_none_or(stopped))
     }
 
     pub(super) fn start(self: Arc<Self>, native: NativeOwners, flow: Flow) -> Reply {
@@ -411,6 +421,7 @@ impl Jobs {
                 Some(Record {
                     job: job.clone(),
                     code_sent: false,
+                    installing: false,
                     stop_requested: false,
                     finished_at: None,
                 }),
@@ -436,7 +447,7 @@ impl Jobs {
     async fn run_flow(
         self: Arc<Self>,
         native: &NativeOwners,
-        flow: Flow,
+        mut flow: Flow,
         initial: DashboardSignInJob,
     ) {
         let id = initial.id.clone();
@@ -449,9 +460,9 @@ impl Jobs {
             Ok(_) => (failure(initial, ErrorCode::Timeout), false),
             Err(err) => (failure(initial, err), false),
         };
-        if install && !self.stopped(&id) {
+        if install && self.begin_install(&id) {
             self.publish(native, job.clone());
-            job = match flow.install(&native.agents, self.clone(), &id).await {
+            job = match flow.install(native, self.clone(), &id).await {
                 Ok(result) => {
                     job.result = serde_json::from_value(result).ok();
                     job.state = "succeeded".into();
@@ -536,12 +547,12 @@ impl Jobs {
             if frame["protocol"] != 1 || frame["id"] != initial.id {
                 break;
             }
-            if self.stopped(&initial.id) {
-                break;
-            }
             match frame["type"].as_str() {
                 Some("progress") => {
-                    if let Some(job) = incoming(frame["data"].clone(), &initial)
+                    if self.stopped(&initial.id) {
+                        continue;
+                    }
+                    if let Some(job) = incoming(&frame["data"], &initial)
                         && matches!(job.state.as_str(), "waiting" | "awaiting_code")
                     {
                         if self
@@ -555,19 +566,8 @@ impl Jobs {
                     }
                 }
                 Some("result") => {
-                    let mut value = frame["value"].clone();
-                    let install = value
-                        .as_object_mut()
-                        .and_then(|value| value.shift_remove("installPending"))
-                        .is_some_and(|value| value == true);
-                    if let Some(job) = incoming(value, &initial)
-                        && (if install {
-                            job.state == "verifying"
-                        } else {
-                            finished(&job.state)
-                        })
-                    {
-                        return (job, install);
+                    if let Some(terminal) = terminal(&frame["value"], &initial) {
+                        return terminal;
                     }
                     break;
                 }
@@ -582,8 +582,8 @@ fn start_error() -> Reply {
     error(500, "write_failed", "The change could not be saved safely.")
 }
 
-fn incoming(value: Value, expected: &DashboardSignInJob) -> Option<DashboardSignInJob> {
-    let mut job: DashboardSignInJob = serde_json::from_value(value).ok()?;
+fn incoming(frame: &Value, expected: &DashboardSignInJob) -> Option<DashboardSignInJob> {
+    let mut job: DashboardSignInJob = serde_json::from_value(frame["job"].clone()).ok()?;
     if job.id != expected.id
         || job.provider != expected.provider
         || job.kind != expected.kind
@@ -597,9 +597,31 @@ fn incoming(value: Value, expected: &DashboardSignInJob) -> Option<DashboardSign
     // The launch reply timestamp remains the route's authoritative start and expiry.
     job.started_at = expected.started_at.clone();
     job.expires_at = expected.expires_at.clone();
+    if let Some(verification) = &mut job.verification {
+        verification.expires_at = Some(expected.expires_at.clone());
+    }
     Some(job)
 }
 
+fn stopped(record: &Record) -> bool {
+    record.stop_requested
+        || record.finished_at.is_some()
+        || storage::timestamp(&record.job.expires_at).is_none_or(|end| end <= now())
+}
+
+fn terminal(frame: &Value, expected: &DashboardSignInJob) -> Option<(DashboardSignInJob, bool)> {
+    let install = match frame.get("installPending") {
+        Some(value) => value.as_bool()?,
+        None => false,
+    };
+    let job = incoming(frame, expected)?;
+    let admitted = if install {
+        job.state == "verifying"
+    } else {
+        finished(&job.state)
+    };
+    admitted.then_some((job, install))
+}
 fn failure(mut job: DashboardSignInJob, code: ErrorCode) -> DashboardSignInJob {
     job.state = if code == ErrorCode::Timeout {
         "expired"
@@ -614,4 +636,36 @@ fn failure(mut job: DashboardSignInJob, code: ErrorCode) -> DashboardSignInJob {
         message: code.message().into(),
     });
     job
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn lifecycle_signin_uses_the_agent_job_envelope_and_rejects_a_different_target() {
+        let initial = Flow::Codex {
+            name: "saved".into(),
+            add: false,
+            cli: "fixture-codex".into(),
+        }
+        .initial("job_0123456789abcdef".into())
+        .unwrap();
+        let mut progress = initial.clone();
+        progress.state = "waiting".into();
+        assert_eq!(
+            incoming(&json!({"job":progress}), &initial).unwrap().state,
+            "waiting"
+        );
+        assert!(terminal(&json!({"job":progress,"installPending":true}), &initial).is_none());
+        let mut done = progress;
+        done.state = "verifying".into();
+        let (verified, installs) =
+            terminal(&json!({"job":done,"installPending":true}), &initial).unwrap();
+        assert!(installs);
+        assert_eq!(verified.account_id, initial.account_id);
+        done.account_id = Some("codex:other".into());
+        assert!(terminal(&json!({"job":done,"installPending":true}), &initial).is_none());
+    }
 }
