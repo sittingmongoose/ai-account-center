@@ -766,7 +766,7 @@ pub fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, Failure> {
         Read::Absent => Err(io::Error::from(io::ErrorKind::NotFound).into()),
         Read::Unreadable(kind) | Read::ChainUnreadable(kind) => Err(io::Error::from(kind).into()),
         Read::TooLarge => Err(Failure::new(Cause::OutputTooLarge, "byte cap exceeded")),
-        Read::Link | Read::NotRegular => Err(Failure::new(
+        Read::Link | Read::Directory | Read::NotRegular => Err(Failure::new(
             Cause::Refused,
             "symlink or special file refused",
         )),

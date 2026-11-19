@@ -113,6 +113,8 @@ export interface ServerInstance {
   rustService: RustService;
   /** The optional in-process HTTPS listener (`dashboard_tls.https_listener`); null when off. */
   httpsServer?: https.Server | null;
+  /** Bound public HTTPS address for either listener implementation. */
+  httpsAddress: AddressInfo | null;
 }
 
 function getListenHost(options: ServerOptions): string {
@@ -533,7 +535,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         .catch(() => null)
         .then((started) => {
           httpsServer = started;
-          resolve({ server, wss, cleanup, httpsServer: started, rustService });
+          const bound = started?.address();
+          const httpsAddress = typeof bound === 'object' ? bound : null;
+          resolve({ server, wss, cleanup, httpsServer: started, httpsAddress, rustService });
         });
     };
 

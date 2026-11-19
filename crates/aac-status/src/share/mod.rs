@@ -131,7 +131,7 @@ impl ShareFs for NodeFs {
             // The TypeScript reader's open is O_NOFOLLOW | O_NONBLOCK with a regular-file
             // check on the handle: a link, a FIFO or a folder where a report belongs fails
             // the read (never a transient share error).
-            Read::Link | Read::NotRegular => Err(ReadError::Io(io::Error::new(
+            Read::Link | Read::Directory | Read::NotRegular => Err(ReadError::Io(io::Error::new(
                 io::ErrorKind::Other,
                 "not a regular file",
             ))),

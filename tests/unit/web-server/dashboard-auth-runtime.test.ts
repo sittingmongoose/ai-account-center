@@ -195,7 +195,7 @@ describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
       https_listener: { enabled: true, port, cert_path: files.cert, key_path: files.key },
     });
     instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: path.join(home, 'ui') });
-    expect(instance.httpsServer).toBeTruthy();
+    expect(instance.httpsAddress).toMatchObject({ address: '127.0.0.1', port });
     const response = await httpsGet(port, '/api/auth/check', '192.0.2.10:3443');
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ secureTransport: true, accessMode: 'login' });
@@ -210,6 +210,7 @@ describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
     });
     instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: path.join(home, 'ui') });
     expect(instance.httpsServer).toBeNull();
+    expect(instance.httpsAddress).toBeNull();
     const plain = (instance.server.address() as AddressInfo).port;
     const check = await fetch(`http://127.0.0.1:${plain}/api/auth/check`);
     expect(check.status).toBe(200);
@@ -219,6 +220,7 @@ describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
     await writeConfig('configured');
     instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: path.join(home, 'ui') });
     expect(instance.httpsServer).toBeNull();
+    expect(instance.httpsAddress).toBeNull();
   });
 });
 

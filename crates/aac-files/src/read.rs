@@ -35,6 +35,7 @@ pub type Meta = fs::Metadata;
 trait Facts {
     fn link(&self) -> bool;
     fn regular(&self) -> bool;
+    fn directory(&self) -> bool;
     fn size(&self) -> u64;
     #[cfg(unix)]
     fn owner(&self) -> u32;
@@ -52,6 +53,9 @@ impl Facts for fs::Metadata {
     }
     fn regular(&self) -> bool {
         self.is_file()
+    }
+    fn directory(&self) -> bool {
+        self.is_dir()
     }
     fn size(&self) -> u64 {
         self.len()
@@ -101,6 +105,9 @@ impl Facts for RawStat {
     }
     fn regular(&self) -> bool {
         self.0.st_mode & libc::S_IFMT == libc::S_IFREG
+    }
+    fn directory(&self) -> bool {
+        self.0.st_mode & libc::S_IFMT == libc::S_IFDIR
     }
     fn size(&self) -> u64 {
         u64::try_from(self.0.st_size).unwrap_or(0)
@@ -222,7 +229,9 @@ pub enum Read {
     Foreign,
     /// A group or other permission bit ([`Mode::Private`]).
     BadMode,
-    /// A folder, FIFO, socket or device, by its `lstat` or by the opened descriptor.
+    /// A directory, by its `lstat` or by the opened descriptor.
+    Directory,
+    /// A FIFO, socket or device, by its `lstat` or by the opened descriptor.
     NotRegular,
     /// Over the cap, by its metadata or by the bytes read.
     TooLarge,
@@ -247,6 +256,7 @@ impl fmt::Debug for Read {
             Read::Link => f.write_str("Link"),
             Read::Foreign => f.write_str("Foreign"),
             Read::BadMode => f.write_str("BadMode"),
+            Read::Directory => f.write_str("Directory"),
             Read::NotRegular => f.write_str("NotRegular"),
             Read::TooLarge => f.write_str("TooLarge"),
             Read::Unreadable(kind) => write!(f, "Unreadable({kind:?})"),
@@ -486,7 +496,7 @@ fn opened_checks<B: Facts>(
         .metadata()
         .map_err(|error| Read::Unreadable(error.kind()))?;
     if !opened.is_file() {
-        return Err(Read::NotRegular);
+        return Err(non_regular(&opened));
     }
     if !same_file(before, &opened) {
         return Err(Read::Unproved);
@@ -555,7 +565,7 @@ fn open_at(dir: Option<&File>, name: &std::ffi::OsStr, flags: libc::c_int) -> io
 
 fn admit<S: Facts>(meta: &S, policy: &ReadPolicy) -> Result<(), Read> {
     if !meta.regular() {
-        return Err(Read::NotRegular);
+        return Err(non_regular(meta));
     }
     if meta.size() > policy.cap {
         return Err(Read::TooLarge);
@@ -567,6 +577,14 @@ fn admit<S: Facts>(meta: &S, policy: &ReadPolicy) -> Result<(), Read> {
         return Err(Read::BadMode);
     }
     Ok(())
+}
+
+fn non_regular(meta: &impl Facts) -> Read {
+    if meta.directory() {
+        Read::Directory
+    } else {
+        Read::NotRegular
+    }
 }
 
 /// Not this process's user; Windows has no such check.
@@ -924,10 +942,7 @@ mod tests {
         assert!(made.success(), "mkfifo");
         // A blocking open of a FIFO with no writer would hang this test.
         assert!(matches!(read(&fifo, &plain(1 << 20)), Read::NotRegular));
-        assert!(matches!(
-            read(dir.path(), &plain(1 << 20)),
-            Read::NotRegular
-        ));
+        assert!(matches!(read(dir.path(), &plain(1 << 20)), Read::Directory));
         assert!(matches!(
             read(Path::new("/dev/null"), &plain(9)),
             Read::NotRegular

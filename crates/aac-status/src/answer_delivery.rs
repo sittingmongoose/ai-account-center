@@ -627,7 +627,7 @@ fn read_regular(path: &Path, cap: u64) -> ShareRead {
     match read(path, &ReadPolicy::capped(cap)) {
         Read::Bytes(bytes, _) => ShareRead::Bytes(bytes),
         Read::Absent => ShareRead::Absent,
-        Read::Link | Read::NotRegular => ShareRead::NotPlain,
+        Read::Link | Read::Directory | Read::NotRegular => ShareRead::NotPlain,
         // The TS reader returns the first cap + 1 bytes: never this signer's file nor equal to
         // the body, so a guard treats it as foreign content.
         Read::TooLarge => ShareRead::Bytes(Vec::new()),

@@ -1,15 +1,19 @@
 //! Request correlation and the dashboard's persistent completion log.
 use super::{Dashboard, Reply, header, peer, set_header, static_ui::AssetResponse};
-use aac_log::{Log, RequestLog};
+use aac_log::{Extra, Level, Log, RequestLog};
 use axum::{
     extract::{Request, State},
     http::HeaderValue,
     middleware::Next,
 };
+use serde_json::{Map, json};
 use std::{sync::Arc, time::Instant};
 
 #[derive(Clone)]
 pub(super) struct RequestId(pub(super) HeaderValue);
+
+#[derive(Clone, Copy)]
+pub(super) struct RequestFailure(pub(super) &'static str);
 
 #[derive(Clone)]
 pub(super) struct Audit {
@@ -41,15 +45,40 @@ pub(super) async fn record(State(audit): State<Audit>, mut request: Request, nex
         return reply;
     }
     let status = reply.status().as_u16();
+    let failure = reply.extensions().get::<RequestFailure>().copied();
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let _ = tokio::task::spawn_blocking(move || {
+        if let Some(RequestFailure(kind)) = failure {
+            let context = Map::from_iter([
+                ("status".into(), json!(status)),
+                ("kind".into(), json!(kind)),
+                ("headersSent".into(), json!(false)),
+            ]);
+            audit.log.write(
+                "web-server",
+                Level::Error,
+                "web.request.failed",
+                "Dashboard request failed",
+                &context,
+                &Extra {
+                    request_id: Some(id.clone()),
+                    ..Extra::default()
+                },
+            );
+        }
         let connection = remote.and_then(|remote| {
             let runtime = audit.dashboard.runtime.lock().ok()?;
             let config = runtime.load_config().ok()?;
-            Some(config.network.connection(&headers, remote.address.ip(), remote.tls))
+            Some(
+                config
+                    .network
+                    .connection(&headers, remote.address.ip(), remote.tls),
+            )
         });
         let peer_address = remote.map(|remote| remote.address.ip().to_string());
-        let client = connection.as_ref().and_then(|connection| connection.client_address());
+        let client = connection
+            .as_ref()
+            .and_then(|connection| connection.client_address());
         let via = connection
             .as_ref()
             .filter(|connection| connection.via_proxy)

@@ -53,7 +53,7 @@ fn configured(auth: &DashboardAuth, ip: IpAddr) -> Option<(SocketAddr, Vec<u8>, 
 pub(super) async fn listener(
     auth: &DashboardAuth,
     ip: IpAddr,
-) -> Option<Server<SocketAddr, RustlsAcceptor>> {
+) -> Option<(SocketAddr, Server<SocketAddr, RustlsAcceptor>)> {
     let (address, cert, key) = configured(auth, ip)?;
     // Select ring explicitly so another workspace consumer may enable a different provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -65,7 +65,7 @@ pub(super) async fn listener(
         .ok()?;
     let server = axum_server::from_tcp_rustls(listener, config).ok()?;
     tracing::info!(port = address.port(), "auth.tls.listening");
-    Some(server)
+    Some((address, server))
 }
 
 pub(super) async fn mark_encrypted(mut request: Request, next: Next) -> Response {

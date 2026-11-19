@@ -1,4 +1,5 @@
 //! Leptos frame, install assets and immutable build packages.
+use super::request_log::RequestFailure;
 use super::storage::hex;
 use super::{Reply, coded_path, decline, decode_component, header, plain, response, set_header};
 use aac_files::read::{Ancestors, Read, ReadPolicy};
@@ -100,6 +101,7 @@ impl StaticUi {
         };
         let manifest = ui
             .read(MANIFEST, 1024 * 1024)
+            .ok()
             .and_then(|asset| serde_json::from_slice::<Manifest>(&asset.bytes).ok())
             .unwrap_or_default();
         let mut checked = HashMap::<String, HashMap<Coding, Variant>>::new();
@@ -118,7 +120,7 @@ impl StaticUi {
                 || variant.bytes as u64 > ASSET_LIMIT
                 || !super::storage::is_hex(&variant.sha256, 64)
                 || (!originals.contains(&variant.path)
-                    && ui.read(&variant.path, ASSET_LIMIT).is_none())
+                    && ui.read(&variant.path, ASSET_LIMIT).is_err())
                 || ui.variant(&variant).is_none()
             {
                 continue;
@@ -133,32 +135,35 @@ impl StaticUi {
         ui
     }
 
-    fn read(&self, name: &str, cap: u64) -> Option<Asset> {
+    fn read(&self, name: &str, cap: u64) -> Result<Asset, Read> {
         if let Some(root) = &self.root {
             let policy = ReadPolicy::capped(cap).ancestors(Ancestors::NoLinkBelow(root));
             return match aac_files::read::read(&root.join(name), &policy) {
-                Read::Bytes(bytes, meta) => Some(Asset {
+                Read::Bytes(bytes, meta) => Ok(Asset {
                     bytes: bytes.into(),
                     modified: meta.modified().ok().filter(|time| {
                         time.duration_since(SystemTime::UNIX_EPOCH)
                             .is_ok_and(|elapsed| elapsed.as_secs() < 253_402_300_800)
                     }),
                 }),
-                _ => None,
+                refused => Err(refused),
             };
         }
         let index = EMBEDDED_UI
             .binary_search_by_key(&name, |asset| asset.0)
-            .ok()?;
+            .map_err(|_| Read::Absent)?;
         let bytes = EMBEDDED_UI[index].1;
-        (bytes.len() as u64 <= cap).then(|| Asset {
+        if bytes.len() as u64 > cap {
+            return Err(Read::TooLarge);
+        }
+        Ok(Asset {
             bytes: axum::body::Bytes::from_static(bytes),
             modified: None,
         })
     }
 
     fn variant(&self, variant: &Variant) -> Option<Asset> {
-        let asset = self.read(&variant.file, variant.bytes as u64)?;
+        let asset = self.read(&variant.file, variant.bytes as u64).ok()?;
         (asset.bytes.len() == variant.bytes && hex(&Sha256::digest(&asset.bytes)) == variant.sha256)
             .then_some(asset)
     }
@@ -213,18 +218,27 @@ impl StaticUi {
             }
             if path.ends_with('/') && !relative.is_empty() || hidden(&relative) {
                 // Page dispatch still sees the request's original address spelling.
-            } else if let Some(mut reply) = self.file(&relative, headers, head) {
+            } else if let Ok(mut reply) = self.file(&relative, headers, head) {
                 reply.extensions_mut().insert(AssetResponse);
                 return reply;
             }
         }
         if page(path) {
-            return self.file(FRAME, headers, head).unwrap_or_else(|| {
-                headless(
+            return match self.file(FRAME, headers, head) {
+                Ok(reply) => reply,
+                Err(Read::Directory | Read::Unreadable(std::io::ErrorKind::IsADirectory)) => {
+                    let mut reply = response(
+                        500,
+                        json!({"error":"The request could not be completed safely."}),
+                    );
+                    reply.extensions_mut().insert(RequestFailure("EISDIR"));
+                    headless(reply, head)
+                }
+                Err(_) => headless(
                     (StatusCode::NOT_FOUND, "This build has no dashboard page.").into_response(),
                     head,
-                )
-            });
+                ),
+            };
         }
         let (status, location) = if let Some(alias) = alias(path) {
             (StatusCode::MOVED_PERMANENTLY, alias)
@@ -239,7 +253,7 @@ impl StaticUi {
         redirect(status, location, headers, head)
     }
 
-    fn file(&self, relative: &str, headers: &HeaderMap, head: bool) -> Option<Reply> {
+    fn file(&self, relative: &str, headers: &HeaderMap, head: bool) -> Result<Reply, Read> {
         let entries = self.variants.get(relative);
         let encoding =
             entries.and_then(|entries| negotiate(header(headers, "accept-encoding")?, entries));
@@ -279,7 +293,7 @@ impl StaticUi {
                     asset.bytes.slice(start..=end),
                     Some(format!("bytes {start}-{end}/{size}")),
                 ),
-                Range::Unsatisfiable => return Some(headless(unsatisfiable(size), head)),
+                Range::Unsatisfiable => return Ok(headless(unsatisfiable(size), head)),
                 Range::Full => (StatusCode::OK, asset.bytes, None),
             }
         } else {
@@ -344,7 +358,7 @@ impl StaticUi {
             );
             set_header(&mut reply, "x-frame-options", "SAMEORIGIN");
         }
-        Some(reply)
+        Ok(reply)
     }
 }
 

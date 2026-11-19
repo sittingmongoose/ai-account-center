@@ -14,11 +14,16 @@ import { startServer, type ServerInstance, type ServerOptions } from './index';
 import { peekAccountDashboard } from './services/account-dashboard-service';
 import type { AccountDashboard, ClaudeDashboardPlatform } from './services/account-dashboard-types';
 
-function launched(child: ChildProcess): Promise<AddressInfo> {
+type PublicListeners = { publicAddress: AddressInfo; httpsAddress: AddressInfo | null };
+
+function launched(child: ChildProcess, interactive: boolean): Promise<PublicListeners> {
   if (!child.stdout) return Promise.reject(new Error('Rust dashboard stdout was unavailable'));
   const lines = createInterface({ input: child.stdout });
   return new Promise((resolve, reject) => {
-    const fail = () => reject(new Error('Composed Rust dashboard did not start'));
+    const fail = () => {
+      dispose();
+      reject(new Error('Composed Rust dashboard did not start'));
+    };
     const timeout = setTimeout(fail, 15_000);
     child.once('error', fail);
     child.once('exit', fail);
@@ -29,17 +34,28 @@ function launched(child: ChildProcess): Promise<AddressInfo> {
       child.off('error', fail);
       child.off('exit', fail);
     };
+    let httpsAddress: AddressInfo | null = null;
     lines.on('line', (line) => {
-      const match = /^aac-http public listening on (\[[0-9a-f:]+\]|[0-9.]+):([0-9]+)$/i.exec(line);
+      const match =
+        /^aac-http public (TLS )?listening on (\[[0-9a-f:]+\]|[0-9.]+):([0-9]+)$/i.exec(line);
       if (!match) {
-        if (line.startsWith('Valid for 60 minutes. Saved in auth/setup-code ')) {
+        if (
+          line === 'Valid for 60 minutes. Saved in auth/setup-code in the CCS folder (0600).' ||
+          (interactive &&
+            /^Dashboard first-run setup code: [2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/.test(line))
+        ) {
           process.stdout.write(line + '\n');
         }
         return;
       }
-      const address = match[1].replace(/^\[|\]$/g, '');
+      const address = match[2].replace(/^\[|\]$/g, '');
+      const bound = { address, port: Number(match[3]), family: isIP(address) === 6 ? 'IPv6' : 'IPv4' };
+      if (match[1]) {
+        httpsAddress = bound;
+        return;
+      }
       dispose();
-      resolve({ address, port: Number(match[2]), family: isIP(address) === 6 ? 'IPv6' : 'IPv4' });
+      resolve({ publicAddress: bound, httpsAddress });
     });
     child.once('close', dispose);
   });
@@ -121,7 +137,7 @@ async function publishHubCache(
 export async function startComposedServer(
   options: ServerOptions,
   binary: string
-): Promise<ServerInstance & { restartPublic: () => Promise<void> }> {
+): Promise<ServerInstance & PublicListeners & { restartPublic: () => Promise<void> }> {
   const root = getCcsDir();
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const host = options.host ?? 'localhost';
@@ -185,7 +201,8 @@ export async function startComposedServer(
     refresh();
     timer = setInterval(refresh, 2_500);
     timer.unref();
-    const startPublic = async (port: number): Promise<AddressInfo> => {
+    const startPublic = async (port: number): Promise<PublicListeners> => {
+      const interactive = process.stdout.isTTY === true;
       const listener = spawn(binary, ['--public'], {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'inherit'],
@@ -198,16 +215,17 @@ export async function startComposedServer(
           AAC_RUST_HUB_CACHE: cache,
           AAC_RUST_COMPOSE_UPSTREAM: '127.0.0.1:' + address.port,
           AAC_RUST_COMPOSE_PROOF: proof,
+          AAC_RUST_COMPOSE_STDOUT_TTY: interactive ? '1' : '0',
         },
       });
       child = listener;
       if (listener.stdin) detach = attachDashboardEventFeed(listener.stdin);
-      const started = await launched(listener);
+      const started = await launched(listener, interactive);
       listener.on('error', close);
       listener.once('exit', close);
       return started;
     };
-    const publicAddress = await startPublic(options.port);
+    const listeners = await startPublic(options.port);
     backend.server.once('close', close);
     const restartPublic = async () => {
       const listener = child;
@@ -218,9 +236,18 @@ export async function startComposedServer(
       const stopped = once(listener, 'exit');
       listener.stdin?.end();
       await stopped;
-      await startPublic(publicAddress.port);
+      Object.assign(listeners, await startPublic(listeners.publicAddress.port));
     };
-    return { ...backend, publicAddress, restartPublic };
+    return {
+      ...backend,
+      get publicAddress() {
+        return listeners.publicAddress;
+      },
+      get httpsAddress() {
+        return listeners.httpsAddress;
+      },
+      restartPublic,
+    };
   } catch (error) {
     close();
     if (child?.exitCode === null) child.kill();

@@ -279,7 +279,11 @@ fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
         // Present but not one ordinary file of this user, or the leaf itself unreadable:
         // Python's `read_failed()` — discovery incomplete, the inventory still answers
         // (qwen lane 2 recheck L1).
-        Read::Foreign | Read::NotRegular | Read::BadMode | Read::Unreadable(_) => None,
+        Read::Foreign
+        | Read::Directory
+        | Read::NotRegular
+        | Read::BadMode
+        | Read::Unreadable(_) => None,
     };
     if !value.as_ref().is_some_and(Value::is_object) {
         *complete = false;

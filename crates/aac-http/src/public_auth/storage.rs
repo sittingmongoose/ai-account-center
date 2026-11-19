@@ -337,9 +337,8 @@ pub(super) struct Setup {
 }
 
 impl Setup {
-    pub(super) fn print(&self) {
-        use std::io::IsTerminal;
-        if std::io::stdout().is_terminal() {
+    pub(super) fn print(&self, interactive: bool) {
+        if interactive {
             println!(
                 "Dashboard first-run setup code: {}-{}",
                 &self.code[..4],

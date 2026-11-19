@@ -27,6 +27,7 @@ use policy::{Connection, bearer, device_scope, header, local_access, origin_allo
 use routes::Limits;
 use serde_json::{Value, json};
 use std::{
+    io::IsTerminal,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, LazyLock, Mutex},
@@ -106,11 +107,20 @@ impl DashboardAuth {
     /// Opens explicit private-root stores and claims exclusive Rust writer leases.
     /// Run one front door per private root. The TS dashboard must be stopped before a handoff.
     pub fn open(root: PathBuf) -> std::io::Result<Self> {
-        Self::open_with(root, Overrides::from_process(), 12)
+        Self::open_public(root, std::io::stdout().is_terminal())
+    }
+
+    fn open_public(root: PathBuf, interactive: bool) -> std::io::Result<Self> {
+        Self::open_with(root, Overrides::from_process(), 12, interactive)
             .map_err(|_| std::io::Error::other("dashboard auth initialisation failed"))
     }
 
-    fn open_with(root: PathBuf, env: Overrides, hash_cost: u32) -> Result<Self, StoreError> {
+    fn open_with(
+        root: PathBuf,
+        env: Overrides,
+        hash_cost: u32,
+        interactive: bool,
+    ) -> Result<Self, StoreError> {
         let files = Files::claim(root)?;
         let config = Config::new(files.config()?, &env);
         let credential_stamp = config.stamp();
@@ -122,7 +132,7 @@ impl DashboardAuth {
             None
         });
         if let Some(code) = &setup {
-            code.print();
+            code.print(interactive);
         }
         let (epoch_changed, _) = watch::channel(0);
         let (events, _) = broadcast::channel(64);
@@ -282,11 +292,13 @@ pub(crate) async fn run_public_at(
     })?;
     let address = listener.local_addr()?;
     let log = Arc::new(aac_log::Log::new(root.clone()));
-    let auth = DashboardAuth::open(root)?;
     let ui_root = std::env::var_os("AAC_RUST_UI_DIR").map(PathBuf::from);
     let snapshot = std::env::var_os("AAC_RUST_HUB_CACHE").map(PathBuf::from);
     let backend = compose::Backend::from_env(address)?;
     let composed = backend.is_some();
+    let interactive = std::io::stdout().is_terminal()
+        || (composed && std::env::var("AAC_RUST_COMPOSE_STDOUT_TTY").as_deref() == Ok("1"));
+    let auth = DashboardAuth::open_public(root, interactive)?;
     let mut api = Router::new();
     if !composed {
         api = api.route(
@@ -294,18 +306,26 @@ pub(crate) async fn run_public_at(
             axum::routing::get(|| async { response(200, json!({"status":"ok"})) }),
         );
     }
-    let router = auth.protect(auth.edges(
-        api,
-        HubCache::default(),
-        ui_root,
-        snapshot,
-        !composed,
-        backend,
-    )).layer(middleware::from_fn_with_state(
-        request_log::Audit { dashboard: auth.0.clone(), log },
-        request_log::record,
-    ));
+    let router = auth
+        .protect(auth.edges(
+            api,
+            HubCache::default(),
+            ui_root,
+            snapshot,
+            !composed,
+            backend,
+        ))
+        .layer(middleware::from_fn_with_state(
+            request_log::Audit {
+                dashboard: auth.0.clone(),
+                log,
+            },
+            request_log::record,
+        ));
     let tls_server = tls::listener(&auth, address.ip()).await;
+    if let Some((address, _)) = &tls_server {
+        println!("aac-http public TLS listening on {address}");
+    }
     println!("aac-http public listening on {address}");
     if browser {
         crate::cli::open_browser(address);
@@ -337,7 +357,7 @@ pub(crate) async fn run_public_at(
                 .clone()
                 .into_make_service_with_connect_info::<SocketAddr>(),
         );
-    let result = if let Some(server) = tls_server {
+    let result = if let Some((_, server)) = tls_server {
         let tls_router = router.layer(middleware::from_fn(tls::mark_encrypted));
         let tls = server
             .handle(shutdown)
@@ -613,11 +633,13 @@ fn ws_refusal(status: u16) -> Reply {
     } else {
         "WebSocket access denied"
     };
-    (
+    let mut reply = (
         StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_REQUEST),
         message,
     )
-        .into_response()
+        .into_response();
+    set_header(&mut reply, "connection", "close");
+    reply
 }
 
 enum Decision {
@@ -1016,7 +1038,7 @@ mod tests {
         let hash = bcrypt::hash("fixture-password", 4).unwrap();
         Files::save_config(&aac_files::OwnedStore::claim_dashboard_config(&root).unwrap(),
             &json!({"dashboard_auth":{"enabled":true,"username":"fixture-admin","password_hash":hash}})).unwrap();
-        let auth = DashboardAuth::open_with(root, Overrides::default(), 4).unwrap();
+        let auth = DashboardAuth::open_with(root, Overrides::default(), 4, false).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = auth.protect(Router::new().fallback(|| async { decline() }));
@@ -1079,7 +1101,8 @@ mod tests {
         let bar = root.join("bar");
         std::fs::create_dir(&bar).unwrap();
         std::fs::set_permissions(&bar, std::fs::Permissions::from_mode(0o775)).unwrap();
-        let auth = DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).unwrap();
+        let auth =
+            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).unwrap();
         assert!(
             auth.0
                 .runtime
@@ -1091,22 +1114,31 @@ mod tests {
         );
         drop(auth);
         std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_err());
+        assert!(
+            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).is_err()
+        );
     }
 
     #[test]
     fn public_auth_refuses_a_second_writer_and_a_typescript_session_owner() {
         let home = tempfile::tempdir().unwrap();
         let root = home.path();
-        let first = DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).unwrap();
-        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_err());
+        let first =
+            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).unwrap();
+        assert!(
+            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).is_err()
+        );
         drop(first);
         let owner = root.join("auth/sessions.owner");
         // The file is a test stand-in for a legacy dashboard's own owner marker.
         std::fs::write(&owner, b"fixture TS process").unwrap();
-        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_err());
+        assert!(
+            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).is_err()
+        );
         std::fs::remove_file(&owner).unwrap();
-        assert!(DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4).is_ok());
+        assert!(
+            DashboardAuth::open_with(root.to_path_buf(), Overrides::default(), 4, false).is_ok()
+        );
     }
 
     #[tokio::test]
