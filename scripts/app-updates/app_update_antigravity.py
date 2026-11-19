@@ -66,7 +66,7 @@ def custom_executable_instances():
     """The instance ids whose T3 settings name a custom Antigravity executable.
 
     T3 refuses to install its managed runtime through such an instance ("This instance
-    uses a custom executable"), and its own post-install refresh skips them. Jared's two
+    uses a custom executable"), and its own post-install refresh skips them. The two
     instances run through a per-instance sign-in wrapper (2026-11-19), so the install
     goes through an instance without one, such as T3's disabled default. Only ids are
     read, never other settings. An unreadable file names none: T3's refusal then decides."""

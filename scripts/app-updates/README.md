@@ -188,7 +188,7 @@ for the instance the install ran on, and only when it is enabled; installing on
 the disabled one left the Mac and VM model lists stale on 2026-11-13. An instance
 whose T3 settings name a custom executable (`providerInstances.<id>.config.binaryPath`,
 the only setting AAC reads there) is never the install instance: T3 refuses an install
-through it. Since 2026-11-19 Jared's two instances run a per-instance sign-in wrapper,
+through it. Since 2026-11-19 the two T3 instances run a per-instance sign-in wrapper,
 so the install goes through the disabled default, and the per-instance refresh below
 still covers them; with no instance left that T3 manages the row fails
 `provider_unavailable` / `no_managed_instance` before any install. After a

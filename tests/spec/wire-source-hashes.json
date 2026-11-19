@@ -39,7 +39,7 @@
   "scripts/antigravity/runtime_control.py": "a192fc9485d634df336943db33702279e8c37bc8da0983662191567349d676ce",
   "scripts/antigravity/runtime_health.py": "b516f0ac9af3afdfc57f8c86c71a489f7da45306f4294b1b82f1d06cede25533",
   "scripts/antigravity/runtime_installation.py": "d8fa4ca99abddb17da837b7b6f67ba4b8c2628e9806c067f44dc3e245be99f30",
-  "scripts/app-updates/app_update_antigravity.py": "125ed7e9001666cf8c79d6d028aa2d2a241e4f2dbbbf9947ce7b6a1f47872904",
+  "scripts/app-updates/app_update_antigravity.py": "e9c77abe5bc0bbea2f801b7e762801403b2a24773635211025028440030f2ebd",
   "scripts/app-updates/app_update_common.py": "b6b8f9e623d18a2ac3269984bf2f472ac6ad9ab1851d36b2f64585caf81355aa",
   "scripts/app-updates/app_update_cursor.py": "67acd1534c98f7ea69a074c03ab6f5cc9246dff6e51b31b9fe4a1d30fdcf9120",
   "scripts/app-updates/app_update_desktop.py": "49fac1f8c1804931390a81507bb04faf5e9e06a374bb215071f2340852dcff2a",
