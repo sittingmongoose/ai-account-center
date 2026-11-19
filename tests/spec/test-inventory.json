@@ -613,6 +613,12 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/profile_reads.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/public_auth/app_updates_owner.rs",
       "kind": "safety",
       "evidence": [
