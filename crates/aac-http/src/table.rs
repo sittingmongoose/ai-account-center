@@ -29,6 +29,7 @@ pub(crate) enum Handler {
     Events,
     Agent,
     AgentControl,
+    Approvals,
     Store,
 }
 
@@ -52,6 +53,7 @@ impl Handler {
             "events" => Handler::Events,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
+            "account-approvals" => Handler::Approvals,
             "store" => Handler::Store,
             _ => return None,
         })
@@ -207,7 +209,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (method == axum::http::Method::POST
                 && !matches!(
                     handler,
-                    Handler::Agent | Handler::AgentControl | Handler::Store
+                    Handler::Agent | Handler::AgentControl | Handler::Approvals | Handler::Store
                 ))
             || (method == axum::http::Method::PUT
                 && !matches!(
@@ -222,6 +224,9 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         row.path.as_str(),
                         "/api/accounts/settings" | "/api/accounts/analytics/capture"
                     )))
+            || (handler == Handler::Approvals
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/account-confirmations"))
             || (method == axum::http::Method::PATCH && handler != Handler::WriteVisibility)
             || (handler == Handler::WriteVisibility
                 && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)

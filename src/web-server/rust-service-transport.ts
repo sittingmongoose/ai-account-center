@@ -97,7 +97,7 @@ function once(
   principal: VerifiedRustPrincipal,
   active: Set<http.ClientRequest>,
   payload: string | undefined,
-  method: 'GET' | 'PUT' | 'PATCH',
+  method: 'GET' | 'PUT' | 'PATCH' | 'POST',
   cap: number,
   deadline: number,
   options: RustRequestOptions = {}
@@ -176,7 +176,7 @@ export function requestRust(
   principal: VerifiedRustPrincipal,
   active: Set<http.ClientRequest>,
   input?: unknown,
-  method: 'GET' | 'PUT' | 'PATCH' = 'GET',
+  method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET',
   options: RustRequestOptions = {}
 ): Promise<RustReply> {
   const payload = options.text ?? (input === undefined ? undefined : JSON.stringify(input));

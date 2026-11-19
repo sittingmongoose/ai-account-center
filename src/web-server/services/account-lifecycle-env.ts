@@ -1,6 +1,10 @@
 import { getCcsDir } from '../../utils/config-manager';
 import { broadcastDashboardEvent } from '../dashboard-events';
-import { getAccountConfirmations, type AccountConfirmationStore } from './account-confirmations';
+import {
+  getAccountConfirmations,
+  type AccountApprovals,
+  type AccountConfirmationStore,
+} from './account-confirmations';
 import {
   getAccountDashboard,
   invalidateAccountDashboard,
@@ -75,6 +79,7 @@ export interface LifecycleEnv {
 export interface LifecycleContext {
   secure: boolean;
   sessionKey: string;
+  approvals?: AccountApprovals;
 }
 
 export interface LifecycleResult {

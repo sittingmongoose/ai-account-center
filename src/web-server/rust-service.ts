@@ -1,6 +1,13 @@
 /** M3 strangler: existing endpoint guards run before any verified principal is constructed. */
 import type { Request, Response } from 'express';
 import { performance } from 'perf_hooks';
+import { randomBytes } from 'node:crypto';
+import {
+  confirmationDigest,
+  CONFIRMATION_TOKEN_PATTERN,
+  type AccountApprovals,
+  type ConfirmationBinding,
+} from './services/account-confirmations';
 import routes from './rust-service-routes.json';
 import { tsWritesRow } from '../shared/private-files';
 import { getCcsDir } from '../utils/config-manager';
@@ -101,7 +108,7 @@ export class RustService extends RustSupervisor {
     input?: unknown,
     query = '',
     headers?: Record<string, string>,
-    method: 'GET' | 'PUT' | 'PATCH' = 'GET'
+    method: 'GET' | 'PUT' | 'PATCH' | 'POST' = 'GET'
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -465,6 +472,56 @@ export class RustService extends RustSupervisor {
     this.record(route, { kind: 'served' });
     this.pair(route, null, now() - started);
     return result.body;
+  }
+
+  /** The lifecycle router calls this after its session, origin and body guards. */
+  accountConfirmations(): AccountApprovals | undefined {
+    if (!this.writesOn) return undefined;
+    const route = '/internal/account-confirmations';
+    const verified = { kind: 'session', id: 'front-door', role: 'service' } as const;
+    const call = async (operation: string, token: string, binding: ConfirmationBinding) => {
+      if (
+        this.inFlight >= IN_FLIGHT ||
+        this.lease?.connection.ccsDir !== canonicalRoot(getCcsDir())
+      )
+        throw new Error('Rust approval store unavailable');
+      let result: RustReply;
+      try {
+        result = await this.forward(
+          route,
+          verified,
+          { operation, ...binding, tokenDigest: confirmationDigest(token) },
+          '',
+          undefined,
+          'POST'
+        );
+      } catch (error) {
+        this.failed(route, error);
+        throw error;
+      }
+      if (result.status !== 200 || !result.body || typeof result.body !== 'object') {
+        this.declined(route, result);
+        throw new Error('Rust approval store declined');
+      }
+      this.stats.served++;
+      this.record(route, { kind: 'served' });
+      return result.body as Record<string, unknown>;
+    };
+    return {
+      issue: async (binding) => {
+        const token = randomBytes(32).toString('base64url');
+        const { expiresAtMs } = await call('issue', token, binding);
+        if (typeof expiresAtMs !== 'number' || !Number.isSafeInteger(expiresAtMs))
+          throw new Error('Rust approval expiry refused');
+        return { token, expiresAt: new Date(expiresAtMs).toISOString() };
+      },
+      consume: async (token, binding) => {
+        if (!CONFIRMATION_TOKEN_PATTERN.test(token)) return false;
+        const { consumed } = await call('consume', token, binding);
+        if (typeof consumed !== 'boolean') throw new Error('Rust approval reply refused');
+        return consumed;
+      },
+    };
   }
 
   feedBoot(scope: string): string | null {

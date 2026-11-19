@@ -56,6 +56,7 @@ export const HUNG_TIMEOUTS = 3;
 
 export class RustSupervisor {
   readonly mode: RustServiceMode;
+  protected readonly writesOn: boolean;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */
@@ -118,8 +119,8 @@ export class RustSupervisor {
     this.mode = rustServiceMode(mode);
     // L2: the writer assignment sent in the private boot. Writes have their own switch and
     // need the Unix service. Shadow keeps the TS writer.
-    const writes = this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('writes');
-    settlePrivateFileOwners((group) => group === 'writes' && writes);
+    this.writesOn = this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('writes');
+    settlePrivateFileOwners((group) => group === 'writes' && this.writesOn);
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }

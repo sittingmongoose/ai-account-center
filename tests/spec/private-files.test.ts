@@ -273,7 +273,7 @@ describe('one writer per file', () => {
     expect(supervisor).toContain("this.mode === 'on'");
     expect(supervisor).toContain("rustGroupOn('writes')");
     expect(supervisor).toContain(
-      "settlePrivateFileOwners((group) => group === 'writes' && writes)"
+      "settlePrivateFileOwners((group) => group === 'writes' && this.writesOn)"
     );
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());

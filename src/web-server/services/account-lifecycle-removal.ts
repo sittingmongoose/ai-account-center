@@ -401,7 +401,9 @@ export async function removeAccount(
     stateFingerprint: await plan.fingerprint(),
   };
   if (commitBody === null) {
-    const issued = env.confirmations().issue(binding);
+    const issued = context.approvals
+      ? await context.approvals.issue(binding)
+      : env.confirmations().issue(binding);
     return {
       status: 200,
       body: {
@@ -424,7 +426,11 @@ export async function removeAccount(
       throw new LifecycleHttpError(400, 'invalid_body');
     }
   }
-  if (!env.confirmations().consume(commitBody.token, binding)) {
+  if (
+    !(context.approvals
+      ? await context.approvals.consume(commitBody.token, binding)
+      : env.confirmations().consume(commitBody.token, binding))
+  ) {
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   await refused();
@@ -482,7 +488,9 @@ export async function restoreTrash(
       status: 200,
       body: {
         confirmation: {
-          ...env.confirmations().issue(binding),
+          ...(context.approvals
+            ? await context.approvals.issue(binding)
+            : env.confirmations().issue(binding)),
           effects: [
             'Its Claude data moves back on Mac and Windows.',
             'Its launchers are created again.',
@@ -491,7 +499,11 @@ export async function restoreTrash(
       },
     };
   }
-  if (!env.confirmations().consume(token, binding)) {
+  if (
+    !(context.approvals
+      ? await context.approvals.consume(token, binding)
+      : env.confirmations().consume(token, binding))
+  ) {
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   let restored: { accountId: string };
@@ -556,7 +568,9 @@ export async function purgeTrash(
       status: 200,
       body: {
         confirmation: {
-          ...env.confirmations().issue(binding),
+          ...(context.approvals
+            ? await context.approvals.issue(binding)
+            : env.confirmations().issue(binding)),
           effects: [
             'Its Claude data is deleted for good on Mac and Windows.',
             'This cannot be undone. Type DELETE to confirm.',
@@ -569,7 +583,11 @@ export async function purgeTrash(
   if (commit.confirm !== PURGE_TYPED_CONFIRMATION) {
     throw new LifecycleHttpError(400, 'invalid_body');
   }
-  if (!env.confirmations().consume(commit.token, binding)) {
+  if (
+    !(context.approvals
+      ? await context.approvals.consume(commit.token, binding)
+      : env.confirmations().consume(commit.token, binding))
+  ) {
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   try {

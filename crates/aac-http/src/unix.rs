@@ -72,6 +72,7 @@ struct Shared {
     limits: Limits,
     identity: Identity,
     feeds: Feeds,
+    approvals: crate::account_approvals::Approvals,
     agents: Arc<crate::agent_transport::Agents>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
@@ -307,6 +308,18 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
+        Handler::Approvals => {
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared.approvals.apply(&bytes) {
+                Some(value) => Json(value).into_response(),
+                None => decline(row.handler, Decline::Shape),
+            }
+        }
         Handler::Agent | Handler::AgentControl => {
             let path = req.uri().path().to_owned();
             let cap = if row.handler == Handler::AgentControl {
@@ -719,6 +732,7 @@ pub async fn serve(
         limits: Limits::new(),
         identity,
         feeds: Feeds::new(),
+        approvals: crate::account_approvals::Approvals::default(),
         agents,
         store: store.clone(),
     }));
