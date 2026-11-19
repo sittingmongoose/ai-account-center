@@ -1,6 +1,8 @@
 use super::*;
 use std::{fs, path::Path};
 
+#[cfg(unix)]
+const ANALYTICS: &str = "/api/accounts/analytics";
 const CAPTURE: &str = "/api/accounts/analytics/capture";
 const CACHE: &str = "cache/analytics-remote-v1/mac.json";
 
@@ -102,5 +104,93 @@ async fn analytics_capture_opposite_writes_wait_for_the_file_lease_and_keep_thei
         serde_json::from_slice::<Value>(&fs::read(file).unwrap()).unwrap()["sessions"]["s1"]["cwd"]
             .is_null()
     );
+    handle.abort();
+}
+
+#[cfg(unix)]
+fn real_analytics_owner(root: &Path, populate: bool) -> (analytics_routes::Hop, i64) {
+    let store = root.join("store");
+    let engine =
+        Arc::new(aac_store::ops::open_engine(store.to_str().unwrap(), None, None).unwrap());
+    let hour = 3_600_000;
+    let now = chrono::Utc::now().timestamp_millis().div_euclid(hour) * hour;
+    let day = 24 * hour;
+    let dashboard = json!({"dashboards":[{"platform":"mac","dashboard":{"accounts":[{
+        "id":"codex:fixture", "provider":"codex", "label":"Fixture", "status":"ok",
+        "windows":[{"key":"five-hour","label":"5 hours","kind":"rate_limit","usedPercent":22,"windowMinutes":300}]
+    }]}}]});
+    if populate {
+        let provider = aac_core::ProviderId::new("codex").unwrap();
+        let identity = aac_core::AccountKey::derive(&provider, "codex:fixture", None).unwrap();
+        let observation = |sample: i64, used: u64| {
+            json!({
+                "account":{"identity":identity.as_str(),"provider":"codex","account_id":"codex:fixture",
+                    "platform":"mac","source":"fixture","status":"ok","is_active":false},
+                "sampled_at_ms":sample,"observed_at_ms":sample,
+                "windows":[{"identity":"[\"five-hour\",\"rate_limit\",null]",
+                    "key":"five-hour","label":"5 hours","kind":"rate_limit",
+                    "used_pct":used,"remaining_pct":100 - used,"window_minutes":300}]
+            })
+        };
+        let recorded = aac_store::ops::call(
+            &engine,
+            "record",
+            &json!({"observations":[observation(now - 100 * day, 20), observation(now - 3 * day, 22)]}).to_string(),
+        ).unwrap();
+        assert_eq!(recorded["sampled"], 2);
+        let ingested = aac_store::ops::call(&engine, "activityIngest", &json!({"reports":[{
+            "schema":"aac.usage-report.v1", "computer":"mac", "tool":"codex",
+            "readAt":aac_store::usage::iso(now), "state":"ok", "complete":true,
+            "coverFrom":aac_store::usage::iso(now - 30 * day),
+            "cells":[{"hour":aac_store::usage::iso(now - 3 * day),"sessionKey":"0123456789abcdef",
+                "route":"","modelRaw":"gpt-fixture","inputTokens":100,"outputTokens":0,
+                "cacheCreationTokens":0,"cacheReadTokens":0,"costUsd":0,"fallbackCostUsd":0,"events":1}]
+        }]}).to_string()).unwrap();
+        assert_eq!(ingested["put"], 1);
+    }
+    let root = root.to_owned();
+    let hop: analytics_routes::Hop = Arc::new(move |uri, _principal| {
+        let engine = Arc::clone(&engine);
+        let result = crate::analytics_route::compose(
+            engine,
+            &root,
+            Some(&dashboard),
+            &crate::analytics_live::Live::default(),
+            uri.split_once('?').map(|(_, query)| query),
+            now,
+        );
+        Box::pin(async move {
+            Some(match result {
+                Ok(value) => (200, aac_views::js_json::write(&value)),
+                Err(decline) => (503, format!("{decline:?}").into_bytes()),
+            })
+        })
+    });
+    (hop, now)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn analytics_named_account_reads_hourly_and_daily_ranges_from_the_real_store() {
+    let owner_home = tempfile::tempdir().unwrap();
+    let (hop, now) = real_analytics_owner(owner_home.path(), true);
+    let (_home, _auth, addr, handle) = server_with_analytics(true, Some(hop)).await;
+    let headers = headers(addr).await;
+    let from = aac_store::usage::iso(now - 100 * 86_400_000);
+    let to = aac_store::usage::iso(now);
+    let custom = format!("custom&from={}&to={}", &from[..10], &to[..10]);
+    for (preset, range) in [("30d", "30d"), ("custom", custom.as_str())] {
+        let path = format!(
+            "{ANALYTICS}?range={range}&provider=codex&account=codex%3Afixture&refresh=false&tz=UTC"
+        );
+        let raw = request(addr, &path, "GET", &headers, "").await;
+        assert!(raw.starts_with("HTTP/1.1 200"), "{preset} range failed");
+        let reply = body(&raw, 200);
+        assert_eq!(reply["filters"]["account"], "codex:fixture");
+        assert_eq!(reply["accounts"][0]["id"], "codex:fixture");
+        assert_eq!(reply["history"]["sampleCount"], 1);
+        assert_eq!(reply["activity"]["status"], "unavailable");
+        assert_eq!(reply["range"]["preset"], preset);
+    }
     handle.abort();
 }
