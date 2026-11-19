@@ -25,7 +25,7 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
 });
 const { settlePrivateFileOwners } = await import('../../../src/shared/private-files');
-const { registerRustAgentConnection } =
+const { projectRustSignIns, registerRustAgentConnection } =
   await import('../../../src/web-server/rust-service-transport');
 const { collectQuotaWithFallback, runQuotaAgent } =
   await import('../../../src/web-server/services/agent-verbs');
@@ -38,6 +38,11 @@ const { UsageFailoverService } =
   await import('../../../src/web-server/services/usage-failover-service');
 const { runFailoverInventoryAgent } =
   await import('../../../src/web-server/services/usage-failover-transport');
+
+const { cacheTtlFor, downgradeCrossedRows, mergeRenewal } =
+  await import('../../../src/web-server/services/signin-health-service');
+type Health = import('../../../src/web-server/services/signin-health-service').SignInHealth;
+type Renewal = import('../../../src/web-server/services/claude-signin-renewal').ClaudeSignInRenewal;
 
 const close = registerRustAgentConnection(fixture.root, fixture, new Set());
 const source = { provider: 'kimi-code', platform: 'ubuntu', sshHost: 'fixture' } as const;
@@ -158,6 +163,89 @@ try {
   const restored = await collectFailover(true).collect(target(fixture.root), template);
   assert.deepEqual(restored, owned);
   assert.equal(inventories, 1, 'the cold coordinator reused the Rust-written observation');
+
+  const settledAt = at + 5000;
+  const machines: Health['machines'] = {
+    mac: [
+      {
+        name: 'fixture',
+        machine: 'mac',
+        platform: 'mac',
+        provider: 'claude',
+        state: 'ok',
+        fixCommand: '',
+        accessExpiresAt: new Date(at + 1000).toISOString(),
+      },
+    ],
+  };
+  const expectedHealth: Health = {
+    generatedAt: new Date(settledAt).toISOString(),
+    machines: {
+      ...structuredClone(machines),
+      ubuntu: [
+        {
+          name: 'ubuntu',
+          provider: 'claude',
+          platform: 'ubuntu',
+          machine: 'ubuntu',
+          state: 'unavailable',
+          fixCommand: '',
+          error: 'no collection route from this host',
+        },
+      ],
+    },
+  };
+  const downgraded = downgradeCrossedRows(expectedHealth, at, settledAt);
+  assert.equal(downgraded, true);
+  const health = await projectRustSignIns(fixture.root, {
+    machines,
+    collectedAt: at,
+    now: settledAt,
+  });
+  assert.deepEqual(health, {
+    machines: expectedHealth.machines,
+    ttlMs: downgraded ? 30_000 : cacheTtlFor(expectedHealth, settledAt),
+  });
+
+  const renewal = {
+    stale: false,
+    hosts: [
+      { host: 'mac', error: null },
+      { host: 'windows', error: 'unavailable' },
+    ],
+    signIns: [
+      {
+        profile: 'fixture',
+        host: 'mac',
+        state: 'ok',
+        logoutAt: null,
+        signInEndsAt: null,
+        email: 'fixture@example.test',
+        autoRenew: true,
+      },
+      {
+        profile: 'fixture',
+        host: 'windows',
+        state: 'logged_out',
+        logoutAt: null,
+        signInEndsAt: null,
+        autoRenew: false,
+      },
+    ],
+  } as Renewal;
+  const both = {
+    ...machines,
+    windows: [{ ...machines.mac[0], platform: 'windows', machine: 'windows' }],
+  };
+  const merged = await projectRustSignIns(fixture.root, {
+    machines: both,
+    renewal,
+    now: settledAt,
+  });
+  assert.deepEqual(merged, {
+    machines: JSON.parse(JSON.stringify(mergeRenewal(both, renewal, settledAt))),
+  });
+  console.log('PASS H2 sign-in host settlement, crossed expiry and Claude renewal merge');
 
   console.log(
     'PASS H2 dashboard and Home input bytes, inventory identity and cold cache restoration on the Kimi fixture'

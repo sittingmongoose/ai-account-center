@@ -257,19 +257,23 @@ impl Call {
     }
 
     pub(crate) fn valid(&self, verb: &str) -> bool {
+        [
+            "health",
+            "inventory",
+            "signin-expiry",
+            "quota-read",
+            "scan-usage",
+            "t3-pins",
+            "key-store",
+            "claude-history",
+            "failover-inventory",
+        ]
+        .contains(&verb)
+            && self.bounded(verb)
+    }
+
+    pub(crate) fn bounded(&self, verb: &str) -> bool {
         word(&self.call_id)
-            && [
-                "health",
-                "inventory",
-                "signin-expiry",
-                "quota-read",
-                "scan-usage",
-                "t3-pins",
-                "key-store",
-                "claude-history",
-                "failover-inventory",
-            ]
-            .contains(&verb)
             && self.deadline_ms != 0
             && self.deadline_ms <= aac_protocol::MAX_DEADLINE_MS
             && self.timeout_ms != 0

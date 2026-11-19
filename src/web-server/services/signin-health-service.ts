@@ -1,5 +1,7 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
+import { privateFileOwners } from '../../shared/private-files';
+import { projectRustSignIns } from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-markdown';
 import {
@@ -129,7 +131,26 @@ export async function withRenewal(
 ): Promise<SignInHealth> {
   const renewal = await readRenewal().catch(() => null);
   if (!renewal) return health;
-  return { ...health, machines: mergeRenewal(health.machines, renewal, Date.now()), renewal };
+  const now = Date.now();
+  if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+    const projection = await projectRustSignIns(getCcsDir(), {
+      machines: health.machines,
+      renewal,
+      now,
+    });
+    if (validMachineRows(projection?.machines))
+      return { ...health, machines: projection.machines, renewal };
+  }
+  return { ...health, machines: mergeRenewal(health.machines, renewal, now), renewal };
+}
+
+function validMachineRows(value: unknown): value is Record<string, SignInProfile[]> {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.values(value).every(Array.isArray)
+  );
 }
 
 const CACHE_MIN_MS = 30_000;
@@ -619,11 +640,6 @@ async function collectOnce(): Promise<SignInHealth> {
         : 'no profiles reported';
     machines[host.host] = unavailableHost(host.host, reason);
   });
-  if (!machines.ubuntu) {
-    // A dashboard hosted on the Mac or Windows collects no Ubuntu route:
-    // the machine names itself rather than silently disappearing.
-    machines.ubuntu = unavailableHost('ubuntu', 'no collection route from this host');
-  }
   return { generatedAt: new Date().toISOString(), machines };
 }
 
@@ -675,6 +691,24 @@ function refresh(): Promise<SignInHealth> {
       throw error;
     }
     const settledAt = Date.now();
+    if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+      const projected = await projectRustSignIns(getCcsDir(), {
+        machines: value.machines,
+        collectedAt: entry.collectedAt,
+        now: settledAt,
+      });
+      if (
+        validMachineRows(projected?.machines) &&
+        typeof projected?.ttlMs === 'number' &&
+        Number.isSafeInteger(projected.ttlMs) &&
+        projected.ttlMs >= CACHE_MIN_MS &&
+        projected.ttlMs <= CACHE_MAX_MS
+      ) {
+        entry.until = settledAt + projected.ttlMs;
+        return { ...value, machines: projected.machines };
+      }
+    }
+    value.machines.ubuntu ??= unavailableHost('ubuntu', 'no collection route from this host');
     const downgraded = downgradeCrossedRows(value, entry.collectedAt, settledAt);
     entry.until = settledAt + (downgraded ? CACHE_MIN_MS : cacheTtlFor(value, settledAt));
     return value;

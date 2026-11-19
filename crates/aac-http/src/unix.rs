@@ -309,6 +309,68 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
+        Handler::SignInHealth => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 2 * 1024 * 1024).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::account_usage::signins::answer(&bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::ProviderCache => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::account_usage::provider_caches::answer(&root, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CollectionSources => {
+            use crate::account_usage::sources::{self, Sources};
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || sources::read_registry(&root))
+                .await
+            {
+                Ok(Sources::Legacy) => Json(json!({"state":"absent"})).into_response(),
+                Ok(Sources::V2(accounts)) => Json(json!({
+                    "state":"ok","registry":{"version": 2,"accounts":accounts},
+                }))
+                .into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         Handler::CollectionTick => {
             if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
                 != Some(registry::Role::RustService)
@@ -700,6 +762,15 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
+    serve_with_account_usage_cache(boot, shutdown, Default::default()).await
+}
+
+/// Run the private service with the cache a standalone Rust collector and its public listener share.
+pub async fn serve_with_account_usage_cache(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    cache: crate::account_usage::AccountUsageCache,
+) -> io::Result<()> {
     boot.validate()?;
     let rows = crate::table::rows(crate::table::ROUTES)?;
     let identity = Identity::current()?;
@@ -728,7 +799,7 @@ pub async fn serve(
         boot,
         limits: Limits::new(),
         identity,
-        feeds: Feeds::new(),
+        feeds: cache.feeds,
         agents,
         collection: collection.clone(),
         store: store.clone(),

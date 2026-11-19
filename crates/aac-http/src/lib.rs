@@ -2,6 +2,8 @@
 #[cfg(unix)]
 mod account_reads;
 #[cfg(unix)]
+pub mod account_usage;
+#[cfg(unix)]
 mod agent_transport;
 #[cfg(unix)]
 mod collection;
@@ -9,6 +11,8 @@ mod collection;
 mod collection_cache;
 #[cfg(unix)]
 mod dashboard_fed;
+#[cfg(unix)]
+pub mod dashboard_observations;
 #[cfg(unix)]
 mod feed;
 #[cfg(unix)]
@@ -42,4 +46,4 @@ pub mod view_reply;
 #[cfg(unix)]
 pub use identity::PROTOCOL;
 #[cfg(unix)]
-pub use unix::{Boot, serve, short_name};
+pub use unix::{Boot, serve, serve_with_account_usage_cache, short_name};

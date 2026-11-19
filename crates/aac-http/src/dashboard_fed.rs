@@ -1,5 +1,6 @@
 //! G2: the Accounts and tray response from the dashboard generation shared with Home.
-use crate::feed::{Feeds, HOME_DASHBOARD, Prepared};
+use crate::account_usage::{prepared, source};
+use crate::feed::Feeds;
 use aac_views::decline::Decline;
 use serde::Deserialize;
 
@@ -25,16 +26,9 @@ pub(crate) fn answer(feeds: &Feeds, header: &str) -> Result<(Vec<u8>, Vec<u8>), 
     if !["mac", "windows"].contains(&request.platform.as_str()) {
         return Err(Decline::Shape);
     }
-    let source = format!(
-        "{HOME_DASHBOARD}{}-{}",
-        request.platform,
-        u8::from(request.secure)
-    );
+    let source = source(&request.platform, request.secure);
     let generation = feeds.current(&source, &request.dashboard)?;
-    let Prepared::Dashboard(dashboard) = &generation.prepared else {
-        return Err(Decline::Internal);
-    };
-    let dashboard = dashboard.as_ref().map_err(|reason| *reason)?;
+    let dashboard = prepared(&generation)?;
     let mut identity = Vec::with_capacity(64 + header.len());
     identity.extend_from_slice(env!("AAC_BUILD_COMMIT").as_bytes());
     identity.extend_from_slice(&generation.digest);

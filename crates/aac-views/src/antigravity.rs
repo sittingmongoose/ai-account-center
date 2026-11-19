@@ -55,8 +55,8 @@ fn secret(text: &str) -> bool {
     })
 }
 
-/// `displayText(value, maximum)`.
-fn display_text(value: Option<&Value>, maximum: usize) -> Option<String> {
+/// Match the shared dashboard usage normalization rule `displayText(value, maximum)`.
+pub fn display_text(value: Option<&Value>, maximum: usize) -> Option<String> {
     let text = value?.as_str()?;
     if utf16_len(text) > maximum || has_control(text) || secret(text) {
         return None;

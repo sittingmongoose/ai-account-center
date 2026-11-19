@@ -217,11 +217,31 @@ impl StoreHost {
         .unwrap_or_else(|_| Err("panic: the store stopped this call".to_string()))
     }
 
+    fn record_dashboard(&self, args: &str) -> Result<String, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Tick {
+            now: i64,
+            accounts: Vec<Value>,
+        }
+        let tick: Tick = crate::json_object::from_slice(args.as_bytes(), &["now", "accounts"])
+            .map_err(|_| "invalid: invalid dashboard sample".to_string())?;
+        let observations =
+            crate::dashboard_observations::observations(&tick.accounts, tick.now, i64::MIN)
+                .map_err(|_| "invalid: unproved dashboard observation".to_string())?;
+        let engine = self
+            .engine()
+            .ok_or_else(|| "service_down: the store host is closed".to_string())?;
+        let result = aac_store::usage::record(&engine, observations).map_err(|e| e.to_string())?;
+        serde_json::to_string(&result).map_err(|_| "invalid: dashboard sample reply".to_string())
+    }
+
     fn call_blocking(&self, method: &str, args: &str) -> Result<String, String> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.wait_ready();
             match method {
                 "open" => self.open_idempotent(args),
+                "recordDashboard" => self.record_dashboard(args),
                 "hostJobs" => Ok(self.jobs_json()),
                 "hostIdentity" => Ok(aac_store::build_identity().to_string()),
                 _ => ops::dispatch(&self.slot, method, args).map_err(|e| e.to_string()),

@@ -337,6 +337,86 @@ export function registerRustAgentConnection(
   return () => agentConnections.delete(key);
 }
 
+/** Aggregate the published sign-in rows and renewal facts through the same private service. */
+export async function projectRustSignIns(
+  root: string,
+  input: unknown
+): Promise<{ machines?: unknown; ttlMs?: unknown } | null> {
+  const held = rustAgentConnection(root);
+  if (!held) return null;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-signins',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      input,
+      'PUT'
+    );
+    return reply.status === 200
+      ? (reply.body as { machines?: unknown; ttlMs?: unknown } | null)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read a provider cache by a private binding. Undefined leaves the reference reader in charge. */
+export async function readRustProviderCache(
+  root: string,
+  input: { profileId: string; manifestHash: string } | { bindingHash: string }
+): Promise<unknown> {
+  const held = rustAgentConnection(root);
+  if (!held) return undefined;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-provider-cache',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      input,
+      'PUT',
+      { cap: 128 * 1024 }
+    );
+    return reply.status === 200 ? (reply.body as { value?: unknown } | null)?.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The collector's source registry is a private read bound to this boot root. */
+export async function readRustCollectionSources(root: string): Promise<unknown> {
+  const held = rustAgentConnection(root);
+  if (!held) return null;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-sources',
+      FRONT_DOOR_PRINCIPAL,
+      held.active
+    );
+    return reply.status === 200 ? reply.body : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Publish a background dashboard to the same boot and feed used by the interactive views. */
+export async function publishCollectionFeed(
+  root: string,
+  source: string,
+  generation: string,
+  data: string,
+  facts: string
+): Promise<void> {
+  const held = rustAgentConnection(root);
+  if (held) {
+    await pushRustFeedText(held.connection, source, generation, data, facts, held.active).catch(
+      () => undefined
+    );
+  }
+}
+
 /** Hold the idle sampling interval on Rust's clock, with no pooled socket or read breaker. */
 export function scheduleRustCollection(
   root: string,
@@ -440,7 +520,9 @@ export async function requestRustAgent(
     // A disconnected quota read may have already reached the provider. Allow a
     // reference read only when this service could prove the native call declined.
     const ambiguous = () =>
-      collect && verb === 'quota-read' ? reject(new CollectionReadIndeterminate()) : resolve(null);
+      collect && ['quota-read', 'failover-collect'].includes(verb)
+        ? reject(new CollectionReadIndeterminate())
+        : resolve(null);
     const request = http.request({
       socketPath: held.connection.socketPath,
       path: `/internal/${collect ? 'collect' : 'agent'}/${encodeURIComponent(verb)}`,

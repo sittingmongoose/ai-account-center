@@ -40,13 +40,14 @@ class UnixHttp(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 class Service:
-    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False):
+    def __init__(self, agent, service, *, mode='on', scenario='agent', sha=None, size=None, collection=False, remote_env=None):
         self.temp = tempfile.TemporaryDirectory(prefix='a5-')
         self.root = Path(self.temp.name)
         self.agent = str(Path(agent).resolve())
         self.trace = self.root / 'trace.jsonl'
         self.scenario = self.root / 'scenario'
         self.scenario.write_text(scenario)
+        (self.root / 'remote-env.json').write_text(json.dumps(remote_env or {}))
         identity = json.loads(subprocess.check_output([self.agent, '--version'], env={'PATH': os.defpath}))
         self.identity = identity
         artifact = self.agent
@@ -128,7 +129,15 @@ def record(root, agent):
     if '-G' in sys.argv[1:]:
         sys.exit(0)  # No-connect capability probes are not agent launcher calls.
     root = Path(root)
-    command = shlex.split(sys.argv[-1])[-1]
+    argv = shlex.split(sys.argv[-1])
+    if len(argv) == 5 and argv[:2] == ['/bin/sh', '-c'] and argv[3] == 'aac-failover':
+        with (root / 'trace.jsonl').open('a') as f:
+            f.write(json.dumps({'stage': 'helper', 'pid': os.getpid()}) + '\n')
+        home = root / 'fixture-home'
+        home.mkdir(exist_ok=True)
+        os.environ['HOME'] = str(home)
+        os.execv(argv[0], argv)
+    command = argv[-1]
     stage = re.search(r"case '(probe|prepare|commit|run)'", command)
     assert stage, command
     stage = stage[1]
@@ -185,7 +194,22 @@ def record(root, agent):
                 time.sleep(.1)
                 sys.exit(1)
         sys.exit(1)
+    os.environ.update(json.loads((root / 'remote-env.json').read_text()))
     os.execv(agent, [agent])
+
+def fixture_remote_env():
+    # A real SSH account has its own environment. The fake remote reproduces only
+    # corpus fixtures, never an ambient provider token or home.
+    result = {}
+    for key in ('ZAI_API_KEY', 'KIMI_API_KEY', 'OPENCODE_GO_API_KEY'):
+        value = os.environ.get(key)
+        if value in ('fixture-environment-key', 'non-ascii-\u00e9', 'surrogate-\udcff'):
+            result[key] = value
+    for key in ('HOME', 'XDG_CONFIG_HOME'):
+        value = os.environ.get(key, '')
+        if re.fullmatch(r'/+tmp/aac-(?:m2p4|signin-review)-[a-z0-9_]+(?:/[^/]+)*', value):
+            result[key] = value
+    return result
 
 def proxy(agent, service, collection=False):
     wire = sys.stdin.read()
@@ -199,7 +223,7 @@ def proxy(agent, service, collection=False):
     # the original whole-request cap witness without changing any semantic argument.
     trailing = len(wire.rstrip('\n')) - len(wire.rstrip())
     if trailing and args.endswith('}'): args = args[:-1] + ' ' * trailing + '}'
-    with Service(agent, service, collection=collection) as fixture:
+    with Service(agent, service, collection=collection, remote_env=fixture_remote_env()) as fixture:
         family = 'collect' if collection and request['verb'] in (
             'quota-read', 'signin-expiry', 'failover-inventory') else 'agent'
         payload = fixture.payload(id=request['id'], deadline=request['deadlineMs'], cap=16*1024*1024 if request['verb']=='scan-usage' else 1024*1024)
@@ -314,6 +338,29 @@ def collection_gates(agent, service):
                                            'value':{'schemaVersion':1,'profiles':[]}}
         assert [t['stage'] for t in s.traces()] == ['probe', 'run']
 
+        helper_route = '/internal/collect/failover-collect'
+        # This candidate deliberately fails validation before credential lookup or HTTP.
+        helper_args = {'version': 1, 'provider': 'claude', 'action': 'collect', 'candidate': {}}
+        assert s.ask(helper_route, s.payload(helper_args), principal=public)[0] == 401
+        status, raw = s.ask(helper_route, s.payload(helper_args))
+        event = json.loads(raw)
+        assert status == 200 and event['type'] == 'result', event
+        assert event['value']['failureCode'] == 'invalid_response', event
+        assert [t['stage'] for t in s.traces()] == ['probe', 'run', 'helper']
+
+        source_route = '/internal/collection-sources'
+        assert s.ask(source_route, method='GET') == (200, '{"state":"absent"}')
+        registry = s.root / 'account-usage-accounts.json'
+        binding = {'id':'kimi-code:usage', 'provider':'kimi-code', 'platform':'ubuntu',
+                   'credential':{'kind':'discover'}}
+        registry.write_text(json.dumps({'version':2,'accounts':[binding]}))
+        registry.chmod(0o600)
+        status, raw = s.ask(source_route, method='GET')
+        assert status == 200 and json.loads(raw) == {'state':'ok','registry':{
+            'version':2,'accounts':[dict(binding, sshHost=None, label=None, createdAt=None, createdBy=None)]}}
+        registry.write_text(json.dumps({'version':2,'accounts':[binding,binding]}))
+        assert s.ask(source_route, method='GET')[0] == 503
+
         key = 'a' * 64
         route = '/internal/collection-cache/account-usage-observations/' + key
         sample = {'version':1,'key':key,'identity':None,'primary':None,'saved':None,'nextAttempt':1234}
@@ -348,6 +395,19 @@ def collection_gates(agent, service):
                   'sample':{'profileId':profile, 'platform':'windows', 'windows':[]}}
         assert s.ask(remote_route, remote, method='PUT') == (200, '{"saved":true}')
         assert (s.root / 'claude-desktop-live-cache' / (profile + '.json')).read_text() == json.dumps(remote)
+        cache_route = '/internal/collection-provider-cache'
+        request = {'profileId': profile, 'manifestHash': remote['manifestHash']}
+        status, raw = s.ask(cache_route, request, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value': remote['sample']}
+        assert s.ask(cache_route, dict(request, manifestHash='a'*64), method='PUT') == (200, '{"value":null}')
+        binding = 'd' * 64
+        wallet = s.root / 'opencode-console-wallet-account.json'
+        account = 'plan-opencode-go-console-mac-123456abcdef'
+        wallet.write_text(json.dumps({'version':1,'binding':binding,'accountId':account}))
+        wallet.chmod(0o600)
+        status, raw = s.ask(cache_route, {'bindingHash':binding}, method='PUT')
+        assert status == 200 and json.loads(raw) == {'value':account}
+
     print('PASS H2 collection: switch, principal, read-only verbs, coalescing, row bytes and private cache writes')
 
 

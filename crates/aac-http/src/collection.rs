@@ -18,7 +18,12 @@ use tokio::{
     time::Instant,
 };
 
-const VERBS: [&str; 3] = ["quota-read", "signin-expiry", "failover-inventory"];
+const VERBS: [&str; 4] = [
+    "quota-read",
+    "signin-expiry",
+    "failover-inventory",
+    "failover-collect",
+];
 const MAX_PENDING: usize = 16;
 type Key = [u8; 32];
 enum Collected {
@@ -31,6 +36,7 @@ type Pending = watch::Sender<Option<Reply>>;
 pub(crate) struct Collection {
     pending: Mutex<HashMap<Key, Pending>>,
     timers: Semaphore,
+    helpers: Semaphore,
     stop: CancellationToken,
 }
 
@@ -39,6 +45,7 @@ impl Default for Collection {
         Self {
             pending: Mutex::default(),
             timers: Semaphore::new(4),
+            helpers: Semaphore::new(3),
             stop: CancellationToken::new(),
         }
     }
@@ -66,6 +73,27 @@ impl Collection {
 
     pub(crate) fn stop(&self) {
         self.stop.cancel();
+    }
+
+    async fn read_helper(
+        &self,
+        agents: &Agents,
+        computer: &crate::agent_transport::Selector,
+        args: &Value,
+        deadline: Instant,
+        cap: usize,
+    ) -> Reply {
+        let client = agents
+            .client(computer, deadline)
+            .await
+            .ok_or("unavailable")?;
+        let _permit = tokio::time::timeout_at(deadline, self.helpers.acquire())
+            .await
+            .map_err(|_| "busy")?
+            .map_err(|_| "busy")?;
+        let result =
+            crate::account_usage::helper::collect(client.computer(), args, deadline, cap).await?;
+        Ok(Arc::new(Collected::Value(result)))
     }
 
     pub(crate) async fn read(
@@ -139,7 +167,13 @@ impl Collection {
                 tokio::spawn(async move {
                     // A lost dashboard connection does not spawn a second provider read.
                     // The original pass still owns its slot and absolute deadline.
-                    let result = read_agent(&agents, computer, request, wire, deadline, cap).await;
+                    let result = if request.verb == "failover-collect" {
+                        collection
+                            .read_helper(&agents, &computer, &request.args, deadline, cap)
+                            .await
+                    } else {
+                        read_agent(&agents, computer, request, wire, deadline, cap).await
+                    };
                     let mut pending = collection.pending.lock().unwrap_or_else(|e| e.into_inner());
                     sender.send_replace(Some(result));
                     pending.remove(&key);
@@ -162,18 +196,26 @@ impl Collection {
 
 impl Call {
     fn collection_request(&self, verb: &str) -> Option<Request> {
+        let helper = verb == "failover-collect";
+        let (deadline, cap) = if helper {
+            (35_000, MAX_FRAME_BYTES * 2)
+        } else {
+            (15_000, MAX_FRAME_BYTES)
+        };
         if !VERBS.contains(&verb)
-            || !self.valid(verb)
-            || self.deadline_ms > 15_000
+            || !self.bounded(verb)
+            || self.deadline_ms > deadline
             || self.timeout_ms <= FRONT_DOOR_MARGIN_MS
             || self.max_bytes < 256
-            || self.max_bytes > MAX_FRAME_BYTES
+            || self.max_bytes > cap
         {
             return None;
         }
         let request = serde_json::from_str::<Request>(&self.wire(verb)).ok()?;
         request.validate().ok()?;
-        if verb == "failover-inventory" && request.args["action"] != "inventory" {
+        if (verb == "failover-inventory" && request.args["action"] != "inventory")
+            || (helper && request.args["action"] != "collect")
+        {
             return None;
         }
         Some(request)

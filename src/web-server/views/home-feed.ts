@@ -62,7 +62,7 @@ export class BootFeeds {
  * held moves past it ([`seen`]); both stay safe integers for centuries.
  */
 let last = 0;
-function nextGeneration(): string {
+export function nextGeneration(): string {
   last = Math.max(last + 1, Date.now() * 1000);
   return String(last);
 }
@@ -212,6 +212,18 @@ export function passFaithful(dashboard: AccountDashboard): boolean {
   return true;
 }
 
+/** Shared dashboard bytes and Home's date/sort facts, serialized once for a publication. */
+export function dashboardPublication(dashboard: AccountDashboard) {
+  if (!jsonExact(dashboard)) return null;
+  return {
+    data: JSON.stringify({ ...dashboard, updatedAt: '' }),
+    facts: JSON.stringify({
+      order: localeRanks(homeSortWords(dashboard)),
+      epochs: resetEpochs(dashboard),
+    }),
+  };
+}
+
 /** Shared generation for Accounts, trays and Home. */
 export function ensureDashboardFeed(
   service: RustService,
@@ -226,16 +238,16 @@ export function ensureDashboardFeed(
     feeds,
     `home-dashboard-${platform}-${secure ? 1 : 0}`,
     dashboardText,
-    () =>
-      jsonExact(dashboard)
-        ? {
-            data: dashboardText,
-            facts: JSON.stringify({
-              order: localeRanks(homeSortWords(dashboard)),
-              epochs: resetEpochs(dashboard),
-            }),
-          }
-        : null
+    () => {
+      if (!jsonExact(dashboard)) return null;
+      return {
+        data: dashboardText,
+        facts: JSON.stringify({
+          order: localeRanks(homeSortWords(dashboard)),
+          epochs: resetEpochs(dashboard),
+        }),
+      };
+    }
   );
 }
 

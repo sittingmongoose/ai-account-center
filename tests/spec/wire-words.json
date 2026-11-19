@@ -13,6 +13,7 @@
     "sources": [
       "src/web-server/middleware/dashboard-session-store.ts:read.state",
       "src/web-server/services/account-registry-mode.ts:state",
+      "src/web-server/services/account-registry-v2.ts:native.state",
       "src/web-server/services/account-registry-v2.ts:state",
       "src/web-server/services/account-visibility.ts:read.state",
       "src/web-server/services/additional-account-service.ts:state",
@@ -2872,6 +2873,7 @@
       "src/web-server/services/account-lifecycle-extras.ts:status",
       "src/web-server/services/account-registry-mode.ts:read.state",
       "src/web-server/services/account-registry-mode.ts:state",
+      "src/web-server/services/account-registry-v2.ts:native.state",
       "src/web-server/services/account-registry-v2.ts:read.state",
       "src/web-server/services/account-registry-v2.ts:state",
       "src/web-server/services/account-visibility.ts:current.state",

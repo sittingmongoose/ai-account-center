@@ -1,4 +1,6 @@
 import path from 'path';
+import { privateFileOwners } from '../../shared/private-files';
+import { readRustCollectionSources } from '../rust-service-transport';
 import { ConfigError, ValidationError } from '../../errors/error-types';
 import type { DashboardPlatform } from './account-dashboard-types';
 import { parseSourceManifest, readSourceManifestFile } from './account-usage-manifest';
@@ -203,6 +205,14 @@ export function accountRegistryPath(ccsDir: string): string {
 
 /** Absent, invalid (never read as empty) or the validated registry. */
 export async function readAccountRegistry(ccsDir: string): Promise<AccountRegistryRead> {
+  if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+    const native = await readRustCollectionSources(ccsDir);
+    if (record(native) && native.state === 'absent') return { state: 'absent' };
+    if (record(native) && native.state === 'ok') {
+      const registry = parseAccountRegistry(native.registry);
+      if (registry) return { state: 'ok', registry };
+    }
+  }
   const read = await readPrivateJsonFile(accountRegistryPath(ccsDir), MAX_REGISTRY_BYTES);
   if (read.state !== 'ok') return read;
   const registry = parseAccountRegistry(read.value);

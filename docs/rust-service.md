@@ -647,8 +647,26 @@ computer. The service uses the same L5 registry and pool.
   The selected owner is fixed for the service boot. Turning the group off
   returns writes to TypeScript using the same cache files.
 
-The front door still selects accounts, applies identity-bound failover and
-projects the dashboard for both consumers. Selected-account collection that
-requires an agent verb beyond the three M2 readers still uses its existing
-collector. Claude Desktop's persisted identity cooldown and retry arithmetic
-run in the same coordinator as before, independently of the Rust cache switch.
+- `GET /api/accounts/dashboard` uses the prepared generation that also serves
+  Home. The TypeScript front door preserves validation, session and device
+  authorization, no-store, ETag and the byte-equal fallback.
+- `AccountUsageCache` can be supplied to `serve_with_account_usage_cache` to
+  share generations with the native listener. Its `hub_dashboards` returns
+  the Mac and Windows neutral snapshots in that order. Its `store_observations`
+  maps dashboard windows to the existing history store's observations.
+  With the Rust store hosted, the TS boot job also uses that conversion.
+- `GET /internal/collection-sources` reads the private account registry v2.
+  `PUT /internal/collection-provider-cache` takes a Claude profile ID and
+  manifest hash or an OpenCode wallet binding hash.
+- `PUT /internal/collection-signins` settles host results and computes their
+  expiry TTL or merges the current Claude renewal report into those results.
+- `POST /internal/collect/failover-collect` can run a selected **remote**
+  provider helper over the same L5 pool, with at most three active helpers.
+  The release bundles the existing Python source. A refusal before launch
+  allows the TypeScript fallback. An indeterminate reply ends the attempt.
+
+The TypeScript collector still selects sources, applies identity-bound failover
+and publishes complete dashboard inputs. The standalone Rust sampler takes a
+source producer and publication callback. The full native source producer and
+sign-in host scheduler are separate steps. The existing Claude Desktop
+coordinator retains its wave 67 cooldown persistence and retry behavior.

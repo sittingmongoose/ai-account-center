@@ -29,6 +29,9 @@ pub(crate) enum Handler {
     Agent,
     Collect,
     CollectionTick,
+    CollectionSources,
+    SignInHealth,
+    ProviderCache,
     CollectionCache,
     AgentControl,
     Store,
@@ -53,6 +56,9 @@ impl Handler {
             "events" => Handler::Events,
             "collection-cache" => Handler::CollectionCache,
             "collect" => Handler::Collect,
+            "collection-provider-cache" => Handler::ProviderCache,
+            "collection-signins" => Handler::SignInHealth,
+            "collection-sources" => Handler::CollectionSources,
             "collection-tick" => Handler::CollectionTick,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
@@ -218,6 +224,9 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     Handler::Dashboard
                         | Handler::CollectionCache
                         | Handler::CollectionTick
+                        | Handler::CollectionSources
+                        | Handler::SignInHealth
+                        | Handler::ProviderCache
                         | Handler::Collect
                 ))
             || internal != roles.iter().all(|r| *r == Role::Service)
@@ -231,7 +240,11 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (method == axum::http::Method::PUT
                 && !matches!(
                     handler,
-                    Handler::Feed | Handler::CollectionCache | Handler::CollectionTick
+                    Handler::Feed
+                        | Handler::CollectionCache
+                        | Handler::CollectionTick
+                        | Handler::ProviderCache
+                        | Handler::SignInHealth
                 ))
             || rows
                 .iter()

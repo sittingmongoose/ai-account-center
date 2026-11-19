@@ -1,3 +1,5 @@
+import { privateFileOwners } from '../../shared/private-files';
+import { readRustProviderCache } from '../rust-service-transport';
 import { execFile, type ChildProcess } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
@@ -58,6 +60,10 @@ async function privateCacheDirectory(ccsDir: string): Promise<boolean> {
 /** Non-secret workspace pointer only; the common service owns verified identity and usage. */
 async function readBoundAccount(ccsDir: string, binding: string): Promise<string | null> {
   try {
+    if (privateFileOwners()['account-usage-observations'] === 'rust-service') {
+      const cached = await readRustProviderCache(ccsDir, { bindingHash: sourceHash(binding) });
+      if (cached === null || (typeof cached === 'string' && WALLET_ID.test(cached))) return cached;
+    }
     if (!(await privateCacheDirectory(ccsDir))) return null;
     const file = path.join(ccsDir, ACCOUNT_CACHE);
     const info = await fs.lstat(file);

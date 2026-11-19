@@ -217,6 +217,24 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/account_usage.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/account_usage/failover.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/account_usage/sources.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/agent_transport.rs",
       "kind": "internal",
       "evidence": [],

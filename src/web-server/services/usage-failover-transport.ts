@@ -1,4 +1,8 @@
 import { ValidationError, NetworkError } from '../../errors/error-types';
+import { randomBytes } from 'crypto';
+import { privateFileOwners } from '../../shared/private-files';
+import { getCcsDir } from '../../utils/config-manager';
+import { requestRustAgent } from '../rust-service-transport';
 import { createLogger } from '../../services/logging';
 import { runManagedCommand } from '../../utils/managed-process';
 import * as fs from 'fs';
@@ -13,6 +17,7 @@ import {
 } from './dashboard-hosts';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import {
+  agentTransport,
   collectAgentWithFallback,
   inventoryKind,
   runAgentVerb,
@@ -399,7 +404,8 @@ export async function runUsageHelper(
   );
   const python = async (): Promise<UsageHelperResponse> =>
     parseUsageHelperResponse(
-      await runPrivateUsageHelper(host, request, undefined, undefined, deadlineAt),
+      (request.action === 'collect' && (await dispatchRustHelper(host, request, deadlineAt))) ||
+        (await runPrivateUsageHelper(host, request, undefined, undefined, deadlineAt)),
       request.provider === 'claude' && request.action === 'collect'
         ? (fields) => logger.info('usage.claude.http', 'Claude quota HTTP read', { ...fields })
         : undefined
@@ -421,6 +427,36 @@ export async function runUsageHelper(
   )
     throw new ValidationError('Invalid usage response.');
   return response;
+}
+
+async function dispatchRustHelper(
+  host: UsageHost,
+  request: UsageHelperRequest,
+  deadlineAt: number
+): Promise<string | null | undefined> {
+  if (
+    !host.sshHost ||
+    privateFileOwners()['account-usage-observations'] !== 'rust-service' ||
+    agentTransport() !== 'on'
+  )
+    return null;
+
+  const remaining = Math.floor(deadlineAt - Date.now());
+  if (remaining < AGENT_MIN_MS) return null;
+  return requestRustAgent(
+    getCcsDir(),
+    'failover-collect',
+    {
+      computer: { platform: host.platform, sshHost: host.sshHost },
+      args: request,
+      deadlineMs: Math.min(35_000, remaining),
+      timeoutMs: remaining,
+      maxBytes: MAX_BYTES,
+      callId: randomBytes(16).toString('hex'),
+    },
+    undefined,
+    true
+  );
 }
 
 /** The keys a native inventory reply may carry: the existing public contract's. */
