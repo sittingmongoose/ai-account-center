@@ -119,7 +119,7 @@ if case != "empty":
             ("codex", "OpenAI.Codex", "ChatGPT.exe", "26.1113.36452.0"),
             ("claude", "Claude", "Claude.exe", "1.18233.1"),
         ):
-            installed = program_files / name
+            installed = program_files / "Ren\u00e9" / name
             if case != "degraded" or name == "claude":
                 put(installed / "app" / executable)
             packages[identity] = {"name": identity, "root": str(installed), "version": version, "publisher": "fixture"}
@@ -197,7 +197,8 @@ ConcretePath = type(pathlib.Path())
 
 
 def fixture_path_parts(parts):
-    if parts and isinstance(parts[0], str) and parts[0].startswith("/") and not parts[0].startswith("//"):
+    if (parts and isinstance(parts[0], str) and parts[0].startswith("/")
+            and not parts[0].startswith("//") and not ConcretePath(parts[0]).is_relative_to(root)):
         return (system / parts[0].lstrip("/"), *parts[1:])
     return parts
 
@@ -284,7 +285,6 @@ with contextlib.ExitStack() as stack:
     assert not unexpected, unexpected
 
 print(json.dumps({
-    "probes": probes, "packages": packages, "path": list(map(str, folders)), "arch": arch,
+    "root": str(root), "probes": probes, "packages": packages, "path": list(map(str, folders)), "arch": arch,
     "expected": json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":")),
 }, ensure_ascii=True))
-

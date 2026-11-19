@@ -23,13 +23,24 @@ impl Probe for FixtureProbe {
             .expect("fixture argument");
         let key = match name {
             "plutil" | "dpkg-query" => last,
-            "powershell.exe" if argv.iter().any(|item| item == "-Command") => {
+            "powershell.exe" if argv.iter().any(|item| item == "-EncodedCommand") => {
+                let bytes = STANDARD.decode(last).expect("base64 PowerShell script");
+                let text: Vec<_> = bytes
+                    .chunks_exact(2)
+                    .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+                    .collect();
+                let script = String::from_utf16(&text).expect("UTF-16 PowerShell script");
+                assert!(script.starts_with("[Console]::OutputEncoding="));
+                if !script.contains("Get-AppxPackage") {
+                    assert!(script.contains("cursor-agent.cmd") && script.contains("--version"));
+                    return fixture_reply(&self.replies["cursor"], program, argv);
+                }
                 return ProbeResult::Output(
                     self.packages
                         .as_object()
                         .expect("package table")
                         .iter()
-                        .find(|(name, _)| last.contains(&format!("'{name}'")))
+                        .find(|(name, _)| script.contains(&format!("'{name}'")))
                         .map(|(_, data)| data.to_string())
                         .unwrap_or_default(),
                 );
@@ -56,14 +67,18 @@ impl Probe for FixtureProbe {
                 .find(|(path, _)| Path::new(path) == Path::new(key))
                 .map(|(_, value)| value)
         });
-        match reply.unwrap_or(&Value::Null) {
-            Value::String(text) => ProbeResult::Output(text.clone()),
-            value if value["timeout"] == true => ProbeResult::Timeout,
-            value if value.is_object() => {
-                ProbeResult::Failed(value["failure"].as_str().unwrap_or_default().to_owned())
-            }
-            _ => panic!("unexpected probe {program} {argv:?}"),
+        fixture_reply(reply.unwrap_or(&Value::Null), program, argv)
+    }
+}
+
+fn fixture_reply(reply: &Value, program: &str, argv: &[OsString]) -> ProbeResult {
+    match reply {
+        Value::String(text) => ProbeResult::Output(text.clone()),
+        value if value["timeout"] == true => ProbeResult::Timeout,
+        value if value.is_object() => {
+            ProbeResult::Failed(value["failure"].as_str().unwrap_or_default().to_owned())
         }
+        _ => panic!("unexpected probe {program} {argv:?}"),
     }
 }
 
@@ -89,7 +104,7 @@ async fn parity(platform: Platform) {
             String::from_utf8_lossy(&result.stderr)
         );
         let data: Value = serde_json::from_slice(&result.stdout).expect("reference payload");
-        let root = root.path();
+        let root = Path::new(data["root"].as_str().expect("fixture root"));
         let host = Host {
             platform,
             home: root.join("home"),
@@ -145,6 +160,25 @@ async fn rejects_callers_selecting_a_path_or_foreign_platform() {
         json!({"action":"inventory","platform":null}),
         json!({"action":"inventory","platform":if cfg!(windows) { "mac" } else { "windows" }}),
     ] {
+        assert_eq!(
+            run(&invalid).await.expect_err("refused").cause,
+            Cause::Refused
+        );
+    }
+}
+
+#[tokio::test]
+async fn normal_update_and_cancel_requests_decline_to_python() {
+    for action in ["update", "cancel"] {
+        let value = json!({
+            "action": action, "platform": "windows",
+            "jobId": "cdc2d248a04f48a894be80bd777d866d"
+        });
+        assert_eq!(
+            run(&value).await.expect("fallback"),
+            crate::proof::fallback()
+        );
+        let invalid = json!({"action":action,"platform":"windows","jobId":"../../fixture"});
         assert_eq!(
             run(&invalid).await.expect_err("refused").cause,
             Cause::Refused

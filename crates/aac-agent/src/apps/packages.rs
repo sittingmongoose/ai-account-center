@@ -29,7 +29,9 @@ pub(super) async fn desktop(host: &Host, probe: &impl Probe, codex: bool) -> Opt
             } else {
                 ("Claude", "app/Claude.exe")
             };
-            let shell = host.powershell.as_deref()?;
+            let Some(shell) = host.powershell.as_deref() else {
+                return Some(Install::new("msix", None));
+            };
             let result = probe.run(shell, &ps_command(format!(
                 "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name '{identity}' | Sort-Object {{[Version]$_.Version}} -Descending | Select-Object -First 1; if($p){{@{{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation;family=$p.PackageFamilyName}}|ConvertTo-Json -Compress}}"
             )), 30).await;
@@ -38,7 +40,9 @@ pub(super) async fn desktop(host: &Host, probe: &impl Probe, codex: bool) -> Opt
             }
             let current = result
                 .output()
-                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .and_then(|text| {
+                    serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok()
+                })
                 .filter(|package| package["name"] == identity)
                 .filter(|package| {
                     package["root"]

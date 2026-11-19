@@ -91,6 +91,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/src/apps/tests.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-agent/src/failover.rs",
       "kind": "internal",
       "evidence": [],
@@ -129,6 +136,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/tests/apps_update.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-agent/tests/search_ancestors.rs",

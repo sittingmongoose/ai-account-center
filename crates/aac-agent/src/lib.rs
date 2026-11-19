@@ -130,11 +130,21 @@ pub async fn run(
                             }
                         }
                     };
+                    let work = async {
+                        #[cfg(feature = "parity-fixtures")]
+                        if request.verb == "apps"
+                            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+                            && let Some(fixture) = apps::update::Fixture::open()
+                        {
+                            return fixture.run(&request, &mut writer).await;
+                        }
+                        dispatch(&request).await
+                    };
                     tokio::select! {
                         biased;
                         result = control => result,
                         _ = tokio::time::sleep(std::time::Duration::from_millis(request.deadline_ms)) => Err(Failure::new(Cause::Timeout, "agent deadline exceeded")),
-                        result = dispatch(&request) => result,
+                        result = work => result,
                     }
                 }
             };
@@ -159,15 +169,24 @@ pub async fn run(
             1,
         ),
     };
-    let mut bytes = serde_json::to_vec(&event)
-        .map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
+    write_event(&mut writer, &event, cap).await?;
+    Ok(code)
+}
+
+pub(crate) async fn write_event(
+    writer: &mut (impl AsyncWrite + Unpin),
+    event: &Event,
+    cap: usize,
+) -> Result<(), Failure> {
+    let mut bytes =
+        serde_json::to_vec(event).map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
     if bytes.len() >= cap {
         return Err(Failure::new(Cause::OutputTooLarge, "event cap exceeded"));
     }
     bytes.push(b'\n');
     writer.write_all(&bytes).await?;
     writer.flush().await?;
-    Ok(code)
+    Ok(())
 }
 
 fn safe_id(id: &str) -> String {

@@ -2,9 +2,12 @@
 mod adapters;
 mod cli;
 mod packages;
+#[cfg(feature = "parity-fixtures")]
+pub(crate) mod update;
 
 use aac_core::{Cause, Failure};
 use aac_files::read::{self, Read, ReadPolicy};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
     ffi::{OsStr, OsString},
@@ -357,8 +360,12 @@ fn ps_quote(path: &Path) -> String {
 }
 
 fn ps_command(script: String) -> Vec<OsString> {
-    let mut argv = args(&["-NoProfile", "-NonInteractive", "-Command"]);
-    argv.push(script.into());
+    // Windows PowerShell 5.1 otherwise writes to a pipe using the OEM code page.
+    let script =
+        format!("[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding $false); {script}");
+    let utf16: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut argv = args(&["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+    argv.push(STANDARD.encode(utf16).into());
     argv
 }
 
@@ -415,16 +422,14 @@ pub(crate) async fn run(value: &Value) -> Result<Value, Failure> {
     let input = value
         .as_object()
         .ok_or_else(|| Failure::new(Cause::Refused, "invalid apps request"))?;
-    if input.len() != 2
-        || !matches!(
-            input.get("platform").and_then(Value::as_str),
-            Some("ubuntu" | "mac" | "windows")
-        )
-    {
+    if !matches!(
+        input.get("platform").and_then(Value::as_str),
+        Some("ubuntu" | "mac" | "windows")
+    ) {
         return Err(Failure::new(Cause::Refused, "invalid apps request"));
     }
     match input.get("action").and_then(Value::as_str) {
-        Some("inventory") => {
+        Some("inventory") if input.len() == 2 => {
             let Some(host) = Platform::native().and_then(Host::native) else {
                 return Ok(crate::proof::fallback());
             };
@@ -436,9 +441,24 @@ pub(crate) async fn run(value: &Value) -> Result<Value, Failure> {
             }
             Ok(inventory(&host, &NativeProbe).await)
         }
-        Some("update" | "cancel") => Ok(crate::proof::fallback()),
+        Some("update" | "cancel")
+            if input.len() == 3
+                && input
+                    .get("jobId")
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_job) =>
+        {
+            Ok(crate::proof::fallback())
+        }
         _ => Err(Failure::new(Cause::Refused, "invalid apps action")),
     }
+}
+
+fn valid_job(id: &str) -> bool {
+    id.len() == 32
+        && id
+            .bytes()
+            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
 }
 
 #[cfg(test)]
