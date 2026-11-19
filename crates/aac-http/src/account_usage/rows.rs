@@ -359,17 +359,20 @@ pub(super) fn pending_claude(profile: &Value, desktop: Desktop) -> Value {
     })
 }
 
+/// The row's own `needsReauth` flag, as the TS projection reads it: a parked
+/// profile, a rejected login (even with no sample), or a sample that reports it.
 pub(super) fn codex(
     name: &str,
     active: bool,
-    signed_out: bool,
+    needs_reauth: bool,
     candidate: Option<&Value>,
     sample: Option<&Value>,
+    note: Option<&aac_renewal::notes::CodexRenewalNote>,
 ) -> Value {
     let candidate = candidate.unwrap_or(&Value::Null);
     let sample = sample.unwrap_or(&Value::Null);
     let windows = windows(&sample["windows"], 256);
-    let status = if signed_out || sample["status"] == "needs_sign_in" {
+    let status = if needs_reauth {
         "needs_sign_in"
     } else if matches!(sample["status"].as_str(), Some("ok" | "cached")) && !windows.is_empty() {
         sample["status"].as_str().unwrap_or("unavailable")
@@ -384,14 +387,22 @@ pub(super) fn codex(
     if status == "cached" {
         row["cacheReason"] = json!("read_failed");
     }
-    row["message"] = match status {
-        "needs_sign_in" => json!("This saved Codex login needs to be renewed."),
-        "cached" => json!(
-            "The Codex usage read failed or was skipped; showing the last successful reading."
-        ),
-        "unavailable" => json!("Codex usage is temporarily unavailable."),
-        _ => Value::Null,
+    // The TS overlay: a renewal note replaces the message, and only OpenAI's
+    // rejection replaces the status. cacheReason keeps the measured status.
+    row["message"] = match note {
+        Some(note) => json!(note.message),
+        None => match status {
+            "needs_sign_in" => json!("This saved Codex login needs to be renewed."),
+            "cached" => json!(
+                "The Codex usage read failed or was skipped; showing the last successful reading."
+            ),
+            "unavailable" => json!("Codex usage is temporarily unavailable."),
+            _ => Value::Null,
+        },
     };
+    if let Some(word) = note.and_then(|note| note.status) {
+        row["status"] = json!(word);
+    }
     row["fetchedAt"] = json!(stamp(&sample["fetchedAt"]));
     row["sampledAt"] = json!(stamp(&sample["sampledAt"]));
     row["isActive"] = json!(active);

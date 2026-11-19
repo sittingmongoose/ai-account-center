@@ -42,3 +42,4 @@ tracing = "0.1"
 
 [dev-dependencies]
 tempfile.workspace = true
+aac-renewal = { workspace = true, features = ["parity-fixtures"] }
