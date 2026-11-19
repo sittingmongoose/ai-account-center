@@ -1,4 +1,5 @@
 //! Bind a guarded lifecycle launch to the dashboard's local Lane G journal.
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -45,6 +46,51 @@ fn job_id(id: &str) -> bool {
     })
 }
 
+fn ascii(value: &str, cap: usize) -> bool {
+    !value.is_empty() && value.len() <= cap && value.bytes().all(|b| (0x20..=0x7e).contains(&b))
+}
+
+impl Command {
+    fn bind(mut self, provider: &str) -> Option<Self> {
+        // The dashboard prepares the fixed Antigravity driver as a multiline
+        // Python argument. G admits printable argv only. Preserve the program
+        // and its argv without putting a staged credential on the wire.
+        if provider == "antigravity"
+            && self.file == "/usr/bin/python3"
+            && self.args.first().is_some_and(|arg| arg == "-c")
+            && self
+                .args
+                .get(1)
+                .is_some_and(|program| program.contains('\n'))
+        {
+            let program = STANDARD.encode(&self.args[1]);
+            let chunks: Vec<_> = program
+                .as_bytes()
+                .chunks(3500)
+                .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+                .collect();
+            let mut args = vec![
+                "-c".into(),
+                "import base64,sys; n=int(sys.argv[1]); body=base64.b64decode(''.join(sys.argv[2:2+n])); sys.argv=['-c',*sys.argv[2+n:]]; exec(compile(body,'<string>','exec'))".into(),
+                chunks.len().to_string(),
+            ];
+            args.extend(chunks);
+            args.extend(self.args.drain(2..));
+            self.args = args;
+        }
+        (Path::new(&self.file).is_absolute()
+            && ascii(&self.file, 1024)
+            && self.args.len() <= 64
+            && self.args.iter().all(|arg| ascii(arg, 4096))
+            && self.env.len() <= 64
+            && self
+                .env
+                .iter()
+                .all(|(key, value)| ascii(key, 128) && ascii(value, 8192)))
+        .then_some(self)
+    }
+}
+
 /// Build a Lane G start request after lifecycle admission and provider preparation.
 /// The command always starts on the dashboard host. Muse's prepared command
 /// reaches the configured Mac itself. Job metadata still says Mac.
@@ -76,28 +122,34 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
         }
         _ => false,
     };
+    let root = ccs.to_str()?;
     if !ccs.is_absolute()
+        || !ascii(root, 1024)
         || !provider_matches
         || !account_matches
         || !job_id(&start.job_id)
         || start.front_door_pid == 0
         || !start.profile_name.as_deref().is_some_and(identifier)
-        || !(1..=900_000).contains(&start.timeout_ms)
+        || !(100..=900_000).contains(&start.timeout_ms)
         || start.allowed_origins.is_empty()
         || start.allowed_origins.len() > 8
-        || !Path::new(&start.command.file).is_absolute()
-        || start.command.args.len() > 64
-        || start.command.env.len() > 64
+        || !start.allowed_origins.iter().all(|origin| {
+            ascii(origin, 256)
+                && origin
+                    .strip_prefix("https://")
+                    .is_some_and(|host| !host.contains('/'))
+        })
     {
         return None;
     }
+    let command = start.command.bind(&start.provider)?;
     Some((
         start.timeout_ms + 60_000,
         json!({
             "action": "start",
             "jobId": start.job_id,
             "frontDoorPid": start.front_door_pid,
-            "ccs": ccs.to_str()?,
+            "ccs": root,
             "provider": start.provider,
             "kind": start.kind,
             "mode": start.mode,
@@ -107,10 +159,10 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
             "allowedOrigins": start.allowed_origins,
             "timeoutMs": start.timeout_ms,
             "command": {
-                "file": start.command.file,
-                "args": start.command.args,
-                "env": start.command.env,
-                "pty": start.command.pty,
+                "file": command.file,
+                "args": command.args,
+                "env": command.env,
+                "pty": command.pty,
             }
         }),
     ))
@@ -119,6 +171,26 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_driver_reaches_the_agent_as_printable_argv_without_altering_the_program() {
+        let program = "import sys\nassert sys.argv[1] == 'fixture'\n";
+        let command = Command {
+            file: "/usr/bin/python3".into(),
+            args: vec!["-c".into(), program.into(), "fixture".into()],
+            env: Default::default(),
+            pty: false,
+        }
+        .bind("antigravity")
+        .expect("driver fits the agent argv");
+        assert!(command.args.iter().all(|arg| ascii(arg, 4096)));
+        assert_eq!(command.args[2], "1");
+        assert_eq!(
+            STANDARD.decode(&command.args[3]).expect("encoded driver"),
+            program.as_bytes()
+        );
+        assert_eq!(command.args[4], "fixture");
+    }
 
     #[test]
     fn lifecycle_uses_one_boot_scoped_journal_even_for_a_muse_job() {
