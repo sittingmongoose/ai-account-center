@@ -46,33 +46,47 @@ impl Producer {
     pub(super) async fn claude_rows(
         &self,
         profiles: &[Value],
+        private_profiles: &[Value],
         history: &[Option<Value>],
         force: bool,
     ) -> Vec<[Option<Value>; 2]> {
-        stream::iter(profiles.iter().cloned().zip(history.iter().cloned()))
-            .map(move |(profile, history)| async move {
-                self.claude_pair(&profile, history.as_ref(), force).await
-            })
-            .buffered(3)
-            .collect()
-            .await
+        // Both lists come from the same validated manifest snapshot and keep its row order.
+        // Check identity at the join before using a private launcher for a public account.
+        stream::iter(
+            profiles
+                .iter()
+                .cloned()
+                .zip(private_profiles.iter().cloned())
+                .zip(history.iter().cloned()),
+        )
+        .map(move |((display, private), history)| async move {
+            if display["id"] != private["id"] || display["email"] != private["email"] {
+                return [None, None];
+            }
+            self.claude_pair(&display, &private, history.as_ref(), force)
+                .await
+        })
+        .buffered(3)
+        .collect()
+        .await
     }
 
     async fn claude_pair(
         &self,
-        profile: &Value,
+        display: &Value,
+        private: &Value,
         history: Option<&Value>,
         force: bool,
     ) -> [Option<Value>; 2] {
-        let Some(target) = super::failover::claude_target(&self.root, profile) else {
+        let Some(target) = super::failover::claude_target(&self.root, private) else {
             return [None, None];
         };
         // The TS dashboard probed the Mac launcher before publishing the rows; a profile
         // without a Mac launcher answers unknown and never names Mac.
-        let mac_signed_out = self.mac_signed_out(profile, force).await.unwrap_or(false);
+        let mac_signed_out = self.mac_signed_out(private, force).await.unwrap_or(false);
         let mut out: [Option<Value>; 2] = [None, None];
         for (index, desktop) in [Desktop::Mac, Desktop::Windows].into_iter().enumerate() {
-            let Some(template) = rows::claude(profile, desktop, None, history) else {
+            let Some(template) = rows::claude(display, desktop, None, history) else {
                 continue;
             };
             // The first call in a generation reads; the other desktop's call projects the
@@ -147,18 +161,57 @@ mod tests {
         aac_num::ecma::to_iso_string(now).unwrap()
     }
 
-    /// A profile whose Windows launcher the coordinator already has a verified reading for:
-    /// no transport is reachable, so the row can only come from the coordinator's state.
+    fn fixture_file(root: &std::path::Path, name: &str, value: Value) {
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+            .open(root.join(name))
+            .unwrap()
+            .write_all(value.to_string().as_bytes())
+            .unwrap();
+    }
+
+    /// Start at the manifest and use an observation already keyed to its private launchers.
+    /// A fake Mac probe also verifies that the same profile supplies the private SSH alias.
     #[tokio::test]
-    async fn the_claude_row_is_the_coordinator_projection_of_the_saved_reading() {
+    async fn the_claude_manifest_collects_the_saved_windows_quota_and_mac_sign_in() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        let producer = Producer::new(root.clone(), owners());
+        fixture_file(&root, "config.yaml", json!({"agentTransport":"off"}));
+        fixture_file(
+            &root,
+            "account-usage-accounts.json",
+            json!({"version":2,"accounts":[]}),
+        );
+        let mut producer = Producer::new(root.clone(), owners()).with_home(None);
+        producer.mac_session_fixture = Some(|alias, launcher| {
+            assert_eq!(alias, "jared-mac");
+            assert_eq!(
+                *launcher,
+                json!({"launcherName":"Claude Mac","profilePath":"/Users/fixture/Claude","sshHost":"jared-mac"})
+            );
+            json!({"signedIn":false})
+        });
         let profile = json!({
-            "email":"owner@example.com","id":"livia","canOpen":true,
+            "email":"owner@example.com","id":"livia",
+            "mac":{"launcherName":"Claude Mac","launcherPath":"/Applications/Claude.app",
+                   "profilePath":"/Users/fixture/Claude","sshHost":"jared-mac"},
             "windows":{"launcherName":"Claude","profilePath":"C:\\Users\\x\\AppData\\Local\\Claude",
                        "isDefault":true,"sshHost":"jared-windows"}
         });
+        fixture_file(
+            &root,
+            "claude-desktop-profiles.json",
+            json!({"version":1,"profiles":[profile]}),
+        );
+        let public = crate::profile_reads::desktop_profiles(&root).unwrap();
+        assert!(public["profiles"][0]["windows"].get("sshHost").is_none());
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -191,22 +244,28 @@ mod tests {
             &aac_views::js_json::write(&observation),
         )
         .unwrap();
-        let rows = producer.claude_rows(&[profile], &[None], false).await;
-        let windows = rows[0][1].as_ref().unwrap();
-        assert_eq!(windows["source"], "Verified quota on Windows");
-        assert_eq!(windows["status"], "ok");
-        assert_eq!(windows["plan"], "Max");
-        assert_eq!(windows["windows"][0]["usedPercent"], 42.0);
-        assert_eq!(windows["platform"], "windows");
-        assert_eq!(
-            windows["capabilities"]["claudePlatforms"],
-            json!(["windows"])
-        );
-        // The Mac view keeps its own platform and names where the reading came from, as the
-        // TS dashboard's mac row did for a Windows-collected profile.
-        let mac = rows[0][0].as_ref().unwrap();
-        assert_eq!(mac["platform"], "mac");
-        assert_eq!(mac["host"], "windows");
-        assert_eq!(mac["source"], "Verified quota on Windows");
+        let samples = producer.collect(Default::default()).await.unwrap();
+        for desktop in [Desktop::Mac, Desktop::Windows] {
+            let sample = samples
+                .iter()
+                .find(|sample| sample.desktop == desktop)
+                .unwrap();
+            let row = sample.dashboard["accounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == "claude:livia")
+                .unwrap();
+            assert_eq!(row["source"], "Verified quota on Windows");
+            assert_eq!(row["status"], "ok");
+            assert_eq!(row["plan"], "Max");
+            assert_eq!(row["windows"][0]["usedPercent"], 42.0);
+            assert_eq!(row["signInNeeded"], json!(["mac"]));
+            assert_eq!(
+                row["capabilities"]["claudePlatforms"],
+                json!(["mac", "windows"])
+            );
+            assert!(!row.to_string().contains("jared-"));
+        }
     }
 }

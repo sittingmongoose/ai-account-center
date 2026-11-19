@@ -25,6 +25,9 @@ pub(super) struct Answer {
 /// The producer's per-profile cache of the Mac launcher's session state.
 pub(super) type SignInCache = Arc<Mutex<Vec<(String, Answer)>>>;
 
+#[cfg(test)]
+pub(super) type SessionFixture = fn(&str, &Value) -> Value;
+
 impl Producer {
     /// The TS `getClaudeMacSignInState`: `Some(true)` signed out, `Some(false)` signed in,
     /// `None` unknown. A failed check is unknown and never a sign-out.
@@ -56,21 +59,7 @@ impl Producer {
                 }
             }
         }
-        let reply = self
-            .agents
-            .call_value(
-                "claude-host",
-                Selector::usage("mac", Some(alias)),
-                json!({"host": "mac", "op": "session", "launcher": {
-                    "launcherName": mac["launcherName"],
-                    "profilePath": path,
-                    "sshHost": alias,
-                }}),
-                25_000,
-                30_000,
-                65_536,
-            )
-            .await;
+        let reply = self.probe_mac_session(alias, launcher).await;
         let signed_out = reply.as_ref().and_then(value_for_signed_in)?;
         let entry = Answer {
             at: now,
@@ -88,6 +77,22 @@ impl Producer {
             cache.remove(0);
         }
         Some(signed_out)
+    }
+    async fn probe_mac_session(&self, alias: &str, launcher: Value) -> Option<Value> {
+        #[cfg(test)]
+        if let Some(probe) = self.mac_session_fixture {
+            return Some(probe(alias, &launcher));
+        }
+        self.agents
+            .call_value(
+                "claude-host",
+                Selector::usage("mac", Some(alias)),
+                json!({"host": "mac", "op": "session", "launcher": launcher}),
+                25_000,
+                30_000,
+                65_536,
+            )
+            .await
     }
 }
 
