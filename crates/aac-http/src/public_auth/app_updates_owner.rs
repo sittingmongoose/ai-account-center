@@ -88,6 +88,7 @@ impl Owner {
         if !matches!(access.principal, DashboardPrincipal::Browser { .. }) {
             return super::plain(401, "Authentication required");
         }
+        let requested = request.uri().clone();
         if !matches!(operation, Operation::Status) {
             if !access.origin_present || !access.same_origin {
                 return super::plain(403, "App updates require the dashboard origin.");
@@ -105,8 +106,7 @@ impl Owner {
         }
         #[cfg(unix)]
         {
-            let path = request.uri().path().to_owned();
-            let _ = &request;
+            let path = requested.path().to_owned();
             let method = match operation {
                 Operation::Status => "GET",
                 Operation::Start | Operation::Cancel => "POST",

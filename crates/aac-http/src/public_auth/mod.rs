@@ -128,7 +128,6 @@ impl DashboardAccess {
                 self.session_id.as_deref().unwrap_or("dashboard"),
             ),
             DashboardPrincipal::Device { id, .. } => ("device", "device", id.as_str()),
-            DashboardPrincipal::Hub => ("hub", "hub", "hub"),
             DashboardPrincipal::Anonymous => ("session", "admin", "dashboard"),
         };
         json!({"kind":kind,"id":id,"role":role}).to_string()
