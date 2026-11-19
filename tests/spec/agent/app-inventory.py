@@ -207,6 +207,8 @@ def fixture_path_parts(parts):
 
 class FixturePath(ConcretePath):
     def __new__(cls, *parts):
+        if sys.version_info >= (3, 12):
+            return object.__new__(cls)
         return super().__new__(cls, *fixture_path_parts(parts))
 
     def __init__(self, *parts):
@@ -268,6 +270,16 @@ env = {
     "PATH": os.pathsep.join(map(str, folders)), "LOCALAPPDATA": str(local), "APPDATA": str(roaming),
     "ProgramFiles": str(program_files),
 }
+def checked_detect(app, host):
+    try:
+        return real_detect(app, host)
+    except Exception as error:
+        unexpected.append((app, type(error).__name__, str(error)))
+        raise
+
+
+real_detect = updates._detect_one
+
 # Deny process and network use even if a new probe bypasses the fakes.
 with contextlib.ExitStack() as stack:
     def patch(*args, **kwargs):
@@ -275,6 +287,7 @@ with contextlib.ExitStack() as stack:
 
     stack.enter_context(mock.patch.dict(os.environ, env, clear=True))
     patch(pathlib, "Path", FixturePath)
+    patch(updates, "_detect_one", checked_detect)
     patch(updates.shutil, "which", which)
     patch(acp.platform, "machine", lambda: arch)
     patch(zcode, "MAC_PATH", system / "Applications/ZCode.app")
