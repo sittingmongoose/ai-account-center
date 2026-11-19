@@ -18,6 +18,7 @@ aac-core = { path = "crates/aac-core" }
 aac-protocol = { path = "crates/aac-protocol" }
 aac-providers = { path = "crates/aac-providers" }
 aac-files = { path = "crates/aac-files" }
+aac-log = { path = "crates/aac-log" }
 aac-num = { path = "crates/aac-num" }
 aac-config = { path = "crates/aac-config" }
 aac-transport = { path = "crates/aac-transport" }

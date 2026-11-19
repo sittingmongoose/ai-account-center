@@ -89,6 +89,7 @@ dependencies = [
  "aac-core",
  "aac-diag",
  "aac-files",
+ "aac-log",
  "aac-protocol",
  "aac-providers",
  "aac-status",
@@ -106,6 +107,20 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "aac-log"
+version = "0.1.0"
+dependencies = [
+ "aac-files",
+ "aac-num",
+ "getrandom 0.2.17",
+ "regex",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
  "tracing",
 ]
 

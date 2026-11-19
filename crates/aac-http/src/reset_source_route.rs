@@ -22,6 +22,25 @@ use std::{
 
 type Res<T> = Result<T, &'static str>;
 
+/// One private or package file through the shared hardened read (L2): never a link leaf, at
+/// most `cap` bytes. `Ok(None)` is a missing file; any other refusal is an error.
+fn read_file(path: &Path, cap: u64) -> Result<Option<Vec<u8>>, ()> {
+    use aac_files::read::{Read, ReadPolicy, read};
+    let mut outcome = Read::Unproved;
+    // A file replaced between its check and its open is read again (as the auth reader does).
+    for _ in 0..3 {
+        outcome = read(path, &ReadPolicy::capped(cap));
+        if !matches!(outcome, Read::Unproved) {
+            break;
+        }
+    }
+    match outcome {
+        Read::Bytes(bytes, _) => Ok(Some(bytes)),
+        Read::Absent => Ok(None),
+        _ => Err(()),
+    }
+}
+
 /// `usageHelperProcessTimeoutMs('inventory')`: the claim runs under the inventory request.
 const CLAIM_TIMEOUT: Duration = Duration::from_secs(12);
 const BOOTSTRAP: &str = "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));sys.stdin=io.StringIO(json.dumps(_p['request']));exec(compile(_p['helperSource'],'managed-usage','exec'))";
@@ -132,11 +151,8 @@ pub(crate) fn resolve(ctx: &SourceContext, account: &str) -> Res<Target> {
 /// them for the adapter: a registered profile with a decodable `chatgpt_account_id`.
 fn codex_profile(ccs: &Path, name: &str) -> Res<(String, String)> {
     let unavailable = "credential-host-unavailable";
-    let registry = match std::fs::read(ccs.join("codex-profiles.yaml")) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return Err("registry-unavailable"),
-    };
+    let registry = read_file(&ccs.join("codex-profiles.yaml"), 4 * 1024 * 1024)
+        .map_err(|()| "registry-unavailable")?;
     let profiles = match registry {
         None => Map::new(),
         Some(bytes) => codex_registry_profiles(&bytes).ok_or("registry-unavailable")?,
@@ -201,7 +217,7 @@ fn valid_codex_name(name: &str) -> bool {
 /// `decodeAccountIdentity(...).account_id`: the unverified id_token payload's
 /// `https://api.openai.com/auth.chatgpt_account_id`, when the token is a well-formed JWT.
 fn codex_account_id(auth: &Path) -> Option<String> {
-    let raw = std::fs::read(auth).ok()?;
+    let raw = read_file(auth, 1024 * 1024).ok()??;
     let parsed: Value = serde_json::from_slice(&raw).ok()?;
     let token = parsed.get("tokens")?.get("id_token")?.as_str()?;
     let parts: Vec<&str> = token.split('.').collect();
@@ -242,10 +258,11 @@ fn codex_account_id(auth: &Path) -> Option<String> {
 fn claude_profile(ccs: &Path, account: &str) -> Res<Target> {
     let invalid = "inventory-invalid";
     let unavailable = "credential-host-unavailable";
-    let text = match std::fs::read(ccs.join("claude-desktop-profiles.json")) {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(unavailable),
-        Err(_) => return Err(invalid),
+    // Over 4 MiB is over the TS limit of 1 Mi UTF-16 units whatever the characters are.
+    let text = match read_file(&ccs.join("claude-desktop-profiles.json"), 4 * 1024 * 1024) {
+        Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+        Ok(None) => return Err(unavailable),
+        Err(()) => return Err(invalid),
     };
     if js_length(&text) > 1024 * 1024 {
         return Err(invalid);
@@ -757,7 +774,7 @@ fn truthy(value: &Value) -> bool {
 
 /// `loadUnifiedConfig()`: the raw YAML document, or null when absent or unreadable.
 fn raw_config(ccs: &Path) -> Option<Value> {
-    let bytes = std::fs::read(ccs.join("config.yaml")).ok()?;
+    let bytes = read_file(&ccs.join("config.yaml"), 4 * 1024 * 1024).ok()??;
     let yaml: serde_yaml::Value = serde_yaml::from_slice(&bytes).ok()?;
     serde_json::to_value(yaml).ok().filter(Value::is_object)
 }
@@ -808,8 +825,14 @@ pub(crate) fn windows_helper_command() -> String {
 
 /// The adapter's `source`: the packaged Claude helper wrapped so it runs `reset_host(request)`.
 fn claude_helper_source(ctx: &SourceContext) -> Res<String> {
-    let script = std::fs::read_to_string(ctx.package.join("scripts/account-usage/claude_usage.py"))
-        .map_err(|_| "credential-host-unavailable")?;
+    let bytes = read_file(
+        &ctx.package.join("scripts/account-usage/claude_usage.py"),
+        2 * 1024 * 1024,
+    )
+    .ok()
+    .flatten()
+    .ok_or("credential-host-unavailable")?;
+    let script = String::from_utf8(bytes).map_err(|_| "credential-host-unavailable")?;
     let literal = serde_json::to_string(&serde_json::to_string(&script).map_err(|_| "shape")?)
         .map_err(|_| "shape")?;
     Ok([

@@ -365,6 +365,25 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-log/src/redact.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-log/tests/storage.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-log/tests/vectors.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-num/src/big.rs",
       "kind": "internal",
       "evidence": [],

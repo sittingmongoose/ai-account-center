@@ -100,6 +100,8 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  // G21: the TS log's outputs that the Rust aac-log crate reproduces.
+  ['bun', ['tests/spec/log-vectors.ts']],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   ...[
     'read-view-parity',

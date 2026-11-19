@@ -69,6 +69,11 @@ async fn run() {
         std::process::exit(1);
     };
     line.clear();
+    // G21: the service's tracing events become entries of the dashboard log under its root.
+    aac_log::install(
+        std::sync::Arc::new(aac_log::Log::new(boot.ccs_dir.clone())),
+        "rust-service",
+    );
     // Parent death closes the pipe. TS also sends SIGTERM on normal cleanup.
     let shutdown = async move {
         let mut byte = [0u8; 1];

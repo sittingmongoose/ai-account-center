@@ -320,6 +320,29 @@ try {
         assert.equal(service!.stats.fallbacks, 0);
       }
       results[`${name}.${mode}`] = run;
+      if (mode === 'rust' && oldClient) {
+        // G21: the service's own tracing event (the capability downgrade) is a log entry under
+        // its root, in the dashboard log's format.
+        const entries = lines(path.join(root, 'logs', 'current.jsonl')) as any[];
+        const downgrade = entries.find(
+          (e) =>
+            e.source === 'rust-service' &&
+            e.level === 'warn' &&
+            e.context?.option === 'KnownHostsCommand'
+        );
+        assert.ok(downgrade, 'the Rust service logged the SSH downgrade');
+        assert.deepEqual(Object.keys(downgrade), [
+          'id',
+          'timestamp',
+          'level',
+          'source',
+          'event',
+          'message',
+          'processId',
+          'runId',
+          'context',
+        ]);
+      }
       // Exactly one provider send per claim, in both modes.
       assert.equal(run.codexSends, 1, `${name}.${mode} codex sends`);
       assert.equal(run.claudeClaims.length, 1, `${name}.${mode} claude claims`);
