@@ -13,8 +13,6 @@ pub(super) struct Routes {
     host: Weak<OwnerHost>,
     #[cfg(unix)]
     private: Option<super::service_link::ServiceLink>,
-    #[cfg(unix)]
-    private_collection: bool,
 }
 
 impl Routes {
@@ -23,8 +21,6 @@ impl Routes {
             host: Arc::downgrade(host),
             #[cfg(unix)]
             private: None,
-            #[cfg(unix)]
-            private_collection: false,
         }
     }
 
@@ -32,9 +28,7 @@ impl Routes {
     pub(super) fn with_private(
         mut self,
         private: Option<super::service_link::ServiceLink>,
-        collection_enabled: bool,
     ) -> Self {
-        self.private_collection = private.is_some() && collection_enabled;
         self.private = private;
         self
     }
@@ -67,7 +61,7 @@ impl Routes {
 
     pub(super) fn owns(&self, request: &Request) -> bool {
         #[cfg(unix)]
-        if self.private_collection
+        if self.private.is_some()
             && NativeOwners::owns_collection(request.method(), request.uri().path())
         {
             return true;

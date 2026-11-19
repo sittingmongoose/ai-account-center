@@ -375,6 +375,10 @@ async fn worker_serves_disabled_collection(env_override: bool) {
     .await
     .unwrap();
 
+    assert!(
+        aac_files::OwnedStore::claim_collection(&root).is_err(),
+        "a native sampler must wait for the worker's collection lease"
+    );
     let client = Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(5))
@@ -439,4 +443,5 @@ async fn worker_serves_disabled_collection(env_override: bool) {
         json!({"refreshIntervalSeconds":60})
     );
     child.kill().await.unwrap();
+    assert!(aac_files::OwnedStore::claim_collection(&root).is_ok());
 }
