@@ -70,6 +70,13 @@ export interface RustRequestOptions {
   deadlineMs?: number;
 }
 
+/**
+ * The service socket's read buffer. A fed view reply is up to the 2 MiB view cap; the default 64 KiB splits a
+ * 200 KB Home answer into several chunks, each its own pooled Buffer. One larger buffer keeps the common reply
+ * in one chunk (less allocation and copying per request, on every read route).
+ */
+const RUST_SOCKET_HWM = 256 * 1024;
+
 /** One keep-alive agent per boot (L1): the hop costs a request, not a connection. */
 export function rustAgent(): http.Agent {
   return new http.Agent({ keepAlive: true, maxSockets: 16, maxFreeSockets: 16 });
@@ -109,10 +116,13 @@ function once(
   options: RustRequestOptions = {}
 ): Promise<RustReply> {
   return new Promise((resolve, reject) => {
-    const request = http.request({
+    // highWaterMark reaches the socket through the agent's net.createConnection (Node forwards unknown
+    // request options); the typings do not name it on RequestOptions.
+    const requestOptions: http.RequestOptions & { highWaterMark: number } = {
       socketPath: connection.socketPath,
       path: route,
       method,
+      highWaterMark: RUST_SOCKET_HWM,
       agent: connection.agent ?? false,
       headers: {
         ...options.headers,
@@ -122,7 +132,8 @@ function once(
           ? {}
           : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }),
       },
-    });
+    };
+    const request = http.request(requestOptions);
     active.add(request);
     const timer = setTimeout(
       () => request.destroy(new RustTransportError('deadline', 'Rust service deadline')),
@@ -155,7 +166,7 @@ function once(
         const build = response.headers['x-aac-service-build'];
         const etag = response.headers.etag;
         const view = response.headers['x-aac-view'];
-        const bytes = Buffer.concat(chunks);
+        const bytes = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
         try {
           resolve({
             status: response.statusCode ?? 503,

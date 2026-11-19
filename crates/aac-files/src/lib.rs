@@ -348,7 +348,7 @@ impl OwnedStore {
             path: file,
             max_size,
             parents: row.parents,
-            mode: if row.mode == 0o644 { 0o644 } else { 0o600 },
+            mode: if row.mode == "0644" { 0o644 } else { 0o600 },
             _lock: StoreLock::Kernel { _file: lock },
         })
     }

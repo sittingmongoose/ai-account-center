@@ -8,6 +8,7 @@
 * **fork cleanup:** Removed the unused Claude session launcher, shared Claude-config linker, old profile registry, web-search/image hooks and local bar server mode. `ai-account-center bar` opens the paired native app; start `ai-account-center dashboard` or `ccs config` separately. Existing private files and retired-bin guidance stay. CLIProxy code, tests and paused-account handling are held for central-logins research.
 * **configuration:** Ten retired launcher sections are now ignored and preserved, with no read-time rewrite or new defaults. See [migration notes](docs/user-guide.md#existing-ccs-installations).
 * **maintenance:** Analytics tool types share one registry, and [approval tokens](docs/approval-tokens.md) names the existing store to use for new guarded actions. Existing approval behavior stays unchanged.
+* **dashboard (optional Rust service):** With `rustService.mode: on`, Home is now built by the Rust service by default: `groups.home` unset means on, and one read of `/api/views/home` answers the dashboard, the Claude profiles, the Antigravity copy and the finished view. `groups.home: off` (or `AAC_RUST_GROUP_HOME=off`) restores the previous path, and any answer the service cannot prove equal still falls back to TypeScript. The service itself stays off by default, so installs without it change nothing. See [the Rust service guide](docs/rust-service.md).
 
 ### Added
 

@@ -45,7 +45,7 @@ export interface UnifiedConfig {
   agentTransportSsh?: { identityFile?: string; knownHostsFile?: string };
   /**
    * The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. `groups.home`
-   * (R1, `AAC_RUST_GROUP_HOME` overrides): Home is built from fed generations when the mode is on; `groups.status`
+   * (R1, `AAC_RUST_GROUP_HOME` overrides): Home is built from fed generations when the mode is on (default-ready when unset); `groups.status`
    * (R2, `AAC_RUST_GROUP_STATUS` overrides): the same for Status; `groups.analytics` (R5/A2,
    * `AAC_RUST_GROUP_ANALYTICS` overrides): Analytics history and activity are read from the hosted store and
    * composed in Rust, with the TS computation as the fallback. `store` (R3, `AAC_RUST_STORE` overrides)

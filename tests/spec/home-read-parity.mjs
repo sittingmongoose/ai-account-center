@@ -69,15 +69,19 @@ for (const dir of [ccs, todayCcs])
   fs.writeFileSync(path.join(dir, 'claude-desktop-profiles.json'), JSON.stringify(MANIFEST), { mode: 0o600 });
 
 if (args.includes('--ts-only')) {
-  // Off: the Home group is off by default, and with the service off nothing is fed.
+  // Off mode: the Home group is default-ready (on when unset), but the service mode is the ceiling: with the
+  // service off nothing is fed and the route is not offered.
   const req = createRequire(import.meta.url);
   const { rustGroupOn } = req(path.join(dist, 'web-server/rust-service-groups.js'));
   const { RustService } = req(path.join(dist, 'web-server/rust-service.js'));
-  const { homeFedService } = req(path.join(dist, 'web-server/views/offered-views.js'));
-  // The fixture home has no config.yaml: absent is off.
-  assert.equal(rustGroupOn('home', {}), false, 'the Home group is off by default');
+  const { homeFedService, homeViewService } = req(path.join(dist, 'web-server/views/offered-views.js'));
+  // The fixture home has no config.yaml: absent takes the default; an explicit off is off.
+  assert.equal(rustGroupOn('home', {}), true, 'the Home group is default-ready (on when unset)');
+  assert.equal(rustGroupOn('home', { AAC_RUST_GROUP_HOME: 'off' }), false);
+  assert.equal(rustGroupOn('status', {}), false, 'the Status group stays off by default');
   assert.equal(homeFedService({ locals: { rustService: new RustService('off') } }), null);
-  console.log('home-read-parity: off mode feeds nothing (the Home group is off by default)');
+  assert.equal(homeViewService({ locals: { rustService: new RustService('off') } }), null);
+  console.log('home-read-parity: off mode feeds nothing (the service mode is the ceiling)');
   fs.rmSync(scratch, { recursive: true, force: true });
   process.exit(0);
 }
