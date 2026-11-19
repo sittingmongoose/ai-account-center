@@ -181,33 +181,36 @@ fn damaged_bytes_are_refused_with_the_shared_reasons() {
 }
 
 #[test]
-fn secrets_are_type_scripts_to_check_this_module_reads_what_it_is_given() {
-    // There is exactly one secret filter, the TypeScript one (`jsonFromBytes` in
-    // schema-helpers.ts); the reader runs it on every report before these bytes reach
-    // `parseStatus` (owner decision 2026-11-09). This module keeps no copy of it, so a
-    // token-shaped fixture in a field the projection ignores parses like any other text —
-    // the reader's own test suite holds the refusal. Joined at runtime so this source file
-    // holds no whole token.
+fn there_is_exactly_one_secret_filter_and_it_is_the_rust_one() {
+    // Owner, 2026-11-19 (supersedes 2026-11-09): exactly one secret filter, the Rust one
+    // (`secret_policy` + `typed_secrets`). TypeScript keeps no copy and calls it through the
+    // native module until the cut; the owned share readers call it directly. The NAPI status
+    // parse runs after that check, so it does not repeat it. Joined at runtime so this source
+    // file holds no whole token.
     let api_key = ["sk", "ant", &"a".repeat(24)].join("-");
     let mut doc = valid();
     doc["summary"] = json!("Working.");
     doc["note"] = json!(format!("Use {api_key} for now."));
-    let parsed = parse(&doc).unwrap();
-    assert_eq!(parsed.doc.summary, "Working.");
-}
-
-#[test]
-fn the_owned_share_read_is_the_one_filter_where_no_typescript_reader_runs() {
-    // R4: in the service, the owned readers read the share themselves and no TypeScript
-    // `jsonFromBytes` runs, so `share_json_from_bytes` applies the one packaged policy in its
-    // place (same fixed words). The NAPI parse above stays filter-free: one filter per read.
-    let api_key = ["sk", "ant", &"a".repeat(24)].join("-");
-    let mut doc = valid();
-    doc["note"] = json!(format!("Use {api_key} for now."));
     let bytes = serde_json::to_vec(&doc).unwrap();
+    // The one filter refuses it, on both read paths' entry points.
+    let source = std::str::from_utf8(&bytes).unwrap();
+    assert_eq!(aac_status::secret_policy::find_secret_in(source, &doc), Some("an API key"));
     let reason = aac_status::validate::share_json_from_bytes(&bytes, 64 * 1024).unwrap_err();
-    assert!(reason.starts_with("refused: it contains what looks like"), "{reason}");
+    assert_eq!(reason, "refused: it contains what looks like an API key");
+    // The parse after it does not filter a second time.
+    assert_eq!(parse(&doc).unwrap().doc.summary, "Working.");
     assert!(aac_status::validate::json_from_bytes(&bytes, 64 * 1024).is_ok());
+    // And TypeScript holds no second implementation: its entry points call the native filter.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let policy = std::fs::read_to_string(root.join("src/shared/secret-policy.ts")).unwrap();
+    let typed = std::fs::read_to_string(root.join("src/web-server/status/typed-secrets.ts")).unwrap();
+    for (file, text) in [("secret-policy.ts", &policy), ("typed-secrets.ts", &typed)] {
+        for implementation in ["new RegExp", "SECRET_PATTERNS", "NAMED_VALUE", "secretValue(", "embeddedJson("] {
+            assert!(!text.contains(implementation), "{file} holds a second filter ({implementation})");
+        }
+    }
+    assert!(policy.contains("native.findSecret(text)") && policy.contains("native.findSecretIn("));
+    assert!(typed.contains("native.findTypedSecret(text)"));
 }
 
 #[test]

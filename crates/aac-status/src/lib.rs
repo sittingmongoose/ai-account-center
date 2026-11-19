@@ -52,3 +52,5 @@ pub mod run_corrections;
 
 #[path = "../../../native/shared/secret_policy.rs"]
 pub mod secret_policy;
+/// The typed-secret check for the owner's notes; with `secret_policy`, the one secret filter.
+pub mod typed_secrets;

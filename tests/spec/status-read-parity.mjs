@@ -206,7 +206,7 @@ const same = (a, b) =>
   a.status === b.status && a.body === b.body && HEADERS.every((h) => a.headers[h] === b.headers[h]);
 
 const report = { steps: [], failures: [] };
-let stopOwner;
+let stopOwner = () => undefined;
 try {
   const today = await start('off', 'off');
   const fed = await start('on', 'on');
@@ -387,7 +387,7 @@ try {
   );
 } finally {
   for (const server of servers) server.close();
-  stopOwner?.();
+  stopOwner();
   for (const s of services) s.stop();
   await new Promise((r) => setTimeout(r, 300));
   fs.rmSync(scratch, { recursive: true, force: true });

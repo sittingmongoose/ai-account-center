@@ -2,8 +2,8 @@
 //! holds `<ccs>/status/answers.lock` and is the store's only writer (crates/aac-status
 //! `answers_engine`, the TS `StatusAnswers` ported whole): it runs the 60 s retry pass the TS
 //! timer ran (`status-service.ts` `start()`), and records each send the front door forwards as
-//! `PUT /internal/status/answers`. The front door keeps request admission and the note's secret
-//! check (the one TS secret filter), and reads the history back from the journal as any other
+//! `PUT /internal/status/answers`. The front door keeps request admission and reads the history
+//! back from the journal as any other
 //! process does. Rings go out with the engine unlocked, as the TS ring ran outside its queue.
 //!
 //! The front door hands answers to its own TS store, for the rest of its process, the first time a
@@ -108,7 +108,7 @@ impl AnswersOwned {
     }
 
     /// `submitSet` for one forwarded send: the per-entry results, then (after the reply) one
-    /// ring per asker. The body is `{entries, device, clientSendId, noteSecrets}`.
+    /// ring per asker. The body is `{entries, device, clientSendId}`.
     pub(crate) async fn submit(self: &Arc<Self>, body: &[u8]) -> Result<Json, &'static str> {
         let request: Json = serde_json::from_slice(body).map_err(|_| "shape")?;
         let entries = request
@@ -126,18 +126,11 @@ impl AnswersOwned {
             Some(Json::String(id)) => Some(id.clone()),
             Some(_) => return Err("shape"),
         };
-        let secrets: Vec<Option<String>> = match request.get("noteSecrets").and_then(Json::as_array)
-        {
-            Some(list) if list.len() == entries.len() => {
-                list.iter().map(|s| s.as_str().map(str::to_owned)).collect()
-            }
-            _ => return Err("shape"),
-        };
         let owner = Arc::clone(self);
         // Never cancelled once started: a record is a write.
         let (results, claim) = tokio::task::spawn_blocking(move || {
             let mut engine = lock(&owner.engine);
-            let submitted = engine.submit_set(&entries, &device, client.as_deref(), &secrets);
+            let submitted = engine.submit_set(&entries, &device, client.as_deref());
             match submitted {
                 Ok(submitted) => {
                     // The claim passes to the ring in one step, as `submitSet`'s `finally` does.
@@ -214,7 +207,7 @@ mod tests {
         let owner = AnswersOwned::new(ccs.clone(), root.clone());
         let entry =
             json!({"cardId": id, "cardSeq": 1, "cardSha256": sha, "choice": ["B"], "via": "deck"});
-        let body = json!({"entries": [entry, {"cardId": "x"}], "device": "Mac", "clientSendId": null, "noteSecrets": [null, null]});
+        let body = json!({"entries": [entry, {"cardId": "x"}], "device": "Mac", "clientSendId": null});
         let reply = owner.submit(body.to_string().as_bytes()).await.unwrap();
         let results = reply["results"].as_array().unwrap();
         assert_eq!(results[0]["outcome"], "recorded");

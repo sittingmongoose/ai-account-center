@@ -10,9 +10,8 @@
 //! dashboard or this engine) is the only one that appends, and every other reads it again when
 //! it changes. This engine writes byte-identical lines, so either side reads the other's journal.
 //!
-//! What stays with the caller, as the TypeScript route keeps it: the request admission (body
-//! shape, entry ids), and the note's secret check, which arrives as `note_secrets` (exactly one
-//! secret filter, the TypeScript one, until the cut moves it; see README-gap-G16b).
+//! The caller handles request admission. This engine checks notes with the Rust secret filter
+//! that the TypeScript fallback calls through NAPI.
 //!
 //! The TypeScript class is asynchronous and keeps object identity across reloads; this engine is
 //! synchronous (one caller at a time, under the host's lock) and keeps the same state by record
@@ -2438,7 +2437,6 @@ impl AnswersEngine {
     fn record_entry(
         &mut self,
         raw: &Json,
-        note_secret: Option<&str>,
         device: &str,
         send_id: &str,
         recorded: &mut Vec<String>,
@@ -2453,10 +2451,11 @@ impl AnswersEngine {
         let Some(note) = normalize_note(entry.note.as_deref()) else {
             return Ok(refused(card_id, "invalid_note", None));
         };
-        if !note.is_empty() {
-            if let Some(kind) = note_secret {
-                return Ok(refused(card_id, "note_secret", Some(kind)));
-            }
+        if !note.is_empty()
+            && let Some(kind) = crate::secret_policy::find_secret_in(&note, &Json::String(note.clone()))
+                .or_else(|| crate::typed_secrets::find_typed_secret(&note))
+        {
+            return Ok(refused(card_id, "note_secret", Some(kind)));
         }
         self.ensure_list()?;
         let hash = entry.entry_id.as_ref().map(|_| draft_hash(&entry, &note));
@@ -2532,14 +2531,12 @@ impl AnswersEngine {
     }
 
     /// `submitSet`: each entry validated and recorded on its own, then the signed send summary.
-    /// The caller rings the records next with [`Self::ring_groups`]. `note_secrets[i]` is the
-    /// admission's secret finding for entry `i`'s note (the TypeScript filter), if any.
+    /// The caller rings the records next with [`Self::ring_groups`].
     pub fn submit_set(
         &mut self,
         entries: &[Json],
         device: &str,
         client_send_id: Option<&str>,
-        note_secrets: &[Option<String>],
     ) -> R<Submitted> {
         let send_id = self.host.uuid();
         let mut recorded: Vec<String> = Vec::new();
@@ -2548,7 +2545,6 @@ impl AnswersEngine {
             entries,
             device,
             client_send_id,
-            note_secrets,
             &send_id,
             &entries_hash,
             &mut recorded,
@@ -2560,13 +2556,11 @@ impl AnswersEngine {
         outcome.map(|results| Submitted { results, recorded })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn submit_inner(
         &mut self,
         entries: &[Json],
         device: &str,
         client_send_id: Option<&str>,
-        note_secrets: &[Option<String>],
         send_id: &str,
         entries_hash: &Option<String>,
         recorded: &mut Vec<String>,
@@ -2609,8 +2603,7 @@ impl AnswersEngine {
                 })),
                 _ => None,
             };
-            let secret = note_secrets.get(index).and_then(|s| s.as_deref());
-            match self.record_entry(raw, secret, device, send_id, recorded, &mut budget, request) {
+            match self.record_entry(raw, device, send_id, recorded, &mut budget, request) {
                 Ok(result) => out.push(result),
                 Err(_) => {
                     let card_id = named_card_id(raw);
@@ -2673,9 +2666,8 @@ impl AnswersEngine {
         entries: &[Json],
         device: &str,
         client_send_id: Option<&str>,
-        note_secrets: &[Option<String>],
     ) -> R<Vec<Json>> {
-        let submitted = self.submit_set(entries, device, client_send_id, note_secrets)?;
+        let submitted = self.submit_set(entries, device, client_send_id)?;
         if !submitted.recorded.is_empty() {
             self.ring_groups(&submitted.recorded, None);
         }

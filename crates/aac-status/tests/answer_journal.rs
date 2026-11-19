@@ -208,18 +208,11 @@ fn replay(scenario: &Json) -> usize {
             }
             "submit" => {
                 let entries = op["entries"].as_array().unwrap();
-                let secrets: Vec<Option<String>> = op["noteSecrets"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|s| s.as_str().map(str::to_owned))
-                    .collect();
                 let results = answers
                     .submit_and_ring(
                         entries,
                         op["device"].as_str().unwrap(),
                         op["clientSendId"].as_str(),
-                        &secrets,
                     )
                     .unwrap_or_else(|_| panic!("{at}: submit failed"));
                 assert_eq!(

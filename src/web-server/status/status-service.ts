@@ -47,7 +47,6 @@ import {
 import {
   DOORBELL_SENDER,
   mergeSharedAnswers,
-  noteSecretOf,
   StatusAnswers,
   type AnswerHistoryEntry,
   type EntryResult,
@@ -938,7 +937,7 @@ export class StatusService {
     }
     const reply = await service.internalSend(
       '/internal/status/answers',
-      { entries, device, clientSendId, noteSecrets: entries.map(noteSecretOf) },
+      { entries, device, clientSendId },
       FORWARDED_SEND_DEADLINE_MS
     );
     if (reply.kind === 'reply' && reply.status === 200) {

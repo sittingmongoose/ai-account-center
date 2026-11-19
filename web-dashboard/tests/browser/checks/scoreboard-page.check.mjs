@@ -133,21 +133,27 @@ export const tests = {
 			const view = await r.json();
 			return Array.isArray(view.uses) && view.uses.length > 0 && (view.history?.runs ?? 0) > 0;
 		}, null, { timeout: 60000 });
+		// The bridge's counters around the page's own reads: the wait above may meet the owner before its first
+		// catalog scan and ingest (declined `feed`, today's handler answers), which is start-up, not a finding.
+		const counters = () => t.page.evaluate(async () => {
+			const r = await fetch('/api/diag?bridge=1', { credentials: 'same-origin' });
+			const route = r.ok ? (await r.json()).bridge?.routes?.['/api/scoreboard'] ?? null : null;
+			const all = { ...(route?.declined ?? {}), ...(route?.fedDeclined ?? {}), ...(route?.unavailable ?? {}) };
+			return { served: route?.served ?? 0, fedServed: route?.fedServed ?? 0, declines: all };
+		});
+		const before = await counters();
 		await t.goto('/app/scoreboard', { settleMs: 300 });
 		await t.page.waitForSelector('.picks');
 		await t.count('.sb-unavail', 0);
 		await t.audit('scoreboard end to end 1440');
-		const bridge = await t.page.evaluate(async () => {
-			const r = await fetch('/api/diag?bridge=1', { credentials: 'same-origin' });
-			return r.ok ? (await r.json()).bridge : null;
-		});
-		const route = bridge?.routes?.['/api/scoreboard'] ?? null;
+		const after = await counters();
+		const served = Math.max(after.served - before.served, after.fedServed - before.fedServed);
+		const reasons = Object.keys(after.declines).filter((r) => (after.declines[r] ?? 0) > (before.declines[r] ?? 0));
 		if (t.args.rustOwned) {
-			await t.check('the owned path served the real Scoreboard reads', (route?.served ?? 0) > 0, JSON.stringify(route));
+			await t.check('the owned path served the page Scoreboard reads', served > 0, JSON.stringify({ before, after }));
 			// A read racing a new generation answers through today's handler (`stale`); any other reason is a finding.
-			const reasons = [...Object.keys(route?.declined ?? {}), ...Object.keys(route?.unavailable ?? {})];
 			await t.check('no Scoreboard read fell back but for a race', reasons.every((r) => r === 'stale'), reasons.join(', '));
-		} else await t.check('switch off: no Rust Scoreboard read', (route?.served ?? 0) === 0, JSON.stringify(route));
+		} else await t.check('switch off: no Rust Scoreboard read', after.served === 0 && after.fedServed === 0, JSON.stringify(after));
 	},
 
 	async 'scoreboard desktop'(t) {

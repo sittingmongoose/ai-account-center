@@ -12,6 +12,9 @@
  *   node tests/spec/status-measure.mjs --dist <dist> --binary <aac-http> --out <file.json>
  *        [--rounds 10] [--samples 40] [--clients 16] [--seconds 20] [--base <aac-http>]
  * `--base` adds today's envelope path on another build's service (`on:base`, the before of the composer).
+ * `--owned` adds R4's owned server (store host, Status and Scoreboard groups on) to the rounds, with its own Status
+ * targets, and then measures its Scoreboard route over the large home's runs once ingested: cached (one URL
+ * repeated inside the view cache's 60 s) and uncached (a new filter each request) against DESIGN 1.4's bars.
  * Called by `read-http-parity.ts --measure`. Fixture data only; the processes it starts are its own.
  */
 import assert from 'node:assert/strict';
@@ -36,6 +39,7 @@ const samples = Number(option('samples', 40));
 const clients = Number(option('clients', 16));
 const seconds = Number(option('seconds', 20));
 const base = option('base', process.env.AAC_R2_BASE_BINARY ?? null);
+const withOwned = args.includes('--owned');
 assert.ok(out, '--out <file.json> is required');
 assert.ok(fs.existsSync(binary), `no aac-http at ${binary}`);
 const scratch = fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), 'aac-r2-measure-'));
@@ -130,12 +134,15 @@ try {
   home('on');
   home('fed');
   if (base) home('base');
+  if (withOwned) home('owned');
   const servers = [
     await start('off', path.join(scratch, 'off')),
     await start('on', path.join(scratch, 'on')),
     await start('fed', path.join(scratch, 'fed')),
     ...(base ? [await start('on', path.join(scratch, 'base'), 'on:base', path.resolve(base))] : []),
+    ...(withOwned ? [await start('owned', path.join(scratch, 'owned'))] : []),
   ];
+  const ownedServer = servers.find((w) => w.mode === 'owned') ?? null;
   // Warm up, and check the fed server's answers: on one read, the fed path's bytes are today's builder's.
   for (const worker of servers)
     for (let i = 0; i < 20; i++) assert.equal((await call(worker)).status, 200);
@@ -145,10 +152,19 @@ try {
     verified.every((v) => v.served && v.equal),
     `the fed path serves today's bytes: ${JSON.stringify(verified.slice(0, 3))}`
   );
+  if (ownedServer) {
+    const ownedVerified = [];
+    for (let i = 0; i < 20; i++) ownedVerified.push(await ask(ownedServer, 'verify'));
+    assert.ok(
+      ownedVerified.every((v) => v.served && v.equal),
+      `the owned path serves the builder's bytes: ${JSON.stringify(ownedVerified.slice(0, 3))}`
+    );
+  }
   const sizes = Object.fromEntries(
     await Promise.all(servers.map(async (w) => [w.mode, (await call(w)).body.length]))
   );
   for (const worker of servers) await stats(worker, true);
+  const ownedBefore = ownedServer ? ((await stats(ownedServer)).route?.fedServed ?? 0) : 0;
   const fedStatsBefore = await stats(servers[2]);
   const fedBefore = fedStatsBefore.route?.fedServed ?? 0;
   const routeBefore = fedStatsBefore.route?.served ?? 0;
@@ -176,6 +192,9 @@ try {
     rounds * samples,
     `every fed request in the rounds was served by the fed path (${fedServed})`
   );
+  const ownedServed = ownedServer ? (after.owned.route?.fedServed ?? 0) - ownedBefore : null;
+  if (ownedServer)
+    assert.equal(ownedServed, rounds * samples, `every owned request was served (${ownedServed})`);
   // The envelope fallback's successes on the same route, apart from the fed path's (R2b L2).
   const envelopeServed = (after.fed.route?.served ?? 0) - routeBefore - fedServed;
 
@@ -223,6 +242,68 @@ try {
   }
 
   const latency = Object.fromEntries(servers.map((w) => [w.mode, quantiles(times[w.mode])]));
+
+  // R4 Scoreboard on the owned server: the large home's runs ingested first (data-aware), then cached and
+  // uncached reads; every read must be the owned answer (x-aac-view) and none may decline.
+  let scoreboard = null;
+  if (ownedServer) {
+    const ready = await ask(ownedServer, 'scoreboard-ready', { runs: fixture.runs ?? 1 });
+    assert.ok(!ready.error, ready.error);
+    const get = (route) =>
+      new Promise((resolve, reject) => {
+        const started = process.hrtime.bigint();
+        http
+          .get({ host: '127.0.0.1', port: ownedServer.port, path: route, agent: ownedServer.agent }, (response) => {
+            const chunks = [];
+            response.on('data', (c) => chunks.push(c));
+            response.on('end', () =>
+              resolve({
+                status: response.statusCode,
+                view: response.headers['x-aac-view'] ?? null,
+                bytes: Buffer.concat(chunks).length,
+                ms: Number(process.hrtime.bigint() - started) / 1e6,
+              })
+            );
+          })
+          .on('error', reject);
+      });
+    const day = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
+    const cached = [];
+    const uncached = [];
+    let notOwned = 0;
+    let bytes = 0;
+    await get('/api/scoreboard');
+    for (let round = 0; round < rounds; round++) {
+      for (let i = 0; i < samples; i++) {
+        const reply = await get('/api/scoreboard');
+        assert.equal(reply.status, 200);
+        if (reply.view !== 'scoreboard@1') notOwned++;
+        cached.push(reply.ms);
+        bytes = reply.bytes;
+      }
+      for (let i = 0; i < Math.max(1, Math.floor(samples / 4)); i++) {
+        // A filter not asked before: a new view-cache key, so the view is composed from the store.
+        const n = round * samples + i;
+        const reply = await get(`/api/scoreboard?from=${day(40 + (n % 30))}&to=${day(n % 10)}&source=${['all', 'real', 'benchmark'][Math.floor(n / 30) % 3]}`);
+        assert.equal(reply.status, 200);
+        if (reply.view !== 'scoreboard@1') notOwned++;
+        uncached.push(reply.ms);
+      }
+    }
+    const s = await stats(ownedServer);
+    scoreboard = {
+      runsIngested: ready.runs,
+      viewBytes: bytes,
+      cached: quantiles(cached),
+      uncached: quantiles(uncached),
+      notOwned,
+      declined: s.scoreboardRoute?.declined ?? {},
+      targets: {
+        cachedP95: { bar: 2, measured: quantiles(cached).p95Ms, met: quantiles(cached).p95Ms <= 2 },
+        uncachedP95: { bar: 15, measured: quantiles(uncached).p95Ms, met: quantiles(uncached).p95Ms <= 15 },
+      },
+    };
+  }
   const memory = Object.fromEntries(
     servers.map((w) => {
       const s = after[w.mode];
@@ -274,18 +355,26 @@ try {
     },
     rounds: loads,
     fedServed,
+    ownedServed,
     envelopeServed,
+    scoreboard,
     fedDeclines: after.fed.route?.fedDeclined ?? {},
     serverExits: Object.fromEntries(workers.filter((w) => w.exited).map((w) => [w.mode, w.exited])),
     targets: {
       p50: { bar: 0.6, measured: latency.fed.p50Ms, met: latency.fed.p50Ms <= 0.6 },
       p95: { bar: 1.0, measured: latency.fed.p95Ms, met: latency.fed.p95Ms <= 1.0 },
       rss: { barMiB: 25, overOffMiB: overOff, met: overOff <= 25 },
+      ...(latency.owned
+        ? {
+            ownedP50: { bar: 0.6, measured: latency.owned.p50Ms, met: latency.owned.p50Ms <= 0.6 },
+            ownedP95: { bar: 1.0, measured: latency.owned.p95Ms, met: latency.owned.p95Ms <= 1.0 },
+          }
+        : {}),
     },
   };
   fs.writeFileSync(out, JSON.stringify(result, null, 2) + '\n');
   console.log(
-    `R2 Status under Node: p50/p95 ms off ${latency.off.p50Ms}/${latency.off.p95Ms}, on ${latency.on.p50Ms}/${latency.on.p95Ms}, fed ${latency.fed.p50Ms}/${latency.fed.p95Ms}; combined RSS fed ${overOff >= 0 ? '+' : ''}${overOff} MiB over off`
+    `R2 Status under Node: p50/p95 ms off ${latency.off.p50Ms}/${latency.off.p95Ms}, on ${latency.on.p50Ms}/${latency.on.p95Ms}, fed ${latency.fed.p50Ms}/${latency.fed.p95Ms}${latency.owned ? `, owned ${latency.owned.p50Ms}/${latency.owned.p95Ms}` : ''}${scoreboard ? `; owned Scoreboard p95 cached ${scoreboard.cached.p95Ms} uncached ${scoreboard.uncached.p95Ms} ms over ${scoreboard.runsIngested} runs` : ''}; combined RSS fed ${overOff >= 0 ? '+' : ''}${overOff} MiB over off`
   );
 } finally {
   for (const worker of workers) {
