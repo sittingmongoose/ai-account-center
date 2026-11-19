@@ -16,7 +16,6 @@ use aac_renewal::jwt::{
     has_structurally_valid_id_token, matches_codex_activation_identity,
 };
 use aac_renewal::registry::{CodexRegistryProfile, read_codex_profile_registry};
-use aac_status::read_context::Envelope;
 use aac_transport::CallOptions;
 use axum::{
     extract::Request,
