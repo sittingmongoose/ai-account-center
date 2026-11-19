@@ -130,6 +130,7 @@ pub(crate) fn local_midnight(date: &str, time_zone: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     /// A winter and a summer instant in a zone with daylight saving and one without.

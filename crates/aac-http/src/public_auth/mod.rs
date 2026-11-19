@@ -437,8 +437,8 @@ pub(crate) async fn run_public_at(
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let composed = backend.is_some();
-    // The one owner host (AAC_RUST_CUT_NATIVE_ROUTES=on): the running service's descriptor, or
-    // the same service in-process for a worker-less cut boot. Groups register on top of it.
+    // The one owner host: the running service's descriptor, or the same service in-process for
+    // a worker-less cut boot. Every worker-removal group registers with this one host.
     #[cfg(unix)]
     let owner_host =
         owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));

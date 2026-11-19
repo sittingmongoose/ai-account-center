@@ -149,8 +149,10 @@ function normalize(value: unknown, key = ''): unknown {
   if (value === undefined) return value;
   if (key === 'etag') return '<etag>';
   if (key === 'x-ccs-bar-token') return '<bar-proof>';
-  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
+  // A store boot's own identity (capture.ts nulls the same members when it records the row),
+  // the workers' live host readings (capture.ts does the same), and clock numbers.
   if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
+  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
   if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
     return '<elapsed-seconds>';
   if (key === 'cpu' || key === 'memory' || key === 'gpuPct') return null;
@@ -160,16 +162,6 @@ function normalize(value: unknown, key = ''): unknown {
     assert(Number.isInteger(seconds) && seconds >= 1 && seconds <= 900);
     return '<retry-after-seconds>';
   }
-  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
-  // A store boot's own identity: its open instant and its log/meta clocks (capture.ts nulls
-  // the same members when it records the row).
-  if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
-  if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
-    return '<elapsed-seconds>';
-  // capture.ts nulls the same machine readings when it records the row.
-  if (key === 'cpu' || key === 'memory' || key === 'gpuPct') return null;
-  if (key === 'disk') return [];
-  if (key === 'warnings') return [];
   if (typeof value === 'string' && key === 'set-cookie') {
     return value
       .replace(/^connect\.sid=[^;]+/, 'connect.sid=<session-cookie>')
@@ -180,7 +172,9 @@ function normalize(value: unknown, key = ''): unknown {
       .replaceAll(root, '<fixture-home>')
       .replace(/dev_[0-9a-f]{16}/g, '<device-id>')
       .replace(/aacd_[A-Za-z0-9_-]{43}/g, '<device-token>')
-      .replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g, '<timestamp>');
+      .replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g, '<timestamp>')
+      .replace(/\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g, '<clock>')
+      .replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g, '<day>');
     if (path.sep === '\\' && text.startsWith('<fixture-home>')) text = text.replaceAll('\\', '/');
     return text;
   }
@@ -302,19 +296,19 @@ try {
     { mode: 0o600 }
   );
   if (group === 'status-home' || group === 'status') {
-  for (const key of Object.keys(environment))
-    if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
-  Object.assign(environment, {
-    AAC_RUST_CUT_NATIVE_ROUTES: 'on',
-    AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
-    AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
-    AAC_AGENT_VERBS: 'off',
-    AAC_AGENT_TRANSPORT: 'off',
-  });
-  await fs.mkdir(path.join(root, 'reports'), { recursive: true });
-  await fs.mkdir(path.join(root, 'registry'), { recursive: true });
-}
-if (group === 'resets') {
+    for (const key of Object.keys(environment))
+      if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
+    Object.assign(environment, {
+      AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+      AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+      AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+      AAC_AGENT_VERBS: 'off',
+      AAC_AGENT_TRANSPORT: 'off',
+    });
+    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
+  if (group === 'resets') {
     Object.assign(environment, {
       CCS_HOME: root,
       AAC_RUST_GROUP_COLLECTION: 'off',

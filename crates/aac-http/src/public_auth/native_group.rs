@@ -4,10 +4,10 @@
 //!
 //! The front door owns public admission (session, origin, device scope, JSON, body and query
 //! limits), the guards and the HTTP encoding. The owners stay where they are: every route is
-//! asked of the private service over [`ServiceLink`] with the verified principal, so the
-//! share readers, the answer journal, the store host and its collectors keep one owner and one
-//! writer. A boot without the matching owned group answers the honest decline
-//! ([`decline`]), never a second implementation of the owner.
+//! asked of the private service through [`super::owner_host`] with the verified principal, so
+//! the share readers, the answer journal, the store host and its collectors keep one owner and
+//! one writer. A boot without the matching owned group answers the honest decline
+//! ([`super::decline`]), never a second implementation of the owner.
 //!
 //! Encodings follow the TypeScript routes byte for byte: the fixed `{error, code}` sentences,
 //! `cache-control`, `vary`, the feed views' ETag and 304, and the file envelope's validated
@@ -15,7 +15,7 @@
 
 use super::{
     DashboardAccess, DashboardPrincipal, Reply,
-    service_link::{ServiceLink, ServiceReply},
+    service_link::ServiceReply,
     set_header,
 };
 use axum::{
@@ -26,96 +26,30 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value as Json, json};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// The boot root and the private service's endpoint.
-///
-/// The endpoint is the running service's descriptor when one exists (the cut's supervisor, or
-/// lane N's native one). For a worker-less boot with no service (the strict Rust-only gate, and
-/// the transition until the supervisor is native) this host starts the *same* private service
-/// in-process, with the same boot config the TypeScript supervisor resolves, and writes the
-/// same descriptor. One owner answers either way: no collector, store or journal is copied.
+/// This group's admission and encoding, over the one owner host.
 pub(super) struct Routes {
-    root: PathBuf,
-    /// `AAC_RUST_CUT_NATIVE_ROUTES=on`: this boot answers its own routes instead of forwarding
-    /// them to the compatibility worker. Off until the cutover flips it in the service unit, so
-    /// the shipped worker-enabled gates keep answering through the adapters they recorded.
-    enabled: bool,
-    /// Start the in-process service for a worker-less cut boot (`dashboard` with no backend).
-    /// A composition fixture has a backend and its own supervisor: never a second service there.
-    embed: bool,
-    link: std::sync::Mutex<Option<ServiceLink>>,
-    embedded: tokio::sync::Mutex<Option<Embedded>>,
-}
-
-struct Embedded {
-    stop: tokio::sync::oneshot::Sender<()>,
-    task: tokio::task::JoinHandle<()>,
-    descriptor: PathBuf,
-}
-
-fn random_hex<const N: usize>() -> Option<String> {
-    super::storage::random::<N>()
-        .ok()
-        .map(|bytes| super::storage::hex(&bytes))
+    host: std::sync::Arc<super::owner_host::OwnerHost>,
 }
 
 impl Routes {
-    pub(super) fn new(root: PathBuf, embed: bool) -> Self {
-        Self {
-            root,
-            enabled: std::env::var("AAC_RUST_CUT_NATIVE_ROUTES").as_deref() == Ok("on"),
-            embed,
-            link: std::sync::Mutex::new(None),
-            embedded: tokio::sync::Mutex::new(None),
-        }
+    pub(super) fn new(host: std::sync::Arc<super::owner_host::OwnerHost>) -> Self {
+        Self { host }
     }
 
     /// Whether this boot answers `method path` itself: the switch is on and the pattern is one
     /// of the worker-removal routes.
     pub(super) fn owns(&self, method: &Method, path: &str) -> bool {
-        self.enabled && owns_route(method, path)
+        super::owner_host::enabled() && owns_route(method, path)
     }
 
     fn root(&self) -> &Path {
-        &self.root
+        self.host.root()
     }
 
-    fn cached(&self) -> Option<ServiceLink> {
-        self.link
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-    }
-
-    fn remember(&self, link: ServiceLink) -> ServiceLink {
-        *self.link.lock().unwrap_or_else(|p| p.into_inner()) = Some(link.clone());
-        link
-    }
-
-    /// The service's endpoint: a running one's descriptor, else the in-process service this
-    /// host starts for a worker-less boot.
-    async fn link(&self) -> Option<ServiceLink> {
-        if let Some(link) = self.cached() {
-            return Some(link);
-        }
-        if let Some(link) = ServiceLink::load(&self.root) {
-            return Some(self.remember(link));
-        }
-        if !self.embed {
-            return None;
-        }
-        let mut embedded = self.embedded.lock().await;
-        if embedded.is_none() {
-            *embedded = self.start_embedded().await;
-        }
-        let link = ServiceLink::load(&self.root)?;
-        Some(self.remember(link))
-    }
-
-    /// Whether a private service (running or started here) answers this boot.
     async fn hosted(&self) -> bool {
-        self.link().await.is_some()
+        self.host.ready().await
     }
 
     async fn request(
@@ -126,109 +60,19 @@ impl Routes {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Option<ServiceReply> {
-        let link = self.link().await?;
-        let reply = link.request(method, uri, principal, headers, body).await;
-        if reply.is_none() {
-            *self.link.lock().unwrap_or_else(|p| p.into_inner()) = None;
-        }
-        reply
+        self.host.request(method, uri, principal, headers, body).await
     }
+}
 
-    /// Start the private service in this process with the boot the supervisor resolves: the
-    /// store under `<ccs>/store` and the owned Status/Scoreboard readers on the share roots.
-    fn boot_config(&self) -> Option<Json> {
-        let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off");
-        if store_off {
-            return None;
-        }
-        let on = |env: &str| std::env::var(env).as_deref() != Ok("off");
-        // A fixture boot must name its share roots: without them this would read the real share,
-        // and the host starts only for an explicitly configured boot.
-        let reports = std::env::var("AAC_AGENT_REPORTS_DIR").ok()?;
-        let registry = std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok()?;
-        let ccs = self.root.canonicalize().ok()?;
-        let boot_id = random_hex::<12>()?;
-        let secret = random_hex::<32>()?;
-        let socket = ccs.join("run").join(format!("aac-http-{boot_id}")).join("http.sock");
-        Some(json!({
-            "ccsDir": ccs,
-            "socketPath": socket,
-            "secret": secret,
-            "bootId": boot_id,
-            "store": {
-                "dir": ccs.join("store"),
-                "retentionDays": 0,
-                "bindingIdentity": aac_store::build_identity(),
-                "snapshotDirectory": null,
-                "shareBackupDir": null,
-                "shareBackupOff": true,
-            },
-            "owned": {
-                "reportsRoot": aac_status::share::agent_reports_root(Some(&reports)),
-                "registryDir": aac_status::share::pm_mail_registry_dir(Some(&registry)),
-                "status": on("AAC_RUST_GROUP_STATUS"),
-                "scoreboard": on("AAC_RUST_GROUP_SCOREBOARD"),
-            },
-        }))
-    }
+/// The reply's JSON body, when it is one; the service's routes answer JSON.
+fn json_of(reply: &ServiceReply) -> Option<Json> {
+    serde_json::from_slice(&reply.body).ok()
+}
 
-    async fn start_embedded(&self) -> Option<Embedded> {
-        let config = self.boot_config()?;
-        let socket = PathBuf::from(config.get("socketPath")?.as_str()?);
-        let ccs = PathBuf::from(config.get("ccsDir")?.as_str()?);
-        let secret = config.get("secret")?.as_str()?.to_owned();
-        let boot_id = config.get("bootId")?.as_str()?.to_owned();
-        let boot = crate::unix::Boot::from_json(config.to_string().as_bytes()).ok()?;
-        let descriptor = ccs.join("run").join("aac-http.json");
-        let (stop, stopped) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(async move {
-            if let Err(error) = crate::unix::serve(boot, async {
-                let _ = stopped.await;
-            })
-            .await
-            {
-                tracing::warn!(%error, "the in-process private service stopped");
-            }
-        });
-        // The service binds before it serves; the socket appearing is its readiness signal, and
-        // the health read below proves the descriptor's boot id answers.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !socket.exists() {
-            if task.is_finished() || tokio::time::Instant::now() >= deadline {
-                task.abort();
-                return None;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        if write_descriptor(&descriptor, &ccs, &socket, &secret, &boot_id).is_err() {
-            let _ = stop.send(());
-            let _ = task.await;
-            return None;
-        }
-        Some(Embedded {
-            stop,
-            task,
-            descriptor,
-        })
-    }
-
-    /// Start the private service before the first request, so a cold boot never spends the
-    /// first request's budget on the service's own start.
-    pub(super) async fn warm(&self) {
-        if self.enabled {
-            let _ = self.link().await;
-        }
-    }
-
-    /// Stop the service this boot started, if any (a running one belongs to its own supervisor).
-    pub(super) async fn stop(&self) {
-        let embedded = self.embedded.lock().await.take();
-        if let Some(embedded) = embedded {
-            let _ = embedded.stop.send(());
-            let _ = embedded.task.await;
-            let _ = std::fs::remove_file(&embedded.descriptor);
-        }
-    }
+/// `true` when the service named a decline (`x-aac-decline`): no owner for this route.
+fn declined(reply: &ServiceReply) -> bool {
+    reply.status == StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        && reply.headers.contains_key("x-aac-decline")
 }
 
 /// `MAX_STATUS_BODY_BYTES`, the answer set's own limit.
@@ -415,8 +259,8 @@ async fn store_route(
         None => path.to_owned(),
     };
     match routes.request("GET", &uri, &principal, &[], None).await {
-        Some(reply) if reply.declined() => store_unavailable(),
-        Some(reply) if reply.status == 200 => match reply.json() {
+        Some(reply) if declined(&reply) => store_unavailable(),
+        Some(reply) if reply.status == 200 => match json_of(&reply) {
             Some(value) => no_store(json_reply(200, &value)),
             None => store_failed(),
         },
@@ -479,8 +323,8 @@ async fn store_status(routes: &Routes, access: &DashboardAccess, facts: &Facts) 
         .request("GET", "/api/store/status", &principal, &[], None)
         .await
     {
-        Some(reply) if reply.declined() => unavailable_status(),
-        Some(reply) if reply.status == 200 => match reply.json() {
+        Some(reply) if declined(&reply) => unavailable_status(),
+        Some(reply) if reply.status == 200 => match json_of(&reply) {
             Some(value)
                 if matches!(
                     value.get("state").and_then(Json::as_str),
@@ -526,11 +370,11 @@ async fn answers_read(routes: &Routes, access: &DashboardAccess, raw: Option<&st
     }
     let uri = format!("/api/status/answers?limit={limit}");
     match routes.request("GET", &uri, &principal, &[], None).await {
-        Some(reply) if reply.status == 200 => match reply.json() {
+        Some(reply) if reply.status == 200 => match json_of(&reply) {
             Some(value) if value.get("answers").is_some() => no_store(json_reply(200, &value)),
             _ => super::decline(),
         },
-        Some(reply) if reply.declined() => super::decline(),
+        Some(reply) if declined(&reply) => super::decline(),
         _ => no_store(super::error(503, "answers_unavailable", UNAVAILABLE)),
     }
 }
@@ -594,11 +438,11 @@ async fn answers_post(
         )
         .await
     {
-        Some(reply) if reply.status == 200 => match reply.json() {
+        Some(reply) if reply.status == 200 => match json_of(&reply) {
             Some(value) if value.get("results").is_some() => no_store(json_reply(200, &value)),
             _ => super::decline(),
         },
-        Some(reply) if reply.declined() => super::decline(),
+        Some(reply) if declined(&reply) => super::decline(),
         _ => no_store(super::error(
             500,
             "answers_failed",
@@ -762,7 +606,7 @@ async fn scoreboard_facts(
     if reply.status != 200 {
         return None;
     }
-    let input = reply.json()?;
+    let input = json_of(&reply)?;
     let generation = input.get("generation")?.as_u64()?;
     let catalog_hash = input.get("catalogHash")?.as_str()?.to_owned();
     let catalog = input.get("catalog")?.clone();
@@ -832,7 +676,7 @@ async fn scoreboard_facts(
     if reply.status != 200 {
         return None;
     }
-    let held = reply.json()?.get("generation")?.as_str()?.to_owned();
+    let held = json_of(&reply)?.get("generation")?.as_str()?.to_owned();
     Some((generation, catalog_hash, held))
 }
 
@@ -920,7 +764,7 @@ async fn scoreboard(
             Some(reply) if reply.status == 200 => {
                 return fed_view(&reply, facts.if_none_match.as_deref());
             }
-            Some(reply) if reply.declined() => continue,
+            Some(reply) if declined(&reply) => continue,
             _ => return super::decline(),
         }
     }
@@ -1192,7 +1036,7 @@ fn raw_reply(status: u16, body: Vec<u8>) -> Reply {
 /// The service's file envelope, checked and written (`rust-file-response.ts`): only these
 /// header names, the route's own refusal sentences, and a body whose length matches.
 fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
-    let Some(value) = reply.json() else {
+    let Some(value) = json_of(&reply) else {
         return super::service_error();
     };
     let Some(status) = value.get("status").and_then(Json::as_u64) else {
@@ -1344,35 +1188,6 @@ fn valid_content_range(text: &str) -> bool {
         || range
             .split_once('-')
             .is_some_and(|(start, end)| digits(start) && digits(end))
-}
-
-/// The supervisor's descriptor (`run/aac-http.json`), written the way the front door reads it:
-/// private 0600, replaced atomically, holding the boot's own id and secret.
-fn write_descriptor(
-    path: &Path,
-    ccs: &Path,
-    socket: &Path,
-    secret: &str,
-    boot_id: &str,
-) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let body = json!({
-        "ccsDir": ccs,
-        "socketPath": socket,
-        "secret": secret,
-        "bootId": boot_id,
-    })
-    .to_string();
-    let temporary = path.with_extension("json.tmp");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    file.write_all(body.as_bytes())?;
-    file.sync_all()?;
-    std::fs::rename(&temporary, path)
 }
 
 #[cfg(test)]

@@ -228,6 +228,7 @@ pub(crate) fn submit_body(body: &Json, device: &str) -> Result<Json, Decline> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     fn entry(card: Json, answer: Json) -> HistoryEntry {
         HistoryEntry {

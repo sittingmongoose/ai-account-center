@@ -386,6 +386,7 @@ pub(crate) async fn burn(host: &StoreHost, raw: Option<&str>, now: u64) -> Resul
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

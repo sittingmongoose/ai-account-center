@@ -503,6 +503,25 @@ function stableAges(value: unknown): void {
   }
 }
 
+/** The page's own clock and day words (`dateWordsIn`: "3:04 PM", "Nov 19") follow the recording
+ * instant; the view's data and states are the contract. */
+function stableWords(value: unknown): void {
+  const CLOCK = /\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g;
+  const DAY = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g;
+  if (Array.isArray(value)) {
+    for (const item of value) stableWords(item);
+    return;
+  }
+  if (value && typeof value === 'object') {
+    const map = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(map)) {
+      if (typeof child === 'string')
+        map[key] = child.replace(CLOCK, '<clock>').replace(DAY, '<day>');
+      else stableWords(child);
+    }
+  }
+}
+
 /** A host's live readings (load, free memory and disk) differ every run; the panel's state and
  * words are the contract. The collectors' numbers have their own tests. */
 function stableMachines(value: unknown): void {
@@ -552,6 +571,7 @@ function emit(relative: string, data: any, view: string | null = null) {
   if (owner === 'status-home') {
     stableAges(data.response.body);
     stableMachines(data.response.body);
+    stableWords(data.response.body);
   }
   // The store's boot identity (its open instant, segment log and meta clocks) differs per run;
   // the status row's contract is the writer's shape and state, not one boot's ids.
