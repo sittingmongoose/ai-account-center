@@ -17,9 +17,26 @@ import type { QuotaManagementConfig } from './quota';
 import { DEFAULT_QUOTA_MANAGEMENT_CONFIG } from './quota';
 import { UNIFIED_CONFIG_VERSION } from './version';
 export interface UnifiedConfig {
-  /** Read-only Rust agent verbs; absent and invalid values stay off. */
-  agentVerbs?: 'off' | 'on';
-  /** Existing agents only. Shipping remains disabled pending M3D4 and M3D5. */
+  /** Rust agent verbs ceiling; absent and invalid values stay off. `shadow` serves the reference
+   * answer and compares the agent alongside (DESIGN 4.5). */
+  agentVerbs?: 'off' | 'shadow' | 'on';
+  /** Per-family modes under the agentVerbs ceiling; an absent map keeps the ceiling for every
+   * verb, a present map turns on only its listed families. Invalid maps stay empty (all off). */
+  agentVerbFamilies?: Partial<
+    Record<
+      | 'inventory'
+      | 'signin-expiry'
+      | 'quota-read'
+      | 'scan-usage'
+      | 't3-pins'
+      | 'key-store'
+      | 'claude-history'
+      | 'failover-inventory',
+      'off' | 'shadow' | 'on'
+    >
+  >;
+  /** Existing agents only: the lead's install script places the hash-pinned binary (M3D4 staged,
+   * M3D5 pinned). The service never uploads an agent itself. */
   agentTransport?: 'off' | 'on';
   /** Explicit existing identity and pinned host-key source; neither is created or edited. */
   agentTransportSsh?: { identityFile?: string; knownHostsFile?: string };

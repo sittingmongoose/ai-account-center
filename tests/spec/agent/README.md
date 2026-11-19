@@ -390,3 +390,58 @@ too; killed at the data fsync the committed key is whole, killed at the folder f
 is whole; a held folder lease refuses the write; answers, bytes and modes equal
 `key_store.put`, and no lock file joins the folder. `--baseline` expects the base's
 behaviour (no folder fsync, no lease).
+
+## Lane E: packaging and per-family turn-on
+
+M3D4 (ship in stages, VM first) and M3D5 (the VM's current key, AAC-pinned known_hosts)
+are answered. The trusted catalog `src/web-server/services/agent-artifacts.json` carries
+one reviewed pin per built target; `scripts/build-agent.js` (`bun run agent:build`) builds
+`aac-agent` on each build computer (Nas1, the Mac, aac-winbuild; never the VM) into
+`crates/aac-agent/prebuilt/<target>/` with a source-hash note, `--copy-only` carries the
+matching targets into `dist/agent/` during `build`, and `--catalog-entry` prints the entry
+the lead reviews and commits. `scripts/verify-bundle.js` checks every shipped agent against
+its manifest and every catalog pin present in the build. Linux builds are glibc until the
+musl target is authorized (F11); the adapter and the service admit both on Linux.
+
+The service still admits only an already installed agent (`AgentClient::existing`); it never
+uploads one. The lead places the binary on each remote computer with `scripts/agent-install.sh`
+(Nas1, Mac) or `scripts/agent-install.ps1` (Windows): source digest check, staged `.part`,
+re-check, atomic rename into `~/.cache/ai-account-center/bin/aac-agent`
+(`%LOCALAPPDATA%\ai-account-center\bin\aac-agent.exe`), then the `--version` handshake for
+that OS. The VM is Local: the packaged `dist/agent` binary runs in place, nothing to install.
+
+`agentVerbs: off|shadow|on` is the ceiling; `agentVerbFamilies` (or `AAC_AGENT_VERB_FAMILIES`,
+JSON) sets one mode per verb under it. An absent map keeps the scalar behavior; a present map
+enables only its listed families; a present but invalid map keeps every family off. The
+read-only families turn on one at a time as their parity suites pass: `signin-expiry`,
+`quota-read`, `failover-inventory`, `t3-pins`, `scan-usage`. `key-store` and `claude-history`
+write on the computer, so their shadow is off (shadow never duplicates a write).
+
+In `shadow`, the reference answer is served as soon as it settles; the agent runs alongside
+and the comparison is logged as `agent.verbs.shadow` (verb, outcome, agentMs, referenceMs;
+never bodies). Outcomes: `equal`, `different`, `fallback` (agent declined), `error` (agent
+attempt failed), `reference-failed`, and `reference-fallback` (a scan whose reference is the
+Python helper, not the scanner). Object key order is the only normalization. Owner decision
+2026-11-19: the 72 h shadow soaks are dropped — a family turns on once its parity suite passes;
+`shadow` stays available as an optional live comparison, not a required gate.
+
+Per-family fixture gates (fixture-enabled Nas1/Mac debug build, unchanged harnesses):
+
+```sh
+cargo build -p aac-agent --features parity-fixtures
+python3 tests/spec/agent/run.py target/debug/aac-agent                 # signin-expiry + inventory
+python3 tests/spec/agent/run.py target/debug/aac-agent --part3         # + t3-pins, keys, history
+python3 tests/spec/agent/run.py target/debug/aac-agent --part3 --part4 # + failover-inventory
+python3 tests/spec/agent/quota.py target/debug/aac-agent               # quota-read
+python3 tests/spec/agent/quota-review.py target/debug/aac-agent
+# scan-usage: build native/aac-usage's scanner, then
+python3 tests/spec/agent/run.py target/debug/aac-agent --scan-bin native/aac-usage/target/debug/aac-usage-scan
+```
+
+`tests/unit/web-server/agent-verb-families.test.ts` covers the family map, the ceiling cap,
+invalid-map safety, the write-verb shadow refusal, glibc admission, and the shadow
+comparison outcomes at the collector and scan boundaries with fake closures only.
+
+Limits unchanged: no native Mac/Windows execution is proven by the Linux fixture runs; the
+Mac and Windows catalog entries land only after their own builds and native checks; the
+install scripts are lead-run, and no live computer is touched by this lane.

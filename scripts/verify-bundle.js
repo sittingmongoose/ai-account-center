@@ -460,6 +460,24 @@ if (require.main === module) {
     );
     process.exitCode = 1;
   }
+  try {
+    const result = require('./build-agent.js').verifyDist();
+    if (result.targets.length)
+      console.log(`[OK] Host agent for ${result.targets.join(', ')} matches its manifest.`);
+    else
+      console.warn(
+        '[!] No host agent in this build: every computer keeps the labelled helper. Build it on each target with: bun run agent:build'
+      );
+    if (result.missing.length)
+      console.warn(
+        `[!] Trusted catalog names ${result.missing.join(', ')} but this build carries no such agent; those computers keep the labelled helper until their prebuilt folder is collected.`
+      );
+  } catch (error) {
+    console.error(
+      `[X] ${error instanceof Error ? error.message : 'Host agent verification failed.'}`
+    );
+    process.exitCode = 1;
+  }
 }
 
 module.exports = {
