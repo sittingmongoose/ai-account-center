@@ -222,7 +222,17 @@ fn quota_pass(
     let Some(dashboards) = doc["dashboards"].as_array() else {
         return;
     };
-    let merged = sampler::merge_accounts(dashboards);
+    // The native publisher names each dashboard's platform; the older feed sends bare ones.
+    let dashboards: Vec<Value> = dashboards
+        .iter()
+        .map(|entry| {
+            entry
+                .get("dashboard")
+                .cloned()
+                .unwrap_or_else(|| entry.clone())
+        })
+        .collect();
+    let merged = sampler::merge_accounts(&dashboards);
     if !state.backfilled {
         let (sources, unreadable) = backfill_sources(ccs_dir);
         let providers = sampler::providers_of(&merged);
@@ -284,6 +294,7 @@ async fn activity_pass(
     state: &Mutex<WriterState>,
     ccs_dir: &Path,
     models_dev: &Arc<crate::models_dev::ModelsDevRefresh>,
+    live: &Arc<crate::analytics_live::Live>,
     now: i64,
     refresh_interval_ms: i64,
 ) {
@@ -310,6 +321,8 @@ async fn activity_pass(
             now - 31 * DAY,
         )
     };
+    // The read reports `refreshing` while this pass runs (the TS activity service's pending pass).
+    let _pass = live.pass();
     // Refresh the models.dev registry where the TS collection calls startModelsDevRegistryRefresh:
     // coalesced, fresh-cache short-circuit, stale fallback. The blocking fetch runs off-thread.
     {
@@ -488,6 +501,7 @@ pub(crate) async fn analytics_jobs(
     feeds: Feeds,
     agents: Arc<crate::agent_transport::Agents>,
     ccs_dir: PathBuf,
+    live: Arc<crate::analytics_live::Live>,
     stop: Arc<AtomicBool>,
 ) {
     tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
@@ -504,6 +518,10 @@ pub(crate) async fn analytics_jobs(
             let now = aac_store::engine::now_ms() as i64;
             let refresh = refresh_seconds(&ccs_dir);
             let interval = quota_interval_ms(refresh);
+            // A read with `refresh=true` brings the activity pass forward to this tick.
+            if live.take_refresh() {
+                state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = 0;
+            }
             {
                 let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
                 if now - guard.last_quota_ms >= interval {
@@ -517,6 +535,7 @@ pub(crate) async fn analytics_jobs(
                 &state,
                 &ccs_dir,
                 &models_dev,
+                &live,
                 now,
                 interval,
             )

@@ -66,8 +66,7 @@ import {
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
 import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
-import { startRustUsageSnapshotFeed } from './agent-usage/agent-usage-rust-feed';
-import { rustGroupOn } from './rust-service-groups';
+import { rustAnalyticsWritersOn, rustGroupOn } from './rust-service-groups';
 import {
   closeAacStore,
   onStoreHostFallback,
@@ -458,11 +457,16 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         );
       }
       // Agent usage snapshot (off until a folder is set): written after every analytics sample.
-      // G18: with the service on and groups.usageSnapshot on, the Rust service owns the writer
-      // and the front door pushes each sample to it; otherwise the TypeScript publisher writes.
+      // G18: with the service on, groups.usageSnapshot on and the native writers owning the
+      // sample, the service triggers its own publication (the native owner's sample carries the
+      // accounts; the service's store answers history, burn and rollups). Every other
+      // composition keeps the TypeScript publisher.
       stopAgentUsageSnapshot =
-        process.platform !== 'win32' && rustService.mode === 'on' && rustGroupOn('usageSnapshot')
-          ? startRustUsageSnapshotFeed(rustService)
+        process.platform !== 'win32' &&
+        rustService.mode === 'on' &&
+        rustGroupOn('usageSnapshot') &&
+        rustAnalyticsWritersOn()
+          ? null
           : startAgentUsageSnapshot({
               signIn: async () => {
                 const health = await getSignInHealth();

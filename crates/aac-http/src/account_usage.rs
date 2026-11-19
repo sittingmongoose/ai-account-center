@@ -228,13 +228,21 @@ impl AccountUsageCache {
             .collect()
     }
 
-    /// Choose the same unique accounts as the TS sampler before projecting store observations.
-    pub fn store_observations(
-        &self,
-        updated_at: &str,
-        now: i64,
-        cutoff: i64,
-    ) -> Result<Vec<aac_store::usage::Sampled>, Decline> {
+    /// The same generation named by platform, for the Analytics read's dashboard input.
+    pub fn labeled_dashboards(&self, updated_at: &str, now: i64) -> Vec<Value> {
+        [Desktop::Mac, Desktop::Windows]
+            .into_iter()
+            .filter_map(|desktop| {
+                let bytes = self.render(desktop, false, updated_at, now).ok()?;
+                let dashboard = serde_json::from_slice::<Value>(&bytes).ok()?;
+                Some(json!({ "platform": desktop.word(), "dashboard": dashboard }))
+            })
+            .collect()
+    }
+
+    /// Choose the same unique accounts as the TS sampler: available wins, then the newer
+    /// `sampledAt`/`fetchedAt`, in first-seen order.
+    pub fn merged_accounts(&self, updated_at: &str, now: i64) -> Result<Vec<Value>, Decline> {
         let dashboards = self.hub_dashboards(updated_at, now);
         let mut indices = HashMap::new();
         let mut rows: Vec<(Value, Option<i64>, bool)> = Vec::new();
@@ -269,7 +277,17 @@ impl AccountUsageCache {
                 }
             }
         }
-        let rows: Vec<_> = rows.into_iter().map(|row| row.0).collect();
+        Ok(rows.into_iter().map(|row| row.0).collect())
+    }
+
+    /// The unique accounts as store observations (before projecting them).
+    pub fn store_observations(
+        &self,
+        updated_at: &str,
+        now: i64,
+        cutoff: i64,
+    ) -> Result<Vec<aac_store::usage::Sampled>, Decline> {
+        let rows = self.merged_accounts(updated_at, now)?;
         crate::dashboard_observations::observations(&rows, now, cutoff)
     }
 }

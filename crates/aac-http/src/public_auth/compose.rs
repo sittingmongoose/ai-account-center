@@ -35,7 +35,6 @@ const ACCOUNT_LITERALS: &[&str] = &[
 // the complete legacy router, including its handling of unknown methods.
 const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/analytics", &["GET"]),
-    ("/api/accounts/analytics/capture", &["GET", "PUT"]),
     ("/api/accounts/registry", &["GET"]),
     ("/api/accounts/add", &["POST"]),
     ("/api/accounts/signin-command", &["GET"]),
