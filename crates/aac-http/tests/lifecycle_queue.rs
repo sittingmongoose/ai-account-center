@@ -1,8 +1,19 @@
 #![cfg(unix)]
 
 use aac_http::lifecycle_queue::LifecycleQueues;
-use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
+use std::{
+    fs,
+    future::{Future, poll_fn},
+    os::unix::fs::PermissionsExt,
+    pin::Pin,
+    sync::Arc,
+    task::Poll,
+};
 use tokio::sync::oneshot;
+
+async fn pending(mut future: Pin<&mut impl Future>) -> bool {
+    poll_fn(|cx| Poll::Ready(future.as_mut().poll(cx).is_pending())).await
+}
 
 #[tokio::test]
 async fn a_native_workflow_holds_its_provider_turn_until_it_settles()
@@ -29,13 +40,13 @@ async fn a_native_workflow_holds_its_provider_turn_until_it_settles()
     let second = queues.run("key:zai", async { 2 });
     let third = queues.run("key:zai", async { 3 });
     tokio::pin!(second, third);
-    assert!(futures_util::poll!(&mut second).is_pending());
-    assert!(futures_util::poll!(&mut third).is_pending());
+    assert!(pending(second.as_mut()).await);
+    assert!(pending(third.as_mut()).await);
     assert_eq!(queues.run("key:kimi-code", async { 1 }).await?, 1);
 
     assert!(release.send(()).is_ok());
     assert_eq!(first.await??, Err("fixture rollback"));
-    assert!(futures_util::poll!(&mut third).is_pending());
+    assert!(pending(third.as_mut()).await);
     assert_eq!(second.await?, 2);
     assert_eq!(third.await?, 3);
     Ok(())
