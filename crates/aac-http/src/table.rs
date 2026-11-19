@@ -451,7 +451,11 @@ mod tests {
                     | Handler::ClaudeHistoryCleanup
                     | Handler::StatusAnswers
                     | Handler::SignInPoll
-            )));
+            )
+            || (r.handler == Handler::Lifecycle
+                && r.path == crate::public_auth::lifecycle_host::ENDPOINT
+                && r.method == axum::http::Method::POST
+                && r.roles.as_slice() == [Role::Admin])));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         // M5 lane K: the one reset claims row, internal, on its own pool.
         let reset: Vec<&Row> = rows
@@ -467,6 +471,10 @@ mod tests {
             ("/internal/collection/recheck", Handler::CollectionRecheck),
             ("/internal/collection-signin-poll", Handler::SignInPoll),
             ("/internal/status/answers", Handler::StatusAnswers),
+            (
+                crate::public_auth::lifecycle_host::ENDPOINT,
+                Handler::Lifecycle,
+            ),
         ] {
             assert!(
                 rows.iter()
