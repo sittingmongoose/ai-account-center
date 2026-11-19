@@ -581,11 +581,30 @@ pub fn native_update_paused(
     value
 }
 
-/// The process's uid without an `unsafe` call: `/proc/self/status`'s first `Uid:` field.
-fn current_uid() -> Option<u32> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let line = status.lines().find(|line| line.starts_with("Uid:"))?;
-    line.split_whitespace().nth(1)?.parse().ok()
+/// The process's uid without an `unsafe` call: `/proc/self/status`'s first `Uid:` field, else
+/// the home folder's owner.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn current_uid() -> Option<u32> {
+    if let Some(uid) = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find(|line| line.starts_with("Uid:"))
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|field| field.parse().ok())
+        })
+    {
+        return Some(uid);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Some(meta) = std::env::var_os("HOME").and_then(|home| std::fs::metadata(home).ok()) {
+            return Some(meta.uid());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

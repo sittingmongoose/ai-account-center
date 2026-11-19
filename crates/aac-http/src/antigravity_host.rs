@@ -377,7 +377,9 @@ fn file_identity(home: &Path) -> Option<String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let uid = unsafe { libc::getuid() };
+            let Some(uid) = crate::antigravity_probes::current_uid() else {
+                return None;
+            };
             if meta.uid() != uid {
                 return None;
             }
