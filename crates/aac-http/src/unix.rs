@@ -628,7 +628,7 @@ pub async fn serve(
         limits: Limits::new(),
         identity,
         feeds: Feeds::new(),
-        agents,
+        agents: agents.clone(),
         store: store.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.

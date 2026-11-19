@@ -39,7 +39,6 @@ const PRICING: &str = "analytics-pricing";
 const TICK_MS: u64 = 15_000;
 /// The first pass waits for the front door to feed its inputs.
 const FIRST_PASS_MS: u64 = 20_000;
-const HOUR: i64 = 3_600_000;
 const DAY: i64 = 86_400_000;
 /// The activity converge window and interval (`account-analytics-activity.ts`).
 const CONVERGE_WINDOW_MS: i64 = 10 * 60_000;
@@ -149,7 +148,7 @@ fn read_archive_file(file: &Path) -> Option<Vec<u8>> {
     }
     if file.extension().and_then(|e| e.to_str()) == Some("gz") {
         use std::io::Read;
-        let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
+        let decoder = flate2::read::GzDecoder::new(&bytes[..]);
         let mut out = Vec::new();
         decoder
             .take(MAX_ARCHIVE_BYTES + 1)
@@ -483,7 +482,7 @@ pub(crate) async fn analytics_jobs(
             .unwrap_or(false);
         if enabled {
             if let Some(engine) = store.analytics_engine() {
-                let now = aac_store::engine::now_ms();
+                let now = aac_store::engine::now_ms() as i64;
                 let refresh = refresh_seconds(&ccs_dir);
                 let interval = quota_interval_ms(refresh);
                 {
@@ -499,32 +498,31 @@ pub(crate) async fn analytics_jobs(
     }
 }
 
-/// The activity source states the last pass produced (the owned read's live grid).
-pub(crate) fn source_states(state: &Mutex<WriterState>) -> Vec<Value> {
-    state
-        .lock()
-        .map(|s| s.states.clone())
-        .unwrap_or_default()
-}
-
-/// The store call the owned read uses to ingest a pass's reports directly (tests, backfill).
-pub(crate) fn ingest_reports(
-    engine: &aac_store::engine::Engine,
-    reports: &[Value],
-) -> Result<Value, String> {
-    let typed = report::contract_reports(reports).map_err(|e| e.to_string())?;
-    let result = activity::ingest(engine, &typed).map_err(|e| e.to_string())?;
-    serde_json::to_value(result).map_err(|e| e.to_string())
-}
-
-/// Re-exported for the host's tests: the quota cadence clamp.
-pub(crate) fn interval_for(refresh_seconds: i64) -> i64 {
-    quota_interval_ms(refresh_seconds)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The activity source states the last pass produced (the owned read's live grid).
+    fn source_states(state: &Mutex<WriterState>) -> Vec<Value> {
+        state
+            .lock()
+            .map(|s| s.states.clone())
+            .unwrap_or_default()
+    }
+
+    /// Ingest a pass's reports directly (the owned read / backfill path).
+    fn ingest_reports(
+        engine: &aac_store::engine::Engine,
+        reports: &[Value],
+    ) -> Result<Value, String> {
+        let typed = report::contract_reports(reports).map_err(|e| e.to_string())?;
+        let result = activity::ingest(engine, &typed).map_err(|e| e.to_string())?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    }
+
+    /// The quota cadence clamp.
+    fn interval_for(refresh_seconds: i64) -> i64 {
+        quota_interval_ms(refresh_seconds)
+    }
 
     #[test]
     fn quota_cadence_clamps_the_refresh_interval() {
