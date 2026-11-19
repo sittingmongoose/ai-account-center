@@ -16,7 +16,7 @@ fn hex(s: &str, length: usize) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn load(
+pub(super) fn load(
     root: &Path,
     id: &str,
     name: Option<&str>,
@@ -37,6 +37,20 @@ fn load(
         }
         _ => Err(Decline::Unsupported),
     }
+}
+
+pub(super) fn usage_observation(root: &Path, key: &str) -> Option<Value> {
+    if !hex(key, 64) {
+        return None;
+    }
+    load(
+        root,
+        crate::collection_cache::OBSERVATIONS,
+        Some(&format!("{key}.json")),
+        true,
+    )
+    .ok()
+    .flatten()
 }
 
 /// Read the last Windows Claude sample only for the caller's current manifest hash.
@@ -288,7 +302,7 @@ pub(crate) fn cursor_quota_matches(value: &Value, fingerprint: &str) -> bool {
             .is_some_and(|rows| rows.len() <= 2)
 }
 
-fn cursor_quota(root: &Path, fingerprint: &str) -> Result<Option<Value>, Decline> {
+pub(super) fn cursor_quota(root: &Path, fingerprint: &str) -> Result<Option<Value>, Decline> {
     if !cursor_fingerprint(fingerprint) {
         return Err(Decline::Shape);
     }

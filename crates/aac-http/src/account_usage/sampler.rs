@@ -29,17 +29,23 @@ pub async fn run<C, Collect, P, Publish>(
     mut collect: C,
     mut publish: P,
 ) where
-    C: FnMut() -> Collect,
+    C: FnMut(bool) -> Collect,
     Collect: Future<Output = Vec<DashboardSample>>,
     P: FnMut(AccountUsageCache) -> Publish,
     Publish: Future<Output = ()>,
 {
     let mut generation = 0_u64;
+    let mut forced = false;
     loop {
+        if let Ok(now) = UtcMs::now() {
+            cache
+                .last_refresh
+                .fetch_max(now.get(), std::sync::atomic::Ordering::AcqRel);
+        }
         let samples = tokio::select! {
             biased;
             () = cancel.cancelled() => return,
-            samples = collect() => samples,
+            samples = collect(forced) => samples,
         };
         let Some(now) = UtcMs::now().ok().map(UtcMs::get) else {
             return;
@@ -64,23 +70,29 @@ pub async fn run<C, Collect, P, Publish>(
                 () = publish(cache.clone()) => {}
             }
         }
-        if !wait(&mut interval_ms, &cancel).await {
+        let Some(next) = wait(&mut interval_ms, &cancel, &cache.refresh).await else {
             return;
-        }
+        };
+        forced = next;
     }
 }
 
-async fn wait(interval_ms: &mut watch::Receiver<u64>, cancel: &CancellationToken) -> bool {
+async fn wait(
+    interval_ms: &mut watch::Receiver<u64>,
+    cancel: &CancellationToken,
+    refresh: &tokio::sync::Notify,
+) -> Option<bool> {
     loop {
         let duration =
             Duration::from_millis((*interval_ms.borrow_and_update()).clamp(30_000, 3_600_000));
         tokio::select! {
             biased;
-            () = cancel.cancelled() => return false,
+            () = cancel.cancelled() => return None,
+            () = refresh.notified() => return Some(true),
             changed = interval_ms.changed() => {
-                if changed.is_err() { return false }
+                if changed.is_err() { return None }
             }
-            () = tokio::time::sleep(duration) => return true,
+            () = tokio::time::sleep(duration) => return Some(false),
         }
     }
 }
@@ -101,7 +113,7 @@ mod tests {
             cache.clone(),
             interval,
             cancel.clone(),
-            || async {
+            |_| async {
                 vec![DashboardSample {
                     desktop: Desktop::Mac,
                     secure: false,

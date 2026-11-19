@@ -59,6 +59,12 @@ struct Entry {
     /// reference commands run over the identical SSH policy when no verb can prove a step.
     computer: Option<Computer>,
 }
+pub(crate) struct UsageHost {
+    pub(crate) id: String,
+    pub(crate) platform: &'static str,
+    pub(crate) alias: Option<String>,
+}
+
 struct Registry {
     entries: Vec<Entry>,
 }
@@ -389,11 +395,10 @@ impl Agents {
             active: Mutex::new(BTreeMap::new()),
         }
     }
-    pub(crate) async fn client(
+    async fn registered(
         &self,
-        selector: &Selector,
         deadline: tokio::time::Instant,
-    ) -> Option<AgentClient> {
+    ) -> Option<Arc<Result<Registry, Failure>>> {
         let mut loaded = self.registry.subscribe();
         if !self.loading.swap(true, Ordering::AcqRel) {
             let root = self.root.clone();
@@ -409,7 +414,7 @@ impl Agents {
                 ready.send_replace(Some(Arc::new(result)));
             });
         }
-        let registry = tokio::time::timeout_at(deadline, async {
+        tokio::time::timeout_at(deadline, async {
             loop {
                 if let Some(registry) = loaded.borrow_and_update().clone() {
                     break Some(registry);
@@ -421,11 +426,48 @@ impl Agents {
         })
         .await
         .ok()
-        .flatten();
+        .flatten()
+    }
+
+    pub(crate) async fn client(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Option<AgentClient> {
+        self.registered(deadline)
+            .await?
+            .as_ref()
+            .as_ref()
+            .ok()?
+            .client(selector)
+    }
+
+    pub(crate) async fn usage_hosts(&self) -> Vec<UsageHost> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let Some(registered) = self.registered(deadline).await else {
+            return Vec::new();
+        };
+        let Ok(registry) = registered.as_ref() else {
+            return Vec::new();
+        };
         registry
-            .as_deref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.client(selector))
+            .entries
+            .iter()
+            .filter(|entry| entry.client.is_some())
+            .map(|entry| {
+                let platform = match entry.config.os {
+                    OperatingSystem::Linux => "ubuntu",
+                    OperatingSystem::Mac => "mac",
+                    OperatingSystem::Windows => "windows",
+                };
+                let remote = matches!(entry.config.transport, TransportConfig::Ssh { .. });
+                UsageHost {
+                    id: entry.config.id.as_str().to_owned(),
+                    platform,
+                    alias: remote.then(|| entry.config.id.as_str().to_owned()),
+                }
+            })
+            .collect()
     }
 
     pub(crate) async fn app_call(
@@ -647,37 +689,6 @@ impl Agents {
         response(Body::from_stream(stream))
     }
 
-    /// The registry, loaded once per boot, waited for within the caller's deadline.
-    async fn loaded_registry(
-        &self,
-        deadline: tokio::time::Instant,
-    ) -> Option<Arc<Result<Registry, Failure>>> {
-        let mut loaded = self.registry.subscribe();
-        if !self.loading.swap(true, Ordering::AcqRel) {
-            let root = self.root.clone();
-            let ready = self.registry.clone();
-            tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(move || Registry::load(&root))
-                    .await
-                    .unwrap_or_else(|_| Err(refused()));
-                ready.send_replace(Some(Arc::new(result)));
-            });
-        }
-        tokio::time::timeout_at(deadline, async {
-            loop {
-                if let Some(registry) = loaded.borrow_and_update().clone() {
-                    break Some(registry);
-                }
-                if loaded.changed().await.is_err() {
-                    break None;
-                }
-            }
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-
     /// In-process verb call for the Open orchestrator: the terminal result value, or None
     /// when the agent falls back, fails or cannot be reached. The same admission as `call`,
     /// without the streaming control channel these verbs do not use.
@@ -705,7 +716,7 @@ impl Agents {
             .filter(|ms| *ms > 0)?;
         let permit = self.slots.clone().try_acquire_owned().ok()?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(budget);
-        let registry = self.loaded_registry(deadline).await?;
+        let registry = self.registered(deadline).await?;
         let client = registry.as_ref().as_ref().ok()?.client(&computer)?;
         let call_id = random_call_id()?;
         let args_text = serde_json::to_string(&args).ok()?;
@@ -737,7 +748,7 @@ impl Agents {
         max_bytes: usize,
     ) -> Result<ProcessOutput, Cause> {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-        let registry = self.loaded_registry(deadline).await.ok_or(Cause::Refused)?;
+        let registry = self.registered(deadline).await.ok_or(Cause::Refused)?;
         let handle = registry
             .as_ref()
             .as_ref()
