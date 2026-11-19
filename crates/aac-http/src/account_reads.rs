@@ -609,82 +609,8 @@ pub(crate) fn owned_analytics(
     let Some(engine) = store.and_then(|host| host.analytics_engine()) else {
         return Some(Err(aac_views::decline::Decline::Unsupported));
     };
-    let mut reads = EngineStore::new(engine);
+    let mut reads = crate::analytics_route::EngineStore::new(engine);
     Some(aac_views::analytics_owned::compose(envelope, &mut reads))
-}
-
-/// The hosted Engine as the owned composition's store reads: the one writer's own method contract.
-pub(crate) struct EngineStore {
-    engine: std::sync::Arc<aac_store::engine::Engine>,
-    /// The read's own clock, used to stamp an activity answer whose store has no read yet —
-    /// the clock TS's `storeActivityAnswer` used before its first pass.
-    clock: Option<u64>,
-}
-
-impl EngineStore {
-    pub(crate) fn new(engine: std::sync::Arc<aac_store::engine::Engine>) -> Self {
-        Self {
-            engine,
-            clock: None,
-        }
-    }
-
-    /// The native read: a store without a last read is stamped with this request's clock.
-    pub(crate) fn with_clock(engine: std::sync::Arc<aac_store::engine::Engine>, now: u64) -> Self {
-        Self {
-            engine,
-            clock: Some(now),
-        }
-    }
-}
-
-impl aac_views::analytics_owned::AnalyticsStore for EngineStore {
-    fn activity_oldest(&mut self) -> Result<Option<u64>, aac_views::decline::Decline> {
-        let value = aac_store::ops::call(&self.engine, "activityOldest", "{}")
-            .map_err(|_| aac_views::decline::Decline::Internal)?;
-        Ok(value.as_u64())
-    }
-    fn quota_oldest(&mut self) -> Result<Option<u64>, aac_views::decline::Decline> {
-        let value = aac_store::ops::call(&self.engine, "oldest", "{}")
-            .map_err(|_| aac_views::decline::Decline::Internal)?;
-        Ok(value.as_u64())
-    }
-    fn activity_range(&mut self, query: Value) -> Result<Value, aac_views::decline::Decline> {
-        aac_store::ops::call(&self.engine, "activityRange", &query.to_string())
-            .map_err(|_| aac_views::decline::Decline::Internal)
-    }
-    fn activity_sources(
-        &mut self,
-        from_ms: u64,
-        to_ms: u64,
-    ) -> Result<Value, aac_views::decline::Decline> {
-        let args = json!({ "fromMs": from_ms, "toMs": to_ms });
-        let mut value = aac_store::ops::call(&self.engine, "activitySources", &args.to_string())
-            .map_err(|_| aac_views::decline::Decline::Internal)?;
-        // No read yet: stamp this request's clock, as the TS answer did before its first pass.
-        if let Some(clock) = self.clock
-            && let Some(computers) = value.get_mut("computers").and_then(Value::as_array_mut)
-        {
-            let unread = computers.iter().all(|computer| {
-                computer
-                    .get("lastReadMs")
-                    .and_then(Value::as_u64)
-                    .is_none_or(|at| at == 0)
-            });
-            if unread {
-                for computer in computers {
-                    if let Some(map) = computer.as_object_mut() {
-                        map.insert("lastReadMs".into(), json!(clock));
-                    }
-                }
-            }
-        }
-        Ok(value)
-    }
-    fn history_records(&mut self, query: Value) -> Result<Value, aac_views::decline::Decline> {
-        aac_store::ops::call(&self.engine, "historyRecords", &query.to_string())
-            .map_err(|_| aac_views::decline::Decline::Internal)
-    }
 }
 
 #[cfg(test)]

@@ -1350,7 +1350,14 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(row.handler, Decline::Unsupported);
             };
             let root = shared.boot.ccs_dir.clone();
-            let feeds = shared.feeds.clone();
+            // The same fed dashboard generation Accounts and Home render, as the read's input.
+            let snapshot = shared
+                .feeds
+                .latest("analytics-dashboard")
+                .ok()
+                .and_then(|generation| {
+                    serde_json::from_str::<serde_json::Value>(generation.data.get()).ok()
+                });
             let live = Arc::clone(&shared.analytics_live);
             match shared
                 .limits
@@ -1358,7 +1365,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     crate::analytics_route::compose(
                         engine,
                         &root,
-                        &feeds,
+                        snapshot.as_ref(),
                         &live,
                         query.as_deref(),
                         aac_store::engine::now_ms() as i64,

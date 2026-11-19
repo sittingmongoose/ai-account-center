@@ -4,17 +4,12 @@
 //! offsets from the host zoneinfo, the pricing facts over the store dictionary and the provider
 //! table — then composes through [`aac_views::analytics_owned::compose_native`]. Every input is an
 //! existing owner's answer: no second collector, cache or table.
-use crate::account_reads::EngineStore;
-use crate::feed::Feeds;
 use aac_store::engine::Engine;
 use aac_views::decline::Decline;
 use serde_json::{Map, Value, json};
 use std::path::Path;
 use std::sync::Arc;
 
-/// The fed analytics dashboards: `{dashboards: [{platform, dashboard}, ...]}` (older feeds carry
-/// bare dashboards in mac-then-windows order; a bare single dashboard cannot name its platform).
-const DASHBOARD: &str = "analytics-dashboard";
 /// The display zone's default when no preference is saved (`DEFAULT_DASHBOARD_TIME_ZONE`).
 const DEFAULT_ZONE: &str = "America/New_York";
 const DAY_MS: f64 = 86_400_000.0;
@@ -67,15 +62,28 @@ fn query_object(raw: Option<&str>) -> Result<Map<String, Value>, Decline> {
 }
 
 /// The saved display zone (`readDashboardPreferences(scope).timeZone`), default America/New_York.
+/// Read through the registry row, the one dashboard-preferences file; a pending transaction
+/// leaves the last committed value in force, as the TS reader's refusal does.
 fn saved_zone(root: &Path) -> String {
-    crate::account_reads::preferences(root)
-        .and_then(|value| {
-            value
-                .get("timeZone")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| DEFAULT_ZONE.to_owned())
+    let file = aac_files::registry::row("dashboard-preferences")
+        .ok()
+        .filter(|row| row.root == aac_files::registry::Root::Ccs)
+        .and_then(|row| Some(root.join(row.file(None).ok()?)));
+    file.and_then(|file| {
+        let policy = aac_files::read::ReadPolicy::capped(64 * 1024)
+            .ancestors(aac_files::read::Ancestors::NoLinkBelow(root));
+        let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
+            return None;
+        };
+        serde_json::from_slice::<Value>(&bytes).ok()
+    })
+    .and_then(|value| {
+        value
+            .get("timeZone")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
+    .unwrap_or_else(|| DEFAULT_ZONE.to_owned())
 }
 
 /// `rustAnalyticsOwnedDashboard`: the dashboard's accounts as ordered entry lists.
@@ -135,16 +143,14 @@ fn platform_label(entry: &Value) -> Option<&str> {
     entry.get("platform").and_then(Value::as_str)
 }
 
-/// The platform's dashboard from the fed generation.
-fn dashboard_of(feeds: &Feeds, platform: &str) -> Result<Value, Decline> {
-    let Some(generation) = feeds.latest(DASHBOARD).ok() else {
+/// The platform's dashboard from the fed document (`analytics-dashboard`), when the host has one.
+fn dashboard_of(snapshot: Option<&Value>, platform: &str) -> Result<Value, Decline> {
+    let Some(doc) = snapshot else {
         return Ok(json!({ "accounts": [] }));
     };
-    let doc: Value = serde_json::from_str(generation.data.get()).map_err(|_| Decline::Shape)?;
-    let list = doc
-        .get("dashboards")
-        .and_then(Value::as_array)
-        .ok_or(Decline::Shape)?;
+    let Some(list) = doc.get("dashboards").and_then(Value::as_array) else {
+        return Ok(json!({ "accounts": [] }));
+    };
     let found = if list.iter().any(|entry| platform_label(entry).is_some()) {
         list.iter()
             .find(|entry| platform_label(entry) == Some(platform))
@@ -166,7 +172,7 @@ fn dashboard_of(feeds: &Feeds, platform: &str) -> Result<Value, Decline> {
 pub(crate) fn compose(
     engine: Arc<Engine>,
     root: &Path,
-    feeds: &Feeds,
+    snapshot: Option<&Value>,
     live: &crate::analytics_live::Live,
     raw_query: Option<&str>,
     now: i64,
@@ -198,7 +204,7 @@ pub(crate) fn compose(
     // The query object the answer carries: the route object, with the resolved tz in its place.
     query.insert("tz".into(), json!(tz.clone()));
 
-    let dashboard = dashboard_of(feeds, &platform)?;
+    let dashboard = dashboard_of(snapshot, &platform)?;
     let dashboard = dashboard_entries(&dashboard)?;
     #[allow(clippy::cast_sign_loss)]
     let clock_ms = now.max(0) as u64;
@@ -247,4 +253,78 @@ pub(crate) fn compose(
     };
     let mut store = EngineStore::with_clock(engine, clock_ms);
     with_store(&mut store)
+}
+
+/// The hosted Engine as the owned composition's store reads: the one writer's own method contract.
+pub(crate) struct EngineStore {
+    engine: std::sync::Arc<aac_store::engine::Engine>,
+    /// The read's own clock, used to stamp an activity answer whose store has no read yet —
+    /// the clock TS's `storeActivityAnswer` used before its first pass.
+    clock: Option<u64>,
+}
+
+impl EngineStore {
+    pub(crate) fn new(engine: std::sync::Arc<aac_store::engine::Engine>) -> Self {
+        Self {
+            engine,
+            clock: None,
+        }
+    }
+
+    /// The native read: a store without a last read is stamped with this request's clock.
+    pub(crate) fn with_clock(engine: std::sync::Arc<aac_store::engine::Engine>, now: u64) -> Self {
+        Self {
+            engine,
+            clock: Some(now),
+        }
+    }
+}
+
+impl aac_views::analytics_owned::AnalyticsStore for EngineStore {
+    fn activity_oldest(&mut self) -> Result<Option<u64>, aac_views::decline::Decline> {
+        let value = aac_store::ops::call(&self.engine, "activityOldest", "{}")
+            .map_err(|_| aac_views::decline::Decline::Internal)?;
+        Ok(value.as_u64())
+    }
+    fn quota_oldest(&mut self) -> Result<Option<u64>, aac_views::decline::Decline> {
+        let value = aac_store::ops::call(&self.engine, "oldest", "{}")
+            .map_err(|_| aac_views::decline::Decline::Internal)?;
+        Ok(value.as_u64())
+    }
+    fn activity_range(&mut self, query: Value) -> Result<Value, aac_views::decline::Decline> {
+        aac_store::ops::call(&self.engine, "activityRange", &query.to_string())
+            .map_err(|_| aac_views::decline::Decline::Internal)
+    }
+    fn activity_sources(
+        &mut self,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Value, aac_views::decline::Decline> {
+        let args = json!({ "fromMs": from_ms, "toMs": to_ms });
+        let mut value = aac_store::ops::call(&self.engine, "activitySources", &args.to_string())
+            .map_err(|_| aac_views::decline::Decline::Internal)?;
+        // No read yet: stamp this request's clock, as the TS answer did before its first pass.
+        if let Some(clock) = self.clock
+            && let Some(computers) = value.get_mut("computers").and_then(Value::as_array_mut)
+        {
+            let unread = computers.iter().all(|computer| {
+                computer
+                    .get("lastReadMs")
+                    .and_then(Value::as_u64)
+                    .is_none_or(|at| at == 0)
+            });
+            if unread {
+                for computer in computers {
+                    if let Some(map) = computer.as_object_mut() {
+                        map.insert("lastReadMs".into(), json!(clock));
+                    }
+                }
+            }
+        }
+        Ok(value)
+    }
+    fn history_records(&mut self, query: Value) -> Result<Value, aac_views::decline::Decline> {
+        aac_store::ops::call(&self.engine, "historyRecords", &query.to_string())
+            .map_err(|_| aac_views::decline::Decline::Internal)
+    }
 }
