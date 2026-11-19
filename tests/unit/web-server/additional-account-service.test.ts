@@ -76,6 +76,17 @@ afterEach(async () => {
 });
 
 describe('additional account usage service', () => {
+  it('re-checks the reviewed selector and never collects a newer host with the same id', async () => {
+    const { service, calls, setManifest } = fixture();
+    const source = { provider: 'zai', platform: 'mac', sshHost: 'reviewed-mac' } as const;
+    setManifest(configuration([{ ...source, sshHost: 'replacement-mac' }]));
+    expect(await service.refreshAccount('zai:usage', source)).toBeNull();
+    expect(calls).toHaveLength(0);
+    setManifest(configuration([source]));
+    expect(await service.refreshAccount('zai:usage', source)).toMatchObject({ id: 'zai:usage' });
+    expect(calls).toEqual([source]);
+  });
+
   it('retains Antigravity tier metadata through the legacy desktop collector and cache without leaking it', async () => {
     const { service } = fixture({
       runSource: async (source) =>
