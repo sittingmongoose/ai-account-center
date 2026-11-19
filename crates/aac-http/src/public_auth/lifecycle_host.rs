@@ -11,15 +11,26 @@ pub(crate) use unix::{PACKET_CAP, receive};
 #[derive(Clone)]
 pub(super) struct Routes {
     host: Weak<OwnerHost>,
-    private: bool,
+    #[cfg(unix)]
+    private: Option<super::service_link::ServiceLink>,
 }
 
 impl Routes {
-    pub(super) fn new(host: &Arc<OwnerHost>, private: bool) -> Self {
+    pub(super) fn new(host: &Arc<OwnerHost>) -> Self {
         Self {
             host: Arc::downgrade(host),
-            private,
+            #[cfg(unix)]
+            private: None,
         }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn with_private(
+        mut self,
+        private: Option<super::service_link::ServiceLink>,
+    ) -> Self {
+        self.private = private;
+        self
     }
 
     pub(super) fn router(&self) -> Router {
@@ -50,7 +61,9 @@ impl Routes {
 
     pub(super) fn owns(&self, request: &Request) -> bool {
         #[cfg(unix)]
-        if self.private && NativeOwners::owns_collection(request.method(), request.uri().path()) {
+        if self.private.is_some()
+            && NativeOwners::owns_collection(request.method(), request.uri().path())
+        {
             return true;
         }
         NativeOwners::owns_lifecycle(request.method(), request.uri().path())
@@ -63,11 +76,9 @@ impl Routes {
         let Some(host) = self.host.upgrade() else {
             return super::service_error();
         };
-        if self.private {
-            #[cfg(unix)]
-            return unix::public(&host, request).await;
-            #[cfg(not(unix))]
-            return super::service_error();
+        #[cfg(unix)]
+        if let Some(link) = &self.private {
+            return unix::public(link, request).await;
         }
         if let Some(route) = lifecycle::Route::of(request.method(), request.uri().path()) {
             return lifecycle::handle(host.root(), route, request).await;
@@ -121,7 +132,7 @@ mod unix {
     }
 
     pub(in crate::public_auth) async fn public(
-        host: &super::super::owner_host::OwnerHost,
+        link: &super::super::service_link::ServiceLink,
         request: Request,
     ) -> Reply {
         if request.method() == Method::OPTIONS {
@@ -217,7 +228,7 @@ mod unix {
             ENDPOINT
         };
         let principal = principal.to_string();
-        let Some(answer) = host
+        let Some(answer) = link
             .request(
                 "POST",
                 endpoint,

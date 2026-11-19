@@ -204,13 +204,6 @@ impl OwnerHost {
         body: Option<&[u8]>,
     ) -> Option<ServiceReply> {
         let link = self.link().await?;
-        if matches!(
-            uri,
-            super::lifecycle_host::ENDPOINT | super::lifecycle_host::COLLECTION_ENDPOINT
-        ) && !link.owns_lifecycle()
-        {
-            return None;
-        }
         let reply = link.request(method, uri, principal, headers, body).await;
         if reply.is_none() {
             *self.link.lock().unwrap_or_else(|p| p.into_inner()) = None;

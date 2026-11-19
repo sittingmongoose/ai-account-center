@@ -344,6 +344,17 @@ impl OwnedStore {
         })
     }
 
+    /// Hold the root's collection producer lease for the lifetime of the sampler.
+    pub fn claim_collection(root: &Path) -> Result<Self, Failure> {
+        Self::open(
+            root,
+            Path::new("collection-owner"),
+            0,
+            Parents::Private,
+            Lease::File,
+        )
+    }
+
     /// Remove a private store's leaf under its writer lease. A symlink is unlinked as a name,
     /// never followed, and a directory is refused by the operating system.
     pub fn remove(&self) -> Result<(), Failure> {

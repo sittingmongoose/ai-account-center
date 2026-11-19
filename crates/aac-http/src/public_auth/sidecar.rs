@@ -44,8 +44,7 @@ impl Sidecar {
     pub async fn start(
         root: &Path,
         public: SocketAddr,
-        native_collection: bool,
-        private_lifecycle: bool,
+        collection_selected: bool,
     ) -> io::Result<Option<Self>> {
         let explicit = std::env::var_os("AAC_TS_SIDECAR");
         if explicit.as_deref() == Some(std::ffi::OsStr::new("off")) {
@@ -79,13 +78,12 @@ impl Sidecar {
             .env("AAC_CUT_HUB_DIRECTORY", cache_directory.path())
             .env("AAC_CUT_PUBLIC_OWNERS", "1")
             .env("AAC_CUT_PUBLIC_LIFECYCLE", "1")
-            .env(
-                "AAC_CUT_PRIVATE_LIFECYCLE",
-                if private_lifecycle { "1" } else { "0" },
-            )
+            // Public boot already selected collection. The sidecar may attach to a
+            // service, but cannot launch a new sampler if its own store attach fails.
+            .env("AAC_CUT_PRIVATE_LIFECYCLE", "0")
             .env(
                 "AAC_CUT_PUBLIC_COLLECTION",
-                if native_collection { "1" } else { "0" },
+                if collection_selected { "1" } else { "0" },
             )
             .env("AAC_RUST_COMPOSE", "1")
             .env("AAC_RUST_SERVICE", "on")

@@ -479,8 +479,13 @@ pub(crate) async fn run_public_at(
     };
     let enabled = owner_host::enabled();
     #[cfg(unix)]
-    let has_external =
-        cut && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
+    let adopted = if cut {
+        service_link::ServiceLink::acquire_lifecycle(&root).await?
+    } else {
+        None
+    };
+    #[cfg(unix)]
+    let has_external = adopted.is_some();
     #[cfg(not(unix))]
     let has_external = false;
     let groups = groups.map(|mut groups| {
@@ -493,8 +498,7 @@ pub(crate) async fn run_public_at(
         sidecar::Sidecar::start(
             &root,
             address,
-            groups.is_some_and(|groups| groups.collection),
-            has_external,
+            has_external || groups.is_some_and(|groups| groups.collection),
         )
         .await?
     } else {
@@ -531,7 +535,9 @@ pub(crate) async fn run_public_at(
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
-        let routes = lifecycle_host::Routes::new(host, has_external);
+        let routes = lifecycle_host::Routes::new(host);
+        #[cfg(unix)]
+        let routes = routes.with_private(adopted);
         host.register("lifecycle", routes.router());
         routes
     });
