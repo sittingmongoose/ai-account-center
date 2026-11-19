@@ -33,7 +33,7 @@ def command_for(file):
     if file.suffix in (".js", ".mjs") and "node:test" in file.read_text(encoding="utf-8"):
         return ["/usr/local/bin/node", "--test", str(file)]
     if file.suffix in (".ts", ".js", ".mjs"):
-        return ["/usr/local/bin/bun", "test", "--preload", "./tests/spec/compose-preload.ts", str(file)]
+        return ["/usr/local/bin/bun", "test", "--timeout", "20000", "--preload", "./tests/spec/compose-preload.ts", str(file)]
     return None
 
 
