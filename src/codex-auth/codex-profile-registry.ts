@@ -5,6 +5,7 @@ import * as lockfile from 'proper-lockfile';
 import { createLogger } from '../services/logging';
 import { getCodexAuthRegistryPath } from './codex-profile-paths';
 import { getCcsDirSource } from '../utils/config-manager';
+import { canonicalLeaseRoot, writeProviderFile } from '../shared/private-file-lease';
 import { CODEX_PROFILE_SCHEMA_VERSION, getCodexProfileNameError } from './types';
 import type { CodexProfileData, CodexProfileMetadata } from './types';
 
@@ -151,7 +152,10 @@ function isLockContentionError(err: unknown): boolean {
 export class CodexProfileRegistry {
   private readonly registryPath: string;
 
-  constructor(registryPath?: string) {
+  constructor(
+    registryPath?: string,
+    private readonly lifecycleWrites = false
+  ) {
     this.registryPath = registryPath ?? getCodexAuthRegistryPath();
     this._cleanOrphanTmpFiles();
   }
@@ -184,11 +188,18 @@ export class CodexProfileRegistry {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
 
+    const bytes = yaml.dump(data, { indent: 2, lineWidth: -1 });
+    if (this.lifecycleWrites && path.basename(this.registryPath) === 'codex-profiles.yaml') {
+      const root = canonicalLeaseRoot(dir);
+      if (writeProviderFile(root, root + '.lock', ['codex-metadata'], bytes) === 'committed')
+        return;
+    }
+
     // Unique tmp suffix avoids collisions on concurrent writes and orphan leaks
     const tmpPath = `${this.registryPath}.tmp.${process.pid}.${Math.random().toString(36).slice(2)}`;
 
     try {
-      fs.writeFileSync(tmpPath, yaml.dump(data, { indent: 2, lineWidth: -1 }), {
+      fs.writeFileSync(tmpPath, bytes, {
         mode: 0o600,
       });
       fs.renameSync(tmpPath, this.registryPath);

@@ -1,3 +1,6 @@
+import { runKeyWorkflow } from './account-key-workflow';
+import { editRegistry, keyProbeOutcome } from './account-lifecycle-transitions';
+import { lifecyclePlan } from '../../shared/private-file-lease';
 import type { DashboardProvider } from './account-dashboard-types';
 import { isDashboardProviderId } from './dashboard-provider-table';
 import {
@@ -65,9 +68,23 @@ async function assertCanAdd(
   }
   if (state.unavailableReason) throw new LifecycleHttpError(409, state.unavailableReason);
   const count = await providerAccountCount(env, provider);
-  if (!state.multiAccount && count > 0)
-    throw new LifecycleHttpError(409, 'single_account_provider');
-  if (count >= MAX_ACCOUNTS_PER_PROVIDER) throw new LifecycleHttpError(409, 'too_many_accounts');
+  const chosen = lifecyclePlan(env.ccsDir(), {
+    operation: 'add-admission',
+    multiAccount: state.multiAccount,
+    count,
+    limit: MAX_ACCOUNTS_PER_PROVIDER,
+  });
+  const refusal =
+    chosen === undefined
+      ? !state.multiAccount && count > 0
+        ? 'single_account_provider'
+        : count >= MAX_ACCOUNTS_PER_PROVIDER
+          ? 'too_many_accounts'
+          : null
+      : chosen;
+  if (refusal === 'single_account_provider' || refusal === 'too_many_accounts')
+    throw new LifecycleHttpError(409, refusal);
+  if (refusal !== null) throw new LifecycleHttpError(500, 'write_failed');
 }
 
 export async function addAccount(
@@ -151,29 +168,28 @@ export async function addAccount(
       await readSourceManifestFile(env.ccsDir()).catch(() => null)
     );
     const source = manifest.sources.find((candidate) => candidate.provider === provider);
-    const registry = await updateAccountRegistry(env.ccsDir(), (current) => {
-      if (current.accounts.some((entry) => entry.provider === provider)) {
-        throw new LifecycleHttpError(409, 'single_account_provider');
-      }
-      if (current.accounts.length >= MAX_REGISTRY_ACCOUNTS) {
-        throw new LifecycleHttpError(409, 'too_many_accounts');
-      }
-      return {
-        ...current,
-        accounts: [
-          ...current.accounts,
-          {
-            id: `${provider}:usage`,
-            provider,
-            platform: source?.platform ?? 'ubuntu',
-            sshHost: source?.sshHost ?? null,
-            label: null,
-            credential: { kind: 'discover' },
-            createdAt: new Date(env.now()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
-            createdBy: null,
-          },
-        ],
-      };
+    const root = env.ccsDir();
+    const registry = await updateAccountRegistry(root, (current) => {
+      const edit = editRegistry(root, current, {
+        kind: 'insert',
+        uniqueProvider: true,
+        entry: {
+          id: `${provider}:usage`,
+          provider,
+          platform: source?.platform ?? 'ubuntu',
+          sshHost: source?.sshHost ?? null,
+          label: null,
+          credential: { kind: 'discover' },
+          createdAt: new Date(env.now()).toISOString().replace(/\\.\\d{3}Z$/, 'Z'),
+          createdBy: null,
+        },
+      });
+      if ('refusal' in edit)
+        throw new LifecycleHttpError(
+          409,
+          edit.refusal === 'missing' ? 'write_failed' : edit.refusal
+        );
+      return edit.registry;
     }).catch((error) => {
       throw error instanceof LifecycleHttpError
         ? error
@@ -204,7 +220,7 @@ async function addApiKey(
   await assertCanAdd(env, provider, context);
   const store = env.keyStore({ platform: 'ubuntu', sshHost: null });
   if (!store) throw new LifecycleHttpError(500, 'key_store_unavailable');
-  return serialized(keyQueue(provider), async () => {
+  return serialized(env.ccsDir(), keyQueue(provider), async () => {
     if ((await store.fingerprints(provider)).has(keyFingerprint(secret))) {
       throw new LifecycleHttpError(409, 'duplicate_key');
     }
@@ -217,12 +233,6 @@ async function addApiKey(
     }
     let keyId = newKeyId();
     while (entries.some((entry) => entry.id === `${provider}:acct:${keyId}`)) keyId = newKeyId();
-    let info: StoredKeyInfo;
-    try {
-      info = await store.put(provider, keyId, secret);
-    } catch {
-      throw new LifecycleHttpError(500, 'key_store_unavailable');
-    }
     const entry: RegistryAccount = {
       id: `${provider}:acct:${keyId}`,
       provider,
@@ -233,35 +243,58 @@ async function addApiKey(
       createdAt: new Date(env.now()).toISOString().replace(/\.\d{3}Z$/, 'Z'),
       createdBy: 'dashboard',
     };
-    const without = (current: { version: 2; accounts: RegistryAccount[] }) => ({
-      ...current,
-      accounts: current.accounts.filter((candidate) => candidate.id !== entry.id),
-    });
-    try {
-      await updateAccountRegistry(env.ccsDir(), (current) => {
-        if (current.accounts.length >= MAX_REGISTRY_ACCOUNTS) {
-          throw new LifecycleHttpError(409, 'too_many_accounts');
+    const root = env.ccsDir();
+    let info: StoredKeyInfo | null = null;
+    let check: 'ok' | 'unverified' = 'unverified';
+    let email: string | null = null;
+    const accepted = await runKeyWorkflow(root, 'add', async (effect) => {
+      switch (effect) {
+        case 'store':
+          try {
+            info = await store.put(provider, keyId, secret);
+          } catch {
+            throw new LifecycleHttpError(500, 'key_store_unavailable');
+          }
+          return;
+        case 'publish':
+          await updateAccountRegistry(root, (current) => {
+            const edit = editRegistry(root, current, {
+              kind: 'insert',
+              entry,
+              uniqueProvider: false,
+            });
+            if ('refusal' in edit) throw new LifecycleHttpError(409, 'too_many_accounts');
+            return edit.registry;
+          }).catch((error) => {
+            throw error instanceof LifecycleHttpError
+              ? error
+              : new LifecycleHttpError(500, 'write_failed');
+          });
+          return;
+        case 'probe': {
+          const reading = await env.probe(registrySource(entry));
+          const outcome = keyProbeOutcome(root, reading.status);
+          if (outcome === 'rejected') return false;
+          check = outcome;
+          email = reading.email;
+          return true;
         }
-        return { ...current, accounts: [...current.accounts, entry] };
-      });
-    } catch (error) {
-      await store.delete(provider, keyId).catch(() => undefined);
-      throw error instanceof LifecycleHttpError
-        ? error
-        : new LifecycleHttpError(500, 'write_failed');
-    }
-    const reading = await env.probe(registrySource(entry));
-    if (reading.status === 'needs_sign_in') {
-      await updateAccountRegistry(env.ccsDir(), without).catch(() => undefined);
-      await store.delete(provider, keyId).catch(() => undefined);
-      throw new LifecycleHttpError(422, 'key_rejected');
-    }
-    const check = reading.status === 'ok' || reading.status === 'cached' ? 'ok' : 'unverified';
+        case 'unpublish':
+          await updateAccountRegistry(root, (current) => {
+            const edit = editRegistry(root, current, { kind: 'remove', id: entry.id });
+            return 'refusal' in edit ? current : edit.registry;
+          });
+          return;
+        case 'discard':
+          await store.delete(provider, keyId);
+      }
+    });
+    if (!accepted) throw new LifecycleHttpError(422, 'key_rejected');
     env.audit('accounts.add', { provider, kind: 'api-key' });
     env.onChanged();
     return {
       status: 201,
-      body: { account: entryView(entry, info, true, { email: reading.email }), check },
+      body: { account: entryView(entry, info, true, { email }), check },
     };
   });
 }
@@ -308,7 +341,7 @@ export async function replaceKey(
   const store = env.keyStore({ platform: entry.platform, sshHost: entry.sshHost });
   if (!store) throw new LifecycleHttpError(409, 'not_configured');
   // In the provider's key queue, which a Remove of this account also takes.
-  return serialized(keyQueue(provider), async () => {
+  return serialized(env.ccsDir(), keyQueue(provider), async () => {
     const { entries } = await currentKeyEntry(env, entry);
     const own = await store.info(provider, keyId);
     const others = await store.fingerprints(provider);
@@ -327,26 +360,41 @@ export async function replaceKey(
     while (taken.has(trialId) || (await store.info(provider, trialId)) !== null) {
       trialId = newKeyId();
     }
-    try {
-      await store.put(provider, trialId, secret);
-    } catch {
-      throw new LifecycleHttpError(500, 'key_store_unavailable');
-    }
-    let info: StoredKeyInfo;
-    let check: 'ok' | 'unverified';
-    try {
-      const trial: RegistryAccount = { ...entry, credential: { kind: 'aac-key', keyId: trialId } };
-      const reading = await env.probe(registrySource(trial));
-      if (reading.status === 'needs_sign_in') throw new LifecycleHttpError(422, 'key_rejected');
-      check = reading.status === 'ok' || reading.status === 'cached' ? 'ok' : 'unverified';
-      // The account must still exist before its key is written (never a key without an account).
-      await currentKeyEntry(env, entry);
-      info = await store.put(provider, keyId, secret).catch(() => {
-        throw new LifecycleHttpError(500, 'key_store_unavailable');
-      });
-    } finally {
-      await store.delete(provider, trialId).catch(() => undefined);
-    }
+    let info: StoredKeyInfo | null = null;
+    let check: 'ok' | 'unverified' = 'unverified';
+    const accepted = await runKeyWorkflow(env.ccsDir(), 'replace', async (effect) => {
+      switch (effect) {
+        case 'store':
+          await store.put(provider, trialId, secret).catch(() => {
+            throw new LifecycleHttpError(500, 'key_store_unavailable');
+          });
+          return;
+        case 'probe': {
+          const trial: RegistryAccount = {
+            ...entry,
+            credential: { kind: 'aac-key', keyId: trialId },
+          };
+          const reading = await env.probe(registrySource(trial));
+          const outcome = keyProbeOutcome(env.ccsDir(), reading.status);
+          if (outcome === 'rejected') return false;
+          check = outcome;
+          return true;
+        }
+        case 'publish':
+          // The store and account identity must still match the reviewed entry.
+          await currentKeyEntry(env, entry);
+          info = await store.put(provider, keyId, secret).catch(() => {
+            throw new LifecycleHttpError(500, 'key_store_unavailable');
+          });
+          return;
+        case 'discard':
+          await store.delete(provider, trialId);
+          return;
+        case 'unpublish':
+          throw new LifecycleHttpError(500, 'write_failed');
+      }
+    });
+    if (!accepted) throw new LifecycleHttpError(422, 'key_rejected');
     env.audit('accounts.key.replaced', { provider });
     env.onChanged();
     return { status: 200, body: { account: entryView(entry, info, true), check } };
@@ -391,10 +439,24 @@ export async function signInAgain(
       throw error;
     }
   }
-  return { status: 200, body: { guide: guideFor(account) } };
+  return { status: 200, body: { guide: guideFor(env.ccsDir(), account) } };
 }
 
-function guideFor(account: ResolvedAccount): Record<string, unknown> {
+function guideFor(root: string, account: ResolvedAccount): Record<string, unknown> {
+  const raw = lifecyclePlan(root, {
+    operation: 'guide',
+    kind: account.kind,
+    provider: account.provider,
+    platform: account.kind === 'additional' ? account.entry.platform : null,
+    keyProvider: isKeyProvider(account.provider),
+  });
+  if (raw && typeof raw === 'object') {
+    const reply = raw as Record<string, unknown>;
+    if (reply.refusal === 'use_replace_key' || reply.refusal === 'not_implemented')
+      throw new LifecycleHttpError(409, reply.refusal);
+    if (reply.guide && typeof reply.guide === 'object' && !Array.isArray(reply.guide))
+      return reply.guide as Record<string, unknown>;
+  }
   if (account.kind === 'claude') return { kind: 'open-app', platforms: ['mac', 'windows'] };
   if (account.kind === 'wallet') return { kind: 'browser-extension', platform: 'mac' };
   if (account.kind === 'additional') {

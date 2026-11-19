@@ -101,6 +101,27 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  [
+    'bun',
+    [
+      'tests/spec/local-key-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'node',
+    [
+      'tests/spec/provider-install-writes.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/signin-journal-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   // M6: the T3 hub, the static/Leptos bundle edges and the CLI entry points, recorded from TS and replayable
   // against another front door (AAC_M6_TARGET_URL / AAC_M6_TARGET_CLI).

@@ -1,4 +1,6 @@
 import os from 'os';
+import { activeFileWriterBinary } from '../../shared/private-file-lease';
+import { startLifecycleMaintenance, type MaintenanceStep } from './account-maintenance';
 import { getCcsDir } from '../../utils/config-manager';
 import { AntigravityAccountLifecycle } from '../../antigravity/account-lifecycle';
 import {
@@ -50,7 +52,6 @@ export function claudeHostLifecycleEnabled(
 ): boolean {
   return CLAUDE_HOST_LIFECYCLE_ENABLED || environment.CCS_CLAUDE_HOST_LIFECYCLE === 'on';
 }
-const DAY_MS = 24 * 60 * 60_000;
 
 const logger = createLogger('account-lifecycle');
 
@@ -217,51 +218,58 @@ export function lifecycleProviderFacts(
   };
 }
 
-let maintenance: ReturnType<typeof setInterval> | null = null;
+let maintenance: ReturnType<typeof startLifecycleMaintenance> | null = null;
 
-async function runMaintenance(): Promise<void> {
-  try {
-    await getCodexLifecycle().sweepStaging();
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    const count = await sweepOrphanKeys(getCcsDir());
-    if (count > 0) auditLifecycle('accounts.keys.swept', { count });
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    sweepSignInStaging(getCcsDir());
-    sweepAntigravitySignInMarkers(getCcsDir());
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    const swept = await getAntigravityLifecycle().sweepOrphans();
-    if (swept.removed > 0 || swept.leftInPlace > 0)
-      auditLifecycle('accounts.antigravity.orphans.swept', swept);
-  } catch {
-    /* Retried at the next sweep. */
-  }
-  try {
-    const count = await getClaudeLifecycle().purgeDue();
-    if (count > 0) auditLifecycle('accounts.trash.purge', { count });
-  } catch {
-    /* Retried at the next sweep. */
+async function runMaintenanceStep(step: MaintenanceStep): Promise<void> {
+  const root = getCcsDir();
+  switch (step) {
+    case 'codex-staging':
+      await getCodexLifecycle().sweepStaging();
+      return;
+    case 'orphan-keys': {
+      const count = await sweepOrphanKeys(root);
+      if (count > 0) auditLifecycle('accounts.keys.swept', { count });
+      return;
+    }
+    case 'antigravity-staging':
+      sweepSignInStaging(root);
+      sweepAntigravitySignInMarkers(root);
+      return;
+    case 'antigravity-orphans': {
+      const swept = await getAntigravityLifecycle().sweepOrphans();
+      if (swept.removed > 0 || swept.leftInPlace > 0)
+        auditLifecycle('accounts.antigravity.orphans.swept', swept);
+      return;
+    }
+    case 'claude-trash': {
+      const count = await getClaudeLifecycle().purgeDue();
+      if (count > 0) auditLifecycle('accounts.trash.purge', { count });
+    }
   }
 }
 
-/** At startup and once a day. */
-export function startAccountLifecycleMaintenance(): void {
+/** At startup and once a day. On waits for the guarded writer handoff. */
+export function startAccountLifecycleMaintenance(writerReady?: Promise<void>): void {
   if (maintenance) return;
-  void runMaintenance();
-  maintenance = setInterval(() => void runMaintenance(), DAY_MS);
-  maintenance.unref?.();
+  let stopped = false;
+  let active: ReturnType<typeof startLifecycleMaintenance> | null = null;
+  const start = () => {
+    if (!stopped)
+      active = startLifecycleMaintenance(runMaintenanceStep, activeFileWriterBinary(getCcsDir()));
+  };
+  maintenance = {
+    stop: () => {
+      stopped = true;
+      active?.stop();
+    },
+    native: () => active?.native() ?? false,
+  };
+  if (writerReady) void writerReady.then(start, start);
+  else start();
 }
 
 export function stopAccountLifecycleMaintenance(): void {
-  if (maintenance) clearInterval(maintenance);
+  maintenance?.stop();
   maintenance = null;
   runner?.shutdown();
 }

@@ -246,7 +246,7 @@ export class AntigravityAccountLifecycle {
     if (!this.existingRegistry()) throw new AntigravityLifecycleError('unknown_account');
     let registry: AntigravityProfileRegistry;
     try {
-      registry = new AntigravityProfileRegistry(this.ccsDir());
+      registry = new AntigravityProfileRegistry(this.ccsDir(), { lifecycleWrites: true });
     } catch {
       throw new AntigravityLifecycleError('remove_failed');
     }
@@ -279,7 +279,7 @@ export class AntigravityAccountLifecycle {
    */
   async sweepOrphans(): Promise<{ removed: number; leftInPlace: number }> {
     if (!this.existingRegistry()) return { removed: 0, leftInPlace: 0 };
-    const registry = new AntigravityProfileRegistry(this.ccsDir());
+    const registry = new AntigravityProfileRegistry(this.ccsDir(), { lifecycleWrites: true });
     try {
       return await registry.withLock(async () => registry.sweepOrphanedInstances());
     } catch (error) {
@@ -310,7 +310,7 @@ export class AntigravityAccountLifecycle {
     if (this.nameError(profileId)) throw new AntigravityLifecycleError('write_failed');
     let registry: AntigravityProfileRegistry;
     try {
-      registry = new AntigravityProfileRegistry(this.ccsDir());
+      registry = new AntigravityProfileRegistry(this.ccsDir(), { lifecycleWrites: true });
     } catch {
       throw new AntigravityLifecycleError('write_failed');
     }

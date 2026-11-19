@@ -59,7 +59,7 @@ export const HUNG_TIMEOUTS = 3;
 
 export class RustSupervisor {
   readonly mode: RustServiceMode;
-  protected readonly writesOn: boolean;
+  readonly writesOn: boolean;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */
@@ -139,7 +139,7 @@ export class RustSupervisor {
     binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
   ): Promise<void> {
     if (this.stopped) return;
-    rememberFileLeaseBinary(getCcsDir(), binary);
+    rememberFileLeaseBinary(getCcsDir(), binary, this.writesOn);
     if (this.mode === 'off') {
       let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
       if (transport === undefined) {

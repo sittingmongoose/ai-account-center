@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ConfigError } from '../errors/error-types';
 
 const binaries = new Map<string, string>();
+const handoffRoots = new Set<string>();
 const writers = new Map<string, { binary: string; committed: () => void }>();
 
 export function registerFileWriter(
@@ -12,10 +13,16 @@ export function registerFileWriter(
   committed: () => void
 ): () => void {
   const writer = { binary: path.resolve(binary), committed };
+  handoffRoots.add(root);
   writers.set(root, writer);
   return () => {
     if (writers.get(root) === writer) writers.delete(root);
   };
+}
+
+/** The executable adopted by the current write service for this root. */
+export function activeFileWriterBinary(root: string): string | undefined {
+  return writers.get(canonicalLeaseRoot(root))?.binary;
 }
 
 export interface FileLease {
@@ -30,11 +37,14 @@ export function commitWithFileLease(
   root: string,
   id: string,
   lease: FileLease,
-  bytes: string
+  bytes: string | Buffer,
+  filename?: string
 ): boolean {
   const writer = writers.get(root);
   if (!writer || lease.descriptor === undefined) return false;
-  const result = spawnSync(writer.binary, ['--registered-write', id, root], {
+  const args = ['--registered-write', id, root];
+  if (filename) args.push(filename);
+  const result = spawnSync(writer.binary, args, {
     input: bytes,
     stdio: ['pipe', 'ignore', lease.descriptor],
     timeout: 5000,
@@ -49,10 +59,121 @@ export function commitWithFileLease(
     throw new RegisteredWriteUnclearError('The private file write could not be confirmed.');
   throw new ConfigError('The private file could not be saved safely.');
 }
+type ProviderWrite =
+  | ['codex-metadata']
+  | ['codex-move', home: string, previous: string, next: string]
+  | ['codex-login', home: string, profile: string, scope: 'saved' | 'live']
+  | ['antigravity-credential', profile: string, fingerprint: string]
+  | ['antigravity-index', generation: string];
+
+/** Delegate a prevalidated provider write while the caller still owns its original lock. */
+export function writeProviderFile(
+  root: string,
+  marker: string,
+  operation: ProviderWrite,
+  input: string | Buffer
+): 'unavailable' | 'committed' | 'partial' {
+  const canonical = canonicalLeaseRoot(root);
+  const writer = writers.get(canonical);
+  if (!writer) return 'unavailable';
+  const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = fs.constants;
+  const fd = fs.openSync(marker, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  try {
+    const [name, ...args] = operation;
+    const result = spawnSync(writer.binary, ['--provider-write', name, canonical, ...args], {
+      input,
+      stdio: ['pipe', 'ignore', fd],
+      timeout: 5000,
+      windowsHide: true,
+    });
+    if (result.status === 0) {
+      writer.committed();
+      return 'committed';
+    }
+    if (result.status === 78 && name === 'codex-login') return 'partial';
+    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT')
+      return 'unavailable';
+    throw new ConfigError('The provider file could not be saved safely.');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+export function signInStaging(
+  root: string,
+  provider: 'codex' | 'antigravity',
+  operation:
+    | ['prepare', staging: string]
+    | ['prepare', staging: string, shared: string]
+    | ['cleanup', staging: string]
+    | ['sweep', now: string]
+    | ['marker-claim', name: string, temporary: string]
+    | ['marker-remove', name: string, dev: string, ino: string],
+  input?: string
+): number | undefined {
+  const canonical = canonicalLeaseRoot(root);
+  const writer = writers.get(canonical);
+  if (!writer) return undefined;
+  const [action, ...args] = operation;
+  const result = spawnSync(
+    writer.binary,
+    ['--' + provider + '-staging', action, canonical, ...args],
+    {
+      input,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'ignore'],
+      timeout: 5000,
+      maxBuffer: 64,
+      encoding: 'utf8',
+      windowsHide: true,
+    }
+  );
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  const count = Number(result.stdout?.trim());
+  if (result.status !== 0 || !Number.isSafeInteger(count) || count < 0)
+    throw new ConfigError('The sign-in staging write could not be confirmed.');
+  writer.committed();
+  return count;
+}
+
+/** A pure policy evaluation scoped to the same opted-in service as the writers. */
+export function lifecyclePlan(root: string, request: object): unknown {
+  const writer = writers.get(canonicalLeaseRoot(root));
+  if (!writer) return undefined;
+  const result = spawnSync(writer.binary, ['--lifecycle-plan'], {
+    input: JSON.stringify(request),
+    stdio: ['pipe', 'pipe', 'ignore'],
+    timeout: 5000,
+    maxBuffer: 256 * 1024,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+  if (result.status !== 0 || typeof result.stdout !== 'string') return undefined;
+  try {
+    return JSON.parse(result.stdout) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
-export function rememberFileLeaseBinary(root: string, binary: string): void {
-  binaries.set(path.resolve(root), path.resolve(binary));
+export function rememberFileLeaseBinary(root: string, binary: string, writesOn = false): void {
+  const realRoot = canonicalLeaseRoot(root);
+  binaries.set(realRoot, path.resolve(binary));
+  if (writesOn) handoffRoots.add(realRoot);
+}
+
+export function canonicalLeaseRoot(root: string): string {
+  try {
+    return fs.realpathSync(root);
+  } catch {
+    return path.resolve(root);
+  }
+}
+
+export function hasFileWriterHandoff(root: string): boolean {
+  return handoffRoots.has(canonicalLeaseRoot(root));
 }
 
 function executable(file: string): boolean {
@@ -69,13 +190,16 @@ function executable(file: string): boolean {
  * on stdin. The kernel keeps the lock with the open file description, including
  * after the helper exits, until this process closes its descriptor.
  */
-export function claimFileLease(root: string, file: string): FileLease {
+export function claimFileLease(root: string, file: string): FileLease;
+export function claimFileLease(root: string, file: string, folder: true): FileLease | null;
+export function claimFileLease(root: string, file: string, folder = false): FileLease | null {
   const binary =
-    binaries.get(path.resolve(root)) ?? process.env.AAC_RUST_SERVICE_BINARY ?? defaultBinary;
+    binaries.get(canonicalLeaseRoot(root)) ?? process.env.AAC_RUST_SERVICE_BINARY ?? defaultBinary;
   const helper = executable(binary) ? binary : undefined;
   const flock =
     process.platform === 'linux' ? ['/usr/bin/flock', '/bin/flock'].find(executable) : undefined;
   if (!helper && !flock) {
+    if (folder) return null;
     // A fresh legacy installation can reserve the lock name by mkdir. Rust's
     // open_lock refuses a directory there. Keep an existing inode for flock
     // readers that might already hold it.
@@ -83,14 +207,16 @@ export function claimFileLease(root: string, file: string): FileLease {
     return { close: () => fs.rmdirSync(file) };
   }
 
-  const { O_RDWR, O_CREAT, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
-  const fd = fs.openSync(file, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o600);
+  const { O_RDONLY, O_RDWR, O_CREAT, O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  const access = folder ? O_RDONLY | O_DIRECTORY : O_RDWR | O_CREAT;
+  const fd = fs.openSync(file, access | O_NOFOLLOW | O_NONBLOCK, 0o600);
   let locked = false;
   try {
     const metadata = fs.fstatSync(fd);
     const current = fs.lstatSync(file);
     if (
-      !metadata.isFile() ||
+      !(folder ? metadata.isDirectory() : metadata.isFile()) ||
+      current.isSymbolicLink() ||
       metadata.ino !== current.ino ||
       metadata.dev !== current.dev ||
       (process.getuid && metadata.uid !== process.getuid()) ||

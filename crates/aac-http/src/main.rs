@@ -1,5 +1,9 @@
 //! Private Unix service and the explicitly enabled public TCP front door.
 #[cfg(unix)]
+mod lifecycle_policy;
+#[cfg(unix)]
+mod provider_write;
+#[cfg(unix)]
 mod registered_write;
 
 fn main() {
@@ -11,6 +15,14 @@ fn main() {
     {
         Some("--file-lease") => std::process::exit(file_lease()),
         Some("--registered-write") => std::process::exit(registered_write::commit()),
+        Some("--provider-write") => std::process::exit(provider_write::commit()),
+        Some("--codex-staging") => std::process::exit(provider_write::staging(false)),
+        Some("--antigravity-staging") => std::process::exit(provider_write::staging(true)),
+        Some("--claude-workflow") => std::process::exit(provider_workflow(false)),
+        Some("--key-workflow") => std::process::exit(provider_workflow(true)),
+        Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
+        Some("--lifecycle-queue") => std::process::exit(lifecycle_queue()),
+        Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
         _ => {}
     }
     // Two async workers; at most 24 blocking threads: the 8 read, 4 store, 4 fed-Status and
@@ -47,6 +59,52 @@ fn main() {
 }
 
 #[cfg(unix)]
+fn provider_workflow(key: bool) -> i32 {
+    let Some(mode) = std::env::args().nth(2) else {
+        return 74;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().build();
+    let result = runtime.and_then(|runtime| {
+        if key {
+            runtime.block_on(aac_http::key_lifecycle::compatibility_pipe(&mode))
+        } else {
+            runtime.block_on(aac_http::claude_lifecycle::compatibility_pipe(&mode))
+        }
+    });
+    if result.is_ok() { 0 } else { 74 }
+}
+
+#[cfg(unix)]
+fn lifecycle_maintenance() -> i32 {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build();
+    let result = runtime.and_then(|runtime| {
+        runtime.block_on(aac_http::lifecycle_maintenance::compatibility_pipe())
+    });
+    if result.is_ok() { 0 } else { 74 }
+}
+
+#[cfg(unix)]
+fn lifecycle_queue() -> i32 {
+    use std::{fs::File, os::fd::AsFd, path::Path};
+    let mut args = std::env::args_os().skip(2);
+    let (Some(root), Some(scope), None) = (args.next(), args.next(), args.next()) else {
+        return 74;
+    };
+    let Some(scope) = scope.to_str() else {
+        return 74;
+    };
+    let Ok(fd) = std::io::stdin().as_fd().try_clone_to_owned() else {
+        return 74;
+    };
+    match aac_files::lifecycle_queue::lock_inherited(Path::new(&root), scope, &File::from(fd)) {
+        Ok(()) => 0,
+        Err(_) => 74,
+    }
+}
+
+#[cfg(unix)]
 fn file_lease() -> i32 {
     use std::fs::{File, TryLockError};
     use std::os::fd::AsFd;
@@ -54,7 +112,10 @@ fn file_lease() -> i32 {
         return 74;
     };
     let file = File::from(fd);
-    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+    if !file
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir())
+    {
         return 74;
     }
     match file.try_lock() {

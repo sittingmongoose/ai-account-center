@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { randomBytes } from 'node:crypto';
+import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import { LocalKeyStore } from '../../../src/web-server/services/account-key-store';
 import {
   ORPHAN_KEY_AGE_MS,
@@ -15,15 +17,23 @@ import {
 
 let root: string;
 let ccsDir: string;
+let releaseWriter: (() => void) | undefined;
 const NOW = Date.parse('2026-10-02T12:00:00Z');
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-key-sweep-'));
   ccsDir = path.join(root, '.ccs');
   fs.mkdirSync(ccsDir, { recursive: true });
+  if (process.env.AAC_SPEC_PROVIDER_WRITE_MODE === 'on') {
+    const binary = process.env.AAC_RUST_SERVICE_BINARY;
+    if (!binary) throw new Error('Native writer binary missing');
+    releaseWriter = registerFileWriter(fs.realpathSync(ccsDir), binary, () => {});
+  }
 });
 
 afterEach(() => {
+  releaseWriter?.();
+  releaseWriter = undefined;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -50,7 +60,7 @@ function keyEntry(provider: string, keyId: string) {
 
 async function key(provider: 'zai' | 'kimi-code', keyId: string, ageMs: number): Promise<void> {
   const store = new LocalKeyStore(ccsDir);
-  await store.put(provider, keyId, `${provider}-secret-${keyId}`);
+  await store.put(provider, keyId, randomBytes(20).toString('hex'));
   const at = (NOW - ageMs) / 1000;
   fs.utimesSync(path.join(ccsDir, 'account-usage', 'keys', `${provider}-${keyId}.json`), at, at);
 }

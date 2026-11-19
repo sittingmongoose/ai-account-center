@@ -41,6 +41,7 @@ export interface CodexProfileRemovalOptions {
   force?: boolean;
   /** Where the CLI prints its warnings; the dashboard passes a no-op. */
   warn?: (line: string) => void;
+  move?: (from: string, to: string) => boolean;
 }
 
 const defaultWarn = (line: string) => {
@@ -98,7 +99,7 @@ export async function removeCodexProfileUnderLock(
     .slice(2)}`;
 
   try {
-    fs.renameSync(profileDir, stagedDeleteDir);
+    if (!options.move?.(profileDir, stagedDeleteDir)) fs.renameSync(profileDir, stagedDeleteDir);
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === 'EACCES') {
@@ -110,7 +111,7 @@ export async function removeCodexProfileUnderLock(
   try {
     await fs.promises.cp(stagedDeleteDir, preservationDir, { recursive: true, errorOnExist: true });
   } catch (err) {
-    const restored = restoreProfileDir(stagedDeleteDir, profileDir, warn);
+    const restored = restoreProfileDir(stagedDeleteDir, profileDir, warn, options.move);
     await removePathBestEffort(preservationDir);
     const preservedPath = restored ? profileDir : stagedDeleteDir;
     const msg = err instanceof Error ? err.message : String(err);
@@ -125,7 +126,7 @@ export async function removeCodexProfileUnderLock(
     assertInactiveSavedProfile(nativeAuthPath, path.join(stagedDeleteDir, 'auth.json'));
     registry.removeProfile(profileName, { forceDefault: force });
   } catch (err) {
-    const restored = restoreProfileDir(stagedDeleteDir, profileDir, warn);
+    const restored = restoreProfileDir(stagedDeleteDir, profileDir, warn, options.move);
     await removePathBestEffort(preservationDir);
     const preservedPath = restored ? profileDir : stagedDeleteDir;
     const msg = err instanceof Error ? err.message : String(err);
@@ -142,7 +143,7 @@ export async function removeCodexProfileUnderLock(
     await fs.promises.rm(preservationDir, { recursive: true, force: true });
   } catch (err) {
     const restoreSource = fs.existsSync(preservationDir) ? preservationDir : stagedDeleteDir;
-    const restoredDir = restoreProfileDir(restoreSource, profileDir, warn);
+    const restoredDir = restoreProfileDir(restoreSource, profileDir, warn, options.move);
     const restoredRegistry = restoreRegistryEntry(
       registry,
       profileName,
@@ -200,11 +201,12 @@ function restoreRegistryEntry(
 function restoreProfileDir(
   stagedDeleteDir: string,
   profileDir: string,
-  warn: (line: string) => void
+  warn: (line: string) => void,
+  move?: CodexProfileRemovalOptions['move']
 ): boolean {
   try {
     if (fs.existsSync(stagedDeleteDir) && !fs.existsSync(profileDir)) {
-      fs.renameSync(stagedDeleteDir, profileDir);
+      if (!move?.(stagedDeleteDir, profileDir)) fs.renameSync(stagedDeleteDir, profileDir);
       return true;
     }
     return fs.existsSync(profileDir);

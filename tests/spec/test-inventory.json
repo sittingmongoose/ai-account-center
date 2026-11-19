@@ -265,6 +265,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-files/src/profile_writes.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/src/read.rs",
       "kind": "internal",
       "evidence": [],
@@ -333,6 +339,12 @@
     },
     {
       "file": "crates/aac-http/src/json_object.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/lifecycle_policy.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

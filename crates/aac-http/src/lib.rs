@@ -6,6 +6,8 @@ mod account_reads;
 #[cfg(unix)]
 mod agent_transport;
 #[cfg(unix)]
+pub mod claude_lifecycle;
+#[cfg(unix)]
 pub mod app_update_routes;
 #[cfg(unix)]
 pub mod app_updates;
@@ -26,6 +28,14 @@ mod identity;
 mod json_object;
 #[cfg(unix)]
 mod limits;
+#[cfg(unix)]
+pub mod lifecycle_maintenance;
+#[cfg(unix)]
+mod lifecycle_effect_pipe;
+#[cfg(unix)]
+pub mod key_lifecycle;
+#[cfg(unix)]
+pub mod lifecycle_queue;
 #[cfg(unix)]
 mod preferences_write;
 #[cfg(unix)]

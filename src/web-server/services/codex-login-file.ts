@@ -23,15 +23,17 @@ export interface CodexLoginIdentity {
   binding: CodexActivationIdentity | null;
 }
 
-/** Parsed JSON of a regular, size-limited file that is not a link; throws otherwise. */
-async function readAuthFile(authPath: string): Promise<unknown> {
+/** Bytes of a regular, size-limited file that is not a link; throws otherwise. */
+async function readAuthFile(authPath: string): Promise<Buffer> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     const noFollow = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW;
     handle = await fs.open(authPath, constants.O_RDONLY | noFollow);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > MAX_AUTH_BYTES) throw new ConfigError('Not a login file.');
-    return JSON.parse(await handle.readFile('utf8')) as unknown;
+    const bytes = await handle.readFile();
+    if (bytes.length > MAX_AUTH_BYTES) throw new ConfigError('Not a login file.');
+    return bytes;
   } finally {
     await handle?.close().catch(() => undefined);
   }
@@ -48,7 +50,7 @@ interface AuthTokens {
 
 /** A complete Codex login: a structurally valid id token with an email, plus access and refresh tokens. */
 export async function readCodexLogin(authPath: string): Promise<CodexLoginIdentity | null> {
-  return readLogin(authPath, true);
+  return (await readLogin(authPath, true))?.identity ?? null;
 }
 
 /**
@@ -57,12 +59,20 @@ export async function readCodexLogin(authPath: string): Promise<CodexLoginIdenti
  * token cannot be read.
  */
 export async function readCodexLoginIdentity(authPath: string): Promise<CodexLoginIdentity | null> {
-  return readLogin(authPath, false);
+  return (await readLogin(authPath, false))?.identity ?? null;
 }
 
-async function readLogin(authPath: string, complete: boolean): Promise<CodexLoginIdentity | null> {
+export function readCodexLoginSnapshot(authPath: string) {
+  return readLogin(authPath, true);
+}
+
+async function readLogin(
+  authPath: string,
+  complete: boolean
+): Promise<{ identity: CodexLoginIdentity; bytes: Buffer } | null> {
   try {
-    const parsed = (await readAuthFile(authPath)) as AuthTokens | null;
+    const bytes = await readAuthFile(authPath);
+    const parsed = JSON.parse(bytes.toString('utf8')) as AuthTokens | null;
     const token = parsed?.tokens?.id_token;
     if (typeof token !== 'string' || !hasStructurallyValidIdToken(token)) return null;
     const identity = decodeIdToken(token);
@@ -77,10 +87,13 @@ async function readLogin(authPath: string, complete: boolean): Promise<CodexLogi
       return null;
     }
     return {
-      email: identity.email,
-      accountId: identity.account_id ?? null,
-      plan: identity.plan_type ?? null,
-      binding: decodeCodexActivationIdentity(token, parsed?.tokens?.account_id),
+      identity: {
+        email: identity.email,
+        accountId: identity.account_id ?? null,
+        plan: identity.plan_type ?? null,
+        binding: decodeCodexActivationIdentity(token, parsed?.tokens?.account_id),
+      },
+      bytes,
     };
   } catch {
     // Parser messages can contain token fragments; nothing is reported.

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import { antigravityJobFlow } from '../../../src/web-server/services/account-lifecycle-antigravity';
 import {
   ANTIGRAVITY_FLOW_CACHE_MS,
@@ -17,16 +18,16 @@ import {
 } from '../../../src/web-server/services/account-lifecycle-runtime';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
-import type {
-  NativeCredential,
-  VerifiedIdentity,
-} from '../../../src/antigravity/types';
+import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 import { SignInJobStopped } from '../../../src/web-server/services/signin-jobs';
 import type { SignInPreflight } from '../../../src/antigravity/signin-sandbox';
 import { claimAntigravitySignInMarker } from '../../../src/antigravity/signin-marker';
 
 let root: string;
 let ccsDir: string;
+const nativeMode = process.env.AAC_SPEC_PROVIDER_WRITE_MODE === 'on';
+let stopWriter: (() => void) | undefined;
+let nativeWrites = 0;
 let home: string;
 
 beforeEach(() => {
@@ -36,9 +37,17 @@ beforeEach(() => {
   fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(ccsDir, 0o700);
   fs.mkdirSync(home, { recursive: true });
+  nativeWrites = 0;
+  if (nativeMode) {
+    const binary = process.env.AAC_RUST_SERVICE_BINARY;
+    if (!binary) throw new Error('Native writer binary missing');
+    stopWriter = registerFileWriter(fs.realpathSync(ccsDir), binary, () => nativeWrites++);
+  }
 });
 
 afterEach(() => {
+  stopWriter?.();
+  stopWriter = undefined;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -95,6 +104,7 @@ describe('antigravityJobFlow', () => {
       refreshDescriptor: async () => ({ status: 'no-installation' }),
     });
     const command = await flow.prepare('job_0000000000000001');
+    if (nativeMode) expect(nativeWrites).toBe(2);
     expect(command.file).toBe('/usr/bin/python3');
     expect(command.pty).toBe(false);
     expect(command.args[0]).toBe('-c');
@@ -154,6 +164,7 @@ describe('antigravityJobFlow', () => {
       email: 'party@example.com',
       plan: 'Google AI Pro',
     });
+    if (nativeMode) expect(nativeWrites).toBeGreaterThan(0);
     expect(agy.hasProfile('party')).toBe(true);
     expect(refreshed).toEqual([{ ccsDir, home }]);
   });
@@ -194,7 +205,9 @@ describe('antigravityJobFlow', () => {
     });
     const command = await flow.prepare('job_0000000000000005');
     writeToken(command.args[2], 'party');
-    await expect(flow.complete('job_0000000000000005', { stopped: () => false })).rejects.toMatchObject({
+    await expect(
+      flow.complete('job_0000000000000005', { stopped: () => false })
+    ).rejects.toMatchObject({
       code: 'duplicate_identity',
     });
   });
@@ -314,7 +327,9 @@ describe('antigravitySignInFlow gate', () => {
     expect(antigravitySignInFlow('/home/b', 1_000, counting)).toBe(null);
     expect(calls).toBe(2);
     // Past the TTL the cached home probes again.
-    expect(antigravitySignInFlow('/home/b', 1_000 + ANTIGRAVITY_FLOW_CACHE_MS, counting)).toBe(null);
+    expect(antigravitySignInFlow('/home/b', 1_000 + ANTIGRAVITY_FLOW_CACHE_MS, counting)).toBe(
+      null
+    );
     expect(calls).toBe(3);
     // An explicit reset drops the cache.
     resetAntigravitySignInFlowCache();
