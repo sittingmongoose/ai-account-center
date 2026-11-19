@@ -14523,7 +14523,7 @@
       "cacheAgeSeconds": 0,
       "refreshing": false
     },
-    "wireSha256": "3c072a7e3f093f71ca01eb94f32e548c49c12da76c9dcc496c403a1eec323a1d"
+    "wireSha256": "82ee2bbcf9c7f5de29af614c6c345edfbd84a91695daae216dbf134285ae21e2"
   },
   {
     "route": "/api/status/files/vm.fixture/media/image.png",
