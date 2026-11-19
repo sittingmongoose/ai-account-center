@@ -972,7 +972,7 @@ export function analyticsRowsResult(
   return toWorkerResult(rows, [], kind, host);
 }
 
-function toWorkerResult(
+export function toWorkerResult(
   rows: AnalyticsRemoteRow[],
   srows: AnalyticsRemoteSessionRow[],
   kind: AnalyticsRemoteKind,

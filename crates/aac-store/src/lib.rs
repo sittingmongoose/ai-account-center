@@ -8,6 +8,7 @@
 pub mod activity;
 pub mod capture;
 pub mod contract;
+pub mod collect;
 pub mod db;
 pub mod engine;
 pub mod error;
