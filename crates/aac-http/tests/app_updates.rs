@@ -185,6 +185,43 @@ async fn service_fixture_child() {
             "the next job and cancel should reuse the validated agent on {host}"
         );
     }
+    // Hold the next Windows run channel before its first request reaches the agent.
+    fs::write(root.join("hold-windows-connection"), "fixture").expect("hold Windows SSH");
+    assert_eq!(owner.start().await.status, 202);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !trace(&root, "jared-windows")
+            .iter()
+            .any(|row| row["stage"] == "connecting")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Windows run channel reached the held connection");
+    assert_eq!(owner.cancel().await.status, 202);
+    fs::write(root.join("release-windows-connection"), "fixture").expect("release Windows SSH");
+    let done = until(&owner, |job| job["state"] == "completed").await;
+    assert_eq!(
+        trace(&root, "jared-windows")
+            .iter()
+            .filter(|row| row["stage"] == "update")
+            .count(),
+        2,
+        "the cancelled job must never reach Windows update admission"
+    );
+    assert_eq!(
+        done["results"]
+            .as_array()
+            .expect("complete rows")
+            .iter()
+            .filter(|row| {
+                row["platform"] == "windows"
+                    && row["status"] == "skipped"
+                    && row["updateAttempted"] == false
+            })
+            .count(),
+        12
+    );
 }
 
 fn trace(root: &Path, host: &str) -> Vec<Value> {

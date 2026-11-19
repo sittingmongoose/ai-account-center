@@ -121,44 +121,7 @@ pub async fn run(
                         )
                         .await;
                     }
-                    let control = async {
-                        loop {
-                            let Some(line) = read_line(&mut reader, MAX_FRAME_BYTES).await? else {
-                                return std::future::pending::<Result<serde_json::Value, Failure>>(
-                                )
-                                .await;
-                            };
-                            match serde_json::from_slice::<Control>(&line) {
-                                Ok(Control::Cancel { cancel: true }) => {
-                                    return Err(Failure::new(
-                                        Cause::Cancelled,
-                                        "agent request cancelled",
-                                    ));
-                                }
-                                Ok(_) => {}
-                                Err(_) => {
-                                    return Err(Failure::new(
-                                        Cause::Refused,
-                                        "invalid agent control",
-                                    ));
-                                }
-                            }
-                        }
-                    };
-                    let work = async {
-                        if request.verb == "apps"
-                            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
-                        {
-                            return apps::update::run(&request, &mut writer).await;
-                        }
-                        dispatch(&request).await
-                    };
-                    tokio::select! {
-                        biased;
-                        result = control => result,
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(request.deadline_ms)) => Err(Failure::new(Cause::Timeout, "agent deadline exceeded")),
-                        result = work => result,
-                    }
+                    run_request(request, &mut reader, &mut writer).await
                 }
             };
             (id, cap, result)
@@ -184,6 +147,74 @@ pub async fn run(
     };
     write_event(&mut writer, &event, cap).await?;
     Ok(code)
+}
+
+async fn run_request(
+    mut request: Request,
+    reader: &mut (impl AsyncBufRead + Unpin),
+    writer: &mut (impl AsyncWrite + Unpin),
+) -> Result<serde_json::Value, Failure> {
+    use aac_protocol::{APP_UPDATE_ADMISSION, APP_UPDATE_ADMIT};
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    let deadline = Instant::now() + Duration::from_millis(request.deadline_ms);
+    if request.verb == "apps" && request.args["action"] == "prepare-update" {
+        // No journal, installer or host lease is opened until the dashboard grants this
+        // connected request. An older agent refuses the preparation action.
+        let ready = Event::Progress {
+            protocol: PROTOCOL_VERSION,
+            id: request.id.clone(),
+            data: serde_json::json!({"event": APP_UPDATE_ADMISSION}),
+        };
+        let admission = async {
+            write_event(writer, &ready, frame_cap(&request.verb)).await?;
+            read_line(reader, 64).await
+        };
+        let until = deadline.min(Instant::now() + Duration::from_secs(5));
+        let grant = tokio::time::timeout_at(until, admission)
+            .await
+            .map_err(|_| {
+                Failure::new(Cause::Timeout, "app update admission deadline exceeded")
+            })??;
+        if grant.as_deref() != Some(APP_UPDATE_ADMIT.as_bytes()) {
+            return Err(Failure::new(
+                Cause::Cancelled,
+                "app update was not admitted",
+            ));
+        }
+        request.args["action"] = serde_json::json!("update");
+    }
+    let control = async {
+        loop {
+            let Some(line) = read_line(reader, MAX_FRAME_BYTES).await? else {
+                return std::future::pending::<Result<serde_json::Value, Failure>>().await;
+            };
+            match serde_json::from_slice::<Control>(&line) {
+                Ok(Control::Cancel { cancel: true }) => {
+                    return Err(Failure::new(Cause::Cancelled, "agent request cancelled"));
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return Err(Failure::new(Cause::Refused, "invalid agent control"));
+                }
+            }
+        }
+    };
+    let work = async {
+        if request.verb == "apps"
+            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+        {
+            return apps::update::run(&request, writer).await;
+        }
+        dispatch(&request).await
+    };
+    tokio::select! {
+        biased;
+        result = control => result,
+        _ = tokio::time::sleep_until(deadline) => Err(Failure::new(Cause::Timeout, "agent deadline exceeded")),
+        result = work => result,
+    }
 }
 
 pub(crate) async fn write_event(

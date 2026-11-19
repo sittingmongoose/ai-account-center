@@ -2,11 +2,14 @@
 mod rows;
 mod storage;
 
+use crate::agent_transport::Selector;
 #[cfg(unix)]
 use crate::feed::Feeds;
 use crate::public_auth::{AppUpdateHostProgress, AppUpdateProgress, DashboardEvent};
-use aac_protocol::{APP_UPDATE_HOST_TIMEOUT_MS, Event};
-use aac_transport::CancellationToken;
+use aac_protocol::{
+    APP_UPDATE_ADMISSION, APP_UPDATE_ADMIT, APP_UPDATE_HOST_TIMEOUT_MS, Event, MAX_FRAME_BYTES,
+};
+use aac_transport::{CallOptions, CancellationToken};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
@@ -498,26 +501,54 @@ impl AppUpdates {
             job.refresh_active();
         }).await;
         let (progress, mut events) = mpsc::channel(8);
-        let timeout = Duration::from_millis(APP_UPDATE_HOST_TIMEOUT_MS);
-        let until = Instant::now() + timeout;
+        let (admission, controls) = mpsc::channel(1);
+        let options = CallOptions::new(
+            Duration::from_millis(APP_UPDATE_HOST_TIMEOUT_MS),
+            MAX_FRAME_BYTES * 2,
+        );
+        let until = options.deadline;
+        let transport_cancel = options.cancel.clone();
         let work = self.agents.app_call(
-            host.os,
-            host.alias,
+            Selector::usage(host.os, host.alias),
             format!("{id}-{}", host.id),
-            json!({"action":"update","platform":host.os,"jobId":id}),
-            timeout,
+            json!({"action":"prepare-update","platform":host.os,"jobId":id}),
+            options,
+            controls,
             progress,
         );
-        let signal = self.signal_cancel(host, &id, cancel, until);
+        let signal = self.signal_cancel(host, &id, cancel.clone(), until);
         tokio::pin!(work, signal);
+        let mut admitted = false;
         let terminal = loop {
             tokio::select! {
                 biased;
-                Some(Event::Progress { data, .. }) = events.recv() => self.change(|job| job.event(host,&data)).await,
+                _ = cancel.cancelled(), if !admitted && !transport_cancel.is_cancelled() => {
+                    transport_cancel.cancel();
+                }
+                Some(Event::Progress { data, .. }) = events.recv() => {
+                    if data["event"] == APP_UPDATE_ADMISSION {
+                        // Serialize granting the connected host permission with the HTTP cancel
+                        // acknowledgement. Only a granted host needs job-bound cancellation.
+                        let _active = self.active.lock().await;
+                        if !admitted && !cancel.is_cancelled() {
+                            admitted = admission.try_send(format!("{APP_UPDATE_ADMIT}\n").into_bytes()).is_ok();
+                        }
+                    } else {
+                        self.change(|job| job.event(host, &data)).await;
+                    }
+                }
                 answer = &mut work => break answer,
-                _ = &mut signal => {},
+                _ = &mut signal, if admitted => {},
             }
         };
+        if !admitted && cancel.is_cancelled() {
+            self.change(|job| {
+                job.fill(host, "skipped", "skipped_cancelled");
+                job.host_done(host);
+            })
+            .await;
+            return;
+        }
         while let Ok(Event::Progress { data, .. }) = events.try_recv() {
             self.change(|job| job.event(host, &data)).await;
         }
@@ -538,14 +569,15 @@ impl AppUpdates {
         token.cancelled().await;
         while Instant::now() < until {
             let (send, _progress) = mpsc::channel(1);
+            let (_input, controls) = mpsc::channel(1);
             let answer = self
                 .agents
                 .app_call(
-                    host.os,
-                    host.alias,
+                    Selector::usage(host.os, host.alias),
                     format!("{id}-{}-cancel", host.id),
                     json!({"action":"cancel","platform":host.os,"jobId":id}),
-                    Duration::from_secs(5),
+                    CallOptions::new(Duration::from_secs(5), MAX_FRAME_BYTES * 2),
+                    controls,
                     send,
                 )
                 .await;
@@ -555,8 +587,8 @@ impl AppUpdates {
             }) {
                 break;
             }
-            // The update may still be creating its journal, or acquiring an SSH
-            // channel. A false acknowledgement leaves the real job running.
+            // An admitted update may still be creating its journal. A false
+            // acknowledgement leaves the real job running.
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         std::future::pending::<()>().await;

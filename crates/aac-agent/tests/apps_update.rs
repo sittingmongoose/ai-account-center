@@ -74,7 +74,11 @@ async fn spawn_agent(
         .write_all(format!("{request}\n").as_bytes())
         .await
         .expect("send request");
-    drop(stdin);
+    if action == "prepare-update" {
+        child.stdin = Some(stdin);
+    } else {
+        drop(stdin);
+    }
     let stdout = child.stdout.take().expect("agent stdout");
     (child, BufReader::new(stdout).lines())
 }
@@ -189,6 +193,36 @@ async fn update_and_next_run_match_python_on_three_platforms() {
             assert_eq!(stored.to_string(), payload.to_string());
         }
     }
+}
+
+#[tokio::test]
+async fn windows_update_waits_for_host_admission() {
+    let root = root();
+    let (mut child, mut lines) = agent(root.path(), "windows", JOB, "prepare-update").await;
+    let ready = event(&mut lines).await;
+    assert!(
+        matches!(ready, Event::Progress { data, .. } if data == json!({"event":"admission"})),
+        "expected the host to ask for admission"
+    );
+    assert!(!root.path().join("fixture-journal.json").exists());
+    drop(child.stdin.take());
+    assert!(matches!(event(&mut lines).await,
+        Event::Failure { failure, .. } if failure.cause == aac_core::Cause::Cancelled));
+    assert!(!child.wait().await.expect("reap cancelled agent").success());
+    assert!(!root.path().join("fixture-journal.json").exists());
+
+    let (mut child, mut lines) = agent(root.path(), "windows", JOB, "prepare-update").await;
+    assert!(matches!(event(&mut lines).await,
+        Event::Progress { data, .. } if data == json!({"event":"admission"})));
+    child
+        .stdin
+        .take()
+        .expect("agent stdin")
+        .write_all(b"{\"admit\":true}\n")
+        .await
+        .expect("grant admission");
+    let (events, payload) = terminal(&mut child, &mut lines).await;
+    compare(events, &payload, "windows", "update");
 }
 
 #[tokio::test]
