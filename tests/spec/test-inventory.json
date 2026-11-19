@@ -235,6 +235,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/home_producer.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/json_object.rs",
       "kind": "internal",
       "evidence": [],
@@ -3415,6 +3421,12 @@
       "evidence": [
         "table"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/rust-service-groups.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/rust-service-health.test.ts",
