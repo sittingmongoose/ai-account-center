@@ -38,7 +38,12 @@ interface Run {
   stderr: string;
 }
 
-function runCli(side: 'ts' | 'rust', home: string, args: string[], env: Record<string, string> = {}): Run {
+function runCli(
+  side: 'ts' | 'rust',
+  home: string,
+  args: string[],
+  env: Record<string, string> = {}
+): Run {
   const result = spawnSync(
     side === 'ts' ? 'bun' : rustCli,
     [...(side === 'ts' ? tsArgs : []), ...args],
@@ -84,12 +89,20 @@ function normalize(text: string, homes: string[]): string {
   for (const home of homes) out = out.split(home).join('<home>');
   return out
     .replace(/bak-proxy-\d{8}T\d{6}Z(-\d+)?/g, 'bak-proxy-<stamp>')
-    .replace(/Backup [0-9A-Za-z_-]+ written/g, 'Backup <id> written');
+    .replace(/Backup [0-9A-Za-z_-]+ written/g, 'Backup <id> written')
+    .replace(/Restored backup [0-9A-Za-z_-]+\./g, 'Restored backup <id>.')
+    .replace(/quarantine\/[0-9A-Za-z_-]+/g, 'quarantine/<id>')
+    .replace(/"openedAt": \d+/g, '"openedAt": <ms>')
+    .replace(/"checkedAt": \d+/g, '"checkedAt": <ms>');
 }
 
 function equalRuns(name: string, ts: Run, rust: Run, homes: string[]): void {
   const a = { ...ts, stdout: normalize(ts.stdout, homes), stderr: normalize(ts.stderr, homes) };
-  const b = { ...rust, stdout: normalize(rust.stdout, homes), stderr: normalize(rust.stderr, homes) };
+  const b = {
+    ...rust,
+    stdout: normalize(rust.stdout, homes),
+    stderr: normalize(rust.stderr, homes),
+  };
   check(
     name,
     a.status === b.status && a.stdout === b.stdout && a.stderr === b.stderr,
@@ -199,12 +212,16 @@ for (const verb of ['status', 'check']) {
   const backupsB = path.join(homeB, 'store', 'backups');
   check(
     'store backup folders written',
-    fs.existsSync(backupsA) && fs.existsSync(backupsB) &&
-      fs.readdirSync(backupsA).length === 1 && fs.readdirSync(backupsB).length === 1
+    fs.existsSync(backupsA) &&
+      fs.existsSync(backupsB) &&
+      JSON.stringify(fs.readdirSync(backupsA).sort()) === JSON.stringify(['pool', 'sets']) &&
+      JSON.stringify(fs.readdirSync(backupsB).sort()) === JSON.stringify(['pool', 'sets']) &&
+      fs.readdirSync(path.join(backupsA, 'sets')).length === 1 &&
+      fs.readdirSync(path.join(backupsB, 'sets')).length === 1
   );
-  // restore: each side restores its own backup; paths normalize to the same message.
-  const backupA = path.join(backupsA, fs.readdirSync(backupsA)[0]);
-  const backupB = path.join(backupsB, fs.readdirSync(backupsB)[0]);
+  // restore: each side restores its own backup set; paths and ids normalize to the same message.
+  const backupA = path.join(backupsA, 'sets', fs.readdirSync(path.join(backupsA, 'sets'))[0]);
+  const backupB = path.join(backupsB, 'sets', fs.readdirSync(path.join(backupsB, 'sets'))[0]);
   const tsRestore = runCli('ts', homeA, ['dashboard', 'store', 'restore', backupA]);
   const rustRestore = runCli('rust', homeB, ['dashboard', 'store', 'restore', backupB]);
   equalRuns('store restore', tsRestore, rustRestore, [homeA, homeB]);
@@ -224,6 +241,41 @@ for (const verb of ['status', 'check']) {
 }
 
 // lock_held: a holder process keeps the fixture store open; status then uses the API path.
+// The fixture API server runs in its own process: runCli uses spawnSync, which blocks this
+// process's event loop and would starve an in-process server while the CLI waits on it.
+async function fixtureApiServer(): Promise<{ port: number; stop: () => void }> {
+  const child = spawn(
+    'bun',
+    [
+      '-e',
+      `const server = Bun.serve({ port: 0, fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname !== '/api/store/status') return new Response('no', { status: 404 });
+        if (req.headers.get('authorization') !== 'Bearer fixture-token') return new Response('no', { status: 401 });
+        return Response.json({ state: 'fixture', readings: 7, sealed: true });
+      }});
+      console.log('port=' + server.port);
+      setInterval(() => {}, 1000);`,
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  const port = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('fixture server never bound')), 15_000);
+    child.stdout.on('data', (chunk) => {
+      const match = /port=(\d+)/.exec(String(chunk));
+      if (match) {
+        clearTimeout(timer);
+        resolve(Number(match[1]));
+      }
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`fixture server exited: ${code}`));
+    });
+  });
+  return { port, stop: () => child.kill('SIGKILL') };
+}
+
 async function withStoreHolder<T>(fn: () => Promise<T> | T): Promise<T> {
   const child = spawn(
     'bun',
@@ -234,11 +286,19 @@ async function withStoreHolder<T>(fn: () => Promise<T> | T): Promise<T> {
        if (!loaded.module) { console.error(loaded.reason); process.exit(3); }
        const handle = new loaded.module.NativeStore();
        const answer = await handle.call('open', JSON.stringify({ dir: process.argv[1] }));
+       // Keep the NAPI handle rooted: bun -e module scope is not a GC root after evaluation,
+       // and a collected handle drops the engine and releases the store lock.
+       globalThis.__aacStoreHandle = handle;
        console.log('held');
+       setInterval(() => { void globalThis.__aacStoreHandle; }, 1000);
        setTimeout(() => process.exit(0), 60000);`,
       path.join(storeSeed, 'store'),
     ],
-    { cwd: repo, env: { ...process.env, CCS_HOME: storeSeed, NO_COLOR: '1', AAC_STORE_MODULE: storeModule }, stdio: ['ignore', 'pipe', 'pipe'] }
+    {
+      cwd: repo,
+      env: { ...process.env, CCS_HOME: storeSeed, NO_COLOR: '1', AAC_STORE_MODULE: storeModule },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
   );
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('holder never opened the store')), 20_000);
@@ -269,19 +329,8 @@ await withStoreHolder(async () => {
     runCli('rust', storeSeed, ['dashboard', 'store', 'status']),
     [storeSeed]
   );
-  // With API env: a fixture server answers both sides identically.
-  const statusBody = { state: 'fixture', readings: 7, sealed: true };
-  const server = Bun.serve({
-    port: 0,
-    fetch(req) {
-      const url = new URL(req.url);
-      if (url.pathname !== '/api/store/status') return new Response('no', { status: 404 });
-      if (req.headers.get('authorization') !== 'Bearer fixture-token') {
-        return new Response('no', { status: 401 });
-      }
-      return Response.json(statusBody);
-    },
-  });
+  // With API env: a fixture server (own process) answers both sides identically.
+  const server = await fixtureApiServer();
   const env = {
     AAC_DASHBOARD_URL: `http://127.0.0.1:${server.port}`,
     AAC_DEVICE_TOKEN: 'fixture-token',
@@ -292,14 +341,17 @@ await withStoreHolder(async () => {
     runCli('rust', storeSeed, ['dashboard', 'store', 'status'], env),
     [storeSeed]
   );
-  const badEnv = { AAC_DASHBOARD_URL: `http://127.0.0.1:${server.port}`, AAC_DEVICE_TOKEN: 'wrong' };
+  const badEnv = {
+    AAC_DASHBOARD_URL: `http://127.0.0.1:${server.port}`,
+    AAC_DEVICE_TOKEN: 'wrong',
+  };
   equalRuns(
     'store status API refusal',
     runCli('ts', storeSeed, ['dashboard', 'store', 'status'], badEnv),
     runCli('rust', storeSeed, ['dashboard', 'store', 'status'], badEnv),
     [storeSeed]
   );
-  server.stop(true);
+  server.stop();
 });
 fs.rmSync(storeSeed, { recursive: true, force: true });
 
@@ -315,8 +367,27 @@ const proxyErrorCases: string[][] = [
   ['dashboard', 'proxy', 'set', '--address'],
   ['dashboard', 'proxy', 'set', '--address', '192.168.50.20'],
   ['dashboard', 'proxy', 'set', '--origin', 'https://aac.example.test'],
-  ['dashboard', 'proxy', 'set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test', '--wat'],
-  ['dashboard', 'proxy', 'set', '--address', '192.168.50.20', '--origin', 'https://a.test', '--origin', 'https://b.test'],
+  [
+    'dashboard',
+    'proxy',
+    'set',
+    '--address',
+    '192.168.50.20',
+    '--origin',
+    'https://aac.example.test',
+    '--wat',
+  ],
+  [
+    'dashboard',
+    'proxy',
+    'set',
+    '--address',
+    '192.168.50.20',
+    '--origin',
+    'https://a.test',
+    '--origin',
+    'https://b.test',
+  ],
 ];
 for (const args of proxyErrorCases) {
   const homeA = freshHome();
@@ -361,53 +432,84 @@ interface MutationCase {
   name: string;
   seed: string;
   args: string[];
+  /** Whether the command saves (and therefore backs up) the config. */
+  writes: boolean;
 }
 const MUTATIONS: MutationCase[] = [
-  { name: 'set from nothing', seed: '', args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test'] },
+  {
+    name: 'set from nothing',
+    seed: '',
+    writes: true,
+    args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test'],
+  },
   {
     name: 'set with existing config',
     seed: 'version: 1\naccounts:\n  work:\n    email: a@b.test\n',
-    args: ['set', '--address', '192.168.50.20', '--address', '10.0.0.5', '--origin', 'https://aac.example.test:8443'],
+    writes: true,
+    args: [
+      'set',
+      '--address',
+      '192.168.50.20',
+      '--address',
+      '10.0.0.5',
+      '--origin',
+      'https://aac.example.test:8443',
+    ],
   },
   {
     name: 'set refuses a public address',
     seed: 'version: 1\n',
+    writes: false,
     args: ['set', '--address', '8.8.8.8', '--origin', 'https://aac.example.test'],
   },
   {
     name: 'set refuses loopback',
     seed: 'version: 1\n',
+    writes: false,
     args: ['set', '--address', '127.0.0.1', '--origin', 'https://aac.example.test'],
   },
   {
     name: 'set refuses a bad origin',
     seed: 'version: 1\n',
+    writes: false,
     args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test/path'],
   },
   {
     name: 'set refuses a local kind without --replace',
     seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: tailscale-serve\n',
+    writes: false,
     args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test'],
   },
   {
     name: 'set replaces a local kind with --replace',
     seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: loopback-https-proxy\n',
-    args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test', '--replace'],
+    writes: true,
+    args: [
+      'set',
+      '--address',
+      '192.168.50.20',
+      '--origin',
+      'https://aac.example.test',
+      '--replace',
+    ],
   },
   {
     name: 'set no-op on identical values',
     seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 192.168.50.20\n  public_origin: https://aac.example.test\n',
+    writes: false,
     args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test'],
   },
-  { name: 'off when already off', seed: 'version: 1\n', args: ['off'] },
+  { name: 'off when already off', seed: 'version: 1\n', writes: false, args: ['off'] },
   {
     name: 'off removes the lan block',
     seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 192.168.50.20\n  public_origin: https://aac.example.test\n',
+    writes: true,
     args: ['off'],
   },
   {
     name: 'off keeps other tls keys',
     seed: 'version: 1\ndashboard_tls:\n  trusted_proxy_addresses:\n    - 192.168.50.20\n  https_listener:\n    enabled: true\n    port: 3443\n    cert_path: /tmp/c.pem\n    key_path: /tmp/k.pem\n',
+    writes: true,
     args: ['off'],
   },
 ];
@@ -451,7 +553,8 @@ for (const mutation of MUTATIONS) {
   const backupsB = fs.readdirSync(homeB).filter((name) => name.includes('.bak-proxy-'));
   check(
     `proxy ${mutation.name} backup presence`,
-    backupsA.length === backupsB.length && (mutation.seed === '' || backupsA.length === 1)
+    backupsA.length === backupsB.length &&
+      (mutation.writes && mutation.seed !== '' ? backupsA.length === 1 : backupsA.length === 0)
   );
   if (backupsA.length && backupsB.length) {
     const bytesA = fs.readFileSync(path.join(homeA, backupsA[0]));

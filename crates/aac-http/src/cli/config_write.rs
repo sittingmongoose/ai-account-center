@@ -173,15 +173,36 @@ pub fn read_tls_block(file: &Path) -> Result<Value, ()> {
     let text = match fs::read_to_string(file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
-        Err(_) => return Err(()),
+        Err(error) => {
+            eprintln!("[X] Failed to load config: {error}");
+            return Err(());
+        }
     };
-    let (values, _) = aac_config::split_active(&text).map_err(|_| ())?;
+    // The TS loader reports the same line before it throws (once per path per process; each
+    // CLI invocation is one process and reads the block once).
+    let invalid = || {
+        eprintln!(
+            "[X] Failed to load config: Invalid config format in {}",
+            file.display()
+        );
+    };
+    let (values, _) = match aac_config::split_active(&text) {
+        Ok(pair) => pair,
+        Err(_) => {
+            invalid();
+            return Err(());
+        }
+    };
     if !values.is_object() {
+        invalid();
         return Err(());
     }
     match values.get("version").and_then(Value::as_f64) {
         Some(version) if version >= 1.0 => {}
-        _ => return Err(()),
+        _ => {
+            invalid();
+            return Err(());
+        }
     }
     Ok(values
         .get("dashboard_tls")
