@@ -17,6 +17,7 @@ pub mod fsx;
 pub mod legacy;
 pub mod log;
 pub mod msgpack;
+pub mod observe;
 pub mod ops;
 pub mod pack;
 pub mod read_status;
