@@ -13,6 +13,8 @@ pub enum Workflow {
     Restore,
     /// Purge every host of a reserved trash entry before removing its row.
     Purge,
+    /// Inspect the pending launcher and promote it after verified sign-in.
+    Recheck,
 }
 
 impl Workflow {
@@ -22,6 +24,7 @@ impl Workflow {
             "remove" => Some(Self::Remove),
             "restore" => Some(Self::Restore),
             "purge" => Some(Self::Purge),
+            "recheck" => Some(Self::Recheck),
             _ => None,
         }
     }
@@ -40,6 +43,8 @@ pub enum Effect {
     UndoWindows,
     /// Settle the registry after the host effects succeed.
     Commit,
+    /// Verify that the pending launcher has a session eligible for promotion.
+    Session,
 }
 
 impl Effect {
@@ -50,6 +55,7 @@ impl Effect {
             Self::UndoMac => "undo-mac",
             Self::UndoWindows => "undo-windows",
             Self::Commit => "commit",
+            Self::Session => "session",
         }
     }
 }
@@ -61,6 +67,12 @@ pub async fn run<E, F>(workflow: Workflow, mut perform: impl FnMut(Effect) -> F)
 where
     F: Future<Output = Result<bool, E>>,
 {
+    if workflow == Workflow::Recheck {
+        if perform(Effect::Session).await? {
+            perform(Effect::Commit).await?;
+        }
+        return Ok(());
+    }
     let mut undo = Vec::new();
     let mut failed = None;
     for (apply, compensate) in [

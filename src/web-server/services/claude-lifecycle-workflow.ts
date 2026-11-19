@@ -1,11 +1,22 @@
 import { runLifecycleEffects } from './lifecycle-effect-pipe';
 
-export type ClaudeWorkflow = 'add' | 'remove' | 'restore' | 'purge';
-const EFFECTS = ['apply-mac', 'apply-windows', 'undo-mac', 'undo-windows', 'commit'] as const;
+export type ClaudeWorkflow = 'add' | 'remove' | 'restore' | 'purge' | 'recheck';
+const EFFECTS = [
+  'apply-mac',
+  'apply-windows',
+  'undo-mac',
+  'undo-windows',
+  'commit',
+  'session',
+] as const;
 export type ClaudeEffect = (typeof EFFECTS)[number];
 type Perform = (effect: ClaudeEffect) => Promise<boolean | void>;
 
 async function runFallback(workflow: ClaudeWorkflow, perform: Perform): Promise<void> {
+  if (workflow === 'recheck') {
+    if ((await perform('session')) !== false) await perform('commit');
+    return;
+  }
   const applied: ClaudeEffect[] = [];
   let failed: { error: unknown } | undefined;
   for (const [apply, undo] of [
