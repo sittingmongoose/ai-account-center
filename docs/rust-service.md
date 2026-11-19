@@ -407,12 +407,28 @@ number table; it catches the pre-fix 0.049999999999999996 -> 0.1 wrong answer.
 
 ## Agent transport (L5, off by default)
 
-`agentVerbs: on` enables the existing verb adapters. Independently, `agentTransport: on`
-(or `AAC_AGENT_TRANSPORT=on`) sends those calls to `POST /internal/agent/<verb>` on the
-private service. It can start the service while public Rust read routes remain off.
-The endpoint requires the boot secret and the reserved front-door service principal;
-it is never exposed as a public dashboard route. Shadow read mode does not duplicate
-agent operations. Absent/invalid settings leave the original TS behavior intact.
+`agentVerbs: off|shadow|on` is the ceiling for the verb adapters; `agentVerbFamilies`
+(`AAC_AGENT_VERB_FAMILIES`, JSON) sets one mode per verb under that ceiling. An absent
+map keeps the ceiling for every verb (the legacy scalar behavior); a present map turns
+on only its listed families, so the read-only families turn on one at a time
+(`signin-expiry`, `quota-read`, `failover-inventory`, `t3-pins`, `scan-usage`). A
+present but invalid map keeps every family off. `key-store` and `claude-history` write
+on the computer, so their shadow mode is off: shadow never duplicates a write.
+
+`shadow` serves the reference (Python/TS/scanner) answer as soon as it settles and runs
+the agent alongside; the comparison is logged in the background as `agent.verbs.shadow`
+with the verb, outcome (`equal`, `different`, `fallback`, `error`, `reference-failed`,
+`reference-fallback`) and both durations. Bodies never enter the log. Object key order
+is the only normalization; a scan whose reference is `python-fallback` is
+`reference-fallback`, not a difference. `on` keeps the agent-first boundary with the
+labelled helper fallback.
+
+Independently, `agentTransport: on` (or `AAC_AGENT_TRANSPORT=on`) sends those calls to
+`POST /internal/agent/<verb>` on the private service. It can start the service while
+public Rust read routes remain off. The endpoint requires the boot secret and the
+reserved front-door service principal; it is never exposed as a public dashboard route.
+Shadow read mode does not duplicate agent operations. Absent/invalid settings leave the
+original TS behavior intact.
 
 The service owns one four-channel `Computer` and one verified client per configured
 computer, loaded through `aac-config` and the packaged `computers.json` seed. Calls
@@ -424,8 +440,17 @@ verification while the service is absent/old. Both use the 64 MiB artifact cap f
 
 **Shipping is disabled on the service path.** Only an already installed hash-pinned
 agent is admitted. Missing, damaged or old agents return the labelled helper fallback;
-no prepare, SCP or commit step runs. The catalog stays empty. M3D4 and M3D5 remain open:
-this implementation creates no SSH identity and edits no trust or authorization file.
+no prepare, SCP or commit step runs. M3D4 (ship in stages, VM first) and M3D5 (the VM's
+current key, AAC-pinned known_hosts) are answered: `bun run agent:build` builds the
+agent on each build computer (Nas1, the Mac, aac-winbuild; never the VM) into
+`crates/aac-agent/prebuilt/<target>/`, `--copy-only` carries the matching targets into
+`dist/agent/` during `build`, and the lead reviews and commits each target's pin into
+`src/web-server/services/agent-artifacts.json`. The lead then places the binary on each
+remote computer with `scripts/agent-install.sh` (Nas1, Mac) or `scripts/agent-install.ps1`
+(Windows): digest check, staged `.part`, re-check, atomic rename, `--version` handshake.
+The VM is Local and runs the packaged binary in place. Linux artifacts are glibc until
+the musl target is authorized (F11); both are admitted. This implementation creates no
+SSH identity and edits no trust or authorization file.
 
 SSH requires an explicit existing identity file (`computers[].transport.key`, or
 `agentTransportSsh.identityFile` for seeded computers) and an explicit pinned source
