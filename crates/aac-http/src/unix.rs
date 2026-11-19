@@ -339,13 +339,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 )
                     .into_response();
             };
-            match shared
-                .limits
-                .blocking(row.pool, move || Ok(operation.invoke(jobs.as_ref())))
-                .await
-            {
-                Ok(response) => response,
-                Err(reason) => decline(row.handler, reason),
+            match operation.invoke(jobs.as_ref()).await {
+                Some(response) => response,
+                None => decline(row.handler, Decline::Internal),
             }
         }
         Handler::Approvals => {

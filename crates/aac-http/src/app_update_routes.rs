@@ -4,37 +4,31 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde_json::{Value, json};
+use serde_json::Value;
+use std::{future::Future, pin::Pin};
 
-/// HTTP-compatible job operations supplied by the app-update service at boot.
+/// The dashboard HTTP status and JSON body returned by a job operation.
+pub struct AppUpdateReply {
+    /// HTTP status, including the acknowledgement and conflict statuses.
+    pub status: u16,
+    /// The existing app-update wire body, with its field order.
+    pub body: Value,
+}
+
+/// A single request to the async job owner.
+pub type AppUpdateCall<'a> = Pin<Box<dyn Future<Output = AppUpdateReply> + Send + 'a>>;
+
+/// Async operations supplied by the app-update job owner at boot.
 ///
-/// Each call returns an owned dashboard job snapshot. Start and cancel acknowledge
-/// promptly. The job owner handles execution, durable state, and exclusive ownership.
+/// The job owner manages running jobs, durable state, and exclusive ownership.
+/// The route adapter owns request admission and passes the reply through.
 pub trait AppUpdateJobs: Send + Sync {
     /// Snapshot the current or most recent job, if any.
-    fn status(&self) -> Option<Value>;
-    /// Start a new job or describe why the owner could not start one.
-    fn start(&self) -> Result<Value, AppUpdateStartError>;
-    /// Request cancellation of the current job and report its state.
-    fn cancel(&self) -> AppUpdateCancel;
-}
-
-/// Failure from the guarded start operation.
-pub enum AppUpdateStartError {
-    /// A running job already owns start. Include the current job if known.
-    Busy(Option<Value>),
-    /// The owner could not safely start a job.
-    Failed,
-}
-
-/// Acknowledgement from the guarded cancel operation.
-pub enum AppUpdateCancel {
-    /// No running job. Include the most recent job if known.
-    Idle(Option<Value>),
-    /// The owner is cancelling this job.
-    Cancelling(Value),
-    /// Another process owns cancellation.
-    NotOwner(Option<Value>),
+    fn status(&self) -> AppUpdateCall<'_>;
+    /// Acknowledge a new job or report why the owner could not start one.
+    fn start(&self) -> AppUpdateCall<'_>;
+    /// Acknowledge cancellation or report why the owner could not cancel.
+    fn cancel(&self) -> AppUpdateCall<'_>;
 }
 
 #[derive(Clone, Copy)]
@@ -56,38 +50,14 @@ impl Operation {
         }
     }
 
-    pub(crate) fn invoke(self, jobs: &dyn AppUpdateJobs) -> Response {
-        let (status, body) = match self {
-            Self::Status => (StatusCode::OK, json!({ "job": jobs.status() })),
-            Self::Start => match jobs.start() {
-                Ok(job) => (StatusCode::ACCEPTED, json!({ "job": job })),
-                Err(AppUpdateStartError::Busy(job)) => (
-                    StatusCode::CONFLICT,
-                    json!({ "error": "An app update is already running.", "job": job }),
-                ),
-                Err(AppUpdateStartError::Failed) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    json!({ "error": "App updates could not start safely." }),
-                ),
-            },
-            Self::Cancel => match jobs.cancel() {
-                AppUpdateCancel::Idle(job) => {
-                    (StatusCode::OK, json!({ "job": job, "cancelling": false }))
-                }
-                AppUpdateCancel::Cancelling(job) => (
-                    StatusCode::ACCEPTED,
-                    json!({ "job": job, "cancelling": true }),
-                ),
-                AppUpdateCancel::NotOwner(job) => (
-                    StatusCode::CONFLICT,
-                    json!({
-                        "error": "This update is run by another dashboard process, so it cannot be cancelled here.",
-                        "code": "not_owner", "job": job, "cancelling": false,
-                    }),
-                ),
-            },
+    pub(crate) async fn invoke(self, jobs: &dyn AppUpdateJobs) -> Option<Response> {
+        let reply = match self {
+            Self::Status => jobs.status().await,
+            Self::Start => jobs.start().await,
+            Self::Cancel => jobs.cancel().await,
         };
-        (status, Json(body)).into_response()
+        let status = StatusCode::from_u16(reply.status).ok()?;
+        Some((status, Json(reply.body)).into_response())
     }
 }
 
@@ -95,35 +65,59 @@ impl Operation {
 mod tests {
     use super::*;
     use axum::body::to_bytes;
+    use serde_json::json;
 
     struct Fixture {
         job: Value,
         outcome: String,
     }
 
+    fn reply(status: u16, body: Value) -> AppUpdateReply {
+        AppUpdateReply { status, body }
+    }
+
     impl AppUpdateJobs for Fixture {
-        fn status(&self) -> Option<Value> {
-            (self.outcome != "idle").then(|| self.job.clone())
+        fn status(&self) -> AppUpdateCall<'_> {
+            Box::pin(async {
+                let job = (self.outcome != "idle").then_some(&self.job);
+                reply(200, json!({ "job": job }))
+            })
         }
 
-        fn start(&self) -> Result<Value, AppUpdateStartError> {
-            match self.outcome.as_str() {
-                "failed" => Err(AppUpdateStartError::Failed),
-                "busy" => Err(AppUpdateStartError::Busy(self.status())),
-                _ => Ok(self.job.clone()),
-            }
-        }
-
-        fn cancel(&self) -> AppUpdateCancel {
-            match self.outcome.as_str() {
-                "not_owner" => AppUpdateCancel::NotOwner(self.status()),
-                "cancelling" => {
-                    let mut job = self.job.clone();
-                    job["cancelRequested"] = json!(true);
-                    AppUpdateCancel::Cancelling(job)
+        fn start(&self) -> AppUpdateCall<'_> {
+            Box::pin(async {
+                match self.outcome.as_str() {
+                    "failed" => reply(
+                        500,
+                        json!({ "error": "App updates could not start safely." }),
+                    ),
+                    "busy" => reply(
+                        409,
+                        json!({ "error": "An app update is already running.", "job": self.job }),
+                    ),
+                    _ => reply(202, json!({ "job": self.job })),
                 }
-                _ => AppUpdateCancel::Idle(None),
-            }
+            })
+        }
+
+        fn cancel(&self) -> AppUpdateCall<'_> {
+            Box::pin(async {
+                match self.outcome.as_str() {
+                    "not_owner" => reply(
+                        409,
+                        json!({
+                            "error": "This update is run by another dashboard process, so it cannot be cancelled here.",
+                            "code": "not_owner", "job": self.job, "cancelling": false,
+                        }),
+                    ),
+                    "cancelling" => {
+                        let mut job = self.job.clone();
+                        job["cancelRequested"] = json!(true);
+                        reply(202, json!({ "job": job, "cancelling": true }))
+                    }
+                    _ => reply(200, json!({ "job": null, "cancelling": false })),
+                }
+            })
         }
     }
 
@@ -159,9 +153,12 @@ mod tests {
             },
             jobs,
         ));
-        while !socket.exists() && !service.is_finished() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !socket.exists() && !service.is_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
         for (key, principal, body, expected) in [
             ("wrong", "session", "{}", "401"),
             (secret.as_str(), "device", "{}", "401"),
@@ -220,7 +217,10 @@ mod tests {
                     .ok_or("missing outcome")?
                     .to_owned(),
             };
-            let reply = op.invoke(&jobs);
+            let reply = op
+                .invoke(&jobs)
+                .await
+                .ok_or("invalid status from fixture")?;
             assert_eq!(
                 u64::from(reply.status().as_u16()),
                 case["http"].as_u64().ok_or("missing status")?
