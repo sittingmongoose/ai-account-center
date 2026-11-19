@@ -137,6 +137,20 @@ async function main() {
         await owner.collect();
         await scoreboard.view(ALL_RUNS);
         send({ ok: true });
+      } else if (message.cmd === 'collect') {
+        await owner.collect();
+        send({ ok: true });
+      } else if (message.cmd === 'pins') {
+        const out = {};
+        try {
+          const inputs = owner.readInputs();
+          await owner.pinned.compose(inputs.reports, owner.answers.list(), inputs.docs);
+          out.ok = true;
+          out.view = owner.pinned.view();
+        } catch (e) {
+          out.error = String((e && e.stack) || e);
+        }
+        send({ ok: true, out });
       } else if (message.cmd === 'wait-owned') {
         send({ ok: true, generation: await waitOwned(30000, message.marker ?? null) });
       } else if (message.cmd === 'audit') {
@@ -187,8 +201,9 @@ async function main() {
             'web-server/rust-read-input.js'
           );
           const zone = 'America/New_York';
+          const probeNow = Date.now();
           const data = {
-            now: 0,
+            now: probeNow,
             timeZone: zone,
             root: '',
             catalog: input.catalog,
@@ -221,7 +236,7 @@ async function main() {
           out.held = await rust.pushFeed(
             boot,
             'scoreboard-facts',
-            `${input.generation}:${input.catalogHash}:America-New_York`,
+            `${input.generation}:${String(input.catalogHash).slice(0, 12)}:${probeNow}`,
             rustInputText({ timeZone: zone }),
             factsText
           );

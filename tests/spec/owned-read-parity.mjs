@@ -252,6 +252,7 @@ function get(port, route) {
 const CLOCK_KEYS = new Set([
   'scannedAt',
   'asOf',
+  'asOfMs',
   'firstSeenAt',
   'generatedAt',
   'ageSeconds',
@@ -263,14 +264,18 @@ const CLOCK_KEYS = new Set([
   'memoryReadAt',
   'boards',
 ]);
+/** The two stores' own identities; the fixture homes differ by design. */
+const ID_KEYS = new Set(['instanceId', 'openedAt']);
 function normalize(value) {
   if (Array.isArray(value)) return value.map(normalize);
   if (value && typeof value === 'object') {
     const out = {};
     for (const [key, item] of Object.entries(value))
-      out[key] = CLOCK_KEYS.has(key) ? null : normalize(item);
+      out[key] = CLOCK_KEYS.has(key) || ID_KEYS.has(key) ? null : normalize(item);
     return out;
   }
+  if (typeof value === 'string')
+    return value.split(homes.today).join('<home>').split(homes.owned).join('<home>');
   return value;
 }
 const sameJson = (a, b) =>
@@ -302,9 +307,11 @@ try {
         `${name}: differs at [${diff.join(', ')}]; ${k}: today=${sample(pa[k])} owned=${sample(pb[k])}`
       );
       if (!report.diffDir) {
-        report.diffDir = scratch;
-        fs.writeFileSync(path.join(scratch, 'diff-today.json'), a.body);
-        fs.writeFileSync(path.join(scratch, 'diff-owned.json'), b.body);
+        const dump = path.join(process.env.TMPDIR ?? os.tmpdir(), 'aac-r4-diff');
+        fs.mkdirSync(dump, { recursive: true });
+        report.diffDir = dump;
+        fs.writeFileSync(path.join(dump, 'diff-today.json'), a.body);
+        fs.writeFileSync(path.join(dump, 'diff-owned.json'), b.body);
       }
     }
     if (!served) report.failures.push(`${name}: the owned path did not serve (x-aac-view)`);
@@ -313,9 +320,11 @@ try {
 
   await today.command('scan');
   await owned.command('wait-owned');
+  await owned.command('collect');
   // Let both owners' first collector tick (pinned, machines, simlock) land before comparing.
   await new Promise((resolve) => setTimeout(resolve, 1500));
   await compare('first status read', '/api/status', { view: 'status@1' });
+  report.pinsProbe = await owned.command('pins');
   await compare('first scoreboard read', '/api/scoreboard', { view: 'scoreboard@1' });
   await compare(
     'filtered scoreboard',
@@ -363,12 +372,16 @@ try {
     report.failures.push('runs audit: the owned ingest differs from the TS ingest');
 
   // The readers-check file: one file per writer, the same rows up to the read clocks.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   const checkToday = await today.command('check');
   const checkOwned = await owned.command('check');
   const checkNames = Object.keys(checkToday.files).sort();
   report.steps.push({ name: 'readers check', writers: checkNames });
-  if (JSON.stringify(Object.keys(checkOwned.files).sort()) !== JSON.stringify(checkNames))
-    report.failures.push('readers check: different writer files');
+  const ownedNames = Object.keys(checkOwned.files).sort();
+  if (JSON.stringify(ownedNames) !== JSON.stringify(checkNames))
+    report.failures.push(
+      `readers check: different writer files (today [${checkNames}] owned [${ownedNames}])`
+    );
   for (const name of checkNames) {
     const a = normalize(JSON.parse(checkToday.files[name]));
     const b = normalize(JSON.parse(checkOwned.files[name] ?? 'null'));

@@ -11,7 +11,6 @@ import { RustService } from '../rust-service';
 import { rustOwnedScoreboardOn } from '../rust-service-groups';
 import { dateWordsIn, localeRanks, readFacts, rustInputText } from '../rust-read-input';
 import { sendRustView } from '../rust-view-reply';
-import { onRustServiceEvent } from '../rust-service-events';
 import { addCalendarDays, localMidnight } from '../services/account-analytics-range';
 import {
   DEFAULT_DASHBOARD_TIME_ZONE,
@@ -24,18 +23,12 @@ const ROUTE = '/api/scoreboard';
 /** crates/aac-http scoreboard_owned `respond_tagged("scoreboard", 1, …)`. */
 export const SCOREBOARD_OWNED_VIEW = 'scoreboard@1';
 
-interface OwnedState {
-  boot: string;
+interface OwnedFacts {
   generation: number;
   catalogHash: string;
-  zone: string;
   factsId: string;
-  /** Set when the service moved past what this front door last pushed. */
-  stale: boolean;
 }
 
-const states = new WeakMap<RustService, OwnedState>();
-const events = new WeakMap<RustService, () => void>();
 const groups = new WeakMap<RustService, boolean>();
 
 /** The service that answers the Scoreboard from its own store: the group on, under mode on. */
@@ -59,17 +52,17 @@ function timeZone(): string {
 }
 
 /**
- * The facts generation for the service's current (generation, catalog, zone): fetch the
- * unfiltered input once per generation, compute the envelope facts over it, push them.
- * Null when the service is absent, the push did not land, or the input cannot be carried.
+ * The facts for this request's (generation, catalog, zone, now): fetch the service's
+ * unfiltered input, compute the envelope facts over it at the request's clock — the composer
+ * formats `now` itself, so the facts must carry it — and push them. Null when the service is
+ * absent, the push did not land, or the input cannot be carried.
  */
 async function ensureFacts(
   service: RustService,
   boot: string,
-  zone: string
-): Promise<OwnedState | null> {
-  let state = states.get(service);
-  if (state && state.boot === boot && state.zone === zone && !state.stale) return state;
+  zone: string,
+  now: number
+): Promise<OwnedFacts | null> {
   const input = (await service.internalJson('/internal/scoreboard/inputs')) as {
     generation?: unknown;
     catalogHash?: unknown;
@@ -90,7 +83,7 @@ async function ensureFacts(
     return null;
   }
   const data = {
-    now: 0,
+    now,
     timeZone: zone,
     root: '',
     catalog: input.catalog,
@@ -123,32 +116,13 @@ async function ensureFacts(
   } catch {
     return null;
   }
-  // The feed's generation word admits only [A-Za-z0-9._:-]; zone names carry slashes.
-  const zoneWord = zone.replace(/[^A-Za-z0-9._:-]/g, '-');
-  const factsId = `${input.generation}:${input.catalogHash}:${zoneWord}`;
+  // The feed's generation word admits only [A-Za-z0-9._:-] and at most 64 bytes. The zone
+  // rides in the payload (the answer header carries it); the id names the generation, a hash
+  // prefix and the clock. The full hash still gates the answer's staleness.
+  const factsId = `${input.generation}:${String(input.catalogHash).slice(0, 12)}:${now}`;
   const held = await service.pushFeed(boot, 'scoreboard-facts', factsId, dataText, factsText);
   if (held === null) return null;
-  state = {
-    boot,
-    generation: input.generation,
-    catalogHash: input.catalogHash,
-    zone,
-    factsId: held,
-    stale: false,
-  };
-  states.set(service, state);
-  if (!events.has(service)) {
-    events.set(
-      service,
-      onRustServiceEvent((event) => {
-        if (event.event === 'scoreboard-changed') {
-          const held = states.get(service);
-          if (held) held.stale = true;
-        }
-      })
-    );
-  }
-  return state;
+  return { generation: input.generation, catalogHash: input.catalogHash, factsId: held };
 }
 
 /**
@@ -169,9 +143,9 @@ export async function answerScoreboardOwned(
   const boot = service.feedBoot(scope);
   if (!boot) return declined('root');
   const zone = timeZone();
-  const state = await ensureFacts(service, boot, zone);
-  if (!state) return declined('feed');
   const now = Date.now();
+  const state = await ensureFacts(service, boot, zone, now);
+  if (!state) return declined('feed');
   const words = dateWordsIn(zone)(now);
   const headers = {
     'x-aac-feed': JSON.stringify({
@@ -191,11 +165,8 @@ export async function answerScoreboardOwned(
     }),
   };
   const reply = await service.fedView(req, ROUTE, headers, SCOREBOARD_OWNED_VIEW);
-  if (typeof reply === 'string') {
-    // The service moved past this front door's facts: fetch again on the next request.
-    if (reply === 'stale') state.stale = true;
-    return false;
-  }
+  // 'stale': the service moved past this request's inputs; the next request fetches fresh ones.
+  if (typeof reply === 'string') return false;
   if (!reply) return false;
   sendRustView(res, reply);
   return true;

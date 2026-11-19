@@ -1052,10 +1052,11 @@ service refuses owned flags without a store boot.
   read with its restart budget and last-complete-read fallback, `normalizeModel` docs over the
   held catalog, `read_scoreboard::compose` with by-model and groups in process, the 60 s view
   cache (a hit fills only `cacheAgeSeconds`), the revalidated-view ETag and `x-aac-view:
-  scoreboard@1`. The front door keeps the filter parse and auth, computes the presentation
-  facts once per (generation, catalog, zone) over `GET /internal/scoreboard/inputs` (the
-  unfiltered superset of every filter's rows) and pushes them as `scoreboard-facts`; any
-  decline is today's handler. `scoreboard-changed` carries each new generation.
+  scoreboard@1`. The front door keeps the filter parse and auth, and per request computes the
+  presentation facts at the request's clock over `GET /internal/scoreboard/inputs` (the
+  unfiltered superset of every filter's rows) and pushes them as `scoreboard-facts` — the
+  composer formats `now` itself, so the facts must carry it (`ctx.valid`); any decline is
+  today's handler. `scoreboard-changed` carries each new generation.
 - **One readers-check writer** (`aac-status::share::check`, the registry row `readers-check`
   `movesWith: status`): the status scan's rows and the Scoreboard's runs rows merge into one
   file per writer, written through the registry's leased 0644 writer. The row flips only when

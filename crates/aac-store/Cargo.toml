@@ -29,7 +29,9 @@ zstd = "0.14"
 crc32fast = "1.5"
 sha2.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# The store passes the writer's JSON through: keep its member order in every build shape
+# (aac-http already unifies this feature; a standalone -p aac-store build must agree).
+serde_json = { workspace = true, features = ["preserve_order"] }
 regex.workspace = true
 
 [build-dependencies]
