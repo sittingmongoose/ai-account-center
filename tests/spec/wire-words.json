@@ -2472,6 +2472,13 @@
     ]
   },
   {
+    "word": "no_managed_instance",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:reason"
+    ]
+  },
+  {
     "word": "no_node",
     "cause": null,
     "sources": [
