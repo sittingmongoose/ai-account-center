@@ -190,10 +190,10 @@ fn arc_path(c: f64, r0: f64, r1: f64, a0: f64, a1: f64) -> Option<String> {
     ))
 }
 
-/// The ring's radii for a donut `size` px across (the Slint page's proportions).
+/// The ring's radii for a donut `size` px across, leaving space around the ring for percentage labels.
 fn radii(size: f64) -> (f64, f64) {
-    let r1 = size / 2.0 - 42.0;
-    let r0 = r1 - (size * 0.11).round().max(22.0);
+    let r1 = (size / 2.0 - 48.0).max(1.0);
+    let r0 = (r1 - (size * 0.11).round().max(22.0)).max(0.0);
     (r0, r1)
 }
 
@@ -226,12 +226,7 @@ pub fn DonutCard() -> impl IntoView {
     });
     let size = Memo::new(move |_| {
         let w = width.get();
-        // the share labels sit outside the ring: keep 12 px for them on each side
-        if w <= 0.0 {
-            0.0
-        } else {
-            (w - 24.0).clamp(180.0, 340.0).min(w)
-        }
+        w.min(640.0)
     });
     let show = Memo::new(move |_| {
         let p = pin.get();
@@ -389,8 +384,9 @@ mod tests {
     }
 
     #[test]
-    fn the_ring_keeps_the_slint_proportions() {
-        assert_eq!(radii(300.0), (75.0, 108.0));
-        assert_eq!(radii(180.0), (26.0, 48.0));
+    fn the_ring_reserves_room_for_percentage_labels() {
+        assert_eq!(radii(640.0), (202.0, 272.0));
+        assert_eq!(radii(300.0), (69.0, 102.0));
+        assert_eq!(radii(180.0), (20.0, 42.0));
     }
 }

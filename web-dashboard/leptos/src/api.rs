@@ -32,6 +32,8 @@ pub struct StatusView {
     pub sources: Vec<Source>,
     pub cards: Cards,
     #[serde(deserialize_with = "nullable")]
+    pub report_problems: Vec<StatusProblem>,
+    #[serde(deserialize_with = "nullable")]
     pub projects: Vec<Project>,
     pub threads: Rows<Thread>,
     pub machines: Rows<Machine>,
@@ -63,7 +65,7 @@ pub struct PinnedPanel {
     pub updates: Vec<PinnedUpdate>,
 }
 
-/// A refused status@1 file (`writers/<writer>/status.json`) and why, in the server's fixed words.
+/// A file or folder the report readers could not read, with the reader's reason.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StatusProblem {
@@ -912,6 +914,7 @@ impl Delivery {
     pub fn told(&self) -> &'static str {
         match self.state.as_str() {
             "rang" => "the agent was told",
+            "published" => "signed answer on the share",
             "failed" => "could not tell the agent",
             _ => "telling the agent",
         }
@@ -1756,6 +1759,16 @@ mod tests {
         assert!(n.delivery.warnings().is_empty());
         assert_eq!(n.delivery.not_told(), None);
         assert_eq!(n.delivery.told(), "the agent was told");
+    }
+
+    #[test]
+    fn a_published_answer_reports_its_signed_copy() {
+        let delivery: Delivery = serde_json::from_value(serde_json::json!({
+            "state": "published", "detail": "The signed answer is on the share."
+        }))
+        .unwrap();
+        assert_eq!(delivery.told(), "signed answer on the share");
+        assert!(delivery.warnings().is_empty());
     }
 
     #[test]

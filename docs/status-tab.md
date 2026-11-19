@@ -142,6 +142,7 @@ content alone, without the frame's chrome.
   "sources": [ Source ],
   "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
              "complete": true },
+  "reportProblems": [ { "file": "writers/vm.foo/thread.json", "reason": "not valid JSON", "since": 1793982600000 } ],
   "pinned": PinnedPanel,
   "projects": [ Project ],
   "threads": { "source": "...", "also": [ "pm-mail" ], "rows": [ Thread ] },
@@ -176,6 +177,12 @@ source keeps its last good readings, labelled cached with their age.
 
 Every number the page shows is in this view, already rounded and worded. A missing value is `null` with a reason
 word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago") and Eastern 12-hour on hover/tap.
+
+**Report problems** — `reportProblems` carries the general report reader's file, folder and scan-limit problems.
+The field is omitted when the reader has none. `file` is relative to the report share's `v1` folder, and `since`
+is the first observation time in epoch milliseconds. Status combines these records with `pinned.statusProblems`,
+pin refusals and pin-source machine failures. The disclosure lists each failed file or folder once. The source
+summary still reports freshness, and Questions shows answer and card-action problems.
 
 **Source** (one per input; every panel names the one it shows):
 ```jsonc
@@ -285,8 +292,8 @@ share):
 - A count or premise that changes after a card was shown: the agent supersedes the card; the new card's `whatChanged`
   gives old and new values and `oldAnswer` quotes any earlier answer.
 
-**AnsweredCard**: `{ card: Card, answer: { kind: "answer" | "done", choice, note, via, answeredAt, device, delivery: { state:
-"rang" | "failed" | "pending", at, detail, share: Step, doorbell: Step, summary: Step | null, summaryWarning } } }`,
+**AnsweredCard**: `{ card: Card, answer: { kind: "answer" | "note" | "done", choice, note, via, answeredAt, device, delivery: { state:
+"rang" | "failed" | "pending" | "published", at, detail, share: Step, doorbell: Step, summary: Step | null, summaryWarning } } }`,
 newest first, at most 50 (the full
 history, notes included, is `GET /api/status/answers`). **Step**: `{ state: "pending" | "done" | "failed" |
 "skipped", at, detail, attempts }`. `failed` covers a share write or doorbell still being retried, one that gave up
@@ -519,6 +526,14 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   does not, so a file dropped on the share cannot block a real answer.
 - The card must be open on disk at that `seq` and hash (read fresh, not from the last scan) and that version not yet
   answered. Otherwise that entry is `card_changed` and the page reloads the card.
+- If the private journal lacks an entry, Status can display a published closing answer verified with this
+  dashboard's local signing key. Its card ID, sequence and SHA-256 must match the current open card.
+  The deck shows the signed choice and time under **Answered**, and waits that explicitly name that card
+  clear from the pinned panel. A new sequence can wait again. A recovered copy does not establish that
+  pm-mail rang, so its delivery line says the signed answer is on the share.
+  If several signed copies match, Status picks the latest answer time, then the lexicographically greatest
+  base64 signature for an equal time. The card view and pinned waits are published together. If a competing note read
+  runs out of time, the poll keeps its best verified copy.
 - `choice` keys must be the card's option keys, without repeats (one unless `multiple`).
 - One note box serves a different answer, a comment and a question. With a choice, the record is `kind: "answer"` and
   the card closes. With only a note, the record remains `kind: "note"` for compatibility: it is signed and delivered, closes that card version, and appears in answered history. The agent acts on the response or files a new card if clarification is needed. The agent may withdraw the source card

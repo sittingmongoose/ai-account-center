@@ -321,6 +321,52 @@ fn fresh_verification_requires_exact_decrement_and_refill() {
     }
 }
 #[test]
+fn a_codex_credit_gone_after_openai_said_reset_confirms_and_unlocks() {
+    // OpenAI removes a redeemed Codex credit from its list. With OpenAI's own `reset` on record, a newer read
+    // of the same identity without the credit settles the attempt; without it, the lock stays.
+    for provider_said_reset in [true, false] {
+        let (_d, mut s) = open();
+        let mut snap = snapshot("codex");
+        snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+        let (_, a) = begin(&mut s, &snap);
+        if provider_said_reset {
+            // The 2026-11-16 shape: OpenAI answered `reset`, and no read proved it then.
+            s.read_finish("route-account", &a, Outcome::Reset, None, NOW, None)
+                .unwrap();
+        }
+        let mut after = snap.clone();
+        after.observed_at_ms += 1;
+        after.grants.remove(1);
+        let r = s.read_check("route-account", &a, &after, NOW + 1).unwrap();
+        assert_eq!(
+            r["outcome"],
+            if provider_said_reset {
+                "claimed"
+            } else {
+                "claimed-unconfirmed"
+            }
+        );
+        // Settled means unlocked; unconfirmed keeps the account's lock.
+        let lock = s.pending("route-account", NOW + 2).unwrap();
+        assert_eq!(lock["attemptKey"].is_null(), provider_said_reset);
+    }
+}
+#[test]
+fn a_missing_claude_grant_still_is_not_proof() {
+    let (_d, mut s) = open();
+    let mut snap = snapshot("claude");
+    snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+    let (_, a) = begin(&mut s, &snap);
+    let mut after = snap.clone();
+    after.observed_at_ms += 1;
+    after.grants.remove(1);
+    after.windows.insert("seven_day".into(), 0.0);
+    let r = s
+        .read_finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
+        .unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed");
+}
+#[test]
 fn check_again_only_verifies() {
     let (_d, mut s) = open();
     let snap = snapshot("codex");

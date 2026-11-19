@@ -3,7 +3,7 @@
 //! the server refuses an answer to a card that changed after it was shown.
 
 use crate::api::*;
-use crate::blocks::Blocks;
+use crate::blocks::{BlockFolds, Blocks};
 use crate::drafts::{self, Drafts, Standing};
 use crate::fmt;
 use crate::live::Live;
@@ -113,13 +113,6 @@ fn steady(cards: &[Card]) -> Vec<Card> {
 #[component]
 pub fn CardsPanel() -> impl IntoView {
     let live = expect_context::<Live>();
-    let source = Signal::derive(move || {
-        let view = live.view.get()?;
-        view.sources
-            .iter()
-            .find(|s| s.id == view.cards.source)
-            .cloned()
-    });
     let open = Memo::new(move |_| {
         live.view.with(|v| {
             v.as_ref()
@@ -207,6 +200,7 @@ pub fn CardsPanel() -> impl IntoView {
     });
 
     let answered_open = RwSignal::new(false);
+    let list_open = RwSignal::new(false);
     let history_problem = move || {
         live.view.with(|v| {
             v.as_ref()
@@ -226,12 +220,11 @@ pub fn CardsPanel() -> impl IntoView {
                 }
                 fallback=move || view! {
                     <div class="plate-head"><h2>"Questions for you"</h2><span class="plate-meta">"None waiting"</span></div>
-                    {source_note(source.get(), "No reading from the agent reports yet.")}
                     {history_problem().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
                     <p class="q-empty">"No questions waiting."</p>
                 }
             >
-                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem source=source history_problem=Signal::derive(history_problem)/>
+                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem history_problem=Signal::derive(history_problem) list_open=list_open/>
             </Show>
             <UnsentClosed open=open drafts=drafts/>
             <Show when=move || !answered().is_empty()>
@@ -256,11 +249,10 @@ fn Deck(
     deck_view: RwSignal<DeckView>,
     sending: RwSignal<bool>,
     problem: RwSignal<Option<String>>,
-    source: Signal<Option<Source>>,
     history_problem: Signal<Option<String>>,
+    list_open: RwSignal<bool>,
 ) -> impl IntoView {
     let live = expect_context::<Live>();
-    let list_open = RwSignal::new(false);
     // After the new card or the review screen is in place, bring the deck's top back into view when the owner had
     // scrolled past it (a long card). A deck already in view does not move. A plain browser timer on purpose:
     // Leptos 0.9 cancels its own `set_timeout` when the owner that started it is cleaned up, and this click redraws
@@ -376,6 +368,7 @@ fn Deck(
         })
     };
     let current = Memo::new(move |_| shown.with(|cards| cards.get(at.get()).cloned()));
+    let body_id = Memo::new(move |_| current.with(|c| c.as_ref().map(|c| c.id.clone())));
     let next = move || {
         let last = at.get_untracked() + 1 >= shown.with_untracked(|o| o.len());
         if last {
@@ -507,7 +500,6 @@ fn Deck(
                 </div>
             </Show>
         </div>
-        {move || source_note(source.get(), "No reading from the agent reports yet.")}
         {move || history_problem.get().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
         // below desktop the head's tools are hidden: the recommendations button sits in the body
         <Show when=can_use_rec>
@@ -541,7 +533,13 @@ fn Deck(
             </Show>
             {move || match deck_view.get() {
                 DeckView::Cards => view! {
-                    {move || current.get().map(|card| view! { <CardBody card=card drafts=drafts open=open/> })}
+                    <For each=move || body_id.get() key=|id| id.clone() children=move |id| {
+                        let tech = RwSignal::new(false);
+                        provide_context(BlockFolds::new());
+                        move || current.with(|c| c.as_ref().filter(|c| c.id == id).cloned().map(|card| view! {
+                            <CardBody card=card drafts=drafts open=open tech=tech/>
+                        }))
+                    }/>
                 }.into_any(),
                 DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open sending=sending problem=problem/> }.into_any(),
                 DeckView::Sent(summary) => view! { <Sent summary=summary back=move || go_card(0)/> }.into_any(),
@@ -559,7 +557,12 @@ fn Deck(
 }
 
 #[component]
-fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl IntoView {
+fn CardBody(
+    card: Card,
+    drafts: RwSignal<Drafts>,
+    open: Memo<Vec<Card>>,
+    tech: RwSignal<bool>,
+) -> impl IntoView {
     let card = StoredValue::new(card);
     let c = card.get_value();
     // A judgement card is the owner's own call: no recommendation is shown, so nothing anchors it.
@@ -623,7 +626,27 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     } else {
         c.asked_by.clone()
     };
+    let live = expect_context::<Live>();
     // A card the server can't vouch for right now is shown but can't be answered.
+    let reason = c.problem.clone();
+    let file = format!("writers/{}/cards/{}.json", c.writer, c.id);
+    // The report list can change even when the current card is identical. Read it from the
+    // paragraph's reactive children so a poll can update the words without rebuilding the card.
+    let problem_location = Memo::new(move |_| {
+        let Some(reason) = reason.as_ref() else {
+            return (false, false);
+        };
+        live.view.with(|view| {
+            view.as_ref().map_or((false, false), |view| {
+                let history = view.cards.answer_history_problem.as_ref() == Some(reason);
+                let drawer = view
+                    .report_problems
+                    .iter()
+                    .any(|problem| problem.file == file && problem.reason == *reason);
+                (history, drawer)
+            })
+        })
+    });
     let locked = !c.can_answer();
     let standing = move || drafts.with(|d| drafts::standing(d, &card.get_value()));
     let chosen = move |key: &str| {
@@ -640,7 +663,6 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
         ),
         _ => None,
     };
-    let live = expect_context::<Live>();
     // The facts line under the question, in the card guide's terms.
     let mut facts: Vec<(&'static str, String)> = Vec::new();
     facts.push((
@@ -725,8 +747,17 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                 {(c.kind != "sample" && (locked || c.problem.is_some())).then(|| view! {
                     <p class="q-problem">
                         {if locked { "Can't be answered right now. " } else { "" }}
-                        {c.problem.clone().unwrap_or_else(|| "The card could not be checked.".into())}
-                        {locked.then_some(" The last good version is shown; it can be answered once the agent rewrites it.")}
+                        {let reason = c.problem.clone(); move || {
+                            let (history, drawer) = problem_location.get();
+                            (!history && !drawer).then(|| reason.clone().unwrap_or_else(|| "The card could not be checked.".into()))
+                        }}
+                        {move || locked.then(|| {
+                            if problem_location.with(|(history, _)| *history) {
+                                "It can be answered once the answer history can be read again."
+                            } else {
+                                " The last good version is shown. It can be answered once the agent rewrites it."
+                            }
+                        })}
                     </p>
                 })}
                 {c.exception.clone().map(|e| view! {
@@ -822,7 +853,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                                     {has_extra.then(|| view! {
                                         <div class="opt-extra">
                                             <MediaList items=o.media.clone()/>
-                                            <Blocks blocks=o.sections.clone()/>
+                                            <Blocks blocks=o.sections.clone() option=key.clone()/>
                                         </div>
                                     })}
                                 </div>
@@ -872,7 +903,6 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                 })}
                 <div class="q-more">
                     {(!c.evidence.is_empty() || !c.id.is_empty()).then(|| {
-                        let tech = RwSignal::new(false);
                         let items = c.evidence.clone();
                         // The full id first: a chat may quote it ("vm.pm7-build--Q1") where the label reads PM7-Q1.
                         let id = c.id.clone();

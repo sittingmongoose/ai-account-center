@@ -442,7 +442,7 @@ pub(crate) fn pop_max_heights(vh: f64, top: f64, anchor_top: f64, safe_bottom: f
 }
 
 /// Reads the bottom safe inset from the page (`--safe-bottom`).
-fn page_safe(name: &str) -> f64 {
+pub(super) fn page_safe(name: &str) -> f64 {
     document()
         .document_element()
         .and_then(|r| window().get_computed_style(&r).ok().flatten())
@@ -456,7 +456,7 @@ fn page_safe_bottom() -> f64 {
 }
 
 /// Reads the content bounds from the page's chrome (`data-chrome`, `data-rail-side`, `--rail-w`).
-fn page_bounds(vw: f64) -> (f64, f64) {
+pub(super) fn page_bounds(vw: f64) -> (f64, f64) {
     let root = document().document_element();
     let chrome = root
         .as_ref()

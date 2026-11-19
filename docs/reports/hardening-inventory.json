@@ -540,15 +540,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 687,
+      "totalThrows": 688,
       "typedThrows": 227,
       "plainThrows": 47,
-      "otherThrows": 413,
-      "adoptionRatio": 0.3304,
+      "otherThrows": 414,
+      "adoptionRatio": 0.3299,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 404,
+          "count": 405,
           "typed": 174,
           "plain": 7
         },
@@ -610,8 +610,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 459,
-      "coverageRatio": 0.0959,
+      "totalSourceFiles": 461,
+      "coverageRatio": 0.0954,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -627,7 +627,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 263,
+          "count": 265,
           "withLogger": 30
         },
         {
@@ -755,7 +755,7 @@
         },
         {
           "file": "src/web-server/status/answers.ts",
-          "loc": 1744
+          "loc": 1941
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
@@ -771,11 +771,11 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1101
+          "loc": 1109
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 1053
+          "loc": 1084
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -783,7 +783,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 992
+          "loc": 993
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",
@@ -791,7 +791,7 @@
         },
         {
           "file": "src/web-server/status/status-view.ts",
-          "loc": 870
+          "loc": 871
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
@@ -799,7 +799,7 @@
         },
         {
           "file": "src/web-server/services/app-update-service.ts",
-          "loc": 803
+          "loc": 807
         }
       ]
     }

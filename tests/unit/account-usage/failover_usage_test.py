@@ -135,8 +135,10 @@ class ProtocolTests(unittest.TestCase):
         result, adapter = self.run_helper(self.request(provider="claude", row=row, claudeProfile=selected), adapter)
         self.assertIsNone(result["failureCode"])
         self.assertEqual(len(adapter.inventory_calls), 2)
-        for _, kwargs in adapter.inventory_calls + adapter.collect_calls:
-            self.assertEqual(kwargs, {"ccs_dir": self.home / ".ccs", "claude_profile": selected})
+        context = {"ccs_dir": self.home / ".ccs", "claude_profile": selected}
+        for _, kwargs in adapter.inventory_calls:
+            self.assertEqual(kwargs, context)
+        self.assertEqual(adapter.collect_calls[0][1], {**context, "observe_http": mock.ANY})
         self.assertNotIn("PrivateProfile", json.dumps(result))
 
     def test_claude_profile_context_rejects_ambiguous_or_untrusted_fields(self):
@@ -411,6 +413,26 @@ class ProtocolTests(unittest.TestCase):
         result, _ = self.run_helper(self.request(provider="muse", row=row), adapter)
         self.assertEqual(result["observedPlan"], "Max")
         self.assertEqual(result["observedPlanAt"], "2026-10-14T12:00:00.000Z")
+
+    def test_claude_diagnostics_survive_source_change_without_forwarding_adapter_output(self):
+        row = candidate("claude")
+
+        class Adapter(FakeAdapter):
+            def collect(self, *args, **kwargs):
+                kwargs["observe_http"]("oauth_profile", 200, None)
+                kwargs["observe_http"]("oauth_usage", 429, 90)
+                kwargs["observe_http"](TOKEN, 200, TOKEN)
+                print(TOKEN, file=sys.stderr)
+                return {"failureCode": "rate_limited", "retryAfterSeconds": 90}
+
+        adapter = Adapter(before=[row], after=[])
+        result, _ = self.run_helper(self.request(provider="claude", row=row), adapter)
+        self.assertEqual(result["failureCode"], "source_changed")
+        self.assertEqual(result["claudeHttp"], [
+            {"stage": "oauth_profile", "status": 200, "retryAfterSeconds": None},
+            {"stage": "oauth_usage", "status": 429, "retryAfterSeconds": 90},
+        ])
+        self.assertNotIn(TOKEN, json.dumps(result))
 
     def test_adapter_error_and_output_are_not_forwarded(self):
         adapter = FakeAdapter(result=ValueError("Bearer " + TOKEN))

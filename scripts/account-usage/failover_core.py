@@ -681,12 +681,15 @@ def _retry_after(value):
 
 class Client:
     def __init__(self):
+        self.observe_http = None
         self.deadline = time.monotonic() + HTTP_SECONDS
         self.opener = urllib.request.build_opener(_NoRedirect())
 
     def get(self, url, token, account=None):
         if url not in (CODEX_URL, CLAUDE_PROFILE_URL, CLAUDE_USAGE_URL):
             raise Failure()
+        stage = {CLAUDE_PROFILE_URL: "oauth_profile", CLAUDE_USAGE_URL: "oauth_usage"}.get(url)
+        observe = self.observe_http if stage else None
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise Failure()
@@ -696,9 +699,13 @@ class Client:
                             "User-Agent": "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"})
         else:
             headers.update({"anthropic-beta": "oauth-2025-04-20", "User-Agent": "CCS-ReadOnly-Usage/1.0"})
+        status = retry_after = None
         try:
             request = urllib.request.Request(url, headers=headers)
             with self.opener.open(request, timeout=min(5, remaining)) as response:
+                if observe:
+                    status = response.status
+                    retry_after = _retry_after(response.headers.get("Retry-After"))
                 chunks, size = [], 0
                 while size <= MAX_BYTES:
                     if time.monotonic() >= self.deadline:
@@ -715,11 +722,16 @@ class Client:
                     raise Failure("invalid_response")
                 return value
         except urllib.error.HTTPError as error:
-            if error.code == 429:
-                raise Failure("rate_limited", _retry_after((error.headers or {}).get("Retry-After"))) from None
+            status = error.code
+            retry_after = _retry_after((error.headers or {}).get("Retry-After"))
+            if status == 429:
+                raise Failure("rate_limited", retry_after) from None
             raise Failure("needs_sign_in" if error.code in (401, 403) else "unavailable") from None
         except (OSError, ValueError, UnicodeError, urllib.error.URLError):
             raise Failure() from None
+        finally:
+            if observe:
+                observe(stage, status, retry_after)
 
 
 def _codex_windows(payload, now):
@@ -802,7 +814,7 @@ def _sample(candidate, platform, windows, plan, plan_class=None):
     return sample
 
 
-def _claude_optional_windows(candidate, home, cooldown=None):
+def _claude_optional_windows(candidate, home, cooldown=None, observe_http=None):
     availability = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
     extras = {"optionalExtras": availability}
     identifier = candidate.get("_profile")
@@ -833,7 +845,8 @@ def _claude_optional_windows(candidate, home, cooldown=None):
         windows = claude_usage.optional_web_windows(identifier, candidate["_account"],
                                                     candidate["_organization"], home,
                                                     availability, candidate["email"], cooldown,
-                                                    profile_root=profile_root)
+                                                    profile_root=profile_root,
+                                                    **({"observe_http": observe_http} if observe_http else {}))
     except claude_usage.UsageUnavailable as error:
         windows = []
         availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
@@ -857,7 +870,7 @@ def _claude_optional_windows(candidate, home, cooldown=None):
     return windows, extras
 
 
-def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
+def collect(candidate, home, platform, ccs_dir=None, claude_profile=None, observe_http=None):
     """Collect only a revalidated candidate; provider rejection never becomes zero."""
     cooldown = {}
     try:
@@ -872,6 +885,8 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             windows = _codex_windows(payload, time.time())
             plan = safe_text(payload.get("plan_type", payload.get("planType")), 64) or candidate["plan"]
         elif provider == "claude":
+            client.observe_http = observe_http
+
             def verify_root():
                 root = candidate.get("_profile_root")
                 if root is not None and claude_usage.resolve_windows_profile_root(root, home) != root:
@@ -906,7 +921,7 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             if any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") for w in windows):
                 extras["optionalExtras"]["resetCredits"] = "ok"
             if platform == "windows" and candidate.get("_mode") == "desktop":
-                optional_windows, opt_extras = _claude_optional_windows(candidate, home, cooldown)
+                optional_windows, opt_extras = _claude_optional_windows(candidate, home, cooldown, observe_http)
                 # Deduplicate web grants already supplied by OAuth.
                 seen = {w["key"] for w in windows}
                 for w in optional_windows:

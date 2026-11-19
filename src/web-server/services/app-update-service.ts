@@ -755,13 +755,17 @@ export function legacyRow(row: AppUpdateResult): AppUpdateResult {
       MESSAGES.shared_updater_unsafe,
       MESSAGES.mixed_ownership,
       MESSAGES.pnpm_store_copy,
+      MESSAGES.registry_unreadable,
     ].some((message) => message === row.message)
   )
     return {
       ...rest,
       message: row.status === 'skipped' ? MESSAGES.unsupported : MESSAGES.update_failed,
     };
-  if (row.appId === 't3-acp-adapters' && row.message === MESSAGES.wrong_prefix)
+  if (
+    row.appId === 't3-acp-adapters' &&
+    [MESSAGES.wrong_prefix, MESSAGES.registry_mismatch].some((message) => message === row.message)
+  )
     return { ...rest, message: MESSAGES.update_failed };
   if (row.appId === 't3-acp-adapters' && row.message === MESSAGES.prefix_not_writable)
     return { ...rest, message: MESSAGES.unsupported };

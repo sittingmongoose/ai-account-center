@@ -789,8 +789,11 @@ def zcode_ubuntu(install, deadline, phase, state):
     siblings = {name: package_version(modules, name) for name in PACKAGES
                 if (modules / PACKAGES[name] / "package.json").exists()}
     offers = {name: registry_version(name) for name in siblings}
-    if any(not old or not offers[name] or npm_version_key(offers[name]) < npm_version_key(old)
-           for name, old in siblings.items()):
+    if any(offers[name] is None for name in siblings):
+        # The registry did not answer; that is not a downgrade risk, and the adapters row
+        # in this job says the same word.
+        raise UpdateFailure("registry_unreadable")
+    if any(not old or npm_version_key(offers[name]) < npm_version_key(old) for name, old in siblings.items()):
         return result("zcode", "ubuntu", "skipped", before, before, install.manager, "shared_updater_unsafe")
     phase("updating")
     code = run_unit(deadline)
@@ -1047,22 +1050,23 @@ DENIED = re.compile(r"\b(?:EPERM|EACCES)\b")
 def install_owned(install, deadline, phase, state, plan, held, targets, busy=frozenset()):
     """Each behind copy installs in its own run, bound to the owner that holds it.
 
-    plan is [(adapter, owner index)]. Returns {adapter: failure code}. A package npm reports
+    plan is [(adapter, owner index)]. Returns {adapter: failure code}, the worst across that
+    adapter's copies: one failing copy never skips its siblings. A package npm reports
     EBUSY on, or EPERM while an adapter process uses it (Windows), joins held; EPERM or EACCES
     with nothing using it is an unwritable folder."""
-    failed = {}
+    failures, failed = {}, {}
     shell = git_bash() if install.platform == "windows" else None
     for name, index in plan:
-        if name in held or name in failed:
+        if name in held or (name, index) in failures:
             continue
         owner = install.owners[name][index]
         if not writable(owner, install.platform):
-            failed[name] = "prefix_not_writable"
+            failures[(name, index)] = "prefix_not_writable"
             diagnostics().blame("not_writable", "prefix_not_writable")
             continue
         planned = install_command(owner, name, install.platform, shell, targets[name])
         if planned is None:
-            failed[name] = "unsupported"
+            failures[(name, index)] = "unsupported"
             diagnostics().note("manager_missing")
             continue
         argv, extra, label = planned
@@ -1077,10 +1081,13 @@ def install_owned(install, deadline, phase, state, plan, held, targets, busy=fro
                 if name in busy or (not DENIED.search(error.output or "") and "EBUSY" in error.output):
                     held.add(name)
                 else:
-                    failed[name] = "prefix_not_writable"
+                    failures[(name, index)] = "prefix_not_writable"
                     diagnostics().blame("not_writable", "npm_denied")
             else:
-                failed[name] = error.code
+                failures[(name, index)] = error.code
+    for (name, _index), code in failures.items():
+        # A copy the user must fix never hides a copy that really failed.
+        failed[name] = code if failed.get(name) in (None, "prefix_not_writable") else failed[name]
     return failed
 
 

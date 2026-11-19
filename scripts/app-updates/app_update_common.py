@@ -88,7 +88,7 @@ CREDENTIAL_MARKERS = ("auth", "token", "passw(?:or)?d", "passphrase", "pwd", "se
                       # The other keys the token pass recognises.
                       r"access[_-]?key", r"\bbasic\s+[A-Za-z0-9._~+/=-]", _CODE_KEY,
                       r"one[- ]time (?:code|password)") + CREDENTIAL_FLAG_FORMS
-_CREDENTIAL_WORD = (r"(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential"
+_CREDENTIAL_WORD = (r"(?:token|secret|password|passwd|passphrase|pwd|apikey|api[_-]key|authorization|credential"
                     r"|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)")
 _SECRET_PATTERNS = (
     # Whole credential-carrying headers and config lines: everything after the marker goes,
@@ -107,7 +107,8 @@ _SECRET_PATTERNS = (
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?"), "<redacted>"),
     (re.compile(r"(?i)\b(?:npm_|ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,600}"), "<redacted>"),
     (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "<redacted>"),
-    (re.compile(r"(?i)\b(https?|wss?)://[^/\s@]{1,200}@"), r"\1://"),
+    # URL credentials on any scheme (postgres://, ssh://, ...): the userinfo goes whole.
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,20})://[^/\s@:]{1,200}(?::[^/\s@]{1,200})?@"), r"\1://"),
     (re.compile(r"(?i)\b((?:https?|wss?)://[^\s?#\"']{1,600})[?#][^\s\"']{0,600}"), r"\1"),
     (re.compile(r"[\w.+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b"), "<email>"),
     # user@host without a domain; npm's name@tag and @scope/name forms survive.
@@ -918,9 +919,16 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False,
         if sink is not None:
             with contextlib.suppress(OSError, ValueError):
                 size = sink.seek(0, os.SEEK_END)
-                sink.seek(0)
-                # A truncated credential block cannot be scrubbed safely without its marker.
-                errors_sink.append(sink.read(65536) if size <= 65536 else b"<output omitted: diagnostic limit>")
+                if size > 65536:
+                    # The tail holds the error, so keep it, from its first whole line: a
+                    # truncated credential block cannot be scrubbed safely without its marker.
+                    sink.seek(size - 65536)
+                    data = sink.read(65536)
+                    cut = data.find(b"\n")
+                    errors_sink.append(data[cut + 1:] if cut >= 0 else b"")
+                else:
+                    sink.seek(0)
+                    errors_sink.append(sink.read(65536))
             sink.close()
 
 

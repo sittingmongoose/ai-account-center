@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
 import { DeadlineExceededError, withDeadline } from '../../utils/settle-deadline';
+import { cardRowVersion, cardVersion, closingCardVersions, type CardRow } from './answered-cards';
 import { agentReportsRoot } from './agent-reports-reader';
 import {
   DOORBELL_OFF_DETAIL,
@@ -46,6 +47,7 @@ import {
 } from './answer-entries';
 import {
   loadOrCreateAnswerKey,
+  readAnswerPublicKey,
   signAnswer,
   signDocument,
   answerKeyInfoNative,
@@ -69,7 +71,7 @@ import {
   type ParsedReport,
 } from './report-schema';
 import { readRegularFile } from './share-read';
-import { findSecretIn } from './schema-helpers';
+import { findSecretIn, realTimestamp } from './schema-helpers';
 import { findTypedSecret } from './typed-secrets';
 import { holdWriterLock, WriterBusyError } from './writer-lock';
 import { registerCleanup } from '../../errors/cleanup-registry';
@@ -217,11 +219,29 @@ export interface AnswerHistoryEntry {
   id: string;
   /** The send this record came in; null for records from before sends existed. */
   sendId: string | null;
+  /** A verified published copy without local delivery history. Never enqueued for retry. */
+  sharedOnly?: true;
   answer: SignedAnswer;
   /** The card version answered, as it was read at that moment. */
   card: CardDoc;
   share: StepState;
   doorbell: StepState;
+}
+
+/** Journal entries win when they record the same closing answer version and its delivery. */
+export function mergeSharedAnswers(
+  local: AnswerHistoryEntry[],
+  shared: readonly AnswerHistoryEntry[]
+): AnswerHistoryEntry[] {
+  if (shared.length === 0) return local;
+  const closed = closingCardVersions(local);
+  const recovered = shared.filter(
+    ({ answer }) => !closed.has(cardVersion(answer.cardId, answer.cardSeq, answer.cardSha256))
+  );
+  if (recovered.length === 0) return local;
+  return [...local, ...recovered].sort(
+    (a, b) => Date.parse(a.answer.answeredAt) - Date.parse(b.answer.answeredAt)
+  );
 }
 
 export interface SendRecord {
@@ -233,7 +253,7 @@ export interface SendRecord {
 }
 
 export interface AnswerDelivery {
-  state: 'rang' | 'failed' | 'pending';
+  state: 'rang' | 'failed' | 'pending' | 'published';
   at: string | null;
   detail: string | null;
   share: StepState;
@@ -444,6 +464,8 @@ export function deliveryView(
   const { share, doorbell } = entry;
   const summary = (entry.sendId && summaries?.get(entry.sendId)) || null;
   const base = { share, doorbell, summary, summaryWarning: summaryWarning(summary) };
+  if (entry.sharedOnly)
+    return { ...base, state: 'published', at: null, detail: 'The signed answer is on the share.' };
   if (share.state === 'skipped')
     return { ...base, state: 'failed', at: share.at, detail: share.detail };
   if (share.state === 'failed')
@@ -481,6 +503,8 @@ export function deliveryView(
 export interface StatusAnswersDeps {
   storeDir?: () => string;
   reportsRoot?: () => string;
+  /** A trusted public key supplied by the fixture in tests. */
+  readPublicKey?: () => string | null;
   /** The card as it is on disk now. */
   readCard: (cardId: string) => Promise<ParsedReport<CardDoc> | null>;
   doorbell?: Doorbell;
@@ -550,6 +574,7 @@ export class StatusAnswers {
    * a pending completion. Once it lands the journal itself cancels the line.
    */
   private readonly unvoided = new Set<string>();
+  private sharedAnswers = new Map<string, AnswerHistoryEntry>();
   private historyUnavailable = false;
   /** The journal's size, mtime and inode when `entries` was read; a non-owner reads it again once it changes. */
   private loadedFrom: string | null = null;
@@ -667,6 +692,158 @@ export class StatusAnswers {
     this.loadedFrom = from;
     this.historyUnavailable = false;
     return loaded;
+  }
+
+  /** Verified share copies for the current open versions. The returned list belongs to this read. */
+  sharedAnswersFor(cards: readonly CardRow[]): AnswerHistoryEntry[] {
+    return cards.flatMap((row) => {
+      const entry = this.sharedAnswers.get(cardRowVersion(row));
+      return row.doc.state === 'open' && entry ? [entry] : [];
+    });
+  }
+
+  private trustedPublicKey(): string | null {
+    try {
+      return this.deps.readPublicKey
+        ? this.deps.readPublicKey()
+        : readAnswerPublicKey(this.storeDir());
+    } catch {
+      return null;
+    }
+  }
+
+  private async readSharedClosingAnswer(
+    card: CardDoc,
+    hash: string,
+    publicKey: string,
+    fileName: string = `${card.id}.json`
+  ): Promise<SignedAnswer | null> {
+    const file = path.join(this.reportsRoot(), 'v1', 'answers', fileName);
+    const bytes = await readRegularFile(file, 64 * 1024).catch(() => null);
+    if (!bytes) return null;
+    const checked = verifySignedAnswer(bytes, publicKey);
+    if (!checked.ok) return null;
+    const answer = checked.answer;
+    const kind = answer.kind ?? 'answer';
+    if (
+      answer.cardId !== card.id ||
+      answer.cardSeq !== card.seq ||
+      answer.cardSha256 !== hash ||
+      !CLOSING_KINDS.has(kind) ||
+      (fileName !== `${card.id}.json` && kind !== 'note') ||
+      answer.answeredBy !== 'owner' ||
+      typeof answer.answeredAt !== 'string' ||
+      !realTimestamp(answer.answeredAt) ||
+      !Array.isArray(answer.choice) ||
+      !validChoice(card, answer.choice) ||
+      typeof answer.note !== 'string' ||
+      typeof answer.device !== 'string' ||
+      (answer.via !== 'deck' && answer.via !== 'recommended')
+    )
+      return null;
+    return { ...answer, kind };
+  }
+
+  pruneSharedAnswers(cards: readonly CardRow[]): void {
+    const current = new Set(cards.map(cardRowVersion));
+    for (const version of this.sharedAnswers.keys())
+      if (!current.has(version)) this.sharedAnswers.delete(version);
+  }
+
+  private async sharedNoteNames(): Promise<string[]> {
+    return fs.promises.readdir(path.join(this.reportsRoot(), 'v1', 'answers')).catch(() => []);
+  }
+
+  private async findSharedClosingAnswer(
+    card: CardDoc,
+    sha256: string,
+    publicKey: string,
+    budget: Budget,
+    noteNames: () => Promise<string[]>,
+    preferLatest = false
+  ): Promise<SignedAnswer | null> {
+    const withinBudget = <T>(read: () => Promise<T>, label: string): Promise<T> => {
+      const left = budget.left();
+      if (left === 0) throw new DeadlineExceededError(label);
+      return withDeadline(read(), left, undefined, label);
+    };
+    let selected = await withinBudget(
+      () => this.readSharedClosingAnswer(card, sha256, publicKey),
+      'Status signed answer read'
+    );
+    if (!preferLatest && selected) return selected;
+    const prefix = `${card.id}.note-`;
+    try {
+      // A late listing or note cannot discard a copy already verified during a poll.
+      const names = await withinBudget(noteNames, 'Status signed note listing');
+      for (const name of names) {
+        if (!name.startsWith(prefix) || !/^[a-f0-9]{12}\.json$/.test(name.slice(prefix.length)))
+          continue;
+        const note = await withinBudget(
+          () => this.readSharedClosingAnswer(card, sha256, publicKey, name),
+          'Status signed note read'
+        );
+        if (!note) continue;
+        if (!preferLatest) return note;
+        // Use the signed instant and then the signature bytes' base64 spelling, independent of file order.
+        const timeOrder = selected
+          ? Date.parse(note.answeredAt) - Date.parse(selected.answeredAt)
+          : 0;
+        if (
+          !selected ||
+          timeOrder > 0 ||
+          (timeOrder === 0 && note.signature.value > selected.signature.value)
+        )
+          selected = note;
+      }
+    } catch (error) {
+      // A send still needs to rule out an existing answer before recording a new one.
+      if (!preferLatest || !(error instanceof DeadlineExceededError)) throw error;
+    }
+    return selected;
+  }
+
+  /** Read outside the request path. Retain a verified copy while the same version remains current. */
+  async scanSharedAnswers(
+    cards: readonly CardRow[],
+    local: readonly AnswerHistoryEntry[]
+  ): Promise<void> {
+    const publicKey = this.trustedPublicKey();
+    if (!publicKey) return;
+    const closed = closingCardVersions(local);
+    const missing = cards.filter((row) => {
+      const version = cardRowVersion(row);
+      return row.doc.state === 'open' && !closed.has(version);
+    });
+    const budget = startBudget(this.timing.readMs);
+    let names: Promise<string[]> | null = null;
+    const noteNames = () => (names ??= this.sharedNoteNames());
+    for (let at = 0; at < missing.length && budget.left() > 0; at += 16) {
+      await Promise.all(
+        missing.slice(at, at + 16).map(async (row) => {
+          const answer = await this.findSharedClosingAnswer(
+            row.doc,
+            row.sha256,
+            publicKey,
+            budget,
+            noteNames,
+            true
+          ).catch(() => null);
+          if (answer) {
+            const version = cardRowVersion(row);
+            this.sharedAnswers.set(version, {
+              id: version,
+              sendId: null,
+              sharedOnly: true,
+              answer,
+              card: row.doc,
+              share: { ...PENDING, state: 'done' },
+              doorbell: { ...PENDING, state: 'skipped' },
+            });
+          }
+        })
+      );
+    }
   }
 
   /**
@@ -870,12 +1047,15 @@ export class StatusAnswers {
 
   /** Whether this exact card version has a choice, written response or completed action. */
   isAnswered(cardId: string, seq: number, sha256: string): boolean {
-    return this.list().some(
-      (entry) =>
-        CLOSING_KINDS.has(entry.answer.kind) &&
-        entry.answer.cardId === cardId &&
-        entry.answer.cardSeq === seq &&
-        entry.answer.cardSha256 === sha256
+    return (
+      this.sharedAnswers.has(cardVersion(cardId, seq, sha256)) ||
+      this.list().some(
+        (entry) =>
+          CLOSING_KINDS.has(entry.answer.kind) &&
+          entry.answer.cardId === cardId &&
+          entry.answer.cardSeq === seq &&
+          entry.answer.cardSha256 === sha256
+      )
     );
   }
 
@@ -1541,6 +1721,23 @@ export class StatusAnswers {
     // spoken on a later version, and a closing answer to this one would replace that signed file.
     if (seq < this.highestRecordedSeq(id)) return null;
     if (this.isAnswered(id, seq, sha256)) return null;
+    const publicKey = this.trustedPublicKey();
+    if (publicKey) {
+      try {
+        const readBudget = startBudget(Math.min(this.timing.readMs, budget.left()));
+        const answer = await this.findSharedClosingAnswer(
+          parsed.doc,
+          sha256,
+          publicKey,
+          readBudget,
+          () => this.sharedNoteNames()
+        );
+        if (answer) return null;
+      } catch {
+        budget.spend();
+        return 'no_answer' as const;
+      }
+    }
     return parsed;
   }
 

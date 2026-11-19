@@ -42,11 +42,9 @@ fn headline_runs(view: &StatusView) -> Vec<Run> {
 #[component]
 pub fn StatusPage(embedded: bool) -> impl IntoView {
     let live = expect_context::<Live>();
+    let summary_open = RwSignal::new(None::<String>);
     // The summary counts (summary.rs); None from a server older than the strip, which keeps the sentence.
-    let strip = Memo::new(move |_| {
-        live.view
-            .with(|v| v.as_ref().and_then(|v| v.headline.strip.clone()))
-    });
+    let strip = Memo::new(move |_| live.view.with(|v| v.as_ref().and_then(headline_strip)));
     let info = ChromeInfo {
         updated: Signal::derive(move || {
             if live.view.with(|v| v.is_none()) {
@@ -87,7 +85,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                             <p class="headline">{move || runs_view(live.view.with(|v| v.as_ref().map(headline_runs).unwrap_or_default()))}</p>
                         }
                     >
-                        <crate::summary::SummaryStrip strip=strip/>
+                        <crate::summary::SummaryStrip strip=strip open=summary_open/>
                     </Show>
                 </div>
                 {banner}
@@ -166,36 +164,135 @@ pub(crate) fn cached_notice(p: &PinnedUpdate) -> impl IntoView + use<> {
     }
 }
 
-/// "<file> was refused:", or "A status file was refused:" when the server names no file.
-fn refused_head(file: &str) -> String {
-    if file.trim().is_empty() {
-        "A status file was refused:".to_string()
+/// The readers mark a folder and its cached children, and the status reader can carry the same
+/// failure under status.json. Use the failing folder's path for all of those observations.
+fn problem_path<'a>(
+    file: &'a str,
+    reason: &str,
+    folders: &std::collections::BTreeSet<&str>,
+) -> &'a str {
+    if reason == "folder name is not a writer name" {
+        return file.strip_suffix("/status.json").unwrap_or(file);
+    }
+    if reason.starts_with("its folder could not be listed")
+        && let Some((parent, _)) = file.rsplit_once('/')
+    {
+        if let Some(writer) = parent.strip_suffix("/cards")
+            && folders.contains(writer)
+            && !folders.contains(parent)
+        {
+            return writer;
+        }
+        return parent;
+    }
+    file
+}
+
+fn problem_words(path: &str, reason: &str, title: Option<&str>) -> String {
+    if path.starts_with("limits/") {
+        return format!("{reason}.");
+    }
+    let relative = path.strip_prefix("writers/").unwrap_or(path);
+    let (writer, file) = relative.split_once('/').unwrap_or((relative, ""));
+    if reason == "folder name is not a writer name" {
+        return format!("The report folder for {writer} has an invalid writer name.");
+    }
+    let reason = reason.strip_prefix("its ").unwrap_or(reason);
+    if let Some(more) = reason.strip_prefix("folder could not be listed") {
+        let folder = if file == "cards" {
+            "card folder"
+        } else {
+            "report folder"
+        };
+        return format!("{writer}’s {folder} could not be listed{more}.");
+    }
+    let name = match file {
+        "status.json" => "status report".to_string(),
+        "thread.json" => "thread report".to_string(),
+        "tasks.json" => "task report".to_string(),
+        "" => "report".to_string(),
+        file => file.strip_prefix("cards/").map_or_else(
+            || format!("report file {file}"),
+            |card| {
+                format!(
+                    "question card {}",
+                    card.strip_suffix(".json").unwrap_or(card)
+                )
+            },
+        ),
+    };
+    let owner = title.filter(|t| !t.trim().is_empty()).unwrap_or(writer);
+    let subject = if owner.is_empty() {
+        "A report".to_string()
     } else {
-        format!("{file} was refused:")
+        format!("{owner}’s {name}")
+    };
+    let reason = reason.strip_prefix("status.json ").unwrap_or(reason);
+    if reason.is_empty() {
+        format!("{subject} could not be read.")
+    } else {
+        format!("{subject} could not be read ({reason}).")
     }
 }
 
-/// The refusal over a pin's card or sheet: what was refused and why, in the server's words.
-pub(crate) fn refusal_notice(p: &PinnedUpdate) -> Option<AnyView> {
-    let r = p.refusal.as_ref()?;
-    Some(view! { <p class="pin-cached"><span data-tone="crit">{refused_head(&r.file)}</span>{format!(" {}", r.reason)}</p> }.into_any())
+pub(crate) fn report_problem_lines(view: &StatusView) -> Vec<String> {
+    let panel = view.pinned.as_ref();
+    let updates = panel.into_iter().flat_map(|p| &p.updates);
+    let refusals: std::collections::BTreeMap<_, _> = updates
+        .clone()
+        .filter_map(|u| Some((u.refusal.as_ref()?.file.as_str(), u.title.as_str())))
+        .collect();
+    let problems = view
+        .report_problems
+        .iter()
+        .chain(panel.into_iter().flat_map(|p| &p.status_problems))
+        .chain(updates.filter_map(|u| u.refusal.as_ref()));
+    let folders = problems
+        .clone()
+        .filter(|p| p.reason.starts_with("folder could not be listed"))
+        .map(|p| p.file.trim())
+        .collect();
+    let mut machines = std::collections::BTreeSet::new();
+    let mut lines: Vec<_> = panel
+        .into_iter()
+        .flat_map(|p| &p.machine_problems)
+        .map(|m| m.text.trim())
+        .filter(|text| !text.is_empty() && machines.insert(*text))
+        .map(str::to_owned)
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    for p in problems {
+        let reason = p.reason.trim().trim_end_matches('.');
+        let file = p.file.trim();
+        let path = problem_path(file, reason, &folders);
+        // A missing file label gives no identity. Preserve distinct reasons in that case.
+        if seen.insert((path, path.is_empty().then_some(reason))) {
+            let title = (path == file)
+                .then(|| refusals.get(file).copied())
+                .flatten();
+            lines.push(problem_words(path, reason, title));
+        }
+    }
+    lines
 }
 
-/// The refused status@1 files the server holds no good copy of, under the head. A pin whose own row says it was
-/// refused isn't repeated here.
-pub(crate) fn refused_lines(p: &PinnedPanel) -> impl IntoView + use<> {
-    let on_pins: Vec<String> = p
-        .updates
-        .iter()
-        .filter_map(|u| u.refusal.as_ref().map(|r| r.file.clone()))
-        .collect();
-    p.status_problems
-        .iter()
-        .filter(|s| s.file.is_empty() || !on_pins.contains(&s.file))
-        .map(|s| {
-            view! { <p class="plate-note problem"><span data-tone="crit">{refused_head(&s.file)}</span>{format!(" {}", s.reason)}</p> }
-        })
-        .collect_view()
+fn headline_strip(view: &StatusView) -> Option<Strip> {
+    let mut strip = view.headline.strip.clone()?;
+    // Older servers send these details only in the summary. Keep that fallback until the
+    // response also includes the complete list for the report-problems disclosure.
+    if !view.report_problems.is_empty()
+        && let Some(source) = view
+            .sources
+            .iter()
+            .find(|s| s.id == "agent-reports" && s.state == "unreadable")
+        && let Some((head, _)) = source.detail.split_once(": ")
+        && let Some(item) = strip.items.iter_mut().find(|i| i.key == "sources")
+    {
+        item.detail = item
+            .detail
+            .replace(source.detail.trim().trim_end_matches('.'), head);
+    }
+    Some(strip)
 }
 
 /// The sheet's grabber: drag the sheet down to close it (past 80 px, or a quick flick down); otherwise it springs back.
@@ -860,13 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_with_or_without_a_file_says_what_was_refused() {
-        // a refusal with no file name still says what happened
-        assert_eq!(refused_head(""), "A status file was refused:");
-        assert_eq!(
-            refused_head("mac.flash/status.json"),
-            "mac.flash/status.json was refused:"
-        );
+    fn machine_labels_use_the_packaged_registry() {
         assert_eq!(machine_label("nas1"), Some("Nas1"));
         assert_eq!(machine_label("alexis"), Some("Alexis PC"));
         assert_eq!(machine_label("elsewhere"), None);

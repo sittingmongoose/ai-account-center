@@ -90,7 +90,14 @@ fn parse_proven(platform: &str, text: &str) -> Value {
     .filter(|n| *n != 0.0);
     let avail = if platform == "mac" {
         let pct = unsigned("memAvailPct").filter(|n| *n <= 100.0);
-        total.zip(pct).map(|(total, pct)| total * pct / 100.0)
+        // 100% returns the total itself: the product rounds one byte past it at the safe-integer limit.
+        total.zip(pct).map(|(total, pct)| {
+            if pct == 100.0 {
+                total
+            } else {
+                total * pct / 100.0
+            }
+        })
     } else {
         n("memAvailKb").map(|n| n * 1024.0)
     };
@@ -330,5 +337,113 @@ mod tests {
             missing["memoryError"],
             "The machine did not report its memory."
         );
+    }
+
+    #[test]
+    fn mac_memory_at_100_percent_returns_the_total_itself() {
+        let limit = super::parse("mac", "memTotalB=9007199254740985\nmemAvailPct=100\n");
+        assert_eq!(
+            limit["memAvailableBytes"].as_f64(),
+            Some(9_007_199_254_740_985.0)
+        );
+        assert_eq!(
+            limit["memTotalBytes"].as_f64(),
+            Some(9_007_199_254_740_985.0)
+        );
+        assert!(limit.get("memoryError").is_none());
+        let whole = super::parse("mac", "memTotalB=17179869184\nmemAvailPct=100\n");
+        assert_eq!(whole["memAvailableBytes"].as_f64(), Some(17_179_869_184.0));
+    }
+
+    #[test]
+    fn mac_memory_empty_fields_keep_the_other_readings() {
+        // The wire shapes the strict shell probe emits when a memory source fails.
+        for probe in [
+            "memTotalB=\nmemAvailPct=67\n",
+            "memTotalB=17179869184\nmemAvailPct=\n",
+        ] {
+            let row = super::parse(
+                "mac",
+                &format!("cores=8\ncpuPct=32\ndiskTotalKb=10\ndiskFreeKb=5\n{probe}"),
+            );
+            assert!(row["memAvailableBytes"].is_null(), "{probe}");
+            assert_eq!(row["memoryError"], "The machine did not report its memory.");
+            assert_eq!(row["cores"].as_f64(), Some(8.0));
+            assert_eq!(row["busyPct"].as_f64(), Some(4.0));
+            assert!(row["disk"].is_object(), "{probe}");
+        }
+    }
+
+    #[test]
+    fn mac_shell_probe_publishes_memory_only_from_clean_successful_sources() {
+        // The checked-in probe runs with stubbed commands, never against a real Mac.
+        let run = |memsize: &str, level: &str, pressure: &str| {
+            let stubs = format!(
+                concat!(
+                    "sysctl() {{ case \"$2\" in hw.ncpu) printf '8\\n' ;; ",
+                    "vm.loadavg) printf '{{ 1.50 1.50 1.50 }}\\n' ;; ",
+                    "hw.memsize) {memsize} ;; kern.memorystatus_level) {level} ;; esac; }}; ",
+                    "memory_pressure() {{ {pressure}; }}; ",
+                    "ps() {{ printf '32\\n'; }}; ",
+                    "df() {{ printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n",
+                    "/dev/x 100 50 50 50%% /\\n'; }}; "
+                ),
+                memsize = memsize,
+                level = level,
+                pressure = pressure
+            );
+            let output = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("{stubs}{}", include_str!("probes/mac.txt")))
+                .output()
+                .expect("the probe runs under /bin/sh");
+            String::from_utf8(output.stdout).expect("the probe prints ASCII")
+        };
+        let unavailable = |out: &str| {
+            let row = super::parse("mac", out);
+            assert!(row["memAvailableBytes"].is_null(), "{out}");
+            assert_eq!(row["memoryError"], "The machine did not report its memory.");
+            // CPU and disk stand while memory is unavailable.
+            assert_eq!(row["busyPct"].as_f64(), Some(4.0));
+            assert!(row["disk"].is_object(), "{out}");
+        };
+        let good = "printf '17179869184\\n'";
+        // M1: hw.memsize must exit 0 with exactly one clean decimal.
+        for memsize in [
+            "printf '17179869184\\n'; return 1",
+            "printf '17179869184\\ninvalid\\n'",
+            "printf 'bad\\nmemTotalB=2147483648\\n'",
+            "printf ''",
+            "printf 'N/A\\n'",
+        ] {
+            let out = run(memsize, "printf '67\\n'", "return 1");
+            assert!(out.contains("memTotalB=\n"), "{out}");
+            unavailable(&out);
+        }
+        // M2: memory_pressure must exit 0 with one unconflicted percentage.
+        for pressure in [
+            "printf 'System-wide memory free percentage: 67%%\\n'; return 1",
+            "printf 'System-wide memory free percentage: 67%%\\nSystem-wide memory free percentage: 40%%\\n'",
+            "printf ''",
+            "printf 'System-wide memory free percentage: N/A%%\\n'",
+        ] {
+            let out = run(good, "return 1", pressure);
+            assert!(out.contains("memAvailPct=\n"), "{out}");
+            unavailable(&out);
+        }
+        // A CRLF right after the percent sign and an ordinary report keep their valid reading.
+        for pressure in [
+            "printf 'System-wide memory free percentage: 67%%\\r\\n'",
+            "printf 'Pages free: 6344\\nSystem-wide memory free percentage: 67%%\\n'",
+        ] {
+            let out = run(good, "return 1", pressure);
+            assert!(out.contains("memAvailPct=67\n"), "{out}");
+            let row = super::parse("mac", &out);
+            assert_eq!(row["memAvailableBytes"].as_f64(), Some(11_510_512_353.28));
+            assert!(row.get("memoryError").is_none());
+        }
+        let out = run(good, "printf '67\\n'", "return 1");
+        assert!(out.contains("memTotalB=17179869184\n"), "{out}");
+        assert!(out.contains("memAvailPct=67\n"), "{out}");
     }
 }

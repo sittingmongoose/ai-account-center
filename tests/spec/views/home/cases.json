@@ -1361,6 +1361,369 @@
    "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"1 account · desktop profiles · 1 sign-in step needs you\",\"metaRuns\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account · desktop profiles\",\"strong\":false,\"tone\":\"\"},{\"text\":\" · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"1 sign-in step needs you\",\"strong\":true,\"tone\":\"warn\"}],\"metaWords\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"sign-in\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"step\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"needs\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"you\",\"strong\":true,\"tone\":\"warn\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[{\"id\":\"c1\",\"provider\":\"claude\",\"profile\":\"\",\"email\":\"A@example.com\",\"plan\":\"\",\"meta\":\"Sign-in renewal needs you\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[]}]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Account data unavailable\",\"statusStrong\":\"\",\"statusMore\":\"\",\"statusTip\":\"\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
   },
   {
+   "name": "claude-signins#2",
+   "dashboard": {
+    "accounts": [
+     {
+      "id": "c1",
+      "provider": "claude",
+      "email": "A@example.com",
+      "status": "ok",
+      "windows": []
+     }
+    ],
+    "claudeSignIns": {
+     "runner": "mac",
+     "generatedAt": "2026-11-03T11:59:00.000Z",
+     "stale": false,
+     "renewWithinHours": 96,
+     "needsYou": [],
+     "hosts": [],
+     "signIns": [
+      {
+       "host": "nas1",
+       "profile": "default",
+       "email": "a@example.com",
+       "state": "ok",
+       "signInEndsAt": "2026-11-23T12:00:00.000Z",
+       "renewFrom": "2026-11-19T12:00:00.000Z",
+       "autoRenew": true
+      },
+      {
+       "host": "mac",
+       "profile": "gmail",
+       "email": "a@example.com",
+       "state": "ok",
+       "signInEndsAt": "2026-11-13T12:00:00.000Z",
+       "renewFrom": "2026-11-09T12:00:00.000Z",
+       "autoRenew": true,
+       "lastResult": "renewed",
+       "lastRenewAt": "2026-11-03T11:00:00.000Z"
+      },
+      {
+       "host": "mac",
+       "profile": "other",
+       "email": "b@example.com",
+       "state": "ok",
+       "signInEndsAt": "2026-11-08T12:00:00.000Z"
+      }
+     ],
+     "browserError": "Node.js executable not found on the renewal runner."
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1793707200000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ],
+    "zone": {
+     "from": 1783296000000,
+     "to": 1828224000000,
+     "offsets": [
+      [
+       1783296000000,
+       -240
+      ],
+      [
+       1793512800000,
+       -300
+      ],
+      [
+       1805007600000,
+       -240
+      ],
+      [
+       1825567200000,
+       -300
+      ]
+     ]
+    }
+   },
+   "presentation": {
+    "dates": {
+     "1793707200000": {
+      "iso": "2026-11-03T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 3"
+     },
+     "1783296000000": {
+      "iso": "2026-07-06T00:00:00.000Z",
+      "clock": "8:00 PM",
+      "day": "Jul 5"
+     },
+     "1828224000000": {
+      "iso": "2027-12-08T00:00:00.000Z",
+      "clock": "7:00 PM",
+      "day": "Dec 7"
+     },
+     "1793512800000": {
+      "iso": "2026-11-01T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 1"
+     },
+     "1805007600000": {
+      "iso": "2027-03-14T07:00:00.000Z",
+      "clock": "3:00 AM",
+      "day": "Mar 14"
+     },
+     "1825567200000": {
+      "iso": "2027-11-07T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 7"
+     },
+     "1793707140000": {
+      "iso": "2026-11-03T11:59:00.000Z",
+      "clock": "6:59 AM",
+      "day": "Nov 3"
+     },
+     "1795435200000": {
+      "iso": "2026-11-23T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 23"
+     },
+     "1795089600000": {
+      "iso": "2026-11-19T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 19"
+     },
+     "1794571200000": {
+      "iso": "2026-11-13T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 13"
+     },
+     "1794225600000": {
+      "iso": "2026-11-09T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 9"
+     },
+     "1793703600000": {
+      "iso": "2026-11-03T11:00:00.000Z",
+      "clock": "6:00 AM",
+      "day": "Nov 3"
+     },
+     "1794139200000": {
+      "iso": "2026-11-08T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 8"
+     }
+    },
+    "epochs": {
+     "2026-11-03T11:59:00.000Z": 1793707140000,
+     "2026-11-23T12:00:00.000Z": 1795435200000,
+     "2026-11-19T12:00:00.000Z": 1795089600000,
+     "2026-11-13T12:00:00.000Z": 1794571200000,
+     "2026-11-09T12:00:00.000Z": 1794225600000,
+     "2026-11-03T11:00:00.000Z": 1793703600000,
+     "2026-11-08T12:00:00.000Z": 1794139200000
+    },
+    "order": {
+     "c1": 0,
+     "default": 1,
+     "gmail": 2,
+     "other": 3
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"1 account · desktop profiles\",\"metaRuns\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[{\"id\":\"c1\",\"provider\":\"claude\",\"profile\":\"\",\"email\":\"A@example.com\",\"plan\":\"\",\"meta\":\"Node.js executable not found on the renewal runner.\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[]}]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Account data unavailable\",\"statusStrong\":\"\",\"statusMore\":\"\",\"statusTip\":\"\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "claude-signins#3",
+   "dashboard": {
+    "accounts": [
+     {
+      "id": "c1",
+      "provider": "claude",
+      "email": "A@example.com",
+      "status": "ok",
+      "windows": []
+     }
+    ],
+    "claudeSignIns": {
+     "runner": "mac",
+     "generatedAt": "2026-11-03T11:59:00.000Z",
+     "stale": false,
+     "renewWithinHours": 96,
+     "needsYou": [
+      {
+       "email": "a@example.com",
+       "reason": "captcha"
+      }
+     ],
+     "hosts": [],
+     "signIns": [
+      {
+       "host": "nas1",
+       "profile": "default",
+       "email": "a@example.com",
+       "state": "ok",
+       "signInEndsAt": "2026-11-23T12:00:00.000Z",
+       "renewFrom": "2026-11-19T12:00:00.000Z",
+       "autoRenew": true
+      },
+      {
+       "host": "mac",
+       "profile": "gmail",
+       "email": "a@example.com",
+       "state": "ok",
+       "signInEndsAt": "2026-11-13T12:00:00.000Z",
+       "renewFrom": "2026-11-09T12:00:00.000Z",
+       "autoRenew": true,
+       "lastResult": "renewed",
+       "lastRenewAt": "2026-11-03T11:00:00.000Z"
+      },
+      {
+       "host": "mac",
+       "profile": "other",
+       "email": "b@example.com",
+       "state": "ok",
+       "signInEndsAt": "2026-11-08T12:00:00.000Z"
+      }
+     ],
+     "browserError": "Node.js could not be launched on the renewal runner."
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1793707200000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ],
+    "zone": {
+     "from": 1783296000000,
+     "to": 1828224000000,
+     "offsets": [
+      [
+       1783296000000,
+       -240
+      ],
+      [
+       1793512800000,
+       -300
+      ],
+      [
+       1805007600000,
+       -240
+      ],
+      [
+       1825567200000,
+       -300
+      ]
+     ]
+    }
+   },
+   "presentation": {
+    "dates": {
+     "1793707200000": {
+      "iso": "2026-11-03T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 3"
+     },
+     "1783296000000": {
+      "iso": "2026-07-06T00:00:00.000Z",
+      "clock": "8:00 PM",
+      "day": "Jul 5"
+     },
+     "1828224000000": {
+      "iso": "2027-12-08T00:00:00.000Z",
+      "clock": "7:00 PM",
+      "day": "Dec 7"
+     },
+     "1793512800000": {
+      "iso": "2026-11-01T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 1"
+     },
+     "1805007600000": {
+      "iso": "2027-03-14T07:00:00.000Z",
+      "clock": "3:00 AM",
+      "day": "Mar 14"
+     },
+     "1825567200000": {
+      "iso": "2027-11-07T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 7"
+     },
+     "1793707140000": {
+      "iso": "2026-11-03T11:59:00.000Z",
+      "clock": "6:59 AM",
+      "day": "Nov 3"
+     },
+     "1795435200000": {
+      "iso": "2026-11-23T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 23"
+     },
+     "1795089600000": {
+      "iso": "2026-11-19T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 19"
+     },
+     "1794571200000": {
+      "iso": "2026-11-13T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 13"
+     },
+     "1794225600000": {
+      "iso": "2026-11-09T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 9"
+     },
+     "1793703600000": {
+      "iso": "2026-11-03T11:00:00.000Z",
+      "clock": "6:00 AM",
+      "day": "Nov 3"
+     },
+     "1794139200000": {
+      "iso": "2026-11-08T12:00:00.000Z",
+      "clock": "7:00 AM",
+      "day": "Nov 8"
+     }
+    },
+    "epochs": {
+     "2026-11-03T11:59:00.000Z": 1793707140000,
+     "2026-11-23T12:00:00.000Z": 1795435200000,
+     "2026-11-19T12:00:00.000Z": 1795089600000,
+     "2026-11-13T12:00:00.000Z": 1794571200000,
+     "2026-11-09T12:00:00.000Z": 1794225600000,
+     "2026-11-03T11:00:00.000Z": 1793703600000,
+     "2026-11-08T12:00:00.000Z": 1794139200000
+    },
+    "order": {
+     "c1": 0,
+     "default": 1,
+     "gmail": 2,
+     "other": 3
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"1 account · desktop profiles · 1 sign-in step needs you\",\"metaRuns\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account · desktop profiles\",\"strong\":false,\"tone\":\"\"},{\"text\":\" · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"1 sign-in step needs you\",\"strong\":true,\"tone\":\"warn\"}],\"metaWords\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"sign-in\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"step\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"needs\",\"strong\":true,\"tone\":\"warn\"},{\"text\":\"you\",\"strong\":true,\"tone\":\"warn\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[{\"id\":\"c1\",\"provider\":\"claude\",\"profile\":\"\",\"email\":\"A@example.com\",\"plan\":\"\",\"meta\":\"Node.js could not be launched on the renewal runner.\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[]}]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Account data unavailable\",\"statusStrong\":\"\",\"statusMore\":\"\",\"statusTip\":\"\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
    "name": "cursor-plans#1",
    "dashboard": {
     "accounts": [

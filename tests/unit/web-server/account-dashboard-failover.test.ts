@@ -421,6 +421,7 @@ describe('account dashboard shared usage failover integration', () => {
         provider: 'claude',
         ccsDir: SCOPE,
         expectedEmail: profile.email,
+        claudeDesktopCadence: true,
         binding: JSON.stringify(profile),
         primarySources: [
           {
