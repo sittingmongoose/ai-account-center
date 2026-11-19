@@ -227,7 +227,12 @@ fn apply_verified_source(row: &mut Value, host: &str, verified: &Value) {
     }
 }
 
-pub(super) fn claude(profile: &Value, desktop: Desktop, raw: Option<&Value>) -> Option<Value> {
+pub(super) fn claude(
+    profile: &Value,
+    desktop: Desktop,
+    raw: Option<&Value>,
+    history: Option<&Value>,
+) -> Option<Value> {
     let email = email(&profile["email"])?;
     let id = profile["id"].as_str();
     let raw = raw.unwrap_or(&Value::Null);
@@ -262,11 +267,63 @@ pub(super) fn claude(profile: &Value, desktop: Desktop, raw: Option<&Value>) -> 
     };
     row["fetchedAt"] = json!(stamp(&raw["fetchedAt"]));
     row["sampledAt"] = json!(stamp(&raw["sampledAt"]));
+    if let Some(history) = history {
+        apply_claude_history(&mut row, history);
+    } else {
+        row["windows"] = json!(windows);
+    }
     row["isActive"] = json!(false);
-    row["windows"] = json!(windows);
     row["capabilities"] =
         json!({"codexProfile":null,"claudeProfileId":id,"claudePlatforms":launchers});
     Some(row)
+}
+
+fn apply_claude_history(row: &mut Value, sample: &Value) {
+    let (status, message) = match sample["status"].as_str() {
+        Some("cached") => (
+            "cached",
+            "Live Claude usage was not read; showing the earlier desktop history sample.",
+        ),
+        Some("needs-sign-in") => (
+            "needs_sign_in",
+            "No usage sample is available. This profile may need its first sign-in on this computer.",
+        ),
+        _ => (
+            "unavailable",
+            "Claude desktop usage is temporarily unavailable.",
+        ),
+    };
+    let mut raw = Vec::new();
+    let fields = [
+        ("fiveHour", "five_hour", "5-hour limit", Some(300)),
+        ("weekly", "seven_day", "Weekly limit", Some(10080)),
+        ("weeklyOpus", "seven_day_opus", "Opus weekly", Some(10080)),
+        (
+            "weeklySonnet",
+            "seven_day_sonnet",
+            "Sonnet weekly",
+            Some(10080),
+        ),
+        ("extra", "extra_usage", "Extra usage", None),
+    ];
+    for (field, key, label, minutes) in fields {
+        if let Some(used) = number(&sample["utilization"][field]) {
+            let mut window =
+                json!({"key":key,"label":label,"usedPercent":used,"windowMinutes":minutes});
+            if field == "extra" {
+                window["kind"] = json!("extra_usage");
+            }
+            raw.push(window);
+        }
+    }
+    row["status"] = json!(status);
+    row["message"] = json!(message);
+    row["fetchedAt"] = json!(stamp(&sample["fetchedAt"]));
+    row["sampledAt"] = json!(stamp(&sample["sampledAt"]));
+    row["windows"] = json!(windows(&json!(raw), 5));
+    if status == "cached" {
+        row["cacheReason"] = json!("outcome_unknown");
+    }
 }
 
 pub(super) fn pending_claude(profile: &Value, desktop: Desktop) -> Value {
@@ -307,7 +364,7 @@ pub(super) fn codex(
     let mut row = json!({
         "id":format!("codex:{name}"),"provider":"codex","providerLabel":"Codex","label":name,
         "email":email(&candidate["email"]),"plan":display_text(Some(&candidate["plan"]),80),
-        "platform":"ubuntu","source":"Codex saved login on Ubuntu","status":status
+        "platform":"ubuntu","source":if sample["usageSource"] == "local" {"Codex local quota"} else {"Codex saved login on Ubuntu"},"status":status
     });
     if status == "cached" {
         row["cacheReason"] = json!("read_failed");

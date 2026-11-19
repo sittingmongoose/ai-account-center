@@ -46,7 +46,20 @@ async fn run() {
         };
         tokio::select! { _ = input.read(&mut byte) => {}, _ = signal => {}, _ = tokio::signal::ctrl_c() => {} }
     };
-    if aac_http::serve(boot, shutdown).await.is_err() {
+    let native =
+        std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--native-collection"));
+    let served = if native {
+        aac_http::serve_with_native_account_usage(
+            boot,
+            shutdown,
+            Default::default(),
+            Default::default(),
+        )
+        .await
+    } else {
+        aac_http::serve(boot, shutdown).await
+    };
+    if served.is_err() {
         eprintln!("aac-http: private service failed");
         std::process::exit(1);
     }

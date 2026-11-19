@@ -686,6 +686,16 @@ and queue a debounced pass with `cache.request_refresh`.
 publishes, and the hosted store records observations from that cache.
 `serve_with_account_usage_cache` keeps the transitional feed path available.
 
+The private binary selects the native producer with `--native-collection`.
+Use the existing private boot envelope and assign the collection files to
+`rust-service`. In native mode the authenticated Unix route accepts
+`GET /api/accounts/dashboard?platform=windows&refresh=false` and reads its
+latest generation. Platform defaults to `mac` and refresh defaults to false.
+The verified listener may set `x-aac-dashboard-secure: 1` after checking
+the transport. The route uses its own ETag, conditional GET and no-store.
+The existing `x-aac-feed` contract still lets the caller name an exact
+generation for Home and the transitional readers.
+
 The Cursor account event cache exposes `eventCounts` when the reader can
 classify the pages. `fetched` counts all returned events, including repeated
 events across pages. `kept`, `droppedOutOfWindow`, `droppedNoTokenUsage` and

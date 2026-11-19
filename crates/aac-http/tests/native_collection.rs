@@ -23,17 +23,54 @@ fn private_file(root: &Path, name: &str, value: &Value) {
     fs::set_permissions(file, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-#[tokio::test]
-async fn native_boot_builds_all_selectors_from_private_settings_without_a_feed() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = fs::canonicalize(dir.path()).unwrap();
+fn exchange(socket: &Path, method: &str, path: &str, principal: Value, extra: &str) -> String {
+    let mut pipe = UnixStream::connect(socket).unwrap();
+    pipe.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    write!(pipe, "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nx-aac-boot-secret: {}\r\nx-aac-principal: {principal}\r\n{extra}\r\n", "d".repeat(64)).unwrap();
+    let mut response = String::new();
+    pipe.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn admin() -> Value {
+    json!({"kind":"session","id":"fixture-admin","role":"admin"})
+}
+
+fn fixture_boot(root: &Path) -> (std::path::PathBuf, Vec<u8>) {
     let boot_id = "0123456789abcdef01234567";
     let run = root.join("run");
     let folder = run.join(format!("aac-http-{boot_id}"));
     fs::create_dir_all(&folder).unwrap();
-    for path in [&root, &run, &folder] {
+    for path in [root, &run, &folder] {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
+    let registry: Value = serde_json::from_str(aac_files::registry::SOURCE).unwrap();
+    let files: Map<String, Value> = registry["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            let role = if row["movesWith"] == "collection" {
+                json!("rust-service")
+            } else {
+                row["owner"].clone()
+            };
+            (row["id"].as_str().unwrap().to_owned(), role)
+        })
+        .collect();
+    let input = serde_json::to_vec(&json!({
+        "ccsDir":root,"socketPath":folder.join("http.sock"),
+        "secret":"d".repeat(64),"bootId":boot_id,"files":files
+    }))
+    .unwrap();
+    (folder, input)
+}
+
+#[tokio::test]
+async fn native_boot_builds_all_selectors_from_private_settings_without_a_feed() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let (folder, input) = fixture_boot(&root);
     let measured_source = json!({
         "id":"zai:usage","provider":"zai","platform":"ubuntu","label":"Measured fixture",
         "credential":{"kind":"discover"},
@@ -99,28 +136,7 @@ async fn native_boot_builds_all_selectors_from_private_settings_without_a_feed()
             "trayHiddenProviders":[],"trayHiddenAccountIds":[]
         }),
     );
-    let registry: Value = serde_json::from_str(aac_files::registry::SOURCE).unwrap();
-    let files: Map<String, Value> = registry["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| {
-            let role = if row["movesWith"] == "collection" {
-                json!("rust-service")
-            } else {
-                row["owner"].clone()
-            };
-            (row["id"].as_str().unwrap().to_owned(), role)
-        })
-        .collect();
-    let boot = Boot::from_json(
-        &serde_json::to_vec(&json!({
-            "ccsDir":root,"socketPath":folder.join("http.sock"),
-            "secret":"d".repeat(64),"bootId":boot_id,"files":files
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let boot = Boot::from_json(&input).unwrap();
 
     let cache = AccountUsageCache::default();
     let (observed, mut reports) = mpsc::unbounded_channel();
@@ -193,31 +209,100 @@ async fn native_boot_builds_all_selectors_from_private_settings_without_a_feed()
     });
     let socket = folder.join("http.sock");
     let (accounts, put) = tokio::task::spawn_blocking(move || {
-        let exchange = |method, path, principal: Value, extra: String| {
-            let mut pipe = UnixStream::connect(&socket).unwrap();
-            pipe.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-            write!(pipe, "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nx-aac-boot-secret: {}\r\nx-aac-principal: {principal}\r\n{extra}\r\n", "d".repeat(64)).unwrap();
-            let mut response = String::new();
-            pipe.read_to_string(&mut response).unwrap();
-            response
-        };
         (
             exchange(
-                "GET", "/api/accounts/dashboard",
-                json!({"kind":"session","id":"fixture-admin","role":"admin"}),
-                format!("x-aac-feed: {feed}\r\n"),
+                &socket,
+                "GET",
+                "/api/accounts/dashboard",
+                admin(),
+                &format!("x-aac-feed: {feed}\r\n"),
             ),
             exchange(
-                "PUT", "/internal/feed/home-dashboard-windows-1",
+                &socket,
+                "PUT",
+                "/internal/feed/home-dashboard-windows-1",
                 json!({"kind":"session","id":"front-door","role":"service"}),
-                "Content-Length: 0\r\n".into(),
-            )
+                "Content-Length: 0\r\n",
+            ),
         )
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     let (headers, body) = accounts.split_once("\r\n\r\n").unwrap();
     assert!(headers.starts_with("HTTP/1.1 200"), "{headers}");
     assert_eq!(serde_json::from_str::<Value>(body).unwrap(), secure);
     assert!(put.starts_with("HTTP/1.1 503"), "{put}");
     let _ = stop.send(());
     server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn binary_serves_the_native_accounts_route_without_generation_headers() {
+    use std::process::Stdio;
+    use tokio::{io::AsyncWriteExt, process::Command};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let (folder, mut input) = fixture_boot(&root);
+    private_file(
+        &root,
+        "account-usage-accounts.json",
+        &json!({"version":2,"accounts":[]}),
+    );
+    let socket = folder.join("http.sock");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_aac-http"))
+        .arg("--native-collection")
+        .env("AAC_AGENT_TRANSPORT", "off")
+        .stdin(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    input.push(b'\n');
+    stdin.write_all(&input).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let path = "/api/accounts/dashboard?platform=windows";
+    let response = loop {
+        if socket.exists() && UnixStream::connect(&socket).is_ok() {
+            let answer = exchange(&socket, "GET", path, admin(), "");
+            if answer.starts_with("HTTP/1.1 200") {
+                break answer;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "native dashboard never became ready"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+    assert!(headers.contains("cache-control: no-store"), "{headers}");
+    let etag = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("etag: "))
+        .unwrap();
+    let conditional = format!("if-none-match: {etag}\r\n");
+    assert!(exchange(&socket, "GET", path, admin(), &conditional).starts_with("HTTP/1.1 304"));
+    let reload = format!("{conditional}cache-control: no-cache\r\n");
+    assert!(exchange(&socket, "GET", path, admin(), &reload).starts_with("HTTP/1.1 200"));
+    assert!(
+        exchange(
+            &socket,
+            "GET",
+            "/api/accounts/dashboard?refresh=bad",
+            admin(),
+            ""
+        )
+        .starts_with("HTTP/1.1 400")
+    );
+    let dashboard: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(dashboard["accounts"], json!([]));
+    drop(stdin);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
 }

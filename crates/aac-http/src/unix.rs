@@ -74,6 +74,7 @@ struct Shared {
     cache_writes: Arc<tokio::sync::Mutex<()>>,
     identity: Identity,
     feeds: Feeds,
+    account_usage: crate::account_usage::AccountUsageCache,
     native_usage: bool,
     agents: Arc<crate::agent_transport::Agents>,
     collection: Arc<crate::collection::Collection>,
@@ -621,6 +622,24 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             {
                 return decline(row.handler, Decline::Unsupported);
             }
+            if shared.native_usage && !req.headers().contains_key(crate::home_fed::FEED_HEADER) {
+                let headers = req.headers().clone();
+                let uri = req.uri().clone();
+                let Ok(_) = to_bytes(req.into_body(), 0).await else {
+                    return decline(row.handler, Decline::Shape);
+                };
+                let cache = shared.account_usage.clone();
+                return match shared
+                    .limits
+                    .blocking(row.pool, move || {
+                        crate::dashboard_fed::latest(&cache, &uri, &headers)
+                    })
+                    .await
+                {
+                    Ok(reply) => reply,
+                    Err(reason) => decline(row.handler, reason),
+                };
+            }
             let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
             let query = req.uri().query().is_some();
             let Ok(body) = to_bytes(req.into_body(), 0).await else {
@@ -804,6 +823,16 @@ pub struct NativeAccountUsage {
 }
 
 /// Boot account collection with the private server's L5 pool and the public listener's cache.
+impl Default for NativeAccountUsage {
+    fn default() -> Self {
+        Self {
+            companions: Arc::new(crate::account_usage::producer::CompanionInputs::default),
+            published: Arc::new(|_| {}),
+        }
+    }
+}
+
+/// Start the private binary with the native producer.
 pub async fn serve_with_native_account_usage(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
@@ -867,6 +896,7 @@ async fn serve_inner(
         limits: Limits::new(),
         identity,
         feeds: cache.feeds.clone(),
+        account_usage: cache.clone(),
         native_usage: native.is_some(),
         agents,
         collection: collection.clone(),
