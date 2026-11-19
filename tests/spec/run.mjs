@@ -77,7 +77,13 @@ for (const [program, args] of [
     ? []
     : ['reset-claim-parity', 'reset-source-parity'].map((name) => [
         'bun',
-        [`tests/spec/${name}.ts`, ...(process.env.AAC_RUST_PUBLIC_BINARY ? [] : ['--ts-only'])],
+        [
+          `tests/spec/${name}.ts`,
+          ...(!process.env.AAC_M6_TARGET_CLI ? ['--ts-only'] : []),
+          ...(process.env.AAC_M6_TARGET_CLI && name === 'reset-claim-parity'
+            ? ['--queued-verification']
+            : []),
+        ],
       ])),
   [
     'bun',

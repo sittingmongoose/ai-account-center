@@ -1,7 +1,7 @@
 //! Browser admission and HTTP presentation for the existing reset ledger and sources.
 use super::{
     DashboardAccess, DashboardEvents, DashboardPrincipal, Method, Next, Reply, Request, State,
-    decode_component, empty, header, middleware, now, response, set_header, storage,
+    decode_component, empty, header, json_bytes, middleware, now, set_header, storage,
 };
 use crate::{reset_claims, reset_source_route};
 use aac_files::registry;
@@ -10,10 +10,45 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
-use tokio::sync::Semaphore;
+use tokio::{
+    runtime::Handle,
+    sync::{OwnedSemaphorePermit, Semaphore},
+    time::{Instant, timeout_at},
+};
+
+// The browser waits 120 seconds for a claim. Keep a margin for the response.
+const TRANSACTION_BUDGET: Duration = Duration::from_secs(115);
+const SOURCE_QUEUE_BUDGET: Duration = Duration::from_secs(5);
+// Includes queue admission, the ticketed capture and the bounded provider read.
+const SOURCE_READ_BUDGET: Duration = Duration::from_secs(36);
+// The send uses the existing provider timeout (20s Codex, 12s Claude) plus source resolution.
+const SOURCE_SEND_BUDGET: Duration = Duration::from_secs(24);
+const LEDGER_RESERVE: Duration = Duration::from_secs(10);
+
+struct Execution {
+    route: Route,
+    account: String,
+    caller: String,
+    body: Value,
+    deadline: Instant,
+    sent: AtomicBool,
+}
+
+impl Execution {
+    fn sent(&self) -> bool {
+        self.sent.load(Ordering::Acquire)
+    }
+
+    fn set_sent(&self, value: bool) {
+        self.sent.store(value, Ordering::Release);
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Route {
@@ -58,7 +93,8 @@ pub(super) fn mount(
         claims: reset_claims::ResetClaims::default(),
         events,
         log,
-        slots: Arc::new(Semaphore::new(4)),
+        requests: Arc::new(Semaphore::new(8)),
+        sources: Arc::new(Semaphore::new(4)),
     });
     router.layer(middleware::from_fn_with_state(owner, handle))
 }
@@ -68,7 +104,14 @@ struct ResetRoutes {
     claims: reset_claims::ResetClaims,
     events: DashboardEvents,
     log: Arc<aac_log::Log>,
-    slots: Arc<Semaphore>,
+    requests: Arc<Semaphore>,
+    sources: Arc<Semaphore>,
+}
+
+fn response(status: u16, value: Value) -> Reply {
+    let mut writer = aac_views::js_json::Writer::plain(256);
+    writer.value(&value);
+    json_bytes(status, writer.into_bytes())
 }
 
 fn code(status: u16, code: &str) -> Reply {
@@ -154,20 +197,33 @@ async fn admitted(
     if let Route::Options(allow) = route {
         let mut reply = axum::response::IntoResponse::into_response(allow);
         set_header(&mut reply, "allow", allow);
-        set_header(&mut reply, "content-type", "text/plain; charset=utf-8");
+        set_header(&mut reply, "content-type", "text/plain");
+        set_header(&mut reply, "content-length", &allow.len().to_string());
+        set_header(&mut reply, "x-content-type-options", "nosniff");
         return reply;
     }
-    let Ok(Ok(permit)) =
-        tokio::time::timeout(Duration::from_secs(5), owner.slots.clone().acquire_owned()).await
-    else {
+    let Ok(permit) = owner.requests.clone().try_acquire_owned() else {
         return unavailable(route);
     };
-    let reply = tokio::task::spawn_blocking(move || {
+    let execution = Arc::new(Execution {
+        route,
+        account,
+        caller,
+        body,
+        deadline: Instant::now() + TRANSACTION_BUDGET,
+        sent: AtomicBool::new(false),
+    });
+    let work = execution.clone();
+    // A disconnected browser drops this JoinHandle, while an admitted claim runs to settlement.
+    let operation = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        owner.execute(route, &account, &caller, &body)
-    })
-    .await
-    .unwrap_or_else(|_| unavailable(route));
+        owner.execute(&work)
+    });
+    let reply = match timeout_at(execution.deadline, operation).await {
+        Ok(Ok(reply)) => reply,
+        _ if matches!(route, Route::Claim) => refusal(None, execution.sent(), Value::Null),
+        _ => unavailable(route),
+    };
     if matches!(parts.method, Method::GET | Method::HEAD)
         && reply.status().is_success()
         && let Some(etag) = header(reply.headers(), "etag")
@@ -191,29 +247,29 @@ fn ledger(db: &Path, op: &str, account: &str, mut input: Value) -> Result<Value>
     aac_status::reset::service_call(db, input.to_string().as_bytes()).map(reset_claims::sorted)
 }
 
+const SAFE_REASONS: &[&str] = &[
+    "check-again-required",
+    "claim-token-outstanding",
+    "confirmation-invalid",
+    "cooldown",
+    "grant-changed",
+    "identity-changed",
+    "identity-unconfirmed",
+    "rate-limited",
+    "stale-inventory",
+    "provider-read-only",
+    "unknown-grant-kind",
+    "exact-grant-unavailable",
+    "unsupported-grant-id",
+    "credential-host-unavailable",
+    "grant-unavailable",
+    "redeeming",
+    "refill-windows-unconfirmed",
+    "signed-out",
+];
+
 fn safe_reason(code: &str) -> Option<&str> {
-    matches!(
-        code,
-        "check-again-required"
-            | "claim-token-outstanding"
-            | "confirmation-invalid"
-            | "cooldown"
-            | "grant-changed"
-            | "identity-changed"
-            | "identity-unconfirmed"
-            | "rate-limited"
-            | "stale-inventory"
-            | "provider-read-only"
-            | "unknown-grant-kind"
-            | "exact-grant-unavailable"
-            | "unsupported-grant-id"
-            | "credential-host-unavailable"
-            | "grant-unavailable"
-            | "redeeming"
-            | "refill-windows-unconfirmed"
-            | "signed-out"
-    )
-    .then_some(code)
+    SAFE_REASONS.contains(&code).then_some(code)
 }
 
 fn refusal(reason: Option<&str>, sent: bool, evidence: Value) -> Reply {
@@ -247,14 +303,45 @@ impl ResetRoutes {
         self.claims.path(&self.root, &owners).map_err(|_| "storage")
     }
 
-    fn execute(&self, route: Route, account: &str, caller: &str, body: &Value) -> Reply {
+    fn source_slot(&self, deadline: Instant) -> Result<OwnedSemaphorePermit> {
+        let deadline = deadline.min(Instant::now() + SOURCE_QUEUE_BUDGET);
+        Handle::current().block_on(async {
+            timeout_at(deadline, self.sources.clone().acquire_owned())
+                .await
+                .map_err(|_| "source-busy")?
+                .map_err(|_| "source-busy")
+        })
+    }
+
+    fn read(
+        &self,
+        db: &Path,
+        source: &reset_source_route::SourceContext,
+        account: &str,
+        deadline: Instant,
+    ) -> Result<Value> {
+        let deadline = deadline.min(Instant::now() + SOURCE_READ_BUDGET);
+        let _permit = self.source_slot(deadline)?;
+        if Instant::now() >= deadline {
+            return Err("source-deadline");
+        }
+        let snapshot = reset_source_route::read(source, db, account)?;
+        if Instant::now() >= deadline {
+            return Err("source-deadline");
+        }
+        Ok(snapshot)
+    }
+
+    fn execute(&self, work: &Execution) -> Reply {
+        let route = work.route;
+        let account = &work.account;
         let result = self.path();
         let source =
             reset_source_route::SourceContext::from_env(&self.root, super::sidecar::package_root())
                 .with_log(self.log.clone());
         if matches!(route, Route::Inventory) {
-            let inventory =
-                result.and_then(|db| match reset_source_route::read(&source, &db, account) {
+            let inventory = result.and_then(|db| {
+                match self.read(&db, &source, account, work.deadline - LEDGER_RESERVE) {
                     Ok(snapshot) => ledger(&db, "inventory", account, json!({"snapshot":snapshot})),
                     Err(error) => {
                         let mut recovery = ledger(&db, "pending", account, json!({}))?;
@@ -268,14 +355,14 @@ impl ResetRoutes {
                         recovery["grants"] = json!([]);
                         Ok(recovery)
                     }
-                });
+                }
+            });
             return inventory.map_or_else(|_| unavailable(route), |value| response(200, value));
         }
-        let mut sent = false;
         let reply = result
             .as_ref()
             .map_err(|error| *error)
-            .and_then(|db| self.write(route, db, &source, account, caller, body, &mut sent));
+            .and_then(|db| self.write(db, &source, work));
         let reply = match reply {
             Ok(value) => response(200, value),
             Err(error) => {
@@ -283,31 +370,39 @@ impl ResetRoutes {
                     .ok()
                     .and_then(|db| ledger(&db, "pending", account, json!({})).ok())
                     .map_or(Value::Null, |mut recovery| recovery["evidence"].take());
-                refusal(safe_reason(error), sent, evidence)
+                refusal(safe_reason(error), work.sent(), evidence)
             }
         };
         self.events.reset_claims_changed();
         reply
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn write(
         &self,
-        route: Route,
         db: &Path,
         source: &reset_source_route::SourceContext,
-        account: &str,
-        caller: &str,
-        body: &Value,
-        sent: &mut bool,
+        work: &Execution,
     ) -> Result<Value> {
+        let Execution {
+            route,
+            account,
+            caller,
+            body,
+            ..
+        } = work;
         let key = &body["grantKey"];
         match route {
             Route::Prepare => ledger(db, "prepareGate", account, json!({"key":key}))?,
             Route::Claim => ledger(db, "claimGate", account, json!({"key":key}))?,
             _ => Value::Null,
         };
-        let snapshot = reset_source_route::read(source, db, account)?;
+        let latest_send = work.deadline - LEDGER_RESERVE - SOURCE_READ_BUDGET - SOURCE_SEND_BUDGET;
+        let read_deadline = if matches!(route, Route::Claim) {
+            latest_send - LEDGER_RESERVE
+        } else {
+            work.deadline - LEDGER_RESERVE
+        };
+        let snapshot = self.read(db, source, account, read_deadline)?;
         match route {
             Route::Prepare => ledger(
                 db,
@@ -322,6 +417,12 @@ impl ResetRoutes {
                 json!({"key":body["attemptKey"],"snapshot":snapshot}),
             ),
             Route::Claim => {
+                // Queue for a send before authorising it, leaving time for the durable begin.
+                let reserve_until = latest_send - LEDGER_RESERVE;
+                let send_slot = self.source_slot(reserve_until)?;
+                if Instant::now() >= reserve_until {
+                    return Err("source-deadline");
+                }
                 let write = ledger(
                     db,
                     "begin",
@@ -331,20 +432,26 @@ impl ResetRoutes {
                     }),
                 )?;
                 self.events.reset_claims_changed();
-                // Begin committed the pending attempt and consumed the approval. This blocking
-                // operation runs to settlement even if the browser disconnects.
-                *sent = true;
-                let mut result = reset_source_route::send(source, &write)
-                    .unwrap_or_else(|_| json!({"outcome":"ambiguous"}));
-                if result["outcome"] == "not-sent" {
+                // Begin consumed the confirmation and committed the pending attempt. If disk
+                // contention consumed the reserved time, the server can prove it sent nothing.
+                let mut result = if Instant::now() >= latest_send {
+                    json!({"outcome":"not-sent"})
+                } else {
+                    work.set_sent(true);
+                    reset_source_route::send(source, &write)
+                        .unwrap_or_else(|_| json!({"outcome":"ambiguous"}))
+                };
+                drop(send_slot);
+                if work.sent() && result["outcome"] == "not-sent" {
                     if account.starts_with("claude:") {
-                        *sent = false;
+                        work.set_sent(false);
                     } else {
                         result = json!({"outcome":"ambiguous"});
                     }
                 }
-                let after = if *sent {
-                    reset_source_route::read(source, db, account).unwrap_or(Value::Null)
+                let after = if work.sent() {
+                    self.read(db, source, account, work.deadline - LEDGER_RESERVE)
+                        .unwrap_or(Value::Null)
                 } else {
                     Value::Null
                 };

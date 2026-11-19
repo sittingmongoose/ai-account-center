@@ -1,11 +1,8 @@
 /**
- * M5 lane K: the reset claim route with each writer of the claims file. The production router (its
- * session, origin, query and body guards, account resolution and the one provider send stay in TS)
- * runs one whole claim against a fixture Codex profile: first with the in-process native module as
- * the file's writer, then with the private Rust service owning the `reset-claims` row. Every reply
- * must be equal after opaque tokens are numbered by first appearance and clock readings zeroed.
- * Synthetic accounts, a fake `codex` and temporary roots only; the send is synthetic.
- * Unix only (the fake CLI and the private socket). `--ts-only` runs the native writer alone.
+ * K's whole-claim fixture against the historical Express route and the worker-free
+ * public listener. Compare every response after normalizing opaque tokens and clocks.
+ * Unix only because the fake Codex app-server uses a shebang. Use --queued-verification
+ * to exercise a 4.5-second source queue followed by a 19.8-second provider read.
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -15,6 +12,7 @@ import express from 'express';
 import { startResetFixture } from './reset-http-fixture';
 
 const tsOnly = process.argv.includes('--ts-only');
+const queuedVerification = process.argv.includes('--queued-verification');
 const repo = path.resolve(import.meta.dir, '../..');
 const fixtureCodex = path.join(repo, 'tests/fixtures/reset-source/refusal-codex');
 // The native source and the service find `codex` on the process environment's PATH, which a
@@ -157,7 +155,10 @@ async function scenario(root: string, rust: boolean) {
     });
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
-    return { status: response.status, body: await response.json() };
+    const text = await response.text();
+    const parsed = JSON.parse(text);
+    assert.equal(text, JSON.stringify(parsed), 'exact Express JSON encoding');
+    return { status: response.status, body: parsed };
   };
   const steps: Record<string, Reply> = {};
   try {
@@ -190,6 +191,106 @@ async function scenario(root: string, rust: boolean) {
   assert.equal(sends, 1, 'exactly one synthetic provider send');
   assert.equal(fs.existsSync(path.join(home, 'unexpected-send')), false);
   return steps;
+}
+
+/** Hold the four source permits as the claim moves from send to verification. */
+async function queuedClaim(root: string) {
+  fs.mkdirSync(root, { mode: 0o700 });
+  const barrier = path.join(root, 'queue-fixture');
+  fs.mkdirSync(barrier, { mode: 0o700 });
+  const holders = Array.from({ length: 4 }, (_, index) => `holder-${index}`);
+  const profiles = ['fixture', ...holders];
+  const state = { primary: 100, secondary: 20, spentA: false };
+  fs.writeFileSync(
+    path.join(root, 'codex-profiles.yaml'),
+    "version: '1'\nprofiles:\n" +
+      profiles
+        .map((profile) => `  ${profile}: {type: codex, created: '2026-11-01', last_used: null}\n`)
+        .join('')
+  );
+  for (const profile of profiles) {
+    const home = path.join(root, 'codex-instances', profile);
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    const claims = Buffer.from(
+      JSON.stringify({
+        email: `fixture-${profile}`,
+        'https://api.openai.com/auth': { chatgpt_account_id: profile },
+      })
+    ).toString('base64url');
+    fs.writeFileSync(
+      path.join(home, 'auth.json'),
+      JSON.stringify({
+        tokens: { account_id: profile, id_token: `e30.${claims}.fixture` },
+      })
+    );
+    fs.writeFileSync(path.join(home, 'fixture-state.json'), JSON.stringify(state));
+    if (profile === 'fixture') fs.writeFileSync(path.join(home, 'allow-fixture-send'), '1');
+  }
+  const waitFor = async (name: string) => {
+    const marker = path.join(barrier, name);
+    const deadline = Date.now() + 5_000;
+    while (!fs.existsSync(marker) || fs.statSync(marker).size === 0) {
+      assert.ok(Date.now() < deadline, `fixture did not reach ${name}`);
+      await Bun.sleep(10);
+    }
+    return Number(fs.readFileSync(marker, 'utf8'));
+  };
+  const fixture = await startResetFixture(repo, root);
+  const send = async (account: string, suffix = '', body?: unknown) => {
+    const response = await fetch(
+      `${fixture.url}/api/accounts/${encodeURIComponent(account)}/reset-claims${suffix}`,
+      {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: {
+          cookie: fixture.cookie,
+          origin: fixture.url,
+          'content-type': 'application/json',
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000),
+      }
+    );
+    const result = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(result));
+    return result;
+  };
+  const pending: Promise<unknown>[] = [];
+  try {
+    const inventory = await send(ROUTE);
+    assert.equal(inventory.status, 'ok', JSON.stringify(inventory));
+    assert.equal(inventory.grants.length, 2);
+    const grantKey = inventory.grants[1].grantKey;
+    const { confirmationToken } = await send(ROUTE, '/prepare', { grantKey });
+    const claim = send(ROUTE, '', { grantKey, confirmationToken });
+    pending.push(claim);
+    await waitFor('send-waiting');
+    for (const profile of holders.slice(0, 3)) pending.push(send(`codex:${profile}`));
+    await Promise.all(holders.slice(0, 3).map(waitFor));
+    pending.push(send(`codex:${holders[3]}`));
+    // The fourth reader queues behind the sender. When the send releases its permit,
+    // the fourth reader enters first and the verification has to wait.
+    await Bun.sleep(500);
+    fs.writeFileSync(path.join(barrier, 'release-send'), '1');
+    const sendEnd = await waitFor('send-end');
+    await waitFor(holders[3]);
+    fs.writeFileSync(path.join(barrier, 'release-holders'), String(sendEnd + 4.5));
+    const receipt = await claim;
+    await Promise.all(pending);
+    assert.equal(receipt.outcome, 'claimed', JSON.stringify(receipt));
+    assert.equal(receipt.providerSuccess, true);
+    const queue = (await waitFor('verify-start')) - sendEnd;
+    const read = (await waitFor('verify-end')) - (await waitFor('verify-start'));
+    assert.ok(queue >= 4.45 && queue < 5, `verification queued for ${queue}s`);
+    assert.ok(read >= 19.8 && read < 20, `verification read took ${read}s`);
+    const sends = fs.readFileSync(path.join(root, 'codex-instances/fixture/fixture-sends'), 'utf8');
+    assert.equal(sends, 'sent\n');
+    console.log(
+      `Reset queued verification confirmed after ${queue.toFixed(2)}s queue and ${read.toFixed(2)}s provider read, one send.`
+    );
+  } finally {
+    await fixture.stop();
+    await Promise.allSettled(pending);
+  }
 }
 
 /** Opaque 64-hex values become their order of first appearance; clock readings become 0. */
@@ -230,6 +331,10 @@ try {
     assert.deepEqual(comparable(rust), comparable(ts));
     // Byte order too: the route's JSON text is the same after normalization.
     assert.equal(JSON.stringify(comparable(rust)), JSON.stringify(comparable(ts)));
+  }
+  if (queuedVerification) {
+    assert.equal(tsOnly, false, 'queued verification requires the Rust listener');
+    await queuedClaim(path.join(scratch, 'queued'));
   }
   console.log(
     `reset claim parity: ${Object.keys(ts).length} replies over one whole claim (${tsOnly ? 'TS' : 'TS/Rust'})`

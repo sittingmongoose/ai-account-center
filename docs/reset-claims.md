@@ -62,6 +62,12 @@ the existing registry and manifest. Public balance rows never establish claim
 identity. The listener holds the claims file's writer lease and completes an
 admitted claim even if the browser disconnects.
 
+The server leaves time for verification and settlement before it starts a send.
+Each source read allows for a queue wait, the ticketed identity capture and the
+provider read. The HTTP request settles within the browser's 120-second window.
+If it reaches the server deadline after a send, the pending attempt remains
+available for Check again.
+
 Claude initially uses the manifest's existing Windows profile and credentials,
 locally or through the existing SSH-streamed Python helper. It verifies the same
 account and organization through the existing OAuth profile read. Its private

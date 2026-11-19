@@ -50,6 +50,15 @@ for (const file of files(resolve(root, 'src')).filter(f => f.endsWith('.ts'))) {
   }
   visit(source);
 }
+// Reset replies now come from the native HTTP route's refusal allowlist.
+const resetRoute = 'crates/aac-http/src/public_auth/reset_routes.rs';
+const resetSource = readFileSync(resolve(root, resetRoute), 'utf8');
+const resetReasons = /const SAFE_REASONS: &\[&str\] = &\[([^\]]+)\];/.exec(resetSource);
+if (!resetReasons) throw new Error('Rust reset refusal table is missing');
+for (const [, word] of resetReasons[1].matchAll(/"([^"]+)"/g)) add(word, `${resetRoute}:SAFE_REASONS`);
+const resetInventoryUnavailable = /"(reset-inventory-unavailable)"/.exec(resetSource);
+if (!resetInventoryUnavailable) throw new Error('Rust reset inventory refusal is missing');
+add(resetInventoryUnavailable[1], `${resetRoute}:inventory`);
 const python = spawnSync('python3', ['-c', String.raw`
 import ast,json,pathlib,re,sys
 root=pathlib.Path(sys.argv[1]); out=[]

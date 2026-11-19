@@ -515,6 +515,13 @@
     ]
   },
   {
+    "word": "check-again-required",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "checking",
     "cause": null,
     "sources": [
@@ -530,6 +537,13 @@
       "scripts/account-usage/failover_usage.py:FAILURES",
       "scripts/account-usage/muse_console.py:MuseError",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "claim-token-outstanding",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -693,6 +707,13 @@
     ]
   },
   {
+    "word": "confirmation-invalid",
+    "cause": "damaged",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "confirmation-required",
     "cause": null,
     "sources": [
@@ -725,6 +746,13 @@
     ]
   },
   {
+    "word": "cooldown",
+    "cause": "rate_limited",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "copying",
     "cause": null,
     "sources": [
@@ -753,6 +781,13 @@
     "cause": null,
     "sources": [
       "scripts/claude-history/history_index_remote_v2.py:receipt['status']"
+    ]
+  },
+  {
+    "word": "credential-host-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -1118,6 +1153,13 @@
     ]
   },
   {
+    "word": "exact-grant-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "execution_policy",
     "cause": "refused",
     "sources": [
@@ -1411,6 +1453,20 @@
     ]
   },
   {
+    "word": "grant-changed",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "grant-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "half-open",
     "cause": null,
     "sources": [
@@ -1549,9 +1605,17 @@
     ]
   },
   {
+    "word": "identity-changed",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "identity-unconfirmed",
     "cause": null,
     "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
       "scripts/account-usage/claude_usage.py:result.get('resetReason')",
       "scripts/account-usage/claude_usage.py:result['resetReason']"
@@ -3320,6 +3384,13 @@
     ]
   },
   {
+    "word": "provider-read-only",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "published",
     "cause": null,
     "sources": [
@@ -3433,6 +3504,7 @@
     "word": "rate-limited",
     "cause": null,
     "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
       "scripts/account-usage/plan_usage.py:item.get('status')"
     ]
@@ -3602,6 +3674,20 @@
     ]
   },
   {
+    "word": "redeeming",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "refill-windows-unconfirmed",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "refresh_pending",
     "cause": null,
     "sources": [
@@ -3731,6 +3817,13 @@
     "cause": null,
     "sources": [
       "src/web-server/rust-service-transport.ts:RustFailureKind"
+    ]
+  },
+  {
+    "word": "reset-inventory-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:inventory"
     ]
   },
   {
@@ -4548,6 +4641,7 @@
     "word": "signed-out",
     "cause": null,
     "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS",
       "scripts/account-usage/claude_usage.py:reason",
       "src/web-server/services/account-dashboard-service.ts:macState",
       "src/web-server/services/account-dashboard-service.ts:state",
@@ -4708,6 +4802,13 @@
     "cause": null,
     "sources": [
       "src/antigravity/types.ts:ActivationStatus"
+    ]
+  },
+  {
+    "word": "stale-inventory",
+    "cause": null,
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {
@@ -5414,6 +5515,13 @@
     ]
   },
   {
+    "word": "unknown-grant-kind",
+    "cause": "provider_error",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "unknown-model",
     "cause": "provider_error",
     "sources": [
@@ -5600,6 +5708,13 @@
       "src/web-server/services/signin-health-service.ts:states",
       "src/web-server/usage/native-quota-collector.ts:quotaStatus",
       "src/web-server/usage/native-quota-collector.ts:state.cachedRow.quotaStatus"
+    ]
+  },
+  {
+    "word": "unsupported-grant-id",
+    "cause": "refused",
+    "sources": [
+      "crates/aac-http/src/public_auth/reset_routes.rs:SAFE_REASONS"
     ]
   },
   {

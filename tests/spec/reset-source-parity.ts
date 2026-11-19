@@ -184,7 +184,10 @@ async function scenario(root: string, rust: boolean, hang = false) {
         });
         assert.equal(response.headers.get('cache-control'), 'no-store');
         assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
-        return { status: response.status, body: await response.json() };
+        const text = await response.text();
+        const parsed = JSON.parse(text);
+        assert.equal(text, JSON.stringify(parsed), 'exact Express JSON encoding');
+        return { status: response.status, body: parsed };
       };
       const tag = account.split(':')[0];
       steps[`${tag}.before`] = await send('');

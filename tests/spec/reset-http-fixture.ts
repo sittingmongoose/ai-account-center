@@ -6,8 +6,8 @@ import bcrypt from 'bcrypt';
 import { fixtureEnvironment, startRustFixture } from './m6-rust-fixture';
 
 export async function startResetFixture(repo: string, root: string) {
-  const binary = process.env.AAC_RUST_PUBLIC_BINARY;
-  assert.ok(binary, 'AAC_RUST_PUBLIC_BINARY must name the built ai-account-center program');
+  const binary = process.env.AAC_M6_TARGET_CLI ?? process.env.AAC_RUST_PUBLIC_BINARY;
+  assert.ok(binary, 'AAC_M6_TARGET_CLI must name the built ai-account-center program');
   const configPath = path.join(root, 'config.yaml');
   const config = JSON.parse(
     await readFile(configPath, 'utf8').catch((error) => {
