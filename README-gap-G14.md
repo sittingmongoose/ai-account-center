@@ -97,7 +97,7 @@ all three hold, so nothing is left unwritten and nothing writes twice.
 - Windows-native: the four port suites (12 tests) green; `tsc --noEmit` clean.
 - Linux service build: `cargo check -p aac-http` on Nas1 under
   `flock /home/sittingmongoose/aac-nas1-heavy.lock` + `nice -n 19 -j 2` — **passes (exit 0)**;
-  the writers' cadence/validation/ingest unit tests run with `cargo test -p aac-http --lib analytics_writers`.
+  the writers' cadence/validation/ingest unit tests are **5/5 green** (`cargo test -p aac-http --lib analytics_writers`).
 - Pre-existing Windows failures (not G14 regressions; these files are untouched by this gap):
   aac-files has 5 Unix-centric unit-test failures (identical on the lane E base), and aac-store's
   `store_runs` secret-policy tests `a_refusal_reason_never_quotes_the_writer_folder` /
