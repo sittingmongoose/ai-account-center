@@ -35,6 +35,7 @@ fn result_value(event: &Value) -> Value {
 
 /// Compile a tiny recorder that writes its argv and environment as JSON to a fixed path
 /// and exits with a fixed code: the fake systemd-run for the fixture seam.
+#[cfg(any(not(target_os = "linux"), feature = "parity-fixtures"))]
 fn compile_recorder(
     dir: &std::path::Path,
     out: &std::path::Path,
@@ -105,6 +106,7 @@ fn main() {{
 }
 
 #[test]
+#[cfg(any(not(target_os = "linux"), feature = "parity-fixtures"))]
 fn direct_route_spawns_detached_with_the_spec_environment_and_cwd() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("direct.json");
@@ -112,10 +114,15 @@ fn direct_route_spawns_detached_with_the_spec_environment_and_cwd() {
     // (A detached PowerShell exits 0 without writing under DETACHED_PROCESS, so the
     // fixture must not depend on a console.)
     let exe = compile_recorder(dir.path(), &out, 0);
-    let (code, event) = call(
-        env!("CARGO_BIN_EXE_aac-agent"),
-        json!({"app": "codex-desktop", "exe": exe, "args": [], "cwd": dir.path(), "env": {"AAC_TEST_KEY": "fixture-value"}}),
-    );
+    let args = json!({"app": "codex-desktop", "exe": exe, "args": [], "cwd": dir.path(), "env": {"AAC_TEST_KEY": "fixture-value"}});
+    // Linux production always uses systemd. Pin the direct route in its fixture build.
+    #[cfg(all(target_os = "linux", feature = "parity-fixtures"))]
+    let args = {
+        let mut args = args;
+        args["platform"] = json!("darwin");
+        args
+    };
+    let (code, event) = call(env!("CARGO_BIN_EXE_aac-agent"), args);
     assert_eq!(code, Some(0), "{event}");
     let value = result_value(&event);
     assert_eq!(value["route"], "direct");

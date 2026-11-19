@@ -20,6 +20,19 @@ pub enum Field {
 /// A profile's metadata fields in their original insertion order.
 pub type Meta = Vec<(String, Field)>;
 
+/// Refusal to validate or mutate a profile registry entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileError {
+    /// The name violates the registry's profile name rules.
+    InvalidName,
+    /// A profile with that name already exists.
+    AlreadyExists,
+    /// No profile has that name.
+    Missing,
+    /// Removing the default while other profiles exist requires an explicit override.
+    DefaultInUse,
+}
+
 /// A validated registry: version, default pointer and profiles in insertion order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Registry {
@@ -68,9 +81,10 @@ impl Registry {
 
     /// Insert a new profile (`createProfile`); `Err` when the name is invalid or already present.
     /// `meta` is spread over the base `{type, created, last_used}` in TypeScript's order.
-    pub fn create(&mut self, name: &str, created: &str, meta: Meta) -> Result<(), ()> {
-        if profile_name_error(name).is_err() || self.profiles.iter().any(|(n, _)| n == name) {
-            return Err(());
+    pub fn create(&mut self, name: &str, created: &str, meta: Meta) -> Result<(), ProfileError> {
+        profile_name_error(name)?;
+        if self.profiles.iter().any(|(n, _)| n == name) {
+            return Err(ProfileError::AlreadyExists);
         }
         let mut fields: Meta = vec![
             ("type".to_owned(), Field::Str("codex".to_owned())),
@@ -89,11 +103,9 @@ impl Registry {
     }
 
     /// Merge a partial update into a profile (`updateProfile`); `Err` when absent or invalid.
-    pub fn update(&mut self, name: &str, partial: Meta) -> Result<(), ()> {
-        if profile_name_error(name).is_err() {
-            return Err(());
-        }
-        let fields = self.get_mut(name).ok_or(())?;
+    pub fn update(&mut self, name: &str, partial: Meta) -> Result<(), ProfileError> {
+        profile_name_error(name)?;
+        let fields = self.get_mut(name).ok_or(ProfileError::Missing)?;
         for (key, value) in partial {
             if let Some(slot) = fields.iter_mut().find(|(k, _)| *k == key) {
                 slot.1 = value;
@@ -105,17 +117,15 @@ impl Registry {
     }
 
     /// Remove a profile (`removeProfile`); `Err` on the default-with-others guard or absence.
-    pub fn remove(&mut self, name: &str, force_default: bool) -> Result<(), ()> {
-        if profile_name_error(name).is_err() {
-            return Err(());
-        }
+    pub fn remove(&mut self, name: &str, force_default: bool) -> Result<(), ProfileError> {
+        profile_name_error(name)?;
         let index = self
             .profiles
             .iter()
             .position(|(n, _)| n == name)
-            .ok_or(())?;
+            .ok_or(ProfileError::Missing)?;
         if self.default.as_deref() == Some(name) && self.profiles.len() > 1 && !force_default {
-            return Err(());
+            return Err(ProfileError::DefaultInUse);
         }
         self.profiles.remove(index);
         if self.default.as_deref() == Some(name) {
@@ -126,20 +136,20 @@ impl Registry {
 }
 
 /// The profile name rule (`getCodexProfileNameError`): `Ok(())` when valid.
-pub fn profile_name_error(name: &str) -> Result<(), ()> {
+pub fn profile_name_error(name: &str) -> Result<(), ProfileError> {
     if name.is_empty() || name == "default" || name == "current" {
-        return Err(());
+        return Err(ProfileError::InvalidName);
     }
     if name.contains('/') || name.contains('\\') || name.len() > 64 {
-        return Err(());
+        return Err(ProfileError::InvalidName);
     }
     let mut chars = name.chars();
-    let first = chars.next().ok_or(())?;
+    let first = chars.next().ok_or(ProfileError::InvalidName)?;
     if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
-        return Err(());
+        return Err(ProfileError::InvalidName);
     }
     if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
-        return Err(());
+        return Err(ProfileError::InvalidName);
     }
     Ok(())
 }
