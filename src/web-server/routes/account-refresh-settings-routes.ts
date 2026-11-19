@@ -1,5 +1,5 @@
 import type { Router } from 'express';
-import { respondWithRust } from '../rust-service';
+import { respondWithRust, writeWithRust } from '../rust-service';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
@@ -34,7 +34,7 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
   router.get('/settings', (req, res) =>
     respondWithRust(req, res, '/api/accounts/settings', deps.read ?? readAccountRefreshSettings)
   );
-  router.put('/settings', (req, res) => {
+  router.put('/settings', async (req, res) => {
     if (
       typeof req.headers.origin !== 'string' ||
       !req.headers.origin ||
@@ -52,7 +52,20 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
       return;
     }
     try {
-      const saved = (deps.write ?? writeAccountRefreshSettings)(req.body);
+      const input = req.body;
+      const saved = deps.write
+        ? deps.write(input)
+        : await writeWithRust(
+            req,
+            res,
+            '/api/accounts/settings',
+            'account-refresh-settings',
+            input,
+            (value): value is AccountRefreshSettings =>
+              isAccountRefreshSettings(value) &&
+              value.refreshIntervalSeconds === input.refreshIntervalSeconds,
+            () => writeAccountRefreshSettings(input)
+          );
       (deps.onChanged ?? rescheduleAccountAnalyticsSampling)();
       res.json(saved);
     } catch {

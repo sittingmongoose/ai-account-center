@@ -254,10 +254,10 @@ async fn boundary(State(state): State<AppState>, mut req: Request, next: Next) -
 
 /// The private 503 with its named reason. The bodies are the M3 ones.
 fn decline(handler: Handler, reason: Decline) -> Response {
-    let error = if handler == Handler::Settings {
-        "TypeScript settings fallback required"
-    } else {
-        "TypeScript read fallback required"
+    let error = match handler {
+        Handler::Settings => "TypeScript settings fallback required",
+        Handler::WriteSettings => "Usage refresh settings could not be saved.",
+        _ => "TypeScript read fallback required",
     };
     let mut response = (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -431,6 +431,45 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        Handler::WriteSettings => {
+            if req.uri().query().is_some_and(|q| !q.is_empty()) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Unexpected settings query."})),
+                )
+                    .into_response();
+            }
+            let owners = match shared.boot.owners() {
+                Ok(owners) => owners,
+                Err(_) => return decline(row.handler, Decline::Unsupported),
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return invalid_settings();
+            };
+            let Ok(value) = parse_settings(&bytes) else {
+                return invalid_settings();
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    let rows = registry::rows().map_err(|_| Decline::Internal)?;
+                    let file = owners
+                        .claim(rows, "account-refresh-settings", &root, None)
+                        .map_err(|_| Decline::Unsupported)?;
+                    let mut bytes = serde_json::to_vec(&value).map_err(|_| Decline::Internal)?;
+                    bytes.push(b'\n');
+                    file.replace_settings(&bytes)
+                        .map_err(|_| Decline::Internal)?;
+                    file.clean_settings_temporaries();
+                    Ok(value)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         Handler::Feed | Handler::FeedStatus => {
             let source = req
                 .uri()
@@ -555,11 +594,23 @@ fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
     let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
         return Err(Decline::Unsupported);
     };
+    parse_settings(&bytes)
+}
+
+fn invalid_settings() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error":"Choose a whole number of seconds from 30 to 3600."})),
+    )
+        .into_response()
+}
+
+fn parse_settings(bytes: &[u8]) -> Result<AccountRefreshSettings, Decline> {
     // Require the raw object and exact unique keys before the strict integer DTO parse.
     // Original bytes are retained: no Value normalization or positional struct decoding.
     // These small integers are exact in JS; every other input delegates to the TS owner.
     let value: AccountRefreshSettings =
-        crate::json_object::from_slice(&bytes, &["refreshIntervalSeconds"])
+        crate::json_object::from_slice(bytes, &["refreshIntervalSeconds"])
             .map_err(|_| Decline::Shape)?;
     if (30..=3600).contains(&value.refresh_interval_seconds) {
         Ok(value)
@@ -673,7 +724,7 @@ pub async fn serve(
     served
 }
 
-/// R3: the store jobs loop — the first pass minutes after start, then every 15 minutes,
+/// R3: the store jobs loop â€” the first pass minutes after start, then every 15 minutes,
 /// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
 /// when the service ends.
 async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBool>) {

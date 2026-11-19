@@ -16,6 +16,7 @@ Object.assign(process.env, {
   CCS_HOME: home,
   CCS_DIR: ccs,
   AAC_STORE: 'off',
+  AAC_RUST_GROUP_WRITES: 'on',
   AAC_AGENT_TRANSPORT: 'off',
   AAC_NO_LOCAL_RUST_BUILD: '1',
 });

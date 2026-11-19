@@ -2,6 +2,7 @@
 import type { Request, Response } from 'express';
 import { performance } from 'perf_hooks';
 import routes from './rust-service-routes.json';
+import { tsWritesRow } from '../shared/private-files';
 import type { RustLease } from './rust-service-lifecycle';
 import {
   canonicalRoot,
@@ -27,7 +28,8 @@ export const SHADOW_IN_FLIGHT = 2;
 /** The roles the table admits on a route (TS gates from the same table Rust dispatches from). */
 function routeRoles(route: string): readonly string[] {
   const row = routes.find((r) => r.path === route && r.owner === 'rust') as
-    { roles?: string[] } | undefined;
+    | { roles?: string[] }
+    | undefined;
   return row?.roles ?? [];
 }
 
@@ -97,7 +99,8 @@ export class RustService extends RustSupervisor {
     verified: VerifiedRustPrincipal,
     input?: unknown,
     query = '',
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    method: 'GET' | 'PUT' = 'GET'
   ): Promise<RustReply> {
     const lease: RustLease | null = this.lease;
     if (!lease || this.stopped)
@@ -115,7 +118,7 @@ export class RustService extends RustSupervisor {
         verified,
         this.active,
         input,
-        'GET',
+        method,
         // R1: a fed view carries its ids in headers and comes back as bytes, never parsed here.
         headers ? { headers, raw: true, cap: RUST_VIEW_CAP } : {}
       );
@@ -420,6 +423,48 @@ export class RustService extends RustSupervisor {
    * upgrade) starts with none and the front door pushes again. Null without a lease, or when the service
    * reads another root than `scope` (the TS readers answer for another root).
    */
+  /** A guarded write to a store assigned to this boot. A lost or invalid reply can follow a
+   * committed replacement, so this method never retries a request or invokes a second writer. */
+  async mutate(
+    req: Request,
+    route: string,
+    input: unknown,
+    accepts: (body: unknown) => boolean
+  ): Promise<unknown> {
+    const row = routes.find(
+      (r) =>
+        r.path === route && r.method === req.method && r.group === 'writes' && r.owner === 'rust'
+    );
+    const verified = principal(req, route);
+    if (
+      this.mode !== 'on' ||
+      req.method !== 'PUT' ||
+      !row ||
+      !verified ||
+      !row.roles?.includes(verified.role) ||
+      this.inFlight >= IN_FLIGHT
+    ) {
+      throw new Error('Rust writer unavailable');
+    }
+    const started = now();
+    let result: RustReply;
+    try {
+      result = await this.forward(route, verified, input, '', undefined, req.method);
+    } catch (error) {
+      this.failed(route, error);
+      throw error;
+    }
+    if (result.status !== 200) {
+      this.declined(route, result);
+      throw new Error('Rust write declined');
+    }
+    if (!accepts(result.body)) throw new Error('Rust write reply refused');
+    this.stats.served++;
+    this.record(route, { kind: 'served' });
+    this.pair(route, null, now() - started);
+    return result.body;
+  }
+
   feedBoot(scope: string): string | null {
     const lease = this.lease;
     return lease && !this.stopped && lease.connection.ccsDir === canonicalRoot(scope)
@@ -654,4 +699,22 @@ export async function readOwnedValueWithRust(
   return service instanceof RustService
     ? service.ownedValue(req, route, root, accept, legacy)
     : legacy();
+}
+
+/** The guarded adapter keeps the TS handler whenever the registry assigns TS the file. */
+export async function writeWithRust<T>(
+  req: Request,
+  res: Response,
+  route: string,
+  store: string,
+  input: unknown,
+  accepts: (body: unknown) => body is T,
+  legacy: () => T | Promise<T>
+): Promise<T> {
+  if (tsWritesRow(store)) return legacy();
+  const service: unknown = res.locals.rustService;
+  if (!(service instanceof RustService)) throw new Error('Rust writer unavailable');
+  const result = await service.mutate(req, route, input, accepts);
+  if (!accepts(result)) throw new Error('Rust write reply refused');
+  return result;
 }

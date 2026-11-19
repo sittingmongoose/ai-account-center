@@ -8,14 +8,19 @@
  * Owners are resolved once at start (`settlePrivateFileOwners`) and sent to the service in its
  * boot JSON, which refuses a map that differs from its own registry. TS writers then refuse a
  * row they do not own (`assertTsWritesFile`, `assertTsWritesRow`), so each file has one writer.
- * No row moves yet: every `movesWith` is null, so TS writes everything it wrote before.
  */
 import path from 'path';
 import { ConfigError } from '../errors/error-types';
 
 export type PrivateFileRole = 'ts' | 'rust-service' | 'agent';
 export type PrivateFileClass =
-  'credential' | 'setting' | 'state' | 'cache' | 'history' | 'log' | 'backup';
+  | 'credential'
+  | 'setting'
+  | 'state'
+  | 'cache'
+  | 'history'
+  | 'log'
+  | 'backup';
 
 export interface PrivateFileRow {
   readonly id: string;

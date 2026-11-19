@@ -240,7 +240,32 @@ impl OwnedStore {
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     ) -> Result<(), Failure> {
-        self.write_staged(write, &mut |_| Ok(()))
+        self.write_staged(write, &mut |_| Ok(()), false)
+    }
+
+    /// Replace a settings leaf without opening it. Renaming over a symlink replaces the
+    /// link itself. Parent and lease checks still apply, and a directory cannot be replaced.
+    /// As with the legacy settings writers, syncing the directory after rename is best effort.
+    pub fn replace_settings(&self, bytes: &[u8]) -> Result<(), Failure> {
+        self.write_staged(|out| out.write_all(bytes), &mut |_| Ok(()), true)
+    }
+
+    /// Remove legacy settings staging files beside this store after a successful replacement.
+    /// The writer lease is still held. Unlink never follows a symlink.
+    pub fn clean_settings_temporaries(&self) {
+        let Some((parent, name)) = self.path.parent().zip(self.path.file_name()) else {
+            return;
+        };
+        let prefix = format!("{}.", name.to_string_lossy());
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let entry_name = entry.file_name();
+                let text = entry_name.to_string_lossy();
+                if text.starts_with(&prefix) && text.ends_with(".tmp") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 
     /// [`OwnedStore::write_with`] with a hook after each step (the test seam for a write
@@ -249,10 +274,13 @@ impl OwnedStore {
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
         step: &mut dyn FnMut(Step) -> io::Result<()>,
+        replace_settings_leaf: bool,
     ) -> Result<(), Failure> {
         if self.parents == Parents::Private {
             require_absolute(&self.path)?;
-            reject_special(&self.path, true)?;
+            if !replace_settings_leaf {
+                reject_special(&self.path, true)?;
+            }
         }
         let parent = self
             .path
@@ -292,7 +320,10 @@ impl OwnedStore {
             .persist(&self.path)
             .map_err(|_| Failure::new(Cause::NotWritable, "atomic replacement failed"))?;
         step(Step::Renamed)?;
-        sync_directory(parent)?;
+        let synced = sync_directory(parent);
+        if !replace_settings_leaf {
+            synced?;
+        }
         Ok(())
     }
 
@@ -547,13 +578,17 @@ mod tests {
             let store = store(&root, parents, lease);
             store.write(b"committed").unwrap();
             for at in [Step::Staged, Step::Written, Step::Synced] {
-                let result = store.write_staged(|out| out.write_all(b"replacement"), &mut |now| {
-                    if now == at {
-                        Err(io::Error::other("interrupted"))
-                    } else {
-                        Ok(())
-                    }
-                });
+                let result = store.write_staged(
+                    |out| out.write_all(b"replacement"),
+                    &mut |now| {
+                        if now == at {
+                            Err(io::Error::other("interrupted"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    false,
+                );
                 assert!(result.is_err(), "{at:?}");
                 assert_eq!(store.read().unwrap(), b"committed", "{at:?}");
                 let mut expected = vec!["state.json".to_owned()];
@@ -563,13 +598,17 @@ mod tests {
                 assert_eq!(names(&root.join("d")), expected, "{at:?}");
             }
             // After the rename the new file is whole, and the error says the sync did not run.
-            let result = store.write_staged(|out| out.write_all(b"renamed"), &mut |now| {
-                if now == Step::Renamed {
-                    Err(io::Error::other("interrupted"))
-                } else {
-                    Ok(())
-                }
-            });
+            let result = store.write_staged(
+                |out| out.write_all(b"renamed"),
+                &mut |now| {
+                    if now == Step::Renamed {
+                        Err(io::Error::other("interrupted"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                false,
+            );
             assert!(result.is_err());
             assert_eq!(store.read().unwrap(), b"renamed");
         }

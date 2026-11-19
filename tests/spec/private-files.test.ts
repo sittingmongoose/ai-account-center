@@ -41,10 +41,15 @@ describe('the registry rules', () => {
       'readers-check',
     ])
       expect(ids).toContain(id);
-    // Nothing has moved yet: TS writes every row on the dashboard host.
-    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts' && r.movesWith === null)).toBe(
-      true
+    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts')).toBe(true);
+    expect(files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => false)).toEqual(
+      Object.fromEntries(ids.map((id) => [id, 'ts']))
     );
+    expect(
+      files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, (group) => group === 'writes')[
+        'account-refresh-settings'
+      ]
+    ).toBe('rust-service');
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {

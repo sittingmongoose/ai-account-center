@@ -1,6 +1,7 @@
 [
   { "method": "GET", "path": "/api/health", "owner": "rust", "group": "core", "roles": ["public", "admin", "device", "hub"], "budgetMs": 400, "handler": "health" },
   { "method": "GET", "path": "/api/accounts/settings", "owner": "rust", "group": "core", "roles": ["admin"], "budgetMs": 400, "handler": "settings" },
+  { "method": "PUT", "path": "/api/accounts/settings", "owner": "rust", "group": "writes", "roles": ["admin"], "budgetMs": 400, "handler": "write-settings" },
   { "method": "GET", "path": "/api/diag", "owner": "rust", "group": "core", "roles": ["admin"], "budgetMs": 400, "handler": "diag" },
   { "method": "GET", "path": "/api/store/status", "owner": "rust", "group": "store", "roles": ["admin", "device"], "budgetMs": 400, "handler": "store-status" },
   { "method": "GET", "path": "/api/scoreboard", "owner": "rust", "group": "scoreboard", "roles": ["admin"], "budgetMs": 400, "handler": "scoreboard" },

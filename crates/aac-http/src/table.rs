@@ -15,6 +15,7 @@ pub(crate) enum Handler {
     Health,
     Diag,
     Settings,
+    WriteSettings,
     Home,
     Accounts,
     Profiles,
@@ -36,6 +37,7 @@ impl Handler {
             "health" => Handler::Health,
             "diag" => Handler::Diag,
             "settings" => Handler::Settings,
+            "write-settings" => Handler::WriteSettings,
             "home" => Handler::Home,
             "accounts" => Handler::Accounts,
             "profiles" => Handler::Profiles,
@@ -204,7 +206,12 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     handler,
                     Handler::Agent | Handler::AgentControl | Handler::Store
                 ))
-            || (method == axum::http::Method::PUT && handler != Handler::Feed)
+            || (method == axum::http::Method::PUT
+                && !matches!(handler, Handler::Feed | Handler::WriteSettings))
+            || (handler == Handler::WriteSettings
+                && (method != axum::http::Method::PUT
+                    || row.group != "writes"
+                    || roles != [Role::Admin]))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)
