@@ -168,7 +168,7 @@ export class RustSupervisor {
     this.lifecycleInPrivate =
       this.writesOn &&
       collectionOn &&
-      !publicNative &&
+      (!publicNative || process.env.AAC_CUT_PRIVATE_LIFECYCLE === '1') &&
       process.env.AAC_RUST_CUT_WORKER === '1' &&
       process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on';
     // One readers-check file carries the Status and Scoreboard writers.

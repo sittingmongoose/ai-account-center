@@ -46,6 +46,7 @@ impl Sidecar {
         public: SocketAddr,
         native_collection: bool,
         native_lifecycle: bool,
+        private_lifecycle: bool,
     ) -> io::Result<Option<Self>> {
         let explicit = std::env::var_os("AAC_TS_SIDECAR");
         if explicit.as_deref() == Some(std::ffi::OsStr::new("off")) {
@@ -81,6 +82,10 @@ impl Sidecar {
             .env(
                 "AAC_CUT_PUBLIC_LIFECYCLE",
                 if native_lifecycle { "1" } else { "0" },
+            )
+            .env(
+                "AAC_CUT_PRIVATE_LIFECYCLE",
+                if private_lifecycle { "1" } else { "0" },
             )
             .env(
                 "AAC_CUT_PUBLIC_COLLECTION",

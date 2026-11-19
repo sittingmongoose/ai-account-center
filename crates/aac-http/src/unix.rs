@@ -1561,6 +1561,16 @@ async fn serve_inner(
 ) -> io::Result<()> {
     boot.validate()?;
     let owners = boot.owners()?;
+    if boot.native_lifecycle
+        && (native.is_none()
+            || owners.owner("account-registry") != Some(registry::Role::RustService)
+            || owners.owner("opencode-wallet-source") != Some(registry::Role::RustService))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "native lifecycle requires its collection and registry owners",
+        ));
+    }
     if native.is_some()
         && owners.owner(crate::collection_cache::OBSERVATIONS) != Some(registry::Role::RustService)
     {
@@ -1694,11 +1704,7 @@ async fn serve_inner(
         ))
     });
     let approvals = Arc::new(crate::account_approvals::Approvals::default());
-    let lifecycle = (boot.native_lifecycle
-        && producer.is_some()
-        && owners.owner("account-registry") == Some(registry::Role::RustService)
-        && owners.owner("opencode-wallet-source") == Some(registry::Role::RustService))
-    .then(|| {
+    let lifecycle = boot.native_lifecycle.then(|| {
         crate::public_auth::native_owners::NativeOwners::for_private_lifecycle(
             agents.clone(),
             owners.clone(),

@@ -403,6 +403,7 @@ pub(crate) async fn run_public_at(
             address,
             groups.is_some_and(|groups| groups.collection),
             native_lifecycle,
+            has_external,
         )
         .await?
     } else {

@@ -4,7 +4,7 @@ use crate::{
     account_reads::public_account_id,
     account_usage::{producer, sources},
     lifecycle_policy::{Edit, edit_registry},
-    public_auth::{DashboardAccess, DashboardEvent, Reply, error, lifecycle, response},
+    public_auth::{DashboardAccess, Reply, error, lifecycle, response},
 };
 use aac_files::{
     read::{self, Ancestors, Mode, Read, ReadPolicy},
@@ -89,10 +89,7 @@ pub(super) async fn handle(
     let id = id.to_owned();
     let saved = tokio::task::spawn_blocking(move || {
         let source = commit(&root, &native.owners, &id, label)?;
-        if let Some(usage) = &native.usage {
-            usage.cache.request_refresh();
-        }
-        native.events.publish(DashboardEvent::AccountsChanged {});
+        native.changed();
         account_view(&root, &source, secure).ok_or(SaveError::Write)
     })
     .await;

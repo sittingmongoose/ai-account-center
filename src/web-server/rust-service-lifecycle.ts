@@ -556,7 +556,9 @@ async function acquireWithinBudget(
   const agent = rustAgent();
   const publicOwners = process.env.AAC_CUT_PUBLIC_OWNERS === '1';
   const nativeCollection =
-    !publicOwners && process.env.AAC_RUST_CUT_WORKER === '1' && rustGroupOn('collection');
+    (!publicOwners || process.env.AAC_CUT_PRIVATE_LIFECYCLE === '1') &&
+    process.env.AAC_RUST_CUT_WORKER === '1' &&
+    rustGroupOn('collection');
   const files = privateFileOwners();
   const boot: RustBoot = {
     ccsDir,
