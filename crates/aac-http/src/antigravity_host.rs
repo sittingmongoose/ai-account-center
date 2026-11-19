@@ -377,7 +377,7 @@ fn file_identity(home: &Path) -> Option<String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let uid = unsafe { libc::getuid() };
+            let uid = aac_files::path::uid();
             if meta.uid() != uid {
                 return None;
             }
