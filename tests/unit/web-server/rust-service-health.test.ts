@@ -236,7 +236,12 @@ describe('route table (L1)', () => {
         ['budgetMs', 'group', 'handler', 'method', 'owner', 'path', 'roles'].sort()
       );
       expect(Array.isArray(row.roles) && row.roles.length > 0).toBe(true);
-      const budget = row.handler === 'agent-control' ? 2500 : ['events', 'agent', 'store'].includes(String(row.handler)) ? 0 : 400;
+      const budget =
+        row.handler === 'agent-control'
+          ? 2500
+          : ['events', 'agent', 'store', 'status-answers'].includes(String(row.handler))
+            ? 0
+            : 400;
       expect(row.budgetMs).toBe(budget);
       if (String(row.handler).startsWith('agent')) expect(row.method).toBe('POST');
       const internal = String(row.path).startsWith('/internal/');

@@ -214,7 +214,7 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
     }
     let results: EntryResult[];
     try {
-      results = await service().answers.submitSet(
+      results = await service().submitAnswers(
         entries,
         answerDevice(req.headers['user-agent']),
         typeof body.sendId === 'string' ? body.sendId : null

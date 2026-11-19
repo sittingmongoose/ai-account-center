@@ -934,6 +934,46 @@ pub struct Submitted {
     pub recorded: Vec<String>,
 }
 
+/// One ring pass's claimed groups.
+pub struct RingClaim {
+    /// One per (send, asker), in first-appearance order.
+    pub groups: Vec<RingGroupClaim>,
+}
+
+/// One claimed group.
+pub struct RingGroupClaim {
+    /// The pm-mail name.
+    pub to: String,
+    /// The send, or None for a record from before sends.
+    pub send_id: Option<String>,
+    /// The claimed records.
+    pub ids: Vec<String>,
+}
+
+/// One ring, ready to go out.
+pub struct Ring {
+    /// The pm-mail name.
+    pub to: String,
+    /// The subject.
+    pub subject: String,
+    /// The body.
+    pub body: String,
+    /// The ring's limit.
+    pub timeout: Duration,
+    /// The records it rings.
+    pub ids: Vec<String>,
+}
+
+/// What [`AnswersEngine::prepare_ring`] found.
+pub enum Prepared {
+    /// Ring this.
+    Ring(Ring),
+    /// Already rung: the next group.
+    Nothing,
+    /// The store is another's: the pass ends.
+    NotOwner,
+}
+
 /// The answer store (`StatusAnswers`).
 pub struct AnswersEngine {
     store_dir: PathBuf,
@@ -2045,9 +2085,31 @@ impl AnswersEngine {
     }
 
     /// `ringGroups`: one ring per (send, asker) for the given records whose signed copy is on
-    /// the share. Every group is claimed before the first ring.
+    /// the share. Every group is claimed before the first ring. A host that must not hold its
+    /// lock across a ring uses [`Self::claim_rings`], [`Self::prepare_ring`],
+    /// [`Self::finish_ring`] and [`Self::release_rings`] instead, as this does.
     pub fn ring_groups(&mut self, ids: &[String], budget: Option<&Budget>) {
-        let mut groups: IndexMap<String, (String, Option<String>, Vec<String>)> = IndexMap::new();
+        let claim = self.claim_rings(ids);
+        for group in &claim.groups {
+            if budget.is_some_and(|b| b.left() == 0) {
+                break;
+            }
+            match self.prepare_ring(group) {
+                Prepared::Ring(ring) => {
+                    let result = self.host.ring(&ring.to, &ring.subject, &ring.body, ring.timeout);
+                    self.finish_ring(&ring, &result);
+                }
+                Prepared::Nothing => continue,
+                Prepared::NotOwner => break,
+            }
+        }
+        self.release_rings(claim);
+    }
+
+    /// The ring pass's selection: skips recorded (no pm-mail name, doorbell off), the rest
+    /// grouped by (send, asker) and claimed so no other pass rings them meanwhile.
+    pub fn claim_rings(&mut self, ids: &[String]) -> RingClaim {
+        let mut groups: IndexMap<String, RingGroupClaim> = IndexMap::new();
         for id in ids {
             let Some(entry) = self.entry(id).cloned() else {
                 continue;
@@ -2076,63 +2138,146 @@ impl AnswersEngine {
             let key = format!("{}\n{to}", entry.send_id.as_deref().unwrap_or(&entry.id));
             groups
                 .entry(key)
-                .or_insert_with(|| (to.clone(), entry.send_id.clone(), Vec::new()))
-                .2
+                .or_insert_with(|| RingGroupClaim {
+                    to: to.clone(),
+                    send_id: entry.send_id.clone(),
+                    ids: Vec::new(),
+                })
+                .ids
                 .push(id.clone());
         }
-        let claimed: Vec<String> = groups.values().flat_map(|g| g.2.clone()).collect();
-        for id in &claimed {
-            self.ringing.insert(id.clone());
+        let claim = RingClaim {
+            groups: groups.into_values().collect(),
+        };
+        for group in &claim.groups {
+            for id in &group.ids {
+                self.ringing.insert(id.clone());
+            }
         }
-        for (to, send_id, group_ids) in groups.into_values() {
-            if budget.is_some_and(|b| b.left() == 0) {
-                break;
+        claim
+    }
+
+    /// Before one group's ring: the store confirmed (gaining it reconciles the steps) and what
+    /// is already rung left out.
+    pub fn prepare_ring(&mut self, group: &RingGroupClaim) -> Prepared {
+        if self.writer().is_err() {
+            return Prepared::NotOwner;
+        }
+        let live: Vec<HistoryEntry> = group
+            .ids
+            .iter()
+            .filter_map(|id| self.entry(id).cloned())
+            .filter(|e| e.doorbell.state != "done" && e.doorbell.state != "skipped")
+            .collect();
+        if live.is_empty() {
+            return Prepared::Nothing;
+        }
+        let files: Vec<String> = live
+            .iter()
+            .map(|e| delivery::share_file_name(&e.answer, &e.id))
+            .collect();
+        let records: Vec<SentRecord<'_>> = live
+            .iter()
+            .zip(&files)
+            .map(|(e, file)| SentRecord {
+                answer: &e.answer,
+                card: &e.card,
+                file,
+            })
+            .collect();
+        let key_id = match self.known_key_id.clone() {
+            Some(id) => id,
+            None => self.answer_key().map(|k| k.key_id).unwrap_or_default(),
+        };
+        Prepared::Ring(Ring {
+            to: group.to.clone(),
+            subject: delivery::ring_subject(&records),
+            body: delivery::ring_body(group.send_id.as_deref(), &records, &key_id),
+            timeout: Duration::from_millis(self.timing.ring_ms),
+            ids: live.iter().map(|e| e.id.clone()).collect(),
+        })
+    }
+
+    /// After one ring: each of its records' doorbell step.
+    pub fn finish_ring(&mut self, ring: &Ring, result: &RingResult) {
+        for id in &ring.ids {
+            self.record_step(
+                id,
+                StepName::Doorbell,
+                if result.ok { "done" } else { "failed" },
+                &result.detail,
+            );
+        }
+    }
+
+    /// The pass is over: its claims go.
+    pub fn release_rings(&mut self, claim: RingClaim) {
+        for group in claim.groups {
+            for id in group.ids {
+                self.ringing.remove(&id);
             }
-            if self.writer().is_err() {
-                break;
-            }
-            let live: Vec<HistoryEntry> = group_ids
-                .iter()
-                .filter_map(|id| self.entry(id).cloned())
-                .filter(|e| e.doorbell.state != "done" && e.doorbell.state != "skipped")
-                .collect();
-            if live.is_empty() {
+        }
+    }
+
+    /// `retryPending`'s first half: the share writes and summaries still owed. None when
+    /// another pass runs or another process holds the store (its history is read again).
+    /// The caller rings `rings` within the budget, then calls [`Self::end_retry`].
+    pub fn begin_retry(&mut self) -> Option<(Budget, Vec<String>)> {
+        if self.retrying {
+            return None;
+        }
+        if self.writer().is_err() {
+            let _ = self.ensure_list();
+            return None;
+        }
+        self.retrying = true;
+        let budget = Budget::start(self.timing.retry_budget_ms);
+        let ids: Vec<String> = self
+            .list()
+            .map(|all| all.iter().map(|e| e.id.clone()).collect())
+            .unwrap_or_default();
+        for id in &ids {
+            let wanted = |engine: &Self| engine.entry(id).is_some_and(|e| e.share.retryable());
+            if !wanted(self) {
                 continue;
             }
-            let files: Vec<String> = live
-                .iter()
-                .map(|e| delivery::share_file_name(&e.answer, &e.id))
-                .collect();
-            let records: Vec<SentRecord<'_>> = live
-                .iter()
-                .zip(&files)
-                .map(|(e, file)| SentRecord {
-                    answer: &e.answer,
-                    card: &e.card,
-                    file,
-                })
-                .collect();
-            let key_id = match self.known_key_id.clone() {
-                Some(id) => id,
-                None => self.answer_key().map(|k| k.key_id).unwrap_or_default(),
-            };
-            let subject = delivery::ring_subject(&records);
-            let body = delivery::ring_body(send_id.as_deref(), &records, &key_id);
-            let timeout = Duration::from_millis(self.timing.ring_ms);
-            let result = self.host.ring(&to, &subject, &body, timeout);
-            let ids: Vec<String> = live.iter().map(|e| e.id.clone()).collect();
-            for id in ids {
-                self.record_step(
-                    &id,
-                    StepName::Doorbell,
-                    if result.ok { "done" } else { "failed" },
-                    &result.detail,
-                );
+            let limit = self.timing.share_ms.min(budget.left());
+            if wanted(self) && limit > 0 {
+                self.write_share(id, limit);
             }
         }
-        for id in claimed {
-            self.ringing.remove(&id);
+        let send_ids: Vec<String> = self
+            .send_list()
+            .map(|s| s.into_iter().map(|s| s.send_id).collect())
+            .unwrap_or_default();
+        for send_id in &send_ids {
+            let wanted = |engine: &Self| {
+                let step = engine.step_of(send_id, StepName::Summary);
+                step.state != "done" && step.attempts < MAX_DELIVERY_ATTEMPTS
+            };
+            if !wanted(self) {
+                continue;
+            }
+            let limit = self.timing.share_ms.min(budget.left());
+            if wanted(self) && limit > 0 {
+                self.write_summary(send_id, limit);
+            }
         }
+        let rings: Vec<String> = self
+            .list()
+            .map(|all| {
+                all.iter()
+                    .filter(|e| e.doorbell.retryable())
+                    .map(|e| e.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some((budget, rings))
+    }
+
+    /// `retryPending` is over.
+    pub fn end_retry(&mut self) {
+        self.retrying = false;
     }
 
     // ---- sends ----
@@ -2541,57 +2686,11 @@ impl AnswersEngine {
     /// `retryPending`: every share write, send summary and ring that has not succeeded and has
     /// attempts left. Another process's store: its history is read again if it changed.
     pub fn retry_pending(&mut self) {
-        if self.retrying {
+        let Some((budget, rings)) = self.begin_retry() else {
             return;
-        }
-        if self.writer().is_err() {
-            let _ = self.ensure_list();
-            return;
-        }
-        self.retrying = true;
-        let budget = Budget::start(self.timing.retry_budget_ms);
-        let ids: Vec<String> = self
-            .list()
-            .map(|all| all.iter().map(|e| e.id.clone()).collect())
-            .unwrap_or_default();
-        for id in &ids {
-            let wanted = |engine: &Self| engine.entry(id).is_some_and(|e| e.share.retryable());
-            if !wanted(self) {
-                continue;
-            }
-            let limit = self.timing.share_ms.min(budget.left());
-            if wanted(self) && limit > 0 {
-                self.write_share(id, limit);
-            }
-        }
-        let send_ids: Vec<String> = self
-            .send_list()
-            .map(|s| s.into_iter().map(|s| s.send_id).collect())
-            .unwrap_or_default();
-        for send_id in &send_ids {
-            let wanted = |engine: &Self| {
-                let step = engine.step_of(send_id, StepName::Summary);
-                step.state != "done" && step.attempts < MAX_DELIVERY_ATTEMPTS
-            };
-            if !wanted(self) {
-                continue;
-            }
-            let limit = self.timing.share_ms.min(budget.left());
-            if wanted(self) && limit > 0 {
-                self.write_summary(send_id, limit);
-            }
-        }
-        let rings: Vec<String> = self
-            .list()
-            .map(|all| {
-                all.iter()
-                    .filter(|e| e.doorbell.retryable())
-                    .map(|e| e.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        };
         self.ring_groups(&rings, Some(&budget));
-        self.retrying = false;
+        self.end_retry();
     }
 }
 

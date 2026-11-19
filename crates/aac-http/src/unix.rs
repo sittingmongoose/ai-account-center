@@ -99,6 +99,8 @@ struct Shared {
     status_owned: Option<Arc<crate::status_owned::StatusOwned>>,
     /// R4: the owned Scoreboard, when the boot carries its config.
     scoreboard_owned: Option<Arc<crate::scoreboard_owned::ScoreboardOwned>>,
+    /// G16b: the answer store's writer, with the owned Status readers.
+    answers_owned: Option<Arc<crate::answers_owned::AnswersOwned>>,
 }
 
 #[derive(Clone)]
@@ -154,7 +156,9 @@ impl Boot {
                 Err(error) => last = Some(error),
             }
         }
-        Err(last.unwrap_or_else(|| serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, "invalid boot"))))
+        Err(last.unwrap_or_else(|| {
+            serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, "invalid boot"))
+        }))
     }
 
     /// Each registry row's writer for this boot. A map that names another row set, or gives a
@@ -597,6 +601,25 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // G16b: one forwarded send, recorded by the service's answer store.
+        Handler::StatusAnswers => {
+            let Some(owner) = shared.answers_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let query = req.uri().query().is_some();
+            let Ok(bytes) = to_bytes(req.into_body(), crate::answers_owned::SEND_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if query {
+                return decline(row.handler, Decline::Shape);
+            }
+            match owner.submit(&bytes).await {
+                Ok(value) => Json(value).into_response(),
+                Err("shape") => decline(row.handler, Decline::Shape),
+                // Started and failed: not a decline (the front door must not record it again).
+                Err(_) => store_error("answers_failed: the answer store could not finish"),
+            }
+        }
         // R4: the owned Scoreboard input the front door computes the facts over.
         Handler::ScoreboardInputs => {
             let Some(owner) = shared.scoreboard_owned.clone() else {
@@ -710,17 +733,15 @@ pub async fn serve(
     ));
     let check_flushing = Arc::new(AtomicBool::new(false));
     let status_owned = match (&boot.owned, &store) {
-        (Some(owned), Some(host)) if owned.status => {
-            Some(crate::status_owned::StatusOwned::new(
-                owned.reports_root.clone(),
-                owned.registry_dir.clone(),
-                Arc::clone(host),
-                feeds.clone(),
-                owners.clone(),
-                Arc::clone(&check),
-                Arc::clone(&check_flushing),
-            ))
-        }
+        (Some(owned), Some(host)) if owned.status => Some(crate::status_owned::StatusOwned::new(
+            owned.reports_root.clone(),
+            owned.registry_dir.clone(),
+            Arc::clone(host),
+            feeds.clone(),
+            owners.clone(),
+            Arc::clone(&check),
+            Arc::clone(&check_flushing),
+        )),
         _ => None,
     };
     let scoreboard_owned = match (&boot.owned, &store) {
@@ -736,6 +757,14 @@ pub async fn serve(
         }
         _ => None,
     };
+    // G16b: the answer store moves with the owned Status group.
+    let answers_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(_)) if owned.status => Some(crate::answers_owned::AnswersOwned::new(
+            boot.ccs_dir.clone(),
+            owned.reports_root.clone(),
+        )),
+        _ => None,
+    };
     let owned_reports_root = boot.owned.as_ref().map(|owned| owned.reports_root.clone());
     let state = AppState(Arc::new(Shared {
         boot,
@@ -746,6 +775,7 @@ pub async fn serve(
         store: store.clone(),
         status_owned: status_owned.clone(),
         scoreboard_owned: scoreboard_owned.clone(),
+        answers_owned: answers_owned.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -793,6 +823,11 @@ pub async fn serve(
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { crate::status_owned::jobs(jobs, stop).await });
     }
+    if let Some(owner) = &answers_owned {
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::answers_owned::jobs(jobs, stop).await });
+    }
     if let Some(owner) = &scoreboard_owned {
         let seeder = Arc::clone(owner);
         let root = owned_reports_root.clone().expect("scoreboard owner");
@@ -822,6 +857,9 @@ pub async fn serve(
         .with_graceful_shutdown(shutdown)
         .await;
     jobs_stop.store(true, Ordering::Release);
+    if let Some(owner) = answers_owned {
+        let _ = tokio::task::spawn_blocking(move || owner.close()).await;
+    }
     if let Some(host) = store {
         let _ = tokio::task::spawn_blocking(move || host.close_engine()).await;
     }
