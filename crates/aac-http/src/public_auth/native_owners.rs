@@ -445,7 +445,6 @@ impl NativeOwners {
         self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
-    #[cfg(unix)]
     pub(super) fn owns_collection(method: &Method, path: &str) -> bool {
         let path = path.trim_end_matches('/');
         Self::dashboard_route(method, path) || recheck::route(method, path).is_some()

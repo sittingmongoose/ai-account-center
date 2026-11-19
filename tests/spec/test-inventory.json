@@ -864,9 +864,10 @@
     },
     {
       "file": "crates/aac-http/tests/native_public_collection.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "crates/aac-http/tests/profile_reads.rs",

@@ -296,3 +296,147 @@ async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker
             .success()
     );
 }
+
+#[tokio::test]
+async fn collection_off_routes_only_accounts_and_recheck_to_the_worker() {
+    for env_override in [false, true] {
+        worker_serves_disabled_collection(env_override).await;
+    }
+}
+
+async fn worker_serves_disabled_collection(env_override: bool) {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let password = "fixture-public-password";
+    file(
+        &root,
+        "config.yaml",
+        json!({
+            "dashboard_auth":{"enabled":true,"username":"fixture-admin",
+                "password_hash":bcrypt::hash(password, 4).unwrap()},
+            "rustService":{"groups":{"collection":if env_override {"on"} else {"off"}}}
+        }),
+    );
+    let script = root.join("worker.js");
+    fs::write(&script, r#"
+        const http = require('node:http');
+        const readline = require('node:readline');
+        const input = readline.createInterface({input: process.stdin});
+        input.once('line', proof => {
+            const server = http.createServer((req, res) => {
+                const context = JSON.parse(Buffer.from(req.headers['x-aac-compose-access'], 'base64url'));
+                if (req.headers['x-aac-compose-proof'] !== proof ||
+                    context.principal.kind !== 'session' ||
+                    process.env.AAC_CUT_WORKER_COLLECTION !== '1') {
+                    res.writeHead(403).end();
+                    return;
+                }
+                res.writeHead(200, {'Content-Type': 'application/json'});
+                res.end(JSON.stringify({from: 'worker', method: req.method, path: req.url}));
+            }).listen(0, '127.0.0.1', () => {
+                console.log(JSON.stringify({sidecar:1,port:server.address().port}));
+            });
+            input.once('close', () => server.close());
+        });
+    "#).unwrap();
+
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = socket.local_addr().unwrap();
+    drop(socket);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ai-account-center"));
+    command
+        .args(["dashboard", "--no-open", "--host", "127.0.0.1", "--port"])
+        .arg(address.port().to_string())
+        .env("CCS_HOME", &root)
+        .env("CCS_DIR", &root)
+        .env("AAC_TS_SIDECAR", &script)
+        .env("AAC_AGENT_TRANSPORT", "off")
+        .env("AAC_RUST_GROUP_HOME", "off")
+        .env("AAC_RUST_GROUP_USAGESNAPSHOT", "off")
+        .env("AAC_RUST_GROUP_ANALYTICS_WRITERS", "off")
+        .env("AAC_RUST_CUT_NATIVE_ROUTES", "on")
+        .env_remove("AAC_RUST_GROUP_COLLECTION")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true);
+    if env_override {
+        command.env("AAC_RUST_GROUP_COLLECTION", "off");
+    }
+    let mut child = command.spawn().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(line) = output.next_line().await.unwrap() {
+            if line == format!("aac-http public listening on {address}") {
+                return;
+            }
+        }
+        panic!("public fixture exited before listening");
+    })
+    .await
+    .unwrap();
+
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let base = format!("http://{address}");
+    let login = client
+        .post(format!("{base}/api/auth/login"))
+        .header(header::ORIGIN, &base)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(json!({"username":"fixture-admin","password":password}).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for (method, path) in [
+        (
+            reqwest::Method::GET,
+            "/api/accounts/dashboard?platform=windows",
+        ),
+        (reqwest::Method::HEAD, "/api/accounts/dashboard"),
+        (reqwest::Method::POST, "/api/accounts/fixture:usage/recheck"),
+    ] {
+        let response = client
+            .request(method.clone(), format!("{base}{path}"))
+            .header(header::COOKIE, cookie)
+            .header(header::ORIGIN, &base)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(if method == reqwest::Method::POST {
+                "{}"
+            } else {
+                ""
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{method} {path}");
+        if method == reqwest::Method::HEAD {
+            assert!(response.bytes().await.unwrap().is_empty());
+        } else {
+            let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+            assert_eq!(
+                body,
+                json!({"from":"worker","method":method.as_str(),"path":path})
+            );
+        }
+    }
+    let settings = client
+        .get(format!("{base}/api/accounts/settings"))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        json_reply(settings, StatusCode::OK, true).await,
+        json!({"refreshIntervalSeconds":60})
+    );
+    child.kill().await.unwrap();
+}
