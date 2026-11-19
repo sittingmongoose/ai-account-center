@@ -243,14 +243,14 @@ pub fn windows_open_command(
         )
     };
     let mut command = encode(Vec::new());
-    if let Some(list) = account_list {
-        if list.iter().any(|id| id == profile_id) {
-            // An invalid list, or one past the command-line limit, is left for later.
-            if let Ok(lines) = windows_account_list_script(list) {
-                let with_list = encode(lines);
-                if with_list.len() <= MAX_WINDOWS_COMMAND {
-                    command = with_list;
-                }
+    if let Some(list) = account_list
+        && list.iter().any(|id| id == profile_id)
+    {
+        // An invalid list, or one past the command-line limit, is left for later.
+        if let Ok(lines) = windows_account_list_script(list) {
+            let with_list = encode(lines);
+            if with_list.len() <= MAX_WINDOWS_COMMAND {
+                command = with_list;
             }
         }
     }
@@ -608,10 +608,10 @@ impl ClaudeOpen {
                 Ok(managed) => managed,
                 Err(kind) => {
                     // Only the hold of an Open running now is joined; every other refusal stands.
-                    if kind == OpenErrorKind::HistoryHeld {
-                        if let Some(joined) = running() {
-                            return Ok(Some(joined));
-                        }
+                    if kind == OpenErrorKind::HistoryHeld
+                        && let Some(joined) = running()
+                    {
+                        return Ok(Some(joined));
                     }
                     return Err(kind);
                 }

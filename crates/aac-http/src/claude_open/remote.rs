@@ -36,7 +36,7 @@ pub struct AgentRemote {
 
 impl AgentRemote {
     /// A boundary for one boot; the package root is the trusted front door's, never a request's.
-    pub fn new(agents: Arc<Agents>, package_root: PathBuf) -> Self {
+    pub(crate) fn new(agents: Arc<Agents>, package_root: PathBuf) -> Self {
         Self {
             agents,
             package_root,
@@ -127,8 +127,8 @@ impl HelperCall for AgentRemote {
             }
             // The verb attempt covers exactly the three read modes the TS adapter attempts;
             // every other mode keeps the packaged Python/Node writer on the reference path.
-            if matches!(mode, "collect" | "closed-check" | "protected-check") {
-                if let Some(value) = self
+            if matches!(mode, "collect" | "closed-check" | "protected-check")
+                && let Some(value) = self
                     .agents
                     .call_value(
                         "claude-history",
@@ -139,11 +139,9 @@ impl HelperCall for AgentRemote {
                         1024 * 1024,
                     )
                     .await
-                {
-                    if history_reply_valid(mode, profile_id, platform, &value) {
-                        return serde_json::to_vec(&value).map_err(|_| ());
-                    }
-                }
+                && history_reply_valid(mode, profile_id, platform, &value)
+            {
+                return serde_json::to_vec(&value).map_err(|_| ());
             }
             // The reference bootstrap: private data and sources travel in the SSH stdin pipe.
             let argv = reference_helper_argv(platform, &input)?;
