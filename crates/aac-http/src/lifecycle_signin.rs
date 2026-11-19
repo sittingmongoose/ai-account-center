@@ -163,6 +163,7 @@ pub fn agent_start(ccs: &Path, input: &str) -> Option<(u64, Value)> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn antigravity_driver_reaches_the_agent_as_printable_argv_without_altering_the_program() {
         let program = "import sys\nassert sys.argv[1] == 'fixture'\n";
@@ -183,23 +184,39 @@ mod tests {
         assert_eq!(command.args[4], "fixture");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn the_unix_antigravity_driver_is_refused_on_windows() {
+        let command = Command {
+            file: "/usr/bin/python3".into(),
+            args: vec!["-c".into(), "import sys\n".into()],
+            env: Default::default(),
+            pty: false,
+        };
+        assert!(command.bind("antigravity").is_none());
+    }
+
     #[test]
     fn lifecycle_uses_one_boot_scoped_journal_even_for_a_muse_job() {
+        let (root, ssh) = if cfg!(windows) {
+            (r"C:\fixture\ccs", r"C:\fixture\ssh.exe")
+        } else {
+            ("/fixture/ccs", "/fixture/ssh")
+        };
         let mut request = json!({
             "jobId":"job_0123456789abcdef","frontDoorPid":42,"provider":"muse",
             "kind":"device-code","mode":"signin-again","accountId":"muse:usage",
             "profileName":"muse:usage","platform":"mac",
             "allowedOrigins":["https://auth.meta.com"],"timeoutMs":300000,
-            "command":{"file":"/fixture/ssh","args":[],"env":{},"pty":false}
+            "command":{"file":ssh,"args":[],"env":{},"pty":false}
         });
-        let root = Path::new("/fixture/ccs");
         let (deadline, wire) =
-            agent_start(root, &request.to_string()).expect("valid prepared flow");
+            agent_start(Path::new(root), &request.to_string()).expect("valid prepared flow");
         assert_eq!(deadline, 360_000);
-        assert_eq!(wire["ccs"], "/fixture/ccs");
+        assert_eq!(wire["ccs"], root);
         assert_eq!(wire["action"], "start");
         assert_eq!(wire["platform"], "mac");
         request["ccs"] = json!("/another/journal");
-        assert!(agent_start(root, &request.to_string()).is_none());
+        assert!(agent_start(Path::new(root), &request.to_string()).is_none());
     }
 }
