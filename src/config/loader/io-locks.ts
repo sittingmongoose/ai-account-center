@@ -82,7 +82,7 @@ function deadClaim(content: string): boolean {
 
 function readClaim(lockPath: string): string {
   const stat = fs.lstatSync(lockPath);
-  if (!stat.isFile() || stat.size > 1024) throw new Error('Invalid config writer claim.');
+  if (!stat.isFile() || stat.size > 1024) throw new ConfigError('Invalid config writer claim.');
   return fs.readFileSync(lockPath, 'utf8');
 }
 
@@ -211,7 +211,7 @@ export function withConfigWriteLock<T>(callback: () => T): T {
   }
 
   if (!lockToken) {
-    throw new Error('Config file is locked by another process. Wait a moment and try again.');
+    throw new ConfigError('Config file is locked by another process. Wait a moment and try again.');
   }
 
   try {
@@ -246,7 +246,7 @@ export function loadUnifiedConfigWithLockHeld(
   const parsed = yaml.load(content);
 
   if (!isUnifiedConfig(parsed)) {
-    throw new Error(`Invalid config format in ${yamlPath}`);
+    throw new ConfigError(`Invalid config format in ${yamlPath}`);
   }
 
   return mergeWithDefaults(parsed);
@@ -338,9 +338,9 @@ export function writeUnifiedConfigWithLockHeld(
       );
     }
     if (err.code === 'ENOSPC') {
-      throw new Error('Disk full - cannot save config. Free up space and try again.');
+      throw new ConfigError('Disk full - cannot save config. Free up space and try again.');
     } else if (err.code === 'EROFS' || err.code === 'EACCES') {
-      throw new Error(`Cannot write config - check file permissions: ${err.message}`);
+      throw new ConfigError(`Cannot write config - check file permissions: ${err.message}`);
     }
     throw error;
   }
