@@ -46,11 +46,13 @@ export function antigravityPlanFacts(account) {
   if (!Array.isArray(plan?.models)) return [];
   const models = plan.models.filter(model => typeof model === 'string');
   const versions = [...new Set(models.flatMap(model => model.match(/^Claude (?:Sonnet|Opus) (\d+\.\d+)$/)?.[1] || []))].sort();
+  const orchestrator = model => /^Orchestrator \(.+\)$/.test(model);
   const groups = [
     ...(models.some(model => model.startsWith('Gemini ')) ? ['Gemini'] : []),
+    ...(models.some(orchestrator) ? ['Orchestrator'] : []),
     ...(versions.length ? [`Claude ${versions.join('/')}`] : []),
     ...(models.includes('GPT-OSS-120B') ? ['GPT-OSS'] : []),
-    ...models.filter(model => !model.startsWith('Gemini ') && !/^Claude (?:Sonnet|Opus) \d+\.\d+$/.test(model) && model !== 'GPT-OSS-120B'),
+    ...models.filter(model => !model.startsWith('Gemini ') && !orchestrator(model) && !/^Claude (?:Sonnet|Opus) \d+\.\d+$/.test(model) && model !== 'GPT-OSS-120B'),
   ];
   return [{ label: 'Models', value: groups.length === 1 && groups[0] === 'Gemini' ? 'Gemini only' : groups.join('; ') || 'None', mono: false }];
 }

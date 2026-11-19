@@ -121,9 +121,11 @@ test('an extra pool another account reports reads Not reported, never Unavailabl
     status: 'cached',
     sampledAt: new Date(now - 3 * 86400000).toISOString(),
   };
-  const cachedWindows = account('cached-windows', { quotaPolicy: 'weekly', thirdPartyModels: false }, [
-    { ...window('gemini-weekly', 0), status: 'cached', cached: true },
-  ]);
+  const cachedWindows = account(
+    'cached-windows',
+    { quotaPolicy: 'weekly', thirdPartyModels: false },
+    [{ ...window('gemini-weekly', 0), status: 'cached', cached: true }]
+  );
   const v = section([pro, free, failed, cached, cachedWindows]);
   const at = v.columns.findIndex((column) => column.key === 'gemini-argon-wtu-weekly');
   assert.equal(v.columns[at].label, 'Gemini 4 Argon · Weekly');
@@ -211,3 +213,32 @@ test('details carry optional plan summary, models, overage hint and family note 
   );
 });
 
+test('details group the 2026-11-19 Ultra models, Orchestrators included, under short names', () => {
+  const plan = {
+    class: 'ultra',
+    quotaPolicy: 'five-hour-weekly',
+    summary: 'Refreshes every 5 hours up to a weekly limit.',
+    models: [
+      'Gemini 4 Neon',
+      'Gemini 4 Carbon',
+      'Gemini 4 Argon',
+      'Gemini 4 Hydrogen',
+      'Orchestrator (Neon)',
+      'Orchestrator (Carbon)',
+      'Orchestrator (Argon)',
+      'Gemini 3.8 Flash',
+      'Claude Sonnet 5.5',
+      'Claude Opus 5.5',
+      'GPT-OSS-120B',
+    ],
+    thirdPartyModels: true,
+    creditsOverage: true,
+  };
+  const row = account('ultra', plan, [window('gemini-weekly'), window('gemini-5h')]);
+  const v = detailsViewModel(data([row]), row.id, { now });
+  assert.equal(
+    v.facts.find((fact) => fact.label === 'Models').value,
+    'Gemini; Orchestrator; Claude 5.5; GPT-OSS'
+  );
+  assert.ok(v.note.replace(/\s+/g, ' ').includes('Orchestrator (Carbon)'));
+});

@@ -226,9 +226,7 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
           account.windows[0].poolId === POOL_ID && account.windows[0].poolIdSource === 'provider-id'
       )
     ).toBe(true);
-    expect(
-      accounts.every((account) => account.isActive === false)
-    ).toBe(true);
+    expect(accounts.every((account) => account.isActive === false)).toBe(true);
     expect(quotaCalls).toEqual(['gmail', 'party']);
     const output = JSON.stringify({ inventory, accounts });
     for (const value of [

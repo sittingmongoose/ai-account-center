@@ -1,9 +1,17 @@
-/** Antigravity coding plans, 2026-10-07. Keep labels, policies and model availability here.
+/** Antigravity coding plans, 2026-11-19. Keep labels, policies and model availability here.
+ * Source: antigravity.google/docs/models, /docs/plans, /docs/workspace and /docs/enterprise, read
+ * 2026-11-19; the dated table with sources is RESEARCH.md in the 2026-11-19-plan-tiers share folder.
  * loadCodeAssist fields/legacy IDs: google-gemini/gemini-cli, packages/core/src/code_assist/types.ts.
  * AAC fixture/history: planInfo.planType = pro (6298e60a, 9cf75fbe); generic tiers are ambiguous.
+ * The plan always comes from the latest successful reading; nothing here is a configured label.
+ * Quota windows are never taken from this table: they are what Google reports on each read.
  * 2026-11-13 quota reads: Google AI Pro lists Gemini 4 Argon with its own weekly bucket and
  * Gemini 4 Hydrogen in the Gemini Models windows (same reset and fraction); the free tier,
  * now named "Antigravity Starter Quota", lists neither.
+ * 2026-11-18: Gemini 4 Neon and Orchestrator (Neon) launched on paid Pro, Ultra and Enterprise.
+ * Claude Sonnet/Opus 4.6 and GPT-OSS-120b: the docs still say "removed on November 18", but the
+ * Free account reports its Claude and GPT bucket on Nov 19 and users report a move to Nov 30, so
+ * they are listed until the end of Nov 30.
  */
 export interface AntigravityPlan {
   class?: AntigravityPlanClass;
@@ -25,7 +33,31 @@ export function cloneAntigravityPlan(plan: AntigravityPlan): AntigravityPlan {
   return { ...plan, ...(plan.models ? { models: [...plan.models] } : {}) };
 }
 
-const GEMINI_MODELS = [
+const FLASH_MODELS = ['Gemini 3.8 Flash'];
+/** Paid Google AI Pro (not a trial): docs/models, 2026-11-19. */
+const PRO_GEMINI_MODELS = [
+  'Gemini 4 Neon',
+  'Gemini 4 Argon',
+  'Gemini 4 Hydrogen',
+  'Orchestrator (Neon)',
+  'Orchestrator (Argon)',
+  'Gemini 3.8 Flash',
+];
+const ULTRA_GEMINI_MODELS = [
+  'Gemini 4 Neon',
+  'Gemini 4 Carbon',
+  'Gemini 4 Argon',
+  'Gemini 4 Hydrogen',
+  'Orchestrator (Neon)',
+  'Orchestrator (Carbon)',
+  'Orchestrator (Argon)',
+  'Gemini 3.8 Flash',
+];
+const ENTERPRISE_GEMINI_MODELS = [
+  'Gemini 4 Neon',
+  'Gemini 4 Carbon',
+  'Gemini 4 Argon',
+  'Gemini 4 Hydrogen',
   'Gemini 3.8 Flash',
   'Gemini 3.7 Flash',
   'Gemini 3.6 Flash',
@@ -33,12 +65,17 @@ const GEMINI_MODELS = [
 ];
 const RETIRING_MODELS = ['Claude Sonnet 4.6', 'Claude Opus 4.6', 'GPT-OSS-120B'];
 const PAID_CLAUDE_MODELS = ['Claude Sonnet 5.5', 'Claude Opus 5.5'];
-const MODEL_REMOVAL_AT = Date.parse('2026-11-02T00:00:00Z');
+const MODEL_REMOVAL_AT = Date.parse('2026-12-01T00:00:00Z');
 const DUAL_WINDOW = 'Refreshes every 5 hours up to a weekly limit.';
-/** Observed on Google AI Pro only; other paid plans are not verified. */
-const PRO_GEMINI_MODELS = ['Gemini 4 Argon', 'Gemini 4 Hydrogen'];
+const STARTER = 'Weekly quota only; no 5-hour refresh.';
+const POOLS =
+  'Gemini models share one limit that costlier models use up faster; Claude and GPT models have their own.';
 const PRO_POOLS =
-  'Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.';
+  'Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.';
+const TRIAL =
+  'Gemini 4 Neon, Gemini 4 Argon and their Orchestrators only on trials with eligible premium devices; no Gemini 4 Hydrogen or Claude 5.5 during a trial.';
+const POOLED =
+  'Gemini models use pooled edition seat credits; Claude models need administrator opt-in.';
 const NO_QUOTA = 'This plan does not include Antigravity coding quota.';
 
 interface PlanDefinition {
@@ -46,7 +83,7 @@ interface PlanDefinition {
   aliases?: string[];
   quotaPolicy: NonNullable<AntigravityPlan['quotaPolicy']>;
   summary: string;
-  models: 'consumer' | 'paid-consumer' | 'ultra-consumer' | 'gemini' | 'none';
+  models: 'consumer' | 'trial' | 'paid-consumer' | 'ultra-consumer' | 'gemini' | 'flash';
   creditsOverage?: boolean;
 }
 
@@ -55,22 +92,22 @@ const PLANS = {
     label: 'Free',
     aliases: ['free-tier', 'Antigravity Starter Quota'],
     quotaPolicy: 'weekly',
-    summary: 'Weekly quota only; no 5-hour refresh.',
+    summary: STARTER,
     models: 'consumer',
   },
   plus: {
     label: 'Google AI Plus',
     aliases: ['plus'],
     quotaPolicy: 'weekly',
-    summary: 'Weekly quota only; no 5-hour refresh.',
+    summary: STARTER,
     models: 'consumer',
   },
   'pro-trial': {
     label: 'Google AI Pro (trial)',
     aliases: ['pro-trial', 'Google AI Pro trial'],
     quotaPolicy: 'five-hour-weekly',
-    summary: DUAL_WINDOW,
-    models: 'consumer',
+    summary: `${DUAL_WINDOW} ${TRIAL}`,
+    models: 'trial',
   },
   pro: {
     label: 'Google AI Pro',
@@ -84,7 +121,7 @@ const PLANS = {
     label: 'Google AI Ultra',
     aliases: ['ultra', 'Gemini Code Assist in Google One AI Ultra'],
     quotaPolicy: 'five-hour-weekly',
-    summary: DUAL_WINDOW,
+    summary: `${DUAL_WINDOW} ${POOLS}`,
     models: 'ultra-consumer',
     creditsOverage: true,
   },
@@ -92,7 +129,7 @@ const PLANS = {
     label: 'Google AI Ultra 5x',
     aliases: ['ultra-5x'],
     quotaPolicy: 'five-hour-weekly',
-    summary: '5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.',
+    summary: `5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. ${POOLS}`,
     models: 'ultra-consumer',
     creditsOverage: true,
   },
@@ -100,20 +137,20 @@ const PLANS = {
     label: 'Google AI Ultra 20x',
     aliases: ['ultra-20x'],
     quotaPolicy: 'five-hour-weekly',
-    summary: '20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.',
+    summary: `20x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit. ${POOLS}`,
     models: 'ultra-consumer',
     creditsOverage: true,
   },
   'enterprise-standard': {
     label: 'Gemini Enterprise Standard',
     quotaPolicy: 'pooled-7d',
-    summary: 'Gemini models use a rolling 7-day shared project credit pool.',
+    summary: POOLED,
     models: 'gemini',
   },
   'enterprise-plus': {
     label: 'Gemini Enterprise Plus',
     quotaPolicy: 'pooled-7d',
-    summary: 'Gemini models use a rolling 7-day shared project credit pool.',
+    summary: POOLED,
     models: 'gemini',
   },
   'enterprise-emerging': {
@@ -139,14 +176,14 @@ const PLANS = {
     quotaPolicy: 'none',
     summary:
       'This plan includes separate Gemini CLI quota that AAC does not read; no Antigravity coding quota.',
-    models: 'gemini',
+    models: 'flash',
   },
   'code-assist-enterprise': {
     label: 'Gemini Code Assist Enterprise',
     quotaPolicy: 'none',
     summary:
       'This plan includes separate Gemini CLI quota that AAC does not read; no Antigravity coding quota.',
-    models: 'gemini',
+    models: 'flash',
   },
   workspace: {
     label: 'Google Workspace',
@@ -164,9 +201,9 @@ const PLANS = {
       'Workspace Enterprise Standard',
       'Workspace Enterprise Plus',
     ],
-    quotaPolicy: 'none',
-    summary: NO_QUOTA,
-    models: 'none',
+    quotaPolicy: 'weekly',
+    summary: `Antigravity Starter Quota: ${STARTER} Workspace plans add no higher limits or AI credits.`,
+    models: 'consumer',
   },
 } satisfies Record<string, PlanDefinition>;
 
@@ -209,22 +246,26 @@ export function antigravityPlanDisplay(
   const beforeRemoval = (Number.isFinite(observed) ? observed : Date.now()) < MODEL_REMOVAL_AT;
   const thirdParty = [
     ...(['paid-consumer', 'ultra-consumer'].includes(definition.models) ? PAID_CLAUDE_MODELS : []),
-    ...(beforeRemoval && ['consumer', 'paid-consumer'].includes(definition.models)
+    ...(beforeRemoval && ['consumer', 'trial', 'paid-consumer'].includes(definition.models)
       ? RETIRING_MODELS
       : []),
     ...(beforeRemoval && definition.models === 'ultra-consumer' ? ['GPT-OSS-120B'] : []),
   ];
+  const gemini =
+    definition.models === 'paid-consumer'
+      ? PRO_GEMINI_MODELS
+      : definition.models === 'ultra-consumer'
+        ? ULTRA_GEMINI_MODELS
+        : definition.models === 'gemini'
+          ? ENTERPRISE_GEMINI_MODELS
+          : FLASH_MODELS;
   return {
     plan: definition.label,
     antigravityPlan: {
       class: planClass,
       quotaPolicy: definition.quotaPolicy,
       summary: definition.summary,
-      models: [
-        ...(definition.models === 'none' ? [] : GEMINI_MODELS),
-        ...(planClass === 'pro' ? PRO_GEMINI_MODELS : []),
-        ...thirdParty,
-      ],
+      models: [...gemini, ...thirdParty],
       thirdPartyModels: thirdParty.length > 0,
       creditsOverage: definition.creditsOverage === true,
     },

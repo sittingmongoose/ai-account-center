@@ -261,6 +261,28 @@ class PlanUsageTests(unittest.TestCase):
         self.assertIsNone(common.plan_label("private-key"))
         self.assertIsNone(common.plan_label("sk-" + "secret" * 10))
 
+    def test_a_plan_the_table_does_not_list_keeps_the_provider_name(self):
+        for raw, expected in (("PRO", "pro"), ("Coder", "Coder"), ("max_plus", "max plus"),
+                              ("Token Plan Pro", "Token Plan Pro"), ("Pro 2", "Pro 2")):
+            self.assertEqual(common.plan_label(raw), expected)
+        for raw in ("", " pro", "pro ", "a b c d", "x" * 17, "Plan 20261119", "Pro (Monthly)",
+                    "专业版", "sk_" + "a" * 40):
+            self.assertIsNone(common.plan_label(raw), raw)
+
+    def test_kimi_zai_and_qwen_follow_a_plan_change_between_two_reads(self):
+        kimi = lambda level: usage.parse_kimi({"version": "GOODS_VERSION_V2", "user": {"membership": {"level": level}},
+                                               "usage": {"limit": 100, "used": 25, "resetTime": "2026-11-20T00:00:00Z"}})[0]
+        self.assertEqual([kimi("LEVEL_BASIC"), kimi("LEVEL_ADVANCED")], ["Basic", "Advanced"])
+        self.assertEqual(kimi("LEVEL_ULTRA_MAX"), "Ultra Max")
+        self.assertIsNone(kimi("LEVEL_lowercase"))
+        self.assertIsNone(kimi(None))
+        zai = lambda level: usage.parse_zai({"success": True, "code": 200, "data": {"level": level, "limits": [
+            {"type": "TOKENS_LIMIT", "number": 5, "unit": 3, "usage": 100, "currentValue": 25,
+             "nextResetTime": "2026-11-20T00:00:00Z"}]}})[0]
+        self.assertEqual([zai("lite"), zai("pro"), zai("max")], ["lite", "pro", "max"])
+        self.assertEqual(zai("Coder"), "Coder")
+        self.assertIsNone(zai(None))
+
     def test_optional_metadata_keeps_expiration_separate_from_reset(self):
         window = common.usage_window("test", "Test", reset=1790899200, remaining=0,
                                      expires_at=1790985600000, kind="balance", enabled=False, unlimited=True)

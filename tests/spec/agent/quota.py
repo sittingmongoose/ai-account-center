@@ -109,6 +109,13 @@ def main():
                 variants = [('success', response(payload)), ('401', (401, {}, b'private')), ('403', (403, {}, b'private')), ('500', (500, {}, b'private')), ('timeout', ('timeout', {}, b'')), ('malformed', (200, {}, b'{')), ('oversized', (200, {}, b'x' * (common.MAX_BYTES + 1))), ('array', response([]))]
                 variants += [('retry-' + str(i), (429, {'Retry-After': value}, b'private')) for i, value in enumerate(['0', '30', '999999999999', 'Thu, 01 Jan 2026 01:00:00 GMT', 'nonsense', '1.5', '-2'])]
                 variants += [('unicode', response({'usage': {'weekly': {'used': '\u0085'}}})), ('fraction', response({'usage': {'used': 0.5, 'limit': 1}}))]
+                # A plan the table does not list yet: Python and Rust keep the same provider name.
+                if provider == 'kimi-code':
+                    variants += [('level-' + level, response({**KIMI, 'version': 'GOODS_VERSION_V2', 'user': {'membership': {'level': level}}}))
+                                 for level in ('LEVEL_ADVANCED', 'LEVEL_ULTRA_MAX', 'LEVEL_lower', 'LEVEL_A_B_C_D')]
+                if provider == 'zai':
+                    variants += [('level-' + str(i), response({**ZAI, 'data': {**ZAI['data'], 'level': level}}))
+                                 for i, level in enumerate(('max', 'Coder', 'max_plus', 'Pro 2', ' pro', 'Plan 20261119', 'x' * 17, 'sk-' + 'a' * 40))]
                 for name, first in variants:
                     replies = [first] + ([response(PACKS)] if provider == 'zai' else [])
                     Handler.queue = replies.copy()

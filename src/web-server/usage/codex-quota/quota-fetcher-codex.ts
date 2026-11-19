@@ -706,16 +706,15 @@ async function runCodexUsageFetch(
         if (credits) extras.resetCredits.credits = credits;
       }
 
-      // Extract plan type
+      // The plan exactly as Codex names it now (free, go, plus, pro, prolite, team, business,
+      // enterprise, edu and any later tier), as one bounded lowercase token. Anything else is
+      // unknown, never mapped to a guessed plan.
       const planTypeRaw = data.plan_type || data.planType;
-      let planType: 'free' | 'plus' | 'pro' | 'team' | null = null;
-      if (planTypeRaw) {
-        const normalized = planTypeRaw.toLowerCase();
-        if (normalized === 'free') planType = 'free';
-        else if (normalized === 'plus') planType = 'plus';
-        else if (normalized === 'pro') planType = 'pro';
-        else if (normalized === 'team') planType = 'team';
-      }
+      const normalizedPlan =
+        typeof planTypeRaw === 'string' ? planTypeRaw.trim().toLowerCase() : '';
+      const planType: string | null = /^[a-z][a-z0-9_-]{0,31}$/.test(normalizedPlan)
+        ? normalizedPlan
+        : null;
 
       if (verbose)
         logger.info('quota.fetch.windows', `Codex windows found: ${windows.length}`, {

@@ -167,6 +167,9 @@ def parse_kimi(payload):
     else:
         plan = {"LEVEL_FREE": "Free", "LEVEL_TRIAL": "Trial", "LEVEL_BASIC": "Basic",
                 "LEVEL_INTERMEDIATE": "Intermediate", "LEVEL_ADVANCED": "Advanced"}.get(level)
+    if plan is None and isinstance(level, str) and re.fullmatch(r"LEVEL_[A-Z]{1,16}(?:_[A-Z]{1,16}){0,2}", level):
+        # A membership level Kimi added after this table: its own words, so an upgrade shows.
+        plan = " ".join(word.capitalize() for word in level[6:].split("_"))
     return plan, _valid_windows(ordered + _kimi_booster(payload))
 
 

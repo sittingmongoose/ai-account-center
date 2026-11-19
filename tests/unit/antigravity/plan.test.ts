@@ -1,11 +1,41 @@
 import { describe, expect, it } from 'bun:test';
 import { antigravityPlanDisplay } from '../../../src/antigravity/plan';
 
-const BEFORE = '2026-11-01T23:59:59Z';
-const AFTER = '2026-11-02T00:00:00Z';
-const GEMINI = ['Gemini 3.8 Flash', 'Gemini 3.7 Flash', 'Gemini 3.6 Flash', 'Gemini 3.1 Pro'];
+const BEFORE = '2026-11-30T23:59:59Z';
+const AFTER = '2026-12-01T00:00:00Z';
+const FLASH = ['Gemini 3.8 Flash'];
+const PRO = [
+  'Gemini 4 Neon',
+  'Gemini 4 Argon',
+  'Gemini 4 Hydrogen',
+  'Orchestrator (Neon)',
+  'Orchestrator (Argon)',
+  'Gemini 3.8 Flash',
+];
+const ULTRA = [
+  'Gemini 4 Neon',
+  'Gemini 4 Carbon',
+  'Gemini 4 Argon',
+  'Gemini 4 Hydrogen',
+  'Orchestrator (Neon)',
+  'Orchestrator (Carbon)',
+  'Orchestrator (Argon)',
+  'Gemini 3.8 Flash',
+];
+const ENTERPRISE = [
+  'Gemini 4 Neon',
+  'Gemini 4 Carbon',
+  'Gemini 4 Argon',
+  'Gemini 4 Hydrogen',
+  'Gemini 3.8 Flash',
+  'Gemini 3.7 Flash',
+  'Gemini 3.6 Flash',
+  'Gemini 3.1 Pro',
+];
+const RETIRING = ['Claude Sonnet 4.6', 'Claude Opus 4.6', 'GPT-OSS-120B'];
+const CLAUDE = ['Claude Sonnet 5.5', 'Claude Opus 5.5'];
 
-describe('Antigravity plan table dated 2026-10-07', () => {
+describe('Antigravity plan table dated 2026-11-19', () => {
   it.each([
     ['free-tier', 'Free', 'free', 'weekly'],
     ['GOOGLE_AI_PLUS', 'Google AI Plus', 'plus', 'weekly'],
@@ -41,7 +71,7 @@ describe('Antigravity plan table dated 2026-10-07', () => {
       'code-assist-enterprise',
       'none',
     ],
-    ['Google Workspace Business Standard', 'Google Workspace', 'workspace', 'none'],
+    ['Google Workspace Business Standard', 'Google Workspace', 'workspace', 'weekly'],
   ])('normalizes %s to %s', (raw, label, planClass, quotaPolicy) => {
     const result = antigravityPlanDisplay(raw, BEFORE);
     expect(result.plan).toBe(label);
@@ -72,43 +102,63 @@ describe('Antigravity plan table dated 2026-10-07', () => {
       expect(antigravityPlanDisplay(raw, BEFORE)).toEqual({ plan: raw });
   });
 
-  it('removes retired models exactly on November 2 using the sample time', () => {
-    for (const plan of ['free', 'plus', 'pro-trial']) {
-      const before = antigravityPlanDisplay(plan, BEFORE).antigravityPlan;
-      expect(before?.models).toEqual([
-        ...GEMINI,
-        'Claude Sonnet 4.6',
-        'Claude Opus 4.6',
-        'GPT-OSS-120B',
-      ]);
-      expect(before?.thirdPartyModels).toBe(true);
-      expect(before?.creditsOverage).toBe(false);
-      const after = antigravityPlanDisplay(plan, AFTER).antigravityPlan;
-      expect(after?.models).toEqual(GEMINI);
-      expect(after?.thirdPartyModels).toBe(false);
-    }
-    for (const plan of ['pro', 'ultra', 'ultra-5x', 'ultra-20x']) {
-      expect(antigravityPlanDisplay(plan, BEFORE).antigravityPlan?.models).toContain(
-        'GPT-OSS-120B'
-      );
-      expect(antigravityPlanDisplay(plan, AFTER).antigravityPlan).toMatchObject({
-        models: [
-          ...GEMINI,
-          ...(plan === 'pro' ? ['Gemini 4 Argon', 'Gemini 4 Hydrogen'] : []),
-          'Claude Sonnet 5.5',
-          'Claude Opus 5.5',
-        ],
+  it("lists each tier's models from the 2026-11-19 model table (Neon launched Nov 18)", () => {
+    const models = (plan: string, at = BEFORE) => antigravityPlanDisplay(plan, at).antigravityPlan;
+    for (const plan of ['free', 'plus', 'Google Workspace'])
+      expect(models(plan)).toMatchObject({
+        models: [...FLASH, ...RETIRING],
+        thirdPartyModels: true,
+        creditsOverage: false,
+        quotaPolicy: 'weekly',
+      });
+    expect(models('pro-trial')).toMatchObject({
+      models: [...FLASH, ...RETIRING],
+      quotaPolicy: 'five-hour-weekly',
+      creditsOverage: false,
+    });
+    expect(models('pro-trial')?.summary).toContain('eligible premium devices');
+    expect(models('pro')).toMatchObject({
+      models: [...PRO, ...CLAUDE, ...RETIRING],
+      thirdPartyModels: true,
+      creditsOverage: true,
+    });
+    for (const plan of ['ultra', 'ultra-5x', 'ultra-20x'])
+      expect(models(plan)).toMatchObject({
+        models: [...ULTRA, ...CLAUDE, 'GPT-OSS-120B'],
         thirdPartyModels: true,
         creditsOverage: true,
+        quotaPolicy: 'five-hour-weekly',
       });
-      if (plan.startsWith('ultra'))
-        expect(antigravityPlanDisplay(plan, BEFORE).antigravityPlan?.models).not.toContain(
-          'Claude Sonnet 4.6'
-        );
+    for (const plan of ['free', 'plus', 'pro-trial', 'pro'])
+      expect(models(plan)?.models).not.toContain('Gemini 4 Carbon');
+    for (const plan of ['free', 'plus', 'pro-trial'])
+      expect(models(plan)?.models).not.toContain('Gemini 4 Neon');
+    expect(models('ultra')?.summary).toContain('Claude and GPT models have their own');
+    expect(models('pro')?.summary).toContain('Gemini 4 Argon has its own weekly limit');
+  });
+
+  it('drops Claude 4.6 and GPT-OSS-120B at the end of Nov 30, by the sample time', () => {
+    for (const plan of ['free', 'plus', 'pro-trial', 'Google Workspace']) {
+      const after = antigravityPlanDisplay(plan, AFTER).antigravityPlan;
+      expect(after?.models).toEqual(FLASH);
+      expect(after?.thirdPartyModels).toBe(false);
+    }
+    expect(antigravityPlanDisplay('pro', AFTER).antigravityPlan?.models).toEqual([
+      ...PRO,
+      ...CLAUDE,
+    ]);
+    for (const plan of ['ultra', 'ultra-5x', 'ultra-20x']) {
+      expect(antigravityPlanDisplay(plan, AFTER).antigravityPlan?.models).toEqual([
+        ...ULTRA,
+        ...CLAUDE,
+      ]);
+      expect(antigravityPlanDisplay(plan, BEFORE).antigravityPlan?.models).not.toContain(
+        'Claude Sonnet 4.6'
+      );
     }
   });
 
-  it('reads the free tier by its current Google name and records Pro Argon and Hydrogen pools (2026-11-13)', () => {
+  it('reads the free tier by its current Google name and shows no plan for an empty tier', () => {
     const free = antigravityPlanDisplay(null, AFTER, {
       paidTier: { id: 'free-tier', name: 'Antigravity Starter Quota' },
       currentTier: { id: 'free-tier', name: 'Antigravity' },
@@ -116,38 +166,65 @@ describe('Antigravity plan table dated 2026-10-07', () => {
     expect(free.plan).toBe('Free');
     expect(free.antigravityPlan).toMatchObject({ class: 'free', quotaPolicy: 'weekly' });
     expect(antigravityPlanDisplay('Antigravity Starter Quota', AFTER).plan).toBe('Free');
-    for (const plan of ['free', 'plus', 'pro-trial', 'ultra'])
-      expect(antigravityPlanDisplay(plan, AFTER).antigravityPlan?.models).not.toContain(
-        'Gemini 4 Hydrogen'
-      );
     const pro = antigravityPlanDisplay(null, AFTER, {
       paidTier: { id: 'g1-pro-tier', name: 'Google AI Pro' },
-    }).antigravityPlan;
-    expect(pro?.models).toEqual(expect.arrayContaining(['Gemini 4 Argon', 'Gemini 4 Hydrogen']));
-    expect(pro?.summary).toContain('Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining)');
-    expect(pro?.summary).toContain('Gemini 4 Argon has its own weekly limit');
+    });
+    expect(pro.plan).toBe('Google AI Pro');
+    // Reported on some Ultra accounts since 2026-11-18: an empty tier is unknown, never guessed.
+    expect(
+      antigravityPlanDisplay(null, AFTER, {
+        paidTier: { id: '', name: '' },
+        currentTier: { id: '', name: '' },
+      })
+    ).toEqual({ plan: null });
   });
 
-  it('keeps enterprise Gemini-only, Code Assist quota separate, Workspace empty and model arrays independent', () => {
+  it('follows an upgrade between two reads with no configuration change', () => {
+    const first = antigravityPlanDisplay(null, BEFORE, {
+      paidTier: { id: 'free-tier', name: 'Antigravity Starter Quota' },
+    });
+    const second = antigravityPlanDisplay(null, BEFORE, {
+      planType: 'pro',
+      paidTier: { id: 'g1-pro-tier', name: 'Google AI Pro' },
+    });
+    const third = antigravityPlanDisplay(null, BEFORE, { planType: 'ULTRA' });
+    expect([first.plan, second.plan, third.plan]).toEqual([
+      'Free',
+      'Google AI Pro',
+      'Google AI Ultra',
+    ]);
+    expect(first.antigravityPlan?.quotaPolicy).toBe('weekly');
+    expect(second.antigravityPlan?.quotaPolicy).toBe('five-hour-weekly');
+    expect(second.antigravityPlan?.models).toContain('Gemini 4 Neon');
+    expect(third.antigravityPlan?.models).toContain('Gemini 4 Carbon');
+  });
+
+  it('keeps enterprise on its Gemini list, Code Assist quota separate and model arrays independent', () => {
     for (const plan of [
       'Gemini Enterprise Standard',
       'Gemini Enterprise Plus',
       'Gemini Enterprise Standard Emerging Market',
       'Gemini Enterprise Pay-as-you-go',
       'Gemini Enterprise Business',
-      'Gemini Code Assist Standard',
-      'Gemini Code Assist Enterprise',
     ]) {
       expect(antigravityPlanDisplay(plan, BEFORE).antigravityPlan).toMatchObject({
-        models: GEMINI,
+        models: ENTERPRISE,
         thirdPartyModels: false,
         creditsOverage: false,
       });
     }
+    for (const plan of ['Gemini Code Assist Standard', 'Gemini Code Assist Enterprise'])
+      expect(antigravityPlanDisplay(plan, BEFORE).antigravityPlan).toMatchObject({
+        models: FLASH,
+        quotaPolicy: 'none',
+        thirdPartyModels: false,
+      });
     expect(
       antigravityPlanDisplay('Gemini Code Assist Standard', BEFORE).antigravityPlan?.summary
     ).toContain('Gemini CLI quota that AAC does not read');
-    expect(antigravityPlanDisplay('Google Workspace', BEFORE).antigravityPlan?.models).toEqual([]);
+    expect(
+      antigravityPlanDisplay('Gemini Enterprise Standard', BEFORE).antigravityPlan?.summary
+    ).toContain('pooled edition seat credits');
     const changed = antigravityPlanDisplay('pro', AFTER);
     changed.antigravityPlan?.models?.push('mutated');
     expect(antigravityPlanDisplay('pro', AFTER).antigravityPlan?.models).not.toContain('mutated');
