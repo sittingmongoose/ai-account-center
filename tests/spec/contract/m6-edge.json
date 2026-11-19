@@ -1,0 +1,983 @@
+{
+  "cli": [
+    {
+      "argv": [
+        "--help"
+      ],
+      "case": "cli: help",
+      "status": 0,
+      "stderr": "",
+      "stdout": "AI Account Center\n\nUsage: ai-account-center <command> [options]\n\nCommands:\n  dashboard      Open the account and usage dashboard\n  codex-auth     Save Codex logins whose usage the dashboard reads\n  antigravity    Add or sign in again to a saved Antigravity profile on Ubuntu\n  bar            Install, launch, or inspect the native account bar\n  help           Show command help\n  version        Show version and installation paths\n\nCompatibility: ccs uses the same commands; config is an alias for dashboard.\nGlobal option: --config-dir PATH selects the existing account configuration directory.\n\nExamples:\n  ai-account-center dashboard --host localhost --port 3000 --no-open\n  ai-account-center dashboard auth setup\n  ai-account-center codex-auth show\n  ai-account-center codex-auth login work\n  ai-account-center antigravity signin party\n  ai-account-center bar version\n\n"
+    },
+    {
+      "argv": [
+        "--version"
+      ],
+      "case": "cli: version and paths",
+      "status": 0,
+      "stderr": "",
+      "stdout": "AI Account Center v8.10.0\nInstallation: <repo>/dist/ccs.js\nAccount configuration: <fixture-home>/.ccs\nConfig: <fixture-home>/.ccs/config.json\nLicense: MIT; derived from CCS by Tam Nhu Tran (Kai).\nRun 'ai-account-center --help' for usage information.\n"
+    },
+    {
+      "argv": [
+        "dashboard",
+        "--help"
+      ],
+      "case": "cli: dashboard help",
+      "status": 0,
+      "stderr": "",
+      "stdout": "\nUsage: ai-account-center dashboard [command] [options]\nCompatibility: ccs config accepts the same arguments.\n\nOpen the account and usage dashboard.\n\nCommands:\n  auth setup         Configure dashboard username and password\n  auth show          Display dashboard authentication status\n  auth disable       Disable dashboard authentication\n  usage-hub status   Show the T3 usage hub state and the URL for T3\n  usage-hub generate --stdout   Create the T3 usage hub key (shown once)\n  usage-hub rotate --stdout     Replace the T3 usage hub key\n  usage-hub off      Turn the T3 usage hub off\n  usage-snapshot set <folder>   Publish account usage for agents into <folder>\n  usage-snapshot status|off     Show or stop the agent usage snapshot\n  proxy status       Show whether the LAN HTTPS reverse proxy is trusted\n  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy\n  proxy off          Stop trusting the LAN HTTPS proxy\n  store status       Show the history store state and last backup\n  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)\n  cursor-key set|status|remove   AAC's Cursor API key (the key on stdin, never printed)\n\nOptions:\n  --port, -p PORT    Server port (default: auto-detect)\n  --host, -H HOST    Bind host (default: localhost)\n  --no-open         Start the server without opening a browser\n  --help, -h        Show this help message\n\nLinux service startup never opens a browser automatically.\n\nExamples:\n  ai-account-center dashboard --host localhost --port 3000 --no-open\n  ai-account-center dashboard auth setup\n\n"
+    },
+    {
+      "argv": [
+        "config",
+        "--help"
+      ],
+      "case": "cli: config is the dashboard alias",
+      "status": 0,
+      "stderr": "",
+      "stdout": "\nUsage: ai-account-center dashboard [command] [options]\nCompatibility: ccs config accepts the same arguments.\n\nOpen the account and usage dashboard.\n\nCommands:\n  auth setup         Configure dashboard username and password\n  auth show          Display dashboard authentication status\n  auth disable       Disable dashboard authentication\n  usage-hub status   Show the T3 usage hub state and the URL for T3\n  usage-hub generate --stdout   Create the T3 usage hub key (shown once)\n  usage-hub rotate --stdout     Replace the T3 usage hub key\n  usage-hub off      Turn the T3 usage hub off\n  usage-snapshot set <folder>   Publish account usage for agents into <folder>\n  usage-snapshot status|off     Show or stop the agent usage snapshot\n  proxy status       Show whether the LAN HTTPS reverse proxy is trusted\n  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy\n  proxy off          Stop trusting the LAN HTTPS proxy\n  store status       Show the history store state and last backup\n  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)\n  cursor-key set|status|remove   AAC's Cursor API key (the key on stdin, never printed)\n\nOptions:\n  --port, -p PORT    Server port (default: auto-detect)\n  --host, -H HOST    Bind host (default: localhost)\n  --no-open         Start the server without opening a browser\n  --help, -h        Show this help message\n\nLinux service startup never opens a browser automatically.\n\nExamples:\n  ai-account-center dashboard --host localhost --port 3000 --no-open\n  ai-account-center dashboard auth setup\n\n"
+    },
+    {
+      "argv": [
+        "update"
+      ],
+      "case": "cli: retired self-update",
+      "status": 1,
+      "stderr": "[X] Upstream CCS self-update is retired in AI Account Center.\n    Update AI Account Center from its own release or checkout.\n    Installed application updates remain available in the dashboard.\n    Use ai-account-center dashboard, codex-auth, bar, or --help.\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "launch",
+        "work"
+      ],
+      "case": "cli: retired profile workflow",
+      "status": 1,
+      "stderr": "[X] \"launch\" is an unsupported command or retired upstream CCS workflow.\n    AI Account Center manages accounts and usage; profile/model CLI launches are retired.\n    Use ai-account-center dashboard, codex-auth, bar, or --help.\n",
+      "stdout": ""
+    },
+    {
+      "argv": [],
+      "case": "cli: retired legacy bin",
+      "status": 1,
+      "stderr": "[X] ccs-droid is a retired upstream CCS launcher.\n    Use ai-account-center dashboard for accounts and usage.\n    Use ai-account-center codex-auth show to inspect saved Codex logins.\n    Use ai-account-center codex-auth activate <saved-login> to activate the shared login.\n    Shell exports, isolated CODEX_HOME launches, Droid routing, and CLIProxy launches are retired.\n",
+      "stdout": ""
+    }
+  ],
+  "http": [
+    {
+      "case": "hub auth-files with a bearer key",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "files": [
+            {
+              "auth_index": "49a9393745dd05c6",
+              "disabled": false,
+              "email": "codex:alpha@example.com",
+              "id": "codex:alpha",
+              "label": "codex:alpha",
+              "provider": "codex",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "3b57faefdc629b5b",
+              "disabled": false,
+              "email": "codex:gamma@example.com",
+              "id": "codex:gamma",
+              "label": "codex:gamma",
+              "provider": "codex",
+              "sampled_at": null,
+              "status": "error",
+              "status_message": "AI Account Center has no current reading for this account.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "034c5a25f188dc4d",
+              "disabled": false,
+              "email": "claude:beta@example.com",
+              "id": "claude:beta",
+              "label": "claude:beta",
+              "provider": "claude",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "claude"
+            }
+          ]
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub auth-files with X-Management-Key",
+      "request": {
+        "headers": {
+          "x-management-key": "<management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "files": [
+            {
+              "auth_index": "49a9393745dd05c6",
+              "disabled": false,
+              "email": "codex:alpha@example.com",
+              "id": "codex:alpha",
+              "label": "codex:alpha",
+              "provider": "codex",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "3b57faefdc629b5b",
+              "disabled": false,
+              "email": "codex:gamma@example.com",
+              "id": "codex:gamma",
+              "label": "codex:gamma",
+              "provider": "codex",
+              "sampled_at": null,
+              "status": "error",
+              "status_message": "AI Account Center has no current reading for this account.",
+              "type": "codex"
+            },
+            {
+              "auth_index": "034c5a25f188dc4d",
+              "disabled": false,
+              "email": "claude:beta@example.com",
+              "id": "claude:beta",
+              "label": "claude:beta",
+              "provider": "claude",
+              "sampled_at": "2026-10-06T12:00:00.000Z",
+              "status": "active",
+              "status_message": "Cached AI Account Center reading.",
+              "type": "claude"
+            }
+          ]
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: Codex usage",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"plan_type\":\"pro\",\"rate_limit\":{\"primary_window\":{\"used_percent\":30,\"reset_at\":1791298800,\"limit_window_seconds\":18000},\"secondary_window\":{\"used_percent\":78,\"reset_at\":1791581532,\"limit_window_seconds\":604800}}}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: Claude usage",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"five_hour\":{\"utilization\":10,\"resets_at\":null},\"seven_day\":{\"utilization\":50,\"resets_at\":\"2026-10-10T00:00:00.000Z\"},\"limits\":[]}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: an account with no reading answers 503 upstream",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "body": "{\"error\":{\"type\":\"no_cached_reading\",\"message\":\"AI Account Center has no current reading for this account.\"}}",
+          "header": {
+            "Content-Type": [
+              "application/json"
+            ]
+          },
+          "status_code": 503
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "hub api-call: an unknown auth_index",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unknown_auth_index",
+          "error": "No account has this auth_index. List auth-files."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "hub api-call: a provider mismatch",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "This usage read does not match the account provider."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: a foreign URL is not proxied",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center answers only the Codex and Claude usage reads T3 makes. It is not a proxy."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: reset credits are refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center does not offer Codex reset credits to T3."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: a write is refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center answers only GET usage reads. It is not a proxy and changes nothing."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub api-call: invalid JSON",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/api-call"
+      },
+      "response": {
+        "body": {
+          "code": "invalid_json",
+          "error": "Invalid JSON in request body"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 400
+      }
+    },
+    {
+      "case": "hub reset-quota is refused",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/v0/management/reset-quota"
+      },
+      "response": {
+        "body": {
+          "code": "unsupported_api_call",
+          "error": "AI Account Center does not reset quotas for T3. It only reports usage."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 403
+      }
+    },
+    {
+      "case": "hub: no key",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "missing_management_key",
+          "error": "A management key is required."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 401
+      }
+    },
+    {
+      "case": "hub: a wrong key",
+      "request": {
+        "headers": {
+          "authorization": "Bearer aacu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "method": "GET",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "invalid_management_key",
+          "error": "The management key is not valid."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 401
+      }
+    },
+    {
+      "case": "hub: a key in the query string is refused",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/v0/management/auth-files?key=<management-key>"
+      },
+      "response": {
+        "body": {
+          "code": "key_in_query",
+          "error": "Send the management key only in a request header."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 400
+      }
+    },
+    {
+      "case": "hub: any other path",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "GET",
+        "path": "/v0/management/other"
+      },
+      "response": {
+        "body": {
+          "code": "not_found",
+          "error": "AI Account Center offers only auth-files and api-call usage reads here."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "hub: a method it does not serve",
+      "request": {
+        "headers": {
+          "authorization": "Bearer <management-key>"
+        },
+        "method": "PUT",
+        "path": "/v0/management/auth-files"
+      },
+      "response": {
+        "body": {
+          "code": "not_found",
+          "error": "AI Account Center offers only auth-files and api-call usage reads here."
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "page: /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "body": {
+          "disk": "app/index.html"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: /app/home",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/home"
+      },
+      "response": {
+        "body": {
+          "disk": "app/index.html"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: /login (bookmark alias)",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/login"
+      },
+      "response": {
+        "body": {
+          "disk": "app/index.html"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "page: HEAD",
+      "request": {
+        "headers": {},
+        "method": "HEAD",
+        "path": "/app/home"
+      },
+      "response": {
+        "body": "",
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-security-policy": "frame-ancestors 'self'",
+          "content-type": "text/html; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding",
+          "x-content-type-options": "nosniff"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "frame stylesheet revalidates",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/app.css"
+      },
+      "response": {
+        "body": {
+          "disk": "app/app.css"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/css; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "classic upgrade module is a script",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/bridge.js"
+      },
+      "response": {
+        "body": {
+          "disk": "bridge.js"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: identity",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web.js"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: brotli variant",
+      "request": {
+        "headers": {
+          "accept-encoding": "br"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web.js"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: gzip variant",
+      "request": {
+        "headers": {
+          "accept-encoding": "gzip"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web.js"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "gzip",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: wasm",
+      "request": {
+        "headers": {
+          "accept-encoding": "br"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web_bg.wasm"
+      },
+      "response": {
+        "body": {
+          "disk": "pkg/<build-id>/aac_web_bg.wasm"
+        },
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-encoding": "br",
+          "content-type": "application/wasm",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "pkg: a matching ETag revalidates",
+      "request": {
+        "headers": {
+          "accept-encoding": "gzip"
+        },
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js"
+      },
+      "response": {
+        "body": "",
+        "headers": {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 304
+      }
+    },
+    {
+      "case": "pkg: a precompressed file is never served directly",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/pkg/<build-id>/aac_web.js.br"
+      },
+      "response": {
+        "body": {
+          "error": "Not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "the build manifest is never served",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/ui-build-manifest.json"
+      },
+      "response": {
+        "body": {
+          "error": "Not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "service worker",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/sw.js"
+      },
+      "response": {
+        "body": {
+          "disk": "sw.js"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "service worker routing module",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/sw-route.js"
+      },
+      "response": {
+        "body": {
+          "disk": "sw-route.js"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-encoding": "br",
+          "content-type": "text/javascript; charset=utf-8",
+          "etag": "<etag>",
+          "vary": "Accept-Encoding"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "PWA manifest",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/manifest.webmanifest"
+      },
+      "response": {
+        "body": {
+          "disk": "manifest.webmanifest"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "application/manifest+json",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "PWA icon",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/icons/aac-192.png"
+      },
+      "response": {
+        "body": {
+          "disk": "icons/aac-192.png"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "image/png",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "root icon alias",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/favicon.ico"
+      },
+      "response": {
+        "body": {
+          "disk": "icons/apple-touch-icon-180-v2.png"
+        },
+        "headers": {
+          "cache-control": "no-cache",
+          "content-type": "image/png",
+          "etag": "<etag>"
+        },
+        "status": 200
+      }
+    },
+    {
+      "case": "an unknown API path answers JSON 404",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/api/definitely-not-a-route"
+      },
+      "response": {
+        "body": {
+          "error": "API endpoint was not found."
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "etag": "<etag>"
+        },
+        "status": 404
+      }
+    },
+    {
+      "case": "an unknown page goes back to /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/definitely-not-a-page"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    },
+    {
+      "case": "an unknown asset goes back to /",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/definitely-not-there.js"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    },
+    {
+      "case": "dot segments never escape the static folder",
+      "request": {
+        "headers": {},
+        "method": "GET",
+        "path": "/app/%2e%2e/%2e%2e/package.json"
+      },
+      "response": {
+        "body": "Found. Redirecting to /",
+        "headers": {
+          "content-type": "text/plain; charset=utf-8",
+          "location": "/",
+          "vary": "Accept"
+        },
+        "status": 302
+      }
+    }
+  ],
+  "version": 1
+}
