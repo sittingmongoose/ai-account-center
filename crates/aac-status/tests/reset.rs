@@ -352,6 +352,77 @@ fn a_codex_credit_gone_after_openai_said_reset_confirms_and_unlocks() {
     }
 }
 #[test]
+fn a_codex_reset_in_the_same_call_as_a_credit_less_read_settles_the_claim() {
+    // L2: OpenAI's `reset`/`alreadyRedeemed` can arrive in the same finish call as the post-send read that no
+    // longer lists the credit. One call, not two, settles when OpenAI itself credited this attempt.
+    for outcome in [Outcome::Reset, Outcome::PriorSuccess] {
+        let (_d, mut s) = open();
+        let mut snap = snapshot("codex");
+        snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+        let (_, a) = begin(&mut s, &snap);
+        let mut after = snap.clone();
+        after.observed_at_ms += 1;
+        after.grants.remove(1);
+        let r = s
+            .read_finish("route-account", &a, outcome, Some(&after), NOW + 1, None)
+            .unwrap();
+        assert_eq!(r["outcome"], "claimed");
+        assert_eq!(r["pending"], false);
+        assert_eq!(r["providerSuccess"], true);
+        assert!(s.pending("route-account", NOW + 2).unwrap()["attemptKey"].is_null());
+    }
+    // `ambiguous` means OpenAI gave no answer for this attempt; a missing credit alone proves nothing.
+    let (_d, mut s) = open();
+    let mut snap = snapshot("codex");
+    snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+    let (_, a) = begin(&mut s, &snap);
+    let mut after = snap.clone();
+    after.observed_at_ms += 1;
+    after.grants.remove(1);
+    let r = s
+        .read_finish("route-account", &a, Outcome::Ambiguous, Some(&after), NOW + 1, None)
+        .unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed");
+    assert_eq!(r["providerSuccess"], false);
+    assert_eq!(s.pending("route-account", NOW + 2).unwrap()["attemptKey"], a);
+}
+#[test]
+fn a_stale_or_other_identity_credit_less_read_does_not_settle_a_codex_claim() {
+    // L3: with OpenAI's `reset` on record, the credit-less branch still needs a read that started after the
+    // claim, of the same identity. A pre-claim read ticket cannot confirm it.
+    let (_d, mut s) = open();
+    let mut snap = snapshot("codex");
+    snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+    let (_, a) = begin(&mut s, &snap);
+    s.read_finish("route-account", &a, Outcome::Reset, None, NOW, None)
+        .unwrap();
+    let mut after = snap.clone();
+    after.observed_at_ms += 1;
+    after.grants.remove(1);
+    // This read was captured before begin reserved the claim, so its ticket is older than the claim's.
+    let r = s
+        .finish("route-account", &a, Outcome::Ambiguous, Some(&after), NOW + 1, None)
+        .unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed");
+    assert_eq!(r["providerSuccess"], true);
+    assert_eq!(s.pending("route-account", NOW + 2).unwrap()["attemptKey"], a);
+    // Nor can another login confirm it, even from a fresh read ticket.
+    let (_d, mut s) = open();
+    let mut snap = snapshot("codex");
+    snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+    let (_, a) = begin(&mut s, &snap);
+    s.read_finish("route-account", &a, Outcome::Reset, None, NOW, None)
+        .unwrap();
+    let mut after = snap.clone();
+    after.observed_at_ms += 1;
+    after.grants.remove(1);
+    after.identity.account = "synthetic-other-account".into();
+    let r = s.read_check("route-account", &a, &after, NOW + 1).unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed");
+    assert_eq!(r["providerSuccess"], true);
+    assert_eq!(s.pending("route-account", NOW + 2).unwrap()["attemptKey"], a);
+}
+#[test]
 fn a_missing_claude_grant_still_is_not_proof() {
     let (_d, mut s) = open();
     let mut snap = snapshot("claude");
