@@ -421,9 +421,9 @@ In `shadow`, the reference answer is served as soon as it settles; the agent run
 and the comparison is logged as `agent.verbs.shadow` (verb, outcome, agentMs, referenceMs;
 never bodies). Outcomes: `equal`, `different`, `fallback` (agent declined), `error` (agent
 attempt failed), `reference-failed`, and `reference-fallback` (a scan whose reference is the
-Python helper, not the scanner). Object key order is the only normalization. The live gate
-per DESIGN 4.5 stays 72 h with 0 `different` and agent p50 at most half of Python's; the
-fixture suites below are the lane gate, not a substitute for that soak.
+Python helper, not the scanner). Object key order is the only normalization. Owner decision
+2026-11-19: the 72 h shadow soaks are dropped — a family turns on once its parity suite passes;
+`shadow` stays available as an optional live comparison, not a required gate.
 
 Per-family fixture gates (fixture-enabled Nas1/Mac debug build, unchanged harnesses):
 
