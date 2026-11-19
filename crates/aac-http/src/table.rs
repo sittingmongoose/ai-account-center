@@ -27,6 +27,8 @@ pub(crate) enum Handler {
     Events,
     Agent,
     AgentControl,
+    SignInHealth,
+    SignInPoll,
     Store,
 }
 
@@ -48,6 +50,8 @@ impl Handler {
             "events" => Handler::Events,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
+            "collection-signins" => Handler::SignInHealth,
+            "collection-signin-poll" => Handler::SignInPoll,
             "store" => Handler::Store,
             _ => return None,
         })
@@ -194,7 +198,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
+                && !matches!(
+                    handler,
+                    Handler::Events | Handler::Agent | Handler::SignInPoll | Handler::Store
+                ))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
@@ -204,7 +211,11 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     handler,
                     Handler::Agent | Handler::AgentControl | Handler::Store
                 ))
-            || (method == axum::http::Method::PUT && handler != Handler::Feed)
+            || (method == axum::http::Method::PUT
+                && !matches!(
+                    handler,
+                    Handler::Feed | Handler::SignInHealth | Handler::SignInPoll
+                ))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)
@@ -239,7 +250,10 @@ mod tests {
         let rows = rows(ROUTES)?;
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
         assert!(rows.iter().all(|r| r.budget_ms > 0
-            || matches!(r.handler, Handler::Events | Handler::Agent | Handler::Store)));
+            || matches!(
+                r.handler,
+                Handler::Events | Handler::Agent | Handler::SignInPoll | Handler::Store
+            )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
         Ok(())
     }

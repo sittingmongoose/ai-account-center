@@ -62,6 +62,7 @@ export interface RustRequestOptions {
   raw?: boolean;
   cap?: number;
   text?: string;
+  deadlineMs?: number;
 }
 
 /** One keep-alive agent per boot (L1): the hop costs a request, not a connection. */
@@ -183,7 +184,7 @@ export function requestRust(
   if (payload !== undefined && Buffer.byteLength(payload) > 4 * 1024 * 1024)
     return Promise.reject(new RustTransportError('cap', 'Rust service request cap'));
   const cap = options.cap ?? (payload === undefined ? 64 * 1024 : 2 * 1024 * 1024);
-  const deadline = Date.now() + RUST_DEADLINE_MS;
+  const deadline = Date.now() + (options.deadlineMs ?? RUST_DEADLINE_MS);
   const attempt = () =>
     once(connection, route, principal, active, payload, method, cap, deadline, options);
   return attempt().catch((error: unknown) => {
@@ -327,6 +328,56 @@ export function registerRustAgentConnection(
   const key = Symbol();
   agentConnections.set(key, { root, connection, active, health });
   return () => agentConnections.delete(key);
+}
+
+/** The boot a root registered for internal reads, when a Rust service is active there. */
+export function rustAgentConnection(root: string) {
+  const scope = canonicalRoot(root);
+  return [...agentConnections.values()].reverse().find((entry) => entry.root === scope);
+}
+
+/** Aggregate the published sign-in rows and renewal facts through the same private service. */
+export async function projectRustSignIns(
+  root: string,
+  input: unknown
+): Promise<{ machines?: unknown; ttlMs?: unknown } | null> {
+  const held = rustAgentConnection(root);
+  if (!held) return null;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-signins',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      input,
+      'PUT'
+    );
+    return reply.status === 200
+      ? (reply.body as { machines?: unknown; ttlMs?: unknown } | null)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Run one bounded sign-in poll over the service's configured computers. */
+export async function pollRustSignIns(root: string, hosts: unknown): Promise<unknown> {
+  const held = rustAgentConnection(root);
+  if (!held) return null;
+  try {
+    const reply = await requestRust(
+      held.connection,
+      '/internal/collection-signin-poll',
+      FRONT_DOOR_PRINCIPAL,
+      held.active,
+      { hosts },
+      'PUT',
+      { cap: 5 * 1024 * 1024, deadlineMs: 21_000 }
+    );
+    return reply.status === 200 ? reply.body : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

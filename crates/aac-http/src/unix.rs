@@ -330,6 +330,35 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 shared.agents.call(name, &bytes).await
             }
         }
+        Handler::SignInHealth => {
+            let Ok(Ok(bytes)) =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match crate::signins::answer(&bytes) {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::SignInPoll => {
+            let Ok(Ok(bytes)) =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let hosts = match crate::signins::poll::parse(&bytes) {
+                Ok(hosts) => hosts,
+                Err(reason) => return decline(row.handler, reason),
+            };
+            match crate::signins::poll::read(&shared.agents, &shared.boot.ccs_dir, hosts).await {
+                Ok(batch) => Json(json!({
+                    "machines": batch.machines, "referenceHosts": batch.reference_hosts,
+                }))
+                .into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         // R3: the store host's method contract, the NAPI binding's over the socket. No
         // deadline (the table's budget is 0): backup and maintain take as long as they
         // took in process. Errors keep the binding's `<code>: <message>` shape.

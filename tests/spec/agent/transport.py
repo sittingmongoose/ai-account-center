@@ -138,6 +138,12 @@ def record(root, agent):
             identity['version'] = '0.0.0'
             print(json.dumps(identity)); sys.exit(0)
         os.execv(agent, [agent, '--version'])
+    if scenario == 'signin-rows':
+        request = json.loads(sys.stdin.buffer.readline())
+        assert request['verb'] == 'signin-expiry', request
+        value = json.loads((root / 'signin-fixture.json').read_text())
+        print(json.dumps({'type': 'result', 'protocol': 1, 'id': request['id'], 'value': value}), flush=True)
+        sys.exit(0)
     if scenario == 'burst':
         request = json.loads(sys.stdin.buffer.readline())
         for n in range(16):
@@ -271,8 +277,23 @@ def gates(agent, service):
             conn.close()
     print('PASS L5 service: reuse, principal, breaker, hash, artifact cap, off, existing-only, progress/input, exit-confirmed cancel and no-ack termination')
 
+def signin_gates(agent, service):
+    """G5: the private sign-in poll and the settle/merge projection against the TS adapters."""
+    with Service(agent, service, scenario='signin-rows') as fixture:
+        payload = {'root': str(fixture.root), 'socketPath': str(fixture.socket),
+                   'secret': SECRET, 'bootId': BOOT}
+        script = ROOT / 'tests/spec/agent/signin-projection.ts'
+        run = subprocess.run(['bun', str(script)], input=json.dumps(payload), text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=ROOT)
+        print(run.stdout, end='', flush=True)
+        assert run.returncode == 0, 'sign-in projection parity failed'
+    print('PASS G5 sign-in poll, crossed expiry and Claude renewal merge')
+
 def main():
     agent, service = map(lambda p: str(Path(p).resolve()), sys.argv[1:3])
+    if '--signin' in sys.argv:
+        signin_gates(agent, service)
+        return
     gates(agent,service)
     if '--gates-only' in sys.argv: return
     with tempfile.TemporaryDirectory(prefix='aac-l5-proxy-') as tmp:

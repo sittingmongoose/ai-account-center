@@ -10,6 +10,16 @@ overrides. Release settings and the artifact guard are unchanged.
 and `agentVerbs` switch. Each verb retains its own reply validation and fallback
 boundary; quota results still bind provider, platform and account before use.
 
+## Sign-in projection (gap G5)
+
+`transport.py <aac-agent> <aac-http> --signin` starts the real private service
+with the fixture SSH recorder and runs `signin-projection.ts`. The recorder
+answers `signin-expiry` from `signin-fixture.json`; the script compares the
+Rust poll to TS `parseRows`, then compares the service's settle (crossed
+deadlines, TTL, missing Ubuntu route) and Claude renewal merge to
+`downgradeCrossedRows`/`cacheTtlFor`/`mergeRenewal` on the same inputs. Fixture
+rows only; no host or credential is read.
+
 `aac-agent` uses the existing `native/aac-usage` library through a path dependency.
 The verb's `args` are the standalone scanner request. Its terminal `value` is the
 standalone reply, including discovery, fingerprints, identity and messages. No

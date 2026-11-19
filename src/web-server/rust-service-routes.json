@@ -23,6 +23,8 @@
   { "method": "GET", "path": "/internal/events", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "events" },
   { "method": "POST", "path": "/internal/agent/{verb}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "agent" },
   { "method": "POST", "path": "/internal/agent/{callId}/control", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 2500, "handler": "agent-control" },
+  { "method": "PUT", "path": "/internal/collection-signins", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "collection-signins" },
+  { "method": "PUT", "path": "/internal/collection-signin-poll", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "collection-signin-poll" },
   { "method": "POST", "path": "/internal/store/{method}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "store" },
   { "method": "*", "path": "*", "owner": "ts-fallback" }
 ]

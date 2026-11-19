@@ -259,6 +259,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/signins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/status_cache.rs",
       "kind": "internal",
       "evidence": [],
