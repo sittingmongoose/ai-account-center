@@ -45,12 +45,17 @@ function stagePackage(destination) {
       dereference: true,
       filter: (file) => {
         const relative = path.relative(root, file).split(path.sep).join('/');
-        if (relative === 'dist/ccs.js' || relative === 'dist/bin') return false;
+        if (/^dist\/ccs(?:\.js|\.d\.ts)(?:\.map)?$/.test(relative) || relative === 'dist/bin')
+          return false;
         const match =
           /^dist\/native\/(?:aac-http|ai-account-center|ccs|ccs-droid|ccsd|ccs-codex|ccsx|ccsxp)(\.exe)?$/.exec(
             relative
           );
-        return !match || Boolean(match[1]) === (process.platform === 'win32');
+        if (match) return Boolean(match[1]) === (process.platform === 'win32');
+        // The compiler can leave output for deleted sources in an incremental build.
+        const emitted =
+          /^dist\/(?!ui\/|native\/|app-updates\/)(.+?)(?:\.js|\.d\.ts)(?:\.map)?$/.exec(relative);
+        return !emitted || fs.existsSync(path.join(root, 'src', emitted[1] + '.ts'));
       },
     });
   }
