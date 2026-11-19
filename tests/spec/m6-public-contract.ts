@@ -465,7 +465,10 @@ try {
   await fs.rm(root, { recursive: true, force: true });
 }
 if (recordNative) {
-  await fs.writeFile(path.join(spec, recordNative), JSON.stringify(recordedNative, null, 2) + '\n');
+  await fs.writeFile(
+    path.isAbsolute(recordNative) ? recordNative : path.join(spec, recordNative),
+    JSON.stringify(recordedNative, null, 2) + '\n'
+  );
   console.log(`Recorded ${Object.keys(recordedNative).length} native rows into ${recordNative}`);
 }
 console.log(
