@@ -14,6 +14,7 @@
  * compared by parsed value (the writers' YAML layouts differ; the dashboard reads values).
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,15 +122,6 @@ const dropped: Array<[string, string[]]> = [
   ['auth', ['dashboard', 'auth', 'status']],
   ['auth', ['dashboard', 'auth', 'disable']],
   ['auth', ['config', 'auth', 'show']],
-  ['usage-hub', ['dashboard', 'usage-hub', 'status']],
-  ['usage-hub', ['dashboard', 'usage-hub', 'generate', '--stdout']],
-  ['usage-hub', ['dashboard', 'usage-hub', 'rotate']],
-  ['usage-hub', ['dashboard', 'usage-hub', 'off']],
-  ['usage-snapshot', ['dashboard', 'usage-snapshot', 'status']],
-  ['usage-snapshot', ['dashboard', 'usage-snapshot', 'set', '/tmp/x']],
-  ['usage-snapshot', ['dashboard', 'usage-snapshot', 'off']],
-  ['cursor-key', ['dashboard', 'cursor-key']],
-  ['cursor-key', ['dashboard', 'cursor-key', 'set']],
 ];
 for (const [family, args] of dropped) {
   const home = freshHome();
@@ -143,6 +135,327 @@ for (const [family, args] of dropped) {
     JSON.stringify(rust)
   );
   fs.rmSync(home, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// 1b. Ported admin families: usage-hub, usage-snapshot and cursor-key.
+// The key itself is random, so the key and wall-clock fields are placeholders; the
+// stored hash is checked against the printed key, which is the property that matters.
+// ---------------------------------------------------------------------------
+function adminNormalize(text: string, homes: string[]): string {
+  return normalize(text, homes)
+    .replace(/aacu_[A-Za-z0-9_-]{43}/g, '<hub-key>')
+    .replace(/key fingerprint [0-9a-f]{8}/g, 'key fingerprint <fp>')
+    .replace(/created [0-9T:.Z-]+/g, 'created <iso>')
+    .replace(/Last written [0-9T:.Z-]+ \([^)]* ago\)/g, 'Last written <iso> (<span> ago)')
+    .replace(/other computers: http:\/\/[^:\s]+:<dashboard port>/g, 'other computers: <lan>');
+}
+
+function equalAdmin(name: string, ts: Run, rust: Run, homes: string[]): void {
+  const a = {
+    ...ts,
+    stdout: adminNormalize(ts.stdout, homes),
+    stderr: adminNormalize(ts.stderr, homes),
+  };
+  const b = {
+    ...rust,
+    stdout: adminNormalize(rust.stdout, homes),
+    stderr: adminNormalize(rust.stderr, homes),
+  };
+  check(
+    name,
+    a.status === b.status && a.stdout === b.stdout && a.stderr === b.stderr,
+    `ts=${JSON.stringify(a)}\nrust=${JSON.stringify(b)}`
+  );
+}
+
+const hubErrorCases: string[][] = [
+  ['dashboard', 'usage-hub'],
+  ['dashboard', 'usage-hub', '--help'],
+  ['dashboard', 'usage-hub', 'bogus'],
+  ['dashboard', 'usage-hub', 'generate'],
+  ['dashboard', 'usage-hub', 'status', 'extra'],
+  ['dashboard', 'usage-hub', 'rotate', '--stdout', 'extra'],
+  ['dashboard', 'usage-hub', 'off', 'x'],
+];
+for (const args of hubErrorCases) {
+  const homeA = freshHome();
+  const homeB = freshHome();
+  equalAdmin(
+    `usage-hub ${args.slice(2).join(' ') || '(no args)'}`,
+    runCli('ts', homeA, args),
+    runCli('rust', homeB, args),
+    [homeA, homeB]
+  );
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+
+{
+  const homeA = freshHome();
+  const homeB = freshHome();
+  const statusOff = ['dashboard', 'usage-hub', 'status'];
+  equalAdmin(
+    'usage-hub status off',
+    runCli('ts', homeA, statusOff),
+    runCli('rust', homeB, statusOff),
+    [homeA, homeB]
+  );
+
+  const generate = ['dashboard', 'usage-hub', 'generate', '--stdout'];
+  const genA = runCli('ts', homeA, generate);
+  const genB = runCli('rust', homeB, generate);
+  equalAdmin('usage-hub generate', genA, genB, [homeA, homeB]);
+  const keyA = /aacu_[A-Za-z0-9_-]{43}/.exec(genA.stdout)?.[0] ?? '';
+  const keyB = /aacu_[A-Za-z0-9_-]{43}/.exec(genB.stdout)?.[0] ?? '';
+  const recordA = JSON.parse(
+    fs.readFileSync(path.join(homeA, 'auth', 'usage-hub-key.json'), 'utf8')
+  );
+  const recordB = JSON.parse(
+    fs.readFileSync(path.join(homeB, 'auth', 'usage-hub-key.json'), 'utf8')
+  );
+  check(
+    'usage-hub stores only the key hash',
+    keyA.length === 48 &&
+      keyB.length === 48 &&
+      recordA.version === 1 &&
+      recordB.version === 1 &&
+      recordA.keySha256 === createHash('sha256').update(keyA, 'utf8').digest('hex') &&
+      recordB.keySha256 === createHash('sha256').update(keyB, 'utf8').digest('hex') &&
+      Number.isFinite(Date.parse(recordA.createdAt)) &&
+      Number.isFinite(Date.parse(recordB.createdAt))
+  );
+
+  equalAdmin(
+    'usage-hub status on',
+    runCli('ts', homeA, statusOff),
+    runCli('rust', homeB, statusOff),
+    [homeA, homeB]
+  );
+  equalAdmin(
+    'usage-hub generate refuses an existing key',
+    runCli('ts', homeA, generate),
+    runCli('rust', homeB, generate),
+    [homeA, homeB]
+  );
+
+  const rotate = ['dashboard', 'usage-hub', 'rotate', '--stdout'];
+  const rotA = runCli('ts', homeA, rotate);
+  const rotB = runCli('rust', homeB, rotate);
+  equalAdmin('usage-hub rotate', rotA, rotB, [homeA, homeB]);
+  const rotatedA = JSON.parse(
+    fs.readFileSync(path.join(homeA, 'auth', 'usage-hub-key.json'), 'utf8')
+  );
+  const rotatedB = JSON.parse(
+    fs.readFileSync(path.join(homeB, 'auth', 'usage-hub-key.json'), 'utf8')
+  );
+  check(
+    'usage-hub rotate replaces the stored hash',
+    rotatedA.keySha256 !== recordA.keySha256 && rotatedB.keySha256 !== recordB.keySha256
+  );
+
+  const off = ['dashboard', 'usage-hub', 'off'];
+  equalAdmin('usage-hub off', runCli('ts', homeA, off), runCli('rust', homeB, off), [homeA, homeB]);
+  equalAdmin('usage-hub off again', runCli('ts', homeA, off), runCli('rust', homeB, off), [
+    homeA,
+    homeB,
+  ]);
+  check(
+    'usage-hub off removes the key file',
+    !fs.existsSync(path.join(homeA, 'auth', 'usage-hub-key.json')) &&
+      !fs.existsSync(path.join(homeB, 'auth', 'usage-hub-key.json'))
+  );
+
+  // A damaged key file reads as "invalid" on both sides.
+  for (const home of [homeA, homeB]) {
+    fs.mkdirSync(path.join(home, 'auth'), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, 'auth', 'usage-hub-key.json'),
+      '{"version":1,"keySha256":"nope"}\n'
+    );
+  }
+  equalAdmin(
+    'usage-hub status invalid',
+    runCli('ts', homeA, statusOff),
+    runCli('rust', homeB, statusOff),
+    [homeA, homeB]
+  );
+
+  // Trusted local network on: the LAN lines and the configured range are printed.
+  const config = [
+    'version: 14',
+    'dashboard_network:',
+    '  trust_local_network: true',
+    '  trusted_networks:',
+    '    - 10.6.0.0/24',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(homeA, 'config.yaml'), config);
+  fs.writeFileSync(path.join(homeB, 'config.yaml'), config);
+  equalAdmin(
+    'usage-hub status trusted network',
+    runCli('ts', homeA, statusOff),
+    runCli('rust', homeB, statusOff),
+    [homeA, homeB]
+  );
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+
+const snapshotErrorCases: string[][] = [
+  ['dashboard', 'usage-snapshot'],
+  ['dashboard', 'usage-snapshot', '--help'],
+  ['dashboard', 'usage-snapshot', 'bogus'],
+  ['dashboard', 'usage-snapshot', 'status', 'extra'],
+  ['dashboard', 'usage-snapshot', 'off', 'x'],
+  ['dashboard', 'usage-snapshot', 'set'],
+  ['dashboard', 'usage-snapshot', 'set', 'relative/path'],
+  ['dashboard', 'usage-snapshot', 'set', '/tmp/aac-usage/../escape'],
+];
+for (const args of snapshotErrorCases) {
+  const homeA = freshHome();
+  const homeB = freshHome();
+  equalAdmin(
+    `usage-snapshot ${args.slice(2).join(' ') || '(no args)'}`,
+    runCli('ts', homeA, args),
+    runCli('rust', homeB, args),
+    [homeA, homeB]
+  );
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+}
+
+{
+  const homeA = freshHome();
+  const homeB = freshHome();
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-snap-'));
+  const status = ['dashboard', 'usage-snapshot', 'status'];
+  equalAdmin(
+    'usage-snapshot status off',
+    runCli('ts', homeA, status),
+    runCli('rust', homeB, status),
+    [homeA, homeB]
+  );
+
+  const missingParent = path.join(os.tmpdir(), `aac-snap-missing-${process.pid}`, 'child');
+  const setMissing = ['dashboard', 'usage-snapshot', 'set', missingParent];
+  equalAdmin(
+    'usage-snapshot set refuses a missing parent',
+    runCli('ts', homeA, setMissing),
+    runCli('rust', homeB, setMissing),
+    [homeA, homeB]
+  );
+
+  const set = ['dashboard', 'usage-snapshot', 'set', folder];
+  equalAdmin('usage-snapshot set', runCli('ts', homeA, set), runCli('rust', homeB, set), [
+    homeA,
+    homeB,
+  ]);
+  const settingsA = JSON.parse(
+    fs.readFileSync(path.join(homeA, 'agent-usage-snapshot.json'), 'utf8')
+  );
+  const settingsB = JSON.parse(
+    fs.readFileSync(path.join(homeB, 'agent-usage-snapshot.json'), 'utf8')
+  );
+  check(
+    'usage-snapshot settings agree',
+    JSON.stringify(settingsA) === JSON.stringify(settingsB) &&
+      settingsA.version === 1 &&
+      settingsA.directory === folder
+  );
+  equalAdmin(
+    'usage-snapshot status on without a snapshot',
+    runCli('ts', homeA, status),
+    runCli('rust', homeB, status),
+    [homeA, homeB]
+  );
+
+  fs.writeFileSync(path.join(folder, 'usage.json'), '{"version":1}\n');
+  const fixed = new Date('2026-11-19T12:00:00.000Z');
+  fs.utimesSync(path.join(folder, 'usage.json'), fixed, fixed);
+  equalAdmin(
+    'usage-snapshot status with a snapshot',
+    runCli('ts', homeA, status),
+    runCli('rust', homeB, status),
+    [homeA, homeB]
+  );
+
+  const located = [
+    'dashboard',
+    'usage-snapshot',
+    'set',
+    folder,
+    '--location',
+    'the Mac=/Volumes/share/aac-usage',
+    '--location=Windows=\\\\TRUENAS\\share\\aac-usage',
+  ];
+  equalAdmin(
+    'usage-snapshot set with locations',
+    runCli('ts', homeA, located),
+    runCli('rust', homeB, located),
+    [homeA, homeB]
+  );
+  const locatedA = JSON.parse(
+    fs.readFileSync(path.join(homeA, 'agent-usage-snapshot.json'), 'utf8')
+  );
+  const locatedB = JSON.parse(
+    fs.readFileSync(path.join(homeB, 'agent-usage-snapshot.json'), 'utf8')
+  );
+  check(
+    'usage-snapshot locations agree',
+    JSON.stringify(locatedA) === JSON.stringify(locatedB) && locatedA.locations?.length === 2
+  );
+  equalAdmin(
+    'usage-snapshot status lists locations',
+    runCli('ts', homeA, status),
+    runCli('rust', homeB, status),
+    [homeA, homeB]
+  );
+
+  const badLocation = ['dashboard', 'usage-snapshot', 'set', folder, '--location', 'no-equals'];
+  equalAdmin(
+    'usage-snapshot set refuses a bad location',
+    runCli('ts', homeA, badLocation),
+    runCli('rust', homeB, badLocation),
+    [homeA, homeB]
+  );
+
+  const off = ['dashboard', 'usage-snapshot', 'off'];
+  equalAdmin('usage-snapshot off', runCli('ts', homeA, off), runCli('rust', homeB, off), [
+    homeA,
+    homeB,
+  ]);
+  equalAdmin(
+    'usage-snapshot status after off',
+    runCli('ts', homeA, status),
+    runCli('rust', homeB, status),
+    [homeA, homeB]
+  );
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
+  fs.rmSync(folder, { recursive: true, force: true });
+}
+
+const cursorErrorCases: string[][] = [
+  ['dashboard', 'cursor-key'],
+  ['dashboard', 'cursor-key', 'help'],
+  ['dashboard', 'cursor-key', 'bogus'],
+  ['dashboard', 'cursor-key', 'set', 'extra'],
+  ['dashboard', 'cursor-key', 'status'],
+  ['dashboard', 'cursor-key', 'remove'],
+  ['dashboard', 'cursor-key', 'set'],
+];
+for (const args of cursorErrorCases) {
+  const homeA = freshHome();
+  const homeB = freshHome();
+  equalAdmin(
+    `cursor-key ${args.slice(2).join(' ') || '(no args)'}`,
+    runCli('ts', homeA, args),
+    runCli('rust', homeB, args),
+    [homeA, homeB]
+  );
+  fs.rmSync(homeA, { recursive: true, force: true });
+  fs.rmSync(homeB, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +901,12 @@ const CODEX_PARITY: string[][] = [
 for (const args of CODEX_PARITY) {
   const homeA = freshHome();
   const homeB = freshHome();
-  equalRuns(`codex ${args.slice(1).join(' ') || '(no args)'}`, runCli('ts', homeA, args), runCli('rust', homeB, args), [homeA, homeB]);
+  equalRuns(
+    `codex ${args.slice(1).join(' ') || '(no args)'}`,
+    runCli('ts', homeA, args),
+    runCli('rust', homeB, args),
+    [homeA, homeB]
+  );
   fs.rmSync(homeA, { recursive: true, force: true });
   fs.rmSync(homeB, { recursive: true, force: true });
 }
@@ -642,7 +960,9 @@ for (const testCase of IMPORT_CASES) {
     fs.mkdirSync(ccs, { recursive: true });
     fs.mkdirSync(legacy, { recursive: true });
     if (!testCase.missing) {
-      const auth = testCase.auth ?? { tokens: { id_token: makeJwt({ email: 'work@example.test' }) } };
+      const auth = testCase.auth ?? {
+        tokens: { id_token: makeJwt({ email: 'work@example.test' }) },
+      };
       fs.writeFileSync(path.join(legacy, 'auth.json'), JSON.stringify(auth, null, 2));
     }
     if (testCase.history) {
@@ -668,12 +988,16 @@ for (const testCase of IMPORT_CASES) {
   const rust = runCli('rust', homeB, args, { LEGACY_CODEX_HOME: b.legacy, CCS_DIR: b.ccs });
   const norm = (text: string) =>
     text
-      .split(homeA).join('<home>')
-      .split(homeB).join('<home>')
+      .split(homeA)
+      .join('<home>')
+      .split(homeB)
+      .join('<home>')
       .replace(/auth\.json\.bak-\d+/g, 'auth.json.bak-<ts>');
   check(
     `import-default ${testCase.name} output`,
-    ts.status === rust.status && norm(ts.stdout) === norm(rust.stdout) && norm(ts.stderr) === norm(rust.stderr),
+    ts.status === rust.status &&
+      norm(ts.stdout) === norm(rust.stdout) &&
+      norm(ts.stderr) === norm(rust.stderr),
     `ts=${JSON.stringify(ts)}\nrust=${JSON.stringify(rust)}`
   );
   if (ts.status === 0 && rust.status === 0) {
@@ -699,15 +1023,27 @@ for (const testCase of IMPORT_CASES) {
       return registry;
     };
     // Fixture-owned YAML written by the two CLIs; the shape is the registry contract.
-    const regA = strip(yaml.load(fs.readFileSync(path.join(a.ccs, 'codex-profiles.yaml'), 'utf8')) as Registry);
-    const regB = strip(yaml.load(fs.readFileSync(path.join(b.ccs, 'codex-profiles.yaml'), 'utf8')) as Registry);
-    check(`import-default ${testCase.name} registry`, JSON.stringify(regA) === JSON.stringify(regB), `ts=${JSON.stringify(regA)}\nrust=${JSON.stringify(regB)}`);
+    const regA = strip(
+      yaml.load(fs.readFileSync(path.join(a.ccs, 'codex-profiles.yaml'), 'utf8')) as Registry
+    );
+    const regB = strip(
+      yaml.load(fs.readFileSync(path.join(b.ccs, 'codex-profiles.yaml'), 'utf8')) as Registry
+    );
+    check(
+      `import-default ${testCase.name} registry`,
+      JSON.stringify(regA) === JSON.stringify(regB),
+      `ts=${JSON.stringify(regA)}\nrust=${JSON.stringify(regB)}`
+    );
     const authA = fs.readFileSync(path.join(a.ccs, `codex-instances/${profileName}/auth.json`));
     const authB = fs.readFileSync(path.join(b.ccs, `codex-instances/${profileName}/auth.json`));
     check(`import-default ${testCase.name} auth bytes`, authA.equals(authB));
     const linkA = fs.readlinkSync(path.join(a.ccs, `codex-instances/${profileName}/config.toml`));
     const linkB = fs.readlinkSync(path.join(b.ccs, `codex-instances/${profileName}/config.toml`));
-    check(`import-default ${testCase.name} config link`, linkA === path.join(homeA, '.codex/config.toml') && linkB === path.join(homeB, '.codex/config.toml'));
+    check(
+      `import-default ${testCase.name} config link`,
+      linkA === path.join(homeA, '.codex/config.toml') &&
+        linkB === path.join(homeB, '.codex/config.toml')
+    );
     if (testCase.history) {
       check(
         `import-default ${testCase.name} history files`,
@@ -738,7 +1074,12 @@ const ANTIGRAVITY_PARITY: string[][] = [
 for (const args of ANTIGRAVITY_PARITY) {
   const homeA = freshHome();
   const homeB = freshHome();
-  equalRuns(`antigravity ${args.slice(1).join(' ') || '(no args)'}`, runCli('ts', homeA, args), runCli('rust', homeB, args), [homeA, homeB]);
+  equalRuns(
+    `antigravity ${args.slice(1).join(' ') || '(no args)'}`,
+    runCli('ts', homeA, args),
+    runCli('rust', homeB, args),
+    [homeA, homeB]
+  );
   fs.rmSync(homeA, { recursive: true, force: true });
   fs.rmSync(homeB, { recursive: true, force: true });
 }
@@ -746,9 +1087,19 @@ for (const args of ANTIGRAVITY_PARITY) {
   // status on an empty fixture: both read the packaged release and the same empty state.
   const homeA = freshHome();
   const homeB = freshHome();
-  equalRuns('antigravity status empty', runCli('ts', homeA, ['antigravity', 'status']), runCli('rust', homeB, ['antigravity', 'status']), [homeA, homeB]);
+  equalRuns(
+    'antigravity status empty',
+    runCli('ts', homeA, ['antigravity', 'status']),
+    runCli('rust', homeB, ['antigravity', 'status']),
+    [homeA, homeB]
+  );
   // runtime refresh with no installation: the same refusal.
-  equalRuns('antigravity runtime refresh empty', runCli('ts', homeA, ['antigravity', 'runtime', 'refresh']), runCli('rust', homeB, ['antigravity', 'runtime', 'refresh']), [homeA, homeB]);
+  equalRuns(
+    'antigravity runtime refresh empty',
+    runCli('ts', homeA, ['antigravity', 'runtime', 'refresh']),
+    runCli('rust', homeB, ['antigravity', 'runtime', 'refresh']),
+    [homeA, homeB]
+  );
   fs.rmSync(homeA, { recursive: true, force: true });
   fs.rmSync(homeB, { recursive: true, force: true });
 }
@@ -757,7 +1108,9 @@ for (const args of ANTIGRAVITY_PARITY) {
   const rust = runCli('rust', home, ['antigravity', 'recover']);
   check(
     'drop antigravity recover',
-    rust.status === 1 && rust.stdout === '' && rust.stderr.includes('"antigravity recover" is managed in the dashboard'),
+    rust.status === 1 &&
+      rust.stdout === '' &&
+      rust.stderr.includes('"antigravity recover" is managed in the dashboard'),
     JSON.stringify(rust)
   );
   fs.rmSync(home, { recursive: true, force: true });
@@ -768,7 +1121,11 @@ for (const args of ANTIGRAVITY_PARITY) {
   const fake = path.join(home, 'fake-cli.cjs');
   fs.writeFileSync(fake, "console.log(process.argv.slice(2).join(' '));\n");
   const rust = runCli('rust', home, ['antigravity', 'signin', 'work'], { AAC_TS_CLI: fake });
-  check('antigravity signin delegates', rust.status === 0 && rust.stdout === 'antigravity signin work\n', JSON.stringify(rust));
+  check(
+    'antigravity signin delegates',
+    rust.status === 0 && rust.stdout === 'antigravity signin work\n',
+    JSON.stringify(rust)
+  );
   fs.rmSync(home, { recursive: true, force: true });
 }
 
@@ -794,7 +1151,12 @@ const BAR_PARITY: string[][] = [
 for (const args of BAR_PARITY) {
   const homeA = freshHome();
   const homeB = freshHome();
-  equalRuns(`bar ${args.slice(1).join(' ') || '(no args)'}`, runCli('ts', homeA, args), runCli('rust', homeB, args), [homeA, homeB]);
+  equalRuns(
+    `bar ${args.slice(1).join(' ') || '(no args)'}`,
+    runCli('ts', homeA, args),
+    runCli('rust', homeB, args),
+    [homeA, homeB]
+  );
   fs.rmSync(homeA, { recursive: true, force: true });
   fs.rmSync(homeB, { recursive: true, force: true });
 }
@@ -806,7 +1168,12 @@ for (const args of BAR_PARITY) {
     fs.mkdirSync(path.join(home, 'bar'), { recursive: true });
     fs.writeFileSync(path.join(home, 'bar/.version'), '1.2.3\n');
   }
-  equalRuns('bar version recorded', runCli('ts', homeA, ['bar', 'version']), runCli('rust', homeB, ['bar', 'version']), [homeA, homeB]);
+  equalRuns(
+    'bar version recorded',
+    runCli('ts', homeA, ['bar', 'version']),
+    runCli('rust', homeB, ['bar', 'version']),
+    [homeA, homeB]
+  );
   fs.rmSync(homeA, { recursive: true, force: true });
   fs.rmSync(homeB, { recursive: true, force: true });
 }

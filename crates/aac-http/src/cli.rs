@@ -6,6 +6,7 @@ use std::{
     process::Command,
 };
 
+mod admin;
 mod antigravity;
 mod bar;
 mod codex_auth;
@@ -127,11 +128,20 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
         }
         ("dashboard" | "config", args) => {
             let subcommand = args.first().map(String::as_str);
+            if subcommand == Some("auth") {
+                return Ok(settings_covered("auth"));
+            }
             if matches!(
                 subcommand,
-                Some("auth" | "usage-hub" | "usage-snapshot" | "cursor-key")
+                Some("usage-hub" | "usage-snapshot" | "cursor-key")
             ) {
-                return Ok(settings_covered(subcommand.unwrap_or_default()));
+                let ccs = root(config_dir).unwrap_or_else(|| PathBuf::from(".ccs"));
+                let rest = &args[1..];
+                return Ok(match subcommand {
+                    Some("usage-hub") => admin::usage_hub(rest, &ccs),
+                    Some("usage-snapshot") => admin::usage_snapshot(rest, &ccs),
+                    _ => admin::cursor_key_command(rest, &ccs),
+                });
             }
             if matches!(subcommand, Some("store" | "proxy")) {
                 let ccs = root(config_dir).unwrap_or_else(|| PathBuf::from(".ccs"));

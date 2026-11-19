@@ -108,11 +108,12 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine(
     '  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)'
   );
+  writeLine("  usage-hub status|generate|rotate|off   The T3 usage hub's management key");
+  writeLine('  usage-snapshot status|set|off      Publish agent usage into a shared folder');
+  writeLine("  cursor-key set|status|remove       Keep AAC's Cursor account key");
   writeLine('');
   writeLine("Managed in the dashboard's Settings page (the CLI points there):");
-  writeLine(
-    '  dashboard sign-in (auth), the usage hub key, the usage snapshot folder, the Cursor key'
-  );
+  writeLine('  dashboard sign-in (auth)');
   writeLine('');
   writeLine('Options:');
   writeLine('  --port, -p PORT    Server port (default: auto-detect)');
