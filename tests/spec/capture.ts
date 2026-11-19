@@ -19,15 +19,17 @@ const composedOutput = process.argv
   ?.slice(outputFlag.length);
 assert.ok(!composed || !regenerate, 'record the contract from TypeScript');
 assert.ok(!recordComposed || (composed && !legacyHome), 'record the all-on composed listener');
+assert.notEqual(composedOutput, '', '--composed-golden-output needs a path');
 assert.ok(!composedOutput || recordComposed, 'a composed output requires --regenerate-composed');
 const differences: string[] = [];
 let matched = 0;
 let declines = 0;
 const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
 const nativePrivate = composed && process.platform !== 'win32';
-const nativeReset = nativePrivate || (composed && !!(
-  await import('../../src/status-native/native-loader')
-).loadNativeStatus().module);
+const nativeReset =
+  nativePrivate ||
+  (composed &&
+    (await import('../../src/status-native/native-loader')).loadNativeStatus().module !== null);
 const composedGolden = path.join(
   spec,
   'contract',
@@ -461,13 +463,31 @@ function composedOwner({ method, path, role }: ComposedRecord['request']) {
 
 function emit(relative: string, data: any, view: string | null = null) {
   const file = path.join(spec, relative);
+  const composedRow = composed && /^contract\/[0-9]/.test(relative);
+  const owner = composedRow ? composedOwner(data.request) : undefined;
+  if (owner === 'scoreboard') {
+    assert.equal(view, 'scoreboard@1', 'the composed Scoreboard row must come from its owner');
+    const body = data.response.body;
+    // The two cache reads happen at different instants. Preserve clock-field presence and
+    // nulls, while comparing the displayed data and all response headers exactly.
+    assert.ok(Array.isArray(body.sources), 'the owned Scoreboard has sources');
+    const clocks: Array<[Record<string, unknown>, string]> = [
+      [body, 'cacheAgeSeconds'],
+      ...body.sources.map((source: Record<string, unknown>): [Record<string, unknown>, string] => [
+        source,
+        'ageSeconds',
+      ]),
+    ];
+    for (const [source, key] of clocks) {
+      const value = source[key];
+      if (value === undefined || value === null) continue;
+      assert.ok(typeof value === 'number' && Number.isFinite(value) && value >= 0, `invalid Scoreboard ${key}`);
+      source[key] = '<elapsed-seconds>';
+    }
+  }
   const bytes = JSON.stringify(data, null, 2) + '\n';
   if (regenerate) fs.writeFileSync(file, bytes);
-  else if (composed && /^contract\/[0-9]/.test(relative)) {
-    const owner = composedOwner(data.request);
-    if (owner === 'scoreboard') {
-      assert.equal(view, 'scoreboard@1', 'the composed Scoreboard row must come from its owner');
-    }
+  else if (composedRow) {
     if (owner && recordComposed) {
       assert.equal(data.response.status, 200, `cannot record an unsuccessful ${owner} response`);
       if (owner === 'reset') {
