@@ -164,7 +164,7 @@ fn decorate(
     Ok(account)
 }
 
-fn facts(accounts: &[Value], signins: Option<&Value>) -> Result<Value, Decline> {
+pub(super) fn facts(accounts: &[Value], signins: Option<&Value>) -> Result<Value, Decline> {
     let mut words: Vec<_> = accounts
         .iter()
         .filter_map(|row| row["id"].as_str())

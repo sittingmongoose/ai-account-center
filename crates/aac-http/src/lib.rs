@@ -22,6 +22,8 @@ mod identity;
 #[cfg(unix)]
 mod json_object;
 #[cfg(unix)]
+pub mod lifecycle_recheck;
+#[cfg(unix)]
 mod limits;
 #[cfg(unix)]
 mod profile_reads;

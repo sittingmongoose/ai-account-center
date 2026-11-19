@@ -3,6 +3,7 @@ mod claude;
 mod codex_local;
 mod history;
 mod peers;
+pub mod recheck;
 mod selection;
 
 use super::{AccountUsageCache, Desktop, dashboard, rows, sampler, sources};
@@ -47,6 +48,8 @@ pub struct Producer {
     cursor: Arc<super::cursor::Reader>,
     visibility: Arc<Mutex<Value>>,
     active_identities: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+    /// Per-account forced refresh stamps for a single-row Re-check (the TS debounce).
+    recheck_forced: Arc<std::sync::Mutex<HashMap<String, i64>>>,
 }
 
 impl Producer {
@@ -71,6 +74,7 @@ impl Producer {
             cursor,
             visibility: Arc::new(Mutex::new(dashboard::empty_visibility())),
             active_identities: Arc::default(),
+            recheck_forced: Arc::default(),
         }
     }
 

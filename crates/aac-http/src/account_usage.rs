@@ -84,7 +84,7 @@ impl AccountUsageCache {
     /// Ask the native sampler to start a fresh generation, with the dashboard's
     /// five-second debounce. Provider cooldowns still apply.
     pub fn request_refresh(&self) -> bool {
-        use std::sync::atomic::Ordering;
+        use std::sync::atomic\Ordering;
         let Ok(now) = aac_core::UtcMs::now() else {
             return false;
         };
@@ -101,6 +101,54 @@ impl AccountUsageCache {
         self.refresh.notify_one();
         true
     }
+
+    /// Replace one account row inside the latest held generation for a selector
+    /// (a per-account Re-check), keeping every unrelated row of a concurrently
+    /// published generation. The stored visibility settings redecorate the row
+    /// and the Home facts are rebuilt from the final rows, so the patched
+    /// generation is byte-equivalent to a full pass that collected this row.
+    /// A selector without a held generation, or one that does not list the id,
+    /// keeps its generation unchanged, like the TS row replacement.
+    pub fn replace_row(
+        &self,
+        desktop: Desktop,
+        secure: bool,
+        id: &str,
+        row: Value,
+        lifecycle: &dashboard::Lifecycle,
+    ) -> Result<bool, Decline> {
+        let word = desktop.word();
+        let held = match self.feeds.latest(&source(word, secure)) {
+            Ok(held) => held,
+            Err(Decline::Stale) => return Ok(false),
+            Err(reason) => return Err(reason),
+        };
+        let mut dashboard: Value =
+            serde_json::from_str(held.data.get()).map_err(|_| Decline::Shape)?;
+        let accounts = dashboard["accounts"]
+            .as_array_mut()
+            .ok_or(Decline::Shape)?;
+        let replaced = accounts.iter_mut().find(|row| row["id"] == id);
+        let Some(target) = replaced else {
+            return Ok(false);
+        };
+        *target = dashboard::decorate(row, &dashboard["settings"], lifecycle)?;
+        let accounts = dashboard["accounts"].as_array().ok_or(Decline::Shape)?;
+        let signins = dashboard.get("claudeSignIns");
+        let facts = dashboard::facts(accounts, signins)?;
+        let Ok(now) = aac_core::UtcMs::now() else {
+            return Err(Decline::Date);
+        };
+        // The sampler's own numbering: one above the held generation, and never
+        // below the wall clock, so a concurrent pass and a Re-check cannot collide.
+        let generation = held
+            .id
+            .parse::<u64>()
+            .map_or(now.get(), |held| held.saturating_add(1))
+            .max(now.get());
+        self.publish(desktop, secure, generation, dashboard, facts)
+    }
+
 
     /// Generation to send to the private Home renderer. Both listeners share
     /// the same cache, so this needs no intermediate TypeScript feed.

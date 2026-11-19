@@ -25,6 +25,7 @@ aac-protocol.workspace = true
 aac-transport.workspace = true
 aac-providers.workspace = true
 aac-views.workspace = true
+aac-renewal.workspace = true
 aac-store.workspace = true
 aac-status.workspace = true
 base64 = "0.22"

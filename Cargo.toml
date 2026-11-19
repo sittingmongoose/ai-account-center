@@ -22,6 +22,7 @@ aac-num = { path = "crates/aac-num" }
 aac-config = { path = "crates/aac-config" }
 aac-transport = { path = "crates/aac-transport" }
 aac-views = { path = "crates/aac-views" }
+aac-renewal = { path = "crates/aac-renewal" }
 # R3: the store and Status crates joined the workspace (one lock for the host and the NAPI
 # modules). Dependents take them without the Node binding; the `.node` builds use each
 # package's own default features.
