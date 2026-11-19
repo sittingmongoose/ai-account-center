@@ -264,14 +264,18 @@ const CLOCK_KEYS = new Set([
   'memoryReadAt',
   'boards',
 ]);
+/** The two stores' own identities; the fixture homes differ by design. */
+const ID_KEYS = new Set(['instanceId', 'openedAt']);
 function normalize(value) {
   if (Array.isArray(value)) return value.map(normalize);
   if (value && typeof value === 'object') {
     const out = {};
     for (const [key, item] of Object.entries(value))
-      out[key] = CLOCK_KEYS.has(key) ? null : normalize(item);
+      out[key] = CLOCK_KEYS.has(key) || ID_KEYS.has(key) ? null : normalize(item);
     return out;
   }
+  if (typeof value === 'string')
+    return value.split(homes.today).join('<home>').split(homes.owned).join('<home>');
   return value;
 }
 const sameJson = (a, b) =>
