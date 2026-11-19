@@ -100,7 +100,8 @@ export interface CodexQuotaResult extends QuotaErrorMetadata {
     credits?: { resetType: string; expiresAt: string | null }[];
   };
   /** Plan type: free, plus, pro, team, or null if unknown */
-  planType: 'free' | 'plus' | 'pro' | 'team' | null;
+  /** Codex's own plan name as one bounded lowercase token, or null when it named none. */
+  planType: string | null;
   /** Timestamp of fetch */
   lastUpdated: number;
   /** Error message if fetch failed */

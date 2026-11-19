@@ -138,14 +138,14 @@ describe('additional account usage service', () => {
       runSource: async (source) =>
         payload(
           source.provider === 'antigravity'
-            ? { plan: 'Google Workspace Enterprise Plus', windows: [] }
+            ? { plan: 'Gemini Enterprise Business', windows: [] }
             : {}
         ),
     });
     expect((await service.get()).find((row) => row.provider === 'antigravity')).toMatchObject({
       status: 'ok',
-      plan: 'Google Workspace',
-      antigravityPlan: { quotaPolicy: 'none', models: [] },
+      plan: 'Gemini Enterprise Business',
+      antigravityPlan: { quotaPolicy: 'none' },
       windows: [],
     });
   });

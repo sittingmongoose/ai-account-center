@@ -206,7 +206,7 @@ function deps(overrides: AccountDashboardDeps = {}): AccountDashboardDeps {
 
 describe('Antigravity coding plan dashboard JSON', () => {
   it('carries the optional sample-time plan contract to registered accounts and cached tray responses', async () => {
-    const observed = '2026-11-02T00:00:00Z';
+    const observed = '2026-12-01T00:00:00Z';
     const account: AntigravityDashboardAccount = {
       ...additional('antigravity'),
       id: 'antigravity:profile:fixture',

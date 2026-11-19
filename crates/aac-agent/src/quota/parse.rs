@@ -272,7 +272,28 @@ fn kimi(p: &Value) -> Value {
         (false, "LEVEL_ADVANCED") => Some("Advanced"),
         _ => None,
     };
+    // plan_usage.parse_kimi: a membership level Kimi added after this table keeps its own words.
+    let plan = plan.map(str::to_owned).or_else(|| kimi_new_level(level));
     valid(json!(plan), windows)
+}
+/// `re.fullmatch(r"LEVEL_[A-Z]{1,16}(?:_[A-Z]{1,16}){0,2}", level)`, then each word capitalized.
+fn kimi_new_level(level: &str) -> Option<String> {
+    let rest = level.strip_prefix("LEVEL_")?;
+    let words: Vec<&str> = rest.split('_').collect();
+    if words.len() > 3
+        || words
+            .iter()
+            .any(|w| w.is_empty() || w.len() > 16 || !w.bytes().all(|c| c.is_ascii_uppercase()))
+    {
+        return None;
+    }
+    Some(
+        words
+            .iter()
+            .map(|w| w[..1].to_owned() + &w[1..].to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 fn zai(p: &Value) -> Value {
     if p["code"].is_boolean() {
@@ -424,8 +445,36 @@ fn plan_label(v: &Value) -> Value {
     {
         json!(s)
     } else {
-        Value::Null
+        // plan_common.plan_label: a tier the table does not list yet keeps the provider's own
+        // short, word-shaped name; a longer or key-shaped string stays unknown.
+        v.as_str()
+            .and_then(plan_name)
+            .map_or(Value::Null, |name| json!(name))
     }
+}
+/// Python `value.replace("_", " ")`, then `len <= 32`, `PLAN_NAME.fullmatch` and no `[0-9]{4}`.
+fn plan_name(value: &str) -> Option<String> {
+    let name = value.replace('_', " ");
+    if name.chars().count() > 32 || !name.is_ascii() {
+        return None;
+    }
+    let words: Vec<&str> = name.split(' ').collect();
+    let first = words.first()?;
+    let ok_first = first.len() <= 16
+        && first
+            .bytes()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        && first.bytes().all(|c| c.is_ascii_alphanumeric());
+    let ok_rest = words.len() <= 3
+        && words[1..].iter().all(|w| {
+            !w.is_empty() && w.len() <= 16 && w.bytes().all(|c| c.is_ascii_alphanumeric())
+        });
+    let digits = name
+        .as_bytes()
+        .windows(4)
+        .any(|w| w.iter().all(u8::is_ascii_digit));
+    (ok_first && ok_rest && !digits).then_some(name)
 }
 pub(super) fn packs(p: &Value, now: i64) -> Value {
     if p["code"].is_boolean() {

@@ -816,6 +816,33 @@ describe('Codex Quota Fetcher', () => {
       expect(result.coreUsage?.weekly?.remainingPercent).toBe(50);
     });
 
+    it.each([
+      ['PRO', 'pro'],
+      ['prolite', 'prolite'],
+      ['business', 'business'],
+      ['enterprise', 'enterprise'],
+      ['edu', 'edu'],
+      ['go', 'go'],
+      ['sk-not a plan', null],
+      ['x'.repeat(40), null],
+      [42, null],
+    ])('keeps the plan Codex reports (%j) as one bounded token', async (raw, expected) => {
+      global.fetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              plan_type: raw,
+              rate_limit: { primary_window: { used_percent: 25, reset_after_seconds: 3600 } },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+      ) as typeof fetch;
+      const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+      expect(result.success).toBe(true);
+      expect(result.planType).toBe(expected);
+    });
+
     it.each(['', '   '])('rejects an empty native token %j without networking', async (token) => {
       const fetchSpy = mock(() => Promise.reject(new Error('Unexpected network call')));
       global.fetch = fetchSpy as typeof fetch;

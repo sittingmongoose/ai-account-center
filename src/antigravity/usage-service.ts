@@ -166,7 +166,12 @@ export class AntigravityUsageService {
         result.statusReason = 'identity_unbound';
         result.message = IDENTITY_UNBOUND_MESSAGE;
       } else {
-        result.plan = displayText(sample.plan, 80) ?? result.plan;
+        // A fresh read decides the plan: one that names no plan shows it unknown, never the
+        // label saved at sign-in, so an upgrade or a missing tier is never hidden behind it.
+        result.plan =
+          sample.status === 'ok' || sample.status === 'fresh'
+            ? displayText(sample.plan, 80)
+            : (displayText(sample.plan, 80) ?? result.plan);
         if (
           Number.isInteger(sample.retryAfterSeconds) &&
           (sample.retryAfterSeconds as number) > 0

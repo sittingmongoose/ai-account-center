@@ -136,7 +136,10 @@ export function codexAccount(
     providerLabel: 'Codex',
     label: profile.name,
     email: email(profile.email),
-    plan: text(profile.plan, 80),
+    // The plan the latest successful usage read reports (wham/usage `plan_type`, or the local
+    // session's rate limits) replaces the sign-in token's claim, which lags an upgrade until
+    // Codex renews its token. The claim stays only when no read named a plan.
+    plan: (row?.quotaStatus === 'ok' ? text(row.tier, 80) : null) ?? text(profile.plan, 80),
     platform: 'ubuntu',
     source: row?.quotaSource === 'local' ? 'Codex local quota' : 'Codex saved login on Ubuntu',
     status: note?.status ?? status,

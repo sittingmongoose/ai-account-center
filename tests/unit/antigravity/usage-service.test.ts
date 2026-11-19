@@ -105,12 +105,12 @@ describe('Antigravity account-specific usage cache', () => {
     const f = fixture([profile('gmail')]);
     f.handle(async (row) => ({
       ...sample(row),
-      plan: 'Google Workspace Business Plus',
+      plan: 'Gemini Enterprise Business',
       windows: [],
     }));
     expect((await f.service.getAccounts())[0]).toMatchObject({
       status: 'ok',
-      plan: 'Google Workspace',
+      plan: 'Gemini Enterprise Business',
       antigravityPlan: { quotaPolicy: 'none' },
       windows: [],
     });
@@ -135,6 +135,76 @@ describe('Antigravity account-specific usage cache', () => {
     f.service.invalidate();
     f.handle(async (row) => ({ ...sample(row), email: row.email, plan: 'Future tier' }));
     expect((await f.service.getAccounts())[0].antigravityPlan).toBeUndefined();
+  });
+
+  it('follows a plan change between two reads, windows and all, with no configuration change', async () => {
+    const f = fixture([{ ...profile('gmail'), plan: 'Free' }]);
+    const weekly = (key: string, label: string, windowMinutes: number) => ({
+      key,
+      label,
+      usedPercent: 5,
+      remainingPercent: 95,
+      resetAt: '2026-10-02T17:00:00.000Z',
+      windowMinutes,
+      kind: 'rate_limit',
+    });
+    f.handle(async (row) => ({
+      ...sample(row),
+      plan: null,
+      reportedPlan: { paidTier: { id: 'free-tier', name: 'Antigravity Starter Quota' } },
+      windows: [
+        weekly('gemini-weekly', 'Gemini Models · Weekly', 10080),
+        weekly('3p-weekly', 'Claude and GPT models · Weekly', 10080),
+      ],
+    }));
+    const before = (await f.service.getAccounts())[0];
+    expect(before.plan).toBe('Free');
+    expect(before.antigravityPlan?.quotaPolicy).toBe('weekly');
+    expect(before.windows.map((w) => w.key)).toEqual(['gemini-weekly', '3p-weekly']);
+    f.service.invalidate();
+    f.advance(60_000);
+    f.handle(async (row) => ({
+      ...sample(row),
+      plan: 'pro',
+      fetchedAt: '2026-10-01T17:01:00.000Z',
+      sampledAt: '2026-10-01T17:01:00.000Z',
+      reportedPlan: { planType: 'pro', paidTier: { id: 'g1-pro-tier', name: 'Google AI Pro' } },
+      windows: [
+        weekly('gemini-5h', 'Gemini Models · 5-hour', 300),
+        weekly('gemini-weekly', 'Gemini Models · Weekly', 10080),
+        weekly('3p-5h', 'Claude and GPT models · 5-hour', 300),
+        weekly('3p-weekly', 'Claude and GPT models · Weekly', 10080),
+        weekly('gemini-argon-wtu-weekly', 'Gemini 4 Argon · Weekly', 10080),
+      ],
+    }));
+    const after = (await f.service.getAccounts())[0];
+    expect(after.plan).toBe('Google AI Pro');
+    expect(after.antigravityPlan).toMatchObject({
+      class: 'pro',
+      quotaPolicy: 'five-hour-weekly',
+      creditsOverage: true,
+    });
+    expect(after.antigravityPlan?.models).toContain('Gemini 4 Neon');
+    expect(after.windows.map((w) => w.key)).toEqual([
+      'gemini-5h',
+      'gemini-weekly',
+      '3p-5h',
+      '3p-weekly',
+      'gemini-argon-wtu-weekly',
+    ]);
+  });
+
+  it('shows the plan as unknown when a fresh read names none, never the sign-in label', async () => {
+    const f = fixture([profile('gmail')]);
+    f.handle(async (row) => ({
+      ...sample(row),
+      plan: null,
+      reportedPlan: { paidTier: { id: '', name: '' } },
+    }));
+    const result = (await f.service.getAccounts())[0];
+    expect(result.status).toBe('ok');
+    expect(result.plan).toBeNull();
+    expect(result.antigravityPlan).toBeUndefined();
   });
 
   it('maps the native collector fresh status to an available display reading', async () => {

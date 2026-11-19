@@ -125,13 +125,24 @@ def email_address(value):
     return value if re.fullmatch(r"[^\s@\x00-\x1f]+@[^\s@\x00-\x1f]+\.[^\s@\x00-\x1f]+", value) else None
 
 
+# A plan name the table does not list yet: one to three short ASCII words, no long digit run.
+PLAN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]{0,15}(?: [A-Za-z0-9]{1,16}){0,2}")
+
+
 def plan_label(value):
     if not isinstance(value, str):
         return None
-    # Never forward an arbitrary upstream string which could contain a key.
     known = {"free", "lite", "essential", "basic", "standard", "pro", "professional", "premium",
              "max", "ultra", "team", "business", "enterprise", "go"}
-    return value.lower() if value.lower() in known else None
+    if value.lower() in known:
+        return value.lower()
+    # A tier the provider names but this table does not list yet still shows under the
+    # provider's own name, so an upgrade appears on the next read. Never forward a longer or
+    # key-shaped upstream string: those stay unknown.
+    name = value.replace("_", " ")
+    if len(name) <= 32 and PLAN_NAME.fullmatch(name) and not re.search(r"[0-9]{4}", name):
+        return name
+    return None
 
 
 def usage_window(key, label, used_percent=None, reset=None, minutes=None,
