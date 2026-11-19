@@ -222,7 +222,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // REST API routes (modularized); big JSON answers are encoded on the way out.
   app.use('/api', apiCompression());
   const rustService = new RustService(options.rustService);
-  void rustService.start(options.rustServiceBinary);
+  const rustServiceReady = rustService.start(options.rustServiceBinary);
   app.use('/api', (_req, res, next) => {
     res.locals.rustService = rustService;
     next();
@@ -483,7 +483,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
-      startAccountLifecycleMaintenance();
+      startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
       // First run with sign-in on and no password: this run's one-time setup code.

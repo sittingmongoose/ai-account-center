@@ -57,7 +57,7 @@ export const HUNG_TIMEOUTS = 3;
 
 export class RustSupervisor {
   readonly mode: RustServiceMode;
-  protected readonly writesOn: boolean;
+  readonly writesOn: boolean;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */

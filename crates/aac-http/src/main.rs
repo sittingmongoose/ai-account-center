@@ -18,6 +18,7 @@ fn main() {
         Some("--provider-write") => std::process::exit(provider_write::commit()),
         Some("--codex-staging") => std::process::exit(provider_write::staging(false)),
         Some("--antigravity-staging") => std::process::exit(provider_write::staging(true)),
+        Some("--lifecycle-maintenance") => std::process::exit(lifecycle_maintenance()),
         Some("--lifecycle-plan") => std::process::exit(lifecycle_policy::run()),
         _ => {}
     }
@@ -33,6 +34,17 @@ fn main() {
         std::process::exit(1);
     };
     runtime.block_on(run());
+}
+
+#[cfg(unix)]
+fn lifecycle_maintenance() -> i32 {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build();
+    let result = runtime.and_then(|runtime| {
+        runtime.block_on(aac_http::lifecycle_maintenance::compatibility_pipe())
+    });
+    if result.is_ok() { 0 } else { 74 }
 }
 
 #[cfg(unix)]

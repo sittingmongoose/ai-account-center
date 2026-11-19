@@ -20,6 +20,11 @@ export function registerFileWriter(
   };
 }
 
+/** The executable adopted by the current write service for this root. */
+export function activeFileWriterBinary(root: string): string | undefined {
+  return writers.get(canonicalLeaseRoot(root))?.binary;
+}
+
 export interface FileLease {
   close(): void;
   descriptor?: number;
