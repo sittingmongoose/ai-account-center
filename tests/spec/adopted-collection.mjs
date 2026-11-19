@@ -474,6 +474,13 @@ try {
       if (dead) {
         console.log('Abandoned lifecycle socket regression: 1 scenario passed.');
       } else {
+        const homePath = '/api/views/home?platform=mac';
+        const nativeHome = process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on';
+        if (nativeHome) {
+          const home = await send(homePath, { headers: { cookie } });
+          assert.equal(home.status, 200);
+          assert.equal(label((await home.json()).dashboard), 'Before');
+        }
         await ready(service, async () => {
           const text = await readFile(path.join(share, 'usage.json'), 'utf8').catch(() => '');
           return text !== '' && label(JSON.parse(text)) === 'Before';
@@ -512,6 +519,11 @@ try {
           'After',
           'Re-check updates the dashboard generation before it returns'
         );
+        if (nativeHome) {
+          const home = await send(homePath, { headers: { cookie } });
+          assert.equal(home.status, 200);
+          assert.equal(label((await home.json()).dashboard), 'After');
+        }
         const repeated = await post(accountPath + '/recheck', {}, { cookie, origin });
         assert.equal(repeated.status, 429);
         assert.equal((await repeated.json()).code, 'rate_limited');

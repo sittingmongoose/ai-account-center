@@ -46,7 +46,7 @@ pub(super) struct Groups {
     pub(super) collection: bool,
     pub(super) lifecycle: bool,
     writes: bool,
-    home: bool,
+    pub(super) home: bool,
     #[cfg(unix)]
     analytics_writers: bool,
     /// G18: the service owns the aac-usage share writer this boot.
@@ -461,8 +461,11 @@ impl NativeOwners {
     }
 
     pub(super) fn profile_inputs(&self) -> (Arc<Agents>, Option<AccountUsageCache>) {
-        let cache = self.usage.as_ref().map(|usage| usage.cache.clone());
-        (self.agents.clone(), cache)
+        (self.agents.clone(), self.usage_cache())
+    }
+
+    pub(super) fn usage_cache(&self) -> Option<AccountUsageCache> {
+        self.usage.as_ref().map(|usage| usage.cache.clone())
     }
 
     pub(super) async fn codex_profile_rows(&self, now: i64) -> Vec<Value> {

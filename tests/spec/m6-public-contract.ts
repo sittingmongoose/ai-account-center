@@ -106,7 +106,8 @@ const nativeGroupRow = (method: string, route: string) =>
       route.startsWith('/api/status/') ||
       route === '/api/store/status' ||
       route.startsWith('/api/usage/') ||
-      route === '/api/scoreboard'));
+      route === '/api/scoreboard' ||
+      (group === 'store-usage-home' && route === '/api/views/home')));
 const recordNative = process.argv
   .find((arg) => arg.startsWith('--record-native='))
   ?.slice('--record-native='.length);
@@ -348,7 +349,7 @@ try {
     await fs.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
   }
-  if (group === 'status-home' || group === 'status') {
+  if (group === 'status-home' || group === 'status' || group === 'store-usage-home') {
     for (const key of Object.keys(environment))
       if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
     Object.assign(environment, {
@@ -360,6 +361,13 @@ try {
     });
     await fs.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
+  if (group === 'store-usage-home') {
+    // Use the same local collection generation in the recording and replay.
+    Object.assign(environment, {
+      AAC_RUST_GROUP_HOME: 'on',
+      AAC_TS_SIDECAR: 'off',
+    });
   }
   if (group === 'resets') {
     Object.assign(environment, {

@@ -28,9 +28,7 @@ mod collection_cache;
 mod dashboard_fed;
 pub mod dashboard_observations;
 mod feed;
-#[cfg(unix)]
 mod home_fed;
-#[cfg(unix)]
 mod home_producer;
 mod identity;
 mod json_object;

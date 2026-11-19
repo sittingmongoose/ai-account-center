@@ -7,6 +7,7 @@ mod app_updates_owner;
 mod compose;
 mod dashboard_events;
 mod devices;
+mod home_group;
 mod hub;
 mod lifecycle;
 pub(crate) mod lifecycle_host;
@@ -650,6 +651,21 @@ pub(crate) async fn run_public_at(
     if let Some(host) = &owner_host {
         if enabled && let Some(settings) = &native_settings {
             host.register("settings", settings.router(Router::new()));
+        }
+        if enabled
+            && cut
+            && collection_enabled
+            && groups.is_some_and(|groups| groups.home)
+            && let Some(profiles) = &profiles
+            && let Some(collection) = &lifecycle_routes
+        {
+            let home = Arc::new(home_group::Home::new(
+                host,
+                root.clone(),
+                profiles.open_owner(),
+                collection.clone(),
+            ));
+            host.register("home", home.router(Router::new()));
         }
         api = host.mount(api);
     }
