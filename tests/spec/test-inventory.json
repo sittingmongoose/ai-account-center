@@ -4292,6 +4292,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/settings-review-r2.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/shutdown.test.ts",
       "kind": "helper",
       "evidence": [

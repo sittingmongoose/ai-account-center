@@ -1017,4 +1017,59 @@ mod tests {
         assert!(windows_history_script("C:'P").contains("C:''P"));
         assert_eq!(utf16le("a"), vec![97, 0]);
     }
+
+    #[tokio::test]
+    async fn history_cleanup_checks_origin_and_json_and_reports_a_profile_listing_failure() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().to_owned();
+        let manifest = root.join("claude-desktop-profiles.json");
+        std::fs::write(&manifest, b"{").unwrap();
+        let agents = Arc::new(crate::agent_transport::Agents::with_default(
+            root.clone(),
+            false,
+        ));
+        let profiles = Profiles::start(root, Arc::new(Vec::new), agents);
+        let access = DashboardAccess {
+            auth_enabled: true,
+            principal: DashboardPrincipal::Browser {
+                username: "fixture-admin".into(),
+            },
+            secure_transport: true,
+            same_origin: true,
+            origin_present: true,
+            local_access: true,
+            session_id: None,
+            credential_transport: "test",
+            direct_loopback: true,
+            lan_proxy: false,
+            client_address: None,
+        };
+        let request = |mime| {
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/claude/history-snapshots/cleanup")
+                .header("content-type", mime)
+                .body(axum::body::Body::from("{}"))
+                .unwrap()
+        };
+        let mut foreign = access.clone();
+        foreign.same_origin = false;
+        let response = profiles
+            .cleanup(&foreign, request("application/json"))
+            .await;
+        assert_eq!(response.status(), 403);
+        let response = profiles.cleanup(&access, request("text/plain")).await;
+        assert_eq!(response.status(), 415);
+        let response = profiles.cleanup(&access, request("application/json")).await;
+        assert_eq!(response.status(), 500);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["error"],
+            "History snapshots could not be cleaned safely."
+        );
+        assert_eq!(std::fs::read(manifest).unwrap(), b"{");
+    }
 }
