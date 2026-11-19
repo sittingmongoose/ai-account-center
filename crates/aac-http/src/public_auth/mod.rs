@@ -879,13 +879,19 @@ async fn front_door(State(dashboard): State<Dashboard>, request: Request, next: 
     {
         parts.headers.insert("host", host);
     }
-    let json_content = header(&parts.headers, "content-type").is_some_and(|content| {
-        content
-            .split(';')
-            .next()
-            .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
-    });
+    let mut content_type = header(&parts.headers, "content-type")
+        .unwrap_or_default()
+        .split(';');
+    let json_content = content_type
+        .next()
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
     let (parsed, bytes, length) = if json_content && !upgrade {
+        if content_type.filter_map(|parameter| parameter.split_once('=')).any(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("charset")
+                && !value.trim().trim_matches('"').to_ascii_lowercase().starts_with("utf-")
+        }) {
+            return plain(415, "The request could not be processed.");
+        }
         match parse_body(original_body, auth_path).await {
             Ok((value, bytes)) => {
                 let length = bytes.len();
@@ -960,7 +966,10 @@ async fn parse_body(body: Body, auth: bool) -> Result<(Value, Bytes), Reply> {
                 return Err(if auth {
                     error(413, "body_too_large", "Request body is too large.")
                 } else {
-                    plain(413, "Request body is too large.")
+                    response(
+                        413,
+                        json!({"error":"Request body is too large.","code":"body_too_large"}),
+                    )
                 });
             }
         };
