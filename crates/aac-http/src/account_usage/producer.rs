@@ -38,6 +38,98 @@ pub struct CompanionInputs {
     pub server: Option<Value>,
 }
 
+impl CompanionInputs {
+    /// Read public lifecycle capability and active-job facts from the private worker adapter.
+    pub fn load_lifecycle(&mut self, directory: &Path) {
+        let policy = ReadPolicy::capped(65536)
+            .ancestors(Ancestors::NoLinkBelow(directory))
+            .mode(aac_files::read::Mode::Private)
+            .owner(aac_files::read::Owner::Mine);
+        let Read::Bytes(bytes, _) =
+            aac_files::read::read(&directory.join("lifecycle.json"), &policy)
+        else {
+            return;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            return;
+        };
+        let Some(mounted) = value["mounted"].as_bool() else {
+            return;
+        };
+        let disabled = |name: &str| {
+            value[name]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| aac_providers::ProviderId::parse(entry.as_str()?))
+                .collect()
+        };
+        let blocked = value["blocked"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(id, reason)| {
+                aac_providers::is_dashboard_provider(id)
+                    && matches!(
+                        reason.as_str(),
+                        Some(
+                            "secure_transport_required"
+                                | "not_implemented"
+                                | "preflight_failed"
+                                | "tool_missing"
+                                | "isolation_unproven"
+                                | "extension_update_required"
+                        )
+                    )
+            })
+            .map(|(id, reason)| (id.clone(), reason.clone()))
+            .collect();
+        self.lifecycle = dashboard::Lifecycle {
+            mounted,
+            blocked,
+            remove_disabled: disabled("removeDisabled"),
+            recheck_disabled: disabled("recheckDisabled"),
+            jobs: value["jobs"].as_object().cloned().unwrap_or_default(),
+        };
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn cut_lifecycle_snapshot_supplies_capabilities_and_active_job_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    let sample = json!({
+        "mounted": true,
+        "blocked": {"codex":"tool_missing","other":"tool_missing","claude":{"unexpected":true}},
+        "removeDisabled": ["claude"],
+        "recheckDisabled": ["codex","claude","antigravity"],
+        "jobs": {"codex:work":{"state":"verifying","jobId":"fixture-job"}}
+    });
+    let mut inputs = CompanionInputs::default();
+    inputs.load_lifecycle(directory.path());
+    assert!(!inputs.lifecycle.mounted);
+    aac_files::share::write_atomically(
+        directory.path(),
+        "lifecycle.json",
+        &sample.to_string(),
+        0o600,
+    )
+    .unwrap();
+    inputs.load_lifecycle(directory.path());
+    assert!(inputs.lifecycle.mounted);
+    assert_eq!(
+        inputs.lifecycle.blocked,
+        serde_json::from_value::<serde_json::Map<String, Value>>(json!({"codex":"tool_missing"}))
+            .unwrap()
+    );
+    assert_eq!(
+        inputs.lifecycle.remove_disabled,
+        [aac_providers::ProviderId::Claude]
+    );
+    assert_eq!(inputs.lifecycle.recheck_disabled.len(), 3);
+    assert_eq!(inputs.lifecycle.jobs["codex:work"]["jobId"], "fixture-job");
+}
+
 /// The standalone collection, using the same L5 computer pool as the private service.
 #[derive(Clone)]
 pub struct Producer {

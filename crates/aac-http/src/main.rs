@@ -184,9 +184,15 @@ async fn run() {
     let result = if native {
         let mut inputs = aac_http::NativeAccountUsage::default();
         if std::env::var("AAC_RUST_CUT_WORKER").as_deref() == Ok("1") {
-            inputs.companions = std::sync::Arc::new(|| {
+            let directory = std::env::var_os("AAC_CUT_HUB_DIRECTORY")
+                .map(std::path::PathBuf::from)
+                .filter(|path| path.is_absolute());
+            let facts_directory = directory.clone();
+            inputs.companions = std::sync::Arc::new(move || {
                 let mut facts = aac_http::account_usage::producer::CompanionInputs::default();
-                facts.lifecycle.mounted = true;
+                if let Some(directory) = &facts_directory {
+                    facts.load_lifecycle(directory);
+                }
                 let build = env!("AAC_BUILD_COMMIT");
                 let commit = build.get(..8).filter(|prefix| {
                     build.len() == 40 && prefix.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -199,10 +205,7 @@ async fn run() {
                 facts.server = Some(server);
                 facts
             });
-            if let Some(directory) = std::env::var_os("AAC_CUT_HUB_DIRECTORY")
-                .map(std::path::PathBuf::from)
-                .filter(|path| path.is_absolute())
-            {
+            if let Some(directory) = directory {
                 inputs.published = std::sync::Arc::new(move |cache| {
                     aac_http::public_auth::publish_native_hub(&directory, cache);
                 });

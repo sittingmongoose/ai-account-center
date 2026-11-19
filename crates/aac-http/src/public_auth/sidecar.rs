@@ -19,13 +19,13 @@ pub(super) struct Sidecar {
     output: Option<BufReader<ChildStdout>>,
     pub backend: Backend,
     pub cache: PathBuf,
+    _cache_directory: tempfile::TempDir,
 }
 
 #[derive(Deserialize)]
 struct Ready {
     sidecar: u8,
     port: u16,
-    cache: PathBuf,
 }
 
 fn invalid() -> io::Error {
@@ -52,6 +52,15 @@ impl Sidecar {
             .filter(|file| file.is_absolute() && file.is_file())
             .ok_or_else(|| io::Error::other("the packaged dashboard sidecar is missing"))?;
         let proof = storage::hex(&storage::random::<32>().map_err(|_| invalid())?);
+        let mut cache_builder = tempfile::Builder::new();
+        cache_builder.prefix("aac-sidecar-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            cache_builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let cache_directory = cache_builder.tempdir()?;
+        let cache = cache_directory.path().join("hub.json");
         let exe = std::env::current_exe()?;
         let binary = exe.with_file_name(if cfg!(windows) {
             "aac-http.exe"
@@ -62,6 +71,7 @@ impl Sidecar {
             .arg(script)
             .env("CCS_DIR", root)
             .env("AAC_RUST_CUT_WORKER", "1")
+            .env("AAC_CUT_HUB_DIRECTORY", cache_directory.path())
             .env("AAC_RUST_COMPOSE", "1")
             .env("AAC_RUST_SERVICE", "on")
             .env("AAC_RUST_SERVICE_BINARY", binary)
@@ -94,7 +104,7 @@ impl Sidecar {
         .await
         .map_err(|_| invalid())??;
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, ready.port));
-        if ready.sidecar != 1 || address == public || !ready.cache.is_absolute() {
+        if ready.sidecar != 1 || address == public || !cache.is_absolute() {
             return Err(invalid());
         }
         Ok(Some(Self {
@@ -102,7 +112,8 @@ impl Sidecar {
             input: Some(input),
             output: Some(output),
             backend: Backend::new(address, &proof)?,
-            cache: ready.cache,
+            cache,
+            _cache_directory: cache_directory,
         }))
     }
 
