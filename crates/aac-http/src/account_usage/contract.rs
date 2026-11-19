@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 
 /// A 64-hex digest.
 pub fn hex_digest(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// JavaScript `value.length` (UTF-16 code units).
@@ -18,7 +20,8 @@ fn utf16_len(s: &str) -> usize {
 }
 
 fn control_c0(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, '\u{0000}'..='\u{001f}' | '\u{007f}'))
+    s.chars()
+        .any(|c| matches!(c, '\u{0000}'..='\u{001f}' | '\u{007f}'))
 }
 
 /// JavaScript `\s`.
@@ -41,15 +44,23 @@ fn safe_usage_secret(s: &str) -> bool {
         lower.len() >= i + w.len() && lower[i..i + w.len()] == w[..]
     };
     (0..lower.len()).any(|i| {
-        ["sk-", "sk_", "dca:", "http://", "https://", "access_token", "refresh_token"]
-            .iter()
-            .any(|word| at(i, word))
+        [
+            "sk-",
+            "sk_",
+            "dca:",
+            "http://",
+            "https://",
+            "access_token",
+            "refresh_token",
+        ]
+        .iter()
+        .any(|word| at(i, word))
             || (at(i, "bearer") && lower.get(i + 6).is_some_and(|c| js_ws(*c)))
             || (at(i, "eyj")
                 && lower.len() >= i + 11
-                && lower[i + 3..i + 11]
-                    .iter()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-'))
+                && lower[i + 3..i + 11].iter().all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-'
+                }))
     })
 }
 
@@ -72,16 +83,16 @@ pub fn usage_email(value: &Value) -> Option<String> {
     let dot = rest.bytes().position(|b| b == b'.')?;
     let name = &rest[..dot];
     let suffix = &rest[dot + 1..];
-    let no_ws = |part: &str| {
-        !part.is_empty()
-            && !part.chars().any(|c| js_ws(c) || c == '@')
-    };
+    let no_ws = |part: &str| !part.is_empty() && !part.chars().any(|c| js_ws(c) || c == '@');
     (no_ws(local) && no_ws(name) && no_ws(suffix) && !rest.contains('@')).then_some(text)
 }
 
 /// `Date.parse` for the ISO forms the contract meets; NaN is None.
 pub fn parse_ms(s: &str) -> Option<f64> {
-    aac_views::js::parse_date(s).ok().flatten().map(|ms| ms as f64)
+    aac_views::js::parse_date(s)
+        .ok()
+        .flatten()
+        .map(|ms| ms as f64)
 }
 
 fn iso(ms: f64) -> Option<String> {
@@ -94,7 +105,10 @@ fn iso(ms: f64) -> Option<String> {
 /// `usageTimestamp(value, now)`: ISO-prefixed, bounded, in [2000, now + 5 min].
 pub fn usage_timestamp(value: &Value, now: f64) -> Option<String> {
     let s = value.as_str()?;
-    if s.len() > 64 || !s.starts_with(|c: char| c.is_ascii_digit()) || s.as_bytes().get(10) != Some(&b'T') {
+    if s.len() > 64
+        || !s.starts_with(|c: char| c.is_ascii_digit())
+        || s.as_bytes().get(10) != Some(&b'T')
+    {
         return None;
     }
     let b = s.as_bytes();
@@ -160,9 +174,14 @@ pub fn parse_identity(value: &Value) -> Option<UsageIdentity> {
     let kb = kind.as_bytes();
     let kind_ok = (1..=64).contains(&kb.len())
         && kb[0].is_ascii_lowercase()
-        && kb[1..].iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-');
+        && kb[1..]
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-');
     let key = obj.get("key")?.as_str()?;
-    (kind_ok && hex_digest(key)).then(|| UsageIdentity { kind: kind.to_owned(), key: key.to_owned() })
+    (kind_ok && hex_digest(key)).then(|| UsageIdentity {
+        kind: kind.to_owned(),
+        key: key.to_owned(),
+    })
 }
 
 /// `sameUsageIdentity`.
@@ -205,20 +224,33 @@ fn selector_ok(s: &str) -> bool {
     let b = s.as_bytes();
     (1..=160).contains(&b.len())
         && b[0].is_ascii_alphanumeric()
-        && b[1..].iter().all(|c| c.is_ascii_alphanumeric() || b":_.@-".contains(c))
+        && b[1..]
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || b":_.@-".contains(c))
 }
 
 /// `parseUsageCandidate`.
 pub fn parse_candidate(value: &Value) -> Option<UsageCandidate> {
     let obj = value.as_object()?;
-    if obj.keys().any(|k| !["locator", "selectors", "identity", "revision", "email", "plan"].contains(&k.as_str())) {
+    if obj.keys().any(|k| {
+        ![
+            "locator",
+            "selectors",
+            "identity",
+            "revision",
+            "email",
+            "plan",
+        ]
+        .contains(&k.as_str())
+    }) {
         return None;
     }
     let identity = parse_identity(obj.get("identity")?)?;
     let locator = obj.get("locator")?.as_str()?;
     let revision = obj.get("revision")?.as_str()?;
     let selectors = obj.get("selectors")?.as_array()?;
-    if !hex_digest(locator) || !hex_digest(revision) || selectors.is_empty() || selectors.len() > 32 {
+    if !hex_digest(locator) || !hex_digest(revision) || selectors.is_empty() || selectors.len() > 32
+    {
         return None;
     }
     let mut dedup: Vec<String> = Vec::new();
@@ -264,15 +296,21 @@ fn numeric(value: &Value, percent: bool) -> Option<f64> {
 
 fn clear_slug(s: &str) -> bool {
     let b = s.as_bytes();
-    (1..=40).contains(&b.len()) && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
+    (1..=40).contains(&b.len())
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
 }
 
 fn safe_pool_id(value: &Value) -> bool {
-    let Some(s) = value.as_str() else { return false };
+    let Some(s) = value.as_str() else {
+        return false;
+    };
     let b = s.as_bytes();
     let shaped = (1..=128).contains(&b.len())
         && b[0].is_ascii_alphanumeric()
-        && b[1..].iter().all(|c| c.is_ascii_alphanumeric() || b"._:@/-".contains(c));
+        && b[1..]
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || b"._:@/-".contains(c));
     shaped && aac_views::antigravity::display_text(Some(value), 128).is_some()
 }
 
@@ -303,24 +341,65 @@ pub fn analytics_window(value: &Value) -> Option<Value> {
             seen.push(s);
         }
     }
-    let kind = obj.get("kind").and_then(Value::as_str).filter(|k| {
-        ["rate_limit", "balance", "spend", "extra_usage"].contains(k)
-    });
+    let kind = obj
+        .get("kind")
+        .and_then(Value::as_str)
+        .filter(|k| ["rate_limit", "balance", "spend", "extra_usage"].contains(k));
     let mut out = Map::new();
     out.insert("key".into(), json!(key));
     out.insert("label".into(), json!(label));
-    out.insert("usedPercent".into(), opt_num(numeric(obj.get("usedPercent").unwrap_or(&Value::Null), true)));
-    out.insert("remainingPercent".into(), opt_num(numeric(obj.get("remainingPercent").unwrap_or(&Value::Null), true)));
-    out.insert("resetAt".into(), opt_str(analytics_timestamp(obj.get("resetAt").unwrap_or(&Value::Null))));
-    out.insert("windowMinutes".into(), opt_num(numeric(obj.get("windowMinutes").unwrap_or(&Value::Null), false)));
-    out.insert("used".into(), opt_num(numeric(obj.get("used").unwrap_or(&Value::Null), false)));
-    out.insert("limit".into(), opt_num(numeric(obj.get("limit").unwrap_or(&Value::Null), false)));
-    out.insert("unit".into(), opt_str(history_text(obj.get("unit").unwrap_or(&Value::Null), 40)));
+    out.insert(
+        "usedPercent".into(),
+        opt_num(numeric(
+            obj.get("usedPercent").unwrap_or(&Value::Null),
+            true,
+        )),
+    );
+    out.insert(
+        "remainingPercent".into(),
+        opt_num(numeric(
+            obj.get("remainingPercent").unwrap_or(&Value::Null),
+            true,
+        )),
+    );
+    out.insert(
+        "resetAt".into(),
+        opt_str(analytics_timestamp(
+            obj.get("resetAt").unwrap_or(&Value::Null),
+        )),
+    );
+    out.insert(
+        "windowMinutes".into(),
+        opt_num(numeric(
+            obj.get("windowMinutes").unwrap_or(&Value::Null),
+            false,
+        )),
+    );
+    out.insert(
+        "used".into(),
+        opt_num(numeric(obj.get("used").unwrap_or(&Value::Null), false)),
+    );
+    out.insert(
+        "limit".into(),
+        opt_num(numeric(obj.get("limit").unwrap_or(&Value::Null), false)),
+    );
+    out.insert(
+        "unit".into(),
+        opt_str(history_text(obj.get("unit").unwrap_or(&Value::Null), 40)),
+    );
     if let Some(kind) = kind {
         out.insert("kind".into(), json!(kind));
     }
-    out.insert("remaining".into(), opt_num(numeric(obj.get("remaining").unwrap_or(&Value::Null), false)));
-    out.insert("expiresAt".into(), opt_str(analytics_timestamp(obj.get("expiresAt").unwrap_or(&Value::Null))));
+    out.insert(
+        "remaining".into(),
+        opt_num(numeric(obj.get("remaining").unwrap_or(&Value::Null), false)),
+    );
+    out.insert(
+        "expiresAt".into(),
+        opt_str(analytics_timestamp(
+            obj.get("expiresAt").unwrap_or(&Value::Null),
+        )),
+    );
     if let Some(clears) = obj.get("clears") {
         out.insert("clears".into(), clears.clone());
     }
@@ -339,7 +418,10 @@ pub fn analytics_window(value: &Value) -> Option<Value> {
         out.insert("poolId".into(), pool_id.clone());
     }
     let pool_source = obj.get("poolIdSource").and_then(Value::as_str);
-    if matches!(pool_source, Some("provider-id") | Some("provider-bucket-membership")) {
+    if matches!(
+        pool_source,
+        Some("provider-id") | Some("provider-bucket-membership")
+    ) {
         out.insert("poolIdSource".into(), json!(pool_source.unwrap()));
     }
     let pool_label = obj.get("poolLabel").unwrap_or(&Value::Null);
@@ -355,7 +437,9 @@ pub fn analytics_window(value: &Value) -> Option<Value> {
                     let b = m.as_bytes();
                     (1..=160).contains(&b.len())
                         && b[0].is_ascii_alphanumeric()
-                        && b[1..].iter().all(|c| c.is_ascii_alphanumeric() || b"_.:/@-".contains(c))
+                        && b[1..]
+                            .iter()
+                            .all(|c| c.is_ascii_alphanumeric() || b"_.:/@-".contains(c))
                         && aac_views::antigravity::display_text(Some(model), 160).is_some()
                 })
             })
@@ -367,7 +451,12 @@ pub fn analytics_window(value: &Value) -> Option<Value> {
 }
 
 fn opt_num(n: Option<f64>) -> Value {
-    n.map(|n| serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null)).unwrap_or(Value::Null)
+    n.map(|n| {
+        serde_json::Number::from_f64(n)
+            .map(Value::Number)
+            .unwrap_or(Value::Null)
+    })
+    .unwrap_or(Value::Null)
 }
 
 fn opt_str(s: Option<String>) -> Value {
@@ -426,7 +515,9 @@ impl UsageReading {
 
     /// `hasUsage`.
     pub fn has_usage(&self) -> bool {
-        (self.status == "ok" || self.status == "cached") && !self.windows.is_empty() && self.sampled_at.is_some()
+        (self.status == "ok" || self.status == "cached")
+            && !self.windows.is_empty()
+            && self.sampled_at.is_some()
     }
 }
 
@@ -451,7 +542,9 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
     let fetched_at = usage_timestamp(obj.get("fetchedAt").unwrap_or(&Value::Null), now);
     let successful = status == "ok" || status == "cached";
     if successful {
-        let (Some(s), Some(f)) = (&sampled_at, &fetched_at) else { return None };
+        let (Some(s), Some(f)) = (&sampled_at, &fetched_at) else {
+            return None;
+        };
         if parse_ms(s)? > parse_ms(f)? + 300_000.0 {
             return None;
         }
@@ -459,7 +552,11 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
     let mut windows: Vec<Value> = Vec::new();
     let mut keys: Vec<String> = Vec::new();
     for raw in windows_raw {
-        let raw_key = raw.get("key").and_then(Value::as_str).unwrap_or("").to_owned();
+        let raw_key = raw
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         if safe_usage_text(raw.get("key").unwrap_or(&Value::Null), 64).is_none()
             || safe_usage_text(raw.get("label").unwrap_or(&Value::Null), 80).is_none()
             || keys.contains(&raw_key)
@@ -484,10 +581,19 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
                 return None;
             }
         }
-        keys.push(window.get("key").and_then(Value::as_str).unwrap_or("").to_owned());
+        keys.push(
+            window
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+        );
         windows.push(window);
     }
-    let plan_class = raw_class.and_then(Value::as_str).filter(|c| *c == "max" || *c == "pro").map(str::to_owned);
+    let plan_class = raw_class
+        .and_then(Value::as_str)
+        .filter(|c| *c == "max" || *c == "pro")
+        .map(str::to_owned);
     let mut reading = UsageReading {
         status: status.to_owned(),
         email: usage_email(obj.get("email").unwrap_or(&Value::Null)),
@@ -508,18 +614,35 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
     if let Some(extras) = obj.get("optionalExtras").and_then(Value::as_object) {
         let rc = extras.get("resetCredits").and_then(Value::as_str);
         let pb = extras.get("prepaidBalance").and_then(Value::as_str);
-        if matches!(rc, Some("ok") | Some("unavailable")) && matches!(pb, Some("ok") | Some("unavailable")) {
-            reading.optional_extras = Some(json!({"resetCredits": rc.unwrap(), "prepaidBalance": pb.unwrap()}));
+        if matches!(rc, Some("ok") | Some("unavailable"))
+            && matches!(pb, Some("ok") | Some("unavailable"))
+        {
+            reading.optional_extras =
+                Some(json!({"resetCredits": rc.unwrap(), "prepaidBalance": pb.unwrap()}));
         }
     }
-    let observed = reading.sampled_at.as_deref().or(reading.fetched_at.as_deref()).and_then(parse_ms);
+    let observed = reading
+        .sampled_at
+        .as_deref()
+        .or(reading.fetched_at.as_deref())
+        .and_then(parse_ms);
     let clock = now;
     if let Some(reported) = obj.get("reportedPlan").filter(|v| v.is_object()) {
-        let (plan, detail) = aac_views::antigravity::reading_plan_display(reading.plan.clone(), observed.map(|m| m as i64), clock, Some(reported));
+        let (plan, detail) = aac_views::antigravity::reading_plan_display(
+            reading.plan.clone(),
+            observed.map(|m| m as i64),
+            clock,
+            Some(reported),
+        );
         reading.plan = plan.as_str().map(str::to_owned);
         reading.antigravity_plan = detail;
     } else if obj.get("antigravityPlan").is_some_and(Value::is_object) {
-        let (_plan, detail) = aac_views::antigravity::reading_plan_display(reading.plan.clone(), observed.map(|m| m as i64), clock, None);
+        let (_plan, detail) = aac_views::antigravity::reading_plan_display(
+            reading.plan.clone(),
+            observed.map(|m| m as i64),
+            clock,
+            None,
+        );
         reading.antigravity_plan = detail;
     }
     Some(reading)
@@ -527,10 +650,25 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
 
 /// The failure codes the coordinator recognizes.
 pub const USAGE_FAILURE_CODES: [&str; 19] = [
-    "unavailable", "not_installed", "needs_sign_in", "identity_mismatch", "account_mismatch",
-    "source_changed", "rate_limited", "invalid_response", "network_error", "provider_error",
-    "error", "busy", "no_browser_cookie", "local_storage_error", "identity_unavailable",
-    "plan_mismatch", "team_mismatch", "choose_team", "inactive_subscription",
+    "unavailable",
+    "not_installed",
+    "needs_sign_in",
+    "identity_mismatch",
+    "account_mismatch",
+    "source_changed",
+    "rate_limited",
+    "invalid_response",
+    "network_error",
+    "provider_error",
+    "error",
+    "busy",
+    "no_browser_cookie",
+    "local_storage_error",
+    "identity_unavailable",
+    "plan_mismatch",
+    "team_mismatch",
+    "choose_team",
+    "inactive_subscription",
 ];
 
 /// Whether a failure code is recognized.
@@ -541,8 +679,6 @@ pub fn is_failure_code(code: &str) -> bool {
 // ---- Claude optional extras (usage-failover-claude-extras.ts) ----
 
 const MAX_AGE_MS: f64 = 24.0 * 60.0 * 60.0 * 1000.0;
-
-
 
 /// The optional-extra group a window key belongs to.
 fn extra_group(key: &str) -> Option<&'static str> {
@@ -569,7 +705,9 @@ fn extra_group(key: &str) -> Option<&'static str> {
 /// `stripClaudeFailoverExtras`.
 pub fn strip_claude_extras(reading: &UsageReading) -> UsageReading {
     let mut result = reading.clone();
-    result.windows.retain(|w| extra_group(w.get("key").and_then(Value::as_str).unwrap_or("")).is_none());
+    result
+        .windows
+        .retain(|w| extra_group(w.get("key").and_then(Value::as_str).unwrap_or("")).is_none());
     result.optional_extras = None;
     result.optional_extras_context = None;
     result
@@ -611,9 +749,19 @@ pub fn project_claude_extras(reading: &UsageReading, now: f64) -> UsageReading {
 }
 
 /// `retainClaudeFailoverExtras`.
-pub fn retain_claude_extras(previous: Option<&UsageReading>, next: &UsageReading, same_source: bool, now: f64) -> UsageReading {
-    let Some(previous) = previous else { return next.clone() };
-    let ctx_ok = next.optional_extras_context.as_deref().is_some_and(hex_digest);
+pub fn retain_claude_extras(
+    previous: Option<&UsageReading>,
+    next: &UsageReading,
+    same_source: bool,
+    now: f64,
+) -> UsageReading {
+    let Some(previous) = previous else {
+        return next.clone();
+    };
+    let ctx_ok = next
+        .optional_extras_context
+        .as_deref()
+        .is_some_and(hex_digest);
     if !same_source
         || previous.email != next.email
         || previous.plan != next.plan
@@ -624,17 +772,38 @@ pub fn retain_claude_extras(previous: Option<&UsageReading>, next: &UsageReading
     {
         return next.clone();
     }
-    let Some(fetched_at) = next.fetched_at.as_deref().and_then(parse_ms) else { return next.clone() };
-    let reported: Vec<Option<&str>> = next.windows.iter().map(|w| extra_group(w.get("key").and_then(Value::as_str).unwrap_or(""))).collect();
+    let Some(fetched_at) = next.fetched_at.as_deref().and_then(parse_ms) else {
+        return next.clone();
+    };
+    let reported: Vec<Option<&str>> = next
+        .windows
+        .iter()
+        .map(|w| extra_group(w.get("key").and_then(Value::as_str).unwrap_or("")))
+        .collect();
     let mut retained: Vec<Value> = Vec::new();
     for window in &previous.windows {
         let kind = extra_group(window.get("key").and_then(Value::as_str).unwrap_or(""));
-        let sampled_at = window.get("sampledAt").and_then(Value::as_str).or(previous.fetched_at.as_deref());
+        let sampled_at = window
+            .get("sampledAt")
+            .and_then(Value::as_str)
+            .or(previous.fetched_at.as_deref());
         let timestamp = sampled_at.and_then(parse_ms);
-        let unavailable = kind.and_then(|k| next.optional_extras.as_ref().and_then(|e| e.get(k)).and_then(Value::as_str)) == Some("unavailable");
+        let unavailable = kind.and_then(|k| {
+            next.optional_extras
+                .as_ref()
+                .and_then(|e| e.get(k))
+                .and_then(Value::as_str)
+        }) == Some("unavailable");
         let already_reported = kind.is_some() && reported.iter().any(|r| *r == kind);
         let Some(ts) = timestamp else { continue };
-        if kind.is_none() || !unavailable || already_reported || sampled_at.is_none() || now - ts > MAX_AGE_MS || ts > now || ts > fetched_at {
+        if kind.is_none()
+            || !unavailable
+            || already_reported
+            || sampled_at.is_none()
+            || now - ts > MAX_AGE_MS
+            || ts > now
+            || ts > fetched_at
+        {
             continue;
         }
         let mut w = window.clone();
@@ -664,12 +833,16 @@ pub struct MuseUsagePeer {
 
 /// `musePeerBindingFile`.
 pub fn muse_peer_binding_file(ccs_dir: &Path, key: &str) -> PathBuf {
-    ccs_dir.join("account-usage-failover").join(format!("{key}.muse-peers.json"))
+    ccs_dir
+        .join("account-usage-failover")
+        .join(format!("{key}.muse-peers.json"))
 }
 
 /// The private observation/cache read (`readUsageCache`), bounded and owner-held.
 pub fn read_private_cache(file: &Path) -> Value {
-    let Some(parent) = file.parent() else { return Value::Null };
+    let Some(parent) = file.parent() else {
+        return Value::Null;
+    };
     let policy = ReadPolicy::capped(256 * 1024)
         .mode(Mode::Private)
         .owner(Owner::Mine)
@@ -693,7 +866,10 @@ pub fn parse_muse_peer(value: &Value, dashboard_hosts: &[&str]) -> Option<MuseUs
         return None;
     }
     let identity = parse_identity(obj.get("identity")?)?;
-    (identity.kind == "muse-native-credential").then(|| MuseUsagePeer { host: host.to_owned(), identity })
+    (identity.kind == "muse-native-credential").then(|| MuseUsagePeer {
+        host: host.to_owned(),
+        identity,
+    })
 }
 
 /// `isBoundMusePeer`.
@@ -713,25 +889,40 @@ pub fn is_bound_muse_peer(
         return false;
     }
     let value = read_private_cache(&muse_peer_binding_file(ccs_dir, key));
-    let Some(obj) = value.as_object() else { return false };
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
     let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
     keys.sort_unstable();
     if keys != ["identity", "key", "peers", "version"] {
         return false;
     }
-    if obj.get("version").and_then(Value::as_f64) != Some(1.0) || obj.get("key").and_then(Value::as_str) != Some(key) {
+    if obj.get("version").and_then(Value::as_f64) != Some(1.0)
+        || obj.get("key").and_then(Value::as_str) != Some(key)
+    {
         return false;
     }
-    if !same_identity(parse_identity(obj.get("identity").unwrap_or(&Value::Null)).as_ref(), Some(primary)) {
+    if !same_identity(
+        parse_identity(obj.get("identity").unwrap_or(&Value::Null)).as_ref(),
+        Some(primary),
+    ) {
         return false;
     }
-    let Some(peers) = obj.get("peers").and_then(Value::as_array) else { return false };
+    let Some(peers) = obj.get("peers").and_then(Value::as_array) else {
+        return false;
+    };
     if peers.is_empty() || peers.len() > 8 {
         return false;
     }
-    let parsed: Vec<Option<MuseUsagePeer>> = peers.iter().map(|p| parse_muse_peer(p, dashboard_hosts)).collect();
+    let parsed: Vec<Option<MuseUsagePeer>> = peers
+        .iter()
+        .map(|p| parse_muse_peer(p, dashboard_hosts))
+        .collect();
     if parsed.iter().any(|p| p.is_none()) {
         return false;
     }
-    parsed.iter().any(|p| p.as_ref().is_some_and(|p| p.host == host && same_identity(Some(&p.identity), Some(peer))))
+    parsed.iter().any(|p| {
+        p.as_ref()
+            .is_some_and(|p| p.host == host && same_identity(Some(&p.identity), Some(peer)))
+    })
 }

@@ -535,7 +535,11 @@ fn plan_display(plan: Option<String>, sampled: Option<i64>, clock: f64) -> (Valu
 }
 
 /// The `plan` member and optional `antigravityPlan` for a resolved plan definition.
-fn display_definition(definition: &Plan, sampled: Option<i64>, clock: f64) -> (Value, Option<Value>) {
+fn display_definition(
+    definition: &Plan,
+    sampled: Option<i64>,
+    clock: f64,
+) -> (Value, Option<Value>) {
     #[allow(clippy::cast_precision_loss)]
     let observed = sampled.map_or(clock, |ms| ms as f64);
     let before_removal = observed < MODEL_REMOVAL_AT;
@@ -595,13 +599,14 @@ pub fn reading_plan_display(
         .and_then(|r| r.get("planType"))
         .and_then(Value::as_str)
         .and_then(known);
-    let mut plan_class = plan_type.or(tier_class).or_else(|| plan.as_deref().and_then(known));
-    if let (Some(pc), Some(tc)) = (plan_class, tier_class) {
-        if (pc.class == "ultra" && tc.class.starts_with("ultra-"))
-            || (pc.class == "pro" && tc.class == "pro-trial")
-        {
-            plan_class = Some(tc);
-        }
+    let mut plan_class = plan_type
+        .or(tier_class)
+        .or_else(|| plan.as_deref().and_then(known));
+    if let (Some(pc), Some(tc)) = (plan_class, tier_class)
+        && ((pc.class == "ultra" && tc.class.starts_with("ultra-"))
+            || (pc.class == "pro" && tc.class == "pro-trial"))
+    {
+        plan_class = Some(tc);
     }
     match plan_class {
         Some(definition) => display_definition(definition, sampled, clock),
@@ -953,12 +958,38 @@ mod tests {
     fn reported_plan_refines_the_class_like_the_ts_display() {
         let sampled = Some(1_792_065_600_000);
         let class = |plan: Option<&str>, reported: Value| {
-            reading_plan_display(plan.map(str::to_owned), sampled, 0.0, Some(&reported)).1.map(|d| d["class"].as_str().unwrap_or("").to_owned())
+            reading_plan_display(plan.map(str::to_owned), sampled, 0.0, Some(&reported))
+                .1
+                .map(|d| d["class"].as_str().unwrap_or("").to_owned())
         };
-        assert_eq!(class(Some("Google AI Pro"), json!({"planType":"ultra"})).as_deref(), Some("ultra"));
-        assert_eq!(class(Some("Google AI Ultra"), json!({"paidTier":{"id":"ultra-5x"}})).as_deref(), Some("ultra-5x"));
-        assert_eq!(class(Some("Google AI Pro"), json!({"currentTier":{"name":"pro-trial"}})).as_deref(), Some("pro-trial"));
-        assert_eq!(class(Some("Google AI Pro"), json!({"paidTier":{"id":"ultra-20x"},"planType":"pro"})).as_deref(), Some("pro"));
+        assert_eq!(
+            class(Some("Google AI Pro"), json!({"planType":"ultra"})).as_deref(),
+            Some("ultra")
+        );
+        assert_eq!(
+            class(
+                Some("Google AI Ultra"),
+                json!({"paidTier":{"id":"ultra-5x"}})
+            )
+            .as_deref(),
+            Some("ultra-5x")
+        );
+        assert_eq!(
+            class(
+                Some("Google AI Pro"),
+                json!({"currentTier":{"name":"pro-trial"}})
+            )
+            .as_deref(),
+            Some("pro-trial")
+        );
+        assert_eq!(
+            class(
+                Some("Google AI Pro"),
+                json!({"paidTier":{"id":"ultra-20x"},"planType":"pro"})
+            )
+            .as_deref(),
+            Some("pro")
+        );
         // `known` matches labels/aliases, not class keys: an unmatched planType leaves no class.
         assert_eq!(class(None, json!({"planType":"enterprise-plus"})), None);
         let (plan, detail) = reading_plan_display(Some("Free".into()), sampled, 0.0, None);

@@ -5,7 +5,10 @@ use serde::{
 };
 use std::{collections::BTreeSet, fmt};
 
-struct ExactKeys<'a>(&'a [&'a str]);
+struct ExactKeys<'a> {
+    required: &'a [&'a str],
+    optional: &'a [&'a str],
+}
 impl<'de> Visitor<'de> for ExactKeys<'_> {
     type Value = ();
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -14,12 +17,15 @@ impl<'de> Visitor<'de> for ExactKeys<'_> {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
         let mut seen = BTreeSet::new();
         while let Some(key) = map.next_key::<String>()? {
-            if !self.0.contains(&key.as_str()) || !seen.insert(key) {
+            if !self.required.contains(&key.as_str()) && !self.optional.contains(&key.as_str()) {
+                return Err(de::Error::custom("unexpected or duplicate object key"));
+            }
+            if !seen.insert(key) {
                 return Err(de::Error::custom("unexpected or duplicate object key"));
             }
             map.next_value::<IgnoredAny>()?;
         }
-        if seen.len() != self.0.len() {
+        if !self.required.iter().all(|key| seen.contains(*key)) {
             return Err(de::Error::custom("missing object key"));
         }
         Ok(())
@@ -32,8 +38,17 @@ pub(crate) fn from_slice<T: DeserializeOwned>(
     bytes: &[u8],
     keys: &[&str],
 ) -> serde_json::Result<T> {
+    from_slice_optional(bytes, keys, &[])
+}
+
+/// The same gate when a field is written only in some states (the TS record omits it).
+pub(crate) fn from_slice_optional<T: DeserializeOwned>(
+    bytes: &[u8],
+    required: &[&str],
+    optional: &[&str],
+) -> serde_json::Result<T> {
     let mut raw = serde_json::Deserializer::from_slice(bytes);
-    raw.deserialize_map(ExactKeys(keys))?;
+    raw.deserialize_map(ExactKeys { required, optional })?;
     raw.end()?;
     serde_json::from_slice(bytes)
 }

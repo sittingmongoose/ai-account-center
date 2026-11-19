@@ -3,10 +3,10 @@
 //! cooldown/observation files byte for byte. Runs on the Unix service host (Nas1).
 
 use aac_files::registry::{self, Owners};
+use aac_http::account_usage::coordinator::UsageIdentity;
 use aac_http::account_usage::coordinator::{
     FailoverCoordinator, FailoverDeps, PrimarySource, UsageFailoverTarget, UsageHost,
 };
-use aac_http::account_usage::coordinator::UsageIdentity;
 use aac_views::js_json;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -76,7 +76,13 @@ impl FailoverDeps for FakeDeps {
 
     fn hosts<'a>(&'a self) -> Pin<Box<dyn Future<Output = Vec<UsageHost>> + Send + 'a>> {
         let state = Arc::clone(&self.state);
-        Box::pin(async move { state.lock().unwrap_or_else(|e| e.into_inner()).hosts.clone() })
+        Box::pin(async move {
+            state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hosts
+                .clone()
+        })
     }
 
     fn now(&self) -> f64 {
@@ -133,13 +139,22 @@ fn target(value: &Value, ccs_dir: PathBuf) -> UsageFailoverTarget {
         binding: value["binding"].as_str().unwrap_or("").to_owned(),
         primary_sources,
         claude_desktop_cadence: value["claudeDesktopCadence"] == json!(true),
-        expected_email: value.get("expectedEmail").and_then(Value::as_str).map(str::to_owned),
-        expected_identity: value.get("expectedIdentity").filter(|v| !v.is_null()).map(identity),
+        expected_email: value
+            .get("expectedEmail")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        expected_identity: value
+            .get("expectedIdentity")
+            .filter(|v| !v.is_null())
+            .map(identity),
     }
 }
 
 fn load_corpus() -> Value {
-    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("g4-corpus.json");
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("g4-corpus.json");
     let text = std::fs::read_to_string(file).expect("corpus");
     serde_json::from_str(&text).expect("corpus parse")
 }
@@ -155,22 +170,54 @@ fn set_step(state: &mut FakeState, step: &Value) {
     }
     if let Some(inv) = step["inventories"].as_object() {
         for (h, v) in inv {
-            state.inventories.insert(h.clone(), if v.as_str() == Some("error") { Err(()) } else { Ok(v.as_array().cloned().unwrap_or_default()) });
+            state.inventories.insert(
+                h.clone(),
+                if v.as_str() == Some("error") {
+                    Err(())
+                } else {
+                    Ok(v.as_array().cloned().unwrap_or_default())
+                },
+            );
         }
     }
     if let Some(coll) = step["collections"].as_object() {
         for (h, v) in coll {
-            state.collections.insert(h.clone(), if v.as_str() == Some("error") { Err(()) } else { Ok(v.clone()) });
+            state.collections.insert(
+                h.clone(),
+                if v.as_str() == Some("error") {
+                    Err(())
+                } else {
+                    Ok(v.clone())
+                },
+            );
         }
     }
     if let Some(sign_in) = step["signInNeeded"].as_object() {
         for (h, v) in sign_in {
-            state.sign_in_needed.insert(h.clone(), v.as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()).unwrap_or_default());
+            state.sign_in_needed.insert(
+                h.clone(),
+                v.as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|s| s.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            );
         }
     }
     if let Some(gaps) = step["incomplete"].as_object() {
         for (h, v) in gaps {
-            state.incomplete.insert(h.clone(), v.as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()).unwrap_or_default());
+            state.incomplete.insert(
+                h.clone(),
+                v.as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|s| s.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            );
         }
     }
 }
@@ -181,11 +228,20 @@ fn read_dir_json(dir: &PathBuf) -> (HashMap<String, Value>, Option<(String, Valu
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
-            let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
             if name.starts_with("cooldown-") && name.ends_with(".json") {
                 cooldowns.insert(name, value);
-            } else if name.len() == 69 && name.ends_with(".json") && name[..64].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            } else if name.len() == 69
+                && name.ends_with(".json")
+                && name[..64]
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
                 cache = Some((name[..64].to_owned(), value));
             }
         }
@@ -193,16 +249,30 @@ fn read_dir_json(dir: &PathBuf) -> (HashMap<String, Value>, Option<(String, Valu
     (cooldowns, cache)
 }
 
-fn assert_json(label: &str, expected: &Value, actual: &Value) {
+/// Compare as JSON.stringify bytes; a mismatch is recorded so one run reports every diff.
+fn check_json(diffs: &mut Vec<String>, label: &str, expected: &Value, actual: &Value) {
     let expected_bytes = js_json::write(expected);
     let actual_bytes = js_json::write(actual);
-    assert_eq!(
-        expected_bytes,
-        actual_bytes,
-        "{label}\n  expected: {}\n  actual:   {}",
-        String::from_utf8_lossy(&expected_bytes),
-        String::from_utf8_lossy(&actual_bytes)
-    );
+    if expected_bytes != actual_bytes {
+        diffs.push(format!(
+            "{label}\n  expected: {}\n  actual:   {}",
+            String::from_utf8_lossy(&expected_bytes),
+            String::from_utf8_lossy(&actual_bytes)
+        ));
+    }
+}
+
+fn check_eq<T: std::fmt::Debug + PartialEq>(
+    diffs: &mut Vec<String>,
+    label: &str,
+    expected: T,
+    actual: T,
+) {
+    if expected != actual {
+        diffs.push(format!(
+            "{label}\n  expected: {expected:?}\n  actual:   {actual:?}"
+        ));
+    }
 }
 
 #[tokio::test]
@@ -210,6 +280,7 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
     let corpus = load_corpus();
     let scenarios = corpus.as_array().expect("scenarios");
     let mut checked = 0;
+    let mut diffs: Vec<String> = Vec::new();
     for scenario in scenarios {
         let name = scenario["name"].as_str().unwrap_or("?");
         let ccs_dir = std::env::temp_dir().join("aac-g4-parity").join(name);
@@ -217,8 +288,17 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
         std::fs::create_dir_all(&ccs_dir).expect("ccs");
         let tgt = target(&scenario["target"], ccs_dir.clone());
         let template = scenario["template"].clone();
-        let state = Arc::new(Mutex::new(FakeState { hosts: vec![host(&json!({"host":"mac","platform":"mac","sshHost":"fixture-mac"})), host(&json!({"host":"ubuntu","platform":"ubuntu","sshHost":"fixture-ubuntu"})), host(&json!({"host":"windows","platform":"windows","sshHost":"fixture-windows"}))], ..Default::default() }));
-        let deps = Arc::new(FakeDeps { state: Arc::clone(&state) });
+        let state = Arc::new(Mutex::new(FakeState {
+            hosts: vec![
+                host(&json!({"host":"mac","platform":"mac","sshHost":"fixture-mac"})),
+                host(&json!({"host":"ubuntu","platform":"ubuntu","sshHost":"fixture-ubuntu"})),
+                host(&json!({"host":"windows","platform":"windows","sshHost":"fixture-windows"})),
+            ],
+            ..Default::default()
+        }));
+        let deps = Arc::new(FakeDeps {
+            state: Arc::clone(&state),
+        });
         let owners = collection_owners();
         let mut coordinator = FailoverCoordinator::new(deps.clone(), owners.clone());
         for step in scenario["steps"].as_array().expect("steps") {
@@ -240,13 +320,20 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("grant mode");
-                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("dir mode");
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                        .expect("grant mode");
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                        .expect("dir mode");
                 }
             }
             let op = step["op"].as_str().unwrap_or("");
-            let tmpl = if step["template"].is_null() { template.clone() } else { step["template"].clone() };
+            let tmpl = if step["template"].is_null() {
+                template.clone()
+            } else {
+                step["template"].clone()
+            };
             let expected = &step["expected"];
+            let label = format!("{name}/{op}@{}", step["now"].as_f64().unwrap_or(0.0));
             if op == "collect" || op == "recover" || op == "peek" {
                 let result = if op == "collect" {
                     coordinator.collect(&tgt, &tmpl).await
@@ -255,40 +342,105 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
                 } else {
                     coordinator.peek(&tgt, &tmpl)
                 };
-                assert_json(&format!("{name}/{op} row"), &expected["result"], &result);
+                check_json(
+                    &mut diffs,
+                    &format!("{label} row"),
+                    &expected["result"],
+                    &result,
+                );
             } else {
                 let value = if op == "holdCooldown" {
                     coordinator.hold_cooldown(&tgt, step["holdUntil"].as_f64().unwrap_or(0.0))
                 } else {
                     coordinator.cooldown_until(&tgt)
                 };
-                assert_eq!(value, expected["result"].as_f64().unwrap_or(f64::NAN), "{name}/{op} value");
+                let want = expected["result"].as_f64().unwrap_or(f64::NAN);
+                if !(value == want || (value.is_nan() && want.is_nan())) {
+                    diffs.push(format!(
+                        "{label} value\n  expected: {want}\n  actual:   {value}"
+                    ));
+                }
             }
             // Collect-request hosts.
-            let collected: Vec<String> = state.lock().unwrap_or_else(|e| e.into_inner()).calls.iter()
+            let collected: Vec<String> = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .calls
+                .iter()
                 .filter(|(_, req)| req.get("action").and_then(Value::as_str) == Some("collect"))
-                .map(|(h, _)| h.clone()).collect();
-            let expected_hosts: Vec<String> = expected["collectedHosts"].as_array().map(|a| a.iter().filter_map(|h| h.as_str().map(str::to_owned)).collect()).unwrap_or_default();
-            assert_eq!(collected, expected_hosts, "{name}/{op} collected hosts");
+                .map(|(h, _)| h.clone())
+                .collect();
+            let expected_hosts: Vec<String> = expected["collectedHosts"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|h| h.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            check_eq(
+                &mut diffs,
+                &format!("{label} collected hosts"),
+                expected_hosts,
+                collected,
+            );
             // Cooldown + observation files.
             let dir = ccs_dir.join("account-usage-failover");
             let (cooldowns, cache) = read_dir_json(&dir);
-            let expected_cooldowns = expected["cooldowns"].as_object().cloned().unwrap_or_default();
-            assert_eq!(cooldowns.len(), expected_cooldowns.len(), "{name}/{op} cooldown count");
+            let expected_cooldowns = expected["cooldowns"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            let mut actual_names: Vec<&String> = cooldowns.keys().collect();
+            let mut expected_names: Vec<&String> = expected_cooldowns.keys().collect();
+            actual_names.sort();
+            expected_names.sort();
+            check_eq(
+                &mut diffs,
+                &format!("{label} cooldown files"),
+                expected_names,
+                actual_names,
+            );
             for (file, expected_value) in &expected_cooldowns {
-                let actual = cooldowns.get(file).unwrap_or_else(|| panic!("{name}/{op} missing cooldown {file}"));
-                assert_json(&format!("{name}/{op} cooldown {file}"), expected_value, actual);
+                match cooldowns.get(file) {
+                    Some(actual) => check_json(
+                        &mut diffs,
+                        &format!("{label} cooldown {file}"),
+                        expected_value,
+                        actual,
+                    ),
+                    None => diffs.push(format!("{label} missing cooldown {file}")),
+                }
             }
             let expected_cache = &expected["cache"];
             if expected_cache.is_null() {
-                assert!(cache.is_none(), "{name}/{op} unexpected cache file");
+                if cache.is_some() {
+                    diffs.push(format!("{label} unexpected cache file"));
+                }
+            } else if let Some((key, actual)) = cache.as_ref() {
+                check_eq(
+                    &mut diffs,
+                    &format!("{label} cache key"),
+                    expected["cacheKey"].as_str().unwrap_or("").to_owned(),
+                    key.clone(),
+                );
+                check_json(
+                    &mut diffs,
+                    &format!("{label} cache"),
+                    expected_cache,
+                    actual,
+                );
             } else {
-                let (key, actual) = cache.as_ref().unwrap_or_else(|| panic!("{name}/{op} missing cache"));
-                assert_eq!(key, expected["cacheKey"].as_str().unwrap_or(""), "{name}/{op} cache key");
-                assert_json(&format!("{name}/{op} cache"), expected_cache, actual);
+                diffs.push(format!("{label} missing cache"));
             }
             checked += 1;
         }
     }
     assert!(checked >= 30, "expected at least 30 steps, got {checked}");
+    assert!(
+        diffs.is_empty(),
+        "{} of {checked} steps differ from the TypeScript coordinator:\n\n{}",
+        diffs.len(),
+        diffs.join("\n\n")
+    );
 }
