@@ -544,3 +544,13 @@ pub fn launcher_field_matches(actual: &Value, expected: Option<&str>) -> bool {
 pub fn entry_platform(entry: &Value, platform: &str) -> Option<Map<String, Value>> {
     entry.as_object()?.get(platform)?.as_object().cloned()
 }
+
+/// One manifest row as the Open path reads it (the parity table feeds rows directly).
+pub fn profile_from_value(value: &Value) -> Option<Profile> {
+    read_profile(value)
+}
+
+/// A pending registry document as the Open path reads it (the parity table feeds it directly).
+pub fn pending_from_value(value: &Value) -> Option<Vec<PendingProfile>> {
+    parse_pending(value)
+}

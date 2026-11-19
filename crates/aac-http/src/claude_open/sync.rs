@@ -21,7 +21,7 @@ pub const OPEN_COPY_BUDGET_MS: u64 = 45_000;
 /// The core's `MAX_BATCHES_PER_OPEN`.
 pub const MAX_BATCHES_PER_OPEN: u64 = 50;
 const PROJECT: &str = "/mnt/Cursor/PuppetMaster";
-const NATIVE: [(&str, &str, &str); 2] = [
+pub(crate) const NATIVE: [(&str, &str, &str); 2] = [
     (
         "mac",
         "2.19675.0",

@@ -13,3 +13,9 @@ pub mod policy;
 pub mod sync;
 pub mod remote;
 pub mod sync_service;
+#[cfg(test)]
+mod table_tests;
+#[cfg(test)]
+mod marker_tests;
+#[cfg(test)]
+mod fixture_tests;

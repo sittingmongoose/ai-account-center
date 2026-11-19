@@ -1,0 +1,1922 @@
+{
+  "note": "G13 parity goldens from the real TS core, progress store, policy parse and account-list rule. Synthetic fixtures only.",
+  "policy": [
+    {
+      "name": "valid",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      }
+    },
+    {
+      "name": "version",
+      "value": {
+        "version": 2,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "enabled",
+      "value": {
+        "version": 1,
+        "enabled": false,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "uuid-uppercase",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      }
+    },
+    {
+      "name": "uuid-shape",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "not-a-uuid"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "project-cwd",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/elsewhere",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "root-double-slash",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user//.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "root-dot-dot",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/../.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "root-backslash",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user\\x/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "root-suffix",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/other"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "root-control",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic\u0001user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "alias-shape",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "-bad",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "port-range",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 0
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 0
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "port-float",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 22.5
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 22.5
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "endpoint-mismatch",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "other-host",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "unknown-key",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        },
+        "extra": 1
+      },
+      "expected": null
+    },
+    {
+      "name": "identity-unknown-key",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811",
+          "extra": 1
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          },
+          "windows": {
+            "alias": "synthetic-windows-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "ssh-missing-platform",
+      "value": {
+        "version": 1,
+        "enabled": true,
+        "sourcePlatform": "windows",
+        "identity": {
+          "accountUuid": "00000000-0000-4000-8000-000000000429",
+          "organizationUuid": "00000000-0000-4000-8000-000000000811"
+        },
+        "project": {
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "transcriptRoot": "/synthetic-user/.claude/projects"
+        },
+        "ssh": {
+          "mac": {
+            "alias": "synthetic-mac-alias-A",
+            "hostname": "synthetic-host-A",
+            "username": "synthetic-user-A",
+            "port": 2265
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "null",
+      "value": null,
+      "expected": null
+    },
+    {
+      "name": "array",
+      "value": [
+        {
+          "version": 1,
+          "enabled": true,
+          "sourcePlatform": "windows",
+          "identity": {
+            "accountUuid": "00000000-0000-4000-8000-000000000429",
+            "organizationUuid": "00000000-0000-4000-8000-000000000811"
+          },
+          "project": {
+            "cwd": "/mnt/Cursor/PuppetMaster",
+            "originCwd": "/mnt/Cursor/PuppetMaster",
+            "transcriptRoot": "/synthetic-user/.claude/projects"
+          },
+          "ssh": {
+            "mac": {
+              "alias": "synthetic-mac-alias-A",
+              "hostname": "synthetic-host-A",
+              "username": "synthetic-user-A",
+              "port": 2265
+            },
+            "windows": {
+              "alias": "synthetic-windows-alias-A",
+              "hostname": "synthetic-host-A",
+              "username": "synthetic-user-A",
+              "port": 2265
+            }
+          }
+        }
+      ],
+      "expected": null
+    }
+  ],
+  "neutral": [
+    {
+      "name": "plain",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "descriptor": {
+          "sessionId": "local_00000000-0000-4000-8000-000000000001",
+          "cliSessionId": "00000000-0000-4000-8000-000000000002",
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "createdAt": 1,
+          "lastActivityAt": 2,
+          "lastFocusedAt": 0,
+          "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+          "isArchived": false,
+          "permissionMode": "default",
+          "importedFrom": "local-1p-code",
+          "resumeConfirmed": false,
+          "remoteControlAutoEligible": false,
+          "sshConfig": {
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl"
+        }
+      }
+    },
+    {
+      "name": "model-effort-turns",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "model": "claude-opus-4-5",
+        "effort": "high",
+        "completedTurns": 12
+      },
+      "expected": {
+        "descriptor": {
+          "sessionId": "local_00000000-0000-4000-8000-000000000001",
+          "cliSessionId": "00000000-0000-4000-8000-000000000002",
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "createdAt": 1,
+          "lastActivityAt": 2,
+          "lastFocusedAt": 0,
+          "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+          "isArchived": false,
+          "permissionMode": "default",
+          "importedFrom": "local-1p-code",
+          "resumeConfirmed": false,
+          "remoteControlAutoEligible": false,
+          "sshConfig": {
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+          "model": "claude-opus-4-5",
+          "effort": "high",
+          "completedTurns": 12
+        }
+      }
+    },
+    {
+      "name": "model-invalid",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "model": "gpt-5"
+      },
+      "expected": {
+        "descriptor": {
+          "sessionId": "local_00000000-0000-4000-8000-000000000001",
+          "cliSessionId": "00000000-0000-4000-8000-000000000002",
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "createdAt": 1,
+          "lastActivityAt": 2,
+          "lastFocusedAt": 0,
+          "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+          "isArchived": false,
+          "permissionMode": "default",
+          "importedFrom": "local-1p-code",
+          "resumeConfirmed": false,
+          "remoteControlAutoEligible": false,
+          "sshConfig": {
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl"
+        }
+      }
+    },
+    {
+      "name": "effort-invalid",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "effort": "ultra"
+      },
+      "expected": {
+        "descriptor": {
+          "sessionId": "local_00000000-0000-4000-8000-000000000001",
+          "cliSessionId": "00000000-0000-4000-8000-000000000002",
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "createdAt": 1,
+          "lastActivityAt": 2,
+          "lastFocusedAt": 0,
+          "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+          "isArchived": false,
+          "permissionMode": "default",
+          "importedFrom": "local-1p-code",
+          "resumeConfirmed": false,
+          "remoteControlAutoEligible": false,
+          "sshConfig": {
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl"
+        }
+      }
+    },
+    {
+      "name": "turns-negative",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "completedTurns": -1
+      },
+      "expected": {
+        "descriptor": {
+          "sessionId": "local_00000000-0000-4000-8000-000000000001",
+          "cliSessionId": "00000000-0000-4000-8000-000000000002",
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "createdAt": 1,
+          "lastActivityAt": 2,
+          "lastFocusedAt": 0,
+          "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+          "isArchived": false,
+          "permissionMode": "default",
+          "importedFrom": "local-1p-code",
+          "resumeConfirmed": false,
+          "remoteControlAutoEligible": false,
+          "sshConfig": {
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl"
+        }
+      }
+    },
+    {
+      "name": "turns-float",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "completedTurns": 1.5
+      },
+      "expected": {
+        "descriptor": {
+          "sessionId": "local_00000000-0000-4000-8000-000000000001",
+          "cliSessionId": "00000000-0000-4000-8000-000000000002",
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "createdAt": 1,
+          "lastActivityAt": 2,
+          "lastFocusedAt": 0,
+          "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+          "isArchived": false,
+          "permissionMode": "default",
+          "importedFrom": "local-1p-code",
+          "resumeConfirmed": false,
+          "remoteControlAutoEligible": false,
+          "sshConfig": {
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl"
+        }
+      }
+    },
+    {
+      "name": "wsl-config",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "wslConfig": {
+          "distro": "x"
+        }
+      },
+      "expected": {
+        "reason": "project_or_backend_not_verified"
+      }
+    },
+    {
+      "name": "backend-local",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "backend": {
+          "kind": "local"
+        }
+      },
+      "expected": {
+        "reason": "project_or_backend_not_verified"
+      }
+    },
+    {
+      "name": "backend-ssh",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false,
+        "backend": {
+          "kind": "ssh"
+        }
+      },
+      "expected": {
+        "descriptor": {
+          "sessionId": "local_00000000-0000-4000-8000-000000000001",
+          "cliSessionId": "00000000-0000-4000-8000-000000000002",
+          "cwd": "/mnt/Cursor/PuppetMaster",
+          "originCwd": "/mnt/Cursor/PuppetMaster",
+          "createdAt": 1,
+          "lastActivityAt": 2,
+          "lastFocusedAt": 0,
+          "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+          "isArchived": false,
+          "permissionMode": "default",
+          "importedFrom": "local-1p-code",
+          "resumeConfirmed": false,
+          "remoteControlAutoEligible": false,
+          "sshConfig": {
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl"
+        }
+      }
+    },
+    {
+      "name": "reference-backslash",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects\\bad\\x.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "transcript_reference_invalid"
+      }
+    },
+    {
+      "name": "reference-depth",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/a/b/c.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "transcript_reference_invalid"
+      }
+    },
+    {
+      "name": "reference-name",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/other.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "transcript_reference_invalid"
+      }
+    },
+    {
+      "name": "title-empty",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "display_metadata_invalid"
+      }
+    },
+    {
+      "name": "title-control",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "bad\u0001title",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "display_metadata_invalid"
+      }
+    },
+    {
+      "name": "title-long",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "display_metadata_invalid"
+      }
+    },
+    {
+      "name": "created-negative",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": -1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "display_metadata_invalid"
+      }
+    },
+    {
+      "name": "archived-string",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": "false"
+      },
+      "expected": {
+        "reason": "display_metadata_invalid"
+      }
+    },
+    {
+      "name": "cwd-mismatch",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/elsewhere",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "synthetic-windows-alias-A"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "project_or_backend_not_verified"
+      }
+    },
+    {
+      "name": "alias-mismatch",
+      "source": {
+        "sessionId": "local_00000000-0000-4000-8000-000000000001",
+        "cliSessionId": "00000000-0000-4000-8000-000000000002",
+        "title": "SYNTHETIC_PRIVATE_HISTORY_TITLE",
+        "cwd": "/mnt/Cursor/PuppetMaster",
+        "originCwd": "/mnt/Cursor/PuppetMaster",
+        "sshConfig": {
+          "sshHost": "other-alias"
+        },
+        "sshRemoteTranscriptPath": "/synthetic-user/.claude/projects/-synthetic-project-A/00000000-0000-4000-8000-000000000002.jsonl",
+        "createdAt": 1,
+        "lastActivityAt": 2,
+        "isArchived": false
+      },
+      "expected": {
+        "reason": "project_or_backend_not_verified"
+      }
+    }
+  ],
+  "plan": [
+    {
+      "name": "mixed",
+      "source": [
+        {
+          "name": "local_00000000-0000-4000-8000-000000000001.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303031222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "a73dbf34ca803aa42ceeaa61f7e3d6cac9458760a12773ee0f755fb1b007ad81"
+        },
+        {
+          "name": "local_00000000-0000-4000-8000-000000000003.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303033222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303034222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030342e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "44a172070c61c4941cb57b0f566f7877fba86ebfa69d50b650c99e2616f37c48"
+        },
+        {
+          "name": "local_00000000-0000-4000-8000-000000000005.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303035222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303036222c227469746c65223a22222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030362e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "f7877c7fa1012da4f556b809d10738b2ce724ace044c7095d0104e0a9c90d30c"
+        }
+      ],
+      "target": [
+        {
+          "name": "local_00000000-0000-4000-8000-000000000001.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303031222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d6d61632d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "24f2d01bc19f95ff53dd8f6fe9c06b57297993619a66f8d0bea99cf963d88431"
+        }
+      ],
+      "expected": {
+        "records": [
+          {
+            "name": "local_00000000-0000-4000-8000-000000000003.json",
+            "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303033222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303034222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22637265617465644174223a312c226c61737441637469766974794174223a322c226c617374466f63757365644174223a302c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c2269734172636869766564223a66616c73652c227065726d697373696f6e4d6f6465223a2264656661756c74222c22696d706f7274656446726f6d223a226c6f63616c2d31702d636f6465222c22726573756d65436f6e6669726d6564223a66616c73652c2272656d6f7465436f6e74726f6c4175746f456c696769626c65223a66616c73652c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d6d61632d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030342e6a736f6e6c227d0a"
+          }
+        ],
+        "alreadyPresentCount": 1,
+        "skipped": {
+          "display_metadata_invalid": 1
+        }
+      }
+    }
+  ],
+  "revision": [
+    {
+      "name": "two",
+      "rows": [
+        {
+          "name": "local_00000000-0000-4000-8000-000000000001.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303031222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "a73dbf34ca803aa42ceeaa61f7e3d6cac9458760a12773ee0f755fb1b007ad81"
+        },
+        {
+          "name": "local_00000000-0000-4000-8000-000000000003.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303033222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303034222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030342e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "44a172070c61c4941cb57b0f566f7877fba86ebfa69d50b650c99e2616f37c48"
+        }
+      ],
+      "expected": "f03ff93605942aae347f48d6e908633d3dae6d2ae13939631d6a319afee485ce"
+    },
+    {
+      "name": "empty",
+      "rows": [],
+      "expected": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    }
+  ],
+  "decode": [
+    {
+      "name": "valid",
+      "rows": [
+        {
+          "name": "local_00000000-0000-4000-8000-000000000001.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303031222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "a73dbf34ca803aa42ceeaa61f7e3d6cac9458760a12773ee0f755fb1b007ad81"
+        },
+        {
+          "name": "local_00000000-0000-4000-8000-000000000003.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303033222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303034222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030342e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "44a172070c61c4941cb57b0f566f7877fba86ebfa69d50b650c99e2616f37c48"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "bad-name",
+      "rows": [
+        {
+          "name": "other.json",
+          "bytes": "7b7d",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        }
+      ],
+      "expected": "record_binding_invalid"
+    },
+    {
+      "name": "bad-sha",
+      "rows": [
+        {
+          "name": "local_00000000-0000-4000-8000-000000000001.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303031222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "expected": "record_binding_invalid"
+    },
+    {
+      "name": "bad-identity",
+      "rows": [
+        {
+          "name": "local_not-a-uuid.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f6e6f742d612d75756964222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "7e940a113ed7dc92c099e45b334ff210e85a1778f972dd7b4a69cab519942648"
+        }
+      ],
+      "expected": "record_binding_invalid"
+    },
+    {
+      "name": "duplicate",
+      "rows": [
+        {
+          "name": "local_00000000-0000-4000-8000-000000000001.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303031222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "a73dbf34ca803aa42ceeaa61f7e3d6cac9458760a12773ee0f755fb1b007ad81"
+        },
+        {
+          "name": "local_00000000-0000-4000-8000-000000000001.json",
+          "bytes": "7b2273657373696f6e4964223a226c6f63616c5f30303030303030302d303030302d343030302d383030302d303030303030303030303031222c22636c6953657373696f6e4964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303032222c227469746c65223a2253594e5448455449435f505249564154455f484953544f52595f5449544c45222c22637764223a222f6d6e742f437572736f722f5075707065744d6173746572222c226f726967696e437764223a222f6d6e742f437572736f722f5075707065744d6173746572222c22737368436f6e666967223a7b22737368486f7374223a2273796e7468657469632d77696e646f77732d616c6961732d41227d2c2273736852656d6f74655472616e73637269707450617468223a222f73796e7468657469632d757365722f2e636c617564652f70726f6a656374732f2d73796e7468657469632d70726f6a6563742d412f30303030303030302d303030302d343030302d383030302d3030303030303030303030322e6a736f6e6c222c22637265617465644174223a312c226c61737441637469766974794174223a322c2269734172636869766564223a66616c73657d",
+          "sha256": "a73dbf34ca803aa42ceeaa61f7e3d6cac9458760a12773ee0f755fb1b007ad81"
+        }
+      ],
+      "expected": "duplicate_identity"
+    }
+  ],
+  "sequences": [
+    {
+      "name": "synchronized-4",
+      "expected": "{\"status\":\"synchronized\",\"createdCount\":4,\"alreadyPresentCount\":0,\"skippedReasonCounts\":{},\"originalIdsPreserved\":true,\"explicitNativeConfirmationRequired\":true,\"resumedSessions\":0,\"copiedTranscripts\":0}"
+    },
+    {
+      "name": "unchanged-all-present",
+      "expected": "{\"status\":\"unchanged\",\"createdCount\":0,\"alreadyPresentCount\":4,\"skippedReasonCounts\":{}}"
+    },
+    {
+      "name": "partial-budget",
+      "expected": "{\"status\":\"partial\",\"reason\":\"open_copy_budget_reached\",\"createdCount\":3,\"remainingCount\":15,\"recoveryRequired\":false,\"alreadyPresentCount\":0,\"skippedReasonCounts\":{},\"originalIdsPreserved\":true,\"explicitNativeConfirmationRequired\":true,\"resumedSessions\":0,\"copiedTranscripts\":0}"
+    },
+    {
+      "name": "partial-batches",
+      "expected": "{\"status\":\"partial\",\"reason\":\"open_copy_budget_reached\",\"createdCount\":2,\"remainingCount\":58,\"recoveryRequired\":false,\"alreadyPresentCount\":0,\"skippedReasonCounts\":{},\"originalIdsPreserved\":true,\"explicitNativeConfirmationRequired\":true,\"resumedSessions\":0,\"copiedTranscripts\":0}"
+    },
+    {
+      "name": "lost-second-receipt",
+      "expected": "{\"status\":\"refused\",\"reason\":\"create_only_transaction_unconfirmed\",\"createdCount\":1,\"recoveryRequired\":true}"
+    },
+    {
+      "name": "clean-second-refusal",
+      "expected": "{\"status\":\"refused\",\"reason\":\"create_only_transaction_refused\",\"createdCount\":1,\"recoveryRequired\":false,\"createdCountBeforeRefusal\":0}"
+    },
+    {
+      "name": "registry-bound",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"registry_invalid\",\"createdCount\":0}"
+    },
+    {
+      "name": "unsupported-profile",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"unsupported_direction\",\"createdCount\":0}"
+    },
+    {
+      "name": "unsupported-direction",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"unsupported_direction\",\"createdCount\":0}"
+    },
+    {
+      "name": "policy-direction-mismatch",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"history_policy_unverified\",\"createdCount\":0}"
+    },
+    {
+      "name": "target-open",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"profile_already_open_or_unknown\",\"createdCount\":0}"
+    },
+    {
+      "name": "native-guard-unverified",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"native_guard_unverified\",\"createdCount\":0}"
+    },
+    {
+      "name": "destination-pending-input",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"destination_work_or_state_unknown\",\"createdCount\":0}"
+    },
+    {
+      "name": "source-changed",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"source_changed\",\"createdCount\":0}"
+    },
+    {
+      "name": "transcripts-unverified",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"transcript_metadata_unverified\",\"createdCount\":0}"
+    },
+    {
+      "name": "drift-target-opens",
+      "expected": "{\"status\":\"refused\",\"reason\":\"target_opened\",\"createdCount\":1,\"recoveryRequired\":false}"
+    },
+    {
+      "name": "drift-protected-state",
+      "expected": "{\"status\":\"refused\",\"reason\":\"target_state_changed\",\"createdCount\":1,\"recoveryRequired\":false}"
+    },
+    {
+      "name": "drift-extra-record",
+      "expected": "{\"status\":\"refused\",\"reason\":\"target_state_changed\",\"createdCount\":1,\"recoveryRequired\":false}"
+    },
+    {
+      "name": "identity-collision",
+      "expected": "{\"status\":\"skipped\",\"reason\":\"identity_collision\",\"createdCount\":0}"
+    },
+    {
+      "name": "skip-reasons",
+      "expected": "{\"status\":\"synchronized\",\"createdCount\":1,\"alreadyPresentCount\":0,\"skippedReasonCounts\":{\"display_metadata_invalid\":2,\"transcript_reference_invalid\":1},\"originalIdsPreserved\":true,\"explicitNativeConfirmationRequired\":true,\"resumedSessions\":0,\"copiedTranscripts\":0}"
+    }
+  ],
+  "operations": [
+    {
+      "name": "managed-progress",
+      "expected": [
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_779eb62f7c9c86207fde180c",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ]
+          ],
+          "running": {
+            "id": "op_779eb62f7c9c86207fde180c",
+            "platform": "mac",
+            "state": "checking",
+            "confirmedCount": null,
+            "totalCount": null,
+            "message": null
+          }
+        },
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_779eb62f7c9c86207fde180c",
+                "platform": "mac",
+                "state": "copying",
+                "confirmedCount": 0,
+                "totalCount": 4,
+                "message": null
+              }
+            ]
+          ],
+          "running": {
+            "id": "op_779eb62f7c9c86207fde180c",
+            "platform": "mac",
+            "state": "copying",
+            "confirmedCount": 0,
+            "totalCount": 4,
+            "message": null
+          }
+        },
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_779eb62f7c9c86207fde180c",
+                "platform": "mac",
+                "state": "opening",
+                "confirmedCount": 4,
+                "totalCount": 4,
+                "message": null
+              }
+            ]
+          ],
+          "running": {
+            "id": "op_779eb62f7c9c86207fde180c",
+            "platform": "mac",
+            "state": "opening",
+            "confirmedCount": 4,
+            "totalCount": 4,
+            "message": null
+          }
+        },
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_779eb62f7c9c86207fde180c",
+                "platform": "mac",
+                "state": "opened",
+                "confirmedCount": 4,
+                "totalCount": 4,
+                "message": null
+              }
+            ]
+          ],
+          "running": null
+        }
+      ]
+    },
+    {
+      "name": "held-after-batches",
+      "expected": [
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_57f0a58d6880888ee43c9d65",
+                "platform": "mac",
+                "state": "blocked_uncertain",
+                "confirmedCount": 1,
+                "totalCount": 4,
+                "message": "Claude history copy is unconfirmed. Verify it has stopped before opening this profile."
+              }
+            ]
+          ],
+          "running": null
+        }
+      ]
+    },
+    {
+      "name": "failure-kinds",
+      "expected": [
+        {
+          "forScope": [
+            [
+              "a",
+              {
+                "id": "op_6bbadd60251febd0ac7b91fa",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ],
+            [
+              "b",
+              {
+                "id": "op_fe60baf81efc9a0f1824a23a",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ],
+            [
+              "c",
+              {
+                "id": "op_1451f7dda074e1441ae4a0e5",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ],
+            [
+              "d",
+              {
+                "id": "op_7228be92e27464dbbc07af8d",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ],
+            [
+              "e",
+              {
+                "id": "op_9514e11a3c36223b736bdbce",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ]
+          ],
+          "running": null
+        }
+      ]
+    },
+    {
+      "name": "counts-only-forward",
+      "expected": [
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_23bc414a3ebe5fe88b8a1e2d",
+                "platform": "mac",
+                "state": "copying",
+                "confirmedCount": 3,
+                "totalCount": 3,
+                "message": null
+              }
+            ]
+          ],
+          "running": {
+            "id": "op_23bc414a3ebe5fe88b8a1e2d",
+            "platform": "mac",
+            "state": "copying",
+            "confirmedCount": 3,
+            "totalCount": 3,
+            "message": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "join-running",
+      "expected": [
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_c2aa6ba5aad8d62349faeedb",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ]
+          ],
+          "running": {
+            "id": "op_c2aa6ba5aad8d62349faeedb",
+            "platform": "mac",
+            "state": "checking",
+            "confirmedCount": null,
+            "totalCount": null,
+            "message": null
+          }
+        },
+        {
+          "forScope": [
+            [
+              "gmail",
+              {
+                "id": "op_7b2e7e09a8b9f1444fe0b0fb",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ]
+          ],
+          "running": {
+            "id": "op_7b2e7e09a8b9f1444fe0b0fb",
+            "platform": "mac",
+            "state": "checking",
+            "confirmedCount": null,
+            "totalCount": null,
+            "message": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "retain-and-cap",
+      "expected": [
+        {
+          "forScope": [
+            [
+              "a",
+              {
+                "id": "op_1180be41f95db1b94acbbe20",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ]
+          ],
+          "running": null
+        },
+        {
+          "forScope": [
+            [
+              "a",
+              {
+                "id": "op_1180be41f95db1b94acbbe20",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ],
+            [
+              "b",
+              {
+                "id": "op_ae28598d9a5ed113964dcc11",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ]
+          ],
+          "running": null
+        }
+      ]
+    },
+    {
+      "name": "scope-order",
+      "expected": [
+        {
+          "forScope": [
+            [
+              "b",
+              {
+                "id": "op_74d42285a0217d93d1f83f15",
+                "platform": "mac",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ],
+            [
+              "a",
+              {
+                "id": "op_fcb94d9b3c32fe5f7dae6dbc",
+                "platform": "windows",
+                "state": "checking",
+                "confirmedCount": null,
+                "totalCount": null,
+                "message": null
+              }
+            ]
+          ],
+          "running": null
+        }
+      ]
+    }
+  ],
+  "accountList": [
+    {
+      "name": "default-first",
+      "manifest": [
+        {
+          "id": "work2",
+          "email": "work2@example.test",
+          "windows": {
+            "launcherName": "work2",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-work2"
+          }
+        },
+        {
+          "id": "store",
+          "email": "store@example.test",
+          "windows": {
+            "launcherName": "store",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-store",
+            "isDefault": true
+          }
+        }
+      ],
+      "pending": [],
+      "expected": [
+        "store",
+        "work2"
+      ]
+    },
+    {
+      "name": "default-folder",
+      "manifest": [
+        {
+          "id": "work2",
+          "email": "work2@example.test",
+          "windows": {
+            "launcherName": "work2",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-work2"
+          }
+        },
+        {
+          "id": "store",
+          "email": "store@example.test",
+          "windows": {
+            "launcherName": "store",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude"
+          }
+        }
+      ],
+      "pending": [],
+      "expected": [
+        "store",
+        "work2"
+      ]
+    },
+    {
+      "name": "no-default",
+      "manifest": [
+        {
+          "id": "work2",
+          "email": "work2@example.test",
+          "windows": {
+            "launcherName": "work2",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-work2"
+          }
+        },
+        {
+          "id": "party",
+          "email": "party@example.test",
+          "windows": {
+            "launcherName": "party",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-party"
+          }
+        }
+      ],
+      "pending": [],
+      "expected": null
+    },
+    {
+      "name": "two-defaults",
+      "manifest": [
+        {
+          "id": "store",
+          "email": "store@example.test",
+          "windows": {
+            "launcherName": "store",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-store",
+            "isDefault": true
+          }
+        },
+        {
+          "id": "work2",
+          "email": "work2@example.test",
+          "windows": {
+            "launcherName": "work2",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude/"
+          }
+        }
+      ],
+      "pending": [],
+      "expected": null
+    },
+    {
+      "name": "pending-opens",
+      "manifest": [
+        {
+          "id": "store",
+          "email": "store@example.test",
+          "windows": {
+            "launcherName": "store",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-store",
+            "isDefault": true
+          }
+        }
+      ],
+      "pending": [
+        {
+          "id": "new1",
+          "label": null,
+          "mac": {
+            "launcherName": "new1",
+            "profilePath": "/Users/u/Library/Application Support/Claude-new1",
+            "sshHost": "synthetic-mac-alias-A"
+          },
+          "windows": {
+            "launcherName": "new1",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-new1",
+            "sshHost": "synthetic-windows-alias-A"
+          },
+          "createdAt": "2026-10-02T00:00:00.000Z",
+          "expectedEmail": null
+        }
+      ],
+      "expected": [
+        "store",
+        "new1"
+      ]
+    },
+    {
+      "name": "mac-only-skipped",
+      "manifest": [
+        {
+          "id": "store",
+          "email": "store@example.test",
+          "windows": {
+            "launcherName": "store",
+            "sshHost": "synthetic-windows-alias-A",
+            "profilePath": "C:/Users/u/AppData/Roaming/Claude-store",
+            "isDefault": true
+          }
+        },
+        {
+          "id": "maconly",
+          "email": "m@example.test",
+          "mac": {
+            "launcherName": "maconly",
+            "launcherPath": "/Applications/Claude.app",
+            "sshHost": "synthetic-mac-alias-A"
+          }
+        }
+      ],
+      "pending": [],
+      "expected": [
+        "store"
+      ]
+    }
+  ]
+}

@@ -427,6 +427,7 @@ fn nonce() -> io::Result<String> {
 }
 
 /// One Open's durable marker: the core's `armPendingMarker` handle.
+#[derive(Debug)]
 pub struct PendingMarker {
     directory: PathBuf,
     filename: PathBuf,
