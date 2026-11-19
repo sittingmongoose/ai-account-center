@@ -14,7 +14,7 @@ import {
 import { isSafeUsageSshAlias } from './dashboard-hosts';
 import {
   readPrivateJsonFile,
-  withPrivateFileLock,
+  withRegisteredJsonLock,
   writePrivateJsonFile,
 } from './private-json-store';
 import { classifyAccountRegistry, isUnreadableAccountRegistry } from './account-registry-mode';
@@ -59,7 +59,9 @@ export interface AccountRegistryV2 {
 }
 
 export type AccountRegistryRead =
-  { state: 'absent' } | { state: 'invalid' } | { state: 'ok'; registry: AccountRegistryV2 };
+  | { state: 'absent' }
+  | { state: 'invalid' }
+  | { state: 'ok'; registry: AccountRegistryV2 };
 
 const ENTRY_KEYS = new Set([
   'id',
@@ -266,7 +268,7 @@ export function updateAccountRegistry(
   deps: AccountRegistryUpdateDeps = {}
 ): Promise<AccountRegistryV2> {
   const file = accountRegistryPath(ccsDir);
-  return withPrivateFileLock(file, async () => {
+  return withRegisteredJsonLock(ccsDir, 'account-registry', file, async () => {
     const active = classifyAccountRegistry(await readAccountRegistry(ccsDir));
     if (isUnreadableAccountRegistry(active.mode)) {
       throw new ConfigError('Account list could not be read safely.');
@@ -287,7 +289,7 @@ export function updateAccountRegistry(
       mutate({ version: 2, accounts: base.accounts.map((entry) => ({ ...entry })) })
     );
     if (!next) throw new ValidationError('The account list change is not valid.');
-    await writePrivateJsonFile(file, next);
+    await writePrivateJsonFile(file, next, ccsDir);
     return next;
   });
 }

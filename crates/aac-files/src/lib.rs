@@ -221,6 +221,40 @@ impl OwnedStore {
         })
     }
 
+    /// Accept a lease descriptor from the front door for a registered private file.
+    #[cfg(unix)]
+    fn inherit(root: &Path, row: &registry::Row, lock: File) -> Result<Self, Failure> {
+        use std::os::unix::fs::MetadataExt;
+
+        require_absolute(root)?;
+        let file = path::node::resolve(root, Path::new(&row.file(None)?))?;
+        let mut lock_path = file.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        let lock_path = PathBuf::from(lock_path);
+        require_absolute(&lock_path)?;
+        let current = fs::symlink_metadata(lock_path)?;
+        let held = lock.metadata()?;
+        if !current.is_file()
+            || !held.is_file()
+            || held.uid() != path::uid()
+            || held.mode() & 0o077 != 0
+            || held.dev() != current.dev()
+            || held.ino() != current.ino()
+        {
+            return Err(Failure::new(Cause::Refused, "wrong store writer lease"));
+        }
+        FileExt::try_lock_exclusive(&lock)
+            .map_err(|_| Failure::new(Cause::Busy, "store writer already active"))?;
+        let max_size = usize::try_from(row.max_bytes)
+            .map_err(|_| Failure::new(Cause::Refused, "invalid byte cap"))?;
+        Ok(Self {
+            path: file,
+            max_size,
+            parents: row.parents,
+            _lock: lock,
+        })
+    }
+
     /// Read only a regular file and enforce the declared cap during streaming.
     pub fn read(&self) -> Result<Vec<u8>, Failure> {
         if self.parents == Parents::Private {

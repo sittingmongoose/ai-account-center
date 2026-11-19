@@ -1,8 +1,17 @@
 //! Unix-only skeleton service; its boot secret arrives on stdin, never argv or logs.
 #[cfg(unix)]
+mod registered_write;
+
+#[cfg(unix)]
 fn main() {
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--file-lease")) {
-        std::process::exit(file_lease());
+    match std::env::args_os()
+        .nth(1)
+        .as_deref()
+        .and_then(std::ffi::OsStr::to_str)
+    {
+        Some("--file-lease") => std::process::exit(file_lease()),
+        Some("--registered-write") => std::process::exit(registered_write::commit()),
+        _ => {}
     }
     // Two async workers; at most 20 blocking threads: the 8 read, 4 store and 4 fed-Status
     // permits, plus spare. The permits, not this cap, are the bound the routes rely on.

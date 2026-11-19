@@ -496,6 +496,7 @@ it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
       fs.readFileSync(path.join(ccsDir, 'accounts/claude-pending.json'), 'utf8')
     );
     expect(pending.profiles.map((value: { id: string }) => value.id)).toContain('work2');
+    expect(f.rustService?.registeredWrites).toBe(writeParityMode === 'on' ? 4 : 0);
   }
 );
 

@@ -3,6 +3,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const binaries = new Map<string, string>();
+const writers = new Map<string, { binary: string; committed: () => void }>();
+
+export function registerFileWriter(
+  root: string,
+  binary: string,
+  committed: () => void
+): () => void {
+  const writer = { binary: path.resolve(binary), committed };
+  writers.set(root, writer);
+  return () => {
+    if (writers.get(root) === writer) writers.delete(root);
+  };
+}
+
+export interface FileLease {
+  close(): void;
+  descriptor?: number;
+}
+
+/** Return false only when no native writer was selected or the executable could not launch. */
+export function commitWithFileLease(
+  root: string,
+  id: string,
+  lease: FileLease,
+  bytes: string
+): boolean {
+  const writer = writers.get(root);
+  if (!writer || lease.descriptor === undefined) return false;
+  const result = spawnSync(writer.binary, ['--registered-write', id, root], {
+    input: bytes,
+    stdio: ['pipe', 'ignore', lease.descriptor],
+    timeout: 5000,
+    windowsHide: true,
+  });
+  if (result.status === 0) {
+    writer.committed();
+    return true;
+  }
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+  throw new Error('The private file could not be saved safely.');
+}
 const defaultBinary = path.resolve(__dirname, '../native/aac-http');
 
 export function rememberFileLeaseBinary(root: string, binary: string): void {
@@ -23,7 +64,7 @@ function executable(file: string): boolean {
  * on stdin. The kernel keeps the lock with the open file description, including
  * after the helper exits, until this process closes its descriptor.
  */
-export function claimFileLease(root: string, file: string): () => void {
+export function claimFileLease(root: string, file: string): FileLease {
   const binary =
     binaries.get(path.resolve(root)) ?? process.env.AAC_RUST_SERVICE_BINARY ?? defaultBinary;
   const helper = executable(binary) ? binary : undefined;
@@ -34,7 +75,7 @@ export function claimFileLease(root: string, file: string): () => void {
     // open_lock refuses a directory there. Keep an existing inode for flock
     // readers that might already hold it.
     fs.mkdirSync(file, { mode: 0o700 });
-    return () => fs.rmdirSync(file);
+    return { close: () => fs.rmdirSync(file) };
   }
 
   const { O_RDWR, O_CREAT, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
@@ -61,7 +102,14 @@ export function claimFileLease(root: string, file: string): () => void {
         open?.status !== 73 &&
         spawnSync(flock, ['-n', '0'], { ...options, stdio: [...options.stdio] }).status === 0);
     if (!locked) throw new Error('Private file lease could not be acquired.');
-    return () => fs.closeSync(fd);
+    const lease: FileLease = {
+      descriptor: fd,
+      close: () => {
+        delete lease.descriptor;
+        fs.closeSync(fd);
+      },
+    };
+    return lease;
   } finally {
     if (!locked) fs.closeSync(fd);
   }

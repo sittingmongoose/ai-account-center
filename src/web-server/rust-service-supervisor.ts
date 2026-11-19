@@ -25,7 +25,7 @@ import {
   type RustStoreBootInput,
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
-import { rememberFileLeaseBinary } from '../shared/private-file-lease';
+import { registerFileWriter, rememberFileLeaseBinary } from '../shared/private-file-lease';
 import { rustGroupOn, rustStoreSwitchOn } from './rust-service-groups';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
@@ -102,6 +102,8 @@ export class RustSupervisor {
   protected inFlight = 0;
   protected readonly shadowInFlight = new Map<string, number>();
   protected stopped = false;
+  private removeFileWriter: (() => void) | null = null;
+  registeredWrites = 0;
   private readonly acquisition = new AbortController();
   protected binary: string | null = null;
   protected restartTimer: NodeJS.Timeout | null = null;
@@ -216,6 +218,8 @@ export class RustSupervisor {
 
   stop(): void {
     this.stopped = true;
+    this.removeFileWriter?.();
+    this.removeFileWriter = null;
     this.acquisition.abort();
     if (this.restartTimer) clearTimeout(this.restartTimer);
     if (this.minuteTimer) clearInterval(this.minuteTimer);
@@ -266,6 +270,11 @@ export class RustSupervisor {
           lease.owned
         )
       : null;
+    this.removeFileWriter?.();
+    this.removeFileWriter =
+      this.writesOn && this.binary
+        ? registerFileWriter(lease.connection.ccsDir, this.binary, () => this.registeredWrites++)
+        : null;
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
   }
@@ -273,6 +282,8 @@ export class RustSupervisor {
   /** The service died or stopped answering: TS answers until a restart succeeds (L1). */
   protected lost(lease: RustLease, cause: string, context: Record<string, unknown> = {}): void {
     if (this.stopped || this.lease !== lease) return;
+    this.removeFileWriter?.();
+    this.removeFileWriter = null;
     this.removeAgentConnection?.();
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();

@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
-const fixture = 'takes an answer set only|shows a send summary that cannot|shows a written response|says nothing about a send summary';
+const fixture =
+  'takes an answer set only|shows a send summary that cannot|shows a written response|says nothing about a send summary';
 const modes = process.argv.includes('--ts-only') ? ['off', 'shadow'] : ['off', 'shadow', 'on'];
 for (const mode of modes) {
   execFileSync(
