@@ -1,7 +1,9 @@
 //! Add and replace credentials through the registry lease and the existing collector.
 use super::{
     NativeOwners,
-    lifecycle_label::{claim_registry, entry_view, local_key_info, save_registry},
+    lifecycle_label::{
+        claim_registry, claim_registry_async, entry_view, local_key_info, save_registry,
+    },
     recheck,
 };
 use crate::{
@@ -52,6 +54,7 @@ pub(super) enum Failure {
     KeyStore,
     Duplicate,
     Rejected,
+    RollbackPending,
     TooMany,
     SingleAccount,
 }
@@ -98,6 +101,11 @@ impl Failure {
                 422,
                 "key_rejected",
                 "The provider rejected that key. Nothing was saved.",
+            ),
+            RollbackPending => error(
+                500,
+                "key_rollback_pending",
+                "The rejected account and its key were kept together. Remove that account to retry cleanup.",
             ),
             TooMany => error(
                 409,
@@ -590,8 +598,9 @@ async fn add(
             match step {
                 Effect::Store => store.put(slot, secret).await?,
                 Effect::Publish => {
-                    let (writer, mut entries) =
-                        claim_registry(root, &native.owners).map_err(|_| Failure::Write)?;
+                    let (writer, mut entries) = claim_registry_async(root, &native.owners)
+                        .await
+                        .map_err(|_| Failure::Write)?;
                     if entries.len() >= 64
                         || entries
                             .iter()
@@ -611,10 +620,11 @@ async fn add(
                     return Ok(accepted);
                 }
                 Effect::Unpublish => {
-                    let (writer, mut entries) =
-                        claim_registry(root, &native.owners).map_err(|_| Failure::Write)?;
+                    let (writer, mut entries) = claim_registry_async(root, &native.owners)
+                        .await
+                        .map_err(|_| Failure::RollbackPending)?;
                     entries.retain(|entry| !key_binding(entry, source));
-                    save_registry(&writer, &entries).map_err(|_| Failure::Write)?;
+                    save_registry(&writer, &entries).map_err(|_| Failure::RollbackPending)?;
                 }
                 Effect::Discard => store.delete(slot).await?,
             }
