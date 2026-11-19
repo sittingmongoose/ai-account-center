@@ -447,7 +447,9 @@ fn plan_label(v: &Value) -> Value {
     } else {
         // plan_common.plan_label: a tier the table does not list yet keeps the provider's own
         // short, word-shaped name; a longer or key-shaped string stays unknown.
-        v.as_str().and_then(plan_name).map_or(Value::Null, |name| json!(name))
+        v.as_str()
+            .and_then(plan_name)
+            .map_or(Value::Null, |name| json!(name))
     }
 }
 /// Python `value.replace("_", " ")`, then `len <= 32`, `PLAN_NAME.fullmatch` and no `[0-9]{4}`.
@@ -459,12 +461,15 @@ fn plan_name(value: &str) -> Option<String> {
     let words: Vec<&str> = name.split(' ').collect();
     let first = words.first()?;
     let ok_first = first.len() <= 16
-        && first.bytes().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && first
+            .bytes()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
         && first.bytes().all(|c| c.is_ascii_alphanumeric());
     let ok_rest = words.len() <= 3
-        && words[1..]
-            .iter()
-            .all(|w| !w.is_empty() && w.len() <= 16 && w.bytes().all(|c| c.is_ascii_alphanumeric()));
+        && words[1..].iter().all(|w| {
+            !w.is_empty() && w.len() <= 16 && w.bytes().all(|c| c.is_ascii_alphanumeric())
+        });
     let digits = name
         .as_bytes()
         .windows(4)

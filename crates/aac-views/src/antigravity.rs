@@ -941,18 +941,30 @@ mod tests {
     /// plan.test.ts: the 2026-11-19 model table per tier, and the end-of-Nov-30 removal.
     #[test]
     fn tiers_follow_the_2026_11_19_model_table() {
-        let models = |plan: &str, at: i64| plan_display(Some(plan.into()), Some(at), 0.0).1.expect(plan);
+        let models = |plan: &str, at: i64| {
+            plan_display(Some(plan.into()), Some(at), 0.0)
+                .1
+                .expect(plan)
+        };
         let before = 1_796_083_199_999;
         let after = 1_796_083_200_000;
         for plan in ["free", "plus", "pro-trial", "Google Workspace"] {
             assert_eq!(
                 models(plan, before)["models"],
-                json!(["Gemini 3.8 Flash", "Claude Sonnet 4.6", "Claude Opus 4.6", "GPT-OSS-120B"])
+                json!([
+                    "Gemini 3.8 Flash",
+                    "Claude Sonnet 4.6",
+                    "Claude Opus 4.6",
+                    "GPT-OSS-120B"
+                ])
             );
             assert_eq!(models(plan, after)["models"], json!(["Gemini 3.8 Flash"]));
             assert_eq!(models(plan, after)["thirdPartyModels"], json!(false));
         }
-        assert_eq!(models("Google Workspace", after)["quotaPolicy"], json!("weekly"));
+        assert_eq!(
+            models("Google Workspace", after)["quotaPolicy"],
+            json!("weekly")
+        );
         for plan in ["ultra", "ultra-5x", "ultra-20x"] {
             assert_eq!(
                 models(plan, after)["models"],
