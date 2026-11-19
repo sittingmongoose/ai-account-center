@@ -53,3 +53,12 @@ migration safeguards.
 Original authored tags, changelog entries and upstream credits remain historical
 records. Do not reassign them to the renamed product or restore their old publish
 targets as current tooling.
+
+## Dashboard rollback
+
+Stop the Rust dashboard and wait for its process to exit before starting the
+previous TypeScript dashboard against the same CCS home. Disable automatic
+restart of the outgoing service during the handoff. A graceful stop drains
+requests and flushes the final session state before releasing its claim. Start
+the restored service only after the stop completes, then verify health and
+dashboard sign-in.
