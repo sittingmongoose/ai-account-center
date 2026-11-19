@@ -187,8 +187,9 @@ async function main() {
             'web-server/rust-read-input.js'
           );
           const zone = 'America/New_York';
+          const probeNow = Date.now();
           const data = {
-            now: 0,
+            now: probeNow,
             timeZone: zone,
             root: '',
             catalog: input.catalog,
@@ -221,7 +222,7 @@ async function main() {
           out.held = await rust.pushFeed(
             boot,
             'scoreboard-facts',
-            `${input.generation}:${String(input.catalogHash).slice(0, 12)}:America-New_York`,
+            `${input.generation}:${String(input.catalogHash).slice(0, 12)}:${probeNow}`,
             rustInputText({ timeZone: zone }),
             factsText
           );
