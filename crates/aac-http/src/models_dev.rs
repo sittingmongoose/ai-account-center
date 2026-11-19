@@ -20,7 +20,9 @@ pub struct ModelsDevRefresh {
 impl ModelsDevRefresh {
     /// A refresh point over `<ccs_dir>/models-dev-registry-cache.json`.
     pub fn new(ccs_dir: &Path) -> Self {
-        ModelsDevRefresh { refresh: RegistryRefresh::new(ccs_dir) }
+        ModelsDevRefresh {
+            refresh: RegistryRefresh::new(ccs_dir),
+        }
     }
 
     /// `startModelsDevRegistryRefresh` against the live registry: one fetch per coalesced batch,

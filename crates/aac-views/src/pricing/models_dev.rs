@@ -652,6 +652,9 @@ mod tests {
         }
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         // A later non-forced caller is served by the fresh cache without any fetch.
-        assert!(refresh_models_dev_registry(refresh.cache(), false, 8.0, || unreachable!("no fetch")).is_some());
+        assert!(
+            refresh_models_dev_registry(refresh.cache(), false, 8.0, || unreachable!("no fetch"))
+                .is_some()
+        );
     }
 }
