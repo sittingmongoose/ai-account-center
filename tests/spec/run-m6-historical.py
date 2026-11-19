@@ -32,9 +32,10 @@ def gate_files():
         for name in sorted(set(manifest["safety"]) | set(manifest["http"]))
     }
     retired = manifest.get("notApplicableAfterCut", {})
-    if set(retired) - files.keys():
+    retired_cases = manifest.get("notApplicableCasesAfterCut", {})
+    if (retired.keys() | retired_cases.keys()) - files.keys():
         raise ValueError("retired cases must belong to the reconstructed gate")
-    return files, retired
+    return files, retired, retired_cases
 
 
 def command_for(file):
@@ -91,9 +92,11 @@ def sandbox(tmp, command, binaries, dependencies, reset_executable):
     return cmd + ["--", *command]
 
 
-def run_file(name, gates, binaries, dependencies, logs, retired_reason):
+def run_file(name, gates, binaries, dependencies, logs, retired_reason, retired_cases):
     file = Path(name)
     result = {"file": name, "gates": gates}
+    if retired_cases:
+        result["notApplicableCasesAfterCut"] = retired_cases
     if not file.is_file():
         if retired_reason:
             return {**result, "state": "not applicable after the cut", "reason": retired_reason}
@@ -154,10 +157,11 @@ def main():
     binaries = {name: Path(shutil.which(name)).resolve() for name in ("node", "bun")}
     dependencies = (ROOT / "node_modules").resolve(strict=True)
     output.mkdir(parents=True, exist_ok=True)
-    files, retired = gate_files()
+    files, retired, retired_cases = gate_files()
     items = [(name, gates) for name, gates in files.items() if args.filter in name]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(run_file, name, gates, binaries, dependencies, output, retired.get(name))
+        futures = [pool.submit(run_file, name, gates, binaries, dependencies, output,
+                               retired.get(name), retired_cases.get(name))
                    for name, gates in items]
         results = []
         for future in futures:

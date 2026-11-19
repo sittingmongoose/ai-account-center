@@ -441,7 +441,7 @@ impl Profiles {
     }
 
     async fn codex_profiles(&self, access: &DashboardAccess) -> Reply {
-        if let Some(reply) = session_guard(access) {
+        if let Some(reply) = codex_session_guard(access) {
             return reply;
         }
         #[cfg(unix)]
@@ -466,7 +466,7 @@ impl Profiles {
     }
 
     async fn codex_quotas(&self, access: &DashboardAccess) -> Reply {
-        if let Some(reply) = session_guard(access) {
+        if let Some(reply) = codex_session_guard(access) {
             return reply;
         }
         #[cfg(unix)]
@@ -580,6 +580,16 @@ fn session_guard(access: &DashboardAccess) -> Option<Reply> {
     }
     matches!(access.principal, DashboardPrincipal::Anonymous)
         .then(|| super::plain(401, "Authentication required"))
+}
+
+fn codex_session_guard(access: &DashboardAccess) -> Option<Reply> {
+    if !access.auth_enabled && !access.local_access {
+        return Some(super::plain(
+            403,
+            "Codex auth profiles endpoint requires localhost access when dashboard auth is disabled.",
+        ));
+    }
+    session_guard(access)
 }
 
 fn no_store(mut reply: Reply) -> Reply {
@@ -1016,6 +1026,49 @@ mod tests {
         assert!(windows_history_script(r"C:\P").contains("$history = 'C:\\P'"));
         assert!(windows_history_script("C:'P").contains("C:''P"));
         assert_eq!(utf16le("a"), vec![97, 0]);
+    }
+
+    #[tokio::test]
+    async fn remote_codex_profile_reads_keep_the_localhost_guard_when_auth_is_disabled() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().to_owned();
+        let agents = Arc::new(crate::agent_transport::Agents::with_default(
+            root.clone(),
+            false,
+        ));
+        let profiles = Profiles::start(root, Arc::new(Vec::new), agents);
+        let access = DashboardAccess {
+            auth_enabled: false,
+            principal: DashboardPrincipal::Anonymous,
+            secure_transport: false,
+            same_origin: true,
+            origin_present: false,
+            local_access: false,
+            session_id: None,
+            credential_transport: "test",
+            direct_loopback: false,
+            lan_proxy: false,
+            client_address: None,
+        };
+        for path in ["/api/codex/profiles", "/api/codex/profiles/quotas"] {
+            let request = Request::builder()
+                .uri(path)
+                .extension(access.clone())
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = profiles.handle(request).await;
+            assert_eq!(response.status(), 403, "{path}");
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&bytes).unwrap(),
+                json!({
+                    "error": "Codex auth profiles endpoint requires localhost access when dashboard auth is disabled."
+                }),
+                "{path}"
+            );
+        }
     }
 
     #[tokio::test]
