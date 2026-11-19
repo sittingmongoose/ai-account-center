@@ -39,12 +39,18 @@ describe('the registry rules', () => {
       'claude-desktop-profiles',
       'account-refresh-settings',
       'readers-check',
+      'catalog-seed',
     ])
       expect(ids).toContain(id);
-    // Nothing has moved yet: TS writes every row on the dashboard host.
-    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts' && r.movesWith === null)).toBe(
-      true
-    );
+    // R4: the readers-check row moves with the status group and the catalog seed with the
+    // scoreboard group; every other row stays TS-written on the dashboard host.
+    expect(files.PRIVATE_FILE_ROWS.every((r) => r.owner === 'ts')).toBe(true);
+    expect(files.PRIVATE_FILE_ROWS.find((r) => r.id === 'readers-check')?.movesWith).toBe('status');
+    expect(files.PRIVATE_FILE_ROWS.find((r) => r.id === 'catalog-seed')?.movesWith).toBe('scoreboard');
+    expect(
+      files.PRIVATE_FILE_ROWS.filter((r) => r.id !== 'readers-check' && r.id !== 'catalog-seed')
+        .every((r) => r.movesWith === null)
+    ).toBe(true);
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {
@@ -199,11 +205,12 @@ describe('one writer per file', () => {
     ).toBe('rust-service');
     // A row that moves with no group never leaves TS.
     expect(files.resolvePrivateFileOwners(rows, () => true)['auth-state']).toBe('ts');
-    // The shipped registry: no row moves, whatever the service mode.
-    for (const owner of Object.values(
-      files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => true)
-    ))
-      expect(owner).toBe('ts');
+    // The shipped registry: the R4 share rows move with their groups; the rest stay TS.
+    const allOn = files.resolvePrivateFileOwners(files.PRIVATE_FILE_ROWS, () => true);
+    expect(allOn['readers-check']).toBe('rust-service');
+    expect(allOn['catalog-seed']).toBe('rust-service');
+    for (const [id, owner] of Object.entries(allOn))
+      if (id !== 'readers-check' && id !== 'catalog-seed') expect(owner).toBe('ts');
   });
 
   it('refuses every TS writer of a row the service owns, and writes nothing', async () => {
@@ -267,7 +274,10 @@ describe('one writer per file', () => {
       path.join(root, 'src/web-server/rust-service-supervisor.ts'),
       'utf8'
     );
-    expect(supervisor).toMatch(/settlePrivateFileOwners\(\(\) => this\.mode === 'on'\)/);
+    // R4: the settle is group-aware (the readers-check row flips only when both owned
+    // groups run; the catalog seed with the scoreboard group).
+    expect(supervisor).toMatch(/settlePrivateFileOwners\(\(group\) => \{/);
+    expect(supervisor).toMatch(/rustOwnedStatusOn\(\) && rustOwnedScoreboardOn\(\)/);
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());
   });

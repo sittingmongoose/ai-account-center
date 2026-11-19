@@ -50,7 +50,13 @@ import {
   readAnswerPublicKey,
   signAnswer,
   signDocument,
+  answerKeyInfoNative,
+  signAnswerNative,
+  signDocumentNative,
+  verifySignedDocumentNative,
   type AnswerKey,
+  type AnswerSignature,
+  type AnswerCheck,
   type SignedAnswer,
   type UnsignedAnswer,
   canonicalJson,
@@ -1210,6 +1216,31 @@ export class StatusAnswers {
     return this.key;
   }
 
+  /** R4: the key's public facts from the Rust signer, with the TypeScript key as fallback. */
+  private async answerKeyInfo(): Promise<{ publicKeyPem: string; keyId: string }> {
+    return (await answerKeyInfoNative(this.storeDir())) ?? this.answerKey();
+  }
+
+  private async signAnswerWith(unsigned: UnsignedAnswer): Promise<SignedAnswer> {
+    return (
+      (await signAnswerNative(unsigned, this.storeDir())) ?? signAnswer(unsigned, this.answerKey())
+    );
+  }
+
+  private async signDocumentWith<T extends object>(
+    doc: T
+  ): Promise<T & { signature: AnswerSignature }> {
+    return (await signDocumentNative(doc, this.storeDir())) ?? signDocument(doc, this.answerKey());
+  }
+
+  private async verifyAnswerBytes(bytes: Buffer): Promise<AnswerCheck> {
+    const info = await this.answerKeyInfo();
+    const native = await verifySignedDocumentNative(bytes, info.publicKeyPem, ANSWER_SCHEMA);
+    // The Rust checker returns the same parsed answer document the TypeScript checker does.
+    if (native) return native as AnswerCheck;
+    return verifySignedAnswer(bytes, info.publicKeyPem);
+  }
+
   private record(line: Record<string, unknown>): boolean {
     try {
       this.writer();
@@ -1335,7 +1366,7 @@ export class StatusAnswers {
         const stat = await fs.promises.stat(v1).catch(() => null);
         check();
         if (!stat?.isDirectory()) throw new ShareUnavailableError();
-        const key = this.answerKey();
+        const key = await this.answerKeyInfo();
         // Verifiers try keys/<keyId>.pub first, so a rotation keeps old answers checkable.
         for (const file of [
           path.join(v1, 'keys', 'aac-answers.pub'),
@@ -1398,7 +1429,7 @@ export class StatusAnswers {
       if (['ENOENT', 'ENOTREG', 'ELOOP', 'EACCES', 'EPERM'].includes(code ?? '')) return;
       throw error;
     }
-    const held = verifySignedAnswer(bytes, this.answerKey().publicKeyPem);
+    const held = await this.verifyAnswerBytes(bytes);
     // Only this server's own closing answer to this same card blocks: a signed file copied from another card (the
     // share's answers folder is writable by every writer) or an objection is no newer answer to this one.
     if (
@@ -1487,8 +1518,9 @@ export class StatusAnswers {
     let detail = 'Signed send summary written to the share.';
     try {
       const unsigned = sendSummary(send.sendId, send.at, send.device, answers);
-      const key = this.answerKey();
-      const body = `${JSON.stringify(signDocument(unsigned, key), null, 2)}\n`;
+      const key = await this.answerKeyInfo();
+      const signed = await this.signDocumentWith(unsigned);
+      const body = `${JSON.stringify(signed, null, 2)}\n`;
       await this.writeShareFile(`batches/${send.sendId}.json`, body, limitMs, undefined, (file) =>
         keepPublishedSummary(file, body, unsigned, key.publicKeyPem)
       );
@@ -1575,7 +1607,7 @@ export class StatusAnswers {
             (this.deps.doorbell ?? pmMailDoorbell())(
               group.to,
               ringSubject(records),
-              ringBody(group.sendId, records, this.answerKey().keyId),
+              ringBody(group.sendId, records, (await this.answerKeyInfo()).keyId),
               Date.now() + this.timing.ringMs
             ),
             this.timing.ringMs,
@@ -1626,7 +1658,7 @@ export class StatusAnswers {
       entry = {
         id,
         sendId,
-        answer: signAnswer(unsigned, this.answerKey()),
+        answer: await this.signAnswerWith(unsigned),
         card: parsed.doc,
         share: { ...PENDING },
         doorbell: { ...PENDING },
