@@ -235,7 +235,14 @@ async fn g4_corpus_matches_the_typescript_coordinator() {
                 let grant = json!({"version":1,"key":key,"identity":{"kind":"muse-team","key":"a".repeat(64)},"peers":peers});
                 let dir = ccs_dir.join("account-usage-failover");
                 std::fs::create_dir_all(&dir).expect("dir");
-                std::fs::write(dir.join(format!("{key}.muse-peers.json")), js_json::write(&grant)).expect("grant");
+                let path = dir.join(format!("{key}.muse-peers.json"));
+                std::fs::write(&path, js_json::write(&grant)).expect("grant");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("grant mode");
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("dir mode");
+                }
             }
             let op = step["op"].as_str().unwrap_or("");
             let tmpl = if step["template"].is_null() { template.clone() } else { step["template"].clone() };

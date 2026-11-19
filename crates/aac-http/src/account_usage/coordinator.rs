@@ -375,7 +375,7 @@ impl FailoverCoordinator {
             "identity": state.identity.as_ref().map(|i| i.value()).unwrap_or(Value::Null),
             "primary": state.primary.as_ref().map(|c| c.value()).unwrap_or(Value::Null),
             "saved": state.saved.as_ref().map(|s| json!({
-                "reading": s.reading.value(), "host": s.host, "candidate": s.candidate.value(), "fallback": s.fallback,
+                "reading": s.reading.value(), "candidate": s.candidate.value(), "host": s.host, "fallback": s.fallback,
             })).unwrap_or(Value::Null),
             "nextAttempt": state.next_attempt,
             "fresh": state.fresh.map(Value::Bool).unwrap_or(Value::Null),
@@ -473,6 +473,12 @@ fn has_usage_value(account: &Value) -> bool {
 
 fn parse_opt(s: Option<&str>) -> f64 {
     s.and_then(contract::parse_ms).unwrap_or(f64::NAN)
+}
+
+/// `Date.parse(x ?? '') || 0`: an absent/invalid time is 0 in the plan-age comparisons.
+fn parse_zero(s: Option<&str>) -> f64 {
+    let v = parse_opt(s);
+    if v.is_nan() { 0.0 } else { v }
 }
 
 impl FailoverCoordinator {
@@ -943,7 +949,7 @@ impl FailoverCoordinator {
         let observed_plan_at = response.get("observedPlanAt").and_then(|v| usage_timestamp(v, self.now()));
         if tracks_verified_plan(target) {
             if let (Some(plan), Some(at)) = (&observed_plan, &observed_plan_at) {
-                let bound = parse_opt(state.observed_plan_at.as_deref()).max(parse_opt(state.saved.as_ref().and_then(|s| s.reading.sampled_at.as_deref())));
+                let bound = parse_zero(state.observed_plan_at.as_deref()).max(parse_zero(state.saved.as_ref().and_then(|s| s.reading.sampled_at.as_deref())));
                 if parse_opt(Some(at)) >= bound {
                     state.observed_plan = Some(plan.clone());
                     state.observed_plan_at = Some(at.clone());
@@ -964,9 +970,9 @@ impl FailoverCoordinator {
             return if blocked { "done" } else { "next" };
         }
         if tracks_verified_plan(target) {
-            let sampled = parse_opt(reading.sampled_at.as_deref());
-            let known_plan_at = parse_opt(state.observed_plan_at.as_deref());
-            if reading.status == "ok" && sampled >= known_plan_at && sampled >= parse_opt(state.saved.as_ref().and_then(|s| s.reading.sampled_at.as_deref())) {
+            let sampled = parse_zero(reading.sampled_at.as_deref());
+            let known_plan_at = parse_zero(state.observed_plan_at.as_deref());
+            if reading.status == "ok" && sampled >= known_plan_at && sampled >= parse_zero(state.saved.as_ref().and_then(|s| s.reading.sampled_at.as_deref())) {
                 state.observed_plan = reading.plan.clone();
                 state.observed_plan_at = reading.sampled_at.clone();
                 state.observed_plan_peer = if same_identity(state.identity.as_ref(), Some(&candidate.identity)) { None } else { Some(contract::MuseUsagePeer { host: host.host.clone(), identity: candidate.identity.clone() }) };
