@@ -1139,9 +1139,13 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64, provider_sai
     if after.validate(now).is_err() || after.identity != before.identity || !newer {
         return false;
     }
-    // Missing grant is not sufficient proof: require an explicit chosen-grant decrement.
+    // A missing grant alone is not proof: Claude needs an explicit chosen-grant decrement. OpenAI, though,
+    // removes a redeemed Codex credit from its list (seen live on 2026-11-16: the claim refilled the weekly
+    // window and the credit vanished, and the account then stayed locked as unconfirmed). So for Codex, a
+    // credit OpenAI itself answered `reset` or `alreadyRedeemed` for, gone from a newer read of the same
+    // identity, was spent by this attempt.
     let Some(new) = after.grants.iter().find(|n| n.id == g.id) else {
-        return false;
+        return before.identity.provider == "codex" && provider_said_spent;
     };
     let spent = new.left.checked_add(1) == Some(g.left);
     if before.identity.provider == "codex" {
