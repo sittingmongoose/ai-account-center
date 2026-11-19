@@ -548,11 +548,12 @@ fn a_redeeming_credit_stays_unconfirmed_and_locked_until_a_read_says_redeemed() 
     assert_eq!(r["outcome"], "claimed-unconfirmed");
     assert_eq!(r["verification"], "unconfirmed");
     assert_eq!(r["pending"], true);
-    // Locked, and the redeeming credit itself can't be used or sent.
+    // Locked, and the redeeming credit itself can't be used or sent; its reason names what OpenAI is doing.
     let inv = s.inventory(ROUTE, &f.read(), wall(), &nonce(5)).unwrap();
     assert_eq!(inv["pendingAttempt"], attempt);
+    assert_eq!(inv["grants"][0]["resetsLeft"], 1);
     assert_eq!(inv["grants"][0]["claimable"], false);
-    assert_eq!(inv["grants"][0]["claimBlockedReason"], "grant-unavailable");
+    assert_eq!(inv["grants"][0]["claimBlockedReason"], "redeeming");
     let key = inv["grants"][0]["grantKey"].as_str().unwrap().to_owned();
     assert_eq!(s.gate(ROUTE, &key, wall(), true), Err("check-again-required"));
     // Check again while it is still redeeming: still unconfirmed, still locked, nothing sent.

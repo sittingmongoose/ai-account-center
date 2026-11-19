@@ -352,6 +352,30 @@ fn a_codex_credit_gone_after_openai_said_reset_confirms_and_unlocks() {
     }
 }
 #[test]
+fn a_redeeming_codex_credit_has_its_own_reason_and_stays_unclaimable() {
+    // OpenAI reports the credit `redeeming` while it refills: the count stays, the credit is not spent, and it is
+    // neither usable nor saved, so its reason names what is happening instead of the generic "can't be used yet".
+    let (_d, mut s) = open();
+    let mut snap = snapshot("codex");
+    snap.grants[1].usable = false;
+    let inv = s.read_inventory("route-account", &snap, NOW, &entropy(40)).unwrap();
+    assert_eq!(inv["grants"][0]["claimable"], true, "the untouched credit stays usable");
+    assert_eq!(inv["grants"][1]["resetsLeft"], 1);
+    assert_eq!(inv["grants"][1]["claimable"], false);
+    assert_eq!(inv["grants"][1]["claimBlockedReason"], "redeeming");
+    let key = inv["grants"][1]["grantKey"].as_str().unwrap();
+    assert_eq!(
+        s.prepare("route-account", key, &caller(), &snap, NOW, &entropy(41))
+            .unwrap_err(),
+        "redeeming"
+    );
+    // A Claude grant that is merely not usable yet keeps the generic reason.
+    let mut claude = snapshot("claude");
+    claude.grants[1].usable = false;
+    let inv = s.read_inventory("other-account", &claude, NOW, &entropy(42)).unwrap();
+    assert_eq!(inv["grants"][1]["claimBlockedReason"], "grant-unavailable");
+}
+#[test]
 fn a_missing_claude_grant_still_is_not_proof() {
     let (_d, mut s) = open();
     let mut snap = snapshot("claude");

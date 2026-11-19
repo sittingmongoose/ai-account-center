@@ -175,6 +175,9 @@ pub struct ReadingRow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Phase {
     Ready,
+    /// OpenAI is redeeming this Codex credit now: it keeps its count until the refill finishes, and it is
+    /// neither ready nor saved for later.
+    Redeeming,
     NotYet,
     Used,
     Expired,
@@ -184,6 +187,7 @@ impl Phase {
     pub fn word(self) -> &'static str {
         match self {
             Phase::Ready => "Ready",
+            Phase::Redeeming => "In progress",
             Phase::NotYet => "Not yet",
             Phase::Used => "Used",
             Phase::Expired => "Expired",
@@ -297,6 +301,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
             "AAC couldn't confirm which account this is, so it won't use this reset.".into()
         }
         "grant-unavailable" => "The provider says this reset can't be used yet.".into(),
+        "redeeming" => "OpenAI is using this reset now.".into(),
         "refill-windows-unconfirmed" if provider == "codex" => {
             "AAC can't read this account's Codex limits right now, so it won't use this reset.".into()
         }
@@ -324,6 +329,8 @@ pub fn rows_from_inventory(inv: &Inventory, provider: &str, now_ms: f64) -> Vec<
                 Phase::Used
             } else if g.expires_at_ms.is_some_and(|e| e <= now_ms) {
                 Phase::Expired
+            } else if reason == "redeeming" {
+                Phase::Redeeming
             } else if reason == "grant-unavailable" {
                 Phase::NotYet
             } else {
@@ -404,13 +411,15 @@ pub fn rows_from_reading(rows: &[ReadingRow], now_ms: f64) -> Vec<Row> {
     out
 }
 
-/// Usable first, soonest expiry first; then not yet, unknown kinds, and used or expired rows at the bottom.
+/// Usable first, then a reset OpenAI is using right now, then not yet, unknown kinds, and used or expired rows at
+/// the bottom.
 pub fn sort_rows(rows: &mut [Row]) {
     let rank = |r: &Row| match r.phase {
         Phase::Ready if !r.unknown => 0,
-        Phase::NotYet if !r.unknown => 1,
-        Phase::Ready | Phase::NotYet => 2,
-        Phase::Used | Phase::Expired => 3,
+        Phase::Redeeming => 1,
+        Phase::NotYet if !r.unknown => 2,
+        Phase::Ready | Phase::NotYet => 3,
+        Phase::Used | Phase::Expired => 4,
     };
     rows.sort_by(|a, b| {
         rank(a).cmp(&rank(b)).then_with(|| {
@@ -418,7 +427,7 @@ pub fn sort_rows(rows: &mut [Row]) {
                 a.expires_at_ms.unwrap_or(f64::MAX),
                 b.expires_at_ms.unwrap_or(f64::MAX),
             );
-            if rank(a) == 3 {
+            if rank(a) == 4 {
                 y.total_cmp(&x)
             } else {
                 x.total_cmp(&y)
@@ -431,6 +440,8 @@ pub fn sort_rows(rows: &mut [Row]) {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Counts {
     pub ready: u32,
+    /// Codex credits OpenAI is redeeming now; never part of `not_yet` or `ready`.
+    pub redeeming: u32,
     pub not_yet: u32,
     pub unknown: u32,
     pub used: u32,
@@ -442,6 +453,7 @@ pub fn counts(rows: &[Row]) -> Counts {
         match r.phase {
             Phase::Ready | Phase::NotYet if r.unknown => c.unknown += r.left,
             Phase::Ready => c.ready += r.left,
+            Phase::Redeeming => c.redeeming += r.left,
             Phase::NotYet => c.not_yet += r.left,
             Phase::Used => c.used += r.count,
             Phase::Expired => {}
@@ -452,6 +464,15 @@ pub fn counts(rows: &[Row]) -> Counts {
 
 fn plural(n: u32, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// A reset OpenAI is redeeming right now, in the owner's words: neither saved for later nor ready to use.
+fn redeeming_words(n: u32) -> String {
+    if n == 1 {
+        "OpenAI is using this reset now.".into()
+    } else {
+        format!("OpenAI is using {n} resets now.")
+    }
 }
 
 /// The group's answer as one sentence: the bold lead, then the rest. `day` words a time as "Dec 10".
@@ -470,6 +491,8 @@ pub fn summary(rows: &[Row], mode: &str, day: &dyn Fn(f64) -> String) -> (String
     let c = counts(rows);
     let lead = if c.ready > 0 {
         format!("{} ready.", plural(c.ready, one, many))
+    } else if c.redeeming > 0 {
+        redeeming_words(c.redeeming)
     } else if c.not_yet > 0 {
         format!("{} saved, not usable yet.", plural(c.not_yet, one, many))
     } else if c.unknown > 0 {
@@ -491,6 +514,9 @@ pub fn summary(rows: &[Row], mode: &str, day: &dyn Fn(f64) -> String) -> (String
         } else {
             format!("The first expires {}.", day(at))
         });
+    }
+    if c.ready > 0 && c.redeeming > 0 {
+        rest.push(redeeming_words(c.redeeming));
     }
     if c.ready > 0 && c.not_yet > 0 {
         rest.push(format!(
@@ -519,6 +545,9 @@ pub fn head_end(rows: &[Row]) -> Option<(u32, String)> {
     }
     let c = counts(rows);
     let mut tail = vec![];
+    if c.redeeming > 0 {
+        tail.push(format!("{} in progress", c.redeeming));
+    }
     if c.not_yet > 0 {
         tail.push(format!("{} not yet", c.not_yet));
     }
@@ -2151,6 +2180,72 @@ mod tests {
         assert_eq!(
             summary(&cards, "zai", &fake_day),
             ("3 reset cards ready.".into(), "The first expires day+2. Use them in Z.ai; AAC lists them but can't use them from here.".into())
+        );
+    }
+
+    #[test]
+    fn a_redeeming_credit_has_its_own_state_and_is_never_saved_or_ready() {
+        // Only APIs that exist on the base too, so this case is red there by its words and states, not by a compile
+        // error: base says "1 ... saved, not usable yet" (or counts it ready) for a credit OpenAI is redeeming.
+        let both = rows_from_inventory(
+            &inventory(vec![
+                grant("banked", 1, Some(2.0), true, None),
+                grant("banked", 1, Some(3.0), false, Some("redeeming")),
+            ]),
+            "codex",
+            NOW,
+        );
+        assert_eq!(
+            both.iter().map(|r| r.phase.word()).collect::<Vec<_>>(),
+            vec!["Ready", "In progress"]
+        );
+        assert_eq!(both[1].note, "OpenAI is using this reset now.");
+        assert!(!both[1].claimable);
+        assert_eq!(
+            both[1].left, 1,
+            "the credit keeps its count while redeeming"
+        );
+        assert_eq!(
+            summary(&both, "claim", &fake_day),
+            (
+                "1 rate-limit reset ready.".into(),
+                "It expires day+2. OpenAI is using this reset now.".into()
+            )
+        );
+        assert_eq!(head_end(&both), Some((1, " ready, 1 in progress".into())));
+        // Alone, the group answers with what OpenAI is doing, never a saved total.
+        let alone = rows_from_inventory(
+            &inventory(vec![grant(
+                "banked",
+                1,
+                Some(3.0),
+                false,
+                Some("redeeming"),
+            )]),
+            "codex",
+            NOW,
+        );
+        assert_eq!(
+            summary(&alone, "claim", &fake_day),
+            ("OpenAI is using this reset now.".into(), String::new())
+        );
+        assert_eq!(head_end(&alone), Some((0, " ready, 1 in progress".into())));
+        // A Claude grant that is merely not usable yet keeps the generic saved wording.
+        let claude = rows_from_inventory(
+            &inventory(vec![grant(
+                "session",
+                1,
+                None,
+                false,
+                Some("grant-unavailable"),
+            )]),
+            "claude",
+            NOW,
+        );
+        assert_eq!(claude[0].phase.word(), "Not yet");
+        assert_eq!(
+            summary(&claude, "claim", &fake_day).0,
+            "1 rate-limit reset saved, not usable yet."
         );
     }
 

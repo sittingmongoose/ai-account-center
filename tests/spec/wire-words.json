@@ -3615,6 +3615,13 @@
     ]
   },
   {
+    "word": "redeeming",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "refill-windows-unconfirmed",
     "cause": null,
     "sources": [

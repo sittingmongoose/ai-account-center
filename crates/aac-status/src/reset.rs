@@ -123,8 +123,17 @@ fn blocked(s: &Snapshot, g: &Grant, now: i64) -> Option<&'static str> {
     if s.identity.provider == "claude" && s.identity.organization.is_empty() {
         return Some("identity-unconfirmed");
     }
-    if !g.usable || g.left == 0 || g.expires_at_ms.is_some_and(|v| v <= now) {
+    if g.expires_at_ms.is_some_and(|v| v <= now) || g.left == 0 {
         return Some("grant-unavailable");
+    }
+    if !g.usable {
+        // A Codex credit OpenAI is redeeming keeps its count until the refill finishes; it is in progress, not
+        // saved for later, so the page can say what is happening instead of "not usable yet".
+        return Some(if s.identity.provider == "codex" {
+            "redeeming"
+        } else {
+            "grant-unavailable"
+        });
     }
     if g.clears.is_empty() || g.clears.iter().any(|k| !s.windows.contains_key(k)) {
         return Some("refill-windows-unconfirmed");
