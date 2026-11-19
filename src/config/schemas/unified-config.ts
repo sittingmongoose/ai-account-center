@@ -50,7 +50,9 @@ export interface UnifiedConfig {
    * `AAC_RUST_GROUP_ANALYTICS` overrides): Analytics history and activity are read from the hosted store and
    * composed in Rust, with the TS computation as the fallback. `store` (R3, `AAC_RUST_STORE` overrides)
    * hosts the history store when the mode is on. Off keeps the in-process store; exhausting the restart
-   * budget automatically falls back to it on the same files.
+   * budget automatically falls back to it on the same files. `homeProducer` (G17, `AAC_RUST_HOME_PRODUCER`
+   * overrides): the Rust service produces the Home feed generations from the raw inputs; off by default
+   * until the collection feeds it, and the TS producer stays available until the cut.
    */
   rustService?: {
     frontDoor?: 'ts' | 'rust';
@@ -65,6 +67,7 @@ export interface UnifiedConfig {
       'app-updates'?: 'off' | 'on';
     };
     store?: 'off' | 'on';
+    homeProducer?: 'off' | 'on';
   };
   /** Config version */
   version: number;

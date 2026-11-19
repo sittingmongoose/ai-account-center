@@ -30,6 +30,7 @@
   { "method": "GET", "path": "/api/views/home", "owner": "rust", "group": "home", "roles": ["admin"], "budgetMs": 400, "handler": "home" },
   { "method": "PUT", "path": "/internal/feed/{source}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "feed" },
   { "method": "GET", "path": "/internal/feed/{source}", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "feed-status" },
+  { "method": "PUT", "path": "/internal/home-inputs", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 400, "handler": "home-inputs" },
   { "method": "GET", "path": "/internal/events", "owner": "rust", "group": "internal", "roles": ["service"], "budgetMs": 0, "handler": "events" },
   { "method": "PUT", "path": "/internal/collection-provider-cache", "owner": "rust", "group": "collection", "roles": ["service"], "budgetMs": 400, "handler": "collection-provider-cache" },
   { "method": "PUT", "path": "/internal/collection-cursor", "owner": "rust", "group": "collection", "roles": ["service"], "budgetMs": 0, "handler": "collection-cursor" },

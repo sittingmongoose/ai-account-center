@@ -30,6 +30,7 @@ pub(crate) enum Handler {
     ScoreboardInputs,
     Feed,
     FeedStatus,
+    HomeInputs,
     Events,
     Agent,
     Collect,
@@ -67,6 +68,7 @@ impl Handler {
             "scoreboard-inputs" => Handler::ScoreboardInputs,
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
+            "home-inputs" => Handler::HomeInputs,
             "events" => Handler::Events,
             "collection-cache" => Handler::CollectionCache,
             "collect" => Handler::Collect,
@@ -270,6 +272,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                 && !matches!(
                     handler,
                     Handler::Feed
+                        | Handler::HomeInputs
                         | Handler::CollectionCache
                         | Handler::CollectionTick
                         | Handler::WriteSettings

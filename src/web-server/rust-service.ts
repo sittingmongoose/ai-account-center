@@ -17,12 +17,14 @@ import type { RustLease } from './rust-service-lifecycle';
 import {
   canonicalRoot,
   pushRustFeedText,
+  putRustHomeInputs,
   requestRust,
   FRONT_DOOR_PRINCIPAL,
   RUST_VIEW_CAP,
   rustFailureKind,
   type RustReply,
   type RustRequestOptions,
+  type RustHomeInputs,
   type VerifiedRustPrincipal,
 } from './rust-service-transport';
 import type { NativeStatusHandle } from '../status-native/native-loader';
@@ -722,6 +724,41 @@ export class RustService extends RustSupervisor {
       this.replied(lease);
       const held = (reply.body as { generation?: unknown } | null)?.generation;
       return reply.status === 200 && typeof held === 'string' ? held : null;
+    } catch (error) {
+      this.transportFailed(lease, rustFailureKind(error));
+      return null;
+    }
+  }
+
+  /**
+   * G17: the Rust Home feed producer. The raw inputs go in; the three held generations come back, or the
+   * producer's named decline, or null when the request did not reach the service (a transport failure also
+   * tells the supervisor). The caller declines and the TS producer path answers until the cut.
+   */
+  async putHomeInputs(
+    inputs: RustHomeInputs
+  ): Promise<
+    { dashboard: string; opens: string; antigravity: string } | { declined: string } | null
+  > {
+    const lease = this.lease;
+    if (!lease || this.stopped || this.mode !== 'on') return null;
+    try {
+      const reply = await putRustHomeInputs(lease.connection, inputs, this.active);
+      this.replied(lease);
+      if (reply.status !== 200) return { declined: reply.decline ?? 'unnamed' };
+      const body = reply.body as {
+        dashboard?: unknown;
+        opens?: unknown;
+        antigravity?: unknown;
+      } | null;
+      const { dashboard, opens, antigravity } = body ?? {};
+      if (
+        typeof dashboard !== 'string' ||
+        typeof opens !== 'string' ||
+        typeof antigravity !== 'string'
+      )
+        return null;
+      return { dashboard, opens, antigravity };
     } catch (error) {
       this.transportFailed(lease, rustFailureKind(error));
       return null;

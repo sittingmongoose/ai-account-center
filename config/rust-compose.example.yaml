@@ -4,6 +4,7 @@ rustService:
   frontDoor: rust
   mode: on
   store: on
+  homeProducer: on
   groups:
     home: on
     status: on

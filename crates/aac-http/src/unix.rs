@@ -99,6 +99,8 @@ struct Shared {
     /// M5 lane K: the claims file's writer lease, held from first use to the end of the boot.
     reset_claims: crate::reset_claims::ResetClaims,
     app_update_jobs: Option<BoundJobs>,
+    /// G17: the Home feed producer (the TS producer's work, in process).
+    producer: Arc<crate::home_producer::HomeProducer>,
     agents: Arc<crate::agent_transport::Agents>,
     collection: Arc<crate::collection::Collection>,
     cursor: Arc<crate::account_usage::cursor::Reader>,
@@ -163,7 +165,9 @@ impl Boot {
                 Err(error) => last = Some(error),
             }
         }
-        Err(last.unwrap_or_else(|| serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, "invalid boot"))))
+        Err(last.unwrap_or_else(|| {
+            serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, "invalid boot"))
+        }))
     }
 
     /// Each registry row's writer for this boot. A map that names another row set, or gives a
@@ -864,6 +868,26 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // G17: the Home feed producer — the raw Home inputs in, the held generations named. The transitional
+        // socket form of the producer; lane I's collection feeds it in process once it owns the dashboard read.
+        Handler::HomeInputs => {
+            let Ok(bytes) = to_bytes(req.into_body(), INPUT_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(inputs) = serde_json::from_slice::<crate::home_producer::Inputs>(&bytes) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let feeds = shared.feeds.clone();
+            let producer = shared.producer.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || producer.produce(&feeds, &inputs))
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         // R1: Home from the fed generations (no body; the ids, clock and context in headers). Without
         // `x-aac-feed` it is D7's envelope read below, which TS's own handler still uses.
         Handler::Home if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
@@ -1152,17 +1176,15 @@ async fn serve_inner(
     ));
     let check_flushing = Arc::new(AtomicBool::new(false));
     let status_owned = match (&boot.owned, &store) {
-        (Some(owned), Some(host)) if owned.status => {
-            Some(crate::status_owned::StatusOwned::new(
-                owned.reports_root.clone(),
-                owned.registry_dir.clone(),
-                Arc::clone(host),
-                feeds.clone(),
-                owners.clone(),
-                Arc::clone(&check),
-                Arc::clone(&check_flushing),
-            ))
-        }
+        (Some(owned), Some(host)) if owned.status => Some(crate::status_owned::StatusOwned::new(
+            owned.reports_root.clone(),
+            owned.registry_dir.clone(),
+            Arc::clone(host),
+            feeds.clone(),
+            owners.clone(),
+            Arc::clone(&check),
+            Arc::clone(&check_flushing),
+        )),
         _ => None,
     };
     let scoreboard_owned = match (&boot.owned, &store) {
@@ -1189,6 +1211,7 @@ async fn serve_inner(
         approvals: crate::account_approvals::Approvals::default(),
         reset_claims: crate::reset_claims::ResetClaims::default(),
         app_update_jobs: app_update_jobs.map(BoundJobs::new),
+        producer: Arc::new(crate::home_producer::HomeProducer::default()),
         agents,
         collection: collection.clone(),
         cursor: Arc::default(),

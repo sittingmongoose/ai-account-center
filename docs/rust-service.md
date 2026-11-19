@@ -714,6 +714,35 @@ measures off `GET /api/accounts/dashboard`, D7's Home and the fed Home in the sa
 synthetic home (whose 30 x 12 dashboard rows reach the real dashboard service through the additional-accounts
 snapshot).
 
+### Home feed producer (G17)
+
+The producer half of `views/home-feed.ts` — the dashboard's change-key text (`JSON.stringify({...dashboard,
+updatedAt: ''})`), its facts (`localeRanks(homeSortWords(...))` and `resetEpochs(...)`), the Antigravity ISO-only
+envelope (`rustAntigravityInventoryInput`), the Opens text, and `ensure`'s per-source change keys and generations
+— runs in Rust too: `crates/aac-http/src/home_producer.rs`. `PUT /internal/home-inputs` (service role, the
+internal group) takes the raw inputs `{platform, secure, dashboard, opens, antigravity}` and names the three
+held generations; the fed view request then carries those ids as before. Lane I's collection feeds the producer
+in process once it owns the dashboard read (G2); until then the TS front door can use the socket form with
+`rustService.homeProducer: on` (`AAC_RUST_HOME_PRODUCER` wins), off by default. The TS push path stays available
+until the cut; a producer decline falls back to it.
+
+Every output is the very text the TS producer writes, or a named decline. The proved domains: printable-ASCII
+sort words (`aac_num::intl::ascii_compare`; another word declines `collation`), the ES Date Time String Format
+with an explicit zone (`aac_num::ecma::parse_instant`; the empty string is its proven NaN, another unproved
+string declines `date`), `toISOString` years 1970-9999, safe-integer millisecond times in `readFacts`'s window,
+`String(profile)` of the sign-in rows for absent/null/boolean/string/number only, and `jsonExact`'s gate (depth
+64, no `__proto__` key). The generation rules are `ensure`'s: only-forward clock generations, a newer held
+generation declines `stale`, an over-cap body is refused once per key (`unsupported`; the bridge's word for the
+same refusal on the TS path is `cap`).
+
+The checks: `home_producer.rs` unit tests (the change key, the facts, the envelope, the generation rules, and
+`tests/spec/home-producer-goldens.json` — the TS producer's own outputs for the 176 Home corpus cases and the
+large fixture, byte-equal or declined), `crates/aac-http/tests/lifecycle.rs`
+(`home_inputs_produce_the_generations_the_ts_producer_pushes`: the socket producer's fed answer is byte-equal to
+the push path's, unchanged inputs name the same generations, a non-ASCII word declines `collation`, another
+principal is refused), and `tests/unit/web-server/home-feed.test.ts` (the producer branch sends the raw inputs,
+names the returned generations, pushes nothing itself, and falls back on a decline).
+
 ## Status, fed (R2)
 
 R2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 1.2): Status at the **fed** level. Off by default:

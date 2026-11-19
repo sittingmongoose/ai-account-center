@@ -40,6 +40,7 @@ Object.assign(process.env, {
   // (on when unset under mode on), so pin it and the D7 switch off here to keep the goldens the plain answers.
   AAC_RUST_HOME_VIEW: 'off',
   AAC_RUST_GROUP_HOME: composed && !process.argv.includes('--plain-home') ? 'on' : 'off',
+  AAC_RUST_HOME_PRODUCER: composed && !process.argv.includes('--plain-home') ? 'on' : 'off',
   ...(composed
     ? {
         // The M0 contract uses scripted app-update outcomes. The lane H native owner
