@@ -183,7 +183,11 @@ mod unix {
         };
         let packet = Packet {
             method: parts.method.to_string(),
-            target: parts.uri.to_string(),
+            target: parts
+                .uri
+                .path_and_query()
+                .map_or("/", |target| target.as_str())
+                .to_owned(),
             content_type: parts
                 .headers
                 .get(header::CONTENT_TYPE)
