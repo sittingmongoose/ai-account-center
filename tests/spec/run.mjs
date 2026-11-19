@@ -2,19 +2,21 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const cwd = fileURLToPath(new URL('../..', import.meta.url));
 const legacyResetGroup = process.argv.includes('--group=reset-claims');
-if (process.argv.includes('--cut-rust-only') || legacyResetGroup) {
+const routeGroup = process.argv.find((arg) => arg.startsWith('--route-group='));
+const recording = process.argv.some((arg) => arg.startsWith('--record-native='));
+if (routeGroup || recording || process.argv.includes('--cut-rust-only') || legacyResetGroup) {
   const binary =
     process.env.AAC_M6_TARGET_CLI ??
     (legacyResetGroup ? process.env.AAC_RUST_PUBLIC_BINARY : undefined);
   if (!binary) throw new Error('Set AAC_M6_TARGET_CLI to the native dashboard command.');
+  const mode = recording ? '--cut' : '--cut-rust-only';
   execFileSync(
     'bun',
     [
       'tests/spec/m6-public-contract.ts',
       binary,
-      '--cut-rust-only',
-      '--require-complete',
-      ...process.argv.slice(2).filter((arg) => arg !== '--cut-rust-only'),
+      mode,
+      ...process.argv.slice(2).filter((arg) => arg !== '--cut-rust-only' && arg !== '--cut'),
     ],
     { cwd, stdio: 'inherit' }
   );
