@@ -41,7 +41,11 @@ pub(super) fn package_root() -> Option<PathBuf> {
 }
 
 impl Sidecar {
-    pub async fn start(root: &Path, public: SocketAddr) -> io::Result<Option<Self>> {
+    pub async fn start(
+        root: &Path,
+        public: SocketAddr,
+        native_collection: bool,
+    ) -> io::Result<Option<Self>> {
         let explicit = std::env::var_os("AAC_TS_SIDECAR");
         if explicit.as_deref() == Some(std::ffi::OsStr::new("off")) {
             return Ok(None);
@@ -72,6 +76,11 @@ impl Sidecar {
             .env("CCS_DIR", root)
             .env("AAC_RUST_CUT_WORKER", "1")
             .env("AAC_CUT_HUB_DIRECTORY", cache_directory.path())
+            .env("AAC_CUT_PUBLIC_OWNERS", if cfg!(unix) { "1" } else { "0" })
+            .env(
+                "AAC_CUT_PUBLIC_COLLECTION",
+                if native_collection { "1" } else { "0" },
+            )
             .env("AAC_RUST_COMPOSE", "1")
             .env("AAC_RUST_SERVICE", "on")
             .env("AAC_RUST_SERVICE_BINARY", binary)
@@ -131,26 +140,6 @@ impl Sidecar {
             lost.store(true, std::sync::atomic::Ordering::Relaxed);
             shutdown.graceful_shutdown(Some(Duration::from_secs(3)));
         }))
-    }
-
-    #[cfg(unix)]
-    pub fn watch_native_usage(&self, events: DashboardEvents) -> tokio::task::JoinHandle<()> {
-        let path = self.cache.with_file_name(super::hub::NATIVE_SNAPSHOT);
-        tokio::spawn(async move {
-            let mut previous = None;
-            let mut cadence = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                cadence.tick().await;
-                let revision = std::fs::symlink_metadata(&path)
-                    .ok()
-                    .filter(|metadata| metadata.is_file())
-                    .and_then(|metadata| metadata.modified().ok());
-                if revision.is_some() && revision != previous {
-                    previous = revision;
-                    events.publish(super::DashboardEvent::AccountsChanged {});
-                }
-            }
-        })
     }
 
     pub async fn stop(mut self) {

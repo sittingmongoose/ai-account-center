@@ -636,14 +636,16 @@ async function acquireWithinBudget(
         }
       }
     });
-    const nativeCollection = process.env.AAC_RUST_CUT_WORKER === '1' && rustGroupOn('collection');
+    const publicOwners = process.env.AAC_CUT_PUBLIC_OWNERS === '1';
+    const nativeCollection =
+      !publicOwners && process.env.AAC_RUST_CUT_WORKER === '1' && rustGroupOn('collection');
     child = spawn(binary, nativeCollection ? ['--native-collection'] : [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
         // Windows already returned above; the default re-detects the platform in its own scope.
         ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
         AAC_RUST_NATIVE_APP_UPDATES:
-          rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
+          !publicOwners && rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
         AAC_RUST_CUT_WORKER: process.env.AAC_RUST_CUT_WORKER,
         AAC_CUT_HUB_DIRECTORY: process.env.AAC_CUT_HUB_DIRECTORY,
         AAC_CUT_OFFER_HOME: process.env.AAC_CUT_OFFER_HOME,

@@ -1,0 +1,298 @@
+//! Exercise the shipped public boot without a compatibility worker or provider.
+#![cfg(unix)]
+#![allow(clippy::unwrap_used)]
+
+use futures_util::StreamExt;
+use reqwest::{Client, Response, StatusCode, header};
+use serde_json::{Value, json};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Stdio, time::Duration};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
+};
+
+use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
+
+fn file(root: &Path, name: &str, body: Value) {
+    let file = root.join(name);
+    fs::write(&file, body.to_string()).unwrap();
+    fs::set_permissions(file, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+async fn json_reply(response: Response, status: StatusCode, no_store: bool) -> Value {
+    assert_eq!(response.status(), status);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        no_store.then_some("no-store")
+    );
+    serde_json::from_slice(&response.bytes().await.unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn the_public_boot_serves_accounts_recheck_and_app_jobs_without_the_worker() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let password = "fixture-public-password";
+    file(
+        &root,
+        "config.yaml",
+        json!({
+            "dashboard_auth": {"enabled":true, "username":"fixture-admin",
+                "password_hash":bcrypt::hash(password, 4).unwrap()},
+        }),
+    );
+    file(
+        &root,
+        "account-usage-accounts.json",
+        json!({"version":2,"accounts":[
+            {"id":"cursor:usage","provider":"cursor","platform":"ubuntu","label":"Fixture",
+             "credential":{"kind":"discover"}}
+        ]}),
+    );
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = socket.local_addr().unwrap();
+    drop(socket);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ai-account-center"))
+        .args(["dashboard", "--no-open", "--host", "127.0.0.1", "--port"])
+        .arg(address.port().to_string())
+        .env("CCS_HOME", &root)
+        .env("CCS_DIR", &root)
+        .env("AAC_TS_SIDECAR", "off")
+        .env("AAC_AGENT_TRANSPORT", "off")
+        .env("AAC_RUST_GROUP_COLLECTION", "on")
+        .env("AAC_RUST_GROUP_WRITES", "on")
+        .env("AAC_RUST_GROUP_APP_UPDATES", "on")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let base = format!("http://{address}");
+    let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(line) = output.next_line().await.unwrap() {
+            if line == format!("aac-http public listening on {address}") {
+                return;
+            }
+        }
+        panic!("public fixture exited before listening");
+    })
+    .await
+    .unwrap();
+
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let credentials = json!({"username":"fixture-admin", "password":password});
+    let login = client
+        .post(format!("{base}/api/auth/login"))
+        .header(header::ORIGIN, &base)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(credentials.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let dashboard = format!("{base}/api/accounts/dashboard?platform=windows");
+    let get = || client.get(&dashboard).header(header::COOKIE, cookie);
+    let current = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = get().send().await.unwrap();
+            if response.status() != StatusCode::SERVICE_UNAVAILABLE {
+                break response;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let tag = current.headers()[header::ETAG].clone();
+    let accounts = json_reply(current, StatusCode::OK, true).await;
+    let row = accounts["accounts"][0].clone();
+    assert_eq!(row["id"], "cursor:usage");
+    assert_eq!(row["status"], "unavailable");
+    let current = get()
+        .header(header::IF_NONE_MATCH, tag.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(current.status(), StatusCode::NOT_MODIFIED);
+    assert!(current.bytes().await.unwrap().is_empty());
+    let reload = get()
+        .header(header::IF_NONE_MATCH, tag)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reload.status(), StatusCode::OK);
+
+    let invalid = client
+        .get(format!("{base}/api/accounts/dashboard?fixture=invalid"))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        json_reply(invalid, StatusCode::BAD_REQUEST, false).await,
+        json!({"error":"Select a valid desktop platform and refresh value."})
+    );
+    let recheck_path = |id: &str| format!("{base}/api/accounts/{id}/recheck");
+    let post = |url: String| {
+        client
+            .post(url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body("{}")
+    };
+    let signed = |url: String| post(url).header(header::COOKIE, cookie);
+    let origin = |url: String| signed(url).header(header::ORIGIN, &base);
+    let url = recheck_path("cursor:usage");
+    let signed_out = post(url.clone()).send().await.unwrap();
+    assert_eq!(
+        json_reply(signed_out, StatusCode::UNAUTHORIZED, true).await["code"],
+        "auth_required"
+    );
+    let no_origin = signed(url.clone()).send().await.unwrap();
+    assert_eq!(
+        json_reply(no_origin, StatusCode::FORBIDDEN, true).await["code"],
+        "origin_required"
+    );
+    let wrong_origin = signed(url.clone())
+        .header(header::ORIGIN, "https://wrong.invalid")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        json_reply(wrong_origin, StatusCode::FORBIDDEN, true).await["code"],
+        "origin_required"
+    );
+    let wrong_body = origin(url.clone())
+        .body(r#"{"refresh":true}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        json_reply(wrong_body, StatusCode::BAD_REQUEST, true).await["code"],
+        "invalid_body"
+    );
+    let unknown = origin(recheck_path("zai:acct:00000000"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        json_reply(unknown, StatusCode::NOT_FOUND, true).await,
+        json!({"error":"That account was not found.","code":"unknown_account"})
+    );
+
+    let refreshed = origin(url.clone()).send().await.unwrap();
+    let mut expected = row;
+    let object = expected.as_object_mut().unwrap();
+    object.shift_remove("hidden");
+    object.shift_remove("trayHidden");
+    assert_eq!(
+        json_reply(refreshed, StatusCode::OK, true).await,
+        json!({"account": expected})
+    );
+    let limited = origin(url).send().await.unwrap();
+    assert_eq!(limited.headers()[header::RETRY_AFTER], "10");
+    assert_eq!(
+        json_reply(limited, StatusCode::TOO_MANY_REQUESTS, true).await,
+        json!({
+            "error":"This account was checked a moment ago. Try again shortly.",
+            "code":"rate_limited", "retryAfterSeconds":10,
+        })
+    );
+
+    let status = client
+        .get(format!("{base}/api/app-updates/status"))
+        .header(header::COOKIE, cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        json_reply(status, StatusCode::OK, true).await,
+        json!({"job":null})
+    );
+    let cancel = origin(format!("{base}/api/app-updates/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        json_reply(cancel, StatusCode::OK, true).await,
+        json!({"job":null,"cancelling":false})
+    );
+
+    // The transport is disabled in this fixture. Start still owns the durable
+    // acknowledgement and publishes progress through the public event bus.
+    let mut request = format!("ws://{address}/ws").into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert(header::ORIGIN, base.parse().unwrap());
+    request
+        .headers_mut()
+        .insert(header::COOKIE, cookie.parse().unwrap());
+    let (mut websocket, _) = connect_async(request).await.unwrap();
+    let start = origin(format!("{base}/api/app-updates/start"))
+        .send()
+        .await
+        .unwrap();
+    let job = json_reply(start, StatusCode::ACCEPTED, true).await;
+    let id = job["job"]["id"].as_str().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut running = false;
+        loop {
+            let event = websocket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .into_text()
+                .unwrap();
+            let event: Value = serde_json::from_str(&event).unwrap();
+            if event["type"] != "app-update-job" || event["job"]["id"] != id {
+                continue;
+            }
+            assert!(event["job"].get("results").is_none());
+            if event["job"]["state"] != "running" {
+                assert!(running);
+                break;
+            }
+            running = true;
+        }
+    })
+    .await
+    .unwrap();
+    drop(websocket);
+
+    // Close only our own fixture process and require a clean stop.
+    let pid = child.id().unwrap();
+    assert!(
+        Command::new("/bin/kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+}

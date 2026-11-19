@@ -70,6 +70,10 @@ impl BoundJobs {
     }
 
     pub(crate) async fn dispatch(&self, operation: Operation) -> Result<Response, Decline> {
+        into_response(self.call(operation).await?).ok_or(Decline::Internal)
+    }
+
+    pub(crate) async fn call(&self, operation: Operation) -> Result<AppUpdateReply, Decline> {
         let slot = self
             .slots
             .clone()
@@ -80,11 +84,10 @@ impl BoundJobs {
         // the job owner's acknowledgment or release this request's permit early.
         tokio::spawn(async move {
             let _slot = slot;
-            operation.invoke(owner.as_ref()).await
+            operation.call(owner.as_ref()).await
         })
         .await
-        .map_err(|_| Decline::Internal)?
-        .ok_or(Decline::Internal)
+        .map_err(|_| Decline::Internal)
     }
 }
 
@@ -107,14 +110,48 @@ impl Operation {
         }
     }
 
-    pub(crate) async fn invoke(self, jobs: &dyn AppUpdateJobs) -> Option<Response> {
-        let reply = match self {
+    async fn call(self, jobs: &dyn AppUpdateJobs) -> AppUpdateReply {
+        match self {
             Self::Status => jobs.status().await,
             Self::Start => jobs.start().await,
             Self::Cancel => jobs.cancel().await,
-        };
-        let status = StatusCode::from_u16(reply.status).ok()?;
-        Some((status, Json(reply.body)).into_response())
+        }
+    }
+}
+
+fn into_response(reply: AppUpdateReply) -> Option<Response> {
+    let status = StatusCode::from_u16(reply.status).ok()?;
+    Some((status, Json(reply.body)).into_response())
+}
+
+/// The same inert app service used when M0 captures the TypeScript routes.
+#[cfg(feature = "parity-fixtures")]
+pub(crate) struct M0Jobs;
+
+#[cfg(feature = "parity-fixtures")]
+impl AppUpdateJobs for M0Jobs {
+    fn status(&self) -> AppUpdateCall<'_> {
+        Box::pin(async {
+            AppUpdateReply {
+                status: 200,
+                body: serde_json::json!({"job":null}),
+            }
+        })
+    }
+
+    fn start(&self) -> AppUpdateCall<'_> {
+        Box::pin(async {
+            AppUpdateReply {
+                status: 202,
+                body: serde_json::json!({
+                    "job":{"id":"fixture-update","state":"running","hosts":{},"results":[]}
+                }),
+            }
+        })
+    }
+
+    fn cancel(&self) -> AppUpdateCall<'_> {
+        self.status()
     }
 }
 
@@ -274,10 +311,7 @@ mod tests {
                     .ok_or("missing outcome")?
                     .to_owned(),
             };
-            let reply = op
-                .invoke(&jobs)
-                .await
-                .ok_or("invalid status from fixture")?;
+            let reply = into_response(op.call(&jobs).await).ok_or("invalid status from fixture")?;
             assert_eq!(
                 u64::from(reply.status().as_u16()),
                 case["http"].as_u64().ok_or("missing status")?

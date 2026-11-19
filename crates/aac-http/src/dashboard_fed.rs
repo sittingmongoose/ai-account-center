@@ -68,6 +68,39 @@ pub(crate) fn latest(
     uri: &Uri,
     headers: &HeaderMap,
 ) -> Result<Response, Decline> {
+    let mut scopes = headers.get_all(SECURE_HEADER).iter();
+    let secure = match (scopes.next().map(HeaderValue::to_str), scopes.next()) {
+        (None | Some(Ok("0")), None) => false,
+        (Some(Ok("1")), None) => true,
+        _ => return Ok(invalid()),
+    };
+    latest_with(cache, uri, headers, secure, false)
+}
+
+/// Serve the same generation to a caller whose transport was already authenticated.
+pub(crate) fn latest_for_access(
+    cache: &AccountUsageCache,
+    uri: &Uri,
+    headers: &HeaderMap,
+    secure: bool,
+) -> Result<Response, Decline> {
+    latest_with(cache, uri, headers, secure, true)
+}
+
+fn latest_with(
+    cache: &AccountUsageCache,
+    uri: &Uri,
+    headers: &HeaderMap,
+    secure: bool,
+    public: bool,
+) -> Result<Response, Decline> {
+    let invalid = || {
+        if public {
+            crate::public_auth::plain(400, "Select a valid desktop platform and refresh value.")
+        } else {
+            invalid()
+        }
+    };
     let Ok(Query(query)) = Query::<DashboardQuery>::try_from_uri(uri) else {
         return Ok(invalid());
     };
@@ -78,12 +111,6 @@ pub(crate) fn latest(
     let refresh = match query.refresh.as_deref().unwrap_or("false") {
         "false" => false,
         "true" => true,
-        _ => return Ok(invalid()),
-    };
-    let mut scopes = headers.get_all(SECURE_HEADER).iter();
-    let secure = match (scopes.next().map(HeaderValue::to_str), scopes.next()) {
-        (None | Some(Ok("0")), None) => false,
-        (Some(Ok("1")), None) => true,
         _ => return Ok(invalid()),
     };
     if refresh {
@@ -107,8 +134,12 @@ pub(crate) fn latest(
                     .any(|word| word.trim().eq_ignore_ascii_case("no-cache"))
             })
         });
-    let identity = Sha256::digest(&bytes);
-    let mut response = crate::view_reply::respond_bytes(VIEW, VERSION, bytes, &identity);
+    let mut response = if public {
+        crate::public_auth::json_bytes(200, bytes)
+    } else {
+        let identity = Sha256::digest(&bytes);
+        crate::view_reply::respond_bytes(VIEW, VERSION, bytes, &identity)
+    };
     if !reload
         && let Some(current) = response
             .headers()
@@ -125,6 +156,7 @@ pub(crate) fn latest(
     {
         *response.status_mut() = StatusCode::NOT_MODIFIED;
         response.headers_mut().remove(header::CONTENT_TYPE);
+        response.headers_mut().remove(header::CONTENT_LENGTH);
         *response.body_mut() = axum::body::Body::empty();
     }
     response

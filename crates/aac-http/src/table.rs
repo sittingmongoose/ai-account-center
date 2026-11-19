@@ -419,6 +419,7 @@ mod tests {
                     | Handler::Agent
                     | Handler::Collect
                     | Handler::CollectionTick
+                    | Handler::CollectionRecheck
                     | Handler::ResetClaims
                     | Handler::CursorAccount
                     | Handler::Store

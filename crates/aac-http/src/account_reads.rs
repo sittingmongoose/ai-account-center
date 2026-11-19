@@ -97,7 +97,7 @@ fn record(value: &Value) -> Option<&Object> {
 }
 
 /// `^[a-z0-9][a-z0-9-]{0,31}(?::[A-Za-z0-9@._+-]{1,128}){1,2}$` or the console wallet id.
-fn public_account_id(value: &Value) -> bool {
+pub(crate) fn public_account_id(value: &Value) -> bool {
     let Some(id) = value.as_str() else {
         return false;
     };

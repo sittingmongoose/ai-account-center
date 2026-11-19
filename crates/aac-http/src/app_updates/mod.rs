@@ -297,7 +297,7 @@ pub struct AppUpdates {
     directory: PathBuf,
     agents: Arc<crate::agent_transport::Agents>,
     active: Mutex<Option<Active>>,
-    events: Option<Feeds>,
+    events: Option<Box<dyn Fn(DashboardEvent) + Send + Sync>>,
 }
 
 impl AppUpdates {
@@ -313,6 +313,24 @@ impl AppUpdates {
         agents: Arc<crate::agent_transport::Agents>,
         events: Option<Feeds>,
     ) -> Arc<Self> {
+        Self::with_events(
+            root,
+            agents,
+            events.map(|feeds| {
+                Box::new(move |event| {
+                    if let Ok(value) = serde_json::to_value(event) {
+                        feeds.publish_event(value);
+                    }
+                }) as Box<dyn Fn(DashboardEvent) + Send + Sync>
+            }),
+        )
+    }
+
+    pub(crate) fn with_events(
+        root: PathBuf,
+        agents: Arc<crate::agent_transport::Agents>,
+        events: Option<Box<dyn Fn(DashboardEvent) + Send + Sync>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             directory: root.join("app-updates"),
             agents,
@@ -325,28 +343,31 @@ impl AppUpdates {
         let Some(events) = &self.events else {
             return;
         };
-        let hosts = job.hosts.iter().flatten().map(|(host, progress)| {
-            AppUpdateHostProgress {
+        let hosts = job
+            .hosts
+            .iter()
+            .flatten()
+            .map(|(host, progress)| AppUpdateHostProgress {
                 host: host.clone(),
                 state: progress["state"].as_str().unwrap_or("waiting").to_owned(),
                 current_app: progress["currentApp"].as_str().map(str::to_owned),
                 phase: progress["phase"].as_str().map(str::to_owned),
                 phase_since: progress["phaseSince"].as_str().map(str::to_owned),
-            }
-        }).collect();
+            })
+            .collect();
         let event = DashboardEvent::AppUpdateJob {
             job: AppUpdateProgress {
                 id: job.id.clone(),
                 state: job.state.clone(),
                 cancel_requested: job.cancel_requested,
                 completed_results: u32::try_from(job.results.len()).unwrap_or(u32::MAX),
-                expected_results: job.expected_results.and_then(|total| u32::try_from(total).ok()),
+                expected_results: job
+                    .expected_results
+                    .and_then(|total| u32::try_from(total).ok()),
                 hosts,
             },
         };
-        if let Ok(value) = serde_json::to_value(event) {
-            events.publish_event(value);
-        }
+        events(event);
     }
 
     /// Read a job without launching or reconciling any host process.

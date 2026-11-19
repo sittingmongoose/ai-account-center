@@ -44,34 +44,37 @@ impl Producer {
     /// The account's current source binding, or None when the list is unreadable,
     /// invalid, or does not name the account (the TS refreshAdditional lookup).
     pub async fn resolve_recheck(&self, id: &str) -> Option<Resolved> {
+        self.lookup_recheck(id).await.ok().flatten()
+    }
+
+    pub(crate) async fn lookup_recheck(&self, id: &str) -> Result<Option<Resolved>, Decline> {
         let root = self.root.clone();
         let id = id.to_owned();
         tokio::task::spawn_blocking(move || match sources::read_registry(&root) {
-            Ok(sources::Sources::V2(rows)) => {
-                rows.into_iter()
-                    .find(|source| source.id == id)
-                    .map(|source| Resolved {
-                        source,
-                        legacy: false,
-                    })
-            }
+            Ok(sources::Sources::V2(rows)) => Ok(rows
+                .into_iter()
+                .find(|source| source.id == id)
+                .map(|source| Resolved {
+                    source,
+                    legacy: false,
+                })),
             Ok(sources::Sources::Legacy) => {
                 let (rows, valid) = sources::legacy(Some(&root));
                 if !valid {
-                    return None;
+                    return Err(Decline::Shape);
                 }
-                rows.into_iter()
+                Ok(rows
+                    .into_iter()
                     .find(|source| source.id == id)
                     .map(|source| Resolved {
                         source,
                         legacy: true,
-                    })
+                    }))
             }
-            Err(_) => None,
+            Err(reason) => Err(reason),
         })
         .await
-        .ok()
-        .flatten()
+        .map_err(|_| Decline::Internal)?
     }
 
     /// Collect exactly one source now: the reading caches' TTL is skipped while
@@ -127,6 +130,15 @@ impl Producer {
         let Some(resolved) = self.resolve_recheck(id).await else {
             return Ok(None);
         };
+        self.recheck_resolved(cache, companions, resolved).await
+    }
+
+    pub(crate) async fn recheck_resolved(
+        &self,
+        cache: &AccountUsageCache,
+        companions: &CompanionInputs,
+        resolved: Resolved,
+    ) -> Result<Option<Value>, Decline> {
         let expected = resolved.source.clone();
         let guard = lifecycle_recheck::Source {
             id: expected.id.clone(),
@@ -146,7 +158,7 @@ impl Producer {
                 Ok::<_, Decline>(Some(reading))
             },
             |_source, row| async move {
-                self.publish_recheck_row(cache, companions, id, &expected, row)
+                self.publish_recheck_row(cache, companions, &expected.id, &expected, row)
                     .await
             },
         )

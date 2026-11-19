@@ -1840,7 +1840,7 @@ async fn serve_inner(
                 .run(
                     cache,
                     stop,
-                    || (native.companions)(),
+                    |_| std::future::ready((native.companions)()),
                     |cache| {
                         (native.published)(&cache);
                         let store = store.clone();

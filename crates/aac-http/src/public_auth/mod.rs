@@ -7,6 +7,8 @@ mod dashboard_events;
 mod devices;
 mod hub;
 #[cfg(unix)]
+mod native_owners;
+#[cfg(unix)]
 mod native_reads;
 mod policy;
 mod request_log;
@@ -187,7 +189,17 @@ impl DashboardAuth {
         cache: HubCache,
         ui_root: Option<PathBuf>,
     ) -> Router {
-        self.edges(downstream, cache, ui_root, None, false, None, None)
+        self.edges(
+            downstream,
+            cache,
+            ui_root,
+            None,
+            false,
+            None,
+            None,
+            #[cfg(unix)]
+            None,
+        )
     }
 
     fn edges(
@@ -199,16 +211,15 @@ impl DashboardAuth {
         partial_api: bool,
         backend: Option<compose::Backend>,
         cut_root: Option<PathBuf>,
+        #[cfg(unix)] native_owners: Option<native_owners::NativeOwners>,
     ) -> Router {
         let cut = cut_root.is_some();
-        #[cfg(unix)]
-        let native = cut_root.map(native_reads::NativeReads::new);
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
             #[cfg(unix)]
-            if let Some(native) = native {
+            if let Some(root) = cut_root {
                 if matches!(*request.method(), Method::GET | Method::HEAD)
                     && matches!(
                         request.uri().path(),
@@ -223,13 +234,18 @@ impl DashboardAuth {
                                 matches!(access.principal, DashboardPrincipal::Browser { .. })
                             });
                     let head = request.method() == Method::HEAD;
-                    return native.settings(session, request.uri().clone(), head).await;
+                    return native_reads::settings(root, session, request.uri().clone(), head)
+                        .await;
                 }
-                if let Some(input) = native_reads::DashboardRequest::authorized(&request)
-                    && let Some(reply) = native.try_dashboard(input).await
-                {
-                    return reply;
-                }
+            }
+            #[cfg(unix)]
+            if let Some(native) = native_owners
+                && native_owners::NativeOwners::owns(
+                    request.method(),
+                    request.uri().path().trim_end_matches('/'),
+                )
+            {
+                return native.handle(request).await;
             }
             if let Some(backend) = backend {
                 if api_path(&request.uri().path().to_ascii_lowercase()) {
@@ -323,6 +339,12 @@ pub(crate) async fn run_public_at(
     browser: bool,
     cut: bool,
 ) -> std::io::Result<()> {
+    #[cfg(all(unix, not(feature = "parity-fixtures")))]
+    if cut && std::env::var("AAC_RUST_CUT_APP_UPDATES_FIXTURE").as_deref() == Ok("1") {
+        return Err(std::io::Error::other(
+            "the M0 app-update fixture requires a parity-fixtures build",
+        ));
+    }
     let mut listener = None;
     let mut last_error = None;
     for address in addresses {
@@ -344,8 +366,30 @@ pub(crate) async fn run_public_at(
     let interactive = std::io::stdout().is_terminal()
         || (!cut && std::env::var("AAC_RUST_COMPOSE_STDOUT_TTY").as_deref() == Ok("1"));
     let auth = DashboardAuth::open_public(root.clone(), interactive)?;
+    #[cfg(unix)]
+    let groups = if cut {
+        let config = auth
+            .0
+            .runtime
+            .lock()
+            .ok()
+            .and_then(|state| state.files.config().ok());
+        Some(native_owners::Groups::from_config(
+            &config.unwrap_or_default(),
+        ))
+    } else {
+        None
+    };
     let mut worker = if cut {
-        sidecar::Sidecar::start(&root, address).await?
+        sidecar::Sidecar::start(
+            &root,
+            address,
+            #[cfg(unix)]
+            groups.is_some_and(|groups| groups.collection),
+            #[cfg(not(unix))]
+            false,
+        )
+        .await?
     } else {
         None
     };
@@ -360,6 +404,25 @@ pub(crate) async fn run_public_at(
             compose::Backend::from_env(address)?,
         )
     };
+    let hub = HubCache::default();
+    #[cfg(unix)]
+    let (native, native_jobs) = if let Some(groups) = groups {
+        let (native, jobs) = native_owners::NativeOwners::start(
+            root.clone(),
+            groups,
+            hub.clone(),
+            auth.events(),
+            snapshot
+                .as_deref()
+                .and_then(std::path::Path::parent)
+                .map(std::path::Path::to_owned),
+        )?;
+        (Some(native), Some(jobs))
+    } else {
+        (None, None)
+    };
+    #[cfg(unix)]
+    let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let composed = backend.is_some();
     let mut api = Router::new();
     if cut || !composed {
@@ -374,12 +437,14 @@ pub(crate) async fn run_public_at(
     let router = auth
         .protect(auth.edges(
             api,
-            HubCache::default(),
+            hub,
             ui_root,
             snapshot,
             !composed,
             backend,
             cut.then(|| root.clone()),
+            #[cfg(unix)]
+            native,
         ))
         .layer(middleware::from_fn_with_state(
             request_log::Audit {
@@ -388,6 +453,22 @@ pub(crate) async fn run_public_at(
             },
             request_log::record,
         ));
+    #[cfg(unix)]
+    let router = if cut {
+        router.layer(middleware::from_fn(
+            |request: Request, next: Next| async move {
+                let recheck = native_owners::is_recheck(&request);
+                let reply = next.run(request).await;
+                if recheck {
+                    native_owners::no_store(reply)
+                } else {
+                    reply
+                }
+            },
+        ))
+    } else {
+        router
+    };
     let tls_server = tls::listener(&auth, address.ip()).await;
     if let Some((address, _)) = &tls_server {
         println!("aac-http public TLS listening on {address}");
@@ -403,10 +484,6 @@ pub(crate) async fn run_public_at(
     let signal = shutdown.clone();
     let feed_shutdown = shutdown.clone();
     let worker_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    #[cfg(unix)]
-    let usage_feed = worker
-        .as_ref()
-        .map(|child| child.watch_native_usage(auth.events()));
     let worker_feed = worker
         .as_mut()
         .and_then(|child| child.attach(auth.events(), shutdown.clone(), worker_lost.clone()));
@@ -452,8 +529,8 @@ pub(crate) async fn run_public_at(
         let _ = feed.await;
     }
     #[cfg(unix)]
-    if let Some(feed) = usage_feed {
-        feed.abort();
+    if let Some(jobs) = native_jobs {
+        jobs.stop().await;
     }
     if let Some(worker) = worker {
         worker.stop().await;
@@ -615,12 +692,15 @@ fn set_header(reply: &mut Reply, name: &'static str, value: &str) {
 }
 
 fn response(status: u16, value: Value) -> Reply {
+    json_bytes(status, value.to_string().into_bytes())
+}
+
+pub(crate) fn json_bytes(status: u16, bytes: Vec<u8>) -> Reply {
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
     use sha1::{Digest, Sha1};
-    let text = value.to_string();
-    let length = text.len();
-    let digest = STANDARD_NO_PAD.encode(Sha1::digest(text.as_bytes()));
+    let length = bytes.len();
+    let digest = STANDARD_NO_PAD.encode(Sha1::digest(&bytes));
     let etag = format!(r#"W/"{length:x}-{digest}""#);
     let mut reply = (
         status,
@@ -628,7 +708,7 @@ fn response(status: u16, value: Value) -> Reply {
             axum::http::header::CONTENT_TYPE,
             "application/json; charset=utf-8",
         )],
-        text,
+        bytes,
     )
         .into_response();
     set_header(&mut reply, "content-length", &length.to_string());
@@ -642,7 +722,7 @@ fn empty(status: u16) -> Reply {
         .into_response()
 }
 
-fn plain(status: u16, message: &str) -> Reply {
+pub(crate) fn plain(status: u16, message: &str) -> Reply {
     response(status, json!({"error":message}))
 }
 

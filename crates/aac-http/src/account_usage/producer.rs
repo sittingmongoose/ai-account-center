@@ -285,14 +285,15 @@ impl Producer {
 
     /// Run production sampling until cancellation. A settings edit replaces the
     /// pending wait and publication hands the same cache to the listener and store.
-    pub async fn run<C, P, Publish>(
+    pub async fn run<C, Inputs, P, Publish>(
         &self,
         cache: AccountUsageCache,
         cancel: CancellationToken,
         mut companions: C,
         published: P,
     ) where
-        C: FnMut() -> CompanionInputs,
+        C: FnMut(bool) -> Inputs,
+        Inputs: std::future::Future<Output = CompanionInputs>,
         P: FnMut(AccountUsageCache) -> Publish,
         Publish: std::future::Future<Output = ()>,
     {
@@ -318,9 +319,9 @@ impl Producer {
             interval,
             cancel,
             |force| {
-                let inputs = companions();
+                let inputs = companions(force);
                 async move {
-                    self.collect_with_refresh(inputs, force)
+                    self.collect_with_refresh(inputs.await, force)
                         .await
                         .unwrap_or_default()
                 }
@@ -829,6 +830,10 @@ fn codex_names(root: &Path) -> Result<Vec<SavedCodex>, Decline> {
         }
         _ => Err(Decline::Unsupported),
     }
+}
+
+pub(crate) fn has_codex_profile(root: &Path, name: &str) -> bool {
+    codex_names(root).is_ok_and(|profiles| profiles.iter().any(|profile| profile.name == name))
 }
 
 fn source_host(platform: &str, alias: Option<&str>) -> (String, String) {

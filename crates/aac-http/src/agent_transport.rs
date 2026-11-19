@@ -84,6 +84,7 @@ struct Active {
 
 pub(crate) struct Agents {
     root: PathBuf,
+    enabled_by_default: bool,
     registry: watch::Sender<Option<Arc<Result<Registry, Failure>>>>,
     loading: AtomicBool,
     slots: Arc<Semaphore>,
@@ -160,7 +161,7 @@ pub(crate) fn package_root() -> Option<PathBuf> {
 }
 
 impl Registry {
-    fn load(root: &Path) -> Result<Self, Failure> {
+    fn load(root: &Path, enabled_by_default: bool) -> Result<Self, Failure> {
         // No real-home discovery. The package paths are supplied by the trusted front door.
         if std::env::var("AAC_AGENT_TRANSPORT").is_ok_and(|v| v != "on") {
             return Err(refused());
@@ -172,9 +173,14 @@ impl Registry {
         );
         options.cli = json!({"config_dir":root});
         let config = Config::load(&options)?;
-        let enabled = std::env::var("AAC_AGENT_TRANSPORT")
-            .ok()
-            .map_or_else(|| config.values()["agentTransport"] == "on", |v| v == "on");
+        let enabled = std::env::var("AAC_AGENT_TRANSPORT").ok().map_or_else(
+            || match config.values()["agentTransport"].as_str() {
+                Some("on") => true,
+                Some("off") => false,
+                _ => enabled_by_default,
+            },
+            |v| v == "on",
+        );
         if !enabled {
             return Err(refused());
         }
@@ -395,8 +401,13 @@ impl Agents {
     }
 
     pub(crate) fn new(root: PathBuf) -> Self {
+        Self::with_default(root, false)
+    }
+
+    pub(crate) fn with_default(root: PathBuf, enabled_by_default: bool) -> Self {
         Self {
             root,
+            enabled_by_default,
             registry: watch::channel(None).0,
             loading: AtomicBool::new(false),
             slots: Arc::new(Semaphore::new(16)),
@@ -410,15 +421,17 @@ impl Agents {
         let mut loaded = self.registry.subscribe();
         if !self.loading.swap(true, Ordering::AcqRel) {
             let root = self.root.clone();
+            let enabled_by_default = self.enabled_by_default;
             let ready = self.registry.clone();
             tokio::spawn(async move {
                 // Exactly one initialization job per boot, even if its waiting HTTP request
                 // expires. A missing catalog, a known_hosts file added later, and computer or
                 // identity edits stay unavailable until the service restarts (L5 review L5).
                 // A slow mount cannot accumulate abandoned config/hash workers.
-                let result = tokio::task::spawn_blocking(move || Registry::load(&root))
-                    .await
-                    .unwrap_or_else(|_| Err(refused()));
+                let result =
+                    tokio::task::spawn_blocking(move || Registry::load(&root, enabled_by_default))
+                        .await
+                        .unwrap_or_else(|_| Err(refused()));
                 ready.send_replace(Some(Arc::new(result)));
             });
         }

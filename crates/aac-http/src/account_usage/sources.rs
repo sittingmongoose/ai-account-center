@@ -101,6 +101,14 @@ fn additional(word: &str) -> Option<ProviderId> {
         .map(|p| p.id)
 }
 
+pub(crate) fn is_additional_account_id(id: &str) -> bool {
+    let Some((provider, selector)) = id.split_once(':') else {
+        return false;
+    };
+    additional(provider).is_some()
+        && (selector == "usage" || selector.strip_prefix("acct:").is_some_and(hex8))
+}
+
 impl Source {
     fn check(&self, provider: ProviderId) -> Result<Option<(&'static str, &str)>, Decline> {
         let discover = format!("{}:usage", self.provider);

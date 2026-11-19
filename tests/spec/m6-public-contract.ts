@@ -1,6 +1,7 @@
 /**
  * Replay the M0 request/role inventory against a Rust TCP front door.
  * --cut uses the shipped CLI with its private worker. --cut-rust-only disables the worker.
+ * Unix cut modes require a parity-fixtures binary for the original synthetic app jobs.
  * --require-complete fails for any changed answer or explicit unmounted route.
  */
 import assert from 'node:assert/strict';
@@ -57,6 +58,15 @@ if (mode === 'cut') {
     AAC_AGENT_TRANSPORT: 'off',
     AAC_STATUS_DOORBELL: 'off',
     AAC_STORE_SHARE_BACKUP_DIR: 'off',
+  });
+}
+if (mode !== 'fixture' && process.platform !== 'win32') {
+  Object.assign(environment, {
+    AAC_RUST_CUT_APP_UPDATES_FIXTURE: '1',
+    AAC_RUST_GROUP_APP_UPDATES: 'on',
+    AAC_RUST_GROUP_COLLECTION: 'on',
+    AAC_AGENT_VERBS: 'off',
+    AAC_AGENT_TRANSPORT: 'off',
   });
 }
 

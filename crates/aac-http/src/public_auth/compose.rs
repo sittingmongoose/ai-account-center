@@ -18,6 +18,7 @@ const ACCESS: &str = "x-aac-compose-access";
 // Only the cut uses this list. The composition fixture remains a reference for
 // the complete legacy router, including its handling of unknown methods.
 const CUT_ROUTES: &[(&str, &[&str])] = &[
+    #[cfg(not(unix))]
     ("/api/accounts/dashboard", &["GET"]),
     (
         "/api/accounts/settings",
@@ -43,6 +44,7 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/:id", &["PATCH"]),
     ("/api/accounts/:id/key", &["PUT"]),
     ("/api/accounts/:id/open", &["POST"]),
+    #[cfg(not(unix))]
     ("/api/accounts/:id/recheck", &["POST"]),
     ("/api/accounts/:id/remove", &["POST"]),
     ("/api/accounts/:id/signin-again", &["POST"]),
@@ -51,8 +53,11 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/:id/reset-claims/prepare", &["POST"]),
     ("/api/antigravity/profiles", &["GET"]),
     ("/api/antigravity/profiles/quotas", &["GET"]),
+    #[cfg(not(unix))]
     ("/api/app-updates/status", &["GET"]),
+    #[cfg(not(unix))]
     ("/api/app-updates/start", &["POST"]),
+    #[cfg(not(unix))]
     ("/api/app-updates/cancel", &["POST"]),
     ("/api/claude/desktop-profiles", &["GET"]),
     ("/api/claude/desktop-profiles/usage", &["GET"]),
@@ -110,7 +115,26 @@ mod tests {
 
     #[test]
     fn cut_forwards_only_the_adapter_contract() {
-        assert!(cut_route(&Method::HEAD, "/api/accounts/dashboard"));
+        assert_eq!(
+            cut_route(&Method::HEAD, "/api/accounts/dashboard"),
+            cfg!(not(unix))
+        );
+        assert_eq!(
+            cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"),
+            cfg!(not(unix))
+        );
+        assert_eq!(
+            cut_route(&Method::GET, "/api/app-updates/status"),
+            cfg!(not(unix))
+        );
+        assert_eq!(
+            cut_route(&Method::POST, "/api/app-updates/start"),
+            cfg!(not(unix))
+        );
+        assert_eq!(
+            cut_route(&Method::POST, "/api/app-updates/cancel"),
+            cfg!(not(unix))
+        );
         assert!(cut_route(&Method::PATCH, "/api/accounts/preferences"));
         assert!(cut_route(
             &Method::POST,

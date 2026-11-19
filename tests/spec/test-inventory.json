@@ -616,13 +616,6 @@
       ]
     },
     {
-      "file": "crates/aac-http/src/public_auth/native_reads.rs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
       "file": "crates/aac-http/src/public_auth/policy.rs",
       "kind": "safety",
       "evidence": [
@@ -756,6 +749,12 @@
     },
     {
       "file": "crates/aac-http/tests/native_collection.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/native_public_collection.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

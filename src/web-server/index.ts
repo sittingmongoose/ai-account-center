@@ -511,7 +511,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       stopStatusService = startStatusService();
       // Scoreboard catalog seeds (runs are read on demand).
       startScoreboardService();
-      startAccountAnalyticsSampling(rustService);
+      startAccountAnalyticsSampling(
+        rustService,
+        options.sidecar === true && process.env.AAC_CUT_PUBLIC_COLLECTION === '1'
+      );
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
       startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
       // Usage cache loads on-demand when Analytics page is visited

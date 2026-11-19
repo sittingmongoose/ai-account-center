@@ -236,14 +236,18 @@ impl Host {
 
     /// The public quotas answer from the runtime's own accounts.
     pub fn quotas(&self, refresh: bool, now: i64) -> Value {
-        let live = self.live_identity(now);
+        let Some(accounts) = self.accounts(refresh, now) else {
+            return Value::Null;
+        };
+        public_quotas(&accounts, now, now).unwrap_or(Value::Null)
+    }
+
+    pub(crate) fn accounts(&self, refresh: bool, now: i64) -> Option<Vec<Value>> {
         let Some(state) = read_state(&self.ccs) else {
-            return public_quotas(&[], now, now).unwrap_or(Value::Null);
+            return Some(Vec::new());
         };
-        let mut guard = match self.state.lock() {
-            Ok(guard) => guard,
-            Err(_) => return Value::Null,
-        };
+        let live = self.live_identity(now);
+        let mut guard = self.state.lock().ok()?;
         let guard = &mut *guard;
         let worker = &self.quota;
         let registry = &state;
@@ -267,11 +271,11 @@ impl Host {
             live: live.as_ref(),
             now,
         };
-        let accounts =
+        Some(
             guard
                 .service
-                .get_accounts(&read, &mut collect, &mut guard.cooldowns, refresh);
-        public_quotas(&accounts, now, now).unwrap_or(Value::Null)
+                .get_accounts(&read, &mut collect, &mut guard.cooldowns, refresh),
+        )
     }
 
     fn paused(&self, _now: i64) -> Option<Value> {

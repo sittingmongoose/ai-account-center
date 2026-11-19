@@ -34,7 +34,7 @@ function feedsOf(boot: string): BootFeeds {
   return feeds;
 }
 
-async function pushOnce(service: RustService): Promise<void> {
+async function pushOnce(service: RustService, nativeCollection: boolean): Promise<void> {
   const enabled = rustAnalyticsWritersOn();
   const boot = service.feedBoot(getCcsDir());
   if (!boot) return;
@@ -44,19 +44,21 @@ async function pushOnce(service: RustService): Promise<void> {
     facts: '{}',
   }));
   if (!enabled) return;
-  const settled = await Promise.allSettled(
-    (['mac', 'windows'] as const).map((platform) => getAccountDashboard(platform, false))
-  );
-  const dashboards = settled
-    .filter(
-      (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof getAccountDashboard>>> =>
-        r.status === 'fulfilled'
-    )
-    .map((r) => r.value);
-  await ensure(service, feeds, 'analytics-dashboard', contentKey(dashboards), () => ({
-    data: JSON.stringify({ dashboards }),
-    facts: '{}',
-  }));
+  if (!nativeCollection) {
+    const settled = await Promise.allSettled(
+      (['mac', 'windows'] as const).map((platform) => getAccountDashboard(platform, false))
+    );
+    const dashboards = settled
+      .filter(
+        (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof getAccountDashboard>>> =>
+          r.status === 'fulfilled'
+      )
+      .map((r) => r.value);
+    await ensure(service, feeds, 'analytics-dashboard', contentKey(dashboards), () => ({
+      data: JSON.stringify({ dashboards }),
+      facts: '{}',
+    }));
+  }
   const plan = analyticsWriterPlan();
   await ensure(service, feeds, 'analytics-plan', contentKey(plan), () => ({
     data: JSON.stringify(plan),
@@ -65,12 +67,12 @@ async function pushOnce(service: RustService): Promise<void> {
 }
 
 /** Start the writers' feed loop on the account-refresh cadence (idempotent). */
-export function startAnalyticsWriterFeeds(service: RustService): void {
+export function startAnalyticsWriterFeeds(service: RustService, nativeCollection = false): void {
   if (running) return;
   running = true;
   const tick = (): void => {
     if (!running) return;
-    void pushOnce(service)
+    void pushOnce(service, nativeCollection)
       .catch(() => undefined)
       .finally(() => {
         if (!running) return;

@@ -54,7 +54,7 @@ fn read_text(value: &Value, max: usize) -> Option<&str> {
 }
 
 /// One launcher as the Open path reads it. Absent optional fields stay absent.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Launcher {
     /// The wrapper's display name.
     pub launcher_name: String,
@@ -228,7 +228,7 @@ pub fn list_profiles(ccs_dir: &Path) -> Result<Vec<Profile>, ()> {
 }
 
 /// One pending profile (`PendingClaudeProfile`), as the Open path reads it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingProfile {
     /// The profile id.
     pub id: String,
@@ -315,7 +315,7 @@ fn timestamp_shape(value: &str) -> bool {
 }
 
 /// The pending registry's `parsePending`.
-fn parse_pending(value: &Value) -> Option<Vec<PendingProfile>> {
+pub(crate) fn parse_pending(value: &Value) -> Option<Vec<PendingProfile>> {
     let map = value.as_object()?;
     if map.get("version")? != &serde_json::json!(1) {
         return None;

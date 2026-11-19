@@ -991,14 +991,17 @@ export function getAccountAnalytics(
 ): Promise<AccountAnalytics> {
   return singleton().get(query, composer, owned);
 }
-export function startAccountAnalyticsSampling(rustService?: RustService): void {
+export function startAccountAnalyticsSampling(
+  rustService?: RustService,
+  nativeCollection = false
+): void {
   // G14: with the writers group on, the Rust service samples quota and collects activity; the
   // front door feeds it the inputs and stands its own writers down so nothing writes twice.
   if (rustService?.mode === 'on' && rustAnalyticsWritersOn()) {
-    startAnalyticsWriterFeeds(rustService);
+    startAnalyticsWriterFeeds(rustService, nativeCollection);
     return;
   }
-  singleton().start();
+  if (!nativeCollection) singleton().start();
   // Usage history is collected in the background too, so it grows while no page is open.
   startAccountAnalyticsActivityBackground();
 }
