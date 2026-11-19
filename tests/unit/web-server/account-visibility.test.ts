@@ -57,7 +57,10 @@ describe('account visibility store', () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ version: 1, ...saved });
     expect(await readAccountVisibility(dir)).toEqual({ state: 'ok', visibility: saved });
-    expect(fs.readdirSync(dir)).toEqual([ACCOUNT_VISIBILITY_FILE]);
+    const files = [ACCOUNT_VISIBILITY_FILE];
+    // POSIX writers coordinate through the persistent registry lease.
+    if (process.platform !== 'win32') files.push(`${ACCOUNT_VISIBILITY_FILE}.lock`);
+    expect(fs.readdirSync(dir).sort()).toEqual(files);
   });
 
   it('reports an unsafe or malformed file as unavailable, never as empty', async () => {

@@ -13,6 +13,7 @@ import os from 'os';
 import path from 'path';
 import { WebSocket } from 'ws';
 import { startServer } from '../../../src/web-server';
+import { waitUntil } from '../../shared/fixtures/process-state';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 
@@ -112,9 +113,10 @@ describe('account visibility on the real server', () => {
   it('saves the change in the CCS dir and pushes accounts-changed to signed-in /ws clients', async () => {
     const cookie = await signIn();
     const socket = await openSocket(cookie);
-    const message = new Promise<string>((resolve) =>
-      socket.once('message', (data) => resolve(String(data)))
-    );
+    let visibilityChanged = false;
+    socket.on('message', (data) => {
+      if (String(data) === '{"type":"accounts-changed"}') visibilityChanged = true;
+    });
     const body = { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:lime'] };
     const saved = { ...body, trayHiddenProviders: [], trayHiddenAccountIds: [] };
     const response = await fetch(`${base}/api/accounts/visibility`, {
@@ -125,7 +127,7 @@ describe('account visibility on the real server', () => {
     expect(response.status).toBe(200);
     // The old two-key body is a partial update: the answer carries the untouched tray list.
     expect(await response.json()).toEqual(saved);
-    expect(await message).toBe('{"type":"accounts-changed"}');
+    await waitUntil(() => visibilityChanged, 'accounts-changed on the dashboard WebSocket');
     const file = path.join(home, '.ccs', 'account-visibility.json');
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     const read = await fetch(`${base}/api/accounts/visibility`, { headers: { Cookie: cookie } });
