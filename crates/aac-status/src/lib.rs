@@ -18,6 +18,7 @@
 pub mod computers;
 pub mod error;
 pub mod http_views;
+pub mod model_identity;
 pub mod ops;
 pub mod pinned;
 pub mod pins;
