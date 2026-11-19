@@ -111,7 +111,7 @@ fn owns_route(method: &Method, path: &str) -> bool {
     if path == "/api/status/deliverable" {
         return true;
     }
-    if path == "/api/status/answers" && method == &Method::POST {
+    if path == "/api/status/answers" && method == Method::POST {
         return true;
     }
     if !matches!(*method, Method::GET | Method::HEAD) {
@@ -312,7 +312,7 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
             }
             store_route(routes, access, &path, raw).await
         }
-        "/api/status/answers" if req.method() == &Method::POST => {
+        "/api/status/answers" if req.method() == Method::POST => {
             answers_post(routes, access, req, &facts, raw).await
         }
         "/api/status/answers" => answers_read(routes, access, raw).await,
@@ -1104,7 +1104,7 @@ fn raw_reply(status: u16, body: Vec<u8>) -> Reply {
 /// The service's file envelope, checked and written (`rust-file-response.ts`): only these
 /// header names, the route's own refusal sentences, and a body whose length matches.
 fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
-    let Some(value) = json_of(&reply) else {
+    let Some(value) = json_of(reply) else {
         return super::service_error();
     };
     let Some(status) = value.get("status").and_then(Json::as_u64) else {

@@ -278,9 +278,7 @@ fn burn_query(raw: Option<&str>) -> Option<Burn> {
     };
     let mut spans: Vec<u64> = Vec::with_capacity(names.len());
     for name in &names {
-        let Some((_, span)) = SPANS.iter().find(|(held, _)| *held == name.as_str()) else {
-            return None;
-        };
+        let (_, span) = SPANS.iter().find(|(held, _)| *held == name.as_str())?;
         spans.push(*span);
     }
     Some(Burn {
