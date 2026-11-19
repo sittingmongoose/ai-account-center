@@ -260,19 +260,25 @@ impl SshPolicy {
         let pin = self.known_hosts.clone();
         let metadata = tokio::task::spawn_blocking(move || match std::fs::metadata(&pin) {
             Ok(meta) => {
-                let mut identity = format!("{}:{:?}", meta.len(), meta.modified());
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::MetadataExt;
-                    identity.push_str(&format!(
-                        ":{}:{}:{}:{}",
-                        meta.dev(),
-                        meta.ino(),
-                        meta.ctime(),
-                        meta.ctime_nsec()
-                    ));
-                }
-                Ok(identity)
+                // The Unix fields name a pin's inode and ctime; Windows has no such pair to add.
+                let suffix = {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        format!(
+                            ":{}:{}:{}:{}",
+                            meta.dev(),
+                            meta.ino(),
+                            meta.ctime(),
+                            meta.ctime_nsec()
+                        )
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        String::new()
+                    }
+                };
+                Ok(format!("{}:{:?}{suffix}", meta.len(), meta.modified()))
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("absent".to_owned()),
             Err(error) => Err(Failure::from(error)),

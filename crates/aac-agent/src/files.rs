@@ -42,8 +42,12 @@ pub(crate) enum Regular {
     Foreign,
     /// Refused by the mode rule of the reader's policy.
     Loose,
-    /// The bytes (at most the cap) and the metadata of the descriptor they came from.
-    Read(Vec<u8>, fs::Metadata),
+    /// The bytes (at most the cap) and the metadata of the descriptor they came from. Only the Unix
+    /// readers compare inode and mode, so the metadata is unread on Windows by design.
+    Read(
+        Vec<u8>,
+        #[cfg_attr(not(unix), allow(dead_code))] fs::Metadata,
+    ),
 }
 
 impl From<Read> for Regular {
@@ -72,6 +76,8 @@ pub(crate) fn read_regular(path: &Path, cap: usize) -> Regular {
 
 /// Open one ordinary file for a reader that needs only a header (an app archive); the
 /// descriptor's metadata comes back with it. Every refusal is `None` to this reader.
+/// Only the Unix readers (the Claude history archive) need a descriptor and its metadata.
+#[cfg(unix)]
 pub(crate) fn open_regular(path: &Path, cap: u64) -> Option<(fs::File, fs::Metadata)> {
     read::open(path, &ReadPolicy::capped(cap)).ok()
 }

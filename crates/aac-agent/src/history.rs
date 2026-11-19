@@ -4,10 +4,11 @@ use aac_core::Failure;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::io::Read;
 use std::{
     collections::HashSet,
     fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 
