@@ -105,7 +105,9 @@ fn the_native_input_composes_a_complete_answer() {
     assert_eq!(answer["schemaVersion"], json!(1));
     assert_eq!(answer["range"]["preset"], json!("7d"));
     assert_eq!(answer["range"]["tz"], json!("UTC"));
-    assert_eq!(answer["activity"]["status"], json!("ok"));
+    // No CLI activity in an empty store: the projection's fixed unavailable block, not an
+    // error — the store is read and the answer is complete.
+    assert_eq!(answer["activity"]["status"], json!("unavailable"));
     assert!(
         answer["activity"]["sources"]
             .as_array()
