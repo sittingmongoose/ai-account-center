@@ -5,27 +5,44 @@
  */
 import fs from 'fs';
 import type http from 'http';
+import os from 'os';
 import path from 'path';
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 import { addEventLoopMonitorFields } from '../utils/event-loop-monitor';
 import { createLogger } from '../services/logging';
 import { getCcsDir } from '../utils/config-manager';
+import { broadcastDashboardEvent, type DashboardEvent } from './dashboard-events';
 import {
   acquireRustServiceDetailed,
   PUBLIC_HEALTH_PRINCIPAL,
   type RustLease,
+  type RustOwnedBoot,
 } from './rust-service-lifecycle';
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
 import {
+  notifyRustRenewalGaveUp,
   notifyRustStoreGaveUp,
+  openRustEvents,
   registerRustStoreConnection,
   requestRust,
   registerRustAgentConnection,
+  setRustRenewalHosted,
   setRustStoreHosted,
+  type RustRenewalBoot,
   type RustStoreBootInput,
 } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
-import { rustStoreSwitchOn } from './rust-service-groups';
+import { registerFileWriter, rememberFileLeaseBinary } from '../shared/private-file-lease';
+import {
+  rustComposeSelected,
+  rustGroupOn,
+  rustOwnedScoreboardOn,
+  rustOwnedStatusOn,
+  rustStoreSwitchOn,
+} from './rust-service-groups';
+import { dispatchRustServiceEvent } from './rust-service-events';
+import { agentReportsRoot } from './status/agent-reports-reader';
+import { pmMailRegistryDir } from './status/status-collectors';
 import { loadNativeStore } from '../store/native-loader';
 import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
 import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
@@ -56,6 +73,7 @@ export const HUNG_TIMEOUTS = 3;
 
 export class RustSupervisor {
   readonly mode: RustServiceMode;
+  readonly writesOn: boolean;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */
@@ -96,10 +114,14 @@ export class RustSupervisor {
   private removeStoreConnection: (() => void) | null = null;
   /** R3: the store host's boot input, resolved once in `start`; null keeps the store in TS. */
   protected storeBoot: RustStoreBootInput | null = null;
+  /** G10: the renewal timer's boot input, resolved once in `start`; null keeps the timer in TS. */
+  protected renewalBoot: RustRenewalBoot | null = null;
   protected active = new Set<http.ClientRequest>();
   protected inFlight = 0;
   protected readonly shadowInFlight = new Map<string, number>();
   protected stopped = false;
+  private removeFileWriter: (() => void) | null = null;
+  registeredWrites = 0;
   private readonly acquisition = new AbortController();
   protected binary: string | null = null;
   protected restartTimer: NodeJS.Timeout | null = null;
@@ -109,6 +131,9 @@ export class RustSupervisor {
   protected checking = false;
   /** Transport timeouts in a row on the current lease, any route (review L3). */
   protected timeouts = 0;
+  /** R4: the owned readers' boot config, resolved once in `start`; null keeps them in TS. */
+  protected ownedBoot: RustOwnedBoot | null = null;
+  private removeEvents: (() => void) | null = null;
 
   /** `options` exists for tests: a clock for the breakers and the restart budget, and delays. */
   constructor(
@@ -116,9 +141,16 @@ export class RustSupervisor {
     options: { now?: () => number; restartDelaysMs?: readonly number[] } = {}
   ) {
     this.mode = rustServiceMode(mode);
-    // L2: each registered private file's writer, resolved once at start and sent in the boot
-    // JSON. A row moves with its route group; the service has one mode for every group today.
-    settlePrivateFileOwners(() => this.mode === 'on');
+    const native = this.mode === 'on' && process.platform !== 'win32';
+    this.writesOn = native && rustGroupOn('writes');
+    const collectionOn = native && rustGroupOn('collection');
+    // One readers-check file carries the Status and Scoreboard writers.
+    settlePrivateFileOwners((group) => {
+      if (!native) return false;
+      if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
+      if (group === 'scoreboard') return rustOwnedScoreboardOn();
+      return (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn);
+    });
     this.breakers = new RouteBreakers(options.now);
     this.restarts = new RestartBudget(options.now, options.restartDelaysMs);
   }
@@ -127,6 +159,7 @@ export class RustSupervisor {
     binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
   ): Promise<void> {
     if (this.stopped) return;
+    rememberFileLeaseBinary(getCcsDir(), binary, this.writesOn);
     if (this.mode === 'off') {
       let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
       if (transport === undefined) {
@@ -139,6 +172,16 @@ export class RustSupervisor {
       if (transport !== 'on') return;
     }
     this.binary = binary;
+    // G10: the renewal timer's boot input, resolved once: its own group switch and mode on
+    // (no shadow for the one writer). Reserved before the first await, like the store, so
+    // the TS renewal service defers while the boot config is still loading.
+    if (this.mode === 'on' && rustGroupOn('renewal')) {
+      this.renewalBoot = {
+        codexHome: path.join(os.homedir(), '.codex'),
+        homeDir: os.homedir(),
+      };
+      setRustRenewalHosted(getCcsDir(), true);
+    }
     // R3: the store host's boot input, resolved once: its own switch, mode on (no shadow
     // for the one writer) and the store not disabled. Everything else keeps the store here.
     if (
@@ -169,6 +212,15 @@ export class RustSupervisor {
       if (this.stopped) return;
       this.storeBoot.snapshotDirectory = snapshotDirectory;
     }
+    // R4: the owned readers run under the store host; resolve their share roots once.
+    if (this.storeBoot && (rustOwnedStatusOn() || rustOwnedScoreboardOn())) {
+      this.ownedBoot = {
+        reportsRoot: agentReportsRoot(),
+        registryDir: pmMailRegistryDir(),
+        status: rustOwnedStatusOn(),
+        scoreboard: rustOwnedScoreboardOn(),
+      };
+    }
     this.minuteTimer = setInterval(() => this.logMinute(), 60_000);
     this.minuteTimer.unref();
     // The Rust child's RSS joins the event-loop monitor's minute line (design 4.2).
@@ -180,7 +232,9 @@ export class RustSupervisor {
         binary,
         this.active,
         this.acquisition.signal,
-        this.storeBoot
+        this.storeBoot,
+        this.ownedBoot,
+        this.renewalBoot
       );
       failure = result.failure;
       if (this.stopped) {
@@ -206,12 +260,17 @@ export class RustSupervisor {
       reason: failure ?? 'unhealthy',
     });
     if (failure === 'unhealthy' || failure === 'spawn') this.scheduleRestart();
-    // R3: no restart is coming for the other failures, so the store falls back at once.
-    else if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
+    // R3/G10: no restart is coming for the other failures, so the hosted jobs fall back at once.
+    else {
+      if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
+      if (this.renewalBoot) notifyRustRenewalGaveUp(getCcsDir());
+    }
   }
 
   stop(): void {
     this.stopped = true;
+    this.removeFileWriter?.();
+    this.removeFileWriter = null;
     this.acquisition.abort();
     if (this.restartTimer) clearTimeout(this.restartTimer);
     if (this.minuteTimer) clearInterval(this.minuteTimer);
@@ -224,7 +283,10 @@ export class RustSupervisor {
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
+    this.removeEvents?.();
+    this.removeEvents = null;
     if (this.storeBoot) setRustStoreHosted(getCcsDir(), false);
+    if (this.renewalBoot) setRustRenewalHosted(getCcsDir(), false);
     this.lease?.close();
     this.lease = null;
   }
@@ -262,17 +324,42 @@ export class RustSupervisor {
           lease.owned
         )
       : null;
+    this.removeFileWriter?.();
+    this.removeFileWriter =
+      this.writesOn && this.binary
+        ? registerFileWriter(lease.connection.ccsDir, this.binary, () => this.registeredWrites++)
+        : null;
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
+    this.removeEvents?.();
+    const appUpdates = rustComposeSelected() && rustGroupOn('app-updates');
+    const events = openRustEvents(lease.connection, (event) => {
+      if (this.lease !== lease) return;
+      dispatchRustServiceEvent(event);
+      const { type, job } = event;
+      if (appUpdates && type === 'app-update-job' && job && typeof job === 'object') {
+        // The public Rust listener validates this DTO again and applies the session policy.
+        broadcastDashboardEvent({
+          type,
+          job: job as Extract<DashboardEvent, { type: 'app-update-job' }>['job'],
+        });
+      }
+    });
+    void events.ready.catch(events.close);
+    this.removeEvents = events.close;
   }
 
   /** The service died or stopped answering: TS answers until a restart succeeds (L1). */
   protected lost(lease: RustLease, cause: string, context: Record<string, unknown> = {}): void {
     if (this.stopped || this.lease !== lease) return;
+    this.removeFileWriter?.();
+    this.removeFileWriter = null;
     this.removeAgentConnection?.();
     this.removeAgentConnection = null;
     this.removeStoreConnection?.();
     this.removeStoreConnection = null;
+    this.removeEvents?.();
+    this.removeEvents = null;
     this.lease = null;
     lease.close();
     logger.warn('rust.service.lost', 'Rust service stopped; TypeScript answers', {
@@ -296,6 +383,8 @@ export class RustSupervisor {
       );
       // R3: the dead service released the store lock; TS opens it in process (design 1.3).
       if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
+      // G10: the dead service runs no renewal timer; TS takes it back.
+      if (this.renewalBoot) notifyRustRenewalGaveUp(getCcsDir());
       return;
     }
     const binary = this.binary;
@@ -308,7 +397,9 @@ export class RustSupervisor {
             binary,
             this.active,
             this.acquisition.signal,
-            this.storeBoot
+            this.storeBoot,
+            this.ownedBoot,
+            this.renewalBoot
           );
           failure = result.failure;
           if (result.lease) {

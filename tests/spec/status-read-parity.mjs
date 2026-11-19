@@ -72,7 +72,7 @@ assert.ok(fs.existsSync(binary), `needs the Nas1-built aac-http at ${binary}`);
 const express = require(path.join(repo, 'node_modules/express'));
 const { RustService } = load('web-server/rust-service.js');
 const { createStatusRouter } = load('web-server/routes/status-routes.js');
-const { StatusService } = load('web-server/status/status-service.js');
+const { StatusService, setStatusRustService } = load('web-server/status/status-service.js');
 const { AgentReportsReader } = load('web-server/status/agent-reports-reader.js');
 const { QuotaReportReader } = load('web-server/status/quota-report.js');
 const { statusFedService } = load('web-server/status/status-feed.js');
@@ -206,9 +206,16 @@ const same = (a, b) =>
   a.status === b.status && a.body === b.body && HEADERS.every((h) => a.headers[h] === b.headers[h]);
 
 const report = { steps: [], failures: [] };
+let stopOwner;
 try {
   const today = await start('off', 'off');
   const fed = await start('on', 'on');
+  // R4: with the store host on, the owner forwards this service's owned snapshots (the fed
+  // pipeline is unchanged); without it the owner keeps its TypeScript readers.
+  setStatusRustService(fed);
+  stopOwner = owner.start();
+  // Let the first owned refresh (or TS scan) land before the first comparison.
+  await new Promise((r) => setTimeout(r, 300));
   let fedServed = 0;
   const fedView = fed.fedView.bind(fed);
   fed.fedView = async (...a) => {
@@ -380,6 +387,7 @@ try {
   );
 } finally {
   for (const server of servers) server.close();
+  stopOwner?.();
   for (const s of services) s.stop();
   await new Promise((r) => setTimeout(r, 300));
   fs.rmSync(scratch, { recursive: true, force: true });

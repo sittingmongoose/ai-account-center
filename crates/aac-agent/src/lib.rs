@@ -1,14 +1,20 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
+mod apps;
+mod claude_host;
+mod cursor_open;
 mod failover;
 mod files;
 mod history;
 mod inventory;
 mod key_store;
+mod launch;
+mod muse_login;
 mod pins;
 mod proof;
 mod quota;
 mod scan;
 mod signin;
+mod signin_session;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{
     Control, Event, Handshake, MAX_FRAME_BYTES, MAX_SCAN_FRAME_BYTES, PROTOCOL_VERSION, Request,
@@ -105,6 +111,16 @@ pub async fn run(
             let result = match request.validate() {
                 Err(failure) => Err(failure),
                 Ok(()) => {
+                    if request.verb == "signin-session" {
+                        // The interactive session owns the control stream and emits its
+                        // own progress events; one terminal frame still ends the process.
+                        return signin_session::verb::interactive(
+                            request,
+                            &mut reader,
+                            &mut writer,
+                        )
+                        .await;
+                    }
                     let control = async {
                         loop {
                             let Some(line) = read_line(&mut reader, MAX_FRAME_BYTES).await? else {
@@ -129,11 +145,19 @@ pub async fn run(
                             }
                         }
                     };
+                    let work = async {
+                        if request.verb == "apps"
+                            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+                        {
+                            return apps::update::run(&request, &mut writer).await;
+                        }
+                        dispatch(&request).await
+                    };
                     tokio::select! {
                         biased;
                         result = control => result,
                         _ = tokio::time::sleep(std::time::Duration::from_millis(request.deadline_ms)) => Err(Failure::new(Cause::Timeout, "agent deadline exceeded")),
-                        result = dispatch(&request) => result,
+                        result = work => result,
                     }
                 }
             };
@@ -158,15 +182,24 @@ pub async fn run(
             1,
         ),
     };
-    let mut bytes = serde_json::to_vec(&event)
-        .map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
+    write_event(&mut writer, &event, cap).await?;
+    Ok(code)
+}
+
+pub(crate) async fn write_event(
+    writer: &mut (impl AsyncWrite + Unpin),
+    event: &Event,
+    cap: usize,
+) -> Result<(), Failure> {
+    let mut bytes =
+        serde_json::to_vec(event).map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
     if bytes.len() >= cap {
         return Err(Failure::new(Cause::OutputTooLarge, "event cap exceeded"));
     }
     bytes.push(b'\n');
     writer.write_all(&bytes).await?;
     writer.flush().await?;
-    Ok(code)
+    Ok(())
 }
 
 fn safe_id(id: &str) -> String {
@@ -196,24 +229,40 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
     if matches!(
         request.verb.as_str(),
-        "key-store" | "t3-pins" | "claude-history" | "failover-inventory" | "signin-expiry"
+        "key-store"
+            | "t3-pins"
+            | "claude-history"
+            | "failover-inventory"
+            | "signin-expiry"
+            | "launch"
+            | "claude-host"
+            | "muse-login-identity"
     ) {
         let args = request.args.clone();
         let verb = request.verb.clone();
         return blocking(move || match verb.as_str() {
             "key-store" => key_store::run(&args),
+            "launch" => launch::run(&args),
+            "claude-host" => claude_host::run(&args),
             "t3-pins" => pins::run(&args),
             "failover-inventory" => failover::run(&args),
             "signin-expiry" => signin::run(&args),
+            "muse-login-identity" => muse_login::run(&args),
             _ => history::run(&args),
         })
         .await;
+    }
+    if request.verb == "cursor-open" {
+        return cursor_open::run(&request.args).await;
     }
     if request.verb == "quota-read" {
         return quota::run(&request.args).await;
     }
     if request.verb == "scan-usage" {
         return scan::run(&request.args).await;
+    }
+    if request.verb == "apps" {
+        return apps::run_inventory(&request.args).await;
     }
     if request.verb == "inventory" {
         return inventory::run(&request.args).await;

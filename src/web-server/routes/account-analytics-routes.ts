@@ -1,14 +1,22 @@
 import type { Router } from 'express';
+import path from 'node:path';
+import { getCcsDir } from '../../utils/config-manager';
+import { withPrivateFileLock } from '../services/private-json-store';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import {
   getAccountAnalytics,
   type AccountAnalyticsComposer,
+  type AccountAnalyticsOwnedComposer,
 } from '../services/account-analytics-service';
 import type { AccountAnalyticsComposed } from '../services/account-analytics-compose';
-import { composeWithRust } from '../rust-service';
+import { RustService, composeWithRust, writeWithRust } from '../rust-service';
 import { isRustAnalyticsComposed, rustAnalyticsInput } from '../rust-account-input';
+import { isRustAnalyticsOwned, rustAnalyticsOwnedInput } from '../rust-analytics-owned-input';
+import { rustGroupOn } from '../rust-service-groups';
+import { rustStoreHosted } from '../rust-service-transport';
+import { openAacStore } from '../../store/store-service';
 import { defaultAnalyticsProviderIds } from '../services/account-analytics-providers';
 import {
   ACCOUNT_ANALYTICS_RANGE_PRESETS,
@@ -20,6 +28,7 @@ import {
 } from '../services/account-analytics-range';
 import type { AccountAnalytics, AccountAnalyticsQuery } from '../services/account-analytics-types';
 import {
+  ANALYTICS_CAPTURE_FILE,
   readAnalyticsCaptureSettings,
   writeAnalyticsCaptureSettings,
   type AnalyticsCaptureSettings,
@@ -31,7 +40,8 @@ const QUERY_KEYS = ['platform', 'range', 'provider', 'account', 'refresh', 'tz',
 export interface AccountAnalyticsRouterDeps {
   getAnalytics?: (
     query: AccountAnalyticsQuery,
-    composer?: AccountAnalyticsComposer
+    composer?: AccountAnalyticsComposer,
+    owned?: AccountAnalyticsOwnedComposer
   ) => Promise<AccountAnalytics>;
   /** Provider ids the server reports; `all` is always accepted as well. */
   providerIds?: () => readonly string[];
@@ -117,7 +127,27 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
           legacy,
           isRustAnalyticsComposed
         )) as AccountAnalyticsComposed;
-      res.json(await (deps.getAnalytics ?? getAccountAnalytics)(request, composer));
+      // R5/A2: with the analytics group on and the store hosted, Rust reads the store itself
+      // and composes the whole answer. Off, shadow, unhosted or any decline keeps the TS path.
+      const owned: AccountAnalyticsOwnedComposer = async (facts) => {
+        const service: unknown = res.locals.rustService;
+        if (!(service instanceof RustService) || service.mode !== 'on') return null;
+        if (!rustGroupOn('analytics') || !rustStoreHosted(facts.scope)) return null;
+        const store = (await openAacStore({ ccsDir: facts.scope })).store;
+        if (!store) return null;
+        const input = await rustAnalyticsOwnedInput(facts, store);
+        if (!input) return null;
+        const answer = await composeWithRust(
+          req,
+          res,
+          '/api/accounts/analytics',
+          input,
+          () => null,
+          isRustAnalyticsOwned
+        );
+        return (answer as AccountAnalytics | null) ?? null;
+      };
+      res.json(await (deps.getAnalytics ?? getAccountAnalytics)(request, composer, owned));
     } catch (error) {
       if (error instanceof AccountAnalyticsQueryError) {
         reject(error.code);
@@ -148,7 +178,7 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
   router.get('/analytics/capture', (_req, res) => {
     res.json((deps.readCapture ?? readAnalyticsCaptureSettings)());
   });
-  router.put('/analytics/capture', (req, res) => {
+  router.put('/analytics/capture', async (req, res) => {
     if (
       typeof req.headers.origin !== 'string' ||
       !req.headers.origin ||
@@ -178,13 +208,35 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
       return;
     }
     try {
-      // The setting first, so a scan finishing now saves no folder; then the folders already saved.
-      (deps.writeCapture ?? writeAnalyticsCaptureSettings)({ cwd: body.cwd });
-      const cleared = body.cwd ? undefined : (deps.clearCwds ?? clearAnalyticsRemoteCwds)();
-      res.json({
-        ...(deps.readCapture ?? readAnalyticsCaptureSettings)(),
-        ...(cleared ? { cleared } : {}),
+      const cwd = body.cwd;
+      const ccs = getCcsDir();
+      const saved = await withPrivateFileLock(path.join(ccs, ANALYTICS_CAPTURE_FILE), async () => {
+        // Persist before removing folders, so a scan finishing now observes the new setting.
+        if (deps.writeCapture) deps.writeCapture({ cwd });
+        else
+          await writeWithRust(
+            req,
+            res,
+            '/api/accounts/analytics/capture',
+            'analytics-capture',
+            () => ({ cwd }),
+            (value): value is AnalyticsCaptureSettings =>
+              !!value &&
+              typeof value === 'object' &&
+              Object.keys(value).length === 1 &&
+              (value as AnalyticsCaptureSettings).cwd === cwd,
+            () => {
+              writeAnalyticsCaptureSettings({ cwd }, ccs);
+              return { cwd };
+            }
+          );
+        const cleared = cwd ? undefined : (deps.clearCwds ?? clearAnalyticsRemoteCwds)();
+        return {
+          ...(deps.readCapture ?? (() => readAnalyticsCaptureSettings(ccs)))(),
+          ...(cleared ? { cleared } : {}),
+        };
       });
+      res.json(saved);
     } catch {
       res.status(500).json({ error: 'Capture settings could not be saved.', code: 'save_failed' });
     }

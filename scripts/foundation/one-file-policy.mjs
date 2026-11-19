@@ -37,6 +37,13 @@ export const ALLOWLIST = [
       'moves them as one unit with its own switch.',
   },
   {
+    path: 'crates/aac-agent/src/signin_session/verb.rs',
+    reason:
+      'The sign-in session cancel reads /proc/<relay>/task/<relay>/children to name the CLI ' +
+      'pid before killing the relay group (Linux only, best effort). A kernel process listing, ' +
+      'not an AAC private file; the journal itself writes through the aac-files registry row.',
+  },
+  {
     path: 'native/aac-usage/src/fsx.rs',
     reason:
       "The scanner's walker: one nonblocking open per tool log while it walks very large trees " +
@@ -75,6 +82,42 @@ export const ALLOWLIST = [
     reason:
       "The service hashes its own executable image at start (L1 build check). That is not a " +
       'private file, and the open must follow the path the kernel ran.',
+  },  {
+    path: 'crates/aac-log/src/lib.rs',
+    reason:
+      "The dashboard's structured log stream (logs/current.jsonl and logs/archive), not a " +
+      'registry row: one O_APPEND write per JSON line, shared with the TS server until the cut, ' +
+      'rotated by rename and pruned by age and total size exactly as log-storage.ts does. Its ' +
+      'config read goes through aac-files.',
+  },
+  {
+    path: 'crates/aac-status/src/share/seed.rs',
+    reason:
+      'The R4 catalog seeder keeps the TypeScript share mechanics byte for byte: a new file ' +
+      'is admitted by hard link (fails on a file another machine wrote meanwhile), an existing ' +
+      'models/aliases file is appended in its own layout and re-read before the rename. The ' +
+      'share catalog is not a private file; the readers-check writer uses the leased aac-files ' +
+      'writer, not these mechanics.',
+  },
+  {
+    path: 'crates/aac-status/src/answer_signing.rs',
+    reason:
+      'The R4 answer-key lifecycle keeps the TypeScript mechanics byte for byte: exclusive ' +
+      '0600 creation, hard-link admission (a racing process uses the first key), fsync of file ' +
+      'and folder, and the broken-key repair rename. The key is a credential the signer owns; ' +
+      'the answers store writer lock is held by the caller. Follow-up: a leased aac-files ' +
+      'writer for the key row once the registry lists it.',
+  },
+  {
+    path: 'crates/aac-renewal/src/',
+    reason:
+      "G10 saved-login renewal ports the TS Codex renewal mechanics: bounded reads of the " +
+      "Codex CLI's own auth files and Linux /proc (another tool's data and kernel data, not " +
+      'AAC private registry files), and the atomic 0600 temp+rename write of auth.json and ' +
+      'the advisory codex-renewal-status.json under the Codex activation lock (the TS ' +
+      'codex-atomic-file.ts writer; neither path is a private-files registry row). The ' +
+      'parity bin and fixtures write fake-credential sandboxes in temp roots. Follow-up ' +
+      'l2-renewal-readers: move the bounded reads onto aac_files::read.',
   },
 ];
 

@@ -135,17 +135,22 @@ impl Row {
         let relative = self.file(name)?;
         let max_size = usize::try_from(self.max_bytes)
             .map_err(|_| Failure::new(Cause::Refused, "invalid byte cap"))?;
-        OwnedStore::open(
+        Ok(OwnedStore::open(
             root,
             Path::new(&relative),
             max_size,
             self.parents,
             self.lease,
-        )
+        )?
+        .with_mode(self.mode_bits()))
     }
 }
 
 fn plain_path(path: &str) -> bool {
+    // Existing credential leaves. Wildcards and all other dotted leaves remain refused.
+    if matches!(path, ".session-secret" | "bar/.auth-token") {
+        return true;
+    }
     let parts: Vec<&str> = path.split('/').collect();
     let last = parts.len().saturating_sub(1);
     !path.is_empty()
@@ -167,6 +172,28 @@ fn id_word(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !id.ends_with('-')
         && !id.contains("--")
+}
+
+/// Use a cooperating front door's open-file-description lock for a delegated write.
+#[cfg(unix)]
+pub fn inherit_writer(
+    id: &str,
+    root: &Path,
+    name: Option<&str>,
+    lock: std::fs::File,
+) -> Result<OwnedStore, Failure> {
+    let row = row(id)?;
+    let supports_inherit = matches!(
+        (row.parents, row.lease),
+        (Parents::Private, Lease::File) | (Parents::Reference, Lease::Folder)
+    );
+    if row.root != Root::Ccs || !supports_inherit || row.moves_with.as_deref() != Some("writes") {
+        return Err(Failure::new(
+            Cause::Refused,
+            "store cannot inherit a writer lease",
+        ));
+    }
+    OwnedStore::inherit(root, row, name, lock)
 }
 
 /// Parse and check a registry document: the same rules TS applies.
@@ -334,10 +361,29 @@ mod tests {
             assert!(row(id).is_ok(), "{id}");
         }
         assert!(row("unknown").is_err());
-        // Nothing has moved yet: TS writes every row on the dashboard host.
-        assert!(
-            rows.iter()
-                .all(|r| r.owner == Role::Ts && r.moves_with.is_none())
+        assert_eq!(row("readers-check").unwrap().moves_with.as_deref(), Some("status"));
+        assert_eq!(row("catalog-seed").unwrap().moves_with.as_deref(), Some("scoreboard"));
+        // The default owner map keeps all groups with TS.
+        let defaults = Owners::defaults(rows);
+        for row in rows {
+            assert_eq!(row.owner, Role::Ts);
+            assert_eq!(defaults.owner(&row.id), Some(Role::Ts));
+        }
+        let moved: Vec<_> = rows
+            .iter()
+            .filter(|r| r.moves_with.as_deref() == Some("collection"))
+            .map(|r| (r.id.as_str(), "collection"))
+            .collect();
+        assert_eq!(
+            moved,
+            [
+                ("opencode-wallet-account", "collection"),
+                ("cursor-account-observation", "collection"),
+                ("cursor-quota-observation", "collection"),
+                ("account-usage-cooldown", "collection"),
+                ("account-usage-observations", "collection"),
+                ("claude-live-snapshots", "collection"),
+            ]
         );
     }
 
@@ -353,7 +399,11 @@ mod tests {
             .collect();
         for row in rows().unwrap() {
             if let Some(group) = &row.moves_with {
-                assert!(groups.contains(group.as_str()), "{}", row.id);
+                assert!(
+                    groups.contains(group.as_str()) || group == "public-auth",
+                    "{}",
+                    row.id
+                );
             }
         }
     }
@@ -428,7 +478,7 @@ mod tests {
         let owners = Owners::from_boot(&rows, &files).unwrap();
         assert_eq!(owners.owner(&rows[1].id), Some(Role::RustService));
         let mut flipped = files.clone();
-        flipped.insert(rows[0].id.clone(), "rust-service".into());
+        flipped.insert("usage-hub-key".into(), "rust-service".into());
         assert!(Owners::from_boot(&rows, &flipped).is_err());
         let mut missing = files.clone();
         missing.remove(&rows[2].id);

@@ -105,6 +105,11 @@ impl AgentClient {
         }
     }
 
+    /// Share this registry entry's pooled computer with a fixed package helper.
+    pub fn computer(&self) -> &Computer {
+        &self.computer
+    }
+
     /// Check SHA-256 before every use and cache a successful handshake for this client.
     /// When shipping is allowed, exit 87 permits exactly one upload to
     /// `.part`, remote verification and atomic rename. Other errors never trigger an upload.

@@ -16,6 +16,12 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ProviderError } from '../../errors/error-types';
+import { privateFileOwners } from '../../shared/private-files';
+import {
+  readRustCursorAccount,
+  readRustProviderCache,
+  writeRustCollectionCache,
+} from '../rust-service-transport';
 import { getCcsDir } from '../../utils/config-manager';
 import type { DashboardAccount } from './account-dashboard-types';
 import type { AnalyticsRemoteRow } from './analytics-remote-transport';
@@ -44,6 +50,16 @@ export interface CursorAccountRow {
   uncosted: number;
 }
 
+/** Counts from the same complete provider read as the dated usage rows. */
+export interface CursorEventCounts {
+  pages: number;
+  fetched: number;
+  kept: number;
+  droppedOutOfWindow: number;
+  droppedNoTokenUsage: number;
+  droppedDuplicate: number;
+}
+
 /** The last answer, kept across restarts. */
 export interface CursorAccountRead {
   state: CursorAccountState;
@@ -57,6 +73,7 @@ export interface CursorAccountRead {
   key?: { last4: string; fingerprint: string } | null;
   rows: CursorAccountRow[];
   events: number;
+  eventCounts?: CursorEventCounts;
   /** In-range events whose `tokenUsage` had no usable counts: not logged, never measured zeros. */
   unmeasured: number;
 }
@@ -71,6 +88,7 @@ export interface CursorAccountAnswer {
   accountTokens: number;
   matchedTokens: number;
   outsideTokens: number;
+  eventCounts?: CursorEventCounts;
   localUnmatchedTokens: number;
   /**
    * Present when some of the account's events carried no Cursor cost: any cost figure for the
@@ -158,6 +176,33 @@ const HOUR = /^\d{4}-\d{2}-\d{2} \d{2}:00$/;
 const count = (value: unknown) =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
+function eventCountsOf(sample: unknown): CursorEventCounts | undefined {
+  const record = sample as Partial<CursorAccountRead> | null;
+  const counts = record?.eventCounts;
+  if (!record || !counts) return undefined;
+  const { pages, fetched, kept, droppedOutOfWindow, droppedNoTokenUsage, droppedDuplicate } =
+    counts;
+  if (
+    ![
+      pages,
+      fetched,
+      kept,
+      droppedOutOfWindow,
+      droppedNoTokenUsage,
+      droppedDuplicate,
+      record.unmeasured,
+    ].every(count) ||
+    pages < 1 ||
+    pages > 200 ||
+    fetched > pages * 1000 ||
+    kept !== record.events ||
+    fetched !==
+      kept + droppedOutOfWindow + droppedNoTokenUsage + droppedDuplicate + (record.unmeasured ?? 0)
+  )
+    return undefined;
+  return { pages, fetched, kept, droppedOutOfWindow, droppedNoTokenUsage, droppedDuplicate };
+}
+
 /** The reader's rows, each checked; a malformed one is dropped. */
 export function parseCursorAccountRows(value: unknown): CursorAccountRow[] {
   if (!Array.isArray(value)) return [];
@@ -198,8 +243,10 @@ function loadRead(cacheDir: string): CursorAccountRead | null {
     const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<CursorAccountRead>;
     if (!value || !STATES.has(String(value.state)) || typeof value.checkedAt !== 'string')
       return null;
+    const eventCounts = eventCountsOf(value);
     return {
       state: value.state as CursorAccountState,
+      ...(eventCounts ? { eventCounts } : {}),
       checkedAt: value.checkedAt,
       readAt: typeof value.readAt === 'string' ? value.readAt : null,
       ...(typeof value.cause === 'string' ? { cause: value.cause } : {}),
@@ -244,6 +291,24 @@ export async function readCursorAccount(
   const cacheDir = options.cacheDir ?? path.join(getCcsDir(), 'cache');
   const ccsDir = options.ccsDir ?? getCcsDir();
   const run = options.run ?? runCursorAccount;
+  if (
+    !options.run &&
+    !options.now &&
+    path.resolve(cacheDir) === path.resolve(ccsDir, 'cache') &&
+    privateFileOwners()['cursor-account-observation'] === 'rust-service'
+  ) {
+    const owned = await readRustCursorAccount(ccsDir, {
+      sinceMs: Math.floor(sinceMs),
+      untilMs: Math.floor(untilMs),
+      force: options.force ?? false,
+    });
+    if (owned === null) {
+      const previous = loadRead(cacheDir);
+      if (previous) return previous;
+      throw new Error('reader_failed');
+    }
+    if (owned !== undefined) return owned as CursorAccountRead;
+  }
   const previous = loadRead(cacheDir);
   if (
     previous &&
@@ -275,7 +340,9 @@ export async function readCursorAccount(
       : (previous?.key ?? null);
   let read: CursorAccountRead;
   if (state === 'read') {
+    const eventCounts = eventCountsOf(answer);
     read = {
+      ...(eventCounts ? { eventCounts } : {}),
       state,
       checkedAt,
       readAt: typeof answer.readAt === 'number' ? new Date(answer.readAt).toISOString() : checkedAt,
@@ -306,6 +373,7 @@ export async function readCursorAccount(
       rows: keep?.rows ?? [],
       events: keep?.events ?? 0,
       unmeasured: keep?.unmeasured ?? 0,
+      ...(keep?.eventCounts ? { eventCounts: keep.eventCounts } : {}),
     };
   }
   saveRead(cacheDir, read);
@@ -330,6 +398,7 @@ export async function cursorAccountOutside(
     ...(read.cause ? { cause: read.cause } : {}),
     ...(read.key?.last4 ? { last4: read.key.last4 } : {}),
     unmeasured: read.unmeasured,
+    ...(read.eventCounts ? { eventCounts: read.eventCounts } : {}),
   };
   const empty = {
     ...base,
@@ -402,7 +471,19 @@ export class CursorQuotaReader {
       this.deps.cacheDir ?? path.join(ccsDir, 'cache'),
       'cursor-quota-v1.json'
     );
-    const run = this.deps.run ?? runCursorAccount;
+    const nativeCache =
+      !this.deps.run &&
+      path.dirname(path.resolve(file)) === path.resolve(ccsDir, 'cache') &&
+      privateFileOwners()['cursor-quota-observation'] === 'rust-service';
+    const read = async (command: 'key-status' | 'quota') => {
+      if (!this.deps.run && privateFileOwners()['cursor-account-observation'] === 'rust-service') {
+        const owned = await readRustCursorAccount(ccsDir, { command });
+        if (owned === null) throw new ProviderError('Cursor read failed.', 'cursor');
+        if (owned !== undefined) return owned;
+      }
+      const args = command === 'key-status' ? ['key', 'status'] : ['quota'];
+      return (this.deps.run ?? runCursorAccount)([...args, '--ccs-dir', ccsDir], '');
+    };
     const now = (this.deps.now ?? Date.now)();
     const at = new Date(now).toISOString();
     let fingerprint: string | null = null;
@@ -415,16 +496,22 @@ export class CursorQuotaReader {
     let answer: Record<string, unknown> = {};
     try {
       // Only the reader opens the store. A missing/unsafe reader is not proof of no key.
-      const status = (await run(['key', 'status', '--ccs-dir', ccsDir], '')) as Record<
-        string,
-        unknown
-      >;
+      const status = (await read('key-status')) as Record<string, unknown>;
       if (status.present === false && !status.error) {
         this.current = null;
-        try {
-          fs.unlinkSync(file);
-        } catch {
-          /* No saved quota. */
+        if (nativeCache) {
+          await writeRustCollectionCache(
+            ccsDir,
+            'cursor-quota-observation',
+            'no-key',
+            '{"clear":true}'
+          );
+        } else {
+          try {
+            fs.unlinkSync(file);
+          } catch {
+            /* No saved quota. */
+          }
         }
         return null;
       }
@@ -432,7 +519,11 @@ export class CursorQuotaReader {
         throw new ProviderError('Cursor key status is unavailable.', 'cursor');
       fingerprint = status.fingerprint;
       try {
-        if (fs.statSync(file).size <= 64 * 1024)
+        const owned = nativeCache
+          ? await readRustProviderCache(ccsDir, { cursorFingerprint: fingerprint })
+          : undefined;
+        if (owned !== undefined) previous = owned as typeof previous;
+        else if (fs.statSync(file).size <= 64 * 1024)
           previous = JSON.parse(fs.readFileSync(file, 'utf8'));
       } catch {
         /* No saved quota. */
@@ -467,7 +558,7 @@ export class CursorQuotaReader {
         this.current = previous.account;
         return this.peek(base);
       }
-      answer = (await run(['quota', '--ccs-dir', ccsDir], '')) as Record<string, unknown>;
+      answer = (await read('quota')) as Record<string, unknown>;
     } catch {
       answer = { state: 'unavailable' };
     }
@@ -539,7 +630,14 @@ export class CursorQuotaReader {
             : 'Cursor quota could not be read.',
       windows: valid ? windows : (keep?.windows ?? []),
     };
-    if (fingerprint) {
+    if (fingerprint && nativeCache) {
+      await writeRustCollectionCache(
+        ccsDir,
+        'cursor-quota-observation',
+        fingerprint.slice('sha256:'.length),
+        JSON.stringify({ version: 1, fingerprint, checkedAt: at, account: this.current })
+      );
+    } else if (fingerprint) {
       try {
         fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
         const temporary = `${file}.${process.pid}.tmp`;

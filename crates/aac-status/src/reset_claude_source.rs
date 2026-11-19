@@ -28,6 +28,13 @@ impl Drop for OwnedChild {
         let _ = self.0.wait();
     }
 }
+/// One bounded helper run: `request` replaces the payload's request, stdout must be one JSON
+/// value from a zero exit inside `timeout`. The private service's Claude claim (lane K, G11)
+/// uses the same runner as the capture and read phases.
+pub fn run(command: &HelperCommand, request: Value, timeout: Duration) -> Result<Value> {
+    helper(command, request, timeout)
+}
+
 fn helper(command: &HelperCommand, request: Value, timeout: Duration) -> Result<Value> {
     if command.executable.is_empty() || command.executable.len() > 4096 || command.args.len() > MAX_HELPER_ARGS {
         return Err("credential-host-unavailable");

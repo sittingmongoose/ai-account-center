@@ -10,6 +10,21 @@ for (const [program, args] of [
   // L2: one file policy (no raw file mechanics outside aac-files) and the shared registry.
   ['node', ['scripts/foundation/one-file-policy.mjs']],
   ['bun', ['test', 'tests/spec/private-files.test.ts']],
+  ...(process.env.AAC_RUST_PUBLIC_BINARY
+    ? [
+        ['bun', ['tests/spec/m6-auth-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        ['bun', ['tests/spec/m6-events-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        ['bun', ['tests/spec/m6-tray-parity.ts', process.env.AAC_RUST_PUBLIC_BINARY]],
+        [
+          'bun',
+          [
+            'tests/spec/m6-public-contract.ts',
+            process.env.AAC_RUST_PUBLIC_BINARY,
+            ...(process.env.AAC_M6_REQUIRE_COMPLETE === '1' ? ['--require-complete'] : []),
+          ],
+        ],
+      ]
+    : []),
   [
     'bun',
     [
@@ -24,10 +39,110 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  [
+    'bun',
+    [
+      'tests/spec/settings-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/approval-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  // M5 lane K: the reset claim route with the native module, then the Rust service, as the
+  // claims file's writer (Unix: the fake Codex CLI and the private socket).
+  ...(process.platform === 'win32'
+    ? []
+    : [
+        [
+          'bun',
+          [
+            'tests/spec/reset-claim-parity.ts',
+            ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+          ],
+        ],
+        [
+          'bun',
+          [
+            'tests/spec/reset-source-parity.ts',
+            ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+          ],
+        ],
+      ]),
+  [
+    'bun',
+    [
+      'tests/spec/app-update-http-parity.ts',
+      ...(process.env.AAC_SPEC_APP_UPDATES_UNBOUND === '1' ? ['--rust-unbound'] : []),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/preferences-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/history-cleanup-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'node',
+    [
+      'tests/spec/lifecycle-writes.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'node',
+    [
+      'tests/spec/status-answer-writes.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/local-key-write-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'node',
+    [
+      'tests/spec/provider-install-writes.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  [
+    'bun',
+    [
+      'tests/spec/signin-journal-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  // G21: the TS log's outputs that the Rust aac-log crate reproduces.
+  ['bun', ['tests/spec/log-vectors.ts']],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   // M6: the T3 hub, the static/Leptos bundle edges and the CLI entry points, recorded from TS and replayable
   // against another front door (AAC_M6_TARGET_URL / AAC_M6_TARGET_CLI).
-  ['bun', ['tests/spec/m6-edge-parity.ts']],
+  [
+    'bun',
+    [
+      'tests/spec/m6-edge-parity.ts',
+      ...(process.env.AAC_RUST_PUBLIC_BINARY && !process.env.AAC_M6_TARGET_URL
+        ? ['--rust-fixture']
+        : []),
+    ],
+  ],
   ...[
     'read-view-parity',
     'read-file-parity',
@@ -51,6 +166,9 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE)
+    ? [['node', ['tests/spec/dashboard-read-parity.mjs']]]
+    : []),
   // R1: Home fed against today's handler, end to end on the real binary, under Node.
   [
     'node',

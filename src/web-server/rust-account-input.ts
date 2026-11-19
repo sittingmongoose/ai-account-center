@@ -80,6 +80,37 @@ function finiteOrNull(value: number | undefined): number | null {
 }
 
 /**
+ * The owned Analytics envelope's dashboard (R5/A2): the accounts as the spread entries the
+ * composition port reads, providers and settings as the dashboard answered them. Null when an
+ * account is not the plain shape the port admits.
+ */
+export function rustAnalyticsOwnedDashboard(dashboard: {
+  accounts: unknown[];
+  providers?: unknown;
+  settings?: unknown;
+}): { accounts: Entry[][]; providers?: unknown; settings?: unknown } | null {
+  const accounts: Entry[][] = [];
+  for (const account of dashboard.accounts) {
+    if (
+      !object(account) ||
+      typeof account.provider !== 'string' ||
+      typeof account.id !== 'string' ||
+      !textOrAbsent(account.email)
+    )
+      return null;
+    const entries = spreadEntries(account, { windows: windowList });
+    if (!entries || !Array.isArray(account.windows)) return null;
+    accounts.push(entries);
+  }
+  const { providers, settings } = dashboard;
+  return {
+    accounts,
+    ...(providers !== undefined ? { providers } : {}),
+    ...(settings !== undefined ? { settings } : {}),
+  };
+}
+
+/**
  * The Analytics composition input in the shared presentation envelope, or null when JSON cannot
  * carry it exactly. Rust takes `Date.parse`, `toISOString` and the provider-id `localeCompare`
  * ranks from the envelope's facts; it formats no clock or day words, so none are computed.

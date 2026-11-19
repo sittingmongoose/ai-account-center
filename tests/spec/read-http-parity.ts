@@ -45,7 +45,9 @@ if (worker < 0) {
         }
       );
       if (result.status !== 0)
-        throw new Error(result.stderr || result.stdout || 'HTTP fixture child failed');
+        throw new Error(
+          (result.stdout || '').slice(-2000) + '\n' + (result.stderr || 'HTTP fixture child failed')
+        );
       reports.push(JSON.parse(fs.readFileSync(file, 'utf8')));
       process.stdout.write(result.stdout);
     }
@@ -349,6 +351,8 @@ if (worker < 0) {
     if (mode === 'shadow') {
       for (let i = 0; i < 200 && bridge.stats.shadowed < 5; i++)
         await new Promise((r) => setTimeout(r, 5));
+      if (bridge.stats.differences > 0)
+        console.log('shadow differences:', JSON.stringify(bridge.diagnostics().routes));
       assert.equal(bridge.stats.differences, 0);
       assert.ok(bridge.stats.shadowed >= 5);
     }
@@ -413,6 +417,8 @@ if (worker < 0) {
       for (let i = 0; i < 200 && (bridge as any).active.size > 0; i++)
         await new Promise((r) => setTimeout(r, 5));
       assert.equal((bridge as any).active.size, 0, 'all measured shadow requests must settle');
+      if (bridge.stats.differences > 0)
+        console.log('shadow differences:', JSON.stringify(bridge.diagnostics().routes));
       assert.equal(bridge.stats.differences, 0);
     }
     if (mode === 'on') {

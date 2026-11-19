@@ -1,3 +1,4 @@
+import { broadcastDashboardEvent } from '../dashboard-events';
 import {
   getCodexAuthProfilesSummary,
   type CodexAuthProfilesSummary,
@@ -89,6 +90,8 @@ import {
 export type { AccountDashboard, DashboardAccount } from './account-dashboard-types';
 
 export interface AccountDashboardDeps {
+  /** The collector has published dashboard usage rows. */
+  onUsagePublished?: () => void;
   getCodexSummary?: () => Promise<CodexAuthProfilesSummary>;
   getCodexRows?: (names: string[], refresh: boolean) => Promise<BarSummaryRow[]>;
   getCachedCodexRows?: (names: string[]) => BarSummaryRow[];
@@ -574,6 +577,7 @@ export class AccountDashboardService {
     // Sources that already published a successful reading in this cycle. A slow optional
     // part (the OpenCode wallet) must not relabel those current rows as cached on timeout.
     const publishedThisCycle = new Set<string>();
+    let completed = false;
     const parts = [
       ['codex', this.collectCodex(scope, refresh), () => this.cachedCodex(scope)],
       [
@@ -643,7 +647,10 @@ export class AccountDashboardService {
         // Slow sources can finish after the response deadline. Retain their safe
         // projections without allowing an older cycle to overwrite a newer one.
         const retained = pending.then((accounts) => {
-          if (state.generation === generation) state[key] = accounts;
+          if (state.generation === generation) {
+            state[key] = accounts;
+            if (completed) this.deps.onUsagePublished?.();
+          }
           return accounts;
         });
         const result = await this.bounded(retained, () =>
@@ -665,6 +672,8 @@ export class AccountDashboardService {
       })
     );
     state.fetchedAt = (this.deps.now ?? Date.now)();
+    completed = true;
+    if (state.generation === generation) this.deps.onUsagePublished?.();
     return [...state.codex, ...state.claude, ...state.additional, ...state.antigravity];
   }
 
@@ -956,13 +965,18 @@ export class AccountDashboardService {
 }
 
 let service: AccountDashboardService | null = null;
+
+function dashboardService(): AccountDashboardService {
+  return (service ??= new AccountDashboardService({
+    onUsagePublished: () => broadcastDashboardEvent({ type: 'accounts-changed' }),
+  }));
+}
 export function getAccountDashboard(
   platform: ClaudeDashboardPlatform = 'mac',
   refresh = false,
   context: AccountDashboardRequestContext = {}
 ): Promise<AccountDashboard> {
-  service ??= new AccountDashboardService();
-  return service.get(platform, refresh, context);
+  return dashboardService().get(platform, refresh, context);
 }
 
 /** R1: `getAccountDashboard` before its per-response pass, with that pass's clock (Home, fed). */
@@ -971,8 +985,7 @@ export function readAccountDashboardForHome(
   refresh = false,
   context: AccountDashboardRequestContext = {}
 ): Promise<HomeDashboardRead> {
-  service ??= new AccountDashboardService();
-  return service.readForHome(platform, refresh, context);
+  return dashboardService().readForHome(platform, refresh, context);
 }
 
 /** Cache only: never starts a collection (see AccountDashboardService.peek). */
@@ -980,8 +993,7 @@ export function peekAccountDashboard(
   platform: ClaudeDashboardPlatform = 'mac',
   context: AccountDashboardRequestContext = {}
 ): Promise<AccountDashboard> {
-  service ??= new AccountDashboardService();
-  return service.peek(platform, context);
+  return dashboardService().peek(platform, context);
 }
 
 export function invalidateAccountDashboard(): void {

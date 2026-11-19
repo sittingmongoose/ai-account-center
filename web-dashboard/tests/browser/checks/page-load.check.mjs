@@ -3,7 +3,8 @@
 //
 //   browser-check run web-dashboard/tests/browser/checks --grep 'page load'
 //   browser-check run web-dashboard/tests/browser/checks --grep 'load timing' --set home=<fixture home> --set samples=3
-//   (--set pages=home,accounts picks the timed tabs; the default is home, accounts, analytics and scoreboard)
+//   (--set pages=home,accounts picks the timed tabs; the default is home, accounts, analytics and scoreboard;
+//    --set width=390 --set height=844 times another viewport, e.g. Home's first-draw bar at 1440 and 390)
 //
 // Real server, no stubs: route() turns the HTTP cache off, so a stubbed run can't time a warm load. For numbers worth
 // comparing, give it a prepared home with real-sized synthetic data (usage logs, a full runs folder). The timings are
@@ -182,14 +183,19 @@ export const tests = {
 	async 'load timing: home, accounts, analytics and scoreboard, cold and warm'(t) {
 		const samples = Math.max(1, +t.args.samples || 1);
 		const pages = String(t.args.pages || 'home,accounts,analytics,scoreboard').split(',').filter(Boolean);
-		await t.newContext({ viewport: VIEWPORT, serviceWorkers: 'block' });
+		// --set width/height: Home's first-draw bar measures 1440 and 390 (the default stays 1440x900).
+		const viewport = {
+			width: Math.max(320, +t.args.width || VIEWPORT.width),
+			height: Math.max(480, +t.args.height || VIEWPORT.height),
+		};
+		await t.newContext({ viewport, serviceWorkers: 'block' });
 		await signInBare(t);
 		const server = await warmServer(t);
-		const out = { at: new Date().toISOString(), viewport: VIEWPORT, serviceWorkers: 'blocked', server, runs: [] };
+		const out = { at: new Date().toISOString(), viewport, serviceWorkers: 'blocked', server, runs: [] };
 		for (let i = 0; i < samples; i++) {
 			for (const page of pages) {
 				// cold: a new browser context (empty HTTP and code cache), signed in from a JSON page
-				await t.newContext({ viewport: VIEWPORT, serviceWorkers: 'block' });
+				await t.newContext({ viewport, serviceWorkers: 'block' });
 				await t.context.addInitScript(MARKS);
 				await signInBare(t);
 				const cold = summarize(await visit(t, page));

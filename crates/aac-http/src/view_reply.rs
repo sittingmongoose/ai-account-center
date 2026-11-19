@@ -26,12 +26,22 @@ fn without_clock(value: &Value) -> Value {
     }
 }
 
+/// Lowercase hex of a SHA-256 digest: one String, no per-byte allocation (the ETag is written per request).
+pub(crate) fn hex_digest(digest: &[u8; 32]) -> String {
+    const HEX: [u8; 16] = *b"0123456789abcdef";
+    let mut out = [0u8; 64];
+    for (i, b) in digest.iter().enumerate() {
+        out[2 * i] = HEX[(b >> 4) as usize];
+        out[2 * i + 1] = HEX[(b & 0xf) as usize];
+    }
+    out.into_iter().map(char::from).collect()
+}
+
 /// `W/"<sha256 of the identity JSON>"`, the revalidated-view rule.
 pub fn etag(view: &Value) -> String {
     let identity = without_clock(view).to_string();
-    let digest = Sha256::digest(identity.as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("W/\"{hex}\"")
+    let digest: [u8; 32] = Sha256::digest(identity.as_bytes()).into();
+    format!("W/\"{}\"", hex_digest(&digest))
 }
 
 /// The response a view route sends: the serialized bytes, its ETag and its view version.
@@ -61,9 +71,13 @@ pub fn respond_bytes(
     bytes: Vec<u8>,
     identity: &[u8],
 ) -> Response {
-    let digest = Sha256::digest(identity);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    respond_tagged(name, version, bytes, &format!("W/\"{hex}\""))
+    let digest: [u8; 32] = Sha256::digest(identity).into();
+    respond_tagged(
+        name,
+        version,
+        bytes,
+        &format!("W/\"{}\"", hex_digest(&digest)),
+    )
 }
 
 /// R2: [`respond_bytes`] with the ETag already known (Status keeps the last one per generations and second, and

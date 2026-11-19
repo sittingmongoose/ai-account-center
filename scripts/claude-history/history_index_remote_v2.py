@@ -472,6 +472,21 @@ class BoundProfile:
         # entry inside is the manifest or a protected-N.bin regular file; anything else is skipped
         # and reported, never deleted. The identity bind runs first, so a wrong root refuses.
         self.bind()
+        if os.name == 'nt':
+            return self._prune_snapshots()
+        import fcntl
+        name = self.root / 'aac-history-snapshot-retention.lock'
+        flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+        fd = os.open(name, flags, 0o600)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                refuse('snapshot_unavailable')
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return self._prune_snapshots()
+        finally:
+            os.close(fd)
+
+    def _prune_snapshots(self):
         candidates = []
         skipped = []
         for entry in itertools.islice(self.root.iterdir(), 1024):

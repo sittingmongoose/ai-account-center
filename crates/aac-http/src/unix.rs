@@ -1,4 +1,5 @@
 use crate::{
+    app_update_routes::{AppUpdateJobs, BoundJobs, Operation as AppUpdateOperation},
     feed::Feeds,
     identity::{self, Identity},
     limits::Limits,
@@ -65,16 +66,72 @@ pub struct Boot {
     /// store in the TS process.
     #[serde(default)]
     pub store: Option<crate::store_host::StoreBoot>,
+    /// R4: the owned readers' config as TS resolved it at start; absent keeps the share
+    /// readers and the Scoreboard owner in the TS process.
+    #[serde(default)]
+    pub owned: Option<OwnedBoot>,
+    /// G10: the renewal timer's homes as TS resolved them at start; absent (or null) keeps
+    /// the saved-login renewal timer in the TS process.
+    #[serde(default)]
+    pub renewal: Option<RenewalBoot>,
+}
+
+/// R4 (DESIGN-M3-COMPLETE 1.2/1.4): which owners this boot runs, and the share roots they
+/// read. TS resolves the roots and the group switches once at start; the store host must be
+/// on for either owner (the runs tables and the report captures go through its lock).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnedBoot {
+    /// The agent-reports root (`AAC_AGENT_REPORTS_DIR`, else the shared folder).
+    pub reports_root: PathBuf,
+    /// The pm-mail registry folder (`AAC_PM_MAIL_REGISTRY_DIR`, else the shared inbox).
+    pub registry_dir: PathBuf,
+    /// The owned Status readers (the status group on, under the store host).
+    pub status: bool,
+    /// The owned Scoreboard (the scoreboard group on, under the store host).
+    pub scoreboard: bool,
+}
+
+/// G10: the saved-login renewal timer's boot config (the homes it reads).
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RenewalBoot {
+    /// The shared native Codex login home (`~/.codex`), absolute.
+    pub codex_home: PathBuf,
+    /// The home folder scanned for `.codex*` homes, absolute.
+    pub home_dir: PathBuf,
 }
 
 struct Shared {
     boot: Boot,
     limits: Limits,
+    owners: Owners,
+    cache_writes: Arc<tokio::sync::Mutex<()>>,
     identity: Identity,
     feeds: Feeds,
+    approvals: crate::account_approvals::Approvals,
+    /// M5 lane K: the claims file's writer lease, held from first use to the end of the boot.
+    reset_claims: crate::reset_claims::ResetClaims,
+    app_update_jobs: Option<BoundJobs>,
+    /// G17: the Home feed producer (the TS producer's work, in process).
+    producer: Arc<crate::home_producer::HomeProducer>,
+    account_usage: crate::account_usage::AccountUsageCache,
+    native_usage: bool,
     agents: Arc<crate::agent_transport::Agents>,
+    collection: Arc<crate::collection::Collection>,
+    cursor: Arc<crate::account_usage::cursor::Reader>,
     /// R3: the hosted store, when the boot carries its config.
     store: Option<Arc<crate::store_host::StoreHost>>,
+    /// R4: the owned Status readers, when the boot carries their config.
+    status_owned: Option<Arc<crate::status_owned::StatusOwned>>,
+    /// R4: the owned Scoreboard, when the boot carries its config.
+    scoreboard_owned: Option<Arc<crate::scoreboard_owned::ScoreboardOwned>>,
+    /// G18: the aac-usage share snapshot publisher, fed by the front door's samples.
+    usage: Arc<crate::usage_snapshot::UsageSnapshot>,
+    /// G13: the Claude Open job owner, when the boot binds it.
+    claude_open: Option<Arc<crate::claude_open::open::ClaudeOpen>>,
+    /// G16b: the answer store's writer, with the owned Status readers.
+    answers_owned: Option<Arc<crate::answers_owned::AnswersOwned>>,
 }
 
 #[derive(Clone)]
@@ -112,25 +169,11 @@ fn name_of(path: &Path) -> Option<&str> {
 impl Boot {
     /// Parse only the exact object envelope supplied by TS; arrays are never positional fields.
     pub fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
-        crate::json_object::from_slice(
+        crate::json_object::from_slice_with_optional(
             bytes,
-            &["ccsDir", "socketPath", "secret", "bootId", "files", "store"],
+            &["ccsDir", "socketPath", "secret", "bootId"],
+            &["files", "store", "owned", "renewal"],
         )
-        .or_else(|_| {
-            crate::json_object::from_slice(
-                bytes,
-                &["ccsDir", "socketPath", "secret", "bootId", "files"],
-            )
-        })
-        .or_else(|_| {
-            crate::json_object::from_slice(
-                bytes,
-                &["ccsDir", "socketPath", "secret", "bootId", "store"],
-            )
-        })
-        .or_else(|_| {
-            crate::json_object::from_slice(bytes, &["ccsDir", "socketPath", "secret", "bootId"])
-        })
     }
 
     /// Each registry row's writer for this boot. A map that names another row set, or gives a
@@ -176,6 +219,21 @@ impl Boot {
                     .share_backup_dir
                     .as_ref()
                     .is_some_and(|d| !d.is_absolute()))
+        {
+            return Err(failure());
+        }
+        // R4: the owned readers read absolute share roots, and only under the store host
+        // (the runs tables and the report captures go through its single-writer lock).
+        if let Some(owned) = &self.owned
+            && (!owned.reports_root.is_absolute()
+                || !owned.registry_dir.is_absolute()
+                || ((owned.status || owned.scoreboard) && self.store.is_none()))
+        {
+            return Err(failure());
+        }
+        // G10: the renewal timer reads the homes TS resolved; both must be absolute.
+        if let Some(renewal) = &self.renewal
+            && (!renewal.codex_home.is_absolute() || !renewal.home_dir.is_absolute())
         {
             return Err(failure());
         }
@@ -254,10 +312,12 @@ async fn boundary(State(state): State<AppState>, mut req: Request, next: Next) -
 
 /// The private 503 with its named reason. The bodies are the M3 ones.
 fn decline(handler: Handler, reason: Decline) -> Response {
-    let error = if handler == Handler::Settings {
-        "TypeScript settings fallback required"
-    } else {
-        "TypeScript read fallback required"
+    let error = match handler {
+        Handler::Settings => "TypeScript settings fallback required",
+        Handler::WriteSettings => "Usage refresh settings could not be saved.",
+        Handler::WriteVisibility => "Account visibility could not be saved.",
+        Handler::WritePreferences => "Dashboard preferences could not be saved.",
+        _ => "TypeScript read fallback required",
     };
     let mut response = (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -306,6 +366,225 @@ async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
 async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let shared = &state.0;
     match row.handler {
+        Handler::AppUpdates => {
+            let Some(operation) = AppUpdateOperation::from_route(&row.method, &row.path) else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            if !matches!(operation, AppUpdateOperation::Status) {
+                let query = req.uri().query().is_some_and(|query| !query.is_empty());
+                let body = to_bytes(req.into_body(), 1024).await;
+                if query || !body.is_ok_and(|body| {
+                    crate::json_object::from_slice::<serde_json::Map<String, serde_json::Value>>(
+                        &body,
+                        &[],
+                    )
+                    .is_ok()
+                }) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "Provide an empty JSON object."})),
+                    )
+                        .into_response();
+                }
+            }
+            let Some(jobs) = shared.app_update_jobs.as_ref() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-aac-decline", "unsupported")],
+                    Json(json!({"error": "App update jobs are unbound"})),
+                )
+                    .into_response();
+            };
+            match jobs.dispatch(operation).await {
+                Ok(response) => response,
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::Approvals => {
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared.approvals.apply(&bytes) {
+                Some(value) => Json(value).into_response(),
+                None => decline(row.handler, Decline::Shape),
+            }
+        }
+        Handler::ResetClaims => {
+            if req.uri().query().is_some() {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(owners) = shared.boot.owners() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), crate::reset_claims::BODY_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            let state = state.clone();
+            match shared
+                .limits
+                .blocking_for(row.pool, crate::limits::RESET_WAIT, move || {
+                    state.0.reset_claims.apply(&root, &owners, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CursorAccount => {
+            use crate::account_usage::cursor::{Command, ROW, Request};
+            if shared.owners.owner(ROW) != Some(registry::Role::RustService) {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let Ok(Ok(bytes)) =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            if let Ok(command) = Command::parse(&bytes) {
+                return match tokio::time::timeout(
+                    Duration::from_secs(123),
+                    shared.cursor.command(command, root),
+                )
+                .await
+                {
+                    Ok(Ok(value)) => Json(value).into_response(),
+                    Ok(Err(reason)) => decline(row.handler, reason),
+                    Err(_) => decline(row.handler, Decline::Internal),
+                };
+            }
+            let request = match Request::parse(&bytes) {
+                Ok(request) => request,
+                Err(reason) => return decline(row.handler, reason),
+            };
+            let owners = shared.owners.clone();
+            let reader = shared.cursor.clone();
+            let task = tokio::spawn(async move { reader.read(root, owners, request).await });
+            match tokio::time::timeout(Duration::from_secs(123), task).await {
+                Ok(Ok(Ok(value))) => Json(value.as_ref()).into_response(),
+                Ok(Ok(Err(reason))) => decline(row.handler, reason),
+                _ => decline(row.handler, Decline::Internal),
+            }
+        }
+        Handler::ProviderCache => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::account_usage::provider_caches::answer(&root, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CollectionSources => {
+            use crate::account_usage::sources::{self, Sources};
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || sources::read_registry(&root))
+                .await
+            {
+                Ok(Sources::Legacy) => Json(json!({"state":"absent"})).into_response(),
+                Ok(Sources::V2(accounts)) => Json(json!({
+                    "state":"ok","registry":{"version": 2,"accounts":accounts},
+                }))
+                .into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CollectionTick => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let body =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 64)).await;
+            let Ok(Ok(bytes)) = body else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared.collection.next_tick(&bytes).await {
+                Ok(()) => Json(json!({"due": true})).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::CollectionCache => {
+            let Some((kind, key)) = req
+                .uri()
+                .path()
+                .strip_prefix("/internal/collection-cache/")
+                .and_then(|p| p.split_once('/'))
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let owners = shared.owners.clone();
+            let Ok(Ok(bytes)) = tokio::time::timeout(
+                Duration::from_secs(2),
+                to_bytes(req.into_body(), 256 * 1024),
+            )
+            .await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            let writer = shared.cache_writes.clone().lock_owned().await;
+            let saved = shared
+                .limits
+                .blocking(row.pool, move || {
+                    let _writer = writer;
+                    Ok(crate::collection_cache::write(&owners, &root, &kind, &key, &bytes).is_ok())
+                })
+                .await
+                .unwrap_or(false);
+            Json(json!({"saved": saved})).into_response()
+        }
+        Handler::Collect => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            let verb = req
+                .uri()
+                .path()
+                .strip_prefix("/internal/collect/")
+                .unwrap_or("")
+                .to_owned();
+            let body = tokio::time::timeout(
+                Duration::from_secs(2),
+                to_bytes(req.into_body(), aac_protocol::MAX_FRAME_BYTES + 4096),
+            )
+            .await;
+            let Ok(Ok(bytes)) = body else {
+                return decline(row.handler, Decline::Shape);
+            };
+            shared
+                .collection
+                .read(shared.agents.clone(), &verb, &bytes)
+                .await
+        }
         Handler::Agent | Handler::AgentControl => {
             let path = req.uri().path().to_owned();
             let cap = if row.handler == Handler::AgentControl {
@@ -328,6 +607,35 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     .await
             } else {
                 shared.agents.call(name, &bytes).await
+            }
+        }
+        Handler::SignInHealth => {
+            let Ok(Ok(bytes)) =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match crate::signins::answer(&bytes) {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::SignInPoll => {
+            let Ok(Ok(bytes)) =
+                tokio::time::timeout(Duration::from_secs(2), to_bytes(req.into_body(), 4096)).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let hosts = match crate::signins::poll::parse(&bytes) {
+                Ok(hosts) => hosts,
+                Err(reason) => return decline(row.handler, reason),
+            };
+            match crate::signins::poll::read(&shared.agents, &shared.boot.ccs_dir, hosts).await {
+                Ok(batch) => Json(json!({
+                    "machines": batch.machines, "referenceHosts": batch.reference_hosts,
+                }))
+                .into_response(),
+                Err(reason) => decline(row.handler, reason),
             }
         }
         // R3: the store host's method contract, the NAPI binding's over the socket. No
@@ -431,6 +739,119 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        Handler::WriteSettings => {
+            let capture = row.path == "/api/accounts/analytics/capture";
+            if req.uri().query().is_some_and(|q| !q.is_empty()) {
+                let body = if capture {
+                    json!({"error":"Unexpected capture settings query.", "code":"invalid_query"})
+                } else {
+                    json!({"error":"Unexpected settings query."})
+                };
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
+            let owners = match shared.boot.owners() {
+                Ok(owners) => owners,
+                Err(_) => return decline(row.handler, Decline::Unsupported),
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return invalid_settings(capture);
+            };
+            let value = if capture {
+                crate::json_object::from_slice::<serde_json::Value>(&bytes, &["cwd"])
+                    .ok()
+                    .filter(|capture| capture["cwd"].is_boolean())
+            } else {
+                parse_settings(&bytes).ok().map(|settings| json!(settings))
+            };
+            let Some(value) = value else {
+                return invalid_settings(capture);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    let rows = registry::rows().map_err(|_| Decline::Internal)?;
+                    let store = if capture {
+                        "analytics-capture"
+                    } else {
+                        "account-refresh-settings"
+                    };
+                    let file = owners
+                        .claim(rows, store, &root, None)
+                        .map_err(|_| Decline::Unsupported)?;
+                    let mut bytes = serde_json::to_vec(&value).map_err(|_| Decline::Internal)?;
+                    bytes.push(b'\n');
+                    file.replace_settings(&bytes)
+                        .map_err(|_| Decline::Internal)?;
+                    if !capture {
+                        file.clean_settings_temporaries();
+                    }
+                    Ok(value)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::WritePreferences => {
+            if req.uri().query().is_some_and(|query| !query.is_empty()) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"Unexpected preferences query."})),
+                )
+                    .into_response();
+            }
+            let patch = req.method() == axum::http::Method::PATCH;
+            let Ok(bytes) = to_bytes(req.into_body(), crate::preferences_write::INPUT_CAP).await
+            else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(owners) = shared.boot.owners() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::preferences_write::save(&root, &owners, patch, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::WriteVisibility => {
+            let patch = req.method() == axum::http::Method::PATCH;
+            if req.uri().query().is_some() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "This request does not take a query string.",
+                        "code": "unexpected_query",
+                    })),
+                )
+                    .into_response();
+            }
+            let Ok(owners) = shared.boot.owners() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let Ok(bytes) = to_bytes(req.into_body(), 9 * 1024).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let root = shared.boot.ccs_dir.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::visibility_write::save(&root, &owners, patch, &bytes)
+                })
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         Handler::Feed | Handler::FeedStatus => {
             let source = req
                 .uri()
@@ -444,6 +865,9 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     Err(reason) => decline(row.handler, reason),
                 };
             }
+            if shared.native_usage && source.starts_with(crate::feed::HOME_DASHBOARD) {
+                return decline(row.handler, Decline::Unsupported);
+            }
             let Ok(bytes) = to_bytes(req.into_body(), INPUT_CAP).await else {
                 return decline(row.handler, Decline::Shape);
             };
@@ -451,6 +875,75 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             match shared
                 .limits
                 .blocking(row.pool, move || feeds.put(&source, &bytes))
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::Dashboard => {
+            if shared.owners.owner(crate::collection_cache::OBSERVATIONS)
+                != Some(registry::Role::RustService)
+            {
+                return decline(row.handler, Decline::Unsupported);
+            }
+            if shared.native_usage && !req.headers().contains_key(crate::home_fed::FEED_HEADER) {
+                let headers = req.headers().clone();
+                let uri = req.uri().clone();
+                let Ok(_) = to_bytes(req.into_body(), 0).await else {
+                    return decline(row.handler, Decline::Shape);
+                };
+                let cache = shared.account_usage.clone();
+                return match shared
+                    .limits
+                    .blocking(row.pool, move || {
+                        crate::dashboard_fed::latest(&cache, &uri, &headers)
+                    })
+                    .await
+                {
+                    Ok(reply) => reply,
+                    Err(reason) => decline(row.handler, reason),
+                };
+            }
+            let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let query = req.uri().query().is_some();
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(feed), false, true) = (feed, query, body.is_empty()) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let feeds = shared.feeds.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || {
+                    crate::dashboard_fed::answer(&feeds, &feed)
+                })
+                .await
+            {
+                Ok((bytes, identity)) => crate::view_reply::respond_bytes(
+                    crate::dashboard_fed::VIEW,
+                    crate::dashboard_fed::VERSION,
+                    bytes,
+                    &identity,
+                ),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        // G17: the Home feed producer — the raw Home inputs in, the held generations named. The transitional
+        // socket form of the producer; lane I's collection feeds it in process once it owns the dashboard read.
+        Handler::HomeInputs => {
+            let Ok(bytes) = to_bytes(req.into_body(), INPUT_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(inputs) = serde_json::from_slice::<crate::home_producer::Inputs>(&bytes) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let feeds = shared.feeds.clone();
+            let producer = shared.producer.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || producer.produce(&feeds, &inputs))
                 .await
             {
                 Ok(value) => Json(value).into_response(),
@@ -528,6 +1021,153 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             );
             response
         }
+        // R4: Scoreboard from the owned store and catalog (no body; the filters, the clock
+        // and the facts generation in `x-aac-feed`). Without it, the envelope read below.
+        Handler::Scoreboard if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
+            let Some(owner) = shared.scoreboard_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let query = req.uri().query().is_some();
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(feed), false, true) = (feed, query, body.is_empty()) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match owner.answer(&feed).await {
+                Ok((bytes, etag)) => {
+                    crate::view_reply::respond_tagged("scoreboard", 1, bytes, &etag)
+                }
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        // R4: the owned Status snapshots the front door forwards as the fed generations
+        // (and its fallback composer reads when the service declines).
+        Handler::StatusInputs => {
+            let Some(owner) = shared.status_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            match shared
+                .limits
+                .blocking(row.pool, move || Ok(owner.inputs()))
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        // G16b: one forwarded send, recorded by the service's answer store.
+        Handler::StatusAnswers => {
+            let Some(owner) = shared.answers_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            let query = req.uri().query().is_some();
+            let Ok(bytes) = to_bytes(req.into_body(), crate::answers_owned::SEND_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if query {
+                return decline(row.handler, Decline::Shape);
+            }
+            match owner.submit(&bytes).await {
+                Ok(value) => Json(value).into_response(),
+                Err("shape") => decline(row.handler, Decline::Shape),
+                // Started and failed: not a decline (the front door must not record it again).
+                Err(_) => store_error("answers_failed: the answer store could not finish"),
+            }
+        }
+        // R4: the owned Scoreboard input the front door computes the facts over.
+        Handler::ScoreboardInputs => {
+            let Some(owner) = shared.scoreboard_owned.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            match owner.inputs().await {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        // G18: one pushed analytics sample; accept spawns the parse and publish onto its own
+        // blocking task and replies at once, so neither holds a read permit.
+        Handler::UsageSample => {
+            let Ok(bytes) =
+                to_bytes(req.into_body(), crate::usage_snapshot::USAGE_SAMPLE_CAP).await
+            else {
+                return decline(row.handler, Decline::Shape);
+            };
+            match shared.usage.accept(bytes) {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
+        Handler::ClaudeOpen => {
+            let Some(open) = shared.claude_open.as_ref() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-aac-decline", "unsupported")],
+                    Json(json!({"error": "Claude Open jobs are unbound"})),
+                )
+                    .into_response();
+            };
+            if req.uri().query().is_some_and(|query| !query.is_empty()) {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let Ok(map) = crate::json_object::from_slice::<
+                serde_json::Map<String, serde_json::Value>,
+            >(&bytes, &["id", "platform", "respondAsync"]) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(id), Some(platform), Some(respond_async)) = (
+                map.get("id").and_then(serde_json::Value::as_str),
+                map.get("platform").and_then(serde_json::Value::as_str),
+                map.get("respondAsync").and_then(serde_json::Value::as_bool),
+            ) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if !crate::claude_open::manifest::profile_id_pattern(id)
+                || !matches!(platform, "mac" | "windows")
+            {
+                return decline(row.handler, Decline::Shape);
+            }
+            let reply = open.open(id, platform, respond_async).await;
+            (
+                StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                Json(reply.body),
+            )
+                .into_response()
+        }
+        Handler::ClaudeHistoryCleanup => {
+            let Some(open) = shared.claude_open.as_ref() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-aac-decline", "unsupported")],
+                    Json(json!({"error": "Claude Open jobs are unbound"})),
+                )
+                    .into_response();
+            };
+            if req.uri().query().is_some_and(|query| !query.is_empty()) {
+                return decline(row.handler, Decline::Shape);
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), 4096).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            if crate::json_object::from_slice::<serde_json::Map<String, serde_json::Value>>(
+                &bytes,
+                &[],
+            )
+            .is_err()
+            {
+                return decline(row.handler, Decline::Shape);
+            }
+            let reply = open.cleanup().await;
+            (
+                StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                Json(reply.body),
+            )
+                .into_response()
+        }
         read => {
             let path = req.uri().path().to_owned();
             let query = req.uri().query().is_some();
@@ -535,31 +1175,72 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 return decline(read, Decline::Shape);
             };
             let root = shared.boot.ccs_dir.clone();
+            let store = shared.store.clone();
+            let profiles_path = path.clone();
+            let profiles_root = root.clone();
             match shared
                 .limits
                 .blocking(row.pool, move || {
+                    // R5/A2: the owned Analytics envelope reads the hosted store itself.
+                    if path == "/api/accounts/analytics"
+                        && let Some(answer) =
+                            crate::account_reads::owned_analytics(store.as_ref(), &bytes)
+                    {
+                        return answer;
+                    }
                     crate::read_routes::answer(read, &path, query, &root, &bytes)
                 })
                 .await
             {
-                Ok(value) => Json(value).into_response(),
+                Ok(value) => {
+                    // G13: a bound Open owner adds each Open's progress to the manifest rows,
+                    // exactly as the TS composition adds its own store's progress.
+                    let value = if read == Handler::Profiles
+                        && profiles_path == "/api/claude/desktop-profiles"
+                    {
+                        match shared.claude_open.as_ref() {
+                            Some(open) => crate::claude_open::open::with_open_operations(
+                                value,
+                                open,
+                                &profiles_root,
+                            ),
+                            None => value,
+                        }
+                    } else {
+                        value
+                    };
+                    Json(value).into_response()
+                }
                 Err(reason) => decline(read, reason),
             }
         }
     }
 }
 
-fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
+pub(crate) fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
     let (file, policy) =
         crate::registered::file(root, "account-refresh-settings").ok_or(Decline::Unsupported)?;
     let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
         return Err(Decline::Unsupported);
     };
+    parse_settings(&bytes)
+}
+
+fn invalid_settings(capture: bool) -> Response {
+    let body = if capture {
+        json!({"error": r#"Send {"cwd": true} or {"cwd": false}."#, "code": "invalid_body"})
+    } else {
+        json!({"error":"Choose a whole number of seconds from 30 to 3600."})
+    };
+    (StatusCode::BAD_REQUEST, Json(body)).into_response()
+}
+
+fn parse_settings(bytes: &[u8]) -> Result<AccountRefreshSettings, Decline> {
     // Require the raw object and exact unique keys before the strict integer DTO parse.
     // Original bytes are retained: no Value normalization or positional struct decoding.
     // These small integers are exact in JS; every other input delegates to the TS owner.
     let value: AccountRefreshSettings =
-        crate::json_object::from_slice(&bytes, &["refreshIntervalSeconds"])
+        crate::json_object::from_slice(bytes, &["refreshIntervalSeconds"])
             .map_err(|_| Decline::Shape)?;
     if (30..=3600).contains(&value.refresh_interval_seconds) {
         Ok(value)
@@ -594,7 +1275,144 @@ pub async fn serve(
     boot: Boot,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        false,
+        Default::default(),
+        None,
+        configured_claude_open_package(),
+    )
+    .await
+}
+
+/// Serve the private routes with an app-update job owner supplied by the service binary.
+pub async fn serve_with_app_update_jobs(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    jobs: Arc<dyn AppUpdateJobs>,
+) -> io::Result<()> {
+    serve_inner(
+        boot,
+        shutdown,
+        Some(jobs),
+        false,
+        Default::default(),
+        None,
+        None,
+    )
+    .await
+}
+
+/// Same private protocol, with the native app-update owner using this boot's agent pool.
+pub async fn serve_composed(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        true,
+        Default::default(),
+        None,
+        configured_claude_open_package(),
+    )
+    .await
+}
+
+/// Run the private service with a shared dashboard cache.
+pub async fn serve_with_account_usage_cache(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    cache: crate::account_usage::AccountUsageCache,
+) -> io::Result<()> {
+    serve_inner(boot, shutdown, None, false, cache, None, None).await
+}
+
+/// Native owner callbacks share the dashboard with the public listener, hub and store.
+pub struct NativeAccountUsage {
+    /// Read the current facts published by the adjacent Rust owners.
+    pub companions: Arc<dyn Fn() -> crate::account_usage::producer::CompanionInputs + Send + Sync>,
+    /// Observe each completed cache generation, for example in the usage hub.
+    pub published: Arc<dyn Fn(&crate::account_usage::AccountUsageCache) + Send + Sync>,
+}
+
+impl Default for NativeAccountUsage {
+    fn default() -> Self {
+        Self {
+            companions: Arc::new(crate::account_usage::producer::CompanionInputs::default),
+            published: Arc::new(|_| {}),
+        }
+    }
+}
+
+/// Start the private binary with the native producer.
+/// Boot account collection with the private server's L5 pool and the public listener's cache.
+pub async fn serve_with_native_account_usage(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    cache: crate::account_usage::AccountUsageCache,
+    native: NativeAccountUsage,
+) -> io::Result<()> {
+    let app_updates = std::env::var("AAC_RUST_NATIVE_APP_UPDATES").as_deref() == Ok("1");
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        app_updates,
+        cache,
+        Some(native),
+        configured_claude_open_package(),
+    )
+    .await
+}
+
+/// Serve with the G13 Claude Open job owner bound: the package root supplies the pinned
+/// reference helpers, and the owner shares the service's own L5 pool.
+pub async fn serve_with_claude_open(
+    boot: Boot,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    package_root: PathBuf,
+) -> io::Result<()> {
+    serve_inner(
+        boot,
+        shutdown,
+        None,
+        false,
+        Default::default(),
+        None,
+        Some(package_root),
+    )
+    .await
+}
+
+fn configured_claude_open_package() -> Option<PathBuf> {
+    (std::env::var("AAC_RUST_GROUP_CLAUDE_OPEN").as_deref() == Ok("on"))
+        .then(crate::agent_transport::package_root)
+        .flatten()
+}
+
+async fn serve_inner(
+    boot: Boot,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    app_update_jobs: Option<Arc<dyn AppUpdateJobs>>,
+    native_app_updates: bool,
+    cache: crate::account_usage::AccountUsageCache,
+    native: Option<NativeAccountUsage>,
+    claude_open_package: Option<PathBuf>,
+) -> io::Result<()> {
     boot.validate()?;
+    let owners = boot.owners()?;
+    if native.is_some()
+        && owners.owner(crate::collection_cache::OBSERVATIONS) != Some(registry::Role::RustService)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "native collection requires its registry owner",
+        ));
+    }
     let rows = crate::table::rows(crate::table::ROUTES)?;
     let identity = Identity::current()?;
     let listener = StdListener::bind(&boot.socket_path)?;
@@ -614,14 +1432,117 @@ pub async fn serve(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
+    let feeds = cache.feeds.clone();
+    let app_update_jobs = app_update_jobs.or_else(|| {
+        native_app_updates.then(|| {
+            let jobs = crate::app_updates::AppUpdates::with_pool(
+                boot.ccs_dir.clone(),
+                agents.clone(),
+                Some(feeds.clone()),
+            );
+            Arc::new(crate::app_update_routes::LaneHJobs(jobs)) as Arc<dyn AppUpdateJobs>
+        })
+    });
     let store = boot.store.clone().map(crate::store_host::StoreHost::new);
+    let collection = Arc::new(crate::collection::Collection::default());
+    // R4: the owned readers run under the store host, with the boot's share roots and the
+    // registry writers TS resolved at start.
+    // One readers-check writer for both owners (one file per writer carries the status
+    // scan's rows and the runs rows), and one flush in flight.
+    let check = Arc::new(std::sync::Mutex::new(
+        aac_status::share::check::ReadersCheckWriter::new(
+            boot.owned
+                .as_ref()
+                .map(|owned| owned.reports_root.clone())
+                .unwrap_or_default(),
+        ),
+    ));
+    let check_flushing = Arc::new(AtomicBool::new(false));
+    let status_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(host)) if owned.status => Some(crate::status_owned::StatusOwned::new(
+            owned.reports_root.clone(),
+            owned.registry_dir.clone(),
+            Arc::clone(host),
+            feeds.clone(),
+            owners.clone(),
+            Arc::clone(&check),
+            Arc::clone(&check_flushing),
+        )),
+        _ => None,
+    };
+    let scoreboard_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(host)) if owned.scoreboard => {
+            Some(crate::scoreboard_owned::ScoreboardOwned::new(
+                owned.reports_root.clone(),
+                Arc::clone(host),
+                feeds.clone(),
+                Arc::clone(&check),
+                owners.clone(),
+                Arc::clone(&check_flushing),
+            ))
+        }
+        _ => None,
+    };
+    // G16b: the answer store moves with the owned Status group.
+    let answers_owned = match (&boot.owned, &store) {
+        (Some(owned), Some(_)) if owned.status => Some(crate::answers_owned::AnswersOwned::new(
+            boot.ccs_dir.clone(),
+            owned.reports_root.clone(),
+        )),
+        _ => None,
+    };
+    let owned_reports_root = boot.owned.as_ref().map(|owned| owned.reports_root.clone());
+    let renewal = boot.renewal.clone();
+    let ccs_dir = boot.ccs_dir.clone();
+    let cursor = Arc::<crate::account_usage::cursor::Reader>::default();
+    let producer = native.as_ref().map(|_| {
+        crate::account_usage::producer::Producer::shared(
+            boot.ccs_dir.clone(),
+            owners.clone(),
+            agents.clone(),
+            collection.clone(),
+            cursor.clone(),
+        )
+    });
+    let package_root = crate::agent_transport::package_root();
+    let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(
+        boot.ccs_dir.clone(),
+        package_root.clone().unwrap_or_else(|| boot.ccs_dir.clone()),
+    ));
+    let claude_open = claude_open_package.map(|package| {
+        let remote = Arc::new(crate::claude_open::remote::AgentRemote::new(
+            Arc::clone(&agents),
+            package,
+        ));
+        let ccs_dir = boot.ccs_dir.clone();
+        Arc::new(crate::claude_open::open::ClaudeOpen::new(
+            ccs_dir.clone(),
+            remote,
+            Box::new(move || crate::claude_open::open::snapshot_cleanup_auto(&ccs_dir)),
+        ))
+    });
     let state = AppState(Arc::new(Shared {
+        owners,
+        cache_writes: Arc::default(),
         boot,
         limits: Limits::new(),
         identity,
-        feeds: Feeds::new(),
-        agents,
+        feeds,
+        approvals: crate::account_approvals::Approvals::default(),
+        reset_claims: crate::reset_claims::ResetClaims::default(),
+        app_update_jobs: app_update_jobs.map(BoundJobs::new),
+        producer: Arc::new(crate::home_producer::HomeProducer::default()),
+        account_usage: cache.clone(),
+        native_usage: native.is_some(),
+        agents: agents.clone(),
+        collection: collection.clone(),
+        cursor,
         store: store.clone(),
+        status_owned: status_owned.clone(),
+        scoreboard_owned: scoreboard_owned.clone(),
+        usage,
+        claude_open,
+        answers_owned: answers_owned.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -631,6 +1552,8 @@ pub async fn serve(
             MethodFilter::POST
         } else if row.method == axum::http::Method::PUT {
             MethodFilter::PUT
+        } else if row.method == axum::http::Method::PATCH {
+            MethodFilter::PATCH
         } else {
             MethodFilter::GET
         };
@@ -649,31 +1572,168 @@ pub async fn serve(
         router = router.route(&path, method_router);
     }
     // Global layer protects even unknown routes and unsupported methods.
+    // G14: the Analytics writers read the fed inputs and the boot's root beside the service.
+    let writers_feeds = state.0.feeds.clone();
+    let writers_ccs = state.0.boot.ccs_dir.clone();
     let router = router
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
-        .with_state(state);
+        .with_state(state.clone());
     tracing::info!(target: "aac_http", "private service ready");
+    // G20: only a build that is actually serving becomes the one installers must keep.
+    let running_build = package_root
+        .as_deref()
+        .and_then(aac_files::deployed_build::read_packaged_build);
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    let record_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let unrecorded = aac_files::deployed_build::record_running_build(
+        &ccs_dir,
+        running_build.as_ref(),
+        std::env::var("CCS_DIR").ok().as_deref(),
+        std::env::var("CCS_HOME").ok().as_deref(),
+        &home,
+        record_now,
+    );
+    if unrecorded > 0 {
+        tracing::warn!(target: "aac_http", event = "web.deployed_build.unrecorded", "Running build could not be recorded");
+    }
     // R3: the hosted store opens beside the HTTP service (its calls wait for the open),
     // its jobs run on TS's cadence, and the engine closes cleanly when the service ends.
     let jobs_stop = Arc::new(AtomicBool::new(false));
+    let (jobs_stop_tx, jobs_stop_rx) = tokio::sync::watch::channel(false);
+    // G10: the hosted renewal timer runs on the TS cadence (first cycle 3-5 minutes,
+    // then 6 hours +/- 30 minutes, sooner for a backoff or busy retry). The TS service
+    // defers while this boot owns it; the stop flag ends the loop when the service ends.
+    let renewal_task = renewal.map(|renewal| {
+        let service = aac_renewal::service::CodexProfileRenewalService::new(
+            aac_renewal::service::CodexProfileRenewalServiceDeps {
+                ccs_dir: ccs_dir.clone(),
+                renewal: aac_renewal::renewal::CodexProfileRenewalOptions {
+                    env: aac_renewal::planner::CodexRenewalEnvironment {
+                        ccs_dir,
+                        codex_home: Some(renewal.codex_home),
+                        home_dir: Some(renewal.home_dir),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        tokio::spawn(async move { service.run_until(jobs_stop_rx).await })
+    });
     if let Some(host) = &store {
         let opener = Arc::clone(host);
         tokio::task::spawn_blocking(move || opener.open_at_boot());
         let jobs = Arc::clone(host);
         let stop = Arc::clone(&jobs_stop);
         tokio::spawn(async move { store_jobs(jobs, stop).await });
+        // G14: the quota sampler and activity scheduler run when the front door feeds them on.
+        let writers_host = Arc::clone(host);
+        let writers_stop = Arc::clone(&jobs_stop);
+        let writers_agents = Arc::clone(&agents);
+        tokio::spawn(async move {
+            crate::analytics_writers::analytics_jobs(
+                writers_host,
+                writers_feeds,
+                writers_agents,
+                writers_ccs,
+                writers_stop,
+            )
+            .await
+        });
     }
-    let served = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
+    // R4: the owned readers' jobs, and the catalog seed before the first ingest pass.
+    if let Some(owner) = &status_owned {
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::status_owned::jobs(jobs, stop).await });
+    }
+    if let Some(owner) = &answers_owned {
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::answers_owned::jobs(jobs, stop).await });
+    }
+    if let Some(owner) = &scoreboard_owned {
+        let seeder = Arc::clone(owner);
+        let root = owned_reports_root.clone().expect("scoreboard owner");
+        let _ = tokio::task::spawn_blocking(move || {
+            let mut failures = Vec::new();
+            aac_status::share::seed::seed_catalog(
+                &root,
+                &|name| aac_status::share::seed::embedded_seed(name).map(|bytes| bytes.to_vec()),
+                &mut failures,
+            );
+            seeder.set_seed_failures(
+                failures
+                    .iter()
+                    .map(|failure| json!({"file": failure.file, "code": failure.code}))
+                    .collect(),
+            );
+        })
         .await;
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::scoreboard_owned::ingest_jobs(jobs, stop).await });
+        let jobs = Arc::clone(owner);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { crate::scoreboard_owned::catalog_jobs(jobs, stop).await });
+    }
+    let cancel = aac_transport::CancellationToken::new();
+    let task = producer.zip(native).map(|(producer, native)| {
+        let stop = cancel.clone();
+        let store = store.clone();
+        tokio::spawn(async move {
+            producer
+                .run(
+                    cache,
+                    stop,
+                    || (native.companions)(),
+                    |cache| {
+                        (native.published)(&cache);
+                        let store = store.clone();
+                        async move {
+                            if let Some(store) = store {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    store.record_native_account_usage(&cache)
+                                })
+                                .await;
+                            }
+                        }
+                    },
+                )
+                .await;
+        })
+    });
+    let stopping = cancel.clone();
+    let served = axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            stopping.cancel();
+            collection.stop();
+        })
+        .await;
+    cancel.cancel();
+    if let Some(task) = task {
+        let _ = task.await;
+    }
     jobs_stop.store(true, Ordering::Release);
+    let _ = jobs_stop_tx.send(true);
+    if let Some(owner) = answers_owned {
+        let _ = tokio::task::spawn_blocking(move || owner.close()).await;
+    }
     if let Some(host) = store {
         let _ = tokio::task::spawn_blocking(move || host.close_engine()).await;
+    }
+    if let Some(task) = renewal_task {
+        let _ = task.await;
     }
     served
 }
 
-/// R3: the store jobs loop — the first pass minutes after start, then every 15 minutes,
+/// R3: the store jobs loop â€” the first pass minutes after start, then every 15 minutes,
 /// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
 /// when the service ends.
 async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBool>) {

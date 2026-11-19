@@ -98,6 +98,14 @@ server's own `GET /api/status` is answered from fed generations. `status end to 
 check without stubs) then requires the bridge's `/api/status` counters to show fed answers and no decline; with the
 switch off it requires none. Without it the group is explicitly off.
 
+**Status and Scoreboard owned (R4, opt-in).** `--set rustOwned=1` implies `rustStatusFed=1` and also starts the
+server with `AAC_RUST_STORE=on` and `AAC_RUST_GROUP_SCOREBOARD=on`: the Rust service reads the kit's fixture reports
+folder itself (owned Status readers, the runs ingest into the hosted store, readers-check rows written into that
+temporary folder) and answers `/api/status` and `/api/scoreboard`. `scoreboard end to end on the server` (no stubs)
+then requires the bridge's `/api/scoreboard` counters to show owned answers and no decline but a race; with the switch
+off it requires none. Build `dist/native/aac-http` and both native modules from the same commit (the boot's schema
+guard refuses a mix).
+
 ## Recording, machines and parallel runs
 
 - **Parallel runs:** each gets its own browser, temporary home and reserved port. Use a worktree per candidate or `--set repo=<tree>`: rebuilding `dist/` during a run breaks that run. `--set port=N` fixes the port, so don't use it in parallel.

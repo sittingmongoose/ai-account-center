@@ -17,23 +17,62 @@ import type { QuotaManagementConfig } from './quota';
 import { DEFAULT_QUOTA_MANAGEMENT_CONFIG } from './quota';
 import { UNIFIED_CONFIG_VERSION } from './version';
 export interface UnifiedConfig {
-  /** Read-only Rust agent verbs; absent and invalid values stay off. */
-  agentVerbs?: 'off' | 'on';
-  /** Existing agents only. Shipping remains disabled pending M3D4 and M3D5. */
+  /** Rust agent verbs ceiling; absent and invalid values stay off. `shadow` serves the reference
+   * answer and compares the agent alongside (DESIGN 4.5). */
+  agentVerbs?: 'off' | 'shadow' | 'on';
+  /** Per-family modes under the agentVerbs ceiling; an absent map keeps the ceiling for every
+   * verb, a present map turns on only its listed families. Invalid maps stay empty (all off). */
+  agentVerbFamilies?: Partial<
+    Record<
+      | 'inventory'
+      | 'signin-expiry'
+      | 'quota-read'
+      | 'scan-usage'
+      | 't3-pins'
+      | 'key-store'
+      | 'claude-history'
+      | 'failover-inventory'
+      | 'launch'
+      | 'claude-host'
+      | 'signin-session',
+      'off' | 'shadow' | 'on'
+    >
+  >;
+  /** Existing agents only: the lead's install script places the hash-pinned binary (M3D4 staged,
+   * M3D5 pinned). The service never uploads an agent itself. */
   agentTransport?: 'off' | 'on';
   /** Explicit existing identity and pinned host-key source; neither is created or edited. */
   agentTransportSsh?: { identityFile?: string; knownHostsFile?: string };
   /**
    * The private Rust service (M3, L1); `AAC_RUST_SERVICE` overrides. Absent and invalid stay off. `groups.home`
-   * (R1, `AAC_RUST_GROUP_HOME` overrides): Home is built from fed generations when the mode is on; `groups.status`
-   * (R2, `AAC_RUST_GROUP_STATUS` overrides): the same for Status. `store` (R3, `AAC_RUST_STORE` overrides)
+   * (R1, `AAC_RUST_GROUP_HOME` overrides): Home is built from fed generations when the mode is on (default-ready when unset); `groups.status`
+   * (R2, `AAC_RUST_GROUP_STATUS` overrides): the same for Status; `groups.analytics` (R5/A2,
+   * `AAC_RUST_GROUP_ANALYTICS` overrides): Analytics history and activity are read from the hosted store and
+   * composed in Rust, with the TS computation as the fallback. `store` (R3, `AAC_RUST_STORE` overrides)
    * hosts the history store when the mode is on. Off keeps the in-process store; exhausting the restart
-   * budget automatically falls back to it on the same files.
+   * budget automatically falls back to it on the same files. `homeProducer` (G17, `AAC_RUST_HOME_PRODUCER`
+   * overrides): the Rust service produces the Home feed generations from the raw inputs; off by default
+   * until the collection feeds it, and the TS producer stays available until the cut.
+   * G18 runs the usage share writer in Rust when the usageSnapshot group is on.
    */
   rustService?: {
+    frontDoor?: 'ts' | 'rust';
     mode?: 'off' | 'shadow' | 'on';
-    groups?: { home?: 'off' | 'on'; status?: 'off' | 'on' };
+    groups?: {
+      home?: 'off' | 'on';
+      status?: 'off' | 'on';
+      scoreboard?: 'off' | 'on';
+      analytics?: 'off' | 'on';
+      'analytics-writers'?: 'off' | 'on';
+      collection?: 'off' | 'on';
+      writes?: 'off' | 'on';
+      'app-updates'?: 'off' | 'on';
+      renewal?: 'off' | 'on';
+      usageSnapshot?: 'off' | 'on';
+      'claude-open'?: 'off' | 'on';
+    };
     store?: 'off' | 'on';
+    homeProducer?: 'off' | 'on';
   };
   /** Config version */
   version: number;

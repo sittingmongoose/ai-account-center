@@ -17,6 +17,8 @@ import { createHash, randomBytes, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
+import { RegisteredWriteUnclearError } from '../../shared/private-file-lease';
+import { commitRegisteredFile, withTsPrivateFileLeases } from '../../shared/private-files';
 import { DeadlineExceededError, withDeadline } from '../../utils/settle-deadline';
 import { cardRowVersion, cardVersion, closingCardVersions, type CardRow } from './answered-cards';
 import { agentReportsRoot } from './agent-reports-reader';
@@ -50,7 +52,13 @@ import {
   readAnswerPublicKey,
   signAnswer,
   signDocument,
+  answerKeyInfoNative,
+  signAnswerNative,
+  signDocumentNative,
+  verifySignedDocumentNative,
   type AnswerKey,
+  type AnswerSignature,
+  type AnswerCheck,
   type SignedAnswer,
   type UnsignedAnswer,
   canonicalJson,
@@ -82,6 +90,19 @@ export {
   type Doorbell,
   type RingResult,
 } from './answer-delivery';
+
+/**
+ * G16b: the note's secret finding for one raw entry, as `recordEntry` computes it (the one TS secret
+ * filter): what the front door hands the Rust answer store with a forwarded send. Null when the entry
+ * does not parse, its note is not acceptable or empty, or nothing was found.
+ */
+export function noteSecretOf(raw: unknown): string | null {
+  const entry = parseAnswerEntry(raw);
+  if (!entry) return null;
+  const note = normalizeNote(entry.note);
+  if (!note) return null;
+  return findSecretIn(note, note) ?? findTypedSecret(note) ?? null;
+}
 
 /** Retries of a failed share write, summary or ring before the history says it gave up. */
 export const MAX_DELIVERY_ATTEMPTS = 20;
@@ -160,7 +181,7 @@ class AppendUnclearError extends ConfigError {
 
 /** Appends one `void` line cancelling `line` and syncs it. Throws if the disk refuses either. */
 function appendVoid(fd: number, line: string, file: string): void {
-  const cancel = Buffer.from(`\n${JSON.stringify({ type: 'void', line })}\n`);
+  const cancel = Buffer.from(answerRecord({ type: 'void' }, line));
   for (let done = 0; done < cancel.length;) {
     const taken = fs.writeSync(fd, cancel, done, cancel.length - done);
     if (taken <= 0) throw new ConfigError('The answer store took no part of a void line.', file);
@@ -171,6 +192,13 @@ function appendVoid(fd: number, line: string, file: string): void {
 
 /** Opens the store, appends one void line for `line` and closes it; throws if it did not land. */
 function appendVoidLine(file: string, line: string): void {
+  withAnswerLease(file, (root) => {
+    const cancel = answerRecord({ type: 'void' }, line);
+    if (!commitRegisteredFile(file, root, cancel)) appendLegacyVoid(file, line);
+  });
+}
+
+function appendLegacyVoid(file: string, line: string): void {
   const fd = fs.openSync(file, 'a+', 0o600);
   try {
     appendVoid(fd, line, file);
@@ -372,13 +400,33 @@ async function keepPublishedSummary(
  * holds it as voided and writes the void again later (StatusAnswers.unvoided).
  */
 function appendLine(file: string, record: Record<string, unknown>): void {
+  const line = randomBytes(8).toString('hex');
+  const data = answerRecord(record, line);
+  withAnswerLease(file, (root) => {
+    try {
+      if (commitRegisteredFile(file, root, data)) return;
+    } catch (error) {
+      if (error instanceof RegisteredWriteUnclearError) throw new AppendUnclearError(line, file);
+      throw error;
+    }
+    appendLegacyLine(file, line, Buffer.from(data));
+  });
+}
+
+function answerRecord(record: Record<string, unknown>, line: string): string {
+  return `\n${JSON.stringify({ ...record, line })}\n`;
+}
+
+function withAnswerLease(file: string, append: (root: string) => void): void {
+  const root = path.dirname(path.dirname(file));
+  if (path.basename(path.dirname(file)) !== 'status') return append(root);
+  withTsPrivateFileLeases(root, ['status-answer-log'], () => append(root), true);
+}
+
+function appendLegacyLine(file: string, line: string, data: Buffer): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const fd = fs.openSync(file, 'a+', 0o600);
   try {
-    // Every record starts on a line of its own: a torn line (a crash, or another writer's failed part) can never
-    // swallow it. Blank lines are skipped on load.
-    const line = randomBytes(8).toString('hex');
-    const data = Buffer.from(`\n${JSON.stringify({ ...record, line })}\n`);
     let written = 0;
     try {
       // One write, taken whole or refused: a second part could land after another writer's line and split this one,
@@ -683,6 +731,11 @@ export class StatusAnswers {
     const next = this.queue.then(work, work);
     this.queue = next.catch(() => undefined);
     return next;
+  }
+
+  /** G16b: whether this instance holds the store's writer lock (as of its last confirmation). */
+  holdsStore(): boolean {
+    return this.owner;
   }
 
   /** Every record in the private store, oldest first (folded with its delivery steps). */
@@ -1251,6 +1304,36 @@ export class StatusAnswers {
     return this.key;
   }
 
+  /** R4: the key's public facts from the Rust signer, with the TypeScript key as fallback. */
+  private async answerKeyInfo(): Promise<{ publicKeyPem: string; keyId: string }> {
+    const info = (await answerKeyInfoNative(this.storeDir())) ?? this.answerKey();
+    this.knownKeyId = info.keyId;
+    return info;
+  }
+
+  /** The key id last read: every ring follows its record's share write, which read it. */
+  private knownKeyId: string | null = null;
+
+  private async signAnswerWith(unsigned: UnsignedAnswer): Promise<SignedAnswer> {
+    return (
+      (await signAnswerNative(unsigned, this.storeDir())) ?? signAnswer(unsigned, this.answerKey())
+    );
+  }
+
+  private async signDocumentWith<T extends object>(
+    doc: T
+  ): Promise<T & { signature: AnswerSignature }> {
+    return (await signDocumentNative(doc, this.storeDir())) ?? signDocument(doc, this.answerKey());
+  }
+
+  private async verifyAnswerBytes(bytes: Buffer): Promise<AnswerCheck> {
+    const info = await this.answerKeyInfo();
+    const native = await verifySignedDocumentNative(bytes, info.publicKeyPem, ANSWER_SCHEMA);
+    // The Rust checker returns the same parsed answer document the TypeScript checker does.
+    if (native) return native as AnswerCheck;
+    return verifySignedAnswer(bytes, info.publicKeyPem);
+  }
+
   private record(line: Record<string, unknown>): boolean {
     try {
       this.writer();
@@ -1378,7 +1461,7 @@ export class StatusAnswers {
           .catch(() => null);
         check();
         if (!stat?.isDirectory()) throw new ShareUnavailableError();
-        const key = this.answerKey();
+        const key = await this.answerKeyInfo();
         // Verifiers try keys/<keyId>.pub first, so a rotation keeps old answers checkable.
         for (const file of [
           path.join(v1, 'keys', 'aac-answers.pub'),
@@ -1442,7 +1525,7 @@ export class StatusAnswers {
       if (['ENOENT', 'ENOTREG', 'ELOOP', 'EACCES', 'EPERM'].includes(code ?? '')) return;
       throw error;
     }
-    const held = verifySignedAnswer(bytes, this.answerKey().publicKeyPem);
+    const held = await this.verifyAnswerBytes(bytes);
     // Only this server's own closing answer to this same card blocks: a signed file copied from another card (the
     // share's answers folder is writable by every writer) or an objection is no newer answer to this one.
     if (
@@ -1531,8 +1614,9 @@ export class StatusAnswers {
     let detail = 'Signed send summary written to the share.';
     try {
       const unsigned = sendSummary(send.sendId, send.at, send.device, answers);
-      const key = this.answerKey();
-      const body = `${JSON.stringify(signDocument(unsigned, key), null, 2)}\n`;
+      const key = await this.answerKeyInfo();
+      const signed = await this.signDocumentWith(unsigned);
+      const body = `${JSON.stringify(signed, null, 2)}\n`;
       await this.writeShareFile(`batches/${send.sendId}.json`, body, limitMs, undefined, (file) =>
         keepPublishedSummary(this.shareFs(), file, body, unsigned, key.publicKeyPem)
       );
@@ -1619,7 +1703,13 @@ export class StatusAnswers {
             (this.deps.doorbell ?? pmMailDoorbell())(
               group.to,
               ringSubject(records),
-              ringBody(group.sendId, records, this.answerKey().keyId),
+              // No await when the id is known (always, after the share write): an await here would let
+              // the send return before its ring goes out.
+              ringBody(
+                group.sendId,
+                records,
+                this.knownKeyId ?? (await this.answerKeyInfo()).keyId
+              ),
               Date.now() + this.timing.ringMs
             ),
             this.timing.ringMs,
@@ -1670,7 +1760,7 @@ export class StatusAnswers {
       entry = {
         id,
         sendId,
-        answer: signAnswer(unsigned, this.answerKey()),
+        answer: await this.signAnswerWith(unsigned),
         card: parsed.doc,
         share: { ...PENDING },
         doorbell: { ...PENDING },

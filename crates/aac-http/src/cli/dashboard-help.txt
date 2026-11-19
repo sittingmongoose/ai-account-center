@@ -1,0 +1,28 @@
+
+Usage: ai-account-center dashboard [command] [options]
+Compatibility: ccs config accepts the same arguments.
+
+Open the account and usage dashboard.
+
+Commands:
+  proxy status       Show whether the LAN HTTPS reverse proxy is trusted
+  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy
+  proxy off          Stop trusting the LAN HTTPS proxy
+  store status       Show the history store state and last backup
+  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)
+
+Managed in the dashboard's Settings page (the CLI points there):
+  dashboard sign-in (auth), the usage hub key, the usage snapshot folder, the Cursor key
+
+Options:
+  --port, -p PORT    Server port (default: auto-detect)
+  --host, -H HOST    Bind host (default: localhost)
+  --no-open         Start the server without opening a browser
+  --help, -h        Show this help message
+
+Linux service startup never opens a browser automatically.
+
+Examples:
+  ai-account-center dashboard --host localhost --port 3000 --no-open
+  ai-account-center dashboard store status
+

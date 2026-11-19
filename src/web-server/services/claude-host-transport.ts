@@ -9,6 +9,7 @@ import {
 } from './claude-account-stores';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
 import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
+import { runClaudeHostAgent } from './agent-verbs';
 
 /**
  * Host steps for Claude Add and Remove (CONTRACT-registry-lifecycle 6.2, 6.7,
@@ -50,7 +51,10 @@ export interface ClaudeHostTransport {
     input: ClaudeHostStep & { trashName: string }
   ): Promise<'moved' | 'cross_volume'>;
   restore(host: ClaudeHost, input: ClaudeHostStep & { trashName: string }): Promise<void>;
-  purge(host: ClaudeHost, input: { sshHost: string; trashName: string }): Promise<void>;
+  purge(
+    host: ClaudeHost,
+    input: { sshHost: string; trashName: string; token?: string }
+  ): Promise<void>;
 }
 
 export type ClaudeHostRunner = (sshHost: string, command: string, input: string) => Promise<string>;
@@ -271,12 +275,47 @@ export class SshClaudeHostTransport implements ClaudeHostTransport {
     request: Record<string, unknown>,
     windows: string
   ): Promise<Record<string, unknown>> {
+    // M4b: the agent verb does the host work when enabled; the fixed bootstrap below
+    // stays the labelled fallback. A purge without the TS-issued permit skips the agent.
+    const agent = await this.agentStep(host, sshHost, request);
+    if (agent !== null) return agent;
     if (host === 'mac') {
       const input = JSON.stringify({ program: MAC_HOST_PROGRAM, request });
       return reply(await this.run(sshHost, `/usr/bin/python3 -c "${MAC_BOOTSTRAP}"`, input));
     }
     const command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${WINDOWS_BOOTSTRAP}`;
     return reply(await this.run(sshHost, command, windows));
+  }
+
+  /** The flat reference request becomes the verb envelope; failures delegate (null). */
+  private async agentStep(
+    host: ClaudeHost,
+    sshHost: string,
+    request: Record<string, unknown>
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      if (request.op === 'purge' && typeof request.token !== 'string') return null;
+      const args: Record<string, unknown> = { op: request.op };
+      if (typeof request.profileId === 'string') args.profileId = request.profileId;
+      if (typeof request.trashName === 'string') args.trashName = request.trashName;
+      if (typeof request.token === 'string') args.token = request.token;
+      if (typeof request.profilePath === 'string' && typeof request.launcherName === 'string') {
+        args.launcher = {
+          launcherName: request.launcherName,
+          profilePath: request.profilePath,
+          sshHost,
+          ...(typeof request.launcherPath === 'string'
+            ? { launcherPath: request.launcherPath }
+            : {}),
+          ...(typeof request.startMenuPath === 'string'
+            ? { startMenuPath: request.startMenuPath }
+            : {}),
+        };
+      }
+      return await runClaudeHostAgent({ platform: host, sshHost }, args);
+    } catch {
+      return null;
+    }
   }
 
   async create(host: ClaudeHost, input: { profileId: string; sshHost: string }) {
@@ -355,11 +394,15 @@ export class SshClaudeHostTransport implements ClaudeHostTransport {
     );
   }
 
-  async purge(host: ClaudeHost, input: { sshHost: string; trashName: string }) {
+  async purge(host: ClaudeHost, input: { sshHost: string; trashName: string; token?: string }) {
     await this.step(
       host,
       input.sshHost,
-      { op: 'purge', trashName: input.trashName },
+      {
+        op: 'purge',
+        trashName: input.trashName,
+        ...(input.token === undefined ? {} : { token: input.token }),
+      },
       windowsHostScript('purge', { trashName: input.trashName })
     );
   }

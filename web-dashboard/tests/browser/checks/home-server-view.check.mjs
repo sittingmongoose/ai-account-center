@@ -12,6 +12,9 @@ import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 
 const NOW = Math.floor(Date.now() / 60_000) * 60_000;
 
+/** The config derives rustHome from rustHomeFed; the checks read the same implication, not the raw arg. */
+const rustHomeOn = (t) => !!(t.args.rustHome || t.args.rustHomeFed);
+
 /** The next answer of GET /api/views/home, with the context header the page sent. */
 function nextHomeView(t) {
 	return t.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/views/home', { timeout: 60000 }).then(async (r) => ({
@@ -72,7 +75,7 @@ export const tests = {
 		const dash = await (await get('/api/accounts/dashboard')).json();
 		const home = await get('/api/views/home', { 'X-AAC-Home-Context': 'x' });
 		const answer = { views: dash.server?.views ?? null, status: home.status, body: await home.json().catch(() => null) };
-		if (t.args.rustHome) {
+		if (rustHomeOn(t)) {
 			await t.check('on: the dashboard offers Home', JSON.stringify(answer.views) === '["home"]', JSON.stringify(answer.views));
 			// an unreadable context still answers the data, with no view: the page builds its own
 			await t.check('on: the route answers the data and view null for an unreadable context', answer.status === 200 && answer.body?.schemaVersion === 1 && answer.body.view === null, `${answer.status} ${JSON.stringify(answer.body)?.slice(0, 160)}`);
@@ -83,7 +86,7 @@ export const tests = {
 	},
 
 	async 'home server view: real wiring'(t) {
-		if (!t.args.rustHome) { await t.check('switch off: nothing to wire (run with --set rustHome=1)', true); return; }
+		if (!rustHomeOn(t)) { await t.check('switch off: nothing to wire (run with --set rustHome=1 or rustHomeFed=1)', true); return; }
 		await t.app.open({ page: 'home' });
 		// the first load learned the offer; a reload's first read asks the real front door, which asks the real Rust service
 		await t.until('the offer is remembered', () => localStorage.getItem('aac.homeServerView') === '1', null, { timeout: 30000, hard: true });
@@ -102,7 +105,7 @@ export const tests = {
 	},
 
 	async 'home server view: fixture, desktop and phone'(t) {
-		if (!t.args.rustHome) { await t.check('switch off: the kit builds no server view (run with --set rustHome=1)', true); return; }
+		if (!rustHomeOn(t)) { await t.check('switch off: the kit builds no server view (run with --set rustHome=1 or rustHomeFed=1)', true); return; }
 		for (const [label, size] of [['desktop 1440', { width: 1440, height: 900, mobile: false }], ['phone 390', { width: 390, height: 844, mobile: true }]]) {
 			const r = await homeIn(t, { ...size, offer: true });
 			await t.check(`${label}: the kit's Rust service built the view`, r?.status === 200 && r.body?.view?.version === 3, JSON.stringify(t.app.rustHome()), { hard: true });

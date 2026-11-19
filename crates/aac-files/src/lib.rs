@@ -10,9 +10,25 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+pub mod deployed_build;
+#[cfg(unix)]
+pub mod history_snapshots;
+#[cfg(unix)]
+pub mod key_sweep;
+#[cfg(unix)]
+pub mod lifecycle_queue;
+pub mod codex_identity;
+pub mod codex_registry;
 pub mod path;
+#[cfg(unix)]
+pub mod presence;
+#[cfg(unix)]
+pub mod profile_staging;
+#[cfg(unix)]
+pub mod profile_writes;
 pub mod read;
 pub mod registry;
+pub mod share;
 
 use read::{Read, ReadPolicy};
 
@@ -169,10 +185,104 @@ pub struct OwnedStore {
     path: PathBuf,
     max_size: usize,
     parents: Parents,
-    _lock: File,
+    /// The declared replacement mode (0644 for share rows, otherwise 0600).
+    mode: u32,
+    _lock: StoreLock,
+}
+
+#[derive(Debug)]
+enum StoreLock {
+    Kernel { _file: File },
+    Config { _guard: ConfigLock },
+}
+
+#[derive(Debug)]
+struct ConfigLock {
+    file: PathBuf,
+    claim: Vec<u8>,
+}
+
+impl ConfigLock {
+    fn take(parent: &Path) -> Result<Self, Failure> {
+        let file = parent.join("config.yaml.lock");
+        // The TypeScript config writer checks the PID and owner token in this exact format.
+        // Publish complete contents atomically, so it never mistakes a new claim for a stale one.
+        let mut pending = tempfile::Builder::new()
+            .prefix(".config-claim-")
+            .tempfile_in(parent)?;
+        set_private(pending.as_file())?;
+        let token = pending
+            .path()
+            .file_name()
+            .ok_or_else(|| Failure::new(Cause::Refused, "missing config claim name"))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Failure::new(Cause::Refused, "invalid config claim clock"))?
+            .as_millis();
+        let claim =
+            format!("{}\n{now}\n{}", std::process::id(), token.to_string_lossy()).into_bytes();
+        pending.as_file_mut().write_all(&claim)?;
+        pending.as_file().sync_all()?;
+        pending
+            .persist_noclobber(&file)
+            .map_err(|_| Failure::new(Cause::Busy, "config writer already active"))?;
+        Ok(Self { file, claim })
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        if read_bounded(&self.file, 1024).is_ok_and(|bytes| bytes == self.claim) {
+            let _ = fs::remove_file(&self.file);
+        }
+    }
+}
+
+/// Outcome of a failed Status journal append.
+#[cfg(unix)]
+#[derive(Debug)]
+pub enum AnswerAppendError {
+    /// No record was written or its compensating void is durable.
+    Refused,
+    /// A record may have reached disk without a durable void.
+    Unclear,
 }
 
 impl OwnedStore {
+    /// Acquire the existing cross-language config writer lock for one read-modify-write.
+    /// A pre-existing claim is left for the TypeScript lock's existing recovery path.
+    pub fn claim_dashboard_config(root: &Path) -> Result<Self, Failure> {
+        require_absolute(root)?;
+        ensure_directory(root)?;
+        let path = root.join("config.yaml");
+        reject_special(&path, true)?;
+        Ok(Self {
+            path,
+            max_size: 4 * 1024 * 1024,
+            parents: Parents::Private,
+            mode: 0o600,
+            _lock: StoreLock::Config {
+                _guard: ConfigLock::take(root)?,
+            },
+        })
+    }
+
+    /// Remove a private store's leaf under its writer lease. A symlink is unlinked as a name,
+    /// never followed, and a directory is refused by the operating system.
+    pub fn remove(&self) -> Result<(), Failure> {
+        require_absolute(&self.path)?;
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| Failure::new(Cause::Refused, "missing store parent"))?;
+        folders(parent, self.parents)?;
+        match fs::remove_file(&self.path) {
+            Ok(()) => sync_directory(parent),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Make the row's folders under `root` by its rule, then take its lease.
     fn open(
         root: &Path,
@@ -215,8 +325,75 @@ impl OwnedStore {
             path: file,
             max_size,
             parents,
-            _lock: lock,
+            mode: 0o600,
+            _lock: StoreLock::Kernel { _file: lock },
         })
+    }
+
+    /// Accept a lease descriptor from the front door for a registered private file.
+    #[cfg(unix)]
+    fn inherit(
+        root: &Path,
+        row: &registry::Row,
+        name: Option<&str>,
+        lock: File,
+    ) -> Result<Self, Failure> {
+        use std::os::unix::fs::MetadataExt;
+
+        require_absolute(root)?;
+        let file = path::node::resolve(root, Path::new(&row.file(name)?))?;
+        let lock_path = match row.lease {
+            Lease::File => {
+                let mut lock_path = file.as_os_str().to_os_string();
+                lock_path.push(".lock");
+                PathBuf::from(lock_path)
+            }
+            Lease::Folder => file
+                .parent()
+                .ok_or_else(|| Failure::new(Cause::Refused, "missing store parent"))?
+                .to_path_buf(),
+        };
+        require_absolute(&lock_path)?;
+        let current = fs::symlink_metadata(lock_path)?;
+        let held = lock.metadata()?;
+        let same_kind = match row.lease {
+            Lease::File => current.is_file() && held.is_file(),
+            Lease::Folder => current.is_dir() && held.is_dir(),
+        };
+        if !same_kind
+            || held.uid() != path::uid()
+            || held.mode() & 0o077 != 0
+            || held.dev() != current.dev()
+            || held.ino() != current.ino()
+        {
+            return Err(Failure::new(Cause::Refused, "wrong store writer lease"));
+        }
+        FileExt::try_lock_exclusive(&lock)
+            .map_err(|_| Failure::new(Cause::Busy, "store writer already active"))?;
+        let max_size = usize::try_from(row.max_bytes)
+            .map_err(|_| Failure::new(Cause::Refused, "invalid byte cap"))?;
+        Ok(Self {
+            path: file,
+            max_size,
+            parents: row.parents,
+            mode: if row.mode == "0644" { 0o644 } else { 0o600 },
+            _lock: StoreLock::Kernel { _file: lock },
+        })
+    }
+
+    /// The store's resolved path. For a store with its own engine (the reset claims SQLite),
+    /// the lease is the one-writer proof and the engine opens this path itself.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The row's declared mode for the replacement (R4 share rows write 0644, as their TS
+    /// writer did). Only the registry's two modes are admitted; anything else keeps 0600.
+    pub fn with_mode(mut self, mode: u32) -> Self {
+        if mode == 0o644 {
+            self.mode = mode;
+        }
+        self
     }
 
     /// Read only a regular file and enforce the declared cap during streaming.
@@ -232,15 +409,239 @@ impl OwnedStore {
         self.write_with(|out| out.write_all(bytes))
     }
 
-    /// Stage bytes through a capped writer in a new 0600 file beside the target (`O_EXCL`, a
-    /// random `.<name>.<random>.tmp` name), fsync them, rename on the same filesystem, then
-    /// fsync the folder on Unix. Closure failure or unwinding removes the staging file.
-    /// A post-rename folder-sync failure is reported although the new file is visible.
+    /// Replace an owner-only cache, refusing hard links and loose existing modes.
+    #[cfg(unix)]
+    pub fn write_private_cache(&self, bytes: &[u8]) -> Result<(), Failure> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        let owner = fs::symlink_metadata(parent)?;
+        if !private_cache_metadata(&owner, true) {
+            return Err(Failure::new(
+                Cause::Refused,
+                "cache directory is not private",
+            ));
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(meta)
+                if private_cache_metadata(&meta, false) && meta.len() <= self.max_size as u64 => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            _ => return Err(Failure::new(Cause::Refused, "cache file is not private")),
+        }
+        self.write(bytes)
+    }
+
+    /// Clear a single owner-only cache while holding its writer lease.
+    #[cfg(unix)]
+    pub fn clear_private_cache(&self) -> Result<(), Failure> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        if !private_cache_metadata(&fs::symlink_metadata(parent)?, true) {
+            return Err(Failure::new(
+                Cause::Refused,
+                "cache directory is not private",
+            ));
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(meta)
+                if private_cache_metadata(&meta, false) && meta.len() <= self.max_size as u64 =>
+            {
+                fs::remove_file(&self.path)?;
+                sync_directory(parent)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            _ => Err(Failure::new(Cause::Refused, "cache file is not private")),
+        }
+    }
+
+    /// Keep at most `count` validated cache records, including the file just written.
+    /// The writer holds its folder lease. Unknown or changed entries are left in place.
+    #[cfg(unix)]
+    pub fn prune_private_cache(
+        &self,
+        count: usize,
+        matches_name: impl Fn(&str) -> bool,
+        matches_record: impl Fn(&str, &[u8]) -> bool,
+    ) {
+        use std::os::unix::fs::MetadataExt;
+        let Some(parent) = self.path.parent() else {
+            return;
+        };
+        let StoreLock::Kernel { _file: lock } = &self._lock else {
+            return;
+        };
+        let Ok(folder) = lock.metadata() else {
+            return;
+        };
+        let same = |a: &fs::Metadata, b: &fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+        let unchanged = || {
+            fs::symlink_metadata(parent)
+                .is_ok_and(|meta| private_cache_metadata(&meta, true) && same(&meta, &folder))
+        };
+        if count == 0 || !unchanged() {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(parent) else {
+            return;
+        };
+        let entries = entries.take(4097).collect::<Result<Vec<_>, _>>();
+        let Ok(entries) = entries else { return };
+        if entries.len() <= count || entries.len() > 4096 {
+            return;
+        }
+        let entries = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                matches_name(&name).then(|| (entry.path(), name))
+            })
+            .collect::<Vec<_>>();
+        if entries.len() <= count {
+            return;
+        }
+        let policy = ReadPolicy::capped(self.max_size as u64)
+            .mode(read::Mode::Private)
+            .owner(read::Owner::Mine);
+        let mut records = Vec::new();
+        for (path, name) in entries {
+            let Ok(stat) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !private_cache_metadata(&stat, false) {
+                continue;
+            }
+            let Read::Bytes(bytes, _) = read::read(&path, &policy) else {
+                continue;
+            };
+            if matches_record(&name, &bytes) {
+                records.push((path, stat));
+            }
+        }
+        records.sort_unstable_by(|(a, am), (b, bm)| {
+            (a == &self.path, am.modified().ok(), a).cmp(&(b == &self.path, bm.modified().ok(), b))
+        });
+        let excess = records.len().saturating_sub(count);
+        for (path, before) in records.into_iter().take(excess) {
+            if !unchanged() {
+                return;
+            }
+            if fs::symlink_metadata(&path).is_ok_and(|after| {
+                private_cache_metadata(&after, false)
+                    && same(&before, &after)
+                    && before.len() == after.len()
+                    && before.modified().ok() == after.modified().ok()
+            }) {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    /// Stage bytes through a capped writer in a new file beside the target (`O_EXCL`, a
+    /// random `.<name>.<random>.tmp` name) at the row's mode (0600, or 0644 for a share row),
+    /// fsync them, rename on the same filesystem, then fsync the folder on Unix. Closure
+    /// failure or unwinding removes the staging file. A post-rename folder-sync failure is
+    /// reported although the new file is visible.
     pub fn write_with(
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     ) -> Result<(), Failure> {
-        self.write_staged(write, &mut |_| Ok(()))
+        self.write_staged(write, &mut |_| Ok(()), false)
+    }
+
+    /// Replace a settings leaf without opening it. Renaming over a symlink replaces the
+    /// link itself. Parent and lease checks still apply, and a directory cannot be replaced.
+    /// As with the legacy settings writers, syncing the directory after rename is best effort.
+    pub fn replace_settings(&self, bytes: &[u8]) -> Result<(), Failure> {
+        self.write_staged(|out| out.write_all(bytes), &mut |_| Ok(()), true)
+    }
+
+    /// Append a Status journal record under the registry writer lease. The cap applies to
+    /// an individual record, since existing history stays in the append-only file.
+    #[cfg(unix)]
+    pub fn append_answer(&self, bytes: &[u8], cancel: &[u8]) -> Result<(), AnswerAppendError> {
+        use std::os::unix::fs::OpenOptionsExt;
+        if bytes.len() > self.max_size
+            || cancel.len() > self.max_size
+            || require_absolute(&self.path).is_err()
+            || reject_special(&self.path, true).is_err()
+        {
+            return Err(AnswerAppendError::Refused);
+        }
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&self.path)
+            .map_err(|_| AnswerAppendError::Refused)?;
+        if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+            return Err(AnswerAppendError::Refused);
+        }
+        // Each record starts with a newline, so a torn earlier write cannot swallow it.
+        match file.write(bytes) {
+            Ok(len) if len == bytes.len() && file.sync_all().is_ok() => Ok(()),
+            Ok(0) | Err(_) => Err(AnswerAppendError::Refused),
+            Ok(_)
+                if !cancel.is_empty()
+                    && file.write_all(cancel).is_ok()
+                    && file.sync_all().is_ok() =>
+            {
+                Err(AnswerAppendError::Refused)
+            }
+            Ok(_) => Err(AnswerAppendError::Unclear),
+        }
+    }
+
+    /// Confirm that a settings leaf is absent or can be replaced without following it.
+    pub fn can_replace_settings(&self) -> Result<(), Failure> {
+        if self.parents == Parents::Private {
+            require_absolute(&self.path)?;
+        }
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+            Ok(_) => Err(Failure::new(
+                Cause::Refused,
+                "settings leaf cannot be replaced",
+            )),
+        }
+    }
+
+    /// Remove this settings leaf without following it. An absent leaf is equivalent.
+    pub fn remove_settings(&self) -> Result<(), Failure> {
+        self.can_replace_settings()?;
+        match fs::remove_file(&self.path) {
+            Ok(()) => {
+                if let Some(parent) = self.path.parent() {
+                    let _ = sync_directory(parent);
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Remove legacy settings staging files beside this store after a successful replacement.
+    /// The writer lease is still held. Unlink never follows a symlink.
+    pub fn clean_settings_temporaries(&self) {
+        let Some((parent, name)) = self.path.parent().zip(self.path.file_name()) else {
+            return;
+        };
+        let prefix = format!("{}.", name.to_string_lossy());
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let entry_name = entry.file_name();
+                let text = entry_name.to_string_lossy();
+                if text.starts_with(&prefix) && text.ends_with(".tmp") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 
     /// [`OwnedStore::write_with`] with a hook after each step (the test seam for a write
@@ -249,10 +650,13 @@ impl OwnedStore {
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
         step: &mut dyn FnMut(Step) -> io::Result<()>,
+        replace_settings_leaf: bool,
     ) -> Result<(), Failure> {
         if self.parents == Parents::Private {
             require_absolute(&self.path)?;
-            reject_special(&self.path, true)?;
+            if !replace_settings_leaf {
+                reject_special(&self.path, true)?;
+            }
         }
         let parent = self
             .path
@@ -267,7 +671,7 @@ impl OwnedStore {
             .prefix(&format!(".{}.", name.to_string_lossy()))
             .suffix(".tmp")
             .tempfile_in(parent)?;
-        set_private(staged.as_file())?;
+        set_mode(staged.as_file(), self.mode)?;
         step(Step::Staged)?;
         {
             let mut capped = CappedWriter {
@@ -292,7 +696,10 @@ impl OwnedStore {
             .persist(&self.path)
             .map_err(|_| Failure::new(Cause::NotWritable, "atomic replacement failed"))?;
         step(Step::Renamed)?;
-        sync_directory(parent)?;
+        let synced = sync_directory(parent);
+        if !replace_settings_leaf {
+            synced?;
+        }
         Ok(())
     }
 
@@ -370,6 +777,18 @@ pub fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, Failure> {
     }
 }
 
+#[cfg(unix)]
+fn private_cache_metadata(meta: &fs::Metadata, directory: bool) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.mode() & 0o077 == 0
+        && meta.uid() == path::uid()
+        && if directory {
+            meta.is_dir()
+        } else {
+            meta.is_file() && meta.nlink() == 1
+        }
+}
+
 fn reject_special(path: &Path, missing_ok: bool) -> Result<(), Failure> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(()),
@@ -431,6 +850,19 @@ fn set_private(file: &File) -> Result<(), Failure> {
     }
     #[cfg(not(unix))]
     let _ = file;
+    Ok(())
+}
+
+/// The staged file at the row's declared mode (0600 private, 0644 share). Windows keeps its
+/// native ACL inheritance, as the private writer does.
+fn set_mode(file: &File, mode: u32) -> Result<(), Failure> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = (file, mode);
     Ok(())
 }
 
@@ -547,13 +979,17 @@ mod tests {
             let store = store(&root, parents, lease);
             store.write(b"committed").unwrap();
             for at in [Step::Staged, Step::Written, Step::Synced] {
-                let result = store.write_staged(|out| out.write_all(b"replacement"), &mut |now| {
-                    if now == at {
-                        Err(io::Error::other("interrupted"))
-                    } else {
-                        Ok(())
-                    }
-                });
+                let result = store.write_staged(
+                    |out| out.write_all(b"replacement"),
+                    &mut |now| {
+                        if now == at {
+                            Err(io::Error::other("interrupted"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    false,
+                );
                 assert!(result.is_err(), "{at:?}");
                 assert_eq!(store.read().unwrap(), b"committed", "{at:?}");
                 let mut expected = vec!["state.json".to_owned()];
@@ -563,13 +999,17 @@ mod tests {
                 assert_eq!(names(&root.join("d")), expected, "{at:?}");
             }
             // After the rename the new file is whole, and the error says the sync did not run.
-            let result = store.write_staged(|out| out.write_all(b"renamed"), &mut |now| {
-                if now == Step::Renamed {
-                    Err(io::Error::other("interrupted"))
-                } else {
-                    Ok(())
-                }
-            });
+            let result = store.write_staged(
+                |out| out.write_all(b"renamed"),
+                &mut |now| {
+                    if now == Step::Renamed {
+                        Err(io::Error::other("interrupted"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                false,
+            );
             assert!(result.is_err());
             assert_eq!(store.read().unwrap(), b"renamed");
         }

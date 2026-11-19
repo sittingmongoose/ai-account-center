@@ -12,6 +12,12 @@
  * A change reaches `/ws` clients as `{ type: 'status-changed' }`, at most one every 5 seconds.
  */
 import { broadcastDashboardEvent } from '../dashboard-events';
+import { rustOwnedStatusOn } from '../rust-service-groups';
+import { onRustServiceEvent } from '../rust-service-events';
+import type { RustService } from '../rust-service';
+import type { AgentReportsState } from './agent-reports-reader';
+import type { QuotaReportState } from './quota-report';
+import { getCcsDir } from '../../utils/config-manager';
 import {
   getAacStore,
   storeErrorCode,
@@ -29,7 +35,7 @@ import {
   DEFAULT_DASHBOARD_TIME_ZONE,
   readDashboardPreferences,
 } from '../services/dashboard-preferences';
-import { ValidationError } from '../../errors/error-types';
+import { NetworkError, ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { AgentReportsReader, ensureReportsLayout, publishSchemas } from './agent-reports-reader';
 import {
@@ -41,8 +47,10 @@ import {
 import {
   DOORBELL_SENDER,
   mergeSharedAnswers,
+  noteSecretOf,
   StatusAnswers,
   type AnswerHistoryEntry,
+  type EntryResult,
   type SendRecord,
 } from './answers';
 import { QuotaReportReader } from './quota-report';
@@ -89,6 +97,8 @@ const logger = createLogger('status-service');
 const REPORTS_EVERY_MS = 10_000;
 const REGISTRY_EVERY_MS = 30_000;
 const COLLECT_EVERY_MS = 60_000;
+/** G16b: a forwarded send's whole budget (30 s of entries, its summary) and a margin. */
+const FORWARDED_SEND_DEADLINE_MS = 50_000;
 const DEMAND_WINDOW_MS = 15 * 60_000;
 const HINT_GAP_MS = 5_000;
 
@@ -194,6 +204,19 @@ export class StatusService {
     StatusInputs['reports']['threads'][number],
     StatusInputs['reports']['threads'][number]
   >();
+  /** R4: the service reads the share itself; this side forwards its snapshots. */
+  private readonly owned: boolean;
+  private ownedInputs: {
+    generation: number;
+    reports: AgentReportsState;
+    quota: QuotaReportState;
+    registry: Collected<RegistryThread[]>;
+    docs: StatusDocsState;
+  } | null = null;
+  private ownedFallenBack = false;
+  private ownedFailures = 0;
+  private removeOwnedEvents: (() => void) | null = null;
+  private readonly fallbackTimers: Array<ReturnType<typeof setInterval>> = [];
 
   constructor(private readonly deps: StatusServiceDeps = {}) {
     this.reader = deps.reader ?? new AgentReportsReader();
@@ -232,6 +255,7 @@ export class StatusService {
       const opened = openStatusHandle();
       this.spendNative = 'unavailable' in opened ? null : opened;
     }
+    this.owned = rustOwnedStatusOn();
   }
 
   private now(): number {
@@ -255,13 +279,7 @@ export class StatusService {
       this.hintTimer = null;
       this.lastHint = Date.now();
       try {
-        (
-          this.deps.notify ??
-          (() =>
-            broadcastDashboardEvent((client) =>
-              client.authKind === 'session' ? { type: 'status-changed' } : null
-            ))
-        )();
+        (this.deps.notify ?? (() => broadcastDashboardEvent({ type: 'status-changed' })))();
       } catch {
         /* A hint never fails the collectors. */
       }
@@ -401,13 +419,13 @@ export class StatusService {
   private async composeSpendByStream(): Promise<void> {
     if (!this.spendNative) return;
     const now = this.now();
-    const reports = this.reader.snapshot();
+    const reports = this.ownedReports();
     const panel = await composeSpendByStream(
       {
         nowMs: now,
         utcOffsetMinutes: zoneOffsetMinutes(this.timeZone(), now),
         accountOrder: this.usage ? this.usage.accounts.map((account) => account.id) : [],
-        spend: buildSpend(this.quotaReader.snapshot(), streamLabelsOf(reports)),
+        spend: buildSpend(this.ownedQuota(), streamLabelsOf(reports)),
       },
       { handle: this.spendNative }
     );
@@ -648,9 +666,31 @@ export class StatusService {
       await this.pinned.collect();
       await this.scanningReports;
       await this.publishStatus();
+      this.pushOwnedPins();
     } catch {
       /* The panel keeps its last good pins and its last composed view. */
     }
+  }
+
+  /**
+   * R4: the merged pins the service's readers-check writer matches reports against (the
+   * pinned collector stays here until `t3-pins` runs through the agent transport). Pushed
+   * as the `owned-pins` feed source; the service reads the latest at its check flush.
+   */
+  private pushOwnedPins(): void {
+    if (!this.owned || this.ownedFallenBack) return;
+    const service = rustServiceForStatus;
+    const boot = service?.feedBoot(getCcsDir());
+    if (!service || !boot) return;
+    const pins = this.pinned.pins().map((pin) => ({ id: pin.id, title: pin.title }));
+    lastPinsGeneration = Math.max(lastPinsGeneration + 1, Date.now() * 1000);
+    void service.pushFeed(
+      boot,
+      'owned-pins',
+      String(lastPinsGeneration),
+      JSON.stringify(pins),
+      'null'
+    );
   }
 
   private wanted(): boolean {
@@ -714,7 +754,10 @@ export class StatusService {
       now,
       timeZone: this.timeZone(),
       reports: { ...reports, threads },
-      registry: this.registry,
+      registry:
+        this.owned && !this.ownedFallenBack && this.ownedInputs
+          ? this.ownedInputs.registry
+          : this.registry,
       machines: this.machines,
       browsers: this.browsers,
       simlock: this.simlock,
@@ -723,7 +766,7 @@ export class StatusService {
       sends,
       answerHistoryProblem,
       hiddenThreadNames: [DOORBELL_SENDER],
-      quota: this.quotaReader.snapshot(),
+      quota: this.ownedQuota(),
       pinned: view.pinned,
       spendByStream: this.spendByStream,
     };
@@ -731,6 +774,184 @@ export class StatusService {
 
   view(): StatusView {
     return buildStatusView(this.readInputs());
+  }
+
+  /** The reports snapshot the view reads: the service's owned scan, or this side's reader. */
+  private ownedReports(): AgentReportsState {
+    return this.owned && !this.ownedFallenBack && this.ownedInputs
+      ? this.ownedInputs.reports
+      : this.reader.snapshot();
+  }
+
+  private ownedQuota(): QuotaReportState {
+    return this.owned && !this.ownedFallenBack && this.ownedInputs
+      ? this.ownedInputs.quota
+      : this.quotaReader.snapshot();
+  }
+
+  /**
+   * R4: fetch the service's owned snapshots when its generation moves (the timer and the
+   * `status-changed` event both call this; overlapping calls share nothing — the fetch is
+   * cheap and the generation check drops stale answers). Three failed fetches in a row mean
+   * the service is down past its restart budget: this side restarts its own share readers.
+   */
+  private async ownedRefresh(): Promise<void> {
+    const service = rustServiceForStatus;
+    if (!this.owned || this.ownedFallenBack || !service) return;
+    const answer = (await service.internalJson('/internal/status/inputs')) as {
+      generation?: unknown;
+      reports?: AgentReportsState & { boards?: Record<string, number | null> };
+      quota?: QuotaReportState;
+      registry?: Collected<RegistryThread[]>;
+      docs?: StatusDocsState;
+    } | null;
+    if (
+      !answer ||
+      typeof answer.generation !== 'number' ||
+      !answer.reports ||
+      !answer.quota ||
+      !answer.registry ||
+      !answer.docs
+    ) {
+      this.ownedFailures += 1;
+      if (this.ownedFailures >= 3) this.fallBackToShareReaders();
+      return;
+    }
+    this.ownedFailures = 0;
+    this.answersInRust();
+    if (this.ownedInputs && answer.generation === this.ownedInputs.generation) return;
+    this.ownedInputs = {
+      generation: answer.generation,
+      reports: {
+        ...answer.reports,
+        boards: new Map(Object.entries(answer.reports.boards ?? {})),
+      },
+      quota: answer.quota,
+      registry: answer.registry,
+      docs: answer.docs,
+    };
+    // The same publication as a local scan (shared answers, then one staged presentation),
+    // over the service's snapshots; report captures run in the service.
+    const { reports, docs } = this.ownedInputs;
+    try {
+      await this.answers.scanSharedAnswers(reports.cards, this.readAnswerHistory([]).answers);
+      await this.publishStatus({
+        reports,
+        docs,
+        shared: this.answers.sharedAnswersFor(reports.cards),
+      });
+      this.pushOwnedPins();
+    } catch {
+      /* Keep the last published presentation. */
+      this.changed();
+    } finally {
+      this.answers.pruneSharedAnswers(reports.cards);
+    }
+    await this.composeSpendByStream();
+  }
+
+  /** The service stayed down: the stateless share readers catch up in one cycle (design 1.2). */
+  private fallBackToShareReaders(): void {
+    if (this.ownedFallenBack) return;
+    this.ownedFallenBack = true;
+    this.removeOwnedEvents?.();
+    this.removeOwnedEvents = null;
+    logger.warn(
+      'status.owned_fallback',
+      'The Rust service stayed down; the Status share readers restart in TypeScript'
+    );
+    const every = (ms: number, work: () => Promise<void>) => {
+      let running = false;
+      const timer = setInterval(() => {
+        if (running) return;
+        running = true;
+        void work()
+          .catch(() => undefined)
+          .finally(() => {
+            running = false;
+          });
+      }, ms);
+      timer.unref?.();
+      this.fallbackTimers.push(timer);
+    };
+    every(REPORTS_EVERY_MS, () => this.scanReports());
+    every(REGISTRY_EVERY_MS, () => this.scanRegistry());
+    // The page must not wait a whole cycle for the first fallback scan.
+    void this.scanReports().catch(() => undefined);
+    void this.scanRegistry().catch(() => undefined);
+    this.handAnswersToTs();
+  }
+
+  /**
+   * G16b: whether the service's answer store records sends and runs the retry pass. Owned mode only,
+   * until the first forward that cannot reach the service (or the owned fallback): from then on, for
+   * the rest of this process, the TS store does both (it takes the lock over once the service is gone).
+   */
+  private answersInRust(): boolean {
+    // This process's store holding the lock (a read failure makes `list()` gain it) means the service's
+    // cannot write: TS takes the answers back rather than leave them with no retry pass.
+    if (this.owned && !this.answersLocal && this.answers.holdsStore?.()) this.handAnswersToTs();
+    return this.owned && !this.answersLocal && rustServiceForStatus !== null;
+  }
+
+  private answersLocal = false;
+  private answersRetryTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** G16b: the TS store takes the answers back: its own minute retry pass starts now. */
+  private handAnswersToTs(): void {
+    if (this.answersLocal) return;
+    this.answersLocal = true;
+    if (!this.started) return;
+    let running = false;
+    const tick = () => {
+      if (running) return;
+      running = true;
+      void this.answers
+        .retryPending()
+        .catch(() => undefined)
+        .finally(() => {
+          running = false;
+        });
+    };
+    this.answersRetryTimer = setInterval(tick, COLLECT_EVERY_MS);
+    this.answersRetryTimer.unref?.();
+    tick();
+  }
+
+  private started = false;
+
+  /**
+   * One send (`POST /api/status/answers`). Owned: forwarded to the service's answer store with the
+   * note secret findings (the one TS filter); a forward that never reached the service, or that it
+   * declined, is recorded here instead and hands the answers to TS. A forward that may have reached
+   * it and failed throws: the route answers that some may have been recorded.
+   */
+  async submitAnswers(
+    entries: unknown[],
+    device: string,
+    clientSendId: string | null
+  ): Promise<EntryResult[]> {
+    const service = rustServiceForStatus;
+    if (!this.answersInRust() || !service) {
+      if (this.owned) this.handAnswersToTs();
+      return this.answers.submitSet(entries, device, clientSendId);
+    }
+    const reply = await service.internalSend(
+      '/internal/status/answers',
+      { entries, device, clientSendId, noteSecrets: entries.map(noteSecretOf) },
+      FORWARDED_SEND_DEADLINE_MS
+    );
+    if (reply.kind === 'reply' && reply.status === 200) {
+      const results = (reply.body as { results?: unknown } | null)?.results;
+      if (Array.isArray(results) && results.length === entries.length)
+        return results as EntryResult[];
+      throw new NetworkError('The answer store gave no result per entry.');
+    }
+    if (reply.kind === 'unreached' || (reply.kind === 'reply' && reply.decline !== null)) {
+      this.handAnswersToTs();
+      return this.answers.submitSet(entries, device, clientSendId);
+    }
+    throw new NetworkError('The answer store did not finish the send.');
   }
 
   /** Starts the timers; returns the stop call. */
@@ -756,17 +977,33 @@ export class StatusService {
     void ensureReportsLayout(this.reader.root)
       .then(() => publishSchemas(this.reader.root))
       .catch(() => undefined);
-    every(REPORTS_EVERY_MS, () => this.scanReports());
-    every(REGISTRY_EVERY_MS, () => this.scanRegistry());
+    if (this.owned) {
+      every(REPORTS_EVERY_MS, () => this.ownedRefresh());
+      this.removeOwnedEvents = onRustServiceEvent((event) => {
+        if (event.event === 'status-changed') void this.ownedRefresh();
+      });
+    } else {
+      every(REPORTS_EVERY_MS, () => this.scanReports());
+      every(REGISTRY_EVERY_MS, () => this.scanRegistry());
+    }
     every(COLLECT_EVERY_MS, async () => {
       if (this.wanted()) await this.collect();
     });
-    every(COLLECT_EVERY_MS, () => this.answers.retryPending());
+    // G16b: owned, the service's answer store runs the retry pass; TS only once it takes them back.
+    this.started = true;
+    this.answersLocal = this.answersLocal || !this.owned;
+    if (this.answersLocal) every(COLLECT_EVERY_MS, () => this.answers.retryPending());
     const unsubscribe = (this.deps.subscribeUsage ?? onAccountAnalyticsSample)(this.recordUsage);
     return () => {
       this.answers.flushCompletions();
       for (const timer of timers) clearInterval(timer);
       unsubscribe();
+      this.removeOwnedEvents?.();
+      this.removeOwnedEvents = null;
+      for (const timer of this.fallbackTimers) clearInterval(timer);
+      if (this.answersRetryTimer) clearInterval(this.answersRetryTimer);
+      this.answersRetryTimer = null;
+      this.started = false;
       if (this.hintTimer) clearTimeout(this.hintTimer);
       this.hintTimer = null;
     };
@@ -774,6 +1011,17 @@ export class StatusService {
 }
 
 let service: StatusService | null = null;
+
+/** The process-wide Rust service, set by the server at start (the owned refresh reads it). */
+let rustServiceForStatus: RustService | null = null;
+
+/** The server hands its Rust service to the Status owner's background refresh. */
+export function setStatusRustService(service: RustService | null): void {
+  rustServiceForStatus = service;
+}
+
+/** The last `owned-pins` generation this process issued (numeric, only forward). */
+let lastPinsGeneration = 0;
 
 export function getStatusService(): StatusService {
   service ??= new StatusService();

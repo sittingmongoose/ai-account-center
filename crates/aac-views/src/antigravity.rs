@@ -7,7 +7,7 @@
 //! `markPassedResets` (`account-window-reset.ts`). Inputs are the runtime's inventory and
 //! accounts as TS read them, in the ISO-only presentation envelope: `Date.parse` epochs and
 //! `toISOString` words come from its facts. Every input TS throws on (a 500) is a [`Refuse`].
-use crate::js::{ascii_word, date_parse, email_shape, has_control, is_true, trim};
+use crate::js::{ascii_word, email_shape, has_control, is_true, trim};
 use crate::spread::{Admit, Refuse, req, truthy, utf16_len};
 use aac_status::read_context::{Context, Envelope, js_whitespace};
 use serde_json::{Map, Value, json};
@@ -55,8 +55,8 @@ fn secret(text: &str) -> bool {
     })
 }
 
-/// `displayText(value, maximum)`.
-fn display_text(value: Option<&Value>, maximum: usize) -> Option<String> {
+/// Match the shared dashboard usage normalization rule `displayText(value, maximum)`.
+pub fn display_text(value: Option<&Value>, maximum: usize) -> Option<String> {
     let text = value?.as_str()?;
     if utf16_len(text) > maximum || has_control(text) || secret(text) {
         return None;
@@ -144,14 +144,21 @@ fn timestamp_shape(text: &str) -> bool {
 }
 
 /// `timestamp(value)`: the `toISOString` word and its epoch, `None` for its null.
-fn timestamp(ctx: &Context, value: Option<&Value>) -> Admit<Option<(String, i64)>> {
-    let Some(Value::String(text)) = value else {
+/// One instant reader: the envelope's facts, or the pure ISO parse for runtime words.
+type TimeSource<'a> = &'a dyn Fn(Option<&Value>) -> Admit<Option<(String, i64)>>;
+
+/// `timestamp(value)` from the envelope: an ISO word and the epoch fact its presentation carries.
+fn timestamp_fact(ctx: &Context, value: Option<&Value>) -> Admit<Option<(String, i64)>> {
+    let Some(text) = value.and_then(Value::as_str) else {
         return Ok(None);
     };
     if utf16_len(text) > 40 || !timestamp_shape(text) {
         return Ok(None);
     }
-    let Some(ms) = req(date_parse(ctx, text))? else {
+    let Some(ms) = crate::js::date_parse(ctx, text) else {
+        return Ok(None);
+    };
+    let Some(ms) = ms else {
         return Ok(None);
     };
     if !(YEAR_2000..YEAR_2201).contains(&ms) {
@@ -159,6 +166,16 @@ fn timestamp(ctx: &Context, value: Option<&Value>) -> Admit<Option<(String, i64)
     }
     let word = ctx.iso(Some(ms));
     Ok(Some((req(word.as_str())?.to_owned(), ms)))
+}
+
+/// `timestamp(value)` for a caller whose words are already canonical ISO: a pure `Date` parse.
+fn timestamp_pure(value: Option<&Value>) -> Admit<Option<(String, i64)>> {
+    Ok(canonical_timestamp(value).and_then(|word| {
+        crate::js::parse_date(&word)
+            .ok()
+            .flatten()
+            .map(|ms| (word, ms))
+    }))
 }
 
 fn time_value(time: Option<&(String, i64)>) -> Value {
@@ -180,13 +197,19 @@ fn or_null(value: Option<&Value>) -> Value {
 
 /// `100 - percent`, or null.
 fn complement(value: Option<&Value>) -> Value {
-    value
-        .and_then(Value::as_f64)
-        .map_or(Value::Null, |n| json!(100.0 - n))
+    // `100 - n` is a JavaScript number: an integral result stringifies without a fraction.
+    value.and_then(Value::as_f64).map_or(Value::Null, |n| {
+        let rest = 100.0 - n;
+        if rest.fract() == 0.0 {
+            json!(rest as i64)
+        } else {
+            json!(rest)
+        }
+    })
 }
 
 /// `poolWindow(value)` with its reset epoch; `None` is a window it drops.
-fn pool_window(ctx: &Context, value: &Value) -> Admit<Option<(Object, Option<i64>)>> {
+fn pool_window_inner(value: &Value, time: TimeSource<'_>) -> Admit<Option<(Object, Option<i64>)>> {
     let Some(window) = value.as_object() else {
         return Ok(None);
     };
@@ -198,8 +221,8 @@ fn pool_window(ctx: &Context, value: &Value) -> Admit<Option<(Object, Option<i64
     let used = nonnegative(window.get("used"));
     let limit = nonnegative(window.get("limit"));
     let remaining = nonnegative(window.get("remaining"));
-    let reset_at = timestamp(ctx, window.get("resetAt"))?;
-    let expires_at = timestamp(ctx, window.get("expiresAt"))?;
+    let reset_at = time(window.get("resetAt"))?;
+    let expires_at = time(window.get("expiresAt"))?;
     let enabled = window.get("enabled").filter(|v| v.is_boolean());
     let unlimited = window.get("unlimited").filter(|v| v.is_boolean());
     if used_percent.is_none()
@@ -553,9 +576,18 @@ fn known(value: &str) -> Option<&'static Plan> {
 /// `antigravityPlanDisplay(plan, sampledAt)` without a reported plan: the `plan` member and the
 /// optional `antigravityPlan`. `clock` is TS's `Date.now()` for a reading without a time.
 fn plan_display(plan: Option<String>, sampled: Option<i64>, clock: f64) -> (Value, Option<Value>) {
-    let Some(definition) = plan.as_deref().and_then(known) else {
-        return (text_or_null(plan), None);
-    };
+    match plan.as_deref().and_then(known) {
+        None => (text_or_null(plan), None),
+        Some(definition) => display_for(definition, sampled, clock),
+    }
+}
+
+/// The `plan` and optional `antigravityPlan` for one known plan definition.
+fn display_for(
+    definition: &'static Plan,
+    sampled: Option<i64>,
+    clock: f64,
+) -> (Value, Option<Value>) {
     #[allow(clippy::cast_precision_loss)]
     let observed = sampled.map_or(clock, |ms| ms as f64);
     let before_removal = observed < MODEL_REMOVAL_AT;
@@ -598,8 +630,128 @@ fn plan_display(plan: Option<String>, sampled: Option<i64>, clock: f64) -> (Valu
     )
 }
 
+/// `antigravityPlanDisplay(displayText(plan, 80), verifiedAt).plan`: the plan's label when plan.ts
+/// knows it, else the accepted text; null when the text is refused or absent.
+pub fn public_plan(plan: Option<&Value>) -> Value {
+    plan_display(display_text(plan, 80), None, 0.0).0
+}
+
+/// `timestamp(profile.verifiedAt)` for a stored ISO word: canonical `toISOString`, or null.
+fn canonical_timestamp(value: Option<&Value>) -> Option<String> {
+    let text = value?.as_str()?;
+    if utf16_len(text) > 40 || !timestamp_shape(text) {
+        return None;
+    }
+    let ms = crate::js::parse_date(text).ok()??;
+    if !(YEAR_2000..YEAR_2201).contains(&ms) {
+        return None;
+    }
+    aac_num::ecma::to_iso_string(ms)
+}
+
+/// `publicProfile(profile)` (`usage-normalization.ts`) for the runtime's own row: the public
+/// inventory member with every capability gated on the verified identity. `verifiedAt` is a stored
+/// ISO word (registry identities are normalized on save).
+pub fn public_profile(input: &Value) -> Option<Value> {
+    let id = safe_id(input.get("id"))?;
+    let email = email(input.get("email"))?;
+    let flag = |key: &str| is_true(input.get(key));
+    let verified = flag("identityVerified");
+    Some(json!({
+        "id": id,
+        "email": email,
+        "plan": public_plan(input.get("plan")),
+        "available": verified && flag("available"),
+        "selected": verified && flag("selected"),
+        "runtimeVerified": verified && flag("runtimeVerified"),
+        "verifiedAt": canonical_timestamp(input.get("verifiedAt")).map_or(Value::Null, Value::String),
+        "hostId": "ubuntu",
+    }))
+}
+
+/// `publicRuntimeServiceProblem(value)` for the runtime layer: the probe's bounded row, or none.
+pub fn runtime_problem_value(value: Option<&Value>) -> Option<Value> {
+    runtime_problem(value)
+}
+
+/// `isNativeVersion(value)` for the runtime layer: the reviewed version word, or null.
+pub fn native_version_word(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|text| native_version(text))
+        .map(str::to_owned)
+}
+
+/// `displayText(value, maximum)` for the runtime layer.
+pub fn display_text_value(value: Option<&Value>, maximum: usize) -> Option<String> {
+    display_text(value, maximum)
+}
+
+/// `email(value)` for the runtime layer.
+pub fn email_value(value: Option<&Value>) -> Option<String> {
+    email(value)
+}
+
+/// `timestamp(value)` for the runtime layer: the canonical ISO word, or null.
+pub fn timestamp_word(value: Option<&Value>) -> Option<String> {
+    canonical_timestamp(value)
+}
+
+/// `poolWindow(value)` (`usage-normalization.ts`) for the runtime layer: the internal window.
+pub fn pool_window_value(value: &Value) -> Option<Value> {
+    pool_window_inner(value, &timestamp_pure)
+        .ok()
+        .flatten()
+        .map(|(window, _)| Value::Object(window))
+}
+
+/// `antigravityPlanDisplay(plan, sampledAt, reported)`: a reported tier refines a generic plan
+/// type; an unknown plan passes through as its text. `clock` is TS's `Date.now()`.
+pub fn plan_at(
+    plan: Option<&str>,
+    sampled_at: Option<&Value>,
+    reported: Option<&Value>,
+    clock: f64,
+) -> (Value, Option<Value>) {
+    let reported = reported.and_then(Value::as_object);
+    let tier = reported
+        .and_then(|row| row.get("paidTier").or_else(|| row.get("currentTier")))
+        .and_then(Value::as_object);
+    let tier_class = tier
+        .and_then(|row| row.get("id"))
+        .and_then(Value::as_str)
+        .and_then(known)
+        .or_else(|| {
+            tier.and_then(|row| row.get("name"))
+                .and_then(Value::as_str)
+                .and_then(known)
+        });
+    let mut plan_class = reported
+        .and_then(|row| row.get("planType"))
+        .and_then(Value::as_str)
+        .and_then(known)
+        .or(tier_class)
+        .or_else(|| plan.and_then(known));
+    // An explicit trial or multiplier refines a generic plan type within its family.
+    if let (Some(found), Some(tier)) = (plan_class, tier_class)
+        && ((found.class == "ultra" && tier.class.starts_with("ultra-"))
+            || (found.class == "pro" && tier.class == "pro-trial"))
+    {
+        plan_class = Some(tier);
+    }
+    let Some(definition) = plan_class else {
+        return (text_or_null(plan.map(str::to_owned)), None);
+    };
+    let sampled = match sampled_at {
+        Some(Value::String(text)) => crate::js::parse_date(text).ok().flatten(),
+        Some(Value::Number(number)) => number.as_f64().map(|n| n as i64),
+        _ => None,
+    };
+    display_for(definition, sampled, clock)
+}
+
 /// `publicDashboardAccount(value)` then `markPassedResets(account, now)`.
-fn account(ctx: &Context, value: &Value, now: f64, clock: f64) -> Admit<Value> {
+fn account(value: &Value, now: f64, clock: f64, time: TimeSource<'_>) -> Admit<Value> {
     let value = req(value.as_object())?;
     let capabilities = value.get("capabilities").and_then(Value::as_object);
     let id = req(safe_id(
@@ -618,8 +770,8 @@ fn account(ctx: &Context, value: &Value, now: f64, clock: f64) -> Admit<Value> {
         .filter(|s| ["ok", "cached", "needs_sign_in", "unavailable", "error"].contains(s))
         .unwrap_or("error");
     let identity_unbound = status == "error" && text("statusReason") == Some("identity_unbound");
-    let fetched_at = timestamp(ctx, value.get("fetchedAt"))?;
-    let sampled_at = timestamp(ctx, value.get("sampledAt"))?;
+    let fetched_at = time(value.get("fetchedAt"))?;
+    let sampled_at = time(value.get("sampledAt"))?;
     let observed = sampled_at
         .as_ref()
         .or(fetched_at.as_ref())
@@ -636,7 +788,7 @@ fn account(ctx: &Context, value: &Value, now: f64, clock: f64) -> Admit<Value> {
     let mut windows = Vec::new();
     if let Some(Value::Array(list)) = value.get("windows") {
         for window in list.iter().take(MAX_WINDOWS) {
-            if let Some((mut window, reset)) = pool_window(ctx, window)? {
+            if let Some((mut window, reset)) = pool_window_inner(window, time)? {
                 // readingPredatesReset(resetAt, account.sampledAt, now); a window has no sampledAt.
                 let passed = crate::js::reading_predates_reset(
                     reset,
@@ -724,13 +876,24 @@ pub fn quotas(envelope: Envelope) -> Admit<Value> {
     let clock = req(input.get("clock").and_then(Value::as_f64))?;
     let accounts = req(input.get("accounts").and_then(Value::as_array))?
         .iter()
-        .map(|value| account(&ctx, value, now, clock))
+        .map(|value| account(value, now, clock, &|value| timestamp_fact(&ctx, value)))
         .collect::<Admit<Vec<Value>>>()?;
     if ctx.valid() {
         Ok(json!({ "schemaVersion": 1, "hostId": "ubuntu", "accounts": accounts }))
     } else {
         Err(Refuse)
     }
+}
+
+/// The usage answer from accounts whose timestamps are already canonical ISO words: the runtime
+/// layer's own accounts, with no envelope facts to consult.
+pub fn quotas_words(accounts: &[Value], now: f64, clock: f64) -> Option<Value> {
+    let rows = accounts
+        .iter()
+        .map(|value| account(value, now, clock, &timestamp_pure))
+        .collect::<Admit<Vec<Value>>>()
+        .ok()?;
+    Some(json!({ "schemaVersion": 1, "hostId": "ubuntu", "accounts": rows }))
 }
 
 fn pattern_text(value: Option<&Value>, ok: fn(&str) -> bool) -> Value {
@@ -839,7 +1002,7 @@ pub fn inventory(envelope: Envelope) -> Admit<Value> {
             return Err(Refuse);
         }
         ids.push(id);
-        let verified = timestamp(&ctx, row.get("verifiedAt"))?;
+        let verified = timestamp_fact(&ctx, row.get("verifiedAt"))?;
         profiles.push(json!({
             "id": id,
             "email": email,
@@ -999,6 +1162,56 @@ mod tests {
         assert_eq!(
             models("Gemini Code Assist Standard", after)["models"],
             json!(["Gemini 3.8 Flash"])
+        );
+        // An empty tier shows no plan at all, never a guessed one.
+        assert_eq!(plan_display(None, Some(before), 0.0), (Value::Null, None));
+        assert_eq!(public_plan(None), Value::Null);
+        assert_eq!(public_plan(Some(&json!(""))), Value::Null);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod fact_tests {
+    use super::*;
+    use aac_status::read_context::Presentation;
+
+    /// The envelope path still requires every ISO word's ISO fact (`profile_reads`' case).
+    #[test]
+    fn an_iso_word_without_its_fact_is_refused_by_the_inventory() {
+        let data = json!({"schemaVersion":1,"hostId":"ubuntu","profiles":[{
+            "id":"a","email":"a@example.com","plan":null,"hostId":"ubuntu",
+            "available":true,"selected":false,"runtimeVerified":false,
+            "verifiedAt":"2026-11-15T13:30:00+05:30"}]});
+        // The epoch fact is present but its ISO word is not: the context marks the read invalid.
+        let only_epoch: Presentation = serde_json::from_value(json!({
+            "dates": {},
+            "epochs": {"2026-11-15T13:30:00+05:30": 1_794_729_600_000_i64},
+            "order": {}
+        }))
+        .unwrap();
+        assert!(
+            inventory(Envelope {
+                data: data.clone(),
+                presentation: only_epoch,
+            })
+            .is_err(),
+            "a word without its ISO fact declines"
+        );
+        let facts: Presentation = serde_json::from_value(json!({
+            "dates": {"1794729600000": {"iso": "2026-11-15T08:00:00.000Z"}},
+            "epochs": {"2026-11-15T13:30:00+05:30": 1_794_729_600_000_i64},
+            "order": {}
+        }))
+        .unwrap();
+        let answered = inventory(Envelope {
+            data,
+            presentation: facts,
+        })
+        .unwrap();
+        assert_eq!(
+            answered["profiles"][0]["verifiedAt"],
+            json!("2026-11-15T08:00:00.000Z")
         );
     }
 }

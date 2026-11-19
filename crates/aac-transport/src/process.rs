@@ -492,6 +492,8 @@ pub struct CallOptions {
     pub output_cap: usize,
     /// Whether the longer scan keepalive applies.
     pub scan: bool,
+    /// Trusted dashboard scope for a local app-update agent. SSH never inherits it.
+    pub local_app_update_state_dir: Option<PathBuf>,
 }
 
 impl CallOptions {
@@ -502,6 +504,7 @@ impl CallOptions {
             cancel: CancellationToken::new(),
             output_cap,
             scan: false,
+            local_app_update_state_dir: None,
         }
     }
 }
@@ -628,6 +631,15 @@ impl Computer {
             TransportConfig::Local => {
                 let mut cmd = Command::new(&argv[0]);
                 cmd.args(&argv[1..]);
+                if let Some(directory) = &options.local_app_update_state_dir {
+                    if !directory.is_absolute() {
+                        return Err(Failure::new(
+                            Cause::Refused,
+                            "invalid local app update state directory",
+                        ));
+                    }
+                    cmd.env("AAC_APP_UPDATE_STATE_DIR", directory);
+                }
                 (cmd, None)
             }
             TransportConfig::Ssh {

@@ -4,12 +4,14 @@ import { ConfigError } from '../../errors/error-types';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { getCcsDir } from '../../utils/config-manager';
-import { readOwnedWithRust } from '../rust-service';
+import { readOwnedWithRust, writeWithRust } from '../rust-service';
 import { acceptRustPreferences } from '../rust-account-input';
 import {
+  applyDashboardPreferencesPatch,
   isDashboardPreferences,
+  prepareRustPreferenceWrite,
+  PREFERENCES_STORE_IDS,
   isDashboardPreferencesPatch,
-  patchDashboardPreferences,
   withDashboardPreferencesLock,
   type DashboardPreferencesPatch,
   readDashboardPreferences,
@@ -97,12 +99,28 @@ export function createAccountPreferencesRouter(deps: PreferencesRouterDeps = {})
       return;
     }
     try {
+      if (patch && deps.patch) {
+        res.json(await deps.patch(req.body));
+        return;
+      }
+      const root = getCcsDir();
       res.json(
-        patch
-          ? await (deps.patch ?? patchDashboardPreferences)(req.body)
-          : await withDashboardPreferencesLock(async () =>
-              (deps.write ?? writeDashboardPreferences)(req.body)
-            )
+        await withDashboardPreferencesLock(async () => {
+          if (!patch && deps.write) return deps.write(req.body);
+          return writeWithRust(
+            req,
+            res,
+            '/api/accounts/preferences',
+            PREFERENCES_STORE_IDS,
+            () => prepareRustPreferenceWrite(req.body, patch, root),
+            isDashboardPreferences,
+            () =>
+              writeDashboardPreferences(
+                patch ? applyDashboardPreferencesPatch(req.body, root) : req.body,
+                root
+              )
+          );
+        }, root)
       );
     } catch (error) {
       if (error instanceof ConfigError) {

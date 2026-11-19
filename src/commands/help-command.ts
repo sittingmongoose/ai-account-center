@@ -26,7 +26,7 @@ export async function handleHelpCommand(writeLine: HelpWriter = console.log): Pr
   writeLine('');
   writeLine('Examples:');
   writeLine('  ai-account-center dashboard --host localhost --port 3000 --no-open');
-  writeLine('  ai-account-center dashboard auth setup');
+  writeLine('  ai-account-center dashboard store status');
   writeLine('  ai-account-center codex-auth show');
   writeLine('  ai-account-center codex-auth login work');
   writeLine('  ai-account-center antigravity signin party');

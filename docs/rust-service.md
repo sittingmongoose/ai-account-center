@@ -99,6 +99,44 @@ never applies the folder warning in shadow mode, and every TS reader or composer
 exactly once per request. Requests with bodies keep part 2's 4 MiB input and 2 MiB
 reply caps; larger answers use the TS fallback.
 
+## Owned Analytics (R5 + A2)
+
+`rustService.groups.analytics: on` (`AAC_RUST_GROUP_ANALYTICS` overrides), with the service `on`
+and the store hosted (`store: on`), lets Rust answer the whole `/api/accounts/analytics` read
+from the hosted Engine in process: the quota history (`historyRecords`, thinned to the range's
+buckets), the oldest stored quota sample and activity hour, the activity range and sources
+(`activityRange`/`activitySources`), and the composition of both blocks. The TS computation
+remains the fallback for every request Rust declines; off, shadow, or an unhosted store keeps
+today's fed composition (part 3) unchanged.
+
+The owned envelope (`data.owned: true`, `rustAnalyticsOwnedInput`) carries only what stays in TS
+until H2: the dashboard accounts (as the part-3 spread entries), the live collector state (the
+source grid, `refreshing`, `refreshingRemote` — the same `ownedLive` the activity answer itself
+reads, refresh trigger included), the resolved pricing facts over the store dictionary's
+model/route superset (`activityModels`, answered by the same `getModelPricingWithSource` lookup),
+and the query's zone as proven UTC-offset segments (the server-side form of the page's
+`homeZoneFacts`, bounded to the `Zone` proof's 64 segments). It also carries the bounds and
+provisional range the TS computation read; Rust re-reads both from the Engine and re-resolves the
+range, and any disagreement is a `stale` decline. The presentation facts are empty: the owned
+composer builds its own `Date.parse` epochs and `toISOString` words from the store's ISO strings
+(`aac-num`, the proven engine-independent forms) and the provider-id ranks from the CLDR root
+order (`aac_num::intl::ascii_compare`); a non-ASCII model name or session key is a `collation`
+decline, an instant outside the zone window a `zone` decline.
+
+The activity block is the port of the store-fed answer (`src/store/activity-answer.ts`,
+`activity-coverage.ts`, the attribution, projection and anomalies services):
+`rangeToSources` → attribution → projection → session-count override, with the guarded
+selection's fixed unavailable projection and the TS-published snapshot's coverage. A store with
+no last read yet declines (`stale`): TS's answer would stamp its own clock, which one request
+cannot prove equal. The quota composition reuses the part-3 port (`analyticsAvailableRange` +
+`composeAccountAnalytics`) with `stored: true`; the answer memo stays ineffective exactly as in
+the TS store path (each activity read is a fresh result), and `get()`'s flights, saved views and
+`stale`/`refreshing` read state wrap the owned answer unchanged.
+
+The spec: `tests/spec/analytics-owned-parity.ts` — every range preset, filter and zone against
+the same request's pure TS computation, byte-equal, served with no TS composer call; a case Rust
+cannot prove falls back and stays equal.
+
 ## Profile reads (M3 part 4)
 
 Account switching was removed on 2026-11-13, so these GETs only read and report:
@@ -141,10 +179,13 @@ no-follow, nonblocking descriptor after its `lstat`.
 ## Home view (D7)
 
 `AAC_RUST_HOME_VIEW=on`, with the service `on`, lets the server build Home's view model
-(`crates/aac-views` `home`, view model v3); the default is `off`. Off, `GET /api/views/home` is not
-offered: it answers the 404 every unknown endpoint gets, and the dashboard answer is unchanged. On,
-the dashboard answer adds `server.views: ["home"]` and the page asks that route instead of its three
-reads (the dashboard, `/api/claude/desktop-profiles`, `/api/antigravity/profiles`).
+(`crates/aac-views` `home`, view model v3) through the envelope path; the switch itself defaults to `off`.
+The Home group (`rustService.groups.home`, below) is default-ready and offers the same route from fed
+generations when the mode is on, so with the mode on the route is offered unless the group is explicitly
+`off`. With neither on, `GET /api/views/home` is not offered: it answers the 404 every unknown endpoint
+gets, and the dashboard answer is unchanged. When offered, the dashboard answer adds `server.views: ["home"]`
+and the page asks that route instead of its three reads (the dashboard, `/api/claude/desktop-profiles`,
+`/api/antigravity/profiles`).
 
 The route keeps the dashboard route's session, query and failure rules and answers those three answers
 plus `view`. It reads each one the way its own route answers it: the desktop profiles through part 4's
@@ -407,12 +448,28 @@ number table; it catches the pre-fix 0.049999999999999996 -> 0.1 wrong answer.
 
 ## Agent transport (L5, off by default)
 
-`agentVerbs: on` enables the existing verb adapters. Independently, `agentTransport: on`
-(or `AAC_AGENT_TRANSPORT=on`) sends those calls to `POST /internal/agent/<verb>` on the
-private service. It can start the service while public Rust read routes remain off.
-The endpoint requires the boot secret and the reserved front-door service principal;
-it is never exposed as a public dashboard route. Shadow read mode does not duplicate
-agent operations. Absent/invalid settings leave the original TS behavior intact.
+`agentVerbs: off|shadow|on` is the ceiling for the verb adapters; `agentVerbFamilies`
+(`AAC_AGENT_VERB_FAMILIES`, JSON) sets one mode per verb under that ceiling. An absent
+map keeps the ceiling for every verb (the legacy scalar behavior); a present map turns
+on only its listed families, so the read-only families turn on one at a time
+(`signin-expiry`, `quota-read`, `failover-inventory`, `t3-pins`, `scan-usage`). A
+present but invalid map keeps every family off. `key-store` and `claude-history` write
+on the computer, so their shadow mode is off: shadow never duplicates a write.
+
+`shadow` serves the reference (Python/TS/scanner) answer as soon as it settles and runs
+the agent alongside; the comparison is logged in the background as `agent.verbs.shadow`
+with the verb, outcome (`equal`, `different`, `fallback`, `error`, `reference-failed`,
+`reference-fallback`) and both durations. Bodies never enter the log. Object key order
+is the only normalization; a scan whose reference is `python-fallback` is
+`reference-fallback`, not a difference. `on` keeps the agent-first boundary with the
+labelled helper fallback.
+
+Independently, `agentTransport: on` (or `AAC_AGENT_TRANSPORT=on`) sends those calls to
+`POST /internal/agent/<verb>` on the private service. It can start the service while
+public Rust read routes remain off. The endpoint requires the boot secret and the
+reserved front-door service principal; it is never exposed as a public dashboard route.
+Shadow read mode does not duplicate agent operations. Absent/invalid settings leave the
+original TS behavior intact.
 
 The service owns one four-channel `Computer` and one verified client per configured
 computer, loaded through `aac-config` and the packaged `computers.json` seed. Calls
@@ -424,8 +481,17 @@ verification while the service is absent/old. Both use the 64 MiB artifact cap f
 
 **Shipping is disabled on the service path.** Only an already installed hash-pinned
 agent is admitted. Missing, damaged or old agents return the labelled helper fallback;
-no prepare, SCP or commit step runs. The catalog stays empty. M3D4 and M3D5 remain open:
-this implementation creates no SSH identity and edits no trust or authorization file.
+no prepare, SCP or commit step runs. M3D4 (ship in stages, VM first) and M3D5 (the VM's
+current key, AAC-pinned known_hosts) are answered: `bun run agent:build` builds the
+agent on each build computer (Nas1, the Mac, aac-winbuild; never the VM) into
+`crates/aac-agent/prebuilt/<target>/`, `--copy-only` carries the matching targets into
+`dist/agent/` during `build`, and the lead reviews and commits each target's pin into
+`src/web-server/services/agent-artifacts.json`. The lead then places the binary on each
+remote computer with `scripts/agent-install.sh` (Nas1, Mac) or `scripts/agent-install.ps1`
+(Windows): digest check, staged `.part`, re-check, atomic rename, `--version` handshake.
+The VM is Local and runs the packaged binary in place. Linux artifacts are glibc until
+the musl target is authorized (F11); both are admitted. This implementation creates no
+SSH identity and edits no trust or authorization file.
 
 SSH requires an explicit existing identity file (`computers[].transport.key`, or
 `agentTransportSsh.identityFile` for seeded computers) and an explicit pinned source
@@ -489,13 +555,95 @@ agent corpora directly and through the private socket/SSH recorder and compares 
 counts. It also checks six HTTP hangs opening the three-failure circuit, pooled reuse, breaker, byte/hash caps, no shipping, authentication,
 progress/input and acknowledged cancellation. All binaries stay on the build host.
 
+## M4 host action verbs (off by default)
+
+`launch` and `claude-host` move the host work of `src/utils/app-launcher.ts` and the Claude
+profile bootstraps (`claude-host-transport.ts`, `claude-host-mac-program.ts`, the Open
+commands in `claude-desktop-transport.ts`) into the agent. They ride the same `agentVerbs` /
+`agentTransport` switches and the same fallback contract: every unavailable, unproven or
+failed agent answer delegates to the labelled reference (the TS launcher, the ssh
+bootstrap), which stays in place until the cut. The guards stay in the front door.
+
+- **launch** is a byte-for-byte port of the reference builders: the transient user-service
+  argv (`--user --unit=aac-launch-<app>-<pid>-<suffix> --collect --property=KillMode=process`,
+  bare `--setenv=KEY` flags, the loader trampoline, `$` doubling), the systemd-run
+  environment (the app's values plus the inherited `XDG_RUNTIME_DIR`), the fail-closed
+  refusal when systemd-run is missing, and the detached direct spawn on the other platforms.
+  Environment values never reach an argv. Non-ASCII spellings delegate to the TS launcher.
+- **claude-host** carries `{op, host, profileId?, trashName?, launcher?, accountList?, token?}`
+  for create, undo, state, session, trash, restore, purge and open. The Mac backend is a
+  native port of the fixed Python program (the same folder rules, the sh launch script,
+  plistlib's XML form, the ps needle rule, the sign-in marker read); the Windows backend
+  generates the reference's fixed PowerShell byte for byte and runs it locally behind the
+  same encoded bootstrap, so the COM shortcuts, scheduled tasks and allowlist keep the
+  reference's exact behavior. The host family must match the agent's computer.
+- **purge** additionally requires the TS-issued permit: `claudeHostPurgePermit` computes
+  `<expiresMs>.<HMAC-SHA256>` over `aac-claude-host-purge\0<host>\0<trashName>\0<expiresMs>`
+  with the one shared key in `config/tables/agent-transport-policy.json`
+  (`claudeHostPurgeKey`), riding the confirmation's 120-second lifetime. The lifecycle
+  issues it after the route consumed its confirmation (and for the due sweep); the verb
+  verifies it before any path is touched and refuses without it (`confirmation_invalid` /
+  `confirmation_expired`). The key binds the permit to the TS+agent pair; it is not a
+  credential against the OS account, which can already read its own trash.
+
+The parity suites (see `tests/spec/README.md`, M4a/M4b): the checked-in tables generated by
+the real TS builders (`launch-table.json`, `claude-host-table.json`, the SAFE_PATH category
+ranges), the Rust table tests, `launch_exec.rs`'s recorder runs, and
+`claude_host_parity.py`'s fixture-home comparisons — Mac operations with byte-identical
+trees (trash then restore included), the fixture-safe Windows steps, and the permit
+refusals. No real app, shell folder, scheduled task or provider is touched by the suites.
+
+## Sign-in sessions (M4c, off by default)
+
+`agentVerbs: on` with `agentTransport: on` and a live service connection moves the interactive
+sign-in CLI session into the `signin-session` agent verb (`crates/aac-agent/src/signin_session/`).
+The TypeScript runner stays the fallback and keeps the install commit until M5.
+
+- **One session per agent process.** `start` runs the ported `SignInJobRunner` state machine
+  (`signin-jobs.ts`) with the ported output parser (`signin-output.ts`) and the ported process
+  layer (`signin-process.ts`): the same fixed Python PTY relay byte for byte, the complete
+  environment and nothing else, a new process group, SIGTERM then SIGKILL after the two-second
+  grace (the relay's own one-second grace is inside the fixed program). Plain-pipe commands
+  (the Antigravity driver shape, Muse over SSH) skip the relay. Every job state change is a
+  `progress` event carrying the same job DTO; `{"input":"<code>"}` submits the one supervised
+  authorization code; `{"cancel":true}` ends the job cancelled and kills the CLI group. The
+  terminal frame is the final job, or the cancelled failure the transport acknowledges.
+- **The install boundary.** On CLI exit 0 the session reports `verifying` with
+  `installPending` and exits; the front door's `AgentSignInJobRunner`
+  (`src/web-server/services/signin-session-agent.ts`) runs the unchanged flow `complete`
+  under its identity guards and registry lock, emits the remaining events exactly as the TS
+  runner does, and settles the journal. Origin, session and confirmation guards never moved.
+- **The journal.** Every state change is written atomically through the one-file registry's
+  `signin-jobs` row (0600, `<ccs>/signin-jobs/`). One-shot actions read it: `get` (the journaled
+  job, null past the ten-minute retention, or the restarted placeholder for an unknown id),
+  `list`, `cancel` (the second call sets the flag the owner polls, kills the relay group and
+  the CLI's own session, and verifies the child is gone), and `settle`. A running entry whose
+  owner died recovers as `failed/server_restarted` and its stray CLI group is killed; an
+  installing entry is owned by the front door's pid, not the exited agent. The runner's limits
+  (one running job per provider, three in all) are enforced against the journal at start.
+- **Scrub.** Raw CLI output is parsed in memory and discarded; only the allowlisted URL and
+  the device user code enter events. The submitted authorization code, credential bytes,
+  tokens and emails never enter events, the journal or logs.
+- **Deadline.** The verb keeps the CLI's own 15-minute window: `max_deadline_ms("signin-session")`
+  is 960 s (the other verbs keep 600 s). The adapter sizes the request deadline past the job
+  timeout plus the install margin.
+
+The checks: `cargo test -p aac-agent signin_session` (parser, state machine, journal), and on
+the build host `bun tests/spec/agent/signin-session.mjs /path/to/aac-agent`: fake-CLI PTY
+scripts per provider (Claude, Codex, Antigravity, Muse) drive the real TS runner and the verb
+on the same fixtures and compare the full job event sequences, plus the cancel-kill verified
+by a second call, the scrub, the killed-agent journal recovery, the settle, the limits and the
+restarted placeholder. Synthetic credentials and temporary roots only; no provider is
+contacted. A supervised live sign-in per provider remains the turn-on gate (decision 7).
+
 ## Home, fed (R1)
 
 R1 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 1.1): Home and the accounts dashboard at the
-**fed** level. Off by default: `rustService.groups.home: on` in `config.yaml` (or `AAC_RUST_GROUP_HOME=on`),
-under `rustService.mode: on`, which stays the ceiling. With the group on, Home is offered as with the D7 switch,
-and `GET /api/views/home` is answered from fed generations; with it off, Home is D7's path (or not offered) and
-nothing below runs.
+**fed** level. Default-ready: with `rustService.mode: on` (the ceiling) and no explicit setting, the Home group
+is on and `GET /api/views/home` is answered from fed generations. `rustService.groups.home: off` in
+`config.yaml` (or `AAC_RUST_GROUP_HOME=off`) turns it off; then Home is D7's path (or not offered) and nothing
+below runs. `on` is accepted explicitly too. The group's parity and measurement gates are the Home corpus and
+`tests/spec/bridge-measure.mjs --home` (see the lane README and `MEASURE-R1*`).
 
 - **The owners push only when their data changed** (`views/home-feed.ts`, `PUT /internal/feed/<source>`), with
   a numeric generation per source that only moves forward (a late push of an older one is not taken, and the
@@ -566,6 +714,35 @@ measures off `GET /api/accounts/dashboard`, D7's Home and the fed Home in the sa
 synthetic home (whose 30 x 12 dashboard rows reach the real dashboard service through the additional-accounts
 snapshot).
 
+### Home feed producer (G17)
+
+The producer half of `views/home-feed.ts` — the dashboard's change-key text (`JSON.stringify({...dashboard,
+updatedAt: ''})`), its facts (`localeRanks(homeSortWords(...))` and `resetEpochs(...)`), the Antigravity ISO-only
+envelope (`rustAntigravityInventoryInput`), the Opens text, and `ensure`'s per-source change keys and generations
+— runs in Rust too: `crates/aac-http/src/home_producer.rs`. `PUT /internal/home-inputs` (service role, the
+internal group) takes the raw inputs `{platform, secure, dashboard, opens, antigravity}` and names the three
+held generations; the fed view request then carries those ids as before. Lane I's collection feeds the producer
+in process once it owns the dashboard read (G2); until then the TS front door can use the socket form with
+`rustService.homeProducer: on` (`AAC_RUST_HOME_PRODUCER` wins), off by default. The TS push path stays available
+until the cut; a producer decline falls back to it.
+
+Every output is the very text the TS producer writes, or a named decline. The proved domains: printable-ASCII
+sort words (`aac_num::intl::ascii_compare`; another word declines `collation`), the ES Date Time String Format
+with an explicit zone (`aac_num::ecma::parse_instant`; the empty string is its proven NaN, another unproved
+string declines `date`), `toISOString` years 1970-9999, safe-integer millisecond times in `readFacts`'s window,
+`String(profile)` of the sign-in rows for absent/null/boolean/string/number only, and `jsonExact`'s gate (depth
+64, no `__proto__` key). The generation rules are `ensure`'s: only-forward clock generations, a newer held
+generation declines `stale`, an over-cap body is refused once per key (`unsupported`; the bridge's word for the
+same refusal on the TS path is `cap`).
+
+The checks: `home_producer.rs` unit tests (the change key, the facts, the envelope, the generation rules, and
+`tests/spec/home-producer-goldens.json` — the TS producer's own outputs for the 176 Home corpus cases and the
+large fixture, byte-equal or declined), `crates/aac-http/tests/lifecycle.rs`
+(`home_inputs_produce_the_generations_the_ts_producer_pushes`: the socket producer's fed answer is byte-equal to
+the push path's, unchanged inputs name the same generations, a non-ASCII word declines `collation`, another
+principal is refused), and `tests/unit/web-server/home-feed.test.ts` (the producer branch sends the raw inputs,
+names the returned generations, pushes nothing itself, and falls back on a decline).
+
 ## Status, fed (R2)
 
 R2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 1.2): Status at the **fed** level. Off by default:
@@ -624,3 +801,275 @@ before opening the store. The internal store-method route retains the kernel
 single-writer lock and automatically rolls back to NAPI after five crashes.
 See [store.md, optional Rust store host](store.md#15-optional-rust-store-host-r3)
 for the method contract, caps, shutdown order, fixture drills and turn-on soak.
+
+## M6 dashboard authentication
+
+The Rust public front door is opt-in. Run the `aac-http` binary with `--public`,
+an explicit `CCS_DIR` (or `CCS_HOME`), and a numeric
+`AAC_RUST_PUBLIC_LISTEN` such as `127.0.0.1:0` for an isolated fixture. The
+binary prints the actual bound address. The existing no-argument command still
+selects the private service. On a host with a configured
+`dashboard_tls.https_listener`, public mode also starts the native HTTPS
+listener on its configured port when the certificate and key pass admission.
+
+Public mode owns dashboard sign-in, sessions, setup, password and setting
+changes, devices, the bar proof, and the `/ws` upgrade. It reuses the TS
+session and device documents, the signed `connect.sid` cookie, and the
+private-file registry. Set the same `CCS_SESSION_SECRET` in both processes if
+the installation overrides the file secret. Stop the TS server before starting
+Rust on the same private root. Rust refuses the TS session-owner marker.
+Use separate private roots while comparing the two processes. TS keeps
+ownership in its private-socket modes, including `on`.
+
+To integrate the other public routes, supply the composed public router to
+`DashboardAuth::protect`. Handlers read `DashboardAccess` from the request
+extensions. The public router and the secret-bearing private Unix router have
+separate entry points. Rust owners publish through `DashboardAuth::events()`. The standalone entry
+point explicitly declines routes outside its ownership. See the producer table
+below for the transitions that publish a hint.
+
+The Windows auth fixture uses separate temporary roots, the real TS auth
+routers, and the TCP binary. Run the following commands with a fixture binary.
+
+```sh
+cargo test --locked -p aac-http --lib
+cargo build --locked -p aac-http
+bun tests/spec/m6-auth-parity.ts /absolute/path/to/aac-http
+```
+
+Set `AAC_M6_OPENSSL` to the fixture's OpenSSL executable to exercise native HTTPS
+and setup audit redaction. `AAC_RUST_PUBLIC_BINARY` opts the same HTTP fixture
+into `tests/spec/run.mjs`. The parity fixture compares statuses and serialized
+body order, plus security, cookie and limiter headers. It normalizes generated
+identifiers, timestamps, cookie material and retry timing. It also checks a
+TS-issued cookie and paired token across handoff and a Rust restart.
+
+
+### Public dashboard event producers
+
+| Wire event | Transitional TS producer | Rust owner handoff |
+| --- | --- | --- |
+| `accounts-changed` | Accepted account-usage collection, visibility and lifecycle writes | Publish `DashboardEvent::AccountsChanged {}` after the new snapshot or write is readable. Lane I owns collection. |
+| `status-changed` | The Status service's existing coalesced notification | Lane C publishes `DashboardEvent::StatusChanged {}` on the same invalidation. Scoreboard has no separate TS WebSocket frame. |
+| `analytics-changed` | Completed history sample or published activity snapshot | Lane D publishes `DashboardEvent::AnalyticsChanged {}` after publication. |
+| `app-update-job` | Update all start, host phases and completed rows, cancellation and terminal state | Lane H supplies `AppUpdateProgress` to `DashboardEvent::AppUpdateJob`. The frame has task counts and host phases. HTTP still serves the full result. |
+| `reset-claims-changed` | Existing successful claims and revocations | The owning Rust write calls `DashboardEvents::reset_claims_changed()` after commit. It assigns one id for all recipients. |
+| `signin-job` | The existing sign-in runner's state changes | Lane G supplies the public `DashboardSignInJob` to `DashboardEvent::SigninJob`. Rust applies verification and email redaction per connection. |
+
+The transitional launcher can pass an inherited private pipe to Rust. Start the
+`--public` child with piped stdin and `AAC_RUST_PUBLIC_EVENT_STDIN=1`, then
+attach the child's stdin with `attachDashboardEventFeed` in the producer
+process. `startServer({ dashboardEventFeed: child.stdin, ... })` attaches the
+same adapter for a TS fallback instance using its own private root.
+`DashboardEvents::read_feed` accepts the stream directly in an embedded
+composition. Start only one writer per private root, and detach or replace the
+old pipe when the child is restarted. This pipe carries sign-in verification
+data, so keep it out of logs, disk queues, and public routes.
+
+Frames are newline-delimited JSON with a 64 KiB limit. Rust filters recipients
+when sending. Only account hints reach an auth-disabled localhost socket.
+Malformed frames are skipped. An oversized or incomplete frame ends the feed,
+and a slow or ended pipe can miss hints. Clients can recover current state by
+polling. Analytics and Update all previously relied on polling. Their new
+events carry invalidation or progress only.
+
+```sh
+bun tests/spec/m6-events-parity.ts /absolute/path/to/aac-http
+bun tests/spec/m6-public-contract.ts /absolute/path/to/aac-http --require-complete
+```
+
+The event fixture drives the TS adapter over the inherited pipe, a fake Update
+all runner and the real Rust WebSocket. The public contract replay drives all
+M0 route/role rows directly against Rust. Its strict mode fails while any
+handler is unmounted or any reply differs. Set `AAC_M6_REQUIRE_COMPLETE=1`
+with `AAC_RUST_PUBLIC_BINARY` to enable strict mode from `tests/spec/run.mjs`.
+
+### M6 hub, dashboard assets and CLI
+
+Compose the API with `auth.protect(auth.mount_edges(api, cache, ui_root))`.
+Give account collection a clone of `HubCache` and call
+`publish_dashboard_cache` with the cached dashboard DTOs in Mac, Windows
+order after their normal passed-reset calculation. The facade reads those
+published answers without collecting. The standalone front door can also
+poll an absolute `AAC_RUST_HUB_CACHE` path at most once per five seconds.
+Write a single dashboard or an array of dashboards atomically as owner-only
+JSON with an `accounts` array on each dashboard. An unavailable or invalid
+read retains the last published answer. The hub key stays in the existing TS
+auth store and can be managed with the shipped dashboard usage-hub command.
+
+Set `AAC_RUST_UI_DIR` to a packaged `dist/ui` for development, or set
+`AAC_UI_EMBED_DIR` when building the binary for a self-contained install.
+Supply the output from `scripts/build-ui.js`, including its build manifest.
+An unpackaged development binary also looks for `dist/ui` in the checkout.
+The front door uses strong per-encoding ETags for the verified precompressed
+variants and keeps unversioned assets, the service worker and the app frame
+revalidating. Static files skip session persistence. Page and hub responses
+preserve rolling browser cookies.
+
+The native `ai-account-center` and `ccs` binaries share the same command parser.
+Set `AAC_RUST_DASHBOARD=1` to opt their dashboard launcher into the public Rust
+listener. The shipped TS CLI continues to run dashboard by default and handles
+the administrative subcommands and other existing commands. The native CLI
+locates the shipped entry point next to the executable or through
+`AAC_TS_CLI`. Release packaging can use the same native executable under
+the five retired names to keep their guidance.
+
+### Composed public listener
+
+Copy `config/rust-compose.example.yaml` to `config.yaml` in a fixture root and
+point `AAC_RUST_PUBLIC_BINARY` at the matching local `aac-http` build. Run the ordinary
+dashboard command with --no-open to leave browser startup to the fixture runner.
+The frontDoor setting selects composition when set to rust. AAC_RUST_COMPOSE=1
+is its environment override. The default selects the TypeScript listener.
+
+The Rust listener owns public authentication, sessions, devices, WebSockets,
+static assets and T3 management. Other API paths go over the private loopback
+connection to the existing guarded route adapters. Those adapters dispatch to the
+enabled Rust groups and retain the established fallbacks. The per-boot proof
+and transport facts are supplied by Rust and stripped at the receiver. The
+companion refuses direct HTTP requests and does not open the TS session store.
+App Updates uses the same L5 pool as the private service when the group is on.
+
+Lane H fixture tests use synthetic installers. The composed M0 capture uses its
+existing synthetic app-update owner and disables agent transport for that run.
+`bun tests/spec/compose-app-update-parity.ts` exercises the actual H/J route
+binding and native progress through the public WebSocket with agent transport off.
+Use tests/spec/capture.ts --composed to compare with the checked-in TS goldens.
+The --plain-home flag matches the original Home setting. With Home enabled,
+the two signed-in Home rows return the newly offered view. The standalone Rust
+public mode remains available for auth and static fixture tests.
+
+
+## H2 quota collection
+
+Enable `rustService.groups.collection: on` (or `AAC_RUST_GROUP_COLLECTION=on`)
+under `rustService.mode: on`. Native agent reads also require `agentVerbs: on`
+and `agentTransport: on`, and an existing verified agent on the configured
+computer. The service uses the same L5 registry and pool.
+
+- `PUT /internal/collection-tick` waits the configured 30–3600-second interval
+  after a dashboard sampling pass. A changed interval cancels the pending wait.
+  The TypeScript fallback waits the rest of the same interval if the service
+  goes away. Normal dashboard and Home reads share the existing generation.
+- `POST /internal/collect/{verb}` takes the L5 request envelope for
+  `quota-read`, `signin-expiry` or `failover-inventory` with action `inventory`.
+  Matching in-flight requests share one bounded pass. Existing DTO validation
+  and fallback apply. An indeterminate quota response ends that attempt to
+  avoid a duplicate provider read.
+- `PUT /internal/collection-cache/{kind}/{key}` saves a validated observation
+  or Windows Claude snapshot to the original path through the registry lease.
+  The same lease-backed path owns OpenCode's workspace pointer and identity
+  cooldown holds. A wallet pointer is saved only for the current configured source.
+  The selected owner is fixed for the service boot. Turning the group off
+  returns writes to TypeScript using the same cache files.
+
+- `GET /api/accounts/dashboard` uses the prepared generation that also serves
+  Home. The TypeScript front door preserves validation, session and device
+  authorization, no-store, ETag and the byte-equal fallback.
+- `AccountUsageCache` can be supplied to `serve_with_account_usage_cache` to
+  share generations with the native listener. Its `hub_dashboards` returns
+  the Mac and Windows neutral snapshots in that order. Its `store_observations`
+  maps dashboard windows to the existing history store's observations.
+  With the Rust store hosted, the TS boot job also uses that conversion.
+- `GET /internal/collection-sources` reads the private account registry v2.
+  `PUT /internal/collection-provider-cache` takes a Claude profile ID and
+  manifest hash, an OpenCode wallet binding hash, or a wallet-source read.
+- `PUT /internal/collection-cursor` runs the digest-checked Cursor reader
+  locally, with a 120-second process bound and one pending read. It saves the
+  previous observation's layout, uses the ten-minute TTL, and keeps dated
+  last-good rows on an unavailable result. A manual refresh bypasses the TTL.
+  Its fixed key-status and quota subcommands also serve the Cursor quota-card
+  transport. The quota-card cache is a separate fingerprint-bound file. The
+  lease owner clears it when the reader confirms absence of a key.
+  The existing TS reader serves when the Rust collection group is off.
+- `POST /internal/collect/failover-collect` can run a selected
+  provider helper over the same L5 pool, with at most three active helpers.
+  The release bundles the existing Python source, including OpenCode wallet inventory. A refusal before launch
+  allows the TypeScript fallback. An indeterminate reply ends the attempt.
+
+The standalone listener can run the collector through
+`serve_with_native_account_usage(boot, shutdown, cache, callbacks)`. Supply
+one `AccountUsageCache` to both listeners. `NativeAccountUsage::companions`
+supplies the current Rust lifecycle, sign-in, Antigravity and listener facts.
+The producer reads account registry, visibility and refresh settings itself,
+and normalizes quota inputs for both desktop selectors and both transport
+scopes. Native boot declines incoming dashboard feed writes. The caller
+can render with `cache.render`, pass `cache.generation` to the Home renderer,
+and queue a debounced pass with `cache.request_refresh`.
+`NativeAccountUsage::published` receives the cache for the hub when a pass
+publishes, and the hosted store records observations from that cache.
+`serve_with_account_usage_cache` keeps the transitional feed path available.
+
+The private binary selects the native producer with `--native-collection`.
+Use the existing private boot envelope and assign the collection files to
+`rust-service`. In native mode the authenticated Unix route accepts
+`GET /api/accounts/dashboard?platform=windows&refresh=false` and reads its
+latest generation. Platform defaults to `mac` and refresh defaults to false.
+The verified listener may set `x-aac-dashboard-secure: 1` after checking
+the transport. The route uses its own ETag, conditional GET and no-store.
+The existing `x-aac-feed` contract still lets the caller name an exact
+generation for Home and the transitional readers.
+
+The Cursor account event cache exposes `eventCounts` when the reader can
+classify the pages. `fetched` counts all returned events, including repeated
+events across pages. `kept`, `droppedOutOfWindow`, `droppedNoTokenUsage` and
+`droppedDuplicate` partition that count. `pages` counts valid upstream pages.
+A legacy cache may have no counters. If a refresh fails, retained counters
+describe the dated reading carried forward with the retained rows.
+
+## R4: owned Status and Scoreboard share readers
+
+`rustService.groups.status: on` **and** `rustService.store: on` under `mode: on` move the
+Status share readers into the service (`AAC_RUST_GROUP_STATUS`, `AAC_RUST_STORE` override);
+`rustService.groups.scoreboard: on` with the store host moves the Scoreboard owner
+(`AAC_RUST_GROUP_SCOREBOARD`). Without the store host the status group stays fed (R2) and the
+scoreboard group stays the envelope read: the report captures and the runs tables need the
+hosted writer. The boot carries `owned: {reportsRoot, registryDir, status, scoreboard}`; the
+service refuses owned flags without a store boot.
+
+- **Status** (`crates/aac-http/src/status_owned.rs`, readers in `aac-status::share`): one
+  blocking pass every 10 s scans the agent reports (thread/tasks/cards), the status documents
+  and the quota report; the pm-mail registry rides every third pass (30 s). The scans keep the
+  TypeScript readers' rules byte for byte — list first, stat then read only what changed, last
+  good copies with the fixed refusal words, `seq` ordering, the two-scan ENOENT/ESTALE rule,
+  the 120 s removal grace, the writer/card/byte limits, board stats — and apply the one secret
+  policy (`src/shared/secret-policy.json`, compiled as aac-store compiles it). Accepted report
+  revisions are captured into the hosted store in process (batch of four, per-row policy
+  retry). `GET /internal/status/inputs` answers `{generation, reports, quota, registry, docs}`;
+  the front door's StatusService forwards those snapshots as the R2 fed generations (the
+  request path, the composer and its cache stay the proven ones), recomposes pinned and
+  spend-by-stream over them, and pushes the merged pins as `owned-pins` for the check file.
+  Each new generation publishes `status-changed` on the event stream. Three failed input
+  fetches in a row restart the TypeScript share readers (they are stateless and catch up in
+  one cycle); the page keeps answering through today's handler meanwhile.
+- **Scoreboard** (`crates/aac-http/src/scoreboard_owned.rs`): the catalog seed at boot (the
+  packaged seeds embedded in the binary; a new file is admitted by hard link, an existing
+  models/aliases file gains only the packaged entries it lacks, in its own layout, re-read
+  before the rename), a catalog scan every 30 s, and the runs ingest pass every two minutes
+  (every second while a backfill has more, a full pass every fifteen): `runsScan` → the one
+  secret policy over paths and texts → `runsRecord`, exactly the TypeScript shuttle's filter.
+  `GET /api/scoreboard` with `x-aac-feed` answers from the store in process: the paged snapshot
+  read with its restart budget and last-complete-read fallback, `normalizeModel` docs over the
+  held catalog, `read_scoreboard::compose` with by-model and groups in process, the 60 s view
+  cache (a hit fills only `cacheAgeSeconds`), the revalidated-view ETag and `x-aac-view:
+  scoreboard@1`. The front door keeps the filter parse and auth, and per request computes the
+  presentation facts at the request's clock over `GET /internal/scoreboard/inputs` (the
+  unfiltered superset of every filter's rows) and pushes them as `scoreboard-facts` — the
+  composer formats `now` itself, so the facts must carry it (`ctx.valid`); any decline is
+  today's handler. `scoreboard-changed` carries each new generation.
+- **One readers-check writer** (`aac-status::share::check`, the registry row `readers-check`
+  `movesWith: status`): the status scan's rows and the Scoreboard's runs rows merge into one
+  file per writer, written through the registry's leased 0644 writer. The row flips only when
+  **both** owned groups run (one file, one writer); `catalog-seed` (`movesWith: scoreboard`)
+  flips with the scoreboard group. TypeScript's writers refuse a row they do not own.
+- **Parity**: `tests/spec/share-read-parity.ts` pins the real TypeScript readers' snapshots
+  over a scripted virtual share; `crates/aac-status/tests/share_parity.rs` replays it byte for
+  byte. `tests/spec/model-identity.json` (2016 cases) and `tests/spec/answer-signing.json`
+  pin the display resolution and the Ed25519 signer the same way.
+  `tests/spec/owned-read-parity.mjs` runs both front doors over identical fixture shares:
+  status and scoreboard answers equal up to the scan clocks, the owned path must serve,
+  `runsAudit` ingest parity, readers-check equality, and the kill drill.
+
+The answer signing port (`aac-status::answer_signing`, native verbs `answerKeyLoad`,
+`answerSign`, `answerVerify`) is the G16 producer lane's starting point; the answers service
+prefers it and falls back to the TypeScript signer without the module.

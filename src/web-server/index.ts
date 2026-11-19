@@ -1,3 +1,5 @@
+import type { AccountDashboard, ClaudeDashboardPlatform } from './services/account-dashboard-types';
+import { compositionGuard } from './compose-request';
 /**
  * AI Account Center - Web Server
  *
@@ -11,7 +13,7 @@ import { RustService, type RustServiceMode } from './rust-service';
 import http from 'http';
 import type https from 'https';
 import type { AddressInfo } from 'net';
-import type { Duplex } from 'stream';
+import type { Duplex, Writable } from 'stream';
 import path from 'path';
 import { WebSocketServer } from 'ws';
 import {
@@ -50,7 +52,7 @@ import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
 import { readPackagedBuild, recordRunningBuild } from './services/deployed-build';
 import { getCcsDir } from '../utils/config-manager';
-import { attachDashboardEventServer } from './dashboard-events';
+import { attachDashboardEventFeed, attachDashboardEventServer } from './dashboard-events';
 import { isSecureTransport } from './middleware/secure-transport';
 import {
   configureDashboardTransport,
@@ -65,6 +67,8 @@ import {
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { startRustUsageSnapshotFeed } from './agent-usage/agent-usage-rust-feed';
+import { rustGroupOn } from './rust-service-groups';
 import {
   closeAacStore,
   onStoreHostFallback,
@@ -73,7 +77,7 @@ import {
   startAacStoreMaintenance,
 } from '../store/store-service';
 import { startScoreboardService } from './scoreboard/scoreboard-service';
-import { startStatusService } from './status/status-service';
+import { setStatusRustService, startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
@@ -87,6 +91,12 @@ export interface ServerOptions {
   rustService?: RustServiceMode;
   /** Optional existing binary; never built or installed at startup. */
   rustServiceBinary?: string;
+  /** Per-boot proof for a single loopback-only Rust composition companion. */
+  compositionProof?: string;
+  /** Publishes an admitted Rust-held account snapshot to the usage hub. */
+  onRustDashboard?: (platform: ClaudeDashboardPlatform, dashboard: AccountDashboard) => void;
+  /** Optional inherited stdin of the Rust public dashboard event receiver. */
+  dashboardEventFeed?: Writable;
   host?: string;
   staticDir?: string;
   dev?: boolean;
@@ -98,6 +108,7 @@ export interface ServerInstance {
   server: http.Server;
   wss: WebSocketServer;
   cleanup: () => void;
+  publicAddress?: AddressInfo;
   /** Private test/diagnostic counters; never exposed by an HTTP route. */
   rustService: RustService;
   /** The optional in-process HTTPS listener (`dashboard_tls.https_listener`); null when off. */
@@ -139,6 +150,13 @@ function logRequestFailure(status: number, error: unknown, headersSent: boolean)
  * Start Express server with WebSocket support
  */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
+  if (
+    options.compositionProof &&
+    (options.host !== '127.0.0.1' ||
+      options.port !== 0 ||
+      !/^[0-9a-f]{64}$/.test(options.compositionProof))
+  )
+    throw new Error('The composition backend requires an ephemeral loopback listener.');
   const app = express();
   // Routes answer only to their canonical spelling; set before the first app.use.
   app.set('case sensitive routing', true);
@@ -147,6 +165,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.set('query parser', 'extended');
   // The stack's name and version in every answer help no legitimate client.
   app.disable('x-powered-by');
+  if (options.compositionProof) app.use(compositionGuard(options.compositionProof));
   // Trusted TLS proxy hop (off unless dashboard_tls.trusted_proxy is set).
   configureDashboardTransport(app);
   const server = http.createServer(app);
@@ -203,11 +222,13 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       next();
       return;
     }
-    requestLoggingMiddleware(req, res, next);
+    requestLoggingMiddleware(req, res, next, !!options.compositionProof);
   });
 
   // Session middleware (for dashboard auth)
-  const sessionMiddleware = createSessionMiddleware();
+  const sessionMiddleware = options.compositionProof
+    ? (_req: express.Request, _res: express.Response, next: express.NextFunction) => next()
+    : createSessionMiddleware();
   app.use((req, res, next) => {
     if (res.locals.staticAssetRequest === true) {
       next();
@@ -222,9 +243,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // REST API routes (modularized); big JSON answers are encoded on the way out.
   app.use('/api', apiCompression());
   const rustService = new RustService(options.rustService);
-  void rustService.start(options.rustServiceBinary);
+  setStatusRustService(rustService);
+  const rustServiceReady = rustService.start(options.rustServiceBinary);
   app.use('/api', (_req, res, next) => {
     res.locals.rustService = rustService;
+    if (options.onRustDashboard) res.locals.onRustDashboard = options.onRustDashboard;
     next();
   });
   const { apiRoutes } = await import('./routes/index');
@@ -279,6 +302,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   );
 
   const onUpgrade = (request: http.IncomingMessage, socket: Duplex, head: Buffer): void => {
+    if (options.compositionProof) {
+      rejectWebSocketUpgrade(socket, 404, 'WebSocket endpoint not found');
+      return;
+    }
     const pathname = getUpgradePathname(request.url);
     if (!pathname) {
       rejectWebSocketUpgrade(socket, 400, 'Invalid WebSocket upgrade request');
@@ -340,6 +367,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     sessionEpoch: (request) => (request as express.Request).session?.epoch ?? null,
   });
 
+  const detachRustEvents = options.dashboardEventFeed
+    ? attachDashboardEventFeed(options.dashboardEventFeed)
+    : undefined;
+
   // Combined cleanup function
   const cleanup = () => {
     if (cleaned) return;
@@ -349,6 +380,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopEventLoopMonitor();
     httpsServer?.close();
     detachDashboardEvents();
+    detachRustEvents?.();
     stopAccountLifecycleMaintenance();
     codexRenewal.stop();
     stopAntigravityRuntime();
@@ -431,23 +463,28 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         );
       }
       // Agent usage snapshot (off until a folder is set): written after every analytics sample.
-      stopAgentUsageSnapshot = startAgentUsageSnapshot({
-        signIn: async () => {
-          const health = await getSignInHealth();
-          return Object.values(health.machines).flat();
-        },
-        signInRenewal: async () => {
-          const renewal = await readClaudeSignInRenewal();
-          return renewal
-            ? {
-                runner: renewal.runner,
-                generatedAt: renewal.generatedAt,
-                stale: renewal.stale,
-                needsYou: renewal.needsYou,
-              }
-            : null;
-        },
-      });
+      // G18: with the service on and groups.usageSnapshot on, the Rust service owns the writer
+      // and the front door pushes each sample to it; otherwise the TypeScript publisher writes.
+      stopAgentUsageSnapshot =
+        process.platform !== 'win32' && rustService.mode === 'on' && rustGroupOn('usageSnapshot')
+          ? startRustUsageSnapshotFeed(rustService)
+          : startAgentUsageSnapshot({
+              signIn: async () => {
+                const health = await getSignInHealth();
+                return Object.values(health.machines).flat();
+              },
+              signInRenewal: async () => {
+                const renewal = await readClaudeSignInRenewal();
+                return renewal
+                  ? {
+                      runner: renewal.runner,
+                      generatedAt: renewal.generatedAt,
+                      stale: renewal.stale,
+                      needsYou: renewal.needsYou,
+                    }
+                  : null;
+              },
+            });
       // The history store (docs/store.md): opened before the first sample, which waits for it;
       // without the native module the dashboard runs as before, without stored history.
       // R3: while the service hosts the store, its jobs run there; this loop starts only
@@ -479,17 +516,20 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       stopStatusService = startStatusService();
       // Scoreboard catalog seeds (runs are read on demand).
       startScoreboardService();
-      startAccountAnalyticsSampling();
+      startAccountAnalyticsSampling(rustService);
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
-      startAccountLifecycleMaintenance();
+      startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
       // First run with sign-in on and no password: this run's one-time setup code.
-      void prepareFirstRunSetupCode();
+      if (!options.compositionProof) void prepareFirstRunSetupCode();
       // The optional HTTPS listener (dashboard_tls.https_listener, off by default).
-      void startDashboardHttpsListener(app, listenHost, onUpgrade)
+      const https = options.compositionProof
+        ? Promise.resolve(null)
+        : startDashboardHttpsListener(app, listenHost, onUpgrade);
+      void https
         .catch(() => null)
         .then((started) => {
           httpsServer = started;

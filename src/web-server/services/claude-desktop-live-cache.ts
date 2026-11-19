@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
+import { tsWritesRow } from '../../shared/private-files';
+import { readRustProviderCache, writeRustCollectionCache } from '../rust-service-transport';
 import { CLAUDE_PROFILE_ID_PATTERN } from './claude-desktop-profile-service';
 import type { DashboardAccountWindow } from './account-dashboard-types';
 
@@ -64,6 +66,10 @@ export async function readClaudeDesktopLiveSnapshot(
   const file = cachePath(ccsDir, profileId, manifestHash);
   if (!file) return null;
   try {
+    if (!tsWritesRow('claude-live-snapshots')) {
+      const cached = await readRustProviderCache(ccsDir, { profileId, manifestHash });
+      if (cached !== undefined) return cached;
+    }
     await privateDirectory(path.dirname(file), false);
     const before = await fs.promises.lstat(file);
     if (!regularFile(before) || before.size > MAX_BYTES) return null;
@@ -169,6 +175,10 @@ export async function writeClaudeDesktopLiveSnapshot(
     };
     const contents = JSON.stringify({ schemaVersion: 1, manifestHash, sample: publicSample });
     if (Buffer.byteLength(contents, 'utf8') > MAX_BYTES) return;
+    if (!tsWritesRow('claude-live-snapshots')) {
+      await writeRustCollectionCache(ccsDir, 'claude-live-snapshots', profileId, contents);
+      return;
+    }
     await privateDirectory(path.dirname(file), true);
     try {
       if (!regularFile(await fs.promises.lstat(file))) return;

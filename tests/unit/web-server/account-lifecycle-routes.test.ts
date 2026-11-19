@@ -13,6 +13,7 @@ import os from 'os';
 import path from 'path';
 import { CodexProfileRegistry } from '../../../src/codex-auth/codex-profile-registry';
 import { invalidateCodexAuthProfilesCache } from '../../../src/codex-auth/codex-auth-dashboard-service';
+import { RustService } from '../../../src/web-server/rust-service';
 import { createAccountLifecycleRouter } from '../../../src/web-server/routes/account-lifecycle-routes';
 import { relabel } from '../../../src/web-server/services/account-lifecycle-extras';
 import { AccountConfirmationStore } from '../../../src/web-server/services/account-confirmations';
@@ -29,7 +30,7 @@ import type { ClaudeHostTransport } from '../../../src/web-server/services/claud
 import { CodexAccountLifecycle } from '../../../src/web-server/services/codex-account-lifecycle';
 import { MuseAccountLifecycle } from '../../../src/web-server/services/muse-account-lifecycle';
 import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
-import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
+import { SignInJobRunner, type SignInJob } from '../../../src/web-server/services/signin-jobs';
 import { setLocalNetworkTrustResolver } from '../../../src/web-server/middleware/secure-transport';
 import { parseTrustedNetworks } from '../../../src/web-server/middleware/trusted-networks';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
@@ -190,6 +191,7 @@ function row(id: string, extra: Partial<DashboardAccount> = {}): DashboardAccoun
 
 interface Fixture {
   base: string;
+  rustService?: RustService;
   env: LifecycleEnv;
   audits: Array<[string, Record<string, unknown>]>;
   probes: AdditionalUsageSource[];
@@ -212,6 +214,9 @@ async function fixture(
     claudeEnabled?: boolean;
     antigravityFlow?: 'preflight_failed' | 'tool_missing' | null;
     museEnabled?: boolean;
+    approvalBinary?: string;
+    writeParityMode?: 'off' | 'shadow' | 'on';
+    readSignInJournal?: (id: string) => Promise<SignInJob | null | undefined>;
   } = {}
 ): Promise<Fixture> {
   const audits: Array<[string, Record<string, unknown>]> = [];
@@ -265,6 +270,7 @@ async function fixture(
   const env: LifecycleEnv = {
     ccsDir: () => ccsDir,
     runner: () => runner,
+    readSignInJournal: options.readSignInJournal,
     codex: () => new CodexAccountLifecycle({ codexHome, codexCli: () => '/fake/codex', env: {} }),
     claude: () =>
       new ClaudeAccountLifecycle({
@@ -361,6 +367,25 @@ async function fixture(
   };
   const app = express();
   app.use(express.json());
+  const mode = options.writeParityMode ?? writeParityMode;
+  const rustService = mode || options.approvalBinary ? new RustService(mode ?? 'on') : undefined;
+  if (rustService) {
+    const service = rustService;
+    closers.push(async () => service.stop());
+    if (service.mode === 'on') {
+      await service.start(options.approvalBinary);
+      expect(service.stats.fallbacks).toBe(0);
+      expect(service.accountConfirmations()).toBeDefined();
+    }
+    // The ordinary unit fixtures use a fake approval clock. The parity and
+    // guarded issuer fixtures explicitly opt into the real issuer.
+    if (options.writeParityMode || options.approvalBinary) {
+      app.use((_req, res, next) => {
+        res.locals.rustService = service;
+        next();
+      });
+    }
+  }
   app.use((req, _res, next) => {
     // The peer the route sees: `x-test-peer`, or the real loopback peer. Set on every
     // request, because a kept-alive socket carries the last value to the next one.
@@ -384,6 +409,7 @@ async function fixture(
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
     base,
+    rustService,
     env,
     audits,
     probes,
@@ -426,6 +452,113 @@ function files(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { recursive: true }).map(String).sort();
 }
+
+const writeParityMode = process.env.AAC_SPEC_LIFECYCLE_WRITE_MODE;
+it.skipIf(!['off', 'shadow', 'on'].includes(writeParityMode ?? ''))(
+  'registered lifecycle state write parity',
+  async () => {
+    const f = await fixture({
+      claudeEnabled: true,
+      writeParityMode: writeParityMode as 'off' | 'shadow' | 'on',
+      approvalBinary: process.env.AAC_RUST_SERVICE_BINARY,
+    });
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    expect(added.status).toBe(201);
+    const id = String((added.body.account as { id: string }).id);
+    const file = path.join(ccsDir, 'account-usage-accounts.json');
+    const old = fs.readFileSync(file, 'utf8');
+    expect(
+      (await f.request('PATCH', '/' + id, { label: 'No' }, { origin: 'https://foreign.test' }))
+        .status
+    ).toBe(403);
+    expect(fs.readFileSync(file, 'utf8')).toBe(old);
+    const renamed = await f.request('PATCH', '/' + id, { label: 'Fixture work' });
+    expect(renamed.status).toBe(200);
+    expect((renamed.body.account as { label: string }).label).toBe('Fixture work');
+    expect(
+      JSON.parse(fs.readFileSync(file, 'utf8')).accounts.find(
+        (entry: { id: string }) => entry.id === id
+      ).label
+    ).toBe('Fixture work');
+    const prepared = await f.request('POST', '/' + id + '/remove', {});
+    const token = (prepared.body.confirmation as { token: string }).token;
+    const removed = await f.request('POST', '/' + id + '/remove', { confirmationToken: token });
+    expect(removed.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'party',
+            email: 'party@example.com',
+            mac: {
+              launcherName: 'p',
+              launcherPath: '/a',
+              profilePath: '/fake/mac/Claude-party',
+              sshHost: 'mac-host',
+            },
+            windows: {
+              launcherName: 'p',
+              profilePath: 'C:\\x\\Claude-party',
+              sshHost: 'windows-host',
+            },
+          },
+        ],
+      }),
+      { mode: 0o600 }
+    );
+    const profile = await f.request('POST', '/add', {
+      provider: 'claude',
+      profileId: 'work2',
+      label: 'Work 2',
+      email: 'work2@example.com',
+    });
+    expect(profile.status).toBe(201);
+    expect(profile.body).toMatchObject({
+      account: { id: 'claude:work2', lifecycle: { state: 'pending_sign_in' } },
+      launchers: { mac: 'created', windows: 'created' },
+    });
+    const pending = JSON.parse(
+      fs.readFileSync(path.join(ccsDir, 'accounts/claude-pending.json'), 'utf8')
+    );
+    expect(pending.profiles.map((value: { id: string }) => value.id)).toContain('work2');
+    expect(f.rustService?.registeredWrites).toBe(writeParityMode === 'on' ? 6 : 0);
+    const prepare = await f.request('POST', '/claude:party/remove', {});
+    const removeToken = (prepare.body.confirmation as { token: string }).token;
+    const moved = await f.request('POST', '/claude:party/remove', {
+      confirmationToken: removeToken,
+    });
+    expect(moved.body).toMatchObject({ removed: true, purgeAfter: '2026-11-01T08:00:00Z' });
+    const trashed = String(moved.body.trashId);
+    expect((await f.request('GET', '/trash')).body.entries).toMatchObject([
+      { trashId: trashed, state: 'trashed' },
+    ]);
+    const restore = await f.request('POST', '/trash/' + trashed + '/restore', {});
+    const restoreToken = (restore.body.confirmation as { token: string }).token;
+    const restored = await f.request('POST', '/trash/' + trashed + '/restore', {
+      confirmationToken: restoreToken,
+    });
+    expect(restored.body).toEqual({ restored: true, accountId: 'claude:party' });
+    const writes = f.rustService?.registeredWrites ?? 0;
+    if (writeParityMode === 'on') expect(writes).toBeGreaterThan(6);
+    else expect(writes).toBe(0);
+    f.rustService?.stop();
+    expect((await f.request('PATCH', '/zai:usage', { label: 'Fallback' })).status).toBe(200);
+    const addedOnFallback = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    expect(addedOnFallback.status).toBe(201);
+    const fallbackAccount = (addedOnFallback.body.account as { id: string }).id;
+    const fallbackRoute = '/' + fallbackAccount + '/remove';
+    const fallbackPrepare = await f.request('POST', fallbackRoute, {});
+    const fallbackToken = (fallbackPrepare.body.confirmation as { token: string }).token;
+    const fallbackCommit = await f.request('POST', fallbackRoute, {
+      confirmationToken: fallbackToken,
+    });
+    expect(fallbackCommit.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+    expect(f.rustService?.registeredWrites).toBe(writes);
+  }
+);
 
 describe('lifecycle route scope and guards', () => {
   it('needs a browser session, the dashboard origin, JSON, a strict body and no query', async () => {
@@ -697,6 +830,47 @@ describe('trusted local network (CONTRACT-auth-devices 2a rule 4)', () => {
 });
 
 describe('remove with a confirmation token', () => {
+  const approvalBinary = process.env.AAC_SPEC_APPROVAL_BINARY;
+  it.skipIf(!approvalBinary)(
+    'uses the Rust issuer behind the actual session, origin and target guards',
+    async () => {
+      const f = await fixture({ approvalBinary });
+      const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+      expect(added.status).toBe(201);
+      const id = String((added.body.account as { id: string }).id);
+      const route = `/${id}/remove`;
+      const prepare = async () => {
+        const result = await f.request('POST', route, {});
+        expect(result.status).toBe(200);
+        return (result.body.confirmation as { token: string }).token;
+      };
+      const confirmationToken = await prepare();
+      expect(
+        (
+          await f.request(
+            'POST',
+            route,
+            { confirmationToken },
+            { origin: 'https://untrusted.example' }
+          )
+        ).status
+      ).toBe(403);
+      const foreign = await f.request(
+        'POST',
+        route,
+        { confirmationToken },
+        { 'x-test-session': 'b' }
+      );
+      expect([foreign.status, foreign.body.code]).toEqual([409, 'confirmation_stale']);
+      const spent = await f.request('POST', route, { confirmationToken });
+      expect([spent.status, spent.body.code]).toEqual([409, 'confirmation_stale']);
+      expect((await f.request('POST', route, { confirmationToken: await prepare() })).body).toEqual(
+        { removed: true, trashId: null, purgeAfter: null }
+      );
+      expect(f.rustService?.stats.served).toBe(5);
+    }
+  );
+
   it('prepares, commits once, and refuses a reused, foreign or stale token', async () => {
     const f = await fixture();
     const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
@@ -1114,10 +1288,11 @@ describe('remove races and failures', () => {
     const id = String((added.body.account as { id: string }).id);
     // The lookup sees the account; the write sees the registry after a Remove committed.
     const other = path.join(root, 'after-remove', '.ccs');
-    fs.mkdirSync(path.dirname(other), { recursive: true });
-    fs.cpSync(ccsDir, other, { recursive: true });
+    fs.mkdirSync(other, { recursive: true, mode: 0o700 });
     const registryFile = path.join(other, 'account-usage-accounts.json');
-    const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    const registry = JSON.parse(
+      fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'), 'utf8')
+    );
     registry.accounts = registry.accounts.filter((entry: { id: string }) => entry.id !== id);
     fs.writeFileSync(registryFile, JSON.stringify(registry), { mode: 0o600 });
     let calls = 0;
@@ -1130,6 +1305,49 @@ describe('remove races and failures', () => {
 });
 
 describe('sign-in and guides', () => {
+  it('reads recovered sign-in jobs only after the existing GET guards', async () => {
+    const id = 'job_0000000000000082';
+    const expired = 'job_0000000000000083';
+    const unseen = 'job_0000000000000084';
+    const reads: string[] = [];
+    const at = '2026-10-02T08:00:00.000Z';
+    const job: SignInJob = {
+      id,
+      provider: 'codex',
+      kind: 'device-code',
+      mode: 'signin-again',
+      accountId: 'codex:work',
+      profileName: 'work',
+      platform: 'ubuntu',
+      state: 'succeeded',
+      verification: null,
+      result: { accountId: 'codex:work', email: null, plan: null },
+      error: null,
+      startedAt: at,
+      updatedAt: at,
+      expiresAt: at,
+    };
+    const f = await fixture({
+      readSignInJournal: async (candidate) => {
+        reads.push(candidate);
+        return candidate === id ? job : candidate === expired ? null : undefined;
+      },
+    });
+    const route = '/signin-jobs/' + id;
+    expect((await f.request('GET', route, undefined, { 'x-test-session': '' })).status).toBe(401);
+    expect((await f.request('GET', route + '?x=1')).status).toBe(400);
+    expect((await f.request('GET', '/signin-jobs/nope')).status).toBe(404);
+    expect(reads).toEqual([]);
+    const recovered = await f.request('GET', route);
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get('cache-control')).toBe('no-store');
+    expect(recovered.body).toEqual(job);
+    expect((await f.request('GET', '/signin-jobs/' + expired)).status).toBe(404);
+    const fallback = await f.request('GET', '/signin-jobs/' + unseen);
+    expect(fallback.body).toMatchObject({ id: unseen, error: { code: 'server_restarted' } });
+    expect(reads).toEqual([id, expired, unseen]);
+  });
+
   it('starts a Codex device-code job and allows one per provider', async () => {
     const f = await fixture();
     codexProfile('gmail');
@@ -1351,6 +1569,52 @@ describe('registry, re-check, open, label and trash', () => {
     expect((await f.request('POST', '/zai:usage/recheck', {})).status).toBe(200);
     const codex = await f.request('POST', '/codex:nobody/recheck', {});
     expect(codex.status).toBe(404);
+  });
+
+  it('does not publish a reading after the account changes hosts during Re-check', async () => {
+    const f = await fixture();
+    let finish!: () => void;
+    const continueProbe = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let entered = false;
+    const collect = f.env.refreshAdditional;
+    f.env.refreshAdditional = async (id, source) => {
+      entered = true;
+      await continueProbe;
+      return collect(id, source);
+    };
+    let published = 0;
+    f.env.replaceRow = () => {
+      published++;
+    };
+    const result = f.request('POST', '/zai:usage/recheck', {});
+    try {
+      await until(() => entered);
+      fs.writeFileSync(
+        path.join(ccsDir, 'account-usage-accounts.json'),
+        JSON.stringify({
+          version: 2,
+          accounts: [
+            {
+              id: 'zai:usage',
+              provider: 'zai',
+              platform: 'mac',
+              sshHost: 'replacement-mac',
+              label: null,
+              credential: { kind: 'discover' },
+              createdAt: null,
+              createdBy: null,
+            },
+          ],
+        }),
+        { mode: 0o600 }
+      );
+    } finally {
+      finish();
+    }
+    expect(await result).toMatchObject({ status: 404, body: { code: 'unknown_account' } });
+    expect(published).toBe(0);
   });
 
   it('opens Cursor on the Mac only, and relabels additional accounts', async () => {

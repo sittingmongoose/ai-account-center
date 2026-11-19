@@ -17,7 +17,7 @@ import {
   composeRegistryListing,
   registryListingFacts,
 } from '../services/account-lifecycle-listing';
-import { composeWithRust } from '../rust-service';
+import { composeWithRust, RustService } from '../rust-service';
 import { isRustRegistryListing, rustRegistryInput } from '../rust-account-input';
 import {
   defaultLifecycleEnv,
@@ -67,7 +67,12 @@ export interface AccountLifecycleRouterDeps {
 }
 
 function context(req: Request): LifecycleContext {
-  return { secure: isSecureTransport(req), sessionKey: sessionKey(req.sessionID) };
+  const service: unknown = req.res?.locals.rustService;
+  return {
+    secure: isSecureTransport(req),
+    sessionKey: sessionKey(req.sessionID),
+    approvals: service instanceof RustService ? service.accountConfirmations() : undefined,
+  };
 }
 
 function answer(res: Response, result: LifecycleResult): void {

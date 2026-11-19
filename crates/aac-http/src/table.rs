@@ -15,19 +15,42 @@ pub(crate) enum Handler {
     Health,
     Diag,
     Settings,
+    WriteSettings,
+    WriteVisibility,
+    WritePreferences,
     Home,
     Accounts,
+    Dashboard,
     Profiles,
     Files,
     Status,
     Scoreboard,
     StoreStatus,
+    StatusInputs,
+    StatusAnswers,
+    ScoreboardInputs,
     Feed,
     FeedStatus,
+    HomeInputs,
     Events,
     Agent,
+    Collect,
+    CollectionTick,
+    CollectionSources,
+    ProviderCache,
+    CursorAccount,
+    CollectionCache,
     AgentControl,
+    Approvals,
+    AppUpdates,
+    /// M5 lane K: the reset claims file (ledger and ticketed source reads).
+    ResetClaims,
+    SignInHealth,
+    SignInPoll,
     Store,
+    UsageSample,
+    ClaudeOpen,
+    ClaudeHistoryCleanup,
 }
 
 impl Handler {
@@ -36,19 +59,41 @@ impl Handler {
             "health" => Handler::Health,
             "diag" => Handler::Diag,
             "settings" => Handler::Settings,
+            "write-settings" => Handler::WriteSettings,
+            "write-visibility" => Handler::WriteVisibility,
+            "write-preferences" => Handler::WritePreferences,
             "home" => Handler::Home,
             "accounts" => Handler::Accounts,
+            "dashboard" => Handler::Dashboard,
             "profiles" => Handler::Profiles,
             "files" => Handler::Files,
             "status" => Handler::Status,
             "scoreboard" => Handler::Scoreboard,
             "store-status" => Handler::StoreStatus,
+            "status-inputs" => Handler::StatusInputs,
+            "status-answers" => Handler::StatusAnswers,
+            "scoreboard-inputs" => Handler::ScoreboardInputs,
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
+            "home-inputs" => Handler::HomeInputs,
             "events" => Handler::Events,
+            "collection-cache" => Handler::CollectionCache,
+            "collect" => Handler::Collect,
+            "collection-provider-cache" => Handler::ProviderCache,
+            "collection-cursor" => Handler::CursorAccount,
+            "collection-sources" => Handler::CollectionSources,
+            "collection-tick" => Handler::CollectionTick,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
+            "account-approvals" => Handler::Approvals,
+            "app-updates" => Handler::AppUpdates,
+            "reset-claims" => Handler::ResetClaims,
+            "collection-signins" => Handler::SignInHealth,
+            "collection-signin-poll" => Handler::SignInPoll,
             "store" => Handler::Store,
+            "usage-sample" => Handler::UsageSample,
+            "claude-open" => Handler::ClaudeOpen,
+            "claude-history-cleanup" => Handler::ClaudeHistoryCleanup,
             _ => return None,
         })
     }
@@ -95,6 +140,9 @@ pub(crate) enum Pool {
     /// Fed Status. Not a route-table group: the fed arm chooses it, and the envelope read stays
     /// on [`Pool::Reads`].
     Status,
+    /// The reset claims file: its own slots, so a seconds-long source read never holds a read
+    /// permit.
+    Reset,
 }
 
 /// One `rust` row, checked.
@@ -185,6 +233,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             "GET" => axum::http::Method::GET,
             "PUT" => axum::http::Method::PUT,
             "POST" => axum::http::Method::POST,
+            "PATCH" => axum::http::Method::PATCH,
             _ => return Err(failure()),
         };
         // Internal routes are the front door's alone; public routes never are.
@@ -194,17 +243,126 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
-            || internal != (row.group == "internal")
+                && !matches!(
+                    handler,
+                    Handler::Events
+                        | Handler::Agent
+                        | Handler::Collect
+                        | Handler::CollectionTick
+                        | Handler::ResetClaims
+                        | Handler::CursorAccount
+                        | Handler::Store
+                        | Handler::UsageSample
+                        | Handler::ClaudeOpen
+                        | Handler::ClaudeHistoryCleanup
+                        | Handler::StatusAnswers
+                        | Handler::SignInPoll
+                ))
+            || (row.group == "internal" && !internal)
+            || (internal && !matches!(row.group.as_str(), "internal" | "collection"))
+            || (row.group == "collection"
+                && !matches!(
+                    handler,
+                    Handler::Dashboard
+                        | Handler::CollectionCache
+                        | Handler::CollectionTick
+                        | Handler::CollectionSources
+                        | Handler::ProviderCache
+                        | Handler::CursorAccount
+                        | Handler::Collect
+                ))
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
             || (method == axum::http::Method::POST
                 && !matches!(
                     handler,
-                    Handler::Agent | Handler::AgentControl | Handler::Store
+                    Handler::Agent
+                        | Handler::AgentControl
+                        | Handler::Collect
+                        | Handler::AppUpdates
+                        | Handler::Approvals
+                        | Handler::ResetClaims
+                        | Handler::Store
+                        | Handler::UsageSample
+                        | Handler::ClaudeOpen
+                        | Handler::ClaudeHistoryCleanup
                 ))
-            || (method == axum::http::Method::PUT && handler != Handler::Feed)
+            || (method == axum::http::Method::PUT
+                && !matches!(
+                    handler,
+                    Handler::Feed
+                        | Handler::HomeInputs
+                        | Handler::CollectionCache
+                        | Handler::CollectionTick
+                        | Handler::WriteSettings
+                        | Handler::WriteVisibility
+                        | Handler::WritePreferences
+                        | Handler::ProviderCache
+                        | Handler::CursorAccount
+                        | Handler::StatusAnswers
+                        | Handler::SignInHealth
+                        | Handler::SignInPoll
+                ))
+            || (handler == Handler::StatusAnswers
+                && (method != axum::http::Method::PUT
+                    || row.path != "/internal/status/answers"
+                    || row.budget_ms != 0))
+            || (handler == Handler::WriteSettings
+                && (method != axum::http::Method::PUT
+                    || row.group != "writes"
+                    || roles != [Role::Admin]
+                    || !matches!(
+                        row.path.as_str(),
+                        "/api/accounts/settings" | "/api/accounts/analytics/capture"
+                    )))
+            || (handler == Handler::AppUpdates
+                && (row.group != "app-updates"
+                    || roles != [Role::Admin]
+                    || crate::app_update_routes::Operation::from_route(&method, &row.path)
+                        .is_none()))
+            || (handler == Handler::Approvals
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/account-confirmations"))
+            // The TS route owns the deadline (a Claude source read takes seconds); the work is
+            // one blocking transaction that cannot stop halfway, so the row's budget is 0.
+            || (handler == Handler::ResetClaims
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/reset-claims"
+                    || row.budget_ms != 0))
+            || (handler == Handler::UsageSample
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/usage-snapshot/sample"
+                    || row.budget_ms != 0))
+            || (method == axum::http::Method::PATCH
+                && !matches!(
+                    handler,
+                    Handler::WriteVisibility | Handler::WritePreferences
+                ))
+            || (handler == Handler::WritePreferences
+                && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
+                    || row.group != "writes"
+                    || roles != [Role::Admin]
+                    || row.path != "/api/accounts/preferences"))
+            // The TS route owns the deadline (a Claude source read takes seconds); the work is
+            // one blocking transaction that cannot stop halfway, so the row's budget is 0.
+            || (handler == Handler::ResetClaims
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/reset-claims"
+                    || row.budget_ms != 0))
+            || (handler == Handler::WriteVisibility
+                && (!matches!(method, axum::http::Method::PUT | axum::http::Method::PATCH)
+                    || row.group != "writes"
+                    || roles != [Role::Admin]
+                    || row.path != "/api/accounts/visibility"))
+            || (handler == Handler::ClaudeOpen
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/claude-open"
+                    || row.budget_ms != 0))
+            || (handler == Handler::ClaudeHistoryCleanup
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/claude-history-cleanup"
+                    || row.budget_ms != 0))
             || rows
                 .iter()
                 .any(|r: &Row| r.path == row.path && r.method == method)
@@ -217,6 +375,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             handler,
             pool: if row.group == "store" || handler == Handler::Store {
                 Pool::Store
+            } else if handler == Handler::ResetClaims {
+                Pool::Reset
             } else {
                 Pool::Reads
             },
@@ -239,9 +399,51 @@ mod tests {
         let rows = rows(ROUTES)?;
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
         assert!(rows.iter().all(|r| r.budget_ms > 0
-            || matches!(r.handler, Handler::Events | Handler::Agent | Handler::Store)));
+            || matches!(
+                r.handler,
+                Handler::Events
+                    | Handler::Agent
+                    | Handler::Collect
+                    | Handler::CollectionTick
+                    | Handler::ResetClaims
+                    | Handler::CursorAccount
+                    | Handler::Store
+                    | Handler::UsageSample
+                    | Handler::ClaudeOpen
+                    | Handler::ClaudeHistoryCleanup
+                    | Handler::StatusAnswers
+                    | Handler::SignInPoll
+            )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
+        // M5 lane K: the one reset claims row, internal, on its own pool.
+        let reset: Vec<&Row> = rows
+            .iter()
+            .filter(|r| r.handler == Handler::ResetClaims)
+            .collect();
+        assert_eq!(reset.len(), 1);
+        assert_eq!(reset[0].path, "/internal/reset-claims");
+        assert_eq!(reset[0].method, axum::http::Method::POST);
+        assert_eq!(reset[0].pool, Pool::Reset);
         Ok(())
+    }
+
+    #[test]
+    fn startup_refuses_a_reset_claims_row_off_its_one_shape() {
+        let tail = r#"{"method":"*","path":"*","owner":"ts-fallback"}"#;
+        let good = r#"{"method":"POST","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#;
+        assert!(rows(&format!("[{good},{tail}]")).is_ok());
+        for bad in [
+            // a deadline the TS route owns
+            r#"{"method":"POST","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":400,"handler":"reset-claims"}"#,
+            // another path
+            r#"{"method":"POST","path":"/internal/reset","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#,
+            // a read
+            r#"{"method":"GET","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#,
+            // a public route
+            r#"{"method":"POST","path":"/api/accounts/x/reset-claims","owner":"rust","group":"writes","roles":["admin"],"budgetMs":0,"handler":"reset-claims"}"#,
+        ] {
+            assert!(rows(&format!("[{bad},{tail}]")).is_err(), "{bad}");
+        }
     }
 
     #[test]

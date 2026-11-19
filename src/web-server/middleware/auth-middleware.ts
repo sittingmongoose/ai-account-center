@@ -1,3 +1,4 @@
+import { compositionAccess } from '../compose-request';
 /**
  * Dashboard Authentication Middleware
  * Session-based auth with httpOnly cookies for CCS dashboard.
@@ -18,6 +19,7 @@ import {
   isDashboardAuthEnabled,
 } from '../../config/config-loader-facade';
 import { effectiveSessionLifetimeDays } from '../../config/schemas/auth';
+import { assertTsWritesFile } from '../../shared/private-files';
 import { bearerToken, guardApiRequest, settleSessionEpoch } from './api-request-guard';
 import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
@@ -106,6 +108,7 @@ function getSessionSecret(): string {
   // 3. Generate and persist new random secret
   const newSecret = crypto.randomBytes(32).toString('hex');
   try {
+    assertTsWritesFile(secretPath, getCcsDir());
     const dir = path.dirname(secretPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -318,6 +321,7 @@ export function createSessionMiddleware(): (
  * Only active when dashboard_auth.enabled = true.
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (compositionAccess(req)) return next();
   // Skip auth if disabled. A kept session from an older epoch is still turned signed-out first:
   // with sessions surviving restarts, a cookie revoked before sign-in was turned off must not
   // reach the routes that ask for a signed-in browser.
@@ -345,9 +349,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
  * path. Inside the router, req.path is relative to /api.
  */
 export function apiAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
-  if (!isDashboardAuthEnabled()) {
-    return next();
-  }
+  if (compositionAccess(req) || !isDashboardAuthEnabled()) return next();
 
   guardApiRequest(req, res, next, req.path, {
     unauthenticated: (response) => rejectWithoutSession(response, `/api${req.path}`),
@@ -480,6 +482,11 @@ export function requireLocalAccessWhenAuthDisabled(
     return true;
   }
 
+  const forwarded = compositionAccess(req);
+  if (forwarded) {
+    if (!forwarded.local) res.status(403).json({ error });
+    return forwarded.local;
+  }
   if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
     res.status(403).json({ error });
     return false;
