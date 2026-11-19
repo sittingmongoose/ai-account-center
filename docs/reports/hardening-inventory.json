@@ -490,9 +490,7 @@
         "calls": [],
         "markers": [
           ": await legacy();",
-          ": legacy();",
           "? await composer.compose(input, { ...finish, native: this.native !== null }, legacy)",
-          "? composer.compose(input, { ...finish, native: this.native !== null }, legacy)",
           "const legacy = () =>",
           "legacy: () => Promise<ScoreboardView>"
         ]
