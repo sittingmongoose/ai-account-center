@@ -1607,4 +1607,143 @@ mod tests {
         handle.abort();
         let _ = handle.await;
     }
+
+    /// The cut's own settings, preferences and visibility routes: the TS admission sentences
+    /// and the files the existing owners write.
+    #[tokio::test]
+    async fn the_cut_writes_settings_preferences_and_visibility_under_the_ts_guards() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().to_path_buf();
+        let hash = bcrypt::hash("fixture-password", 4).unwrap();
+        Files::save_config(
+            &aac_files::OwnedStore::claim_dashboard_config(&root).unwrap(),
+            &json!({"dashboard_auth":{"enabled":true,"username":"fixture-admin","password_hash":hash}}),
+        )
+        .unwrap();
+        let auth = DashboardAuth::open_with(root.clone(), Overrides::default(), 4, false).unwrap();
+        let settings = native_settings::Settings::new(root.clone(), auth.events());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = auth.protect(auth.edges(
+            Router::new(),
+            HubCache::default(),
+            None,
+            None,
+            true,
+            None,
+            Some(root.clone()),
+            None,
+            Some(settings),
+        ));
+        let handle = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let cookie = login(addr).await;
+        let origin = format!("Origin: http://{addr}\r\n");
+        let json = format!("{origin}Content-Type: application/json\r\nCookie: {cookie}\r\n");
+
+        let default = request(addr, "/api/accounts/settings", "GET", &format!("Cookie: {cookie}\r\n"), "").await;
+        assert!(default.starts_with("HTTP/1.1 200"), "{default}");
+        assert!(default.contains(r#"{"refreshIntervalSeconds":60}"#), "{default}");
+
+        let saved = request(
+            addr,
+            "/api/accounts/settings",
+            "PUT",
+            &json,
+            r#"{"refreshIntervalSeconds":45}"#,
+        )
+        .await;
+        assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+        assert!(saved.contains(r#"{"refreshIntervalSeconds":45}"#), "{saved}");
+        assert_eq!(
+            std::fs::read(root.join("account-refresh-settings.json")).unwrap(),
+            b"{\"refreshIntervalSeconds\":45}\n"
+        );
+
+        let shape = request(
+            addr,
+            "/api/accounts/settings",
+            "PUT",
+            &json,
+            r#"{"refreshIntervalSeconds":29}"#,
+        )
+        .await;
+        assert!(shape.starts_with("HTTP/1.1 400"), "{shape}");
+        assert!(shape.contains("Choose a whole number of seconds from 30 to 3600."), "{shape}");
+
+        let no_origin = request(
+            addr,
+            "/api/accounts/settings",
+            "PUT",
+            &format!("Content-Type: application/json\r\nCookie: {cookie}\r\n"),
+            r#"{"refreshIntervalSeconds":60}"#,
+        )
+        .await;
+        assert!(no_origin.starts_with("HTTP/1.1 403"), "{no_origin}");
+
+        let visibility = request(
+            addr,
+            "/api/accounts/visibility",
+            "PUT",
+            &json,
+            r#"{"hiddenProviders":["claude"]}"#,
+        )
+        .await;
+        assert!(visibility.starts_with("HTTP/1.1 200"), "{visibility}");
+        assert!(
+            visibility.contains(
+                r#"{"hiddenProviders":["claude"],"hiddenAccountIds":[],"trayHiddenProviders":[],"trayHiddenAccountIds":[]}"#
+            ),
+            "{visibility}"
+        );
+        let read = request(
+            addr,
+            "/api/accounts/visibility",
+            "GET",
+            &format!("Cookie: {cookie}\r\n"),
+            "",
+        )
+        .await;
+        assert!(read.contains(r#""hiddenProviders":["claude"]"#), "{read}");
+
+        let preferences = request(
+            addr,
+            "/api/accounts/preferences",
+            "PUT",
+            &json,
+            r#"{"timeZone":"UTC","snapshotCleanup":{"auto":false},"usageLogSources":[]}"#,
+        )
+        .await;
+        assert!(preferences.starts_with("HTTP/1.1 200"), "{preferences}");
+        assert!(preferences.contains(r#""timeZone":"UTC""#), "{preferences}");
+        let patched = request(
+            addr,
+            "/api/accounts/preferences",
+            "PATCH",
+            &json,
+            r#"{"addUsageLogSource":{"id":"extra","tool":"claude-code","host":"ubuntu","path":"/var/log/extra"}}"#,
+        )
+        .await;
+        assert!(patched.starts_with("HTTP/1.1 200"), "{patched}");
+        assert!(patched.contains(r#""id":"extra""#), "{patched}");
+        let overlap = request(
+            addr,
+            "/api/accounts/preferences",
+            "PATCH",
+            &json,
+            r#"{"addUsageLogSource":{"id":"again","tool":"claude-code","host":"ubuntu","path":"/home/fixture/.claude/projects/nested"}}"#,
+        )
+        .await;
+        assert!(overlap.starts_with("HTTP/1.1 400"), "{overlap}");
+        assert!(overlap.contains("overlaps a built-in root"), "{overlap}");
+
+        handle.abort();
+        let _ = handle.await;
+    }
 }
