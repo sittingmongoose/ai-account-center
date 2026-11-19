@@ -158,9 +158,15 @@ pub(super) fn additional(
         _ => Some("Saved account usage is unavailable on this computer."),
     };
     let label = label(&source.provider);
+    let verified = raw["verifiedSource"].is_object();
+    let fallback = if verified {
+        label
+    } else {
+        email.as_deref().unwrap_or(label)
+    };
     let mut row = json!({
         "id":source.id, "provider":source.provider, "providerLabel":label,
-        "label":source.label.as_deref().or(email.as_deref()).unwrap_or(label),
+        "label":source.label.as_deref().unwrap_or(fallback),
         "email":email,"plan":plan,"platform":source.platform
     });
     if host != source.platform {
@@ -254,9 +260,18 @@ pub(super) fn claude(
     let mut row = json!({
         "id":format!("claude:{label}"),"provider":"claude","providerLabel":"Claude","label":label,
         "email":email,"plan":if live { display_text(Some(&raw["plan"]),80) } else {None},
-        "platform":desktop.word(),"source":if live { "Claude Desktop live quota on Windows".to_owned() } else { format!("Claude desktop on {place}") },
+        "platform":desktop.word(),"source":if live && raw.get("profileId").is_none() {
+            "Verified quota on Windows".to_owned()
+        } else if live {
+            "Claude Desktop live quota on Windows".to_owned()
+        } else {
+            format!("Claude desktop on {place}")
+        },
         "status":if live { raw["status"].as_str().unwrap_or("cached") } else { "unavailable" }
     });
+    if live && matches!(raw["planClass"].as_str(), Some("max" | "pro")) {
+        row["planClass"] = raw["planClass"].clone();
+    }
     if raw["status"] == "cached" && live {
         row["cacheReason"] = json!("read_failed");
     }
