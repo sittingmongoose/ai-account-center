@@ -10,6 +10,12 @@ are retired.
 
 - `bun run build:all` compiles TypeScript, builds the locked Leptos 0.9 WASM
   dashboard and verifies `dist/ui/`.
+- Release packages need current-platform native Store and Status addons.
+  Run `bun run store:build` and `bun run status:build` on the target platform,
+  then `bun run build:all`. Stage into a new directory with
+  `node scripts/stage-dashboard-package.js <stage>`, then pack from that
+  directory with `npm pack --ignore-scripts`. Staging verifies the native
+  commit and addon receipts and writes the platform's `bin` targets.
 - [dev-install.sh](../scripts/dev-install.sh) builds and validates this checkout,
   creates a local package tarball and installs it on explicit invocation. It
   keeps the tarball for local reinstall/rollback.

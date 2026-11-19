@@ -47,6 +47,8 @@ fi
 node scripts/deploy-lineage.js preflight
 
 echo "[i] Building AI Account Center and the pinned Leptos dashboard..."
+bun run store:build
+bun run status:build
 bun run build:all
 if [ "$SKIP_VALIDATE" = false ]; then
   bun run validate

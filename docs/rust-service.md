@@ -1,6 +1,16 @@
-# Optional Rust service (M3 read routes)
+# Rust dashboard runtime
 
-The TypeScript dashboard remains the public HTTP server. `ServerOptions.rustService`
+The shipped native `ai-account-center dashboard` and `ccs config` commands own
+the public HTTP and HTTPS listeners. Rust handles authentication, sessions, devices,
+origin checks, WebSockets, the static Leptos bundle and the T3 hub. The remaining
+compatibility routes and background jobs run in a private TypeScript worker.
+The native launcher enables the Rust service groups by default and starts without
+shadow comparison. See [Private worker and reference fixtures](#private-worker-and-reference-fixtures)
+for the current boundary and the verification commands.
+
+## Historical M3 read-route reference
+
+In the legacy TypeScript test entry point, `ServerOptions.rustService`
 (or `AAC_RUST_SERVICE`, or `rustService.mode` in `config.yaml`) selects `off`, `shadow` or
 `on`; the default is `off`, and an absent or invalid value stays off.
 `ServerOptions.rustServiceBinary` (or `AAC_RUST_SERVICE_BINARY`) can name an existing
@@ -597,7 +607,7 @@ refusals. No real app, shell folder, scheduled task or provider is touched by th
 
 `agentVerbs: on` with `agentTransport: on` and a live service connection moves the interactive
 sign-in CLI session into the `signin-session` agent verb (`crates/aac-agent/src/signin_session/`).
-The TypeScript runner stays the fallback and keeps the install commit until M5.
+The M4c reference fixture uses the TypeScript runner for fallback.
 
 - **One session per agent process.** `start` runs the ported `SignInJobRunner` state machine
   (`signin-jobs.ts`) with the ported output parser (`signin-output.ts`) and the ported process
@@ -894,8 +904,8 @@ published answers without collecting. The standalone front door can also
 poll an absolute `AAC_RUST_HUB_CACHE` path at most once per five seconds.
 Write a single dashboard or an array of dashboards atomically as owner-only
 JSON with an `accounts` array on each dashboard. An unavailable or invalid
-read retains the last published answer. The hub key stays in the existing TS
-auth store and can be managed with the shipped dashboard usage-hub command.
+read retains the last published answer. The Rust listener reads the existing
+hub key. The former dashboard usage-hub command is retired.
 
 Set `AAC_RUST_UI_DIR` to a packaged `dist/ui` for development, or set
 `AAC_UI_EMBED_DIR` when building the binary for a self-contained install.
@@ -907,10 +917,10 @@ revalidating. Static files skip session persistence. Page and hub responses
 preserve rolling browser cookies.
 
 The native `ai-account-center` and `ccs` binaries share the same command parser.
-The shipped `ai-account-center dashboard` and `ccs config` commands start the
-public Rust listener. They supervise the private compatibility worker for the
-remaining dashboard adapters. Settings now handles retired administrative
-commands. The five retired executable names still print migration guidance.
+Both supervise the private compatibility worker for the remaining dashboard
+adapters. Settings covers dashboard sign-in, network and session controls.
+Replacement controls for hub keys, snapshot destinations and Cursor keys
+remain open. The five retired executable names print migration guidance.
 
 ### Private worker and reference fixtures
 
@@ -919,13 +929,15 @@ a configuration switch. The worker defaults its Rust groups to on and uses
 the private socket for handlers it delegates. The former `frontDoor` selector
 and `AAC_RUST_COMPOSE` switch apply to legacy reference fixtures.
 
-The Rust listener owns public authentication, sessions, devices, WebSockets,
-static assets and T3 management. Other API paths go over the private loopback
-connection to the existing guarded route adapters. Those adapters dispatch to the
-enabled Rust groups and retain the established fallbacks. The per-boot proof
-and transport facts are supplied by Rust and stripped at the receiver. The
-companion refuses direct HTTP requests and does not open the TS session store.
-App Updates uses the same L5 pool as the private service when the group is on.
+The Rust listener forwards only explicitly listed compatibility routes to the
+private loopback worker. Those adapters delegate to the enabled Rust groups
+where available. Rust supplies a per-boot proof and verified transport facts,
+which the receiver strips before dispatch. The worker refuses direct HTTP
+requests and uses the authorization decision supplied by Rust. On Unix the
+public Rust process owns Accounts collection, Re-check and App Updates. These
+routes use its L5 pool. Accounts, the hub and the WebSocket use the public
+process's cache. Home still takes the compatibility route. The corresponding
+Windows routes still use the worker.
 
 Lane H fixture tests use synthetic installers. The composed M0 capture uses its
 existing synthetic app-update owner and disables agent transport for that run.
@@ -962,9 +974,9 @@ computer. The service uses the same L5 registry and pool.
   The selected owner is fixed for the service boot. Turning the group off
   returns writes to TypeScript using the same cache files.
 
-- `GET /api/accounts/dashboard` uses the prepared generation that also serves
-  Home. The TypeScript front door preserves validation, session and device
-  authorization, no-store, ETag and the byte-equal fallback.
+- `GET /api/accounts/dashboard` uses the prepared collection generation.
+  The native Unix route preserves validation, session and device
+  authorization, no-store and ETag. Windows uses the compatibility adapter.
 - `AccountUsageCache` can be supplied to `serve_with_account_usage_cache` to
   share generations with the native listener. Its `hub_dashboards` returns
   the Mac and Windows neutral snapshots in that order. Its `store_observations`

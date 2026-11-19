@@ -4,10 +4,32 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { stageManifest } = require('./build-dashboard-native');
 const { readSourceBuild, recordBuild } = require('./deploy-lineage');
+const store = require('./build-native');
+const status = require('./build-status-native');
 
 const root = path.resolve(__dirname, '..');
+
+function verifyAddon(builder, buildCommand) {
+  const name = builder.moduleName();
+  const file = path.join(root, 'dist/native', name);
+  try {
+    const note = JSON.parse(fs.readFileSync(file + '.json', 'utf8'));
+    const digest = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    if (
+      note?.module === name &&
+      note.sha256 === digest &&
+      note.sourceSha256 === builder.sourceHash()
+    ) {
+      return;
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+  }
+  throw new Error(`Missing or stale native addon ${name}. Run ${buildCommand} before staging.`);
+}
 
 function stagePackage(destination) {
   const source = readSourceBuild(root);
@@ -28,6 +50,9 @@ function stagePackage(destination) {
       );
     }
   }
+  verifyAddon(store, 'bun run store:build');
+  verifyAddon(status, 'bun run status:build');
+  const platformAddons = new Set([store.moduleName(), status.moduleName()]);
   const directory = path.resolve(destination);
   const parent = fs.realpathSync(path.dirname(directory));
   const resolved = path.join(parent, path.basename(directory));
@@ -52,6 +77,8 @@ function stagePackage(destination) {
             relative
           );
         if (match) return Boolean(match[1]) === (process.platform === 'win32');
+        const addon = /^dist\/native\/(aac-(?:store|status)\.[^/]+\.node)(?:\.json)?$/.exec(relative);
+        if (addon) return platformAddons.has(addon[1]);
         // The compiler can leave output for deleted sources in an incremental build.
         const emitted =
           /^dist\/(?!ui\/|native\/|app-updates\/)(.+?)(?:\.js|\.d\.ts)(?:\.map)?$/.exec(relative);
