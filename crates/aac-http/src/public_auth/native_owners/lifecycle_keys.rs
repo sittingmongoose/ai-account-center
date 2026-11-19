@@ -534,12 +534,8 @@ fn remote_argv(platform: &str, action: &str, provider: &str, id: &str) -> Vec<st
 }
 
 async fn probe(native: &NativeOwners, source: &Source) -> Value {
-    if let Some(producer) = native
-        .lifecycle_usage
-        .as_ref()
-        .and_then(|usage| usage.producer.as_ref())
-    {
-        return producer.probe_key(source, now()).await;
+    if let Some(usage) = &native.usage {
+        return usage.producer.probe_key(source, now()).await;
     }
     Value::Null
 }

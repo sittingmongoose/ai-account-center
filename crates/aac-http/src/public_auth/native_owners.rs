@@ -44,7 +44,7 @@ mod lifecycle_open;
 mod lifecycle_registry;
 mod lifecycle_remove;
 mod lifecycle_trash;
-mod recheck;
+pub(super) mod recheck;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Groups {
@@ -53,7 +53,9 @@ pub(super) struct Groups {
     writes: bool,
     app_updates: bool,
     home: bool,
+    #[cfg(unix)]
     analytics_writers: bool,
+    #[cfg(unix)]
     store: bool,
 }
 
@@ -66,6 +68,7 @@ impl Groups {
                 groups.get(name).is_none() || groups[name] == "on"
             }
         };
+        #[cfg(unix)]
         let store = match std::env::var_os("AAC_RUST_STORE") {
             Some(value) => value == "on",
             None => {
@@ -75,7 +78,9 @@ impl Groups {
         };
         Self {
             lifecycle: false,
+            #[cfg(unix)]
             store,
+            #[cfg(unix)]
             analytics_writers: on("analytics-writers", "AAC_RUST_GROUP_ANALYTICS_WRITERS")
                 && on("analytics", "AAC_RUST_GROUP_ANALYTICS"),
             collection: on("collection", "AAC_RUST_GROUP_COLLECTION"),
@@ -96,7 +101,6 @@ pub(crate) struct NativeOwners {
     trash: Option<Arc<lifecycle_trash::Trash>>,
     events: DashboardEvents,
     usage: Option<Arc<Usage>>,
-    lifecycle_usage: Option<LifecycleUsage>,
     #[cfg(unix)]
     apps: Option<Arc<BoundJobs>>,
     writes: bool,
@@ -130,24 +134,31 @@ struct Usage {
     root: PathBuf,
     producer: Arc<Producer>,
     cache: AccountUsageCache,
-    hub: HubCache,
+    publication: Publication,
     events: DashboardEvents,
-    lifecycle: Mutex<crate::account_usage::dashboard::Lifecycle>,
+    jobs: Option<Arc<lifecycle_jobs::Jobs>>,
     recheck_limit: Mutex<recheck::Limit>,
-    signins: ClaudeSignInRenewalReader,
     antigravity: Option<Arc<crate::antigravity_host::Host>>,
-    server: Value,
-    store: bool,
-    analytics_writers: bool,
     owners: Owners,
     agents: Arc<Agents>,
 }
 
-#[derive(Clone)]
-struct LifecycleUsage {
-    cache: AccountUsageCache,
-    producer: Option<Arc<Producer>>,
-    antigravity: Option<Arc<crate::antigravity_host::Host>>,
+#[cfg(unix)]
+type Published = Arc<dyn Fn(&AccountUsageCache) + Send + Sync>;
+
+enum Publication {
+    Public(HubCache),
+    #[cfg(unix)]
+    Private(Published),
+}
+
+struct PublicSampling {
+    signins: ClaudeSignInRenewalReader,
+    server: Value,
+    #[cfg(unix)]
+    store: bool,
+    #[cfg(unix)]
+    analytics_writers: bool,
 }
 
 fn lifecycle_facts() -> crate::account_usage::dashboard::Lifecycle {
@@ -269,23 +280,26 @@ impl NativeOwners {
                     Arc::default(),
                 )),
                 cache: AccountUsageCache::default(),
-                hub,
+                publication: Publication::Public(hub),
                 events: events.clone(),
-                lifecycle: Mutex::new(lifecycle_facts()),
+                jobs: lifecycle_jobs.clone(),
                 recheck_limit: Mutex::default(),
-                signins: ClaudeSignInRenewalReader::new(root.clone(), Default::default()),
                 antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
-                server,
-                store: groups.store && worker_directory.is_some(),
-                analytics_writers: groups.analytics_writers,
                 owners: owners.clone(),
                 agents: agents.clone(),
-                root,
+                root: root.clone(),
             });
-            // Subscribe before the HTTP listener can admit a sign-in.
-            let receiver = events.0.subscribe();
-            jobs.signins = Some(tokio::spawn(usage.clone().watch_signins(receiver)));
-            jobs.sampling = Some(tokio::spawn(usage.clone().sample(cancel)));
+            let sampling = PublicSampling {
+                signins: ClaudeSignInRenewalReader::new(root, Default::default()),
+                server,
+                #[cfg(unix)]
+                store: groups.store && worker_directory.is_some(),
+                #[cfg(unix)]
+                analytics_writers: groups.analytics_writers,
+            };
+            jobs.sampling = Some(tokio::spawn(
+                usage.clone().sample(cancel, Arc::new(sampling)),
+            ));
             Some(usage)
         } else {
             None
@@ -298,11 +312,6 @@ impl NativeOwners {
                 lifecycle_jobs,
                 trash,
                 events,
-                lifecycle_usage: usage.as_ref().map(|usage| LifecycleUsage {
-                    cache: usage.cache.clone(),
-                    producer: Some(usage.producer.clone()),
-                    antigravity: usage.antigravity.clone(),
-                }),
                 usage,
                 #[cfg(unix)]
                 apps,
@@ -336,9 +345,10 @@ impl NativeOwners {
         agents: Arc<Agents>,
         owners: Owners,
         cache: AccountUsageCache,
-        producer: Option<Arc<Producer>>,
+        producer: Arc<Producer>,
         approvals: Arc<crate::account_approvals::Approvals>,
         feeds: crate::feed::Feeds,
+        published: Published,
     ) -> (Self, Jobs) {
         let root = agents.root().to_owned();
         let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
@@ -371,20 +381,28 @@ impl NativeOwners {
             trash.clone(),
             cancel.clone(),
         );
+        let lifecycle_jobs = Arc::new(lifecycle_jobs::Jobs::default());
+        let usage = Usage {
+            producer,
+            cache,
+            publication: Publication::Private(published),
+            events: events.clone(),
+            jobs: Some(lifecycle_jobs.clone()),
+            recheck_limit: Mutex::default(),
+            antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
+            owners: owners.clone(),
+            agents: agents.clone(),
+            root,
+        };
         (
             Self {
                 agents,
                 owners,
                 queues,
-                lifecycle_jobs: Some(Arc::new(lifecycle_jobs::Jobs::default())),
+                lifecycle_jobs: Some(lifecycle_jobs),
                 trash: Some(trash),
                 events,
-                usage: None,
-                lifecycle_usage: Some(LifecycleUsage {
-                    cache,
-                    producer,
-                    antigravity: crate::antigravity_host::Host::from_root(&root).map(Arc::new),
-                }),
+                usage: Some(Arc::new(usage)),
                 apps: None,
                 writes: true,
                 limits: Limits::new(),
@@ -404,36 +422,14 @@ impl NativeOwners {
         mut facts: CompanionInputs,
         refresh: bool,
     ) -> CompanionInputs {
-        facts.lifecycle = lifecycle_facts();
-        if let Some(jobs) = &self.lifecycle_jobs {
-            for job in jobs.running(false) {
-                if let Some(id) = job.account_id {
-                    let state = if job.state == "verifying" {
-                        "verifying"
-                    } else {
-                        "signing_in"
-                    };
-                    facts
-                        .lifecycle
-                        .jobs
-                        .insert(id, json!({"state":state,"jobId":job.id}));
-                }
-            }
-        }
-        if let Some(host) = self
-            .lifecycle_usage
-            .as_ref()
-            .and_then(|usage| usage.antigravity.clone())
-        {
-            let root = self.root().to_owned();
-            facts.antigravity = tokio::task::spawn_blocking(move || {
-                crate::antigravity_runtime::has_profiles(&root)
-                    .then(|| host.accounts(refresh, super::now()))
-                    .flatten()
-            })
-            .await
-            .ok()
-            .flatten();
+        if let Some(usage) = &self.usage {
+            facts.lifecycle = usage.lifecycle();
+            let usage = usage.clone();
+            facts.antigravity =
+                tokio::task::spawn_blocking(move || usage.antigravity_accounts(refresh))
+                    .await
+                    .ok()
+                    .flatten();
         }
         facts
     }
@@ -448,13 +444,19 @@ impl NativeOwners {
     }
 
     fn changed(&self) {
-        if let Some(usage) = &self.lifecycle_usage {
+        if let Some(usage) = &self.usage {
             usage.cache.request_refresh();
         }
         self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
-    fn dashboard_route(method: &Method, path: &str) -> bool {
+    #[cfg(unix)]
+    pub(super) fn owns_collection(method: &Method, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        Self::dashboard_route(method, path) || recheck::route(method, path).is_some()
+    }
+
+    pub(super) fn dashboard_route(method: &Method, path: &str) -> bool {
         matches!(*method, Method::GET | Method::HEAD) && path == "/api/accounts/dashboard"
     }
 
@@ -625,28 +627,49 @@ impl NativeOwners {
 }
 
 impl Usage {
+    fn lifecycle(&self) -> crate::account_usage::dashboard::Lifecycle {
+        let mut facts = lifecycle_facts();
+        if let Some(jobs) = &self.jobs {
+            for job in jobs.running(false) {
+                if let Some(id) = job.account_id {
+                    let state = if job.state == "verifying" {
+                        "verifying"
+                    } else {
+                        "signing_in"
+                    };
+                    facts.jobs.insert(id, json!({"state":state,"jobId":job.id}));
+                }
+            }
+        }
+        facts
+    }
+
     fn companions(&self) -> CompanionInputs {
         CompanionInputs {
-            lifecycle: self
-                .lifecycle
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .clone(),
-            server: Some(self.server.clone()),
+            lifecycle: self.lifecycle(),
             ..Default::default()
         }
     }
 
-    async fn collect_companions(self: Arc<Self>, refresh: bool) -> CompanionInputs {
-        let fallback = self.companions();
+    fn antigravity_accounts(&self, refresh: bool) -> Option<Vec<Value>> {
+        self.antigravity.as_ref().and_then(|host| {
+            crate::antigravity_runtime::has_profiles(&self.root)
+                .then(|| host.accounts(refresh, super::now()))
+                .flatten()
+        })
+    }
+
+    async fn collect_companions(
+        self: Arc<Self>,
+        sampling: Arc<PublicSampling>,
+        refresh: bool,
+    ) -> CompanionInputs {
+        let mut facts = self.companions();
+        facts.server = Some(sampling.server.clone());
+        let fallback = facts.clone();
         tokio::task::spawn_blocking(move || {
-            let mut facts = self.companions();
-            facts.signins = self.signins.read().map(|report| report.to_json());
-            facts.antigravity = self.antigravity.as_ref().and_then(|host| {
-                crate::antigravity_runtime::has_profiles(&self.root)
-                    .then(|| host.accounts(refresh, super::now()))
-                    .flatten()
-            });
+            facts.signins = sampling.signins.read().map(|report| report.to_json());
+            facts.antigravity = self.antigravity_accounts(refresh);
             facts
         })
         .await
@@ -654,86 +677,47 @@ impl Usage {
     }
 
     fn publish(&self) {
-        let now = super::now();
-        if let Some(timestamp) = super::storage::iso(now) {
-            self.hub
-                .publish_dashboard_cache(&self.cache.hub_dashboards(&timestamp, now));
-            self.events.publish(DashboardEvent::AccountsChanged {});
+        match &self.publication {
+            Publication::Public(hub) => {
+                let now = super::now();
+                let Some(timestamp) = super::storage::iso(now) else {
+                    return;
+                };
+                hub.publish_dashboard_cache(&self.cache.hub_dashboards(&timestamp, now));
+            }
+            #[cfg(unix)]
+            Publication::Private(published) => published(&self.cache),
         }
+        self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
-    async fn sample(self: Arc<Self>, cancel: CancellationToken) {
+    async fn sample(self: Arc<Self>, cancel: CancellationToken, sampling: Arc<PublicSampling>) {
         self.producer
             .run(
                 self.cache.clone(),
                 cancel,
-                |refresh| self.clone().collect_companions(refresh),
+                |refresh| self.clone().collect_companions(sampling.clone(), refresh),
                 |cache| {
                     let owner = self.clone();
+                    let sampling = sampling.clone();
                     async move {
                         owner.publish();
                         #[cfg(unix)]
-                        if owner.store {
+                        if sampling.store {
                             super::native_reads::publish_usage(
                                 owner.root.clone(),
                                 &cache,
                                 super::now(),
-                                owner.analytics_writers,
+                                sampling.analytics_writers,
                             )
                             .await;
                         }
                         #[cfg(not(unix))]
-                        let _ = &cache;
+                        let _ = (&sampling, &cache);
                     }
                 },
             )
             .await;
-    }
-
-    async fn watch_signins(
-        self: Arc<Self>,
-        mut receiver: tokio::sync::broadcast::Receiver<DashboardEvent>,
-    ) {
-        loop {
-            let event = match receiver.recv().await {
-                Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    if let Ok(mut lifecycle) = self.lifecycle.lock() {
-                        lifecycle.jobs.clear();
-                    }
-                    continue;
-                }
-                Err(_) => break,
-            };
-            let DashboardEvent::SigninJob { job } = event else {
-                continue;
-            };
-            let Some(id) = job.account_id else { continue };
-            let Ok(mut lifecycle) = self.lifecycle.lock() else {
-                continue;
-            };
-            match job.state.as_str() {
-                "starting" | "waiting" | "awaiting_code" => {
-                    lifecycle
-                        .jobs
-                        .insert(id, json!({"state":"signing_in","jobId":job.id}));
-                }
-                "verifying" => {
-                    lifecycle
-                        .jobs
-                        .insert(id, json!({"state":"verifying","jobId":job.id}));
-                }
-                _ => {
-                    if lifecycle
-                        .jobs
-                        .get(&id)
-                        .is_some_and(|value| value["jobId"] == job.id)
-                    {
-                        lifecycle.jobs.remove(&id);
-                    }
-                }
-            }
-        }
     }
 }
 
