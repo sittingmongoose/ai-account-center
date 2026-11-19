@@ -610,3 +610,24 @@ fn a_redeeming_credit_confirms_only_when_openai_answered_this_attempt() {
         assert_eq!(f.sent().len(), 1);
     }
 }
+
+#[test]
+fn a_redeeming_credit_names_its_own_state_and_stays_unclaimable() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut s = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let mut snap = codex(2.0, 60.0);
+    // OpenAI is redeeming the second credit now: it keeps its count, but it is neither ready nor saved.
+    snap.grants[1].usable = false;
+    let inv = s.read_inventory("route", &snap, NOW, &nonce(700)).unwrap();
+    assert_eq!(inv["grants"][0]["claimable"], true, "the untouched credit stays usable");
+    assert_eq!(inv["grants"][1]["resetsLeft"], 1);
+    assert_eq!(inv["grants"][1]["claimable"], false);
+    assert_eq!(inv["grants"][1]["claimBlockedReason"], "redeeming");
+    let key = inv["grants"][1]["grantKey"].as_str().unwrap();
+    // Prepare refuses with the same reason the page words as "OpenAI is using this reset now."
+    assert_eq!(
+        s.prepare("route", key, &caller(), &snap, NOW, &nonce(701)).unwrap_err(),
+        "redeeming"
+    );
+}
