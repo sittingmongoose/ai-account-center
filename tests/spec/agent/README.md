@@ -1,5 +1,59 @@
 # Agent verb parity
 
+## App inventory and update fixtures (M4d)
+
+The host agent accepts `apps` with `{"action":"inventory","platform":"ubuntu"}`.
+Use `mac` and `windows` on the matching hosts. The verb returns the 12 ordered
+rows from the Python helper's `--inventory` contract. Its CLI probes only request
+versions and set the Python helper's auto-update suppression variables. Desktop
+readers inspect package metadata, and the ACP readers inspect existing records.
+The L5 private transport accepts the verb. The existing dashboard update service
+continues to call its Python helper.
+
+Run the Windows host's fixture gate from this workspace:
+
+```powershell
+cargo test --locked --offline -p aac-agent --lib apps::tests -j 2
+cargo test --locked --offline -p aac-agent --features parity-fixtures --test apps_update -j 2
+```
+
+The inventory suite constructs empty, populated and degraded installations for
+each platform under temporary roots, uses fake process outputs, and compares
+with the actual Python inventory payload byte for byte. The update suite runs a
+fixture-enabled agent subprocess. Its fixed installers write version receipts
+under a temporary root. The full app matrix checks four-worker scheduling,
+shared installer exclusion and app dependency gates. The suite compares terminal result bytes
+with Python and compares per-app progress for the desktop-only cases, dropping
+elapsed phase milliseconds.
+It also cancels during a held download, kills an agent during a held download,
+checks the journal's single writer and recovery, and verifies that an explicit
+retry can run after recovery. Recovery preserves saved rows, closes missing rows
+as unknown and clears the fixture installer's partial file.
+
+In production the Rust agent holds the host update lease and passes each selected
+app to a bounded Python `--apply --app` subprocess. The D3 adapter is labeled
+`aac-agent apps installer fallback: python` on stderr. App updates have a 31-minute
+agent deadline and a 33-minute service deadline. Cancel sends a job-bound request
+through L5 and reaps the selected worker, marking that app and queued work skipped.
+Ubuntu and Mac admit up to four workers. Windows serializes requests to its one
+registered interactive updater task. The agent never falls back to the full Python
+job after work starts.
+
+The Rust service API uses the same rollback and expanded job files as the guarded
+TS routes. Its unit cases cover TS row bytes and the abandoned-job display.
+The L5 integration gate checks the five host selectors, job conflict, counts,
+persistence and per-host cancel through an SSH recorder that opens no sockets.
+
+```sh
+cargo test --locked --offline -p aac-http --lib app_updates -j 2
+cargo test --locked --offline -p aac-http --test app_updates -j 2
+python3 -B tests/unit/app-updates/app_update_agent_worker_test.py
+```
+
+The separate `time-app-update-ssh.py` harness measures a fixed fixture workload
+over real pinned OpenSSH, alternating separate connections and a new control
+master. It validates the control master and the returned bytes on every round.
+
 ## Scan usage
 
 The workspace dev/test profiles disable debug symbols, so default Cargo test

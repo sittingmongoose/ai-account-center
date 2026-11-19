@@ -1,4 +1,5 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
+mod apps;
 mod claude_host;
 mod failover;
 mod files;
@@ -142,11 +143,19 @@ pub async fn run(
                             }
                         }
                     };
+                    let work = async {
+                        if request.verb == "apps"
+                            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+                        {
+                            return apps::update::run(&request, &mut writer).await;
+                        }
+                        dispatch(&request).await
+                    };
                     tokio::select! {
                         biased;
                         result = control => result,
                         _ = tokio::time::sleep(std::time::Duration::from_millis(request.deadline_ms)) => Err(Failure::new(Cause::Timeout, "agent deadline exceeded")),
-                        result = dispatch(&request) => result,
+                        result = work => result,
                     }
                 }
             };
@@ -171,15 +180,24 @@ pub async fn run(
             1,
         ),
     };
-    let mut bytes = serde_json::to_vec(&event)
-        .map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
+    write_event(&mut writer, &event, cap).await?;
+    Ok(code)
+}
+
+pub(crate) async fn write_event(
+    writer: &mut (impl AsyncWrite + Unpin),
+    event: &Event,
+    cap: usize,
+) -> Result<(), Failure> {
+    let mut bytes =
+        serde_json::to_vec(event).map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
     if bytes.len() >= cap {
         return Err(Failure::new(Cause::OutputTooLarge, "event cap exceeded"));
     }
     bytes.push(b'\n');
     writer.write_all(&bytes).await?;
     writer.flush().await?;
-    Ok(code)
+    Ok(())
 }
 
 fn safe_id(id: &str) -> String {
@@ -235,6 +253,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     }
     if request.verb == "scan-usage" {
         return scan::run(&request.args).await;
+    }
+    if request.verb == "apps" {
+        return apps::run_inventory(&request.args).await;
     }
     if request.verb == "inventory" {
         return inventory::run(&request.args).await;

@@ -9,6 +9,7 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -517,8 +518,33 @@ def in_service_cgroup():
         return False
 
 
+def _mac_process_table():
+    """One bounded census for cancelling a worker and its own descendants on macOS."""
+    import calendar
+    import time as clock
+    try:
+        reply = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,lstart="],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               env={**os.environ, "LC_ALL": "C"}, timeout=2, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if len(reply.stdout) > 2 * 1024 * 1024:
+        return {}
+    result = {}
+    for line in reply.stdout.decode("ascii", "replace").splitlines():
+        try:
+            pid, parent, start = line.split(None, 2)
+            ticks = calendar.timegm(clock.strptime(start, "%a %b %d %H:%M:%S %Y"))
+            result[int(pid)] = int(parent), str(ticks)
+        except (ValueError, OverflowError):
+            continue
+    return result
+
+
 def _posix_process_table():
     """pid -> (ppid, start ticks) for this user's /proc entries, for owned-tree walks."""
+    if sys.platform == "darwin":
+        return _mac_process_table()
     table = {}
     for entry in pathlib.Path("/proc").glob("[0-9]*"):
         if not entry.is_dir():
@@ -535,6 +561,15 @@ def _posix_process_table():
 
 
 def _posix_process_identity(pid):
+    if sys.platform == "darwin":
+        try:
+            reply = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "lstart="],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   env={**os.environ, "LC_ALL": "C"}, timeout=1, check=True)
+            import calendar
+            return str(calendar.timegm(time.strptime(reply.stdout.decode("ascii").strip(), "%a %b %d %H:%M:%S %Y")))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
     try:
         text = pathlib.Path("/proc/%d/stat" % pid).read_text()
         return text[text.rfind(")") + 2:].split()[19]
@@ -1328,15 +1363,16 @@ def remote_fingerprint(url, timeout=15):
 
 @contextlib.contextmanager
 def private_temporary():
-    root = pathlib.Path.home() / ".ccs/app-updates"
+    staging = os.environ.get("AAC_UPDATE_WORKER_STAGING")
+    root = pathlib.Path(staging) if staging else pathlib.Path.home() / ".ccs/app-updates"
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix="stage-", dir=root) as value:
         yield pathlib.Path(value)
 
 
 @contextlib.contextmanager
-def execution_lock(name="helper-update.lock"):
-    root = pathlib.Path.home() / ".ccs/app-updates"
+def execution_lock(name="helper-update.lock", root=None):
+    root = root or pathlib.Path.home() / ".ccs/app-updates"
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     handle = (root / name).open("a+b")
     try:

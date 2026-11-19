@@ -250,61 +250,11 @@ impl Agents {
             active: Mutex::new(BTreeMap::new()),
         }
     }
-    pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
-        let started = tokio::time::Instant::now();
-        let Ok(call) = crate::json_object::from_slice::<Call>(
-            bytes,
-            &[
-                "computer",
-                "args",
-                "deadlineMs",
-                "timeoutMs",
-                "maxBytes",
-                "callId",
-            ],
-        ) else {
-            return unavailable("", "shape");
-        };
-        if !word(&call.call_id)
-            || ![
-                "health",
-                "inventory",
-                "signin-expiry",
-                "quota-read",
-                "scan-usage",
-                "t3-pins",
-                "key-store",
-                "claude-history",
-                "failover-inventory",
-                "launch",
-                "claude-host",
-                "signin-session",
-            ]
-            .contains(&verb)
-            || call.deadline_ms == 0
-            || call.deadline_ms > aac_protocol::max_deadline_ms(verb)
-            || call.timeout_ms == 0
-            || call.timeout_ms > call.deadline_ms + 5000
-            || call.max_bytes == 0
-            || call.max_bytes > frame_cap(verb) * 2
-            || !call.args.get().trim_start().starts_with('{')
-        {
-            return unavailable(&call.call_id, "shape");
-        }
-        // End before the front door's own `timeoutMs` timer, leaving time to reap the owned child
-        // and deliver an ordinary fallback frame. A slow agent must not look like an unresponsive
-        // service to L1's health supervisor (L5 review L2).
-        let Some(budget) = call
-            .timeout_ms
-            .checked_sub(FRONT_DOOR_MARGIN_MS)
-            .filter(|ms| *ms > 0)
-        else {
-            return unavailable(&call.call_id, "deadline");
-        };
-        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
-            return unavailable(&call.call_id, "busy");
-        };
-        let deadline = started + Duration::from_millis(budget);
+    async fn client(
+        &self,
+        selector: &Selector,
+        deadline: tokio::time::Instant,
+    ) -> Option<AgentClient> {
         let mut loaded = self.registry.subscribe();
         if !self.loading.swap(true, Ordering::AcqRel) {
             let root = self.root.clone();
@@ -333,10 +283,127 @@ impl Agents {
         .await
         .ok()
         .flatten();
-        let client = registry
+        registry
             .as_deref()
             .and_then(|result| result.as_ref().ok())
-            .and_then(|registry| registry.client(&call.computer));
+            .and_then(|registry| registry.client(selector))
+    }
+
+    pub(crate) async fn app_call(
+        &self,
+        platform: &str,
+        alias: Option<&str>,
+        id: String,
+        args: Value,
+        budget: Duration,
+        progress: mpsc::Sender<Event>,
+    ) -> Result<Vec<Event>, Failure> {
+        let started = tokio::time::Instant::now();
+        let deadline = started + budget;
+        let _permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Failure::new(Cause::Busy, "agent transport saturated"))?;
+        let client = self
+            .client(
+                &Selector {
+                    platform: platform.into(),
+                    ssh_host: alias.map(str::to_owned),
+                },
+                deadline,
+            )
+            .await
+            .ok_or_else(refused)?;
+        let deadline_ms = aac_protocol::deadline_cap("apps", &args).min(
+            u64::try_from(
+                deadline
+                    .saturating_duration_since(tokio::time::Instant::now())
+                    .as_millis(),
+            )
+            .unwrap_or(0),
+        );
+        let request = Request {
+            protocol: PROTOCOL_VERSION,
+            verb: "apps".into(),
+            id,
+            deadline_ms,
+            args,
+        };
+        let mut options = CallOptions::new(budget, aac_protocol::MAX_FRAME_BYTES * 2);
+        options.deadline = deadline;
+        if alias.is_none() {
+            options.local_app_update_state_dir = Some(self.root.join("app-updates"));
+        }
+        let (_input, controls) = mpsc::channel(1);
+        let wire = serde_json::to_vec(&request).map_err(|_| refused())?;
+        client
+            .call_controlled_encoded(&request, &wire, &options, controls, progress)
+            .await
+    }
+
+    pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
+        let started = tokio::time::Instant::now();
+        let Ok(call) = crate::json_object::from_slice::<Call>(
+            bytes,
+            &[
+                "computer",
+                "args",
+                "deadlineMs",
+                "timeoutMs",
+                "maxBytes",
+                "callId",
+            ],
+        ) else {
+            return unavailable("", "shape");
+        };
+        if !word(&call.call_id)
+            || ![
+                "health",
+                "inventory",
+                "apps",
+                "signin-expiry",
+                "quota-read",
+                "scan-usage",
+                "t3-pins",
+                "key-store",
+                "claude-history",
+                "failover-inventory",
+                "launch",
+                "claude-host",
+                "signin-session",
+            ]
+            .contains(&verb)
+            || call.deadline_ms == 0
+            || call.deadline_ms
+                > if verb == "apps" {
+                    aac_protocol::APP_UPDATE_DEADLINE_MS
+                } else {
+                    aac_protocol::max_deadline_ms(verb)
+                }
+            || call.timeout_ms == 0
+            || call.timeout_ms > call.deadline_ms + 5000
+            || call.max_bytes == 0
+            || call.max_bytes > frame_cap(verb) * 2
+            || !call.args.get().trim_start().starts_with('{')
+        {
+            return unavailable(&call.call_id, "shape");
+        }
+        // End before the front door's own `timeoutMs` timer, leaving time to reap the owned child
+        // and deliver an ordinary fallback frame. A slow agent must not look like an unresponsive
+        // service to L1's health supervisor (L5 review L2).
+        let Some(budget) = call
+            .timeout_ms
+            .checked_sub(FRONT_DOOR_MARGIN_MS)
+            .filter(|ms| *ms > 0)
+        else {
+            return unavailable(&call.call_id, "deadline");
+        };
+        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+            return unavailable(&call.call_id, "busy");
+        };
+        let deadline = started + Duration::from_millis(budget);
+        let client = self.client(&call.computer, deadline).await;
         let Some(client) = client else {
             return unavailable(&call.call_id, "unavailable");
         };
@@ -352,6 +419,12 @@ impl Agents {
         let mut options = CallOptions::new(Duration::ZERO, call.max_bytes);
         options.deadline = deadline;
         options.scan = verb == "scan-usage";
+        if verb == "apps"
+            && call.computer.ssh_host.is_none()
+            && matches!(request.args["action"].as_str(), Some("update" | "cancel"))
+        {
+            options.local_app_update_state_dir = Some(self.root.join("app-updates"));
+        }
         let (input, controls) = mpsc::channel(8);
         let (done, finished) = watch::channel(None);
         let (output, receiver) = mpsc::channel(8);

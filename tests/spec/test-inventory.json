@@ -91,6 +91,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/src/apps/tests.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "crates/aac-agent/src/failover.rs",
       "kind": "internal",
       "evidence": [],
@@ -129,6 +136,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-agent/tests/apps_update.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-agent/tests/search_ancestors.rs",
@@ -223,6 +237,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/app_updates/tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/feed.rs",
       "kind": "internal",
       "evidence": [],
@@ -296,6 +316,12 @@
     },
     {
       "file": "crates/aac-http/tests/account_reads.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/app_updates.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1525,6 +1551,13 @@
       "evidence": [
         "helper",
         "table"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_agent_worker_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
       ]
     },
     {

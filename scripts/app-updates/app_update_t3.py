@@ -22,7 +22,7 @@ import uuid
 import zipfile
 
 from app_update_common import (
-    Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, powershell, private_temporary,
+    APP_LABELS, Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, powershell, private_temporary,
     ps_quote, result, write_private_json, process_identity,
 )
 from app_update_processes import family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
@@ -459,12 +459,14 @@ def schedule_restart(version):
     root = state_root()
     marker = root / "t3-code-pending-restart.json"
     write_private_json(marker, {"version": version})
+    agent_job = os.environ.get("AAC_UPDATE_AGENT_JOB")
     unit = "aac-t3-restart-" + uuid.uuid4().hex[:12]
     command(["/usr/bin/systemd-run", "--user", "--collect", "--unit=" + unit,
              # The 33-minute dashboard job, restart and UBUNTU_READY_SECONDS, with room to spare.
              "--property=RuntimeMaxSec=5400", "/usr/bin/python3", pathlib.Path(__file__).resolve(),
              "--restart-service", str(os.getpid()), "--state-dir", str(root),
-             *(["--dashboard-job"] if os.environ.get("AAC_UPDATE_DASHBOARD_JOB") == "1" else [])], timeout=15)
+             *(["--agent-job", agent_job] if agent_job and re.fullmatch(r"[a-f0-9]{32}", agent_job) else
+               ["--dashboard-job"] if os.environ.get("AAC_UPDATE_DASHBOARD_JOB") == "1" else [])], timeout=15)
     return {"kind": "systemd", "service": "t3code.service", "delaySeconds": 30}
 
 
@@ -580,7 +582,22 @@ def claim_restart_lock(path):
             return None
 
 
-def deferred_restart(parent_pid, root=None, dashboard=False):
+def agent_job_finished(root, job):
+    """The Rust host journal releases its own Ubuntu/Nas1 restart gate."""
+    try:
+        with (root / "agent-journal.json").open("rb") as stream:
+            raw = stream.read(65537)
+        if len(raw) > 65536:
+            return False
+        result = json.loads(raw)
+        return (result.get("job") == job and result.get("platform") == "ubuntu"
+                and result.get("running") == [] and isinstance(result.get("results"), dict)
+                and set(result["results"]) == set(APP_LABELS))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def deferred_restart(parent_pid, root=None, dashboard=False, agent_job=None):
     """Detached worker: restart once this computer's part of the update is over.
 
     For a dashboard job that means the job file's entry for this host says
@@ -596,6 +613,8 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
     # hosts for most of the run, and the worker no longer waits for it — so the
     # worker's exclusion marker during the restart is its own file and never
     # touches the dashboard's (whose owner unlinks it when the job ends).
+    dashboard = dashboard or bool(agent_job)
+    finished = (lambda: agent_job_finished(root, agent_job)) if agent_job else (lambda: job_finished(root, dashboard))
     worker_lock = root / "t3-restart.lock" if dashboard else lock
     marker = root / "t3-code-pending-restart.json"
     deadline = time.monotonic() + 35 * 60
@@ -614,7 +633,7 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
             # Same per-user lock as standalone --apply, even when the dashboard
             # stores its job in a custom directory. File existence is not a lock.
             with execution_lock():
-                if parent_alive or (lock.exists() and not dashboard) or not job_finished(root, dashboard):
+                if parent_alive or (lock.exists() and not dashboard) or not finished():
                     quiet_since = None
                 elif quiet_since is None:
                     quiet_since = time.monotonic()
@@ -626,7 +645,7 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
                     try:
                         with os.fdopen(descriptor, "w") as output:
                             json.dump({"pid": os.getpid(), "identity": process_identity(os.getpid())}, output)
-                        if marker.exists() and job_finished(root, dashboard):
+                        if marker.exists() and finished():
                             # Without a readable target version the restart cannot be verified; do not start one.
                             expected = marker_version(marker)
                             if expected is None:
@@ -965,10 +984,16 @@ def main():
     parser.add_argument("--restart-service", type=int, required=True)
     parser.add_argument("--state-dir", type=pathlib.Path, default=state_root())
     parser.add_argument("--dashboard-job", action="store_true")
+    parser.add_argument("--agent-job")
     args = parser.parse_args()
     if not sys.platform.startswith("linux") or args.restart_service <= 1 or not args.state_dir.is_absolute():
         parser.error("Only the fixed detached T3 restart worker is supported.")
-    deferred_restart(args.restart_service, args.state_dir, args.dashboard_job)
+    if args.agent_job and not re.fullmatch(r"[a-f0-9]{32}", args.agent_job):
+        parser.error("Invalid agent job ID.")
+    if args.agent_job:
+        deferred_restart(args.restart_service, args.state_dir, args.dashboard_job, args.agent_job)
+    else:
+        deferred_restart(args.restart_service, args.state_dir, args.dashboard_job)
 
 
 if __name__ == "__main__":
