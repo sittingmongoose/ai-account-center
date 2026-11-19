@@ -887,8 +887,8 @@ the five retired names to keep their guidance.
 
 ### Composed public listener
 
-Use config/rust-compose.example.yaml in a fixture root and point
-AAC_RUST_PUBLIC_BINARY at the matching local aac-http build. Run the ordinary
+Copy `config/rust-compose.example.yaml` to `config.yaml` in a fixture root and
+point `AAC_RUST_PUBLIC_BINARY` at the matching local `aac-http` build. Run the ordinary
 dashboard command with --no-open to leave browser startup to the fixture runner.
 The frontDoor setting selects composition when set to rust. AAC_RUST_COMPOSE=1
 is its environment override. The default selects the TypeScript listener.
@@ -903,6 +903,8 @@ App Updates uses the same L5 pool as the private service when the group is on.
 
 Lane H fixture tests use synthetic installers. The composed M0 capture uses its
 existing synthetic app-update owner and disables agent transport for that run.
+`bun tests/spec/compose-app-update-parity.ts` exercises the actual H/J route
+binding and native progress through the public WebSocket with agent transport off.
 Use tests/spec/capture.ts --composed to compare with the checked-in TS goldens.
 The --plain-home flag matches the original Home setting. With Home enabled,
 the two signed-in Home rows return the newly offered view. The standalone Rust

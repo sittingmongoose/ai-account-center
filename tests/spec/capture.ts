@@ -310,7 +310,15 @@ if (composed) {
     mode: 'on',
     frontDoor: 'rust',
     store: 'on',
-    groups: { home: 'on', status: 'on', analytics: 'on', writes: 'on', 'app-updates': 'on' },
+    groups: {
+      home: 'on',
+      status: 'on',
+      scoreboard: 'on',
+      analytics: 'on',
+      collection: 'on',
+      writes: 'on',
+      'app-updates': 'on',
+    },
   };
 }
 saveUnifiedConfig(config);

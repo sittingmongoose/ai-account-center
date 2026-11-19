@@ -1,4 +1,5 @@
-# Copy these switches into an isolated dashboard configuration for composition.
+# Example config.yaml for an isolated composition fixture.
+version: 14
 rustService:
   frontDoor: rust
   mode: on
