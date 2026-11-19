@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+pub use super::contract::UsageIdentity;
 
 const DAY_MS: f64 = 86_400_000.0;
 const MAX_CLAUDE_429_STREAK: u8 = 5;

@@ -6,7 +6,7 @@ use aac_files::registry::{self, Owners};
 use aac_http::account_usage::coordinator::{
     FailoverCoordinator, FailoverDeps, PrimarySource, UsageFailoverTarget, UsageHost,
 };
-use aac_http::account_usage::contract::UsageIdentity;
+use aac_http::account_usage::coordinator::UsageIdentity;
 use aac_views::js_json;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -194,9 +194,15 @@ fn read_dir_json(dir: &PathBuf) -> (HashMap<String, Value>, Option<(String, Valu
 }
 
 fn assert_json(label: &str, expected: &Value, actual: &Value) {
-    let expected_text = js_json::write(expected);
-    let actual_text = js_json::write(actual);
-    assert_eq!(expected_text, actual_text, "{label}\n  expected: {expected_text}\n  actual:   {actual_text}");
+    let expected_bytes = js_json::write(expected);
+    let actual_bytes = js_json::write(actual);
+    assert_eq!(
+        expected_bytes,
+        actual_bytes,
+        "{label}\n  expected: {}\n  actual:   {}",
+        String::from_utf8_lossy(&expected_bytes),
+        String::from_utf8_lossy(&actual_bytes)
+    );
 }
 
 #[tokio::test]
