@@ -116,7 +116,6 @@ pub struct DashboardAccess {
 
 impl DashboardAccess {
     /// The admitted principal this request carries to the private route table.
-    #[cfg(unix)]
     pub(crate) fn service_principal(&self) -> Option<String> {
         match &self.principal {
             DashboardPrincipal::Browser { .. } => self
