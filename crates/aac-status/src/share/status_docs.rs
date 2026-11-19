@@ -8,7 +8,7 @@ use super::{
     MISSING_GRACE_MS, PERSISTENT_LISTING_ERROR, SEQ_WENT_BACK,
 };
 use crate::status_doc::{parse_status_file, STATUS_SIZE_CAP};
-use crate::validate::{is_writer_name, json_from_bytes, obj};
+use crate::validate::{is_writer_name, obj, share_json_from_bytes};
 use indexmap::IndexMap;
 use serde_json::{Value as Json, json};
 use std::collections::HashSet;
@@ -92,7 +92,7 @@ pub struct StatusDocsReader {
 /// The document's parse: the byte rules (with the one secret policy), the v2 validation the
 /// TypeScript wrapper ran, then this crate's projection. The refusal is the reader's reason.
 fn parse_status(bytes: &[u8], writer: &str) -> Result<(Json, String, u64, Option<i64>), String> {
-    let raw = json_from_bytes(bytes, STATUS_SIZE_CAP)?;
+    let raw = share_json_from_bytes(bytes, STATUS_SIZE_CAP)?;
     let doc = obj(Some(&raw), "document").map_err(|invalid| invalid.0)?;
     super::report::report_v2(doc).map_err(|invalid| invalid.0)?;
     let parsed = parse_status_file(bytes, writer)?;

@@ -158,7 +158,7 @@ pub fn project(raw: &Json) -> Valid<Json> {
 
 /// Bytes of report.json -> the projected report and its digest, or a fixed reason.
 pub fn parse_quota_report(bytes: &[u8]) -> Result<(Json, String), String> {
-    let raw = validate::json_from_bytes(bytes, QUOTA_REPORT_CAP)?;
+    let raw = validate::share_json_from_bytes(bytes, QUOTA_REPORT_CAP)?;
     match project(&raw) {
         Ok(doc) => Ok((doc, super::sha256_hex(bytes))),
         Err(Invalid(reason)) => Err(reason),

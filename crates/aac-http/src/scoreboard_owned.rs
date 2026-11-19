@@ -295,7 +295,7 @@ impl ScoreboardOwned {
                     }));
                     continue;
                 }
-                match validate::json_from_bytes(text.as_bytes(), RUN_CAP) {
+                match validate::share_json_from_bytes(text.as_bytes(), RUN_CAP) {
                     Ok(_) => files.push(file),
                     Err(reason) => refused.push(json!({
                         "path": path,
@@ -311,7 +311,7 @@ impl ScoreboardOwned {
                 for (writer, text) in map {
                     let text = text.as_str().unwrap_or_default();
                     if aac_status::secret_policy::find_secret(writer).is_none()
-                        && validate::json_from_bytes(text.as_bytes(), THREAD_CAP).is_ok()
+                        && validate::share_json_from_bytes(text.as_bytes(), THREAD_CAP).is_ok()
                     {
                         threads.insert(writer.clone(), json!(text));
                     }
@@ -322,7 +322,7 @@ impl ScoreboardOwned {
         };
         let catalog_text = |value: &Json| -> Json {
             match value.as_str() {
-                Some(text) if validate::json_from_bytes(text.as_bytes(), CATALOG_CAP).is_ok() => {
+                Some(text) if validate::share_json_from_bytes(text.as_bytes(), CATALOG_CAP).is_ok() => {
                     json!(text)
                 }
                 _ => Json::Null,

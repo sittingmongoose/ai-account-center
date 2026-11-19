@@ -988,7 +988,7 @@ pub fn parse_report_file(
         "card" => CARD_CAP,
         _ => return Err("could not be read".to_string()),
     };
-    let raw = validate::json_from_bytes(bytes, cap)?;
+    let raw = validate::share_json_from_bytes(bytes, cap)?;
     let doc = obj(Some(&raw), "document").map_err(|Invalid(reason)| reason)?;
     let projected = match kind {
         "thread" => thread(doc, writer),

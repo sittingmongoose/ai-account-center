@@ -197,6 +197,20 @@ fn secrets_are_type_scripts_to_check_this_module_reads_what_it_is_given() {
 }
 
 #[test]
+fn the_owned_share_read_is_the_one_filter_where_no_typescript_reader_runs() {
+    // R4: in the service, the owned readers read the share themselves and no TypeScript
+    // `jsonFromBytes` runs, so `share_json_from_bytes` applies the one packaged policy in its
+    // place (same fixed words). The NAPI parse above stays filter-free: one filter per read.
+    let api_key = ["sk", "ant", &"a".repeat(24)].join("-");
+    let mut doc = valid();
+    doc["note"] = json!(format!("Use {api_key} for now."));
+    let bytes = serde_json::to_vec(&doc).unwrap();
+    let reason = aac_status::validate::share_json_from_bytes(&bytes, 64 * 1024).unwrap_err();
+    assert!(reason.starts_with("refused: it contains what looks like"), "{reason}");
+    assert!(aac_status::validate::json_from_bytes(&bytes, 64 * 1024).is_ok());
+}
+
+#[test]
 fn the_packaged_examples_agree_with_the_validator() {
     let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/agent-reports/examples");
     let good = std::fs::read(examples.join("status.valid.json")).unwrap();
