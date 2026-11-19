@@ -423,7 +423,9 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   // Short socket folders a long root made under the runtime folder.
   const { shortName } = require(path.join(dist, 'web-server/rust-service-lifecycle.js'));
-  for (const base of [process.env.XDG_RUNTIME_DIR, `/tmp/aac-${process.getuid()}`])
+  // `getuid` is POSIX-only; Windows has no per-user runtime folder to sweep.
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  for (const base of [process.env.XDG_RUNTIME_DIR, uid === null ? null : `/tmp/aac-${uid}`])
     if (base && fs.existsSync(base))
       for (const name of fs.readdirSync(base))
         for (const dir of fs.readdirSync(scratch, { recursive: true }))

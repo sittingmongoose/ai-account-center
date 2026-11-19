@@ -486,9 +486,21 @@ try {
       assert.equal(await checkStatusFed(service, input, 'fed prototype name'), false);
   }
   const file = path.join(root, 'tests/spec/contract/m3-read-views.json');
+  // Windows serializes `\` as `\\` inside JSON text, so the escaped form is the one that appears there.
+  const escapedHome = JSON.stringify(home).slice(1, -1);
+  // The views pin fixture paths, not the host's separator: compare them in one form.
+  const portable = (value: unknown): unknown => {
+    if (typeof value === 'string') return value.split('\\').join('/');
+    if (Array.isArray(value)) return value.map(portable);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, portable(entry)]));
+    return value;
+  };
+  const normalized = JSON.parse(
+    JSON.stringify(captured).split(escapedHome).join('<fixture>').split(home).join('<fixture>')
+  );
   const golden =
-    JSON.stringify(JSON.parse(JSON.stringify(captured).split(home).join('<fixture>')), null, 2) +
-    '\n';
+    JSON.stringify(path.sep === '\\' ? portable(normalized) : normalized, null, 2) + '\n';
   if (process.argv.includes('--regenerate')) fs.writeFileSync(file, golden);
   else assert.equal(fs.readFileSync(file, 'utf8'), golden, 'raw-reader view golden bytes changed');
   console.log(

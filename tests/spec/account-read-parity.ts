@@ -20,6 +20,11 @@ import { fileURLToPath } from 'node:url';
 
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const GOLDEN = path.join(repo, 'tests/spec/contract/m3-part3-account-reads.json');
+// POSIX file modes are not enforced on Windows, so these two refusals cannot be produced there.
+const HOSTLESS =
+  process.platform === 'win32'
+    ? new Set(['visibility: mode 0644', 'visibility: folder writable by others'])
+    : new Set<string>();
 const worker = process.argv.indexOf('--worker');
 
 interface Row {
@@ -83,9 +88,15 @@ if (worker < 0) {
         throw new Error(result.stderr || result.stdout || `${mode}: account read worker failed`);
       reports.push(JSON.parse(fs.readFileSync(file, 'utf8')) as Report);
     }
+    const expected = (JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Array<{ name: string }>).filter(
+      (row) => !HOSTLESS.has(row.name)
+    );
+    const expectedText = JSON.stringify(expected, null, 2) + '\n';
     const bytes = JSON.stringify(reports[0].rows, null, 2) + '\n';
-    if (process.argv.includes('--regenerate')) fs.writeFileSync(GOLDEN, bytes);
-    else assert.ok(fs.readFileSync(GOLDEN, 'utf8') === bytes, 'account read golden bytes changed');
+    if (process.argv.includes('--regenerate')) {
+      assert.equal(HOSTLESS.size, 0, 'record the goldens on a POSIX host');
+      fs.writeFileSync(GOLDEN, bytes);
+    } else assert.ok(expectedText === bytes, 'account read golden bytes changed');
     for (const report of reports) {
       for (const [index, row] of report.rows.entries())
         assert.deepEqual(
@@ -312,6 +323,10 @@ async function runWorker(mode: string, destination: string): Promise<void> {
 
   try {
     for (const form of fixtures.visibilityForms()) {
+      if (HOSTLESS.has(`visibility: ${form.name}`)) {
+        console.log(`[SKIP] account-read-parity: visibility: ${form.name} (POSIX file modes)`);
+        continue;
+      }
       fixtures.resetCcs(ccs);
       form.setup(ccs);
       await run(`visibility: ${form.name}`, '/api/accounts/visibility', form.rust);

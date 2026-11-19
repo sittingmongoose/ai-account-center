@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import type { Server } from 'node:http';
 const repo = fileURLToPath(new URL('../..', import.meta.url));
+// The share route serves secure share files on Linux only (share-route.ts refuses other hosts with 503
+// unsupported_host), so those cases are skipped elsewhere; every other case stays checked.
+const SKIP_SHARE = process.platform !== 'linux';
+const isShareCase = (name: string) => name.startsWith('share-');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-http-files-'));
 const ccs = path.join(home, '.ccs');
 fs.mkdirSync(ccs, { mode: 0o700 });
@@ -163,6 +167,10 @@ try {
       const origin = `http://127.0.0.1:${(server.address() as any).port}`;
       const rows = [];
       for (const row of cases) {
+        if (SKIP_SHARE && isShareCase(row.name)) {
+          console.log(`[SKIP] read-file-parity: ${row.name} (secure share files are Linux-only)`);
+          continue;
+        }
         activeReports = (row as any).alias ? altReports : reports;
         const headers: Record<string, string> = {};
         if ((row as any).role !== 'anonymous') headers['x-session'] = 'yes';
@@ -193,9 +201,14 @@ try {
       if (mode === 'off') {
         reference = rows;
         const file = path.join(repo, 'tests/spec/contract/m3-read-files.json');
+        const expected = (JSON.parse(fs.readFileSync(file, 'utf8')) as Array<{ name: string }>)
+          .filter((row) => !(SKIP_SHARE && isShareCase(row.name)));
+        const expectedText = JSON.stringify(expected, null, 2) + '\n';
         const bytes = JSON.stringify(rows, null, 2) + '\n';
-        if (process.argv.includes('--regenerate')) fs.writeFileSync(file, bytes);
-        else assert.equal(fs.readFileSync(file, 'utf8'), bytes, 'HTTP file golden bytes changed');
+        if (process.argv.includes('--regenerate')) {
+          assert.equal(SKIP_SHARE, false, 'record the goldens on a Linux host');
+          fs.writeFileSync(file, bytes);
+        } else assert.equal(expectedText, bytes, 'HTTP file golden bytes changed');
       } else
         assert.deepEqual(
           rows,
