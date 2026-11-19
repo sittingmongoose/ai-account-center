@@ -195,13 +195,13 @@ function normalize(value: unknown, key = '', nativeRoute?: string): unknown {
     )
       return '<build-commit>';
     if (
-      nativeRoute === '/api/store/status' &&
-      key === 'lastSequence' &&
+      ((nativeRoute === '/api/store/status' && key === 'lastSequence') ||
+        (nativeRoute === '/api/status' && key === 'asOfMs')) &&
       typeof value === 'number' &&
       Number.isSafeInteger(value) &&
       value >= 0
     )
-      return '<checkpoint-sequence>';
+      return key === 'lastSequence' ? '<checkpoint-sequence>' : '<pin-time>';
     if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
     if (key === 'redbBytes' || key === 'redbStats') return null;
     if (key === 'instanceId' || key === 'integrity' || key === 'capture' || key === 'storageHealth')
