@@ -5,10 +5,12 @@
  * timer), with the process collectors, the pm-mail registry and the pins stubbed, so nothing outside the fixture
  * is read or started. Forked by status-measure.mjs; answers IPC `stats` and `stop`.
  *
- *   node tests/spec/status-measure-server.cjs <dist> <binary> <off|on|fed> <home>
+ *   node tests/spec/status-measure-server.cjs <dist> <binary> <off|on|fed|owned> <home>
  *   - off: the service off (today's TS path, the reference);
  *   - on: mode on with the Status group off (today's M3 envelope path);
- *   - fed: mode on with the Status group on (R2).
+ *   - fed: mode on with the Status group on (R2);
+ *   - owned: R4, the store host and the Status and Scoreboard groups on: the service reads the share, ingests
+ *     the runs and answers both routes (the Scoreboard router is mounted too).
  */
 'use strict';
 const fs = require('fs');
@@ -16,6 +18,7 @@ const path = require('path');
 const { monitorEventLoopDelay, performance } = require('perf_hooks');
 
 const [dist, binary, mode, home] = process.argv.slice(2);
+const owned = mode === 'owned';
 const repo = path.resolve(__dirname, '../..');
 const ccs = path.join(home, '.ccs');
 fs.mkdirSync(ccs, { recursive: true, mode: 0o700 });
@@ -28,14 +31,16 @@ Object.assign(process.env, {
   AAC_NO_LOCAL_RUST_BUILD: '1',
   AAC_AGENT_REPORTS_DIR: path.join(home, 'share'),
   AAC_PM_MAIL_REGISTRY_DIR: path.join(home, 'registry'),
-  AAC_RUST_GROUP_STATUS: mode === 'fed' ? 'on' : 'off',
+  AAC_RUST_GROUP_STATUS: mode === 'fed' || owned ? 'on' : 'off',
+  AAC_RUST_STORE: owned ? 'on' : 'off',
+  AAC_RUST_GROUP_SCOREBOARD: owned ? 'on' : 'off',
   NO_COLOR: '1',
 });
 const load = (file) => require(path.join(dist, file));
 const express = require(path.join(repo, 'node_modules/express'));
 const { RustService } = load('web-server/rust-service.js');
 const { createStatusRouter } = load('web-server/routes/status-routes.js');
-const { StatusService } = load('web-server/status/status-service.js');
+const { StatusService, setStatusRustService } = load('web-server/status/status-service.js');
 
 const sample = {
   cores: 56,
@@ -135,10 +140,25 @@ async function main() {
       return reply;
     };
   }
-  await owner.scanReports();
-  await owner.scanRegistry();
-  await owner.collect();
-  const stopOwner = owner.start();
+  let stopOwner;
+  if (owned) {
+    // R4: the owner forwards the service's owned snapshots; wait for the first owned scan of the share.
+    setStatusRustService(service);
+    stopOwner = owner.start();
+    const deadline = Date.now() + 120000;
+    for (;;) {
+      const inputs = await service.internalJson('/internal/status/inputs');
+      if (inputs && typeof inputs.generation === 'number' && inputs.generation > 0) break;
+      if (Date.now() > deadline) throw new Error('the owned Status readers never produced a generation');
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    await owner.collect();
+  } else {
+    await owner.scanReports();
+    await owner.scanRegistry();
+    await owner.collect();
+    stopOwner = owner.start();
+  }
   const app = express();
   app.use((req, res, next) => {
     Object.assign(req, { session: { authenticated: true }, sessionID: 'fixture-measure-session' });
@@ -149,6 +169,15 @@ async function main() {
     '/api/status',
     createStatusRouter(() => owner)
   );
+  if (owned) {
+    const { createScoreboardRouter } = load('web-server/routes/scoreboard-routes.js');
+    const { getScoreboardService } = load('web-server/scoreboard/scoreboard-service.js');
+    const scoreboard = getScoreboardService();
+    app.use(
+      '/api/scoreboard',
+      createScoreboardRouter(() => scoreboard)
+    );
+  }
   const server = app.listen(0, '127.0.0.1', () =>
     process.send({ type: 'ready', port: server.address().port })
   );
@@ -183,6 +212,7 @@ async function main() {
         },
         rustPart: { p50Ms: quantile(timing.rust, 0.5), p95Ms: quantile(timing.rust, 0.95) },
         route: diag.routes?.['/api/status'] ?? null,
+        scoreboardRoute: diag.routes?.['/api/scoreboard'] ?? null,
         stats: diag.stats,
       });
       if (message.reset) {
@@ -190,6 +220,27 @@ async function main() {
         timing.readInputs = [];
         timing.rust = [];
       }
+    } else if (message.type === 'scoreboard-ready') {
+      // Data-aware: the owned store holds the fixture's runs (the ingest backfills in passes).
+      const deadline = Date.now() + 600000;
+      // Done at the fixture's count, or when the count holds for 5 polls (a refused run never lands).
+      const poll = async () => {
+        let last = -1;
+        let held = 0;
+        for (;;) {
+          const inputs = await service.internalJson('/internal/scoreboard/inputs');
+          const runs = Array.isArray(inputs?.runs?.runs) ? inputs.runs.runs.length : 0;
+          held = runs > 0 && runs === last ? held + 1 : 0;
+          last = runs;
+          if (inputs?.catalog && (runs >= message.runs || held >= 5)) return runs;
+          if (Date.now() > deadline) throw new Error(`the owned ingest reached ${runs} runs`);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      };
+      poll().then(
+        (runs) => process.send({ type: 'stats', id: message.id, runs }),
+        (error) => process.send({ type: 'stats', id: message.id, error: String(error) })
+      );
     } else if (message.type === 'verify') {
       // The fed path against today's builder on one read: the same bytes, or a decline (today's answer).
       verify(service).then(
