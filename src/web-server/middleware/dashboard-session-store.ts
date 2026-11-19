@@ -497,7 +497,12 @@ export class DashboardSessionStore extends session.Store {
 /** A claim's text in one canonical form, so a rewritten claim compares equal. */
 function normalClaim(text: string): string {
   try {
-    const value = JSON.parse(text) as { pid?: unknown; host?: unknown; boot?: unknown; writer?: unknown };
+    const value = JSON.parse(text) as {
+      pid?: unknown;
+      host?: unknown;
+      boot?: unknown;
+      writer?: unknown;
+    };
     if (value.writer === 'rust') return text;
     return JSON.stringify({ pid: value.pid, host: value.host, boot: value.boot });
   } catch {
