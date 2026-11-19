@@ -89,6 +89,12 @@ const overrides: Record<string, Contract> =
         )
       )
     : {};
+const lifecycleOverrides: Record<string, Contract> =
+  mode !== 'fixture' && process.platform === 'win32' && registryOutput === undefined
+    ? JSON.parse(
+        await fs.readFile(path.join(spec, 'contract', 'm0-lifecycle-windows.json'), 'utf8')
+      )
+    : {};
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-m6-contract-'));
 const username = 'fixture-admin';
 const password = 'fixture-password-only';
@@ -297,16 +303,18 @@ try {
     for (const [index, route] of selectedRoutes) {
       const name = route.method + ' ' + route.path;
       const ownsReset = nativeReset(route.method, route.path);
+      const ownsLifecycle = mode !== 'fixture' && groups.lifecycle.test(name);
       for (const role of route.roles) {
         const fixture = String(index).padStart(3, '0') + '-' + role + '.json';
-        const contract: Contract =
-          (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
-          JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
-        const { request } = contract;
         const recordRegistryRow =
           windowsPreflightReason !== undefined &&
           name === 'GET /api/accounts/registry' &&
           (role === 'session' || role === 'bar');
+        const contract: Contract =
+          (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
+          (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
+          JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
+        const { request } = contract;
         const expected = recordRegistryRow ? structuredClone(contract.response) : contract.response;
         if (recordRegistryRow) {
           const registry = expected.body as {
