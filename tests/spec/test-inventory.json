@@ -285,6 +285,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/reset_claims.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/status_cache.rs",
       "kind": "internal",
       "evidence": [],
@@ -555,6 +562,12 @@
     },
     {
       "file": "crates/aac-status/tests/reset_review_grants.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-status/tests/reset_service.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3422,6 +3435,14 @@
       "file": "tests/unit/web-server/reset-capture-native.test.ts",
       "kind": "HTTP",
       "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/reset-claims-rust-owner.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
         "HTTP"
       ]
     },

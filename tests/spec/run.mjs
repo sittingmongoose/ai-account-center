@@ -53,6 +53,19 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  // M5 lane K: the reset claim route with the native module, then the Rust service, as the
+  // claims file's writer (Unix: the fake Codex CLI and the private socket).
+  ...(process.platform === 'win32'
+    ? []
+    : [
+        [
+          'bun',
+          [
+            'tests/spec/reset-claim-parity.ts',
+            ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+          ],
+        ],
+      ]),
   [
     'bun',
     [

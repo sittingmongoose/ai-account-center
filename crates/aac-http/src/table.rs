@@ -32,6 +32,8 @@ pub(crate) enum Handler {
     AgentControl,
     Approvals,
     AppUpdates,
+    /// M5 lane K: the reset claims file (ledger and ticketed source reads).
+    ResetClaims,
     Store,
 }
 
@@ -58,6 +60,7 @@ impl Handler {
             "agent-control" => Handler::AgentControl,
             "account-approvals" => Handler::Approvals,
             "app-updates" => Handler::AppUpdates,
+            "reset-claims" => Handler::ResetClaims,
             "store" => Handler::Store,
             _ => return None,
         })
@@ -105,6 +108,9 @@ pub(crate) enum Pool {
     /// Fed Status. Not a route-table group: the fed arm chooses it, and the envelope read stays
     /// on [`Pool::Reads`].
     Status,
+    /// The reset claims file: its own slots, so a seconds-long source read never holds a read
+    /// permit.
+    Reset,
 }
 
 /// One `rust` row, checked.
@@ -205,7 +211,10 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || roles.is_empty()
             || row.budget_ms > 10_000
             || (row.budget_ms == 0
-                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
+                && !matches!(
+                    handler,
+                    Handler::Events | Handler::Agent | Handler::ResetClaims | Handler::Store
+                ))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
@@ -217,6 +226,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::AgentControl
                         | Handler::AppUpdates
                         | Handler::Approvals
+                        | Handler::ResetClaims
                         | Handler::Store
                 ))
             || (method == axum::http::Method::PUT
@@ -243,6 +253,12 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || (handler == Handler::Approvals
                 && (method != axum::http::Method::POST
                     || row.path != "/internal/account-confirmations"))
+            // The TS route owns the deadline (a Claude source read takes seconds); the work is
+            // one blocking transaction that cannot stop halfway, so the row's budget is 0.
+            || (handler == Handler::ResetClaims
+                && (method != axum::http::Method::POST
+                    || row.path != "/internal/reset-claims"
+                    || row.budget_ms != 0))
             || (method == axum::http::Method::PATCH
                 && !matches!(
                     handler,
@@ -270,6 +286,8 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             handler,
             pool: if row.group == "store" || handler == Handler::Store {
                 Pool::Store
+            } else if handler == Handler::ResetClaims {
+                Pool::Reset
             } else {
                 Pool::Reads
             },
@@ -292,9 +310,40 @@ mod tests {
         let rows = rows(ROUTES)?;
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
         assert!(rows.iter().all(|r| r.budget_ms > 0
-            || matches!(r.handler, Handler::Events | Handler::Agent | Handler::Store)));
+            || matches!(
+                r.handler,
+                Handler::Events | Handler::Agent | Handler::ResetClaims | Handler::Store
+            )));
         assert!(rows.iter().any(|r| r.handler == Handler::Store));
+        // M5 lane K: the one reset claims row, internal, on its own pool.
+        let reset: Vec<&Row> = rows
+            .iter()
+            .filter(|r| r.handler == Handler::ResetClaims)
+            .collect();
+        assert_eq!(reset.len(), 1);
+        assert_eq!(reset[0].path, "/internal/reset-claims");
+        assert_eq!(reset[0].method, axum::http::Method::POST);
+        assert_eq!(reset[0].pool, Pool::Reset);
         Ok(())
+    }
+
+    #[test]
+    fn startup_refuses_a_reset_claims_row_off_its_one_shape() {
+        let tail = r#"{"method":"*","path":"*","owner":"ts-fallback"}"#;
+        let good = r#"{"method":"POST","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#;
+        assert!(rows(&format!("[{good},{tail}]")).is_ok());
+        for bad in [
+            // a deadline the TS route owns
+            r#"{"method":"POST","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":400,"handler":"reset-claims"}"#,
+            // another path
+            r#"{"method":"POST","path":"/internal/reset","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#,
+            // a read
+            r#"{"method":"GET","path":"/internal/reset-claims","owner":"rust","group":"internal","roles":["service"],"budgetMs":0,"handler":"reset-claims"}"#,
+            // a public route
+            r#"{"method":"POST","path":"/api/accounts/x/reset-claims","owner":"rust","group":"writes","roles":["admin"],"budgetMs":0,"handler":"reset-claims"}"#,
+        ] {
+            assert!(rows(&format!("[{bad},{tail}]")).is_err(), "{bad}");
+        }
     }
 
     #[test]
