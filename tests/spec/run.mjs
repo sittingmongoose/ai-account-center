@@ -80,6 +80,13 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  [
+    'node',
+    [
+      'tests/spec/provider-install-writes.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
   ['node', ['tests/spec/read-number-vectors.mjs']],
   ...[
     'read-view-parity',

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import { antigravityJobFlow } from '../../../src/web-server/services/account-lifecycle-antigravity';
 import {
   ANTIGRAVITY_FLOW_CACHE_MS,
@@ -27,6 +28,9 @@ import { claimAntigravitySignInMarker } from '../../../src/antigravity/signin-ma
 
 let root: string;
 let ccsDir: string;
+const nativeMode = process.env.AAC_SPEC_PROVIDER_WRITE_MODE === 'on';
+let stopWriter: (() => void) | undefined;
+let nativeWrites = 0;
 let home: string;
 
 beforeEach(() => {
@@ -36,9 +40,17 @@ beforeEach(() => {
   fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(ccsDir, 0o700);
   fs.mkdirSync(home, { recursive: true });
+  nativeWrites = 0;
+  if (nativeMode) {
+    const binary = process.env.AAC_RUST_SERVICE_BINARY;
+    if (!binary) throw new Error('Native writer binary missing');
+    stopWriter = registerFileWriter(fs.realpathSync(ccsDir), binary, () => nativeWrites++);
+  }
 });
 
 afterEach(() => {
+  stopWriter?.();
+  stopWriter = undefined;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -153,7 +165,8 @@ describe('antigravityJobFlow', () => {
       accountId: 'antigravity:profile:party',
       email: 'party@example.com',
       plan: 'Google AI Pro',
-    });
+      if (nativeMode) expect(nativeWrites).toBeGreaterThan(0);
+  });
     expect(agy.hasProfile('party')).toBe(true);
     expect(refreshed).toEqual([{ ccsDir, home }]);
   });

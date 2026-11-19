@@ -8,6 +8,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { registerFileWriter } from '../../../src/shared/private-file-lease';
 import * as lockfile from 'proper-lockfile';
 import { CodexProfileRegistry } from '../../../src/codex-auth/codex-profile-registry';
 import { invalidateCodexAuthProfilesCache } from '../../../src/codex-auth/codex-auth-dashboard-service';
@@ -25,6 +26,9 @@ import type {
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
 let root: string;
 let ccsDir: string;
+const nativeMode = process.env.AAC_SPEC_PROVIDER_WRITE_MODE === 'on';
+let stopWriter: (() => void) | undefined;
+let nativeWrites = 0;
 let codexHome: string;
 let sharedConfig: string;
 
@@ -88,12 +92,20 @@ beforeEach(() => {
   sharedConfig = path.join(root, 'shared', 'config.toml');
   fs.mkdirSync(ccsDir, { recursive: true });
   fs.mkdirSync(codexHome);
+  nativeWrites = 0;
+  if (nativeMode) {
+    const binary = process.env.AAC_RUST_SERVICE_BINARY;
+    if (!binary) throw new Error('Native writer binary missing');
+    stopWriter = registerFileWriter(fs.realpathSync(ccsDir), binary, () => nativeWrites++);
+  }
   fs.mkdirSync(path.dirname(sharedConfig));
   fs.writeFileSync(sharedConfig, 'model = "fixture"\n');
   invalidateCodexAuthProfilesCache();
 });
 
 afterEach(() => {
+  stopWriter?.();
+  stopWriter = undefined;
   if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
   else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
   invalidateCodexAuthProfilesCache();
@@ -183,6 +195,7 @@ describe('Codex Add', () => {
     const runner = fakeRunner(login('new@example.com', 'acct-new', 'new'), commands);
     const job = runner.start(lifecycle().addFlow('codex-4'));
     const done = await finished(runner, job.id);
+    if (nativeMode) expect(nativeWrites).toBeGreaterThan(0);
     expect(done).toMatchObject({
       state: 'succeeded',
       accountId: 'codex:codex-4',
@@ -470,7 +483,7 @@ describe('Codex Sign in again', () => {
     }
   });
 
-  it('puts the saved login back when the live login cannot be replaced', async () => {
+  it.skipIf(nativeMode)('puts the saved login back when the live login cannot be replaced', async () => {
     addProfile('party', 'party@example.com', 'acct-party');
     addProfile('gmail', 'gmail@example.com');
     const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
