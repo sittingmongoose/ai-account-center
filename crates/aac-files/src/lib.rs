@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub mod auth_owner;
 pub mod codex_identity;
 pub mod codex_registry;
+mod config_recovery;
 pub mod deployed_build;
 #[cfg(unix)]
 pub mod history_snapshots;
@@ -202,7 +203,7 @@ pub struct ConfigLock {
 }
 
 impl ConfigLock {
-    /// Take the config marker, reclaiming only an unchanged, proven-dead owner.
+    /// Take the config marker, reclaiming an unchanged dead claim or abandoned empty marker.
     pub fn take(parent: &Path) -> Result<Self, Failure> {
         ensure_directory(parent)?;
         let file = parent.join("config.yaml.lock");
@@ -229,14 +230,23 @@ impl ConfigLock {
             Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
                 let held = read_bounded(&file, 1024)?;
                 let busy = || Failure::new(Cause::Busy, "config writer already active");
-                if !Self::proven_dead(&held) {
+                if !held.is_empty() && !Self::proven_dead(&held) {
                     return Err(busy());
                 }
+                let empty = held
+                    .is_empty()
+                    .then(|| fs::symlink_metadata(&file))
+                    .transpose()?;
                 let _takeover = WriterLease::try_take(&parent.join("config.yaml.reclaim.lock"))?;
-                let again = read_bounded(&file, 1024)?;
-                if again != held || !Self::proven_dead(&again) {
-                    return Err(busy());
-                }
+                let _empty_guard = if let Some(before) = empty {
+                    Some(config_recovery::guard_empty(&file, &before)?)
+                } else {
+                    let again = read_bounded(&file, 1024)?;
+                    if again != held || !Self::proven_dead(&again) {
+                        return Err(busy());
+                    }
+                    None
+                };
                 error.file.persist(&file).map_err(|error| error.error)?;
             }
             Err(error) => return Err(error.error.into()),

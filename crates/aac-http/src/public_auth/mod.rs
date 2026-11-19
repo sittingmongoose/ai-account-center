@@ -864,6 +864,7 @@ struct AuthRuntime {
 
 impl AuthRuntime {
     fn load_config(&self) -> Result<Config, StoreError> {
+        self.files.verify_owner()?;
         Ok(Config::new(self.files.config()?, &self.env))
     }
     fn update_config(
