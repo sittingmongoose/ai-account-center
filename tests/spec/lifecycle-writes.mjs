@@ -7,7 +7,7 @@ const args = ['test', 'tests/unit/web-server/account-lifecycle-routes.test.ts'];
 if (process.platform === 'win32') {
   args.push(
     '--test-name-pattern',
-    'registered lifecycle state write parity|needs a browser session|replaces a key|re-checks a pending|purges one trash'
+    'registered lifecycle state write parity|needs a browser session|replaces a key|re-checks a pending|purges one trash|reads recovered sign-in jobs'
   );
 }
 for (const mode of tsOnly ? ['off', 'shadow'] : ['off', 'shadow', 'on']) {

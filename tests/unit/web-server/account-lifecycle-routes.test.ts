@@ -30,7 +30,10 @@ import type { ClaudeHostTransport } from '../../../src/web-server/services/claud
 import { CodexAccountLifecycle } from '../../../src/web-server/services/codex-account-lifecycle';
 import { MuseAccountLifecycle } from '../../../src/web-server/services/muse-account-lifecycle';
 import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
-import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
+import {
+  SignInJobRunner,
+  type SignInJob,
+} from '../../../src/web-server/services/signin-jobs';
 import { setLocalNetworkTrustResolver } from '../../../src/web-server/middleware/secure-transport';
 import { parseTrustedNetworks } from '../../../src/web-server/middleware/trusted-networks';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
@@ -216,6 +219,7 @@ async function fixture(
     museEnabled?: boolean;
     approvalBinary?: string;
     writeParityMode?: 'off' | 'shadow' | 'on';
+    readSignInJournal?: (id: string) => Promise<SignInJob | null | undefined>;
   } = {}
 ): Promise<Fixture> {
   const audits: Array<[string, Record<string, unknown>]> = [];
@@ -269,6 +273,7 @@ async function fixture(
   const env: LifecycleEnv = {
     ccsDir: () => ccsDir,
     runner: () => runner,
+    readSignInJournal: options.readSignInJournal,
     codex: () => new CodexAccountLifecycle({ codexHome, codexCli: () => '/fake/codex', env: {} }),
     claude: () =>
       new ClaudeAccountLifecycle({
@@ -1303,6 +1308,49 @@ describe('remove races and failures', () => {
 });
 
 describe('sign-in and guides', () => {
+  it('reads recovered sign-in jobs only after the existing GET guards', async () => {
+    const id = 'job_0000000000000082';
+    const expired = 'job_0000000000000083';
+    const unseen = 'job_0000000000000084';
+    const reads: string[] = [];
+    const at = '2026-10-02T08:00:00.000Z';
+    const job: SignInJob = {
+      id,
+      provider: 'codex',
+      kind: 'device-code',
+      mode: 'signin-again',
+      accountId: 'codex:work',
+      profileName: 'work',
+      platform: 'ubuntu',
+      state: 'succeeded',
+      verification: null,
+      result: { accountId: 'codex:work', email: null, plan: null },
+      error: null,
+      startedAt: at,
+      updatedAt: at,
+      expiresAt: at,
+    };
+    const f = await fixture({
+      readSignInJournal: async (candidate) => {
+        reads.push(candidate);
+        return candidate === id ? job : candidate === expired ? null : undefined;
+      },
+    });
+    const route = '/signin-jobs/' + id;
+    expect((await f.request('GET', route, undefined, { 'x-test-session': '' })).status).toBe(401);
+    expect((await f.request('GET', route + '?x=1')).status).toBe(400);
+    expect((await f.request('GET', '/signin-jobs/nope')).status).toBe(404);
+    expect(reads).toEqual([]);
+    const recovered = await f.request('GET', route);
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get('cache-control')).toBe('no-store');
+    expect(recovered.body).toEqual(job);
+    expect((await f.request('GET', '/signin-jobs/' + expired)).status).toBe(404);
+    const fallback = await f.request('GET', '/signin-jobs/' + unseen);
+    expect(fallback.body).toMatchObject({ id: unseen, error: { code: 'server_restarted' } });
+    expect(reads).toEqual([id, expired, unseen]);
+  });
+
   it('starts a Codex device-code job and allows one per provider', async () => {
     const f = await fixture();
     codexProfile('gmail');
