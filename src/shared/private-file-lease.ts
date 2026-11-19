@@ -42,8 +42,11 @@ export function claimFileLease(root: string, file: string): () => void {
   let locked = false;
   try {
     const metadata = fs.fstatSync(fd);
+    const current = fs.lstatSync(file);
     if (
       !metadata.isFile() ||
+      metadata.ino !== current.ino ||
+      metadata.dev !== current.dev ||
       (process.getuid && metadata.uid !== process.getuid()) ||
       (metadata.mode & 0o077) !== 0
     )

@@ -243,15 +243,16 @@ export function withTsPrivateFileLeases<T>(
   task: () => T,
   handoff = false
 ): T {
-  if (process.platform !== 'win32') fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const previous = tsWriterGrant.getStore();
-  const canonical = canonicalWriterRoot(root);
+  let canonical = canonicalWriterRoot(root);
   const inherited =
     previous?.active && previous.root === canonical ? previous.rows : new Set<string>();
   const requested = [...new Set(ids)].filter((id) => !inherited.has(id)).sort();
   if (!requested.length) return task();
   if (!handoff) requested.forEach(assertTsWritesRow);
   if (process.platform === 'win32') return task();
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  canonical = fs.realpathSync(root);
 
   const releases: Array<() => void> = [];
   const grant = { root: canonical, rows: new Set([...inherited, ...requested]), active: true };

@@ -232,6 +232,36 @@ async function check(mode: 'off' | 'shadow' | 'on') {
     }
     assert.equal(service.stats.served, mode === 'on' ? saves.length : 0, mode);
     assert.equal(service.stats.fallbacks, 0, mode);
+
+    // The process stopped just after its durable intent, before installing the companion.
+    const transaction = path.join(ccs, 'dashboard-preferences-transaction.json');
+    const committed = { ...clean, timeZone: 'Asia/Tokyo', usageLogSources: [legacySource, alexis] };
+    fs.writeFileSync(
+      transaction,
+      JSON.stringify({
+        primary: JSON.stringify({ ...committed, usageLogSources: [legacySource] }) + '\n',
+        companion: JSON.stringify({ usageLogSources: [alexis] }) + '\n',
+      }) + '\n',
+      { mode: 0o600 }
+    );
+    const reading = await fetch(url, { headers: { 'x-fixture-session': 'yes' } });
+    assert.equal(reading.status, 200);
+    assert.equal(await reading.text(), JSON.stringify(committed));
+    const resumed = await request({
+      method: 'PATCH',
+      body: { snapshotCleanup: { auto: false } },
+      status: 200,
+    });
+    assert.equal(resumed.status, 200);
+    assert.equal(
+      await resumed.text(),
+      JSON.stringify({ ...committed, snapshotCleanup: { auto: false } })
+    );
+    assert.equal(fs.existsSync(transaction), false);
+    assert.equal(
+      fs.readFileSync(extra, 'utf8'),
+      JSON.stringify({ usageLogSources: [alexis] }) + '\n'
+    );
   } finally {
     service.stop();
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));

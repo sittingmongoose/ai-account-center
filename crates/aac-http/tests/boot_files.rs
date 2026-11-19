@@ -101,7 +101,7 @@ fn the_service_starts_only_with_the_registrys_owners() {
     let mut unknown = owners();
     unknown.insert("zz-unknown".into(), json!("ts"));
     let mut moved = owners();
-    moved.insert("dashboard-preferences".into(), json!("rust-service"));
+    moved.insert("auth-state".into(), json!("rust-service"));
     let mut word = owners();
     word.insert("account-visibility".into(), json!("python"));
     for (name, files) in [
