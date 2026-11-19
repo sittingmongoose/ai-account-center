@@ -251,14 +251,6 @@ impl DashboardAuth {
                 };
                 return settings.handle(&access, family, request).await;
             }
-            if let Some(native) = &native_owners
-                && native_owners::NativeOwners::owns(
-                    request.method(),
-                    request.uri().path().trim_end_matches('/'),
-                )
-            {
-                return native.handle(request).await;
-            }
             if let Some(root) = cut_root.as_deref()
                 && analytics_routes::owns(request.method(), request.uri().path())
             {
@@ -287,6 +279,14 @@ impl DashboardAuth {
                 {
                     return reply;
                 }
+            }
+            if let Some(native) = &native_owners
+                && native_owners::NativeOwners::owns(
+                    request.method(),
+                    request.uri().path().trim_end_matches('/'),
+                )
+            {
+                return native.handle(request).await;
             }
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
