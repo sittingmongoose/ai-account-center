@@ -1,3 +1,4 @@
+import { loadOrCreateUnifiedConfig } from '../config/unified-config-loader';
 import { once } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -117,6 +118,9 @@ export async function startComposedServer(
   options: ServerOptions,
   binary: string
 ): Promise<ServerInstance & { restartPublic: () => Promise<void> }> {
+  // The retained adapters require the unified-config schema even on a fresh
+  // root. Set it up before Rust can persist the first dashboard credentials.
+  loadOrCreateUnifiedConfig();
   const host = options.host ?? 'localhost';
   const ip =
     host === 'localhost'
