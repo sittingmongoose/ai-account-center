@@ -166,8 +166,22 @@ try {
       head: false,
     },
   } as any);
-  const normalize = (value: unknown) =>
-    JSON.parse(JSON.stringify(value).split(home).join('<fixture>'));
+  // Windows serializes `\` as `\\` inside JSON text, so the escaped form is the one that appears there.
+  const escapedHome = JSON.stringify(home).slice(1, -1);
+  // The snapshot pins fixture paths, not the host's separator: compare them in one form.
+  const portable = (value: unknown): unknown => {
+    if (typeof value === 'string') return value.split('\\').join('/');
+    if (Array.isArray(value)) return value.map(portable);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, portable(entry)]));
+    return value;
+  };
+  const normalize = (value: unknown) => {
+    const parsed = JSON.parse(
+      JSON.stringify(value).split(escapedHome).join('<fixture>').split(home).join('<fixture>')
+    );
+    return path.sep === '\\' ? portable(parsed) : parsed;
+  };
   const golden = path.join(root, 'tests/spec/contract/m3-read-snapshots.json');
   const bytes = JSON.stringify(normalize(rows), null, 2) + '\n';
   if (regenerate) fs.writeFileSync(golden, bytes);

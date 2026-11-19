@@ -26,6 +26,15 @@ import { fileURLToPath } from 'node:url';
 
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const GOLDEN = path.join(repo, 'tests/spec/contract/m3-part4-profile-reads.json');
+// A FIFO is POSIX-only: on Windows `mkfifo` from Git for Windows makes a regular file, so these checks cannot hold.
+const HOSTLESS =
+  process.platform === 'win32'
+    ? new Set([
+        'hardened visibility: a FIFO (never opened)',
+        'hardened preferences: a FIFO primary',
+        'hardened preferences: a FIFO companion',
+      ])
+    : new Set<string>();
 const worker = process.argv.indexOf('--worker');
 /** The Antigravity routes' response instant. */
 const NOW = Date.parse('2026-11-15T12:00:00Z');
@@ -95,9 +104,15 @@ if (worker < 0) {
         throw new Error(result.stderr || result.stdout || `${mode}: profile read worker failed`);
       reports.push(JSON.parse(fs.readFileSync(file, 'utf8')) as Report);
     }
+    const expected = (JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Array<{ name: string }>).filter(
+      (row) => !HOSTLESS.has(row.name)
+    );
+    const expectedText = JSON.stringify(expected, null, 2) + '\n';
     const bytes = JSON.stringify(reports[0].rows, null, 2) + '\n';
-    if (process.argv.includes('--regenerate')) fs.writeFileSync(GOLDEN, bytes);
-    else assert.ok(fs.readFileSync(GOLDEN, 'utf8') === bytes, 'profile read golden bytes changed');
+    if (process.argv.includes('--regenerate')) {
+      assert.equal(HOSTLESS.size, 0, 'record the goldens on a POSIX host');
+      fs.writeFileSync(GOLDEN, bytes);
+    } else assert.ok(expectedText === bytes, 'profile read golden bytes changed');
     for (const report of reports) {
       for (const [index, row] of report.rows.entries())
         assert.deepEqual(
@@ -372,7 +387,22 @@ async function runWorker(mode: string, destination: string): Promise<void> {
     }
   };
   const normalize = (body: string): string => {
-    let text = body.split(canonicalCcs).join('<ccs>').split(home).join('<home>');
+    // Windows serializes `\` as `\\` inside JSON text, so the escaped form is the one that appears there.
+    const escapedHome = JSON.stringify(home).slice(1, -1);
+    const escapedCcs = JSON.stringify(canonicalCcs).slice(1, -1);
+    let text = body
+      .split(escapedCcs).join('<ccs>')
+      .split(canonicalCcs).join('<ccs>')
+      .split(escapedHome).join('<home>')
+      .split(home).join('<home>');
+    // The body pins fixture paths, not the host's separator; a JSON string carries `\\` for each one. Only the
+    // segments after the fixture root are converted: the fixture's own Windows paths (a launcher path) stay as given.
+    if (path.sep === '\\') {
+      for (const label of ['<ccs>', '<home>']) {
+        const pattern = new RegExp(String.raw`${label}((?:\\\\[^"\\\\]+)+)`, 'g');
+        text = text.replace(pattern, (_match, tail: string) => label + tail.split(String.raw`\\`).join('/'));
+      }
+    }
     // The usage answer's own read instant and an Open's random id belong to this run.
     try {
       const fetchedAt = (JSON.parse(body) as { fetchedAt?: unknown } | null)?.fetchedAt;
@@ -455,6 +485,10 @@ async function runWorker(mode: string, destination: string): Promise<void> {
       );
     }
     for (const form of fixtures.hardenedForms()) {
+      if (HOSTLESS.has(`hardened ${form.name}`)) {
+        console.log(`[SKIP] profile-read-parity: hardened ${form.name} (POSIX FIFO)`);
+        continue;
+      }
       prepare({ setup: (dir) => form.setup(dir) });
       await run(`hardened ${form.name}`, form.route, form.rust);
     }

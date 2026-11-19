@@ -12,6 +12,17 @@ import { fileURLToPath } from 'node:url';
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const worker = process.argv.indexOf('--worker');
 if (worker < 0) {
+  // The native-store contracts need the fixture store module built on Nas1; a host without it says so instead of
+  // failing on an assertion (the same suite then runs unchanged wherever the module exists).
+  const storeModule = process.env.AAC_STORE_MODULE ??
+    path.join(repo, 'dist/native/aac-store.linux-x64.node');
+  if (!fs.existsSync(storeModule)) {
+    console.log(
+      `[SKIP] read-http-parity: needs the Nas1-built native store at ${storeModule}; ` +
+        'copy it into dist/native or set AAC_STORE_MODULE'
+    );
+    process.exit(0);
+  }
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-http-m3-'));
   const reports: any[] = [];
   try {

@@ -36,14 +36,19 @@ const denied = new Set<string>();
 function guardFile(input: any) {
   if (typeof input !== 'string' && !(input instanceof URL)) return;
   const target = path.resolve(input instanceof URL ? fileURLToPath(input) : input);
-  if ([home, root, moduleRoot].some((base) => target === base || target.startsWith(base + '/')))
-    return;
+  const inside = (base: string) => {
+    const relative = path.relative(base, target);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  };
+  if ([home, root, moduleRoot].some(inside)) return;
+  // The denied roots are written with forward slashes; Windows resolves and reports `\`.
+  const portable = target.split(path.sep).join('/');
   if (
-    target.startsWith('/home/') ||
-    target.startsWith('/mnt/Cursor/') ||
-    /\/(?:\.ccs|\.claude|\.codex|\.t3)(?:\/|$)/.test(target)
+    portable.startsWith('/home/') ||
+    portable.startsWith('/mnt/Cursor/') ||
+    /(?:^|\/)(?:\.ccs|\.claude|\.codex|\.t3)(?:\/|$)/.test(portable)
   ) {
-    denied.add(target.replace(/^.*\/(\.[^/]+).*$/, '$1'));
+    denied.add(portable.replace(/^.*\/(\.[^/]+).*$/, '$1'));
     throw Object.assign(new Error('Outside fixture filesystem'), { code: 'EACCES' });
   }
 }
@@ -211,6 +216,17 @@ await stub('src/store/store-service.ts', {
 const routerModule = await import('../../src/web-server/routes/api-router');
 const createRouter = routerModule.createApiRouter;
 const records = new Map<any, any[]>();
+// Stack frames use the host's separators (and may be file URLs): compare on one form.
+const portableRoot = root.split(path.sep).join('/');
+function routeHandlerFile(): string {
+  const frame = (new Error().stack ?? '')
+    .split('\n')
+    .map((line) => line.split('\\').join('/').replace(/file:\/\/\//g, ''))
+    .find((line) => line.includes(`${portableRoot}/src/`) && !line.includes('api-router.ts'));
+  if (!frame) return 'unknown';
+  const fromRoot = frame.slice(frame.indexOf(`${portableRoot}/src/`) + portableRoot.length + 1);
+  return fromRoot.match(/^(src\/[^():]+\.ts)/)?.[1] ?? 'unknown';
+}
 spyOn(routerModule, 'createApiRouter').mockImplementation(() => {
   const router = createRouter();
   const entries: any[] = [];
@@ -218,16 +234,7 @@ spyOn(routerModule, 'createApiRouter').mockImplementation(() => {
   for (const method of ['use', 'all', 'get', 'head', 'post', 'put', 'patch', 'delete', 'options']) {
     const original = (router as any)[method];
     (router as any)[method] = (...args: any[]) => {
-      const frame = new Error().stack
-        ?.split('\n')
-        .find((line) => line.includes(`${root}/src/`) && !line.includes('api-router.ts'));
-      entries.push({
-        method,
-        args,
-        handlerFile:
-          frame?.slice(frame.indexOf(root) + root.length + 1).match(/^(src\/[^():]+\.ts)/)?.[1] ??
-          'unknown',
-      });
+      entries.push({ method, args, handlerFile: routeHandlerFile() });
       return original.apply(router, args);
     };
   }
@@ -387,14 +394,22 @@ function normalize(value: any, key = ''): any {
         .sort(([a], [b]) => a.localeCompare(b, 'en'))
         .map(([k, v]) => [k, normalize(v, k)])
     );
-  if (typeof value === 'string')
-    return value
+  if (typeof value === 'string') {
+    let text = value
       .replace(/dev_[0-9a-f]{16}/g, '<device-id>')
       .replace(/aacd_[A-Za-z0-9_-]{43}/g, '<device-token>')
       .replaceAll(base, '<origin>')
       .replaceAll(home, '<fixture-home>')
       .replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b/g, '<timestamp>')
       .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/g, '<uuid>');
+    // A fixture path pins the file, not the host's separator: compare it in one form.
+    if (path.sep === '\\')
+      text = text.replace(
+        /<fixture-home>((?:\\[^"\\]+)+)/g,
+        (_match, tail: string) => '<fixture-home>' + tail.split('\\').join('/')
+      );
+    return text;
+  }
   return value;
 }
 try {
@@ -418,7 +433,7 @@ try {
     'route-source-hashes.json',
     Object.fromEntries(
       routeSources.map((file) => [
-        path.relative(root, file),
+        path.relative(root, file).split(path.sep).join('/'),
         createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
       ])
     )
