@@ -20,7 +20,7 @@ use axum::{
     extract::Request,
     http::{Method, Uri},
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::{
     io,
     path::PathBuf,
@@ -377,6 +377,34 @@ impl Usage {
             }
         }
     }
+}
+
+fn json_content(request: &Request) -> bool {
+    super::header(request.headers(), "content-type")
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+}
+
+async fn object_body(request: Request, limit: usize) -> Option<Map<String, Value>> {
+    use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
+    let declared = request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|size| size.to_str().ok());
+    if declared
+        .and_then(|size| size.parse::<usize>().ok())
+        .is_some_and(|size| size > limit)
+    {
+        return None;
+    }
+    let has_body = declared.is_some() || request.headers().contains_key(TRANSFER_ENCODING);
+    let bytes = axum::body::to_bytes(request.into_body(), limit)
+        .await
+        .ok()?;
+    if bytes.is_empty() {
+        return has_body.then(Map::new);
+    }
+    serde_json::from_slice(&bytes).ok()
 }
 
 pub(super) fn no_store(mut reply: Reply) -> Reply {
