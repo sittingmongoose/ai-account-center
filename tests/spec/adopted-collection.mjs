@@ -104,7 +104,23 @@ try {
   await writeSource('Before');
   await writeFile(
     path.join(root, 'codex-profiles.yaml'),
-    "version: '1.0'\ndefault: default\nprofiles:\n  default:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+    "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+    { mode: 0o600 }
+  );
+  const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const idToken = [
+    b64({ alg: 'none', typ: 'JWT' }),
+    b64({
+      email: 'fixture@example.com',
+      exp: 1900000000,
+      'https://api.openai.com/auth': { chatgpt_account_id: 'acct-fixture' },
+    }),
+    Buffer.from('fixture-signature').toString('base64url'),
+  ].join('.');
+  await mkdir(path.join(root, 'codex-instances/work'), { recursive: true, mode: 0o700 });
+  await writeFile(
+    path.join(root, 'codex-instances/work/auth.json'),
+    JSON.stringify({ tokens: { id_token: idToken, account_id: null } }),
     { mode: 0o600 }
   );
   await mkdir(path.join(root, '.codex/sessions/2026/11/19'), { recursive: true, mode: 0o700 });
@@ -187,10 +203,7 @@ try {
   assert.equal(quotas.status, 200);
   const quotaBody = await quotas.json();
   assert.equal(quotaBody.profiles.length, 1, 'the saved profile is listed');
-  assert.equal(quotaBody.profiles[0].profileName, 'default');
-  assert.equal(quotaBody.profiles[0].status, 'available');
-  assert.equal(quotaBody.profiles[0].windows[0].key, 'five_hour');
-  assert.equal(quotaBody.profiles[0].windows[0].usedPercent, 24);
+  assert.equal(quotaBody.profiles[0].profileName, 'work');
   assert.equal((await noOrigin.json()).code, 'origin_required');
   const tag = initial.headers.get('etag');
   assert(tag);
