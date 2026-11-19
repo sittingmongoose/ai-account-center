@@ -417,12 +417,10 @@ pub fn analytics_window(value: &Value) -> Option<Value> {
     if safe_pool_id(pool_id) {
         out.insert("poolId".into(), pool_id.clone());
     }
-    let pool_source = obj.get("poolIdSource").and_then(Value::as_str);
-    if matches!(
-        pool_source,
-        Some("provider-id") | Some("provider-bucket-membership")
-    ) {
-        out.insert("poolIdSource".into(), json!(pool_source.unwrap()));
+    if let Some(source @ ("provider-id" | "provider-bucket-membership")) =
+        obj.get("poolIdSource").and_then(Value::as_str)
+    {
+        out.insert("poolIdSource".into(), json!(source));
     }
     let pool_label = obj.get("poolLabel").unwrap_or(&Value::Null);
     if let Some(display) = aac_views::antigravity::display_text(Some(pool_label), 80) {
@@ -533,10 +531,12 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
         return None;
     }
     let raw_class = obj.get("planClass");
-    if let Some(class) = raw_class {
-        if !class.is_null() && class.as_str() != Some("max") && class.as_str() != Some("pro") {
-            return None;
-        }
+    if let Some(class) = raw_class
+        && !class.is_null()
+        && class.as_str() != Some("max")
+        && class.as_str() != Some("pro")
+    {
+        return None;
     }
     let sampled_at = usage_timestamp(obj.get("sampledAt").unwrap_or(&Value::Null), now);
     let fetched_at = usage_timestamp(obj.get("fetchedAt").unwrap_or(&Value::Null), now);
@@ -565,21 +565,22 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
         }
         let window = analytics_window(raw)?;
         for field in ["usedPercent", "used", "limit", "windowMinutes"] {
-            if let Some(n) = window.get(field).and_then(Value::as_f64) {
-                if n < 0.0 {
-                    return None;
-                }
-            }
-        }
-        if let Some(rp) = window.get("remainingPercent").and_then(Value::as_f64) {
-            if !(0.0..=100.0).contains(&rp) {
+            if let Some(n) = window.get(field).and_then(Value::as_f64)
+                && n < 0.0
+            {
                 return None;
             }
         }
-        if let Some(unit) = window.get("unit") {
-            if !unit.is_null() && safe_usage_text(unit, 40).is_none() {
-                return None;
-            }
+        if let Some(rp) = window.get("remainingPercent").and_then(Value::as_f64)
+            && !(0.0..=100.0).contains(&rp)
+        {
+            return None;
+        }
+        if let Some(unit) = window.get("unit")
+            && !unit.is_null()
+            && safe_usage_text(unit, 40).is_none()
+        {
+            return None;
         }
         keys.push(
             window
@@ -606,19 +607,19 @@ pub fn parse_reading(value: &Value, now: f64) -> Option<UsageReading> {
         optional_extras: None,
         antigravity_plan: None,
     };
-    if let Some(ctx) = obj.get("optionalExtrasContext").and_then(Value::as_str) {
-        if hex_digest(ctx) {
-            reading.optional_extras_context = Some(ctx.to_owned());
-        }
+    if let Some(ctx) = obj.get("optionalExtrasContext").and_then(Value::as_str)
+        && hex_digest(ctx)
+    {
+        reading.optional_extras_context = Some(ctx.to_owned());
     }
     if let Some(extras) = obj.get("optionalExtras").and_then(Value::as_object) {
         let rc = extras.get("resetCredits").and_then(Value::as_str);
         let pb = extras.get("prepaidBalance").and_then(Value::as_str);
-        if matches!(rc, Some("ok") | Some("unavailable"))
-            && matches!(pb, Some("ok") | Some("unavailable"))
+        if let (Some(rc), Some(pb)) = (rc, pb)
+            && matches!(rc, "ok" | "unavailable")
+            && matches!(pb, "ok" | "unavailable")
         {
-            reading.optional_extras =
-                Some(json!({"resetCredits": rc.unwrap(), "prepaidBalance": pb.unwrap()}));
+            reading.optional_extras = Some(json!({"resetCredits": rc, "prepaidBalance": pb}));
         }
     }
     let observed = reading
@@ -691,12 +692,12 @@ fn extra_group(key: &str) -> Option<&'static str> {
     // reset_credit_(available|saved|used|expired)_grant_(1..20)
     for state in ["available", "saved", "used", "expired"] {
         let prefix = format!("reset_credit_{state}_grant_");
-        if let Some(num) = key.strip_prefix(&prefix) {
-            if let Ok(n) = num.parse::<u32>() {
-                if (1..=20).contains(&n) && num == n.to_string() {
-                    return Some("resetCredits");
-                }
-            }
+        if let Some(num) = key.strip_prefix(&prefix)
+            && let Ok(n) = num.parse::<u32>()
+            && (1..=20).contains(&n)
+            && num == n.to_string()
+        {
+            return Some("resetCredits");
         }
     }
     None
@@ -794,7 +795,7 @@ pub fn retain_claude_extras(
                 .and_then(|e| e.get(k))
                 .and_then(Value::as_str)
         }) == Some("unavailable");
-        let already_reported = kind.is_some() && reported.iter().any(|r| *r == kind);
+        let already_reported = kind.is_some() && reported.contains(&kind);
         let Some(ts) = timestamp else { continue };
         if kind.is_none()
             || !unavailable
@@ -806,9 +807,10 @@ pub fn retain_claude_extras(
         {
             continue;
         }
+        let Some(sampled) = sampled_at else { continue };
         let mut w = window.clone();
         w["status"] = json!("cached");
-        w["sampledAt"] = json!(sampled_at.unwrap());
+        w["sampledAt"] = json!(sampled);
         retained.push(w);
     }
     if retained.is_empty() {
@@ -862,7 +864,7 @@ pub fn parse_muse_peer(value: &Value, dashboard_hosts: &[&str]) -> Option<MuseUs
         return None;
     }
     let host = obj.get("host")?.as_str()?;
-    if !dashboard_hosts.iter().any(|h| *h == host) {
+    if !dashboard_hosts.contains(&host) {
         return None;
     }
     let identity = parse_identity(obj.get("identity")?)?;

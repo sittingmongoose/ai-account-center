@@ -121,15 +121,14 @@ impl Source {
         {
             return Err(Decline::Shape);
         }
-        if let Some(stamp) = &self.created_at {
-            if !stamp.contains('T')
+        if let Some(stamp) = &self.created_at
+            && (!stamp.contains('T')
                 || !stamp.as_bytes().get(16).is_some_and(|b| *b == b':')
                 || aac_views::js::parse_date(stamp)
                     .map_err(|_| Decline::Date)?
-                    .is_none()
-            {
-                return Err(Decline::Date);
-            }
+                    .is_none())
+        {
+            return Err(Decline::Date);
         }
         match &self.credential {
             Credential::Discover
