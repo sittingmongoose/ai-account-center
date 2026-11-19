@@ -87,7 +87,6 @@ impl Context {
             }
         }
         self.missing.set(true);
-            eprintln!("COMPOSE-MISS epoch: {value}");
         None
     }
     fn date(&self, ms: i64) -> Option<&Date> {
@@ -99,7 +98,6 @@ impl Context {
         let value = self.facts.dates.get(&ms.to_string());
         if value.is_none() {
             self.missing.set(true);
-            eprintln!("COMPOSE-MISS date: {ms}");
         }
         value
     }
@@ -117,7 +115,6 @@ impl Context {
             Some(Some(word)) => word.clone(),
             Some(None) => {
                 self.missing.set(true);
-                eprintln!("COMPOSE-MISS word: {ms}");
                 String::new()
             }
             None => String::new(),
@@ -135,7 +132,6 @@ impl Context {
             (Some(a), Some(b)) => a.cmp(b),
             _ => {
                 self.missing.set(true);
-                eprintln!("COMPOSE-MISS compare: {a} / {b}");
                 a.cmp(b)
             }
         }
