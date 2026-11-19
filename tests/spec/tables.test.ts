@@ -275,6 +275,9 @@ describe('a synthetic provider and tool added to the table', () => {
         'src',
         'config/tables',
         'config/private-files.json',
+        'config/agent-artifacts.json',
+        'config/rust-service-routes.json',
+        'config/secret-policy.json',
         'web-dashboard/public',
       ])
         fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });

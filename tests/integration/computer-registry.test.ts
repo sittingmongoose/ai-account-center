@@ -15,6 +15,9 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
       'config/tables',
       // The L2 private-file registry the TS writers load.
       'config/private-files.json',
+      'config/agent-artifacts.json',
+      'config/rust-service-routes.json',
+      'config/secret-policy.json',
       'web-dashboard/public',
       'scripts',
       'docs/agent-reports/schemas',
