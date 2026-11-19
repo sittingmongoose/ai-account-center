@@ -948,4 +948,21 @@ mod tests {
             ])
         );
     }
+
+    #[test]
+    fn reported_plan_refines_the_class_like_the_ts_display() {
+        let sampled = Some(1_792_065_600_000);
+        let class = |plan: Option<&str>, reported: Value| {
+            reading_plan_display(plan.map(str::to_owned), sampled, 0.0, Some(&reported)).1.map(|d| d["class"].as_str().unwrap_or("").to_owned())
+        };
+        assert_eq!(class(Some("Google AI Pro"), json!({"planType":"ultra"})).as_deref(), Some("ultra"));
+        assert_eq!(class(Some("Google AI Ultra"), json!({"paidTier":{"id":"ultra-5x"}})).as_deref(), Some("ultra-5x"));
+        assert_eq!(class(Some("Google AI Pro"), json!({"currentTier":{"name":"pro-trial"}})).as_deref(), Some("pro-trial"));
+        assert_eq!(class(Some("Google AI Pro"), json!({"paidTier":{"id":"ultra-20x"},"planType":"pro"})).as_deref(), Some("pro"));
+        // `known` matches labels/aliases, not class keys: an unmatched planType leaves no class.
+        assert_eq!(class(None, json!({"planType":"enterprise-plus"})), None);
+        let (plan, detail) = reading_plan_display(Some("Free".into()), sampled, 0.0, None);
+        assert_eq!(plan, json!("Free"));
+        assert_eq!(detail.expect("free")["class"], json!("free"));
+    }
 }
