@@ -199,17 +199,7 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream,
-            cache,
-            ui_root,
-            None,
-            false,
-            None,
-            None,
-            None,
-            None,
-            #[cfg(unix)]
-            None,
+            downstream, cache, ui_root, None, false, None, None, None, None, None,
         )
     }
 
@@ -228,27 +218,13 @@ impl DashboardAuth {
         cut_root: Option<PathBuf>,
         native_owners: Option<native_owners::NativeOwners>,
         native_settings: Option<native_settings::Settings>,
-        #[cfg(unix)] external_owner: Option<Arc<owner_host::OwnerHost>>,
+        lifecycle_routes: Option<lifecycle_host::Routes>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
         let ui = static_ui::StaticUi::load(ui_root, partial_api);
         let dashboard = self.0.clone();
         downstream.fallback(move |request: Request| async move {
-            #[cfg(unix)]
-            if let Some(host) = &external_owner
-                && native_owners::NativeOwners::owns_lifecycle(
-                    request.method(),
-                    request.uri().path(),
-                )
-            {
-                return lifecycle_host::public(host, request).await;
-            }
-            if let Some(root) = cut_root.as_deref()
-                && let Some(route) = lifecycle::Route::of(request.method(), request.uri().path())
-            {
-                return lifecycle::handle(root, route, request).await;
-            }
             if let Some(settings) = &native_settings
                 && let Some(family) = native_settings::route(request.method(), request.uri().path())
             {
@@ -256,6 +232,18 @@ impl DashboardAuth {
                     return service_error();
                 };
                 return settings.handle(&access, family, request).await;
+            }
+            // The account-id PATCH route shares this path depth with the settings literals.
+            // Let those routes keep precedence and accept trailing slashes as the TS router did.
+            if let Some(routes) = &lifecycle_routes
+                && lifecycle_host::Routes::owns(&request)
+            {
+                return routes.handle(request).await;
+            }
+            if let Some(root) = cut_root.as_deref()
+                && let Some(route) = lifecycle::Route::of(request.method(), request.uri().path())
+            {
+                return lifecycle::handle(root, route, request).await;
             }
             if let Some(native) = &native_owners
                 && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
@@ -394,11 +382,27 @@ pub(crate) async fn run_public_at(
     } else {
         None
     };
+    let enabled = owner_host::enabled();
+    #[cfg(unix)]
+    let has_external = cut
+        && enabled
+        && service_link::ServiceLink::load(&root).is_some_and(|link| link.owns_lifecycle());
+    #[cfg(not(unix))]
+    let has_external = false;
+    let lifecycle_available = groups.is_some_and(native_owners::Groups::lifecycle_available);
+    let native_lifecycle = cut && enabled && (has_external || lifecycle_available);
+    let groups = groups.map(|mut groups| {
+        if has_external {
+            groups.collection = false;
+        }
+        groups
+    });
     let mut worker = if cut {
         sidecar::Sidecar::start(
             &root,
             address,
             groups.is_some_and(|groups| groups.collection),
+            native_lifecycle,
         )
         .await?
     } else {
@@ -417,20 +421,23 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    let owner_host =
-        owner_host::enabled().then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
-    #[cfg(unix)]
-    let has_external = owner_host.is_some() && service_link::ServiceLink::load(&root).is_some();
-    #[cfg(not(unix))]
-    let has_external = false;
-    let local_lifecycle = cut && !composed && !has_external;
+    let native_lifecycle = native_lifecycle || (cut && !composed && lifecycle_available);
+    let owner_host = (enabled || native_lifecycle)
+        .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
+    let local_lifecycle = native_lifecycle && !has_external;
     let (native, native_jobs) = if let Some(groups) = groups {
         let worker_directory = snapshot
             .as_deref()
             .and_then(std::path::Path::parent)
             .map(std::path::Path::to_owned);
         if let Some(host) = &owner_host {
-            host.start_public(groups, hub.clone(), auth.events(), worker_directory, local_lifecycle)?;
+            host.start_public(
+                groups,
+                hub.clone(),
+                auth.events(),
+                worker_directory,
+                local_lifecycle,
+            )?;
             (host.public_owners(), None)
         } else {
             let (native, jobs) = native_owners::NativeOwners::start(
@@ -448,6 +455,14 @@ pub(crate) async fn run_public_at(
     };
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
+    let lifecycle_routes = owner_host
+        .as_ref()
+        .filter(|_| native_lifecycle)
+        .map(|host| {
+            let routes = lifecycle_host::Routes::new(host, has_external);
+            host.register("lifecycle", routes.router());
+            routes
+        });
     let mut api = Router::new();
     if let Some(host) = &owner_host {
         api = host.mount(api);
@@ -471,8 +486,7 @@ pub(crate) async fn run_public_at(
         cut.then(|| root.clone()),
         native,
         native_settings,
-        #[cfg(unix)]
-        owner_host.clone().filter(|_| cut && has_external),
+        lifecycle_routes,
     );
     let router = auth
         .protect(reset_routes::mount(
@@ -1681,7 +1695,6 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
-            #[cfg(unix)]
             None,
         ));
         let handle = tokio::spawn(async move {

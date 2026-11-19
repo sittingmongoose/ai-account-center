@@ -1,9 +1,78 @@
 //! The private lifecycle hop carries only the session and request facts already admitted by Rust.
+use super::{Reply, Request, lifecycle, native_owners::NativeOwners, owner_host::OwnerHost};
+use axum::{Router, routing::any};
+use std::sync::{Arc, Weak};
+
 pub(crate) const ENDPOINT: &str = "/internal/accounts/lifecycle";
 #[cfg(unix)]
-pub(super) use unix::public;
-#[cfg(unix)]
 pub(crate) use unix::{PACKET_CAP, receive};
+
+#[derive(Clone)]
+pub(super) struct Routes {
+    host: Weak<OwnerHost>,
+    private: bool,
+}
+
+impl Routes {
+    pub(super) fn new(host: &Arc<OwnerHost>, private: bool) -> Self {
+        Self {
+            host: Arc::downgrade(host),
+            private,
+        }
+    }
+
+    pub(super) fn router(&self) -> Router {
+        let mut router = Router::new();
+        for path in [
+            "/api/accounts/registry",
+            "/api/accounts/signin-command",
+            "/api/accounts/signin-jobs/{id}",
+            "/api/accounts/signin-jobs/{id}/cancel",
+            "/api/accounts/signin-jobs/{id}/code",
+            "/api/accounts/trash",
+            "/api/accounts/trash/{id}/purge",
+            "/api/accounts/trash/{id}/restore",
+            "/api/accounts/add",
+            "/api/accounts/{id}/open",
+            "/api/accounts/{id}/remove",
+            "/api/accounts/{id}/signin-again",
+            "/api/accounts/{id}/key",
+        ] {
+            let routes = self.clone();
+            router = router.route(
+                path,
+                any(move |request: Request| async move { routes.handle(request).await }),
+            );
+        }
+        router
+    }
+
+    pub(super) fn owns(request: &Request) -> bool {
+        NativeOwners::owns_lifecycle(request.method(), request.uri().path())
+    }
+
+    pub(super) async fn handle(&self, request: Request) -> Reply {
+        if !Self::owns(&request) {
+            return super::plain(404, "API endpoint was not found.");
+        }
+        let Some(host) = self.host.upgrade() else {
+            return super::service_error();
+        };
+        if self.private {
+            #[cfg(unix)]
+            return unix::public(&host, request).await;
+            #[cfg(not(unix))]
+            return super::service_error();
+        }
+        if let Some(route) = lifecycle::Route::of(request.method(), request.uri().path()) {
+            return lifecycle::handle(host.root(), route, request).await;
+        }
+        let Some(owner) = host.public_owners() else {
+            return super::service_error();
+        };
+        owner.handle(request).await
+    }
+}
 
 #[cfg(unix)]
 mod unix {

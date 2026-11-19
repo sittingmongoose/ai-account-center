@@ -516,7 +516,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         options.sidecar === true && process.env.AAC_CUT_PUBLIC_COLLECTION === '1'
       );
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
-      startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
+      if (
+        !rustService.lifecycleInPrivate &&
+        (!options.sidecar || process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1')
+      ) {
+        startAccountLifecycleMaintenance(rustService.writesOn ? rustServiceReady : undefined);
+      }
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
       // First run with sign-in on and no password: this run's one-time setup code.

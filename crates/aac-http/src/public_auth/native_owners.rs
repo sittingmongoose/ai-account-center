@@ -57,6 +57,10 @@ pub(super) struct Groups {
 }
 
 impl Groups {
+    pub(super) fn lifecycle_available(self) -> bool {
+        self.collection && self.writes
+    }
+
     pub(super) fn from_config(config: &Value) -> Self {
         let on = |name: &str, env: &str| match std::env::var_os(env) {
             Some(value) => value == "on",
@@ -136,6 +140,7 @@ struct Usage {
     antigravity: Option<Arc<crate::antigravity_host::Host>>,
     server: Value,
     worker_directory: Option<PathBuf>,
+    native_lifecycle: bool,
     store: bool,
     analytics_writers: bool,
     owners: Owners,
@@ -266,6 +271,7 @@ impl NativeOwners {
                 server,
                 store: groups.store && worker_directory.is_some(),
                 worker_directory,
+                native_lifecycle: owns_lifecycle_here,
                 analytics_writers: groups.analytics_writers,
                 owners: owners.clone(),
                 agents: agents.clone(),
@@ -327,6 +333,7 @@ impl NativeOwners {
         cache: AccountUsageCache,
         producer: Option<Arc<Producer>>,
         approvals: Arc<crate::account_approvals::Approvals>,
+        feeds: crate::feed::Feeds,
     ) -> (Self, Jobs) {
         let root = agents.root().to_owned();
         let queues = Arc::new(crate::lifecycle_queue::LifecycleQueues::new(root.clone()));
@@ -338,6 +345,21 @@ impl NativeOwners {
             approvals,
         ));
         let cancel = CancellationToken::new();
+        let events = DashboardEvents(tokio::sync::broadcast::channel(64).0);
+        let mut receiver = events.0.subscribe();
+        let signins = tokio::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        if let Ok(event) = serde_json::to_value(event) {
+                            feeds.publish_event(event);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
         let maintenance = lifecycle_maintenance::start(
             root.clone(),
             owners.clone(),
@@ -351,7 +373,7 @@ impl NativeOwners {
                 queues,
                 lifecycle_jobs: Some(Arc::new(lifecycle_jobs::Jobs::default())),
                 trash: Some(trash),
-                events: DashboardEvents(tokio::sync::broadcast::channel(64).0),
+                events,
                 usage: None,
                 lifecycle_usage: Some(LifecycleUsage {
                     cache,
@@ -365,7 +387,7 @@ impl NativeOwners {
             Jobs {
                 cancel,
                 sampling: None,
-                signins: None,
+                signins: Some(signins),
                 maintenance: Some(maintenance),
             },
         )
@@ -576,7 +598,9 @@ impl Usage {
             let mut facts = self.companions();
             // The remaining lifecycle adapters may supply capability preflight. Collection
             // and Re-check still run with the Rust facts if that worker is absent.
-            if let Some(directory) = &self.worker_directory {
+            if let Some(directory) = &self.worker_directory
+                && !self.native_lifecycle
+            {
                 let active = facts.lifecycle.jobs.clone();
                 facts.load_lifecycle(directory);
                 facts.lifecycle.jobs.extend(active);

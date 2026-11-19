@@ -94,6 +94,9 @@ pub struct Boot {
     /// the saved-login renewal timer in the TS process.
     #[serde(default)]
     pub renewal: Option<RenewalBoot>,
+    /// The private service owns lifecycle when it already owns the collection generation.
+    #[serde(default)]
+    pub native_lifecycle: bool,
 }
 
 /// R4 (DESIGN-M3-COMPLETE 1.2/1.4): which owners this boot runs, and the share roots they
@@ -1691,7 +1694,8 @@ async fn serve_inner(
         ))
     });
     let approvals = Arc::new(crate::account_approvals::Approvals::default());
-    let lifecycle = (std::env::var("AAC_RUST_CUT_NATIVE_ROUTES").as_deref() == Ok("on")
+    let lifecycle = (boot.native_lifecycle
+        && producer.is_some()
         && owners.owner("account-registry") == Some(registry::Role::RustService)
         && owners.owner("opencode-wallet-source") == Some(registry::Role::RustService))
     .then(|| {
@@ -1701,6 +1705,7 @@ async fn serve_inner(
             cache.clone(),
             producer.clone(),
             approvals.clone(),
+            feeds.clone(),
         )
     });
     let (lifecycle, lifecycle_jobs) = lifecycle.unzip();

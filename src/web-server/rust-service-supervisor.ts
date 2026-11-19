@@ -91,6 +91,7 @@ export const HUNG_TIMEOUTS = 3;
 export class RustSupervisor {
   readonly mode: RustServiceMode;
   readonly writesOn: boolean;
+  readonly lifecycleInPrivate: boolean;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
   readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
   /** L1: per (route, outcome, reason) counters and paired timings; a log line per state change. */
@@ -164,12 +165,19 @@ export class RustSupervisor {
     const publicNative = this.mode === 'on' && process.env.AAC_CUT_PUBLIC_OWNERS === '1';
     this.writesOn = native && rustGroupOn('writes');
     const collectionOn = native && rustGroupOn('collection');
+    this.lifecycleInPrivate =
+      this.writesOn &&
+      collectionOn &&
+      !publicNative &&
+      process.env.AAC_RUST_CUT_WORKER === '1' &&
+      process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on';
     // One readers-check file carries the Status and Scoreboard writers.
     settlePrivateFileOwners(
       (group) => {
         if (!native) return false;
         if (group === 'status') return rustOwnedStatusOn() && rustOwnedScoreboardOn();
         if (group === 'scoreboard') return rustOwnedScoreboardOn();
+        if (group === 'lifecycle') return this.lifecycleInPrivate;
         return (group === 'writes' && this.writesOn) || (group === 'collection' && collectionOn);
       },
       PRIVATE_FILE_ROWS,
@@ -363,6 +371,15 @@ export class RustSupervisor {
       if (this.lease !== lease) return;
       dispatchRustServiceEvent(event);
       const { type, job } = event;
+      if (lease.connection.nativeLifecycle) {
+        if (type === 'accounts-changed') broadcastDashboardEvent({ type });
+        if (type === 'signin-job' && job && typeof job === 'object') {
+          broadcastDashboardEvent({
+            type,
+            job: job as Extract<DashboardEvent, { type: 'signin-job' }>['job'],
+          });
+        }
+      }
       if (appUpdates && type === 'app-update-job' && job && typeof job === 'object') {
         // The public Rust listener validates this DTO again and applies the session policy.
         broadcastDashboardEvent({
