@@ -15,6 +15,7 @@ mock.module('../../src/web-server', () => ({
   async startServer(options: Parameters<typeof startPrivate>[0]) {
     if (options.compositionProof) return startPrivate(options);
     const instance = await startComposedServer(options, binary);
+    if (process.env.AAC_M6_FIXTURE_REPORT === '1') console.error('[m6 compose fixture]');
     const server = new Proxy(instance.server, {
       get(target, property) {
         if (property === 'address') return () => instance.publicAddress;
