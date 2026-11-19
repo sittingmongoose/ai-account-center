@@ -15,7 +15,7 @@ use super::storage;
 use crate::identity;
 use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
 use axum::body::{Body, to_bytes};
-use axum::http::{HeaderMap, Request};
+use axum::http::Request;
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
