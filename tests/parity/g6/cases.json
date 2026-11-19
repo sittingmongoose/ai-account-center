@@ -37,13 +37,26 @@
           }
         }
       ],
-      "active": { "profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z" },
+      "active": {
+        "profileId": "gmail",
+        "verifiedAt": "2026-10-01T16:40:00.000Z"
+      },
       "live": {
         "email": "party@example.com",
         "subject": "fixture-authoritative-subject-party",
         "plan": null,
         "verifiedAt": "2026-10-01T16:59:30.000Z",
         "source": "native-runtime"
+      },
+      "paused": {
+        "installedVersion": "1.6.0"
+      },
+      "problem": {
+        "reason": "missing-python-module",
+        "module": "pyte",
+        "python": "3.14",
+        "builtFor": "3.13",
+        "exitStatus": null
       }
     },
     {
@@ -66,13 +79,23 @@
           }
         }
       ],
-      "active": { "profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z" },
+      "active": {
+        "profileId": "gmail",
+        "verifiedAt": "2026-10-01T16:40:00.000Z"
+      },
       "live": {
         "email": "gmail@example.com",
         "subject": "fixture-authoritative-subject-gmail",
         "plan": "Google AI Pro",
         "verifiedAt": "2026-10-01T16:54:00.000Z",
         "source": "provider-userinfo"
+      },
+      "paused": {
+        "installedVersion": "unreviewed-build"
+      },
+      "problem": {
+        "reason": "not-a-reason",
+        "module": "x"
       }
     },
     {
@@ -95,7 +118,10 @@
           }
         }
       ],
-      "active": { "profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z" },
+      "active": {
+        "profileId": "gmail",
+        "verifiedAt": "2026-10-01T16:40:00.000Z"
+      },
       "live": {
         "email": "gmail@example.com",
         "subject": "fixture-authoritative-subject-gmail",
@@ -130,7 +156,10 @@
           }
         }
       ],
-      "active": { "profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z" },
+      "active": {
+        "profileId": "gmail",
+        "verifiedAt": "2026-10-01T16:40:00.000Z"
+      },
       "omitCredentials": true,
       "live": {
         "email": "gmail@example.com",

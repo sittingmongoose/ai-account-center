@@ -84,6 +84,8 @@ async function report(item) {
     driver,
     now: () => now,
     collectQuota: () => forbidden('collectQuota'),
+    readNativeUpdatePaused: async () => item.paused ?? null,
+    readRuntimeServiceProblem: async () => item.problem ?? null,
   });
   return {
     name: item.name,
