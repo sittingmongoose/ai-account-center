@@ -1681,6 +1681,8 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
+            #[cfg(unix)]
+            None,
         ));
         let handle = tokio::spawn(async move {
             axum::serve(

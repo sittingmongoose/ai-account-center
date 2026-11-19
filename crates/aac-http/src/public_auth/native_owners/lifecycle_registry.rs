@@ -189,8 +189,37 @@ pub(super) fn codex_cli() -> Option<PathBuf> {
         };
         return read::stat(&path).ok()?.file.then_some(path);
     }
-    let path = crate::antigravity_probes::bounded_run("which", &["codex"], 5000)?;
-    let path = PathBuf::from(path.lines().next()?);
+    let finder = if cfg!(windows) { "where.exe" } else { "which" };
+    let paths = crate::antigravity_probes::bounded_run(finder, &["codex"], 5000)?;
+    let mut paths = paths.lines().map(PathBuf::from);
+    #[cfg(windows)]
+    {
+        let command = paths.clone().find(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ["exe", "cmd", "bat", "ps1"]
+                        .iter()
+                        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+                })
+        });
+        if let Some(path) = command {
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("ps1"))
+            {
+                for extension in ["cmd", "bat", "exe"] {
+                    let wrapper = path.with_extension(extension);
+                    if read::stat(&wrapper).is_ok_and(|stat| stat.file) {
+                        return Some(wrapper);
+                    }
+                }
+            }
+            return read::stat(&path).ok()?.file.then_some(path);
+        }
+    }
+    let path = paths.next()?;
     read::stat(&path).ok()?.file.then_some(path)
 }
 

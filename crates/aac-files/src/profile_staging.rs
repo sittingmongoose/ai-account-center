@@ -188,7 +188,7 @@ pub fn prepare_antigravity(root: &Path, name: &str, bus: &[u8]) -> io::Result<()
             "x-www-browser",
             "www-browser",
         ] {
-            create_file(&stubs.join(name), b"#!/bin/sh\\nexit 0\\n", 0o700)?;
+            create_file(&stubs.join(name), b"#!/bin/sh\nexit 0\n", 0o700)?;
         }
         create_file(&stage.join("session-bus.conf"), bus, 0o600)
     };

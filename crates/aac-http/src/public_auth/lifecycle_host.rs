@@ -54,10 +54,10 @@ mod unix {
         let Some(session) = access.session_id else {
             return super::super::service_error();
         };
-        if !matches!(*request.method(), Method::GET | Method::HEAD) {
-            if let Err(reply) = lifecycle::mutation_admission(&request) {
-                return reply;
-            }
+        if !matches!(*request.method(), Method::GET | Method::HEAD)
+            && let Err(reply) = lifecycle::mutation_admission(&request)
+        {
+            return reply;
         }
         let (parts, body) = request.into_parts();
         let Ok(bytes) = to_bytes(body, INPUT_CAP).await else {

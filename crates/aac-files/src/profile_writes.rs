@@ -36,17 +36,28 @@ pub(crate) fn owned_directory(dir: &Path) -> io::Result<()> {
 
 /// Open only the named leaf, including a directory on Windows.
 pub(crate) fn open_leaf(path: &Path, directory: bool) -> io::Result<File> {
+    open_leaf_for_use(path, directory, false)
+}
+
+fn open_leaf_for_use(path: &Path, directory: bool, heartbeat: bool) -> io::Result<File> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
-    options.custom_flags(
-        libc::O_NOFOLLOW | libc::O_NONBLOCK | if directory { libc::O_DIRECTORY } else { 0 },
-    );
+    {
+        let _ = heartbeat;
+        options.custom_flags(
+            libc::O_NOFOLLOW | libc::O_NONBLOCK | if directory { libc::O_DIRECTORY } else { 0 },
+        );
+    }
     #[cfg(windows)]
     {
+        use windows_sys::Win32::Foundation::GENERIC_READ;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_WRITE_ATTRIBUTES,
         };
+        if heartbeat {
+            options.access_mode(GENERIC_READ | FILE_WRITE_ATTRIBUTES);
+        }
         options.custom_flags(
             FILE_FLAG_OPEN_REPARSE_POINT
                 | if directory {
@@ -202,7 +213,7 @@ impl CodexLease {
             }
             Err(error) => return Err(error),
         }
-        let directory = open_leaf(&marker, true)?;
+        let directory = open_leaf_for_use(&marker, true, true)?;
         let lease = LegacyLease::verify(&marker, directory)?;
         let stop = Arc::new(AtomicBool::new(false));
         let heartbeat = watch_lock(&lease.0, Arc::clone(&stop), update);
