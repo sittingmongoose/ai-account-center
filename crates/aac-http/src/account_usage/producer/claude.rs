@@ -125,7 +125,6 @@ mod tests {
     use crate::collection_cache;
     use aac_files::registry::{Owners, Role};
     use serde_json::json;
-    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn owners() -> Owners {
