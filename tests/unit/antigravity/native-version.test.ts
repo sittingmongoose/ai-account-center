@@ -217,10 +217,7 @@ describe('native version review state', () => {
       { nativeVersion: '1.2.14', nativeSha256: 'a'.repeat(64) },
       { nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64) },
     ];
-    fs.writeFileSync(
-      releaseFile,
-      JSON.stringify({ schemaVersion: 1, ...gate, reviewedNatives: entries })
-    );
+    fs.writeFileSync(releaseFile, JSON.stringify({ schemaVersion: 1, ...gate, reviewedNatives: entries }));
     expect(readNativeRelease(releaseFile)).toEqual({
       gateOpen: true,
       reviewed: [
@@ -230,12 +227,7 @@ describe('native version review state', () => {
     });
     fs.writeFileSync(
       releaseFile,
-      JSON.stringify({
-        schemaVersion: 1,
-        ...gate,
-        nativeVersion: '1.2.16',
-        nativeSha256: 'c'.repeat(64),
-      })
+      JSON.stringify({ schemaVersion: 1, ...gate, nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64) })
     );
     expect(readNativeRelease(releaseFile)).toEqual({
       gateOpen: true,

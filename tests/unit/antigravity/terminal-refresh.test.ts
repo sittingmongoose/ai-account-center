@@ -45,25 +45,12 @@ describe('runtime refresh command', () => {
     for (const [result, code, headline] of [
       [{ status: 'current', version: '1.2.16', sha256: 'c'.repeat(64) }, 0, 'is current'],
       [
-        {
-          status: 'refreshed',
-          version: '1.2.16',
-          sha256: 'c'.repeat(64),
-          previousSha256: 'a'.repeat(64),
-        },
+        { status: 'refreshed', version: '1.2.16', sha256: 'c'.repeat(64), previousSha256: 'a'.repeat(64) },
         0,
         'refreshed to the reviewed 1.2.16 build',
       ],
-      [
-        { status: 'unreviewed', installedVersion: '1.2.99' },
-        1,
-        'updated to 1.2.99; switching paused until reviewed',
-      ],
-      [
-        { status: 'unreviewed', installedVersion: null },
-        1,
-        'updated; switching paused until reviewed',
-      ],
+      [{ status: 'unreviewed', installedVersion: '1.2.99' }, 1, 'updated to 1.2.99; switching paused until reviewed'],
+      [{ status: 'unreviewed', installedVersion: null }, 1, 'updated; switching paused until reviewed'],
       [{ status: 'no-installation' }, 1, 'No Antigravity runtime is installed'],
       [{ status: 'gate-closed' }, 1, 'not released in this build'],
       [{ status: 'failed' }, 1, 'could not complete its checks'],

@@ -34,9 +34,7 @@ let descriptorFile: string;
 let releaseFile: string;
 let bundleLib: string;
 
-function writeRelease(
-  reviewed: Array<{ nativeVersion: string; nativeSha256: string }> | null
-): void {
+function writeRelease(reviewed: Array<{ nativeVersion: string; nativeSha256: string }> | null): void {
   fs.writeFileSync(
     releaseFile,
     JSON.stringify({
@@ -156,12 +154,15 @@ describe('runtime descriptor refresh', () => {
   it('pauses on an unreviewed native without touching the descriptor', async () => {
     const before = fs.readFileSync(descriptorFile);
     let reads = 0;
-    const result = await refresh(() => false, {
-      readVersion: async () => {
-        reads++;
-        return '1.2.99';
-      },
-    });
+    const result = await refresh(
+      () => false,
+      {
+        readVersion: async () => {
+          reads++;
+          return '1.2.99';
+        },
+      }
+    );
     expect(result).toEqual({ status: 'unreviewed', installedVersion: '1.2.99' });
     expect(fs.readFileSync(descriptorFile).equals(before)).toBe(true);
     expect(fs.existsSync(path.join(stateDir, 'descriptor-backups'))).toBe(false);
@@ -276,9 +277,7 @@ describe('runtime descriptor refresh', () => {
     // The earlier generation's pin-named backup is never overwritten.
     expect(fs.readFileSync(backup).equals(divergent)).toBe(true);
     const named = fs.readdirSync(backups).filter((name) => name !== `${SHA14}.json`);
-    expect(named).toEqual([
-      `${SHA14}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`,
-    ]);
+    expect(named).toEqual([`${SHA14}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`]);
     expect(fs.readFileSync(path.join(backups, named[0])).equals(before)).toBe(true);
     expect(fs.lstatSync(path.join(backups, named[0])).mode & 0o777).toBe(0o600);
     expect(readInstalledAntigravityRuntime(ccsDir, home)?.nativeSha256).toBe(SHA16);
@@ -290,9 +289,7 @@ describe('runtime descriptor refresh', () => {
     // addressed one, and the CLI then moved to the next reviewed build.
     const backups = path.join(stateDir, 'descriptor-backups');
     fs.mkdirSync(backups, { mode: 0o700 });
-    const older = Buffer.from(
-      fs.readFileSync(descriptorFile).toString().replace('c'.repeat(64), 'e'.repeat(64))
-    );
+    const older = Buffer.from(fs.readFileSync(descriptorFile).toString().replace('c'.repeat(64), 'e'.repeat(64)));
     fs.writeFileSync(path.join(backups, `${SHA16}.json`), older, { mode: 0o600 });
     fs.writeFileSync(path.join(backups, `${SHA16}-${'f'.repeat(16)}.json`), older, { mode: 0o600 });
     writeRelease([
@@ -308,10 +305,7 @@ describe('runtime descriptor refresh', () => {
       previousSha256: SHA16,
     });
     expect(fs.readFileSync(path.join(backups, `${SHA16}.json`)).equals(older)).toBe(true);
-    const kept = path.join(
-      backups,
-      `${SHA16}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`
-    );
+    const kept = path.join(backups, `${SHA16}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`);
     expect(fs.readFileSync(kept).equals(before)).toBe(true);
     expect(readInstalledAntigravityRuntime(ccsDir, home)?.nativeSha256).toBe(SHA130);
     expect((await refresh((binary, sha) => sha === SHA130)).status).toBe('current');
@@ -326,10 +320,7 @@ describe('runtime descriptor refresh', () => {
     const before = fs.readFileSync(descriptorFile);
     expect((await refresh((binary, sha) => sha === SHA16)).status).toBe('failed');
     fs.chmodSync(backup, 0o600);
-    const addressed = path.join(
-      backups,
-      `${SHA14}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`
-    );
+    const addressed = path.join(backups, `${SHA14}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`);
     fs.writeFileSync(addressed, '{"changed":true}\n', { mode: 0o600 });
     expect((await refresh((binary, sha) => sha === SHA16)).status).toBe('failed');
     fs.rmSync(addressed);

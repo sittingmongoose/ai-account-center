@@ -15,7 +15,10 @@ import {
   type SavedQuotaSnapshot,
 } from '../../../src/antigravity/runtime-composition';
 import { runAntigravityTerminalSignIn } from '../../../src/antigravity/terminal-signin';
-import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
+import type {
+  NativeCredential,
+  VerifiedIdentity,
+} from '../../../src/antigravity/types';
 
 const NOW = Date.parse('2026-10-02T12:00:00.000Z');
 const roots: string[] = [];
