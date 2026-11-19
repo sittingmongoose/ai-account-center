@@ -4,8 +4,9 @@
  * variable (`AAC_RUST_GROUP_HOME`, `AAC_RUST_GROUP_STATUS`) wins over the file.
  *
  * `home` is default-ready: with the service mode on and no explicit setting, the fed Home answers (R1's parity
- * and measurement gates passed). `groups.home: off` restores D7's path (or not offered). `status` stays off by
- * default. An explicit invalid value is off; an absent or unreadable setting takes the group's default.
+ * corpus and the kit's Home set passed; the measurement report is `README-A.md` in the rust-monday share folder).
+ * `groups.home: off` restores D7's path (or not offered). `status` stays off by default. An explicit invalid
+ * value is off; an absent or unreadable setting takes the group's default.
  */
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 
