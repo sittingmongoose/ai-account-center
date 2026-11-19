@@ -479,7 +479,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       stopStatusService = startStatusService();
       // Scoreboard catalog seeds (runs are read on demand).
       startScoreboardService();
-      startAccountAnalyticsSampling();
+      startAccountAnalyticsSampling(rustService);
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();
       // Staging folders of sign-ins from before a restart, and trash past 30 days.

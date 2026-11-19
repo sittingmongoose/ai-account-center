@@ -398,6 +398,48 @@ const TAKEOVER_KINDS: readonly AnalyticsRemoteKind[] = ANALYTICS_TOOLS;
  * which replaces the collector's rows in one step.
  */
 export const LOCAL_SCANNER_KINDS: readonly AnalyticsRemoteKind[] = REMOTE_TARGETS.ubuntu;
+
+/**
+ * G14: the activity plan the Rust writers' scheduler scans from — one computer per configured
+ * remote host plus the dashboard's own computer, each with the kinds the scanner reads there.
+ * The local extra/experiment roots join the ubuntu entry; fingerprints ride along when the cache
+ * holds them. Root discovery and fingerprinting stay here (fed to Rust) until their own ports land.
+ */
+export function analyticsWriterPlan(): {
+  computers: Array<{
+    host: AnalyticsScanHost;
+    platform: string;
+    sshHost?: string;
+    kinds: AnalyticsRemoteKind[];
+    extraRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
+    experimentRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
+  }>;
+  windowDays: number;
+} {
+  const cacheDir = path.join(getCcsDir(), 'cache');
+  let experiments: Partial<Record<AnalyticsRemoteKind, string[]>> = {};
+  try {
+    experiments = localExperimentRoots(cacheDir);
+  } catch {
+    experiments = {};
+  }
+  const extra = localExtraRoots([...LOCAL_SCANNER_KINDS], experiments);
+  const hosts: AnalyticsScanHost[] = [...REMOTE_ANALYTICS_HOSTS, 'ubuntu'];
+  const computers = hosts.map((host) => ({
+    host,
+    platform: host,
+    ...(host === 'ubuntu' ? {} : { sshHost: host }),
+    // Kinds with more roots than the scanner takes stay with the collector (overflow).
+    kinds:
+      host === 'ubuntu'
+        ? REMOTE_TARGETS.ubuntu.filter((kind) => !extra.overflow.includes(kind))
+        : [...REMOTE_TARGETS[host]],
+    ...(host === 'ubuntu'
+      ? { extraRoots: extra.extra, experimentRoots: extra.experiments }
+      : {}),
+  }));
+  return { computers, windowDays: 31 };
+}
 const LOCAL_ALIAS = '@local';
 const EXTRA_ROOTS_MAX = 16;
 

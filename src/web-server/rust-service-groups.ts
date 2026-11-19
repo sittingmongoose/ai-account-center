@@ -6,7 +6,7 @@
  */
 import { loadUnifiedConfig } from '../config/unified-config-loader';
 
-export type RustGroup = 'home' | 'status' | 'analytics';
+export type RustGroup = 'home' | 'status' | 'analytics' | 'analytics-writers';
 
 export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.env): boolean {
   let value: unknown = env[`AAC_RUST_GROUP_${group.toUpperCase()}`];
@@ -39,4 +39,26 @@ export function rustStoreSwitchOn(env: NodeJS.ProcessEnv = process.env): boolean
     }
   }
   return value === 'on';
+}
+
+/**
+ * G14: the Analytics writers' switch, `rustService.groups['analytics-writers']`
+ * (`AAC_RUST_GROUP_ANALYTICS_WRITERS` wins). The writers own quota sampling and activity collection
+ * only when the analytics read group is on and the store is hosted by the service (the one writer);
+ * otherwise the TypeScript writers keep running, so nothing is left unwritten.
+ */
+export function rustAnalyticsWritersOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  let value: unknown = env.AAC_RUST_GROUP_ANALYTICS_WRITERS;
+  if (value === undefined) {
+    try {
+      const groups = (loadUnifiedConfig()?.rustService as { groups?: unknown } | undefined)?.groups;
+      value =
+        groups && typeof groups === 'object'
+          ? (groups as Record<string, unknown>)['analytics-writers']
+          : undefined;
+    } catch {
+      value = undefined;
+    }
+  }
+  return value === 'on' && rustGroupOn('analytics', env) && rustStoreSwitchOn(env);
 }
