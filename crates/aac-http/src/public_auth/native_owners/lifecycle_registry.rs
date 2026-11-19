@@ -28,7 +28,7 @@ pub(super) async fn handle(native: &NativeOwners, jobs: &Jobs, request: Request)
     if request.uri().query().is_some() {
         return lifecycle::unexpected_query();
     }
-    let Some(usage) = &native.lifecycle_usage else {
+    let Some(usage) = &native.usage else {
         return unavailable();
     };
     let Some(dashboard) = dashboard(&usage.cache, secure).await else {

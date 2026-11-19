@@ -465,7 +465,13 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let Ok(bytes) = to_bytes(req.into_body(), PACKET_CAP).await else {
                 return decline(row.handler, Decline::Shape);
             };
-            lifecycle_host::receive(owner, &principal, &bytes).await
+            lifecycle_host::receive(
+                owner,
+                &principal,
+                &bytes,
+                row.path == lifecycle_host::COLLECTION_ENDPOINT,
+            )
+            .await
         }
         Handler::ResetClaims => {
             if req.uri().query().is_some() {
@@ -1704,16 +1710,21 @@ async fn serve_inner(
         ))
     });
     let approvals = Arc::new(crate::account_approvals::Approvals::default());
-    let lifecycle = boot.native_lifecycle.then(|| {
-        crate::public_auth::native_owners::NativeOwners::for_private_lifecycle(
-            agents.clone(),
-            owners.clone(),
-            cache.clone(),
-            producer.clone(),
-            approvals.clone(),
-            feeds.clone(),
-        )
-    });
+    let lifecycle = producer
+        .as_ref()
+        .zip(native.as_ref())
+        .filter(|_| boot.native_lifecycle)
+        .map(|(producer, native)| {
+            crate::public_auth::native_owners::NativeOwners::for_private_lifecycle(
+                agents.clone(),
+                owners.clone(),
+                cache.clone(),
+                Arc::clone(producer),
+                approvals.clone(),
+                feeds.clone(),
+                Arc::clone(&native.published),
+            )
+        });
     let (lifecycle, lifecycle_jobs) = lifecycle.unzip();
     let state = AppState(Arc::new(Shared {
         owners,

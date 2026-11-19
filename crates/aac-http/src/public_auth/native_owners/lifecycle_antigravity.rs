@@ -177,7 +177,7 @@ pub(super) fn install(
 ) -> Result<LiveIdentity, ErrorCode> {
     let root = native.agents.root();
     let host = native
-        .lifecycle_usage
+        .usage
         .as_ref()
         .and_then(|usage| usage.antigravity.as_ref())
         .ok_or(ErrorCode::WriteFailed)?;
@@ -346,7 +346,7 @@ fn guard(
     let home = std::env::home_dir().ok_or(RemoveError::Failed)?;
     if exists(&home.join(".gemini/antigravity-cli/antigravity-oauth-token"))? {
         let host = native
-            .lifecycle_usage
+            .usage
             .as_ref()
             .and_then(|usage| usage.antigravity.as_ref())
             .ok_or(RemoveError::Failed)?;
