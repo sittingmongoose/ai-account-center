@@ -32,7 +32,7 @@ fn filename(root: &Path, scope: &str) -> Result<PathBuf, Failure> {
     if path::linked_within(Path::new("/"), &run)
         || !meta.is_dir()
         || meta.mode() & 0o777 != 0o700
-        || meta.uid() != unsafe { libc::geteuid() }
+        || meta.uid() != rustix::process::geteuid().as_raw()
     {
         return Err(refused());
     }
@@ -60,7 +60,7 @@ fn verify(path: &Path, file: &File) -> Result<(), Failure> {
     let actual = file.metadata()?;
     if !expected.is_file()
         || !actual.is_file()
-        || actual.uid() != unsafe { libc::geteuid() }
+        || actual.uid() != rustix::process::geteuid().as_raw()
         || actual.mode() & 0o777 != 0o600
         || actual.nlink() != 1
         || actual.len() != 0
