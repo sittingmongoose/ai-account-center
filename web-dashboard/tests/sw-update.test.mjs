@@ -96,6 +96,7 @@ class FakeRequest {
 function loadWorker(fetchImpl, storage, precache = PRECACHE, buildId = NEW_ID) {
 	const handlers = {};
 	const claimed = { count: 0 };
+	const skipped = { count: 0 };
 	const sandbox = {
 		URL, URLSearchParams, Headers, Promise, Error, setTimeout, clearTimeout,
 		Request: FakeRequest,
@@ -103,6 +104,7 @@ function loadWorker(fetchImpl, storage, precache = PRECACHE, buildId = NEW_ID) {
 		fetch: (request) => fetchImpl(request.url.slice(ORIGIN.length) || '/', request),
 		caches: storage,
 		clients: { claim: async () => { claimed.count++; } },
+		skipWaiting: async () => { skipped.count++; },
 	};
 	sandbox.self = sandbox;
 	sandbox.location = { origin: ORIGIN };
@@ -113,7 +115,7 @@ function loadWorker(fetchImpl, storage, precache = PRECACHE, buildId = NEW_ID) {
 	sandbox.importScripts = () => vm.runInContext(routeSource, ctx);
 	const source = fs.readFileSync(new URL('sw.js', publicDir), 'utf8');
 	vm.runInContext(precache === null ? source.replace('__AAC_BUILD_ID__', buildId) : stampedSwSource(source, buildId, precache), ctx);
-	return { handlers, claimed };
+	return { handlers, claimed, skipped };
 }
 
 /** Runs a lifecycle event the way the browser does: it settles with everything passed to waitUntil. */
@@ -288,4 +290,79 @@ test('an install refuses another stylesheet fingerprint even when the wasm runti
    : served(address), storage);
  await assert.rejects(lifecycle(worker.handlers, 'install'), /stylesheet|incomplete/);
  assert.equal(storage.named.has(NEW), false);
+});
+
+
+// The frame's Reload (frame.rs hand_over, 2026-11-19): the old worker stays in charge while a page is open and answers
+// a plain reload with the old build, so the "New version" notice came back after every Reload. The page asks the
+// waiting worker to take over; nothing else may.
+
+/** Posts a message to the worker the way the browser does: it settles with everything passed to waitUntil. */
+async function message(handlers, data) {
+	const waits = [];
+	handlers.message({ data, waitUntil: (p) => waits.push(p) });
+	return Promise.all(waits);
+}
+
+test('Reload: a waiting worker with its whole copy takes over when the page asks, and only then drops the old copy', async () => {
+	const storage = fakeCaches();
+	await oldCopy(storage);
+	const { handlers, claimed, skipped } = loadWorker(async (address) => served(address), storage);
+	await lifecycle(handlers, 'install');
+	assert.equal(skipped.count, 0, 'an install alone waits for the next launch');
+	assert.ok(storage.named.has(OLD), 'the installed copy stays while the new one waits');
+	await message(handlers, { type: 'activate-now' });
+	assert.equal(skipped.count, 1, 'the page asked: the waiting worker activates now');
+	// the browser then activates it: the old copy goes once the new one is whole, and the open pages are claimed
+	await lifecycle(handlers, 'activate');
+	assert.deepEqual([...storage.named.keys()], [NEW]);
+	assert.equal(claimed.count, 1, 'the open page gets its controllerchange and reloads onto the new build');
+});
+
+test('Reload: a waiting worker whose copy lost a part does not take over', async () => {
+	const storage = fakeCaches();
+	await oldCopy(storage);
+	const { handlers, skipped } = loadWorker(async (address) => served(address), storage);
+	await lifecycle(handlers, 'install');
+	storage.named.get(NEW).store.delete(`${ORIGIN}/pkg/0123456789ab/aac_web_bg.wasm`);
+	await message(handlers, { type: 'activate-now' });
+	assert.equal(skipped.count, 0, 'the worker in charge keeps serving its complete copy');
+	assert.ok(storage.named.has(OLD));
+});
+
+test('Reload: any other message never activates a waiting worker', async () => {
+	const storage = fakeCaches();
+	const { handlers, skipped } = loadWorker(async (address) => served(address), storage);
+	await lifecycle(handlers, 'install');
+	for (const data of [undefined, null, 'activate-now', { type: 'activate' }, { type: 'skip-waiting' }, {}]) {
+		await message(handlers, data);
+	}
+	assert.equal(skipped.count, 0);
+});
+
+test('a plain fetch or reload never activates a waiting worker', async () => {
+	const storage = fakeCaches();
+	await oldCopy(storage);
+	const { handlers, skipped } = loadWorker(async (address) => served(address), storage);
+	await lifecycle(handlers, 'install');
+	// navigations (a reload is one), the frame's no-store build check, and cache-first runtime reads
+	for (const path of ['/', '/app/home', '/app/accounts', '/analytics']) await navigate(handlers, path);
+	for (const [path, cache] of [['/app/home', 'no-store'], ['/pkg/0123456789ab/aac_web.js', undefined], ['/frame-session.mjs', undefined]]) {
+		const event = { request: new FakeRequest(path, { cache }), waitUntil() {}, respondWith(p) { this.promise = p; } };
+		handlers.fetch(event);
+		await event.promise;
+	}
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(skipped.count, 0, 'only the page\'s explicit request hands over');
+	assert.ok(storage.named.has(OLD), 'and the installed copy stays');
+});
+
+test('sw.js calls skipWaiting in one place: the activate-now message', () => {
+	const source = fs.readFileSync(new URL('sw.js', publicDir), 'utf8');
+	const code = source.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+	const calls = code.match(/skipWaiting\s*\(/g) ?? [];
+	assert.equal(calls.length, 1);
+	const handler = code.slice(code.indexOf("addEventListener('message'"));
+	assert.ok(code.indexOf("addEventListener('message'") >= 0 && handler.indexOf('skipWaiting(') < handler.indexOf('addEventListener(', 1));
+	assert.match(handler, /data\.type !== 'activate-now'/);
 });

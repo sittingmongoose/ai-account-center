@@ -27,7 +27,10 @@ browser-check run web-dashboard/tests/browser/upgrade \
 `consistent.check.mjs` covers failed update, navigation under the old worker, closing the last client, then an
 offline launch, as well as a fixed worker preserving its own generation, two tabs keeping an update waiting,
 all five trailing-slash aliases and refusal of an unknown app path. Those cross-version cases are opt in when
-retained builds are unavailable. `captions.check.mjs` checks synthetic Analytics text bounds at 382, 390 and 466
+retained builds are unavailable. `reload.check.mjs` serves a second build of this checkout (`fixture-server.cjs`
+secondBuild: dist/ui under another runtime id and shell stamp) and checks that "New version · Reload" hands over to the
+waiting worker once and the notice does not return, that a resumed app hands over by itself, and that a build whose
+worker cannot install is never offered. `captions.check.mjs` checks synthetic Analytics text bounds at 382, 390 and 466
 CSS pixels, including the Duo rail.
 
 ## What a run does
