@@ -12,14 +12,17 @@ use axum::{extract::Request, http::Method};
 use serde_json::{Map, Value};
 use std::{path::PathBuf, sync::Arc};
 
-/// One boot's job owner.
+/// One boot's job owner. Unix's NativeOwners serves the same three rows, so this owner is
+/// constructed on Windows only; the module still compiles there with the host.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(super) struct Owner {
     jobs: Arc<BoundJobs>,
     #[cfg(unix)]
     host: Option<Arc<super::owner_host::OwnerHost>>,
 }
 
+#[allow(dead_code)]
 impl Owner {
     /// The job owner for this boot. `events` publishes job progress to the dashboard.
     pub(super) fn start(
