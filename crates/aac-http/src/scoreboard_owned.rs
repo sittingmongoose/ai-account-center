@@ -399,7 +399,12 @@ impl ScoreboardOwned {
     /// One snapshot per read (`RunsStore.read`): every page names its generation and catalog
     /// hash; a commit between pages restarts the read, bounded; past the budget, the last
     /// complete read for this filter with a disclosed moving store, or an explicit failure.
-    async fn read(&self, query: &Json) -> Result<CompletedRead, Decline> {
+    ///
+    /// `clock` stamps the read (`at`, the runs state's `scannedAt`). On the answer path it is
+    /// the request's clock: TS reads the store inside the request, at the instant its view
+    /// builder formats, and the forwarded presentation facts hold exactly that instant; a
+    /// service-clock stamp a few ms later has no date fact and the compose declines.
+    async fn read(&self, query: &Json, clock: Option<u64>) -> Result<CompletedRead, Decline> {
         let signature = json!([
             query["fromMs"], query["toMs"], query["source"], query["taskType"],
             query["reviewsOnly"].as_bool().unwrap_or(false),
@@ -411,7 +416,7 @@ impl ScoreboardOwned {
         let mut generation = 0u64;
         let mut problems: Vec<Json> = Vec::new();
         let mut accepted: Option<Vec<Json>> = None;
-        let mut at = now_ms();
+        let mut at = clock.unwrap_or_else(now_ms);
         let mut restarts = 0u32;
         loop {
             let mut args = query.clone();
@@ -430,7 +435,7 @@ impl ScoreboardOwned {
             if after.is_null() {
                 snapshot = key;
                 generation = page["generation"].as_u64().unwrap_or(0);
-                at = now_ms();
+                at = clock.unwrap_or_else(now_ms);
                 problems = page["problems"].as_array().cloned().unwrap_or_default();
                 accepted = page["accepted"].as_array().cloned();
             } else if key != snapshot {
@@ -485,10 +490,10 @@ impl ScoreboardOwned {
     }
 
     /// The runs as the view builder reads them (`RunsStore.state`), from the store.
-    async fn runs_state(&self, query: &Json) -> Result<Json, Decline> {
+    async fn runs_state(&self, query: &Json, clock: Option<u64>) -> Result<Json, Decline> {
         let mut full_query = query.clone();
         full_query["includeReceipts"] = json!(true);
-        let read = self.read(&full_query).await?;
+        let read = self.read(&full_query, clock).await?;
         let refused: Vec<Json> = self
             .store
             .call("runsRefused".to_string(), "{}".to_string())
@@ -697,7 +702,7 @@ impl ScoreboardOwned {
                 }
             }
         }
-        let runs = self.runs_state(&query).await?;
+        let runs = self.runs_state(&query, Some(now)).await?;
         self.record_check(&runs);
         let join_reviews = if filtered {
             let mut reviews_query = Map::new();
@@ -705,7 +710,7 @@ impl ScoreboardOwned {
                 reviews_query.insert("fromMs".to_string(), json!(from_ms));
             }
             reviews_query.insert("reviewsOnly".to_string(), json!(true));
-            self.read(&Json::Object(reviews_query))
+            self.read(&Json::Object(reviews_query), Some(now))
                 .await?
                 .runs
                 .iter()
@@ -813,7 +818,7 @@ impl ScoreboardOwned {
     /// parts, at the current generation.
     pub(crate) async fn inputs(&self) -> Result<Json, Decline> {
         let (generation, catalog_hash) = self.generation();
-        let runs = self.runs_state(&json!({})).await?;
+        let runs = self.runs_state(&json!({}), None).await?;
         let catalog = self
             .catalog_state
             .lock()
