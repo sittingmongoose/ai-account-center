@@ -50,6 +50,17 @@ export function scoreboardOwnedService(res: Response): RustService | null {
   return on ? service : null;
 }
 
+/** One pair of `Intl.DateTimeFormat`s per zone: building them costs more than an owned answer. */
+const wordsByZone = new Map<string, ReturnType<typeof dateWordsIn>>();
+function wordsIn(zone: string): ReturnType<typeof dateWordsIn> {
+  let words = wordsByZone.get(zone);
+  if (!words) {
+    words = dateWordsIn(zone);
+    wordsByZone.set(zone, words);
+  }
+  return words;
+}
+
 function timeZone(): string {
   try {
     return readDashboardPreferences().timeZone;
@@ -129,7 +140,7 @@ async function makeFacts(
   try {
     const parsed = JSON.parse(rustInputText(data));
     const { words, times, epochs } = readFacts(parsed);
-    const format = dateWordsIn(zone);
+    const format = wordsIn(zone);
     const dates = Object.fromEntries([...times].map((ms) => [String(ms), format(ms)]));
     factsText = JSON.stringify({ dates, epochs, order: localeRanks(words) });
     dataText = rustInputText({ timeZone: zone });
@@ -166,7 +177,7 @@ export async function answerScoreboardOwned(
   const now = Date.now();
   const state = await ensureFacts(service, boot, zone, now);
   if (!state) return declined('feed');
-  const words = dateWordsIn(zone)(now);
+  const words = wordsIn(zone)(now);
   const headers = {
     'x-aac-feed': JSON.stringify({
       now,

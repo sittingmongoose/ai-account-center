@@ -1047,11 +1047,22 @@ service refuses owned flags without a store boot.
   before the rename), a catalog scan every 30 s, and the runs ingest pass every two minutes
   (every second while a backfill has more, a full pass every fifteen): `runsScan` → the one
   secret policy over paths and texts → `runsRecord`, exactly the TypeScript shuttle's filter.
-  `GET /api/scoreboard` with `x-aac-feed` answers from the store in process: the paged snapshot
-  read with its restart budget and last-complete-read fallback, `normalizeModel` docs over the
-  held catalog, `read_scoreboard::compose` with by-model and groups in process, the 60 s view
-  cache (a hit fills only `cacheAgeSeconds`), the revalidated-view ETag and `x-aac-view:
-  scoreboard@1`. The front door keeps the filter parse and auth, and once per (generation,
+  `GET /api/scoreboard` with `x-aac-feed` answers from a **held snapshot**: the store's
+  unfiltered runs for the owner's current (generation, catalog hash), read once with the paged
+  restart budget and the rows' `[endedMs, r]` cursors (`runsQuery` `includeCursors`), and every
+  filter answered from it with `runsQuery`'s own bounds (inclusive cursor time; source, task type
+  and reviews on the run). A new generation replaces it, as it replaces the view cache. Per
+  snapshot and catalog the owner also holds the runs-state rows, the `normalizeModel` docs with
+  their reviews merged, each row's compose facts (`read_scoreboard::row_facts`) and prototype-
+  name flag, and per facts generation each doc's position in the stable newest order; the store
+  facts (`runsRefused`, `runsIdentity`, `runsStatus.runs`) are held until the owner's next
+  `runsRecord`. `read_scoreboard::compose_fed_parts` composes over them by reference (the
+  envelope path makes the same facts per call: one code path), with by-model and groups, then
+  the 60 s view cache (a hit fills only `cacheAgeSeconds`), the revalidated-view ETag and
+  `x-aac-view: scoreboard@1`. The compose runs as its own task (a request that outlives its
+  budget still fills the cache); the readers-check record runs on the blocking pool. On the
+  5,000-run large home (Nas1): uncached p95 11.3 ms, cached 0.94 ms (`status-measure.mjs
+  --owned`). The front door keeps the filter parse and auth, and once per (generation,
   catalog, zone) computes the presentation facts over `GET /internal/scoreboard/inputs` (the
   unfiltered superset of every filter's rows; 8 MiB cap, 5 s budget) and pushes them as
   `scoreboard-facts`; the service parses them once and composes with them plus the request's

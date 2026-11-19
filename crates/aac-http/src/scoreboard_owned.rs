@@ -97,6 +97,110 @@ struct CompletedRead {
     at: u64,
 }
 
+/// The unfiltered runs of one store snapshot, held while the owner's (generation, catalog
+/// hash) names it: every filter is answered from it as `runsQuery` answers (time bounds on the
+/// row's `[endedMs, r]` cursor, inclusive; source, task type and reviews on the run), so a new
+/// filter reads no store page. A new generation replaces it, as it replaces the view cache.
+/// Per held snapshot and catalog: what the composer's envelope path derives from every row
+/// before it composes, made once instead of per request.
+struct PreparedDocs {
+    /// Each row's display-normalized doc with its run's review merged in (the envelope
+    /// path's `effective` step), aligned with `HeldRuns::rows`.
+    docs: Vec<Json>,
+    /// Whether the row or its doc holds a prototype name (`read_context::proto_named`): a
+    /// filter that picks one declines, as the envelope path does.
+    proto: Vec<bool>,
+    /// What compose reads of each row (`read_scoreboard::row_facts`).
+    facts: Vec<aac_status::read_scoreboard::RowFacts>,
+    /// Each doc's position in the newest order, per facts generation id (None: not provable).
+    order: Mutex<Option<(String, Option<Arc<Vec<usize>>>)>>,
+}
+
+impl PreparedDocs {
+    /// The newest positions under this facts generation, made once per id.
+    fn positions(&self, facts_id: &str, facts: &std::sync::Arc<Presentation>) -> Option<Arc<Vec<usize>>> {
+        let mut held = self.order.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((id, positions)) = held.as_ref()
+            && id == facts_id
+        {
+            return positions.clone();
+        }
+        let docs: Vec<&Json> = self.docs.iter().collect();
+        let positions = aac_status::read_scoreboard::newest_positions(&docs, facts.clone()).map(Arc::new);
+        *held = Some((facts_id.to_string(), positions.clone()));
+        positions
+    }
+}
+
+/// The store's own facts the runs state and the view carry, which change only when the runs
+/// tables are written (`runsRecord`).
+struct StoreFacts {
+    refused: Vec<Json>,
+    identity: Json,
+    status_runs: Json,
+}
+
+struct HeldRuns {
+    key: (u64, String),
+    /// Each row as `runsQuery` returns it (no `_cursor`), with its cursor's time.
+    rows: Vec<(u64, Json)>,
+    /// Each row as the runs state carries it (`file`, `doc`, `firstSeenAt`, `sha256`).
+    state_rows: Vec<Json>,
+    problems: Vec<Json>,
+    accepted: Option<Vec<Json>>,
+    /// Each row's composer doc over the catalog with this hash (made on first use).
+    docs: Mutex<Option<(String, Arc<PreparedDocs>)>>,
+    /// The readers-check rows of the snapshot's receipts (made on first use).
+    accepted_rows: std::sync::OnceLock<Vec<RunRow>>,
+}
+
+impl HeldRuns {
+    fn new(key: (u64, String), rows: Vec<(u64, Json)>, problems: Vec<Json>, accepted: Option<Vec<Json>>) -> Self {
+        let state_rows = rows
+            .iter()
+            .map(|(_, run)| {
+                json!({
+                    "file": run["file"],
+                    "doc": run["doc"],
+                    "firstSeenAt": run["firstSeenAt"],
+                    "sha256": run["sha256"],
+                })
+            })
+            .collect();
+        Self {
+            key,
+            rows,
+            state_rows,
+            problems,
+            accepted,
+            docs: Mutex::new(None),
+            accepted_rows: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The rows `runsQuery` answers this query with, in its order (indices into `rows`).
+    fn pick(&self, query: &Json) -> Vec<usize> {
+        let from = query["fromMs"].as_u64();
+        let to = query["toMs"].as_u64();
+        let source = query["source"].as_str();
+        let task_type = query["taskType"].as_str();
+        let reviews_only = query["reviewsOnly"].as_bool() == Some(true);
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, row))| {
+                let doc = &row["doc"];
+                from.is_none_or(|from| *at >= from)
+                    && to.is_none_or(|to| *at <= to)
+                    && source.is_none_or(|want| doc["source"].as_str() == Some(want))
+                    && task_type.is_none_or(|want| doc["task"]["type"].as_str() == Some(want))
+                    && (!reviews_only || doc["review"].is_object())
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+}
+
 /// The request's filters and clock, as the front door parsed and read them.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -147,6 +251,15 @@ pub(crate) struct ScoreboardOwned {
     safe_paths: Mutex<HashMap<String, String>>,
     seed_failures: Mutex<Vec<Json>>,
     reads: Mutex<IndexMap<String, CompletedRead>>,
+    /// The current snapshot's unfiltered runs (see [`HeldRuns`]).
+    held_runs: Mutex<Option<Arc<HeldRuns>>>,
+    /// Bumped before and after every `runsRecord` (this owner is the runs tables' only
+    /// writer): the store facts below are held while it has not moved.
+    store_epoch: AtomicU64,
+    /// `runsRefused`, `runsIdentity` and `runsStatus.runs` as of a store epoch.
+    store_facts: Mutex<Option<(u64, Arc<StoreFacts>)>>,
+    /// The newest snapshot generation whose readers-check rows were recorded.
+    recorded: Arc<Mutex<u64>>,
     views: Mutex<IndexMap<String, CachedView>>,
     /// The last pushed facts generation, parsed once: (its id, its presentation).
     parsed_facts: Mutex<Option<(String, std::sync::Arc<Presentation>)>>,
@@ -178,6 +291,10 @@ impl ScoreboardOwned {
             safe_paths: Mutex::new(HashMap::new()),
             seed_failures: Mutex::new(Vec::new()),
             reads: Mutex::new(IndexMap::new()),
+            held_runs: Mutex::new(None),
+            store_epoch: AtomicU64::new(0),
+            store_facts: Mutex::new(None),
+            recorded: Arc::new(Mutex::new(0)),
             views: Mutex::new(IndexMap::new()),
             parsed_facts: Mutex::new(None),
             composing: Mutex::new(std::collections::HashSet::new()),
@@ -195,46 +312,43 @@ impl ScoreboardOwned {
     /// The check file's runs rows (`ScoreboardService.recordCheck`): the accepted revisions
     /// this view read, and the named refusals. Fire and forget behind one in-flight guard,
     /// as the TS writer does; a hung share never stalls the answer.
-    fn record_check(&self, runs: &Json) {
+    /// The answer's readers-check record, off the request path: the held receipts' rows and
+    /// the runs state's problems, recorded on the blocking pool; a snapshot older than one
+    /// already recorded is dropped, so the newest generation always wins.
+    fn record_check_held(&self, held: &Arc<HeldRuns>, picked: &[usize], runs: &Json) {
         if self.owners.owner("readers-check") != Some(Role::RustService) {
             return;
         }
-        let empty: Vec<Json> = Vec::new();
-        let source = runs["accepted"]
-            .as_array()
-            .unwrap_or_else(|| runs["runs"].as_array().unwrap_or(&empty));
-        let rows: Vec<RunRow> = source
-            .iter()
-            .map(|row| RunRow {
-                file: row["file"].as_str().unwrap_or_default().to_string(),
-                seq: row["doc"]["seq"].as_u64().unwrap_or(0),
-                sha256: row["sha256"].as_str().unwrap_or_default().to_string(),
-                first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
-            })
-            .collect();
-        let problems: Vec<Problem> = runs["problems"]
-            .as_array()
-            .map(|rows| {
-                rows.iter()
-                    .map(|problem| Problem {
-                        file: problem["file"].as_str().unwrap_or_default().to_string(),
-                        reason: problem["reason"].as_str().unwrap_or_default().to_string(),
-                        since: problem["since"].as_u64().unwrap_or(0),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        {
-            let mut check = self.check.lock().unwrap_or_else(|p| p.into_inner());
-            check.record_runs(&rows, &problems);
-        }
-        if self.flushing.swap(true, Ordering::Relaxed) {
-            return;
-        }
+        let problems = check_problems(runs);
+        // Without receipts the rows are the picked runs' (as `record_check` reads `runs`).
+        let picked: Option<Vec<usize>> = held.accepted.is_none().then(|| picked.to_vec());
+        let held = Arc::clone(held);
         let check = Arc::clone(&self.check);
+        let recorded = Arc::clone(&self.recorded);
         let owners = self.owners.clone();
         let flushing = Arc::clone(&self.flushing);
         tokio::task::spawn_blocking(move || {
+            {
+                let mut newest = recorded.lock().unwrap_or_else(|p| p.into_inner());
+                if held.key.0 < *newest {
+                    return;
+                }
+                *newest = held.key.0;
+                let made: Vec<RunRow>;
+                let rows: &[RunRow] = match &picked {
+                    None => held.accepted_rows.get_or_init(|| check_rows(held.accepted.as_deref().unwrap_or(&[]))),
+                    Some(picked) => {
+                        let state: Vec<&Json> = picked.iter().map(|&index| &held.state_rows[index]).collect();
+                        made = check_rows_of(&state);
+                        &made
+                    }
+                };
+                let mut check = check.lock().unwrap_or_else(|p| p.into_inner());
+                check.record_runs(rows, &problems);
+            }
+            if flushing.swap(true, Ordering::Relaxed) {
+                return;
+            }
             let check = check.lock().unwrap_or_else(|p| p.into_inner());
             check.flush(&owners, now_ms());
             flushing.store(false, Ordering::Relaxed);
@@ -284,10 +398,12 @@ impl ScoreboardOwned {
             let mut safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
             ingest_request(&scan, now, &mut safe_paths)
         };
+        self.store_epoch.fetch_add(1, Ordering::SeqCst);
         let record = self
             .store
             .call("runsRecord".to_string(), request.record.to_string())
             .await;
+        self.store_epoch.fetch_add(1, Ordering::SeqCst);
         let record: Json = match record {
             Ok(text) => serde_json::from_str(&text).unwrap_or(Json::Null),
             Err(_) => return,
@@ -324,7 +440,49 @@ impl ScoreboardOwned {
     /// the request's clock: TS reads the store inside the request, at the instant its view
     /// builder formats, and the forwarded presentation facts hold exactly that instant; a
     /// service-clock stamp a few ms later has no date fact and the compose declines.
-    async fn read(&self, query: &Json, clock: Option<u64>) -> Result<CompletedRead, Decline> {
+    /// The held unfiltered snapshot for the owner's current (generation, catalog hash), read
+    /// once from the store when the generation moved (see [`HeldRuns`]).
+    async fn held(&self, clock: Option<u64>) -> Result<Arc<HeldRuns>, Decline> {
+        let key = self.generation();
+        let held = self
+            .held_runs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .filter(|held| held.key == key);
+        if let Some(held) = held {
+            return Ok(held);
+        }
+        // One unfiltered read of the snapshot, with the rows' cursors and the receipts.
+        let full = self
+            .read_store(&json!({"includeReceipts": true, "includeCursors": true}), clock)
+            .await?;
+        let rows = full
+            .runs
+            .into_iter()
+            .map(|mut row| {
+                let at = row["_cursor"][0].as_u64().unwrap_or(0);
+                if let Some(object) = row.as_object_mut() {
+                    object.remove("_cursor");
+                }
+                (at, row)
+            })
+            .collect();
+        let held = Arc::new(HeldRuns::new(
+            (full.generation, key.1.clone()),
+            rows,
+            full.problems,
+            full.accepted,
+        ));
+        // Held only when the read is the snapshot the owner names (an ingest may have landed).
+        if held.key == key {
+            *self.held_runs.lock().unwrap_or_else(|p| p.into_inner()) = Some(held.clone());
+        }
+        Ok(held)
+    }
+
+    /// The store's paged read of one query (see [`Self::read`] for the held snapshot).
+    async fn read_store(&self, query: &Json, clock: Option<u64>) -> Result<CompletedRead, Decline> {
         let signature = json!([
             query["fromMs"], query["toMs"], query["source"], query["taskType"],
             query["reviewsOnly"].as_bool().unwrap_or(false),
@@ -341,12 +499,12 @@ impl ScoreboardOwned {
         loop {
             let mut args = query.clone();
             args["after"] = after.clone();
-            let page: Json = self
+            let text = self
                 .store
                 .call("runsQuery".to_string(), args.to_string())
                 .await
-                .map_err(|_| Decline::Internal)
-                .and_then(|text| serde_json::from_str(&text).map_err(|_| Decline::Internal))?;
+                .map_err(|_| Decline::Internal)?;
+            let page: Json = serde_json::from_str(&text).map_err(|_| Decline::Internal)?;
             let key = format!(
                 "{}:{}",
                 page["generation"].as_u64().unwrap_or(0),
@@ -411,17 +569,58 @@ impl ScoreboardOwned {
 
     /// The runs as the view builder reads them (`RunsStore.state`), from the store.
     async fn runs_state(&self, query: &Json, clock: Option<u64>) -> Result<Json, Decline> {
-        let mut full_query = query.clone();
-        full_query["includeReceipts"] = json!(true);
-        let read = self.read(&full_query, clock).await?;
-        let refused: Vec<Json> = self
-            .store
-            .call("runsRefused".to_string(), "{}".to_string())
-            .await
-            .ok()
-            .and_then(|text| serde_json::from_str::<Json>(&text).ok())
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default();
+        let held = self.held(clock).await?;
+        let picked = held.pick(query);
+        self.state_of(&held, &picked, clock.unwrap_or_else(now_ms)).await
+    }
+
+    /// The runs state (`RunsStore.state`) of the held snapshot's `picked` rows: the receipts,
+    /// the problems (refused files, the pass's, the snapshot's) and the rows, at `clock`.
+    async fn state_of(&self, held: &HeldRuns, picked: &[usize], clock: u64) -> Result<Json, Decline> {
+        self.state_with(held, picked, clock, true).await
+    }
+
+    /// The store's facts as of now: held until the next `runsRecord` (see `store_epoch`); a
+    /// read that overlaps a write is used once and not held.
+    async fn store_facts(&self) -> Arc<StoreFacts> {
+        let epoch = self.store_epoch.load(Ordering::SeqCst);
+        if let Some((at, facts)) = self.store_facts.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
+            && *at == epoch
+        {
+            return facts.clone();
+        }
+        let call = |method: &'static str| async move {
+            self.store
+                .call(method.to_string(), "{}".to_string())
+                .await
+                .ok()
+                .and_then(|text| serde_json::from_str::<Json>(&text).ok())
+        };
+        let refused = call("runsRefused").await.and_then(|value| value.as_array().cloned()).unwrap_or_default();
+        let identity = call("runsIdentity").await.unwrap_or(Json::Null);
+        let status_runs = call("runsStatus").await.map(|status| status["runs"].clone()).unwrap_or(Json::Null);
+        let facts = Arc::new(StoreFacts {
+            refused,
+            identity,
+            status_runs,
+        });
+        if self.store_epoch.load(Ordering::SeqCst) == epoch && epoch % 2 == 0 {
+            *self.store_facts.lock().unwrap_or_else(|p| p.into_inner()) = Some((epoch, facts.clone()));
+        }
+        facts
+    }
+
+    /// [`Self::state_of`]; without `receipts` the state leaves out `accepted` (the composer
+    /// never reads it; the readers-check rows take the held receipts directly).
+    async fn state_with(&self, held: &HeldRuns, picked: &[usize], clock: u64, receipts: bool) -> Result<Json, Decline> {
+        self.state_rows(held, picked, clock, receipts, true).await
+    }
+
+    /// [`Self::state_with`]; without `rows` the state's `runs` is empty (the composer takes the
+    /// held rows by reference).
+    async fn state_rows(&self, held: &HeldRuns, picked: &[usize], clock: u64, receipts: bool, rows: bool) -> Result<Json, Decline> {
+        let store_facts = self.store_facts().await;
+        let refused = &store_facts.refused;
         let safe_paths = self.safe_paths.lock().unwrap_or_else(|p| p.into_inner());
         let pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
         let mut problems: Vec<Json> = refused
@@ -438,36 +637,52 @@ impl ScoreboardOwned {
             })
             .collect();
         problems.extend(pass.problems.iter().cloned());
-        problems.extend(read.problems.iter().cloned());
+        problems.extend(held.problems.iter().cloned());
         drop(safe_paths);
         let mut writers = std::collections::HashSet::new();
-        let runs: Vec<Json> = read
-            .runs
+        let runs: Vec<Json> = picked
             .iter()
-            .map(|run| {
-                writers.insert(run["doc"]["writer"].as_str().unwrap_or_default().to_string());
-                json!({
-                    "file": run["file"],
-                    "doc": run["doc"],
-                    "firstSeenAt": run["firstSeenAt"],
-                    "sha256": run["sha256"],
-                })
+            .map(|&index| {
+                writers.insert(held.rows[index].1["doc"]["writer"].as_str().unwrap_or_default());
+                index
             })
+            .collect::<Vec<usize>>()
+            .into_iter()
+            .filter(|_| rows)
+            .map(|index| held.state_rows[index].clone())
             .collect();
-        Ok(json!({
-            "correctionsResolved": true,
-            "accepted": read.accepted,
-            "state": if pass.state.is_empty() { "ok" } else { pass.state.as_str() },
-            "scannedAt": read.at,
-            "runs": runs,
-            "writers": writers.len(),
-            "skipped": {"runFiles": 0, "writerFolders": 0},
-            "problems": problems,
-        }))
+        // Built by moving the rows in (`json!` would serialize, a deep copy of every row).
+        let writers = writers.len();
+        let state = if pass.state.is_empty() { "ok" } else { pass.state.as_str() };
+        let mut out = Map::new();
+        out.insert("correctionsResolved".to_string(), Json::Bool(true));
+        out.insert(
+            "accepted".to_string(),
+            match (receipts, &held.accepted) {
+                (true, Some(accepted)) => Json::Array(accepted.clone()),
+                _ => Json::Null,
+            },
+        );
+        out.insert("state".to_string(), json!(state));
+        out.insert("scannedAt".to_string(), json!(clock));
+        out.insert("runs".to_string(), Json::Array(runs));
+        out.insert("writers".to_string(), json!(writers));
+        out.insert("skipped".to_string(), json!({"runFiles": 0, "writerFolders": 0}));
+        out.insert("problems".to_string(), Json::Array(problems));
+        Ok(Json::Object(out))
     }
 
     /// The envelope's `docs`: each run's display model resolution over the held catalog.
     fn normalized_docs(&self, runs: &Json, catalog: &Json) -> Vec<Json> {
+        let docs: Vec<&Json> = runs["runs"]
+            .as_array()
+            .map(|rows| rows.iter().map(|row| &row["doc"]).collect())
+            .unwrap_or_default();
+        self.normalized_doc_list(docs.into_iter(), catalog)
+    }
+
+    /// Each doc's display model resolution over the held catalog.
+    fn normalized_doc_list<'d>(&self, docs: impl Iterator<Item = &'d Json>, catalog: &Json) -> Vec<Json> {
         let models: Vec<Model<'_>> = catalog["models"]
             .as_array()
             .map(|rows| {
@@ -528,31 +743,57 @@ impl ScoreboardOwned {
             aliases,
             effort_suffixes: suffixes,
         };
-        runs["runs"]
-            .as_array()
-            .map(|rows| {
-                rows.iter()
-                    .map(|row| {
-                        let doc = &row["doc"];
-                        let id = doc["model"]["id"].as_str().unwrap_or_default();
-                        if id.is_empty() {
-                            return doc.clone();
-                        }
-                        let resolved = normalize_model(
-                            id,
-                            doc["model"]["effort"].as_str(),
-                            &models,
-                            Some(&table),
-                        );
-                        let mut doc = doc.clone();
-                        doc["model"]["id"] = json!(resolved.id);
-                        doc["model"]["effort"] = json!(resolved.effort);
-                        doc["model"]["provider"] = Json::Null;
-                        doc
-                    })
-                    .collect()
+        docs.map(|doc| {
+            let id = doc["model"]["id"].as_str().unwrap_or_default();
+            if id.is_empty() {
+                return doc.clone();
+            }
+            let resolved = normalize_model(id, doc["model"]["effort"].as_str(), &models, Some(&table));
+            let mut doc = doc.clone();
+            doc["model"]["id"] = json!(resolved.id);
+            doc["model"]["effort"] = json!(resolved.effort);
+            doc["model"]["provider"] = Json::Null;
+            doc
+        })
+        .collect()
+    }
+
+    /// The held snapshot's normalized docs over this catalog, made once per catalog hash.
+    fn held_docs(&self, held: &HeldRuns, catalog: &Json, catalog_hash: &str) -> Arc<PreparedDocs> {
+        let mut docs = held.docs.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((hash, made)) = docs.as_ref()
+            && hash == catalog_hash
+        {
+            return made.clone();
+        }
+        let mut normalized = self.normalized_doc_list(held.rows.iter().map(|(_, row)| &row["doc"]), catalog);
+        for (doc, (_, row)) in normalized.iter_mut().zip(&held.rows) {
+            if row["doc"]["review"].is_object() {
+                doc["review"] = row["doc"]["review"].clone();
+            }
+        }
+        let proto = held
+            .state_rows
+            .iter()
+            .zip(&normalized)
+            .map(|(row, doc)| {
+                aac_status::read_context::proto_named(row) || aac_status::read_context::proto_named(doc)
             })
-            .unwrap_or_default()
+            .collect();
+        let facts = held
+            .state_rows
+            .iter()
+            .zip(&normalized)
+            .map(|(row, doc)| aac_status::read_scoreboard::row_facts(row, doc))
+            .collect();
+        let made = Arc::new(PreparedDocs {
+            docs: normalized,
+            proto,
+            facts,
+            order: Mutex::new(None),
+        });
+        *docs = Some((catalog_hash.to_string(), made.clone()));
+        made
     }
 
     /// The owned answer: the final bytes and ETag, or a named decline.
@@ -645,19 +886,20 @@ impl ScoreboardOwned {
             }
         };
         let now_date = Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Shape)?;
-        let runs = self.runs_state(&query, Some(now)).await?;
-        self.record_check(&runs);
+        // The held snapshot answers every filter: the store is read once per generation.
+        let held = self.held(Some(now)).await?;
+        let picked = held.pick(&query);
+        let runs = self.state_rows(&held, &picked, now, false, false).await?;
+        self.record_check_held(&held, &picked, &runs);
         let join_reviews = if filtered {
             let mut reviews_query = Map::new();
             if let Some(from_ms) = feed.from_ms {
                 reviews_query.insert("fromMs".to_string(), json!(from_ms));
             }
             reviews_query.insert("reviewsOnly".to_string(), json!(true));
-            self.read(&Json::Object(reviews_query), Some(now))
-                .await?
-                .runs
-                .iter()
-                .map(|run| run["doc"].clone())
+            held.pick(&Json::Object(reviews_query))
+                .into_iter()
+                .map(|index| held.rows[index].1["doc"].clone())
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -670,22 +912,19 @@ impl ScoreboardOwned {
         if catalog.is_null() {
             return Err(Decline::Stale);
         }
-        let docs = self.normalized_docs(&runs, &catalog);
-        let identity: Json = self
-            .store
-            .call("runsIdentity".to_string(), "{}".to_string())
-            .await
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or(Json::Null);
-        let status_runs: Json = self
-            .store
-            .call("runsStatus".to_string(), "{}".to_string())
-            .await
-            .ok()
-            .and_then(|text| serde_json::from_str::<Json>(&text).ok())
-            .map(|status| status["runs"].clone())
-            .unwrap_or(Json::Null);
+        let prepared = self.held_docs(&held, &catalog, &catalog_hash);
+        if picked.iter().any(|&index| prepared.proto[index]) {
+            return Err(Decline::Unsupported);
+        }
+        let rows: Vec<&Json> = picked.iter().map(|&index| &held.state_rows[index]).collect();
+        let docs: Vec<&Json> = picked.iter().map(|&index| &prepared.docs[index]).collect();
+        let row_facts: Vec<&aac_status::read_scoreboard::RowFacts> =
+            picked.iter().map(|&index| &prepared.facts[index]).collect();
+        let positions = prepared.positions(&feed.facts, &presentation);
+        let order: Option<Vec<usize>> = positions.map(|positions| picked.iter().map(|&index| positions[index]).collect());
+        let store_facts = self.store_facts().await;
+        let identity = store_facts.identity.clone();
+        let status_runs = store_facts.status_runs.clone();
         let task_types: Vec<Json> = catalog["taskTypes"]
             .as_array()
             .map(|rows| {
@@ -704,16 +943,18 @@ impl ScoreboardOwned {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        let data = json!({
-            "now": feed.now,
-            "timeZone": feed.time_zone,
-            "root": self.root.to_string_lossy(),
-            "catalog": catalog,
-            "runs": runs,
-            "joinReviews": join_reviews,
-            "seedFailures": seed_failures,
-            "docs": docs,
-            "finish": {
+        // Moved in, not `json!`-serialized (a deep copy of every row and doc).
+        let mut data = Map::new();
+        data.insert("now".to_string(), json!(feed.now));
+        data.insert("timeZone".to_string(), json!(feed.time_zone));
+        data.insert("root".to_string(), json!(self.root.to_string_lossy()));
+        data.insert("catalog".to_string(), catalog);
+        data.insert("runs".to_string(), runs);
+        data.insert("joinReviews".to_string(), Json::Array(join_reviews));
+        data.insert("seedFailures".to_string(), json!(seed_failures));
+        data.insert(
+            "finish".to_string(),
+            json!({
                 "filters": {
                     "from": feed.from,
                     "to": feed.to,
@@ -725,13 +966,22 @@ impl ScoreboardOwned {
                 "identity": identity,
                 "history": {"store": "on", "runs": status_runs, "importing": importing},
                 "native": true,
-            },
-        });
+            }),
+        );
+        let data = Json::Object(data);
         // A miss is a facts generation older than the data (the catalog's 30 s scan moves its
         // `scannedAt` without a new generation): `stale`, so the front door pushes fresh facts
         // and today's handler answers this one request.
-        let view = aac_status::read_scoreboard::compose_fed(data, presentation, (feed.now, now_date))
-            .ok_or(Decline::Stale)?;
+        let view = aac_status::read_scoreboard::compose_fed_parts(
+            &data,
+            &rows,
+            &docs,
+            &row_facts,
+            order.as_deref(),
+            presentation,
+            (feed.now, now_date),
+        )
+        .ok_or(Decline::Stale)?;
         let mut writer = Writer::with_capacity(64 * 1024);
         writer.value(&view);
         let (bytes, identity_bytes) = writer.finish();
@@ -951,4 +1201,36 @@ pub(crate) async fn catalog_jobs(owner: Arc<ScoreboardOwned>, stop: Arc<std::syn
         }
         owner.catalog_pass(now_ms());
     }
+}
+
+/// The readers-check rows of runs-state rows (`file`, `doc.seq`, `sha256`, `firstSeenAt`).
+fn check_rows(rows: &[Json]) -> Vec<RunRow> {
+    check_rows_of(&rows.iter().collect::<Vec<_>>())
+}
+
+fn check_rows_of(rows: &[&Json]) -> Vec<RunRow> {
+    rows.iter()
+        .map(|row| RunRow {
+            file: row["file"].as_str().unwrap_or_default().to_string(),
+            seq: row["doc"]["seq"].as_u64().unwrap_or(0),
+            sha256: row["sha256"].as_str().unwrap_or_default().to_string(),
+            first_seen_at: row["firstSeenAt"].as_u64().unwrap_or(0),
+        })
+        .collect()
+}
+
+/// The readers-check problems of a runs state.
+fn check_problems(runs: &Json) -> Vec<Problem> {
+    runs["problems"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|problem| Problem {
+                    file: problem["file"].as_str().unwrap_or_default().to_string(),
+                    reason: problem["reason"].as_str().unwrap_or_default().to_string(),
+                    since: problem["since"].as_u64().unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }

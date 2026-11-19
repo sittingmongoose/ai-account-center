@@ -309,6 +309,8 @@ try {
     const s = await stats(ownedServer);
     scoreboard = {
       ownedCompose: composeMs.length ? quantiles(composeMs) : null,
+      // The bridge's own timing of the Rust hop for the reads it served (front door to Rust and back).
+      hop: s.scoreboardRoute?.rustOnly ?? null,
       ownedComposeAnswered: composeMs.length,
       runsIngested: ready.runs,
       viewBytes: bytes,
@@ -404,5 +406,6 @@ try {
   }
   await new Promise((r) => setTimeout(r, 800));
   for (const worker of workers) if (worker.child.exitCode === null) worker.child.kill('SIGKILL');
-  fs.rmSync(scratch, { recursive: true, force: true });
+  // The owned service may still be flushing into its home as it stops.
+  fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
