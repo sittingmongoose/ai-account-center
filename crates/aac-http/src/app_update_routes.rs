@@ -215,6 +215,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_bound_job_owner_is_reached_only_after_socket_admission()
     -> Result<(), Box<dyn std::error::Error>> {
