@@ -50,6 +50,16 @@ export interface CursorAccountRow {
   uncosted: number;
 }
 
+/** Counts from the same complete provider read as the dated usage rows. */
+export interface CursorEventCounts {
+  pages: number;
+  fetched: number;
+  kept: number;
+  droppedOutOfWindow: number;
+  droppedNoTokenUsage: number;
+  droppedDuplicate: number;
+}
+
 /** The last answer, kept across restarts. */
 export interface CursorAccountRead {
   state: CursorAccountState;
@@ -63,6 +73,7 @@ export interface CursorAccountRead {
   key?: { last4: string; fingerprint: string } | null;
   rows: CursorAccountRow[];
   events: number;
+  eventCounts?: CursorEventCounts;
   /** In-range events whose `tokenUsage` had no usable counts: not logged, never measured zeros. */
   unmeasured: number;
 }
@@ -77,6 +88,7 @@ export interface CursorAccountAnswer {
   accountTokens: number;
   matchedTokens: number;
   outsideTokens: number;
+  eventCounts?: CursorEventCounts;
   localUnmatchedTokens: number;
   /**
    * Present when some of the account's events carried no Cursor cost: any cost figure for the
@@ -164,6 +176,33 @@ const HOUR = /^\d{4}-\d{2}-\d{2} \d{2}:00$/;
 const count = (value: unknown) =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
+function eventCountsOf(sample: unknown): CursorEventCounts | undefined {
+  const record = sample as Partial<CursorAccountRead> | null;
+  const counts = record?.eventCounts;
+  if (!record || !counts) return undefined;
+  const { pages, fetched, kept, droppedOutOfWindow, droppedNoTokenUsage, droppedDuplicate } =
+    counts;
+  if (
+    ![
+      pages,
+      fetched,
+      kept,
+      droppedOutOfWindow,
+      droppedNoTokenUsage,
+      droppedDuplicate,
+      record.unmeasured,
+    ].every(count) ||
+    pages < 1 ||
+    pages > 200 ||
+    fetched > pages * 1000 ||
+    kept !== record.events ||
+    fetched !==
+      kept + droppedOutOfWindow + droppedNoTokenUsage + droppedDuplicate + (record.unmeasured ?? 0)
+  )
+    return undefined;
+  return { pages, fetched, kept, droppedOutOfWindow, droppedNoTokenUsage, droppedDuplicate };
+}
+
 /** The reader's rows, each checked; a malformed one is dropped. */
 export function parseCursorAccountRows(value: unknown): CursorAccountRow[] {
   if (!Array.isArray(value)) return [];
@@ -204,8 +243,10 @@ function loadRead(cacheDir: string): CursorAccountRead | null {
     const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<CursorAccountRead>;
     if (!value || !STATES.has(String(value.state)) || typeof value.checkedAt !== 'string')
       return null;
+    const eventCounts = eventCountsOf(value);
     return {
       state: value.state as CursorAccountState,
+      ...(eventCounts ? { eventCounts } : {}),
       checkedAt: value.checkedAt,
       readAt: typeof value.readAt === 'string' ? value.readAt : null,
       ...(typeof value.cause === 'string' ? { cause: value.cause } : {}),
@@ -299,7 +340,9 @@ export async function readCursorAccount(
       : (previous?.key ?? null);
   let read: CursorAccountRead;
   if (state === 'read') {
+    const eventCounts = eventCountsOf(answer);
     read = {
+      ...(eventCounts ? { eventCounts } : {}),
       state,
       checkedAt,
       readAt: typeof answer.readAt === 'number' ? new Date(answer.readAt).toISOString() : checkedAt,
@@ -330,6 +373,7 @@ export async function readCursorAccount(
       rows: keep?.rows ?? [],
       events: keep?.events ?? 0,
       unmeasured: keep?.unmeasured ?? 0,
+      ...(keep?.eventCounts ? { eventCounts: keep.eventCounts } : {}),
     };
   }
   saveRead(cacheDir, read);
@@ -354,6 +398,7 @@ export async function cursorAccountOutside(
     ...(read.cause ? { cause: read.cause } : {}),
     ...(read.key?.last4 ? { last4: read.key.last4 } : {}),
     unmeasured: read.unmeasured,
+    ...(read.eventCounts ? { eventCounts: read.eventCounts } : {}),
   };
   const empty = {
     ...base,

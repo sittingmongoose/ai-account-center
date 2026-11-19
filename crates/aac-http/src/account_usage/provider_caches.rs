@@ -177,6 +177,24 @@ pub(crate) fn counter(value: &Value) -> Option<u64> {
     value.as_u64().filter(|n| *n <= 9_007_199_254_740_991)
 }
 
+pub(crate) fn cursor_event_counts(sample: &Value) -> Option<Value> {
+    let value = &sample["eventCounts"];
+    let pages = counter(&value["pages"]).filter(|n| (1..=200).contains(n))?;
+    let fetched = counter(&value["fetched"]).filter(|n| *n <= pages * 1000)?;
+    let kept = counter(&value["kept"]).filter(|n| Some(*n) == counter(&sample["events"]))?;
+    let outside = counter(&value["droppedOutOfWindow"])?;
+    let no_usage = counter(&value["droppedNoTokenUsage"])?;
+    let duplicate = counter(&value["droppedDuplicate"])?;
+    let unmeasured = counter(&sample["unmeasured"])?;
+    if fetched != kept + outside + no_usage + duplicate + unmeasured {
+        return None;
+    }
+    Some(
+        json!({"pages":pages,"fetched":fetched,"kept":kept,"droppedOutOfWindow":outside,
+        "droppedNoTokenUsage":no_usage,"droppedDuplicate":duplicate}),
+    )
+}
+
 fn cursor_row(row: &Value) -> bool {
     let hour = row["h"].as_str().unwrap_or("").as_bytes();
     let hour_ok = hour.len() == 16
@@ -240,6 +258,9 @@ pub fn cursor_account(root: &Path) -> Result<Option<Value>, Decline> {
         "rows": rows, "events": counter(&value["events"]).unwrap_or(0),
         "unmeasured": counter(&value["unmeasured"]).unwrap_or(0),
     });
+    if let Some(counts) = cursor_event_counts(&value) {
+        answer["eventCounts"] = counts;
+    }
     if let Some(cause) = value["cause"].as_str() {
         answer["cause"] = json!(cause);
     }

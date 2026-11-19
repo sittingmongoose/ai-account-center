@@ -403,6 +403,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/home_producer.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/json_object.rs",
       "kind": "internal",
       "evidence": [],

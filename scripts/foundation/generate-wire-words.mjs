@@ -41,7 +41,7 @@ for (const file of files(resolve(root, 'src')).filter(f => f.endsWith('.ts'))) {
     }
     if (region) {
       const collect = child => {
-        if (ts.isStringLiteral(child)) add(child.text, `${relative(root, file)}:${name}`);
+        if (ts.isStringLiteral(child)) add(child.text, `${relative(root, file).replaceAll('\\', '/')}:${name}`);
         ts.forEachChild(child, collect);
       };
       collect(region);
@@ -56,10 +56,10 @@ root=pathlib.Path(sys.argv[1]); out=[]
 context=re.compile(r'(cause|reason|status|state|failure|error.?code|read_failures)',re.I)
 def emit(node,path,label):
     for child in ast.walk(node):
-        if isinstance(child,ast.Constant) and isinstance(child.value,str): out.append([child.value,str(path.relative_to(root))+':'+label])
+        if isinstance(child,ast.Constant) and isinstance(child.value,str): out.append([child.value,path.relative_to(root).as_posix()+':'+label])
 for path in sorted((root/'scripts').rglob('*.py')):
     if any(p in ('__pycache__','__tests__','node_modules') for p in path.parts) or path.name.startswith('test'): continue
-    tree=ast.parse(path.read_text(),filename=str(path))
+    tree=ast.parse(path.read_text(encoding='utf-8'),filename=str(path))
     for node in ast.walk(tree):
         if isinstance(node,(ast.Assign,ast.AnnAssign)):
             targets=node.targets if isinstance(node,ast.Assign) else [node.target]

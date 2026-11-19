@@ -114,10 +114,7 @@ fn executable(package: &Path, target: &str) -> Option<PathBuf> {
 }
 
 fn local_reader() -> Result<(Option<PathBuf>, OperatingSystem), Decline> {
-    let package = std::env::var_os("AAC_AGENT_PACKAGE_ROOT")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or(Decline::Unsupported)?;
+    let package = crate::agent_transport::package_root().ok_or(Decline::Unsupported)?;
     let (target, os) = target().ok_or(Decline::Unsupported)?;
     Ok((executable(&package, target), os))
 }
@@ -259,12 +256,16 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
             .as_f64()
             .and_then(|ms| aac_num::ecma::to_iso_string(ms.trunc() as i64))
             .unwrap_or_else(|| checked.clone());
-        return Ok(json!({
+        let mut answer = json!({
             "state":state, "checkedAt":checked, "readAt":read_at, "account":current["account"].as_str(),
             "key":key, "rows":super::provider_caches::cursor_rows(&current["rows"]),
             "events":super::provider_caches::counter(&current["events"]).unwrap_or(0),
             "unmeasured":super::provider_caches::counter(&current["unmeasured"]).unwrap_or(0),
-        }));
+        });
+        if let Some(counts) = super::provider_caches::cursor_event_counts(current) {
+            answer["eventCounts"] = counts;
+        }
+        return Ok(answer);
     }
     let keep = state == "unavailable" && previous["readAt"].as_str().is_some_and(|s| !s.is_empty());
     let old = if keep { previous } else { &Value::Null };
@@ -273,6 +274,9 @@ fn project(current: &Value, previous: Option<&Value>, now: i64) -> Result<Value,
         "key":key, "rows":old["rows"].as_array().map(Vec::as_slice).unwrap_or_default(),
         "events":old["events"].as_u64().unwrap_or(0), "unmeasured":old["unmeasured"].as_u64().unwrap_or(0),
     });
+    if let Some(counts) = super::provider_caches::cursor_event_counts(old) {
+        result["eventCounts"] = counts;
+    }
     if state == "unavailable" {
         result["cause"] = json!(
             current["cause"]

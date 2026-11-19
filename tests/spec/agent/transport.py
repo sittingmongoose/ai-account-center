@@ -170,7 +170,7 @@ rows = [{'h':'2026-01-01 00:00','m':'fixture-model','i':3,'o':0,'cr':0,'cw':0,
          'n':1,'uncosted':0,'cents':2}, {'h':'bad'}]
 print(json.dumps({'state':'read','readAt':bounds['untilMs'],'account':'fixture',
                   'key':{'last4':'long-ab12','fingerprint':'fixture'},'rows':rows,
-                  'events':1,'unmeasured':2}))
+                  'events':1,'unmeasured':2,'eventCounts':{'pages':1,'fetched':7,'kept':1,'droppedOutOfWindow':2,'droppedNoTokenUsage':1,'droppedDuplicate':1}}))
 """
     binary.write_text(source.replace("ROOT", repr(str(root))))
     binary.chmod(0o700)
@@ -237,6 +237,7 @@ def cursor_gates(agent, service):
         assert first['state'] == 'read' and first['readAt'] == '2026-01-01T01:00:00.000Z'
         assert first['key']['last4'] == 'ab12' and len(first['rows']) == 1
         assert first['events'] == 1 and first['unmeasured'] == 2
+        assert first['eventCounts'] == {'pages':1,'fetched':7,'kept':1,'droppedOutOfWindow':2,'droppedNoTokenUsage':1,'droppedDuplicate':1}
         assert fixture.ask(route, payload, method='PUT') == (200, raw)
         assert trace.read_text().splitlines() == [json.dumps({'sinceMs':since,'untilMs':until})]
         (fixture.root / 'cursor-failure').touch()
@@ -244,7 +245,7 @@ def cursor_gates(agent, service):
         failed = json.loads(raw)
         assert status == 200 and failed['state'] == 'unavailable'
         assert failed['cause'] == 'fixture_failure'
-        for name in ('rows', 'readAt', 'account', 'events', 'unmeasured', 'key'):
+        for name in ('rows', 'readAt', 'account', 'events', 'unmeasured', 'eventCounts', 'key'):
             assert failed[name] == first[name]
         saved = fixture.root / 'cache/cursor-account-v1.json'
         assert json.loads(saved.read_text()) == failed
