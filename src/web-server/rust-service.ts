@@ -45,6 +45,10 @@ function routeRoles(route: string): readonly string[] {
 const now = () => performance.now();
 
 export class RustService extends RustSupervisor {
+  get writerRoutesEnabled(): boolean {
+    return this.writesOn;
+  }
+
   private readonly appUpdatesOn =
     this.mode === 'on' && process.platform !== 'win32' && rustGroupOn('app-updates');
 
@@ -831,6 +835,12 @@ export async function readOwnedValueWithRust(
   return service instanceof RustService
     ? service.ownedValue(req, route, root, accept, legacy)
     : legacy();
+}
+
+/** Whether this guarded route can select its native write adapter. */
+export function rustWritesEnabled(res: Response): boolean {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService && service.writerRoutesEnabled;
 }
 
 /** The front door may resume the existing writer only after claiming its registry leases. */

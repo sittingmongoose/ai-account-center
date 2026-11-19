@@ -313,19 +313,26 @@ function isCleanupResult(
  */
 export async function cleanupHistorySnapshots(
   profile: ClaudeDesktopProfile,
-  platform: 'mac' | 'windows'
+  platform: 'mac' | 'windows',
+  preferRustWrite = false
 ): Promise<HistorySnapshotCleanup> {
   const id = profile.id;
   const launcher = profile[platform];
   const policy = await loadClaudeHistoryPolicy(profile);
   if (!id || !launcher || !policy) throw new ValidationError('helper_unavailable');
-  const data = await runClaudeHistoryHelper(launcher, platform, id, {
-    mode: 'snapshot-cleanup',
-    profileId: id,
+  const data = await runClaudeHistoryHelper(
+    launcher,
     platform,
-    policy,
-    expectedEmail: profile.email,
-  });
+    id,
+    {
+      mode: 'snapshot-cleanup',
+      profileId: id,
+      platform,
+      policy,
+      expectedEmail: profile.email,
+    },
+    preferRustWrite
+  );
   if (data.length > MAX_HELPER_BYTES) throw new ValidationError('helper_unavailable');
   const response: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
   if (!isCleanupResult(response)) throw new ValidationError('helper_unavailable');
@@ -347,7 +354,8 @@ export interface HistorySnapshotCleanupAll {
 }
 
 export async function cleanupAllHistorySnapshots(
-  list: () => Promise<ClaudeDesktopProfile[]> = listProfiles
+  list: () => Promise<ClaudeDesktopProfile[]> = listProfiles,
+  preferRustWrite = false
 ): Promise<HistorySnapshotCleanupAll> {
   const total: HistorySnapshotCleanupAll = {
     profiles: 0,
@@ -365,7 +373,7 @@ export async function cleanupAllHistorySnapshots(
       if (!profile[platform]) continue;
       total.targets += 1;
       try {
-        const cleanup = await cleanupHistorySnapshots(profile, platform);
+        const cleanup = await cleanupHistorySnapshots(profile, platform, preferRustWrite);
         total.kept += cleanup.kept;
         total.deleted += cleanup.deleted;
         total.skipped += cleanup.skipped;

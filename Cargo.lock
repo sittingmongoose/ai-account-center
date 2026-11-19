@@ -74,6 +74,7 @@ dependencies = [
  "aac-core",
  "fs2",
  "libc",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

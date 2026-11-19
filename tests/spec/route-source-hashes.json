@@ -19,7 +19,7 @@
   "src/web-server/routes/auth-session-routes.ts": "9087f7b4312dcf028faa52d4e278b33e469b7a82161bc1d95e7c34d60d01d71e",
   "src/web-server/routes/bar-routes.ts": "bdc16629846cc448521898aaac9ab7ff077899984873daadc4d94ab9dcb0fd5d",
   "src/web-server/routes/caller-key.ts": "f321ab6e548bacadc6310f85b6e122aee3de4c8cefed37e67ee17dc2352a0ddb",
-  "src/web-server/routes/claude-desktop-routes.ts": "55f976c7d5278947a6f8dcddede94050203f90e701805ccbbd5a25570631f179",
+  "src/web-server/routes/claude-desktop-routes.ts": "639dbad68ba48b227e1c26c1002b1ccd097efcbc9179e249af4458fb9a62a614",
   "src/web-server/routes/codex-routes.ts": "c49b0a4a3cbd76165423140a9abfda25876ead87b7884c5cdae8791934c9b4de",
   "src/web-server/routes/home-view-routes.ts": "72c6d6a020d089ae71c041990de6d3a71a02ff73ba4619585ac2a8e1c37eefa9",
   "src/web-server/routes/index.ts": "0e5af7ae2b8922270575f49135248e3987e428f79b303bbc1fc1361de84d16e0",
@@ -33,7 +33,7 @@
   "src/web-server/rust-service-lifecycle.ts": "d60cc409499852a0047f7a88eb0a53e96f1d637405ebecf2215b2540b467ebae",
   "src/web-server/rust-service-routes.json": "eee90456b6d8f6ab35fb2b859363524be7c4bfc7730c09262cf000704f82a03d",
   "src/web-server/rust-service-supervisor.ts": "8d1ecfb9f89340bd6c13f11963d61b2ed925ac21c415d5ad867ed4178c046193",
-  "src/web-server/rust-service-transport.ts": "857dfccfcdf63dbfa67996310bd9f1f9730c687592deb9be3acefd60f33d93f0",
-  "src/web-server/rust-service.ts": "5cbbcc933e4e83b32b0be9927c7aca08b296b02b23ec96054126ea1b0ab8f76a",
+  "src/web-server/rust-service-transport.ts": "9ade6a8ab7a012ff1adbeb3a097060a695cbaa5e7d198510802f407d95e0afa3",
+  "src/web-server/rust-service.ts": "e0f632bd2af2fbcee2de054a5552843a51d8583a9a746e6614899131ee25fbb2",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
 }

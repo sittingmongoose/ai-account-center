@@ -10,6 +10,8 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+pub mod history_snapshots;
 pub mod path;
 pub mod read;
 pub mod registry;

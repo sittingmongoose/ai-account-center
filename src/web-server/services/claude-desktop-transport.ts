@@ -295,7 +295,8 @@ export async function runClaudeHistoryHelper(
   launcher: ClaudeDesktopLauncher,
   platform: 'mac' | 'windows',
   profileId: string,
-  request: Record<string, unknown>
+  request: Record<string, unknown>,
+  preferRustWrite = false
 ): Promise<Buffer> {
   if (
     !CLAUDE_PROFILE_ID_PATTERN.test(profileId) ||
@@ -336,9 +337,13 @@ export async function runClaudeHistoryHelper(
   );
   if (input.length > MAX_PRIVATE_INDEX_BYTES)
     throw new ValidationError('Claude history helper is unavailable.');
+  const cleanup = request.mode === 'snapshot-cleanup';
   return collectAgentWithFallback(
     'claude-history',
-    () => runHistoryAgent({ platform, sshHost: checkHost(launcher.sshHost) }, request),
+    () =>
+      cleanup && !preferRustWrite
+        ? Promise.resolve(null)
+        : runHistoryAgent({ platform, sshHost: checkHost(launcher.sshHost) }, request),
     async () => {
       // A short fixed bootstrap keeps Windows command-line length bounded. Only
       // this process's trusted packaged sources are executed; private data and
@@ -359,6 +364,7 @@ export async function runClaudeHistoryHelper(
         command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
       }
       return runDesktopSsh(checkHost(launcher.sshHost), command, input);
-    }
+    },
+    cleanup
   );
 }
