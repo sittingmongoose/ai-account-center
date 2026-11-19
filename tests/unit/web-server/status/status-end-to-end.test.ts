@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
+import { createHash } from 'crypto';
 import { Database } from 'bun:sqlite';
 import express from 'express';
 import type { Server } from 'http';
@@ -11,6 +12,11 @@ import { AgentReportsReader } from '../../../../src/web-server/status/agent-repo
 import { PinnedThreadsCollector } from '../../../../src/web-server/status/pinned-threads';
 import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
+import {
+  loadOrCreateAnswerKey,
+  signAnswer,
+} from '../../../../src/web-server/status/answer-signing';
+import { ANSWER_SCHEMA } from '../../../../src/web-server/status/report-schema';
 import { ReadersCheckWriter } from '../../../../src/web-server/status/readers-check';
 import { PINNED_THREADS_QUERY } from '../../../../src/web-server/status/status-collectors';
 import { StatusService } from '../../../../src/web-server/status/status-service';
@@ -104,6 +110,135 @@ function fixturePinDb(
     cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }
+
+withModule(
+  'keeps a verified answer and its pin closed after restart when the notes listing stalls',
+  async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-status-slow-notes-'));
+    const reports = path.join(home, 'agent-reports');
+    const store = path.join(home, '.ccs', 'status');
+    const answerDir = path.join(reports, 'v1', 'answers');
+    const now = Date.parse('2026-11-18T18:51:00Z');
+    const db = fixturePinDb();
+    const exact = process.env.AAC_SR1_FIXTURE;
+    try {
+      const bytes = exact
+        ? fs.readFileSync(path.join(exact, 'card.json'))
+        : Buffer.from(JSON.stringify(cardDoc('vm.lead', 'SR1', { seq: 2308 })));
+      const card = JSON.parse(bytes.toString()) as ReturnType<typeof cardDoc>;
+      const cardFile = path.join(reports, 'v1', 'writers', card.writer, 'cards', card.id + '.json');
+      fs.mkdirSync(path.dirname(cardFile), { recursive: true });
+      fs.writeFileSync(cardFile, bytes);
+      fs.mkdirSync(answerDir);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      const original = exact
+        ? JSON.parse(fs.readFileSync(path.join(exact, 'answer.json'), 'utf8'))
+        : signAnswer(
+            {
+              schema: ANSWER_SCHEMA,
+              cardId: card.id,
+              cardSeq: card.seq,
+              cardSha256: sha256,
+              kind: 'answer',
+              choice: ['A'],
+              note: '',
+              via: 'deck',
+              answeredAt: '2026-11-18T18:50:41.881Z',
+              answeredBy: 'owner',
+              device: 'iPhone',
+            },
+            loadOrCreateAnswerKey(store)
+          );
+      expect(original.cardSha256).toBe(sha256);
+      const answerFile = path.join(answerDir, card.id + '.json');
+      if (exact) fs.copyFileSync(path.join(exact, 'answer.json'), answerFile);
+      else fs.writeFileSync(answerFile, JSON.stringify(original));
+      writeReport(
+        reports,
+        card.writer,
+        'thread.json',
+        threadDoc(card.writer, {
+          writtenAt: new Date(now).toISOString(),
+          agent: { t3Thread: PIN_ID },
+          blockedOn: { kind: 'owner', what: 'Card SR1: pick the design' },
+        })
+      );
+
+      async function createService() {
+        const reader = new AgentReportsReader({ root: () => reports, now: () => now });
+        const pinned = new PinnedThreadsCollector({
+          file: PREBUILT,
+          dbPath: db.file,
+          readRemote: async () => '[]',
+          reportsRoot: () => reports,
+          now: () => now,
+          timeZone: () => 'UTC',
+        });
+        await pinned.collect();
+        return new StatusService({
+          reader,
+          pinned,
+          answers: new StatusAnswers({
+            storeDir: () => store,
+            reportsRoot: () => reports,
+            readCard: (id) => reader.readCardNow(id),
+            ...(exact
+              ? { readPublicKey: () => fs.readFileSync(path.join(exact, 'answer.pub'), 'utf8') }
+              : {}),
+            timing: { readMs: 250 },
+          }),
+          historyStore: () => null,
+          spendNative: null,
+          now: () => now,
+          timeZone: () => 'UTC',
+          run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+          readLocalMachine: async () => {
+            throw new Error('fixture only');
+          },
+          readRemoteMachine: async () => {
+            throw new Error('fixture only');
+          },
+        });
+      }
+
+      const warm = await createService();
+      await warm.scanReports();
+      const cold = await createService();
+      const pending = Promise.withResolvers<string[]>();
+      const readdir = fs.promises.readdir;
+      let listings = 0;
+      const stall = spyOn(fs.promises, 'readdir').mockImplementation(((file, ...opts) => {
+        if (file !== answerDir) return Reflect.apply(readdir, fs.promises, [file, ...opts]);
+        listings += 1;
+        return pending.promise;
+      }) as typeof readdir);
+      try {
+        await warm.scanReports();
+        await cold.scanReports();
+        expect(listings).toBe(2);
+        for (const owner of [warm, cold]) {
+          const view = owner.view();
+          expect([
+            view.headline.counts.questions,
+            view.cards.answered?.length,
+            view.headline.counts.waitingPinned,
+          ]).toEqual([0, 1, 0]);
+          expect(view.cards.answered).toMatchObject([
+            { answer: { choice: ['A'], answeredAt: original.answeredAt } },
+          ]);
+          expect(view.pinned).toMatchObject({ counts: { pinned: 1, waitingOnYou: 0 } });
+        }
+      } finally {
+        stall.mockRestore();
+        pending.resolve([]);
+        await Promise.all([warm.collect(), cold.collect()]);
+      }
+    } finally {
+      db.cleanup();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+);
 
 describe('the status endpoint from real files', () => {
   withModule('reads report files and pins through the real readers and composer', async () => {

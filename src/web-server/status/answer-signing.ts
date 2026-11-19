@@ -114,6 +114,13 @@ function readKey(file: string): KeyObject | null | undefined {
   }
 }
 
+/** The local signing identity for a read-only check. A reader never creates or repairs the key. */
+export function readAnswerPublicKey(dir: string): string | null {
+  const key = readKey(path.join(dir, 'answer-key.pem'));
+  if (key?.asymmetricKeyType !== 'ed25519') return null;
+  return createPublicKey(key).export({ type: 'spki', format: 'pem' }).toString();
+}
+
 /**
  * Creates the key file without ever showing another process half a key: the key is written whole to a private temp
  * file, synced, then linked into place. If another process got there first, its key is the one used. Where hard

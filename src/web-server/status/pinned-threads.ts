@@ -22,7 +22,12 @@ import {
 import type { NativeStatusHandle } from '../../status-native/native-loader';
 import type { AnswerHistoryEntry } from './answers';
 import type { AgentReportsState } from './agent-reports-reader';
-import { CLOSING_KINDS } from './answer-entries';
+import {
+  activeBlocker,
+  resolvedCardWaits,
+  cardRowVersion,
+  closingCardVersions,
+} from './answered-cards';
 import type { BlockedOn, MachineId } from './report-schema';
 import type { PinnedPanel, PinnedView } from './status-view-types';
 import { readRemotePins, runCommand, type CommandRunner } from './status-collectors';
@@ -226,15 +231,17 @@ export class PinnedThreadsCollector {
     reports: AgentReportsState,
     answers: readonly AnswerHistoryEntry[],
     docs?: StatusDocsState
-  ): Promise<void> {
+  ): Promise<PinnedPanel> {
     const statuses = docs ?? this.docs.snapshot();
     // Check receipts describe reader acceptance even when pins or native composition are unavailable.
     this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
     this.deps.readersCheck?.flushSoon();
-    if (!this.handle) return;
+    if (!this.handle) return this.view();
     // Before the first collect there are no pins to compose over; the reports scan that runs
     // first must not publish an empty panel.
-    if (!this.collected) return;
+    if (!this.collected) return this.view();
+    const closed = closingCardVersions(answers);
+    const answered = resolvedCardWaits(reports, closed);
     const input = {
       nowMs: this.now(),
       utcOffsetMinutes: zoneOffsetMinutes(this.deps.timeZone?.() ?? 'UTC', this.now()),
@@ -257,7 +264,7 @@ export class PinnedThreadsCollector {
         stream: row.doc.stream,
         state: row.doc.state,
         doing: row.doc.doing,
-        blockedOn: blockedOnIn(row.doc.blockedOn),
+        blockedOn: blockedOnIn(activeBlocker(answered, row.writer, row.doc.blockedOn)),
         progress: row.doc.progress,
         ttlSeconds: row.doc.ttlSeconds,
         problem: row.problem?.reason ?? null,
@@ -283,18 +290,20 @@ export class PinnedThreadsCollector {
             verdict: review.verdict,
           })),
           landed: item.landed ? { atMs: item.landed.at ? Date.parse(item.landed.at) : null } : null,
-          blockedOn: blockedOnIn(item.blockedOn),
+          blockedOn: blockedOnIn(activeBlocker(answered, row.writer, item.blockedOn)),
           updatedAtMs: item.updatedAt ? Date.parse(item.updatedAt) : null,
         })),
       })),
-      openCards: openCardRows(reports, answers).map((row) => ({
-        writer: row.writer,
-        id: row.doc.id,
-        seq: row.doc.seq,
-        title: row.doc.title,
-        kind: row.doc.kind,
-        askedAtMs: Date.parse(row.doc.askedAt),
-      })),
+      openCards: reports.cards
+        .filter((row) => row.doc.state === 'open' && !closed.has(cardRowVersion(row)))
+        .map((row) => ({
+          writer: row.writer,
+          id: row.doc.id,
+          seq: row.doc.seq,
+          title: row.doc.title,
+          kind: row.doc.kind,
+          askedAtMs: Date.parse(row.doc.askedAt),
+        })),
       statuses: statuses.docs.map((row) => ({
         ...reportV2(row.doc),
         writer: row.writer,
@@ -306,7 +315,10 @@ export class PinnedThreadsCollector {
         percent: row.doc.percent,
         done: row.doc.done,
         left: row.doc.left,
-        blockers: row.doc.blockers,
+        blockers: (Array.isArray(row.doc.blockers) ? row.doc.blockers : []).filter(
+          (blocker) =>
+            blocker?.waitingOn !== 'owner' || !answered(row.writer, blocker.card, blocker.text)
+        ),
         looping: row.doc.looping,
         problem: row.problem?.reason ?? null,
         problemSinceMs: row.problem?.since ?? null,
@@ -318,8 +330,10 @@ export class PinnedThreadsCollector {
       })),
     };
     const composed = await composePinned(input, { handle: this.handle });
-    if ('view' in composed) this.composed = composed.view as unknown as PinnedView;
-    // A refused compose keeps the last good view; its own asOfMs shows its age.
+    // The returned panel belongs to these inputs even when composition fails.
+    if ('unavailable' in composed) return composed;
+    this.composed = composed.view as unknown as PinnedView;
+    return this.composed;
   }
 
   /** The merged pins of the last collect, for the pin match the check file reports. */
@@ -371,22 +385,6 @@ export function modelLabelFor(model: string | null): string | null {
 /** `blockedOn` with its `since` parsed once, for the composer's "waiting since" clock words. */
 function blockedOnIn(blocked: BlockedOn | null) {
   return blocked ? { ...blocked, sinceMs: blocked.since ? Date.parse(blocked.since) : null } : null;
-}
-
-/** The open cards (questions the owner has not answered), the same rule as the cards panel. */
-function openCardRows(
-  reports: AgentReportsState,
-  answers: readonly AnswerHistoryEntry[]
-): AgentReportsState['cards'] {
-  const answered = new Set(
-    answers
-      .filter((entry) => CLOSING_KINDS.has(entry.answer.kind))
-      .map((entry) => `${entry.answer.cardId}\n${entry.answer.cardSeq}\n${entry.answer.cardSha256}`)
-  );
-  return reports.cards.filter(
-    (row) =>
-      row.doc.state === 'open' && !answered.has(`${row.doc.id}\n${row.doc.seq}\n${row.sha256}`)
-  );
 }
 
 /** The dashboard time zone's UTC offset in minutes at `at`, for the composer's clock times. */

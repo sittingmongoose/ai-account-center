@@ -2967,12 +2967,15 @@
     "cause": null,
     "sources": [
       "src/web-server/rust-service-health.ts:BreakerState",
+      "src/web-server/status/answered-cards.ts:row.doc.state",
       "src/web-server/status/answers.ts:parsed.doc.state",
+      "src/web-server/status/answers.ts:row.doc.state",
       "src/web-server/status/card-schema.ts:CARD_STATES",
       "src/web-server/status/card-schema.ts:doc.state",
       "src/web-server/status/card-schema.ts:reason",
       "src/web-server/status/card-schema.ts:state",
       "src/web-server/status/pinned-threads.ts:row.doc.state",
+      "src/web-server/status/status-service.ts:row.doc.state",
       "src/web-server/status/status-view.ts:card.doc.state",
       "src/web-server/status/status-view.ts:row.doc.state"
     ]
@@ -3032,6 +3035,13 @@
     "sources": [
       "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
       "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "owner",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/pinned-threads.ts:statuses"
     ]
   },
   {
@@ -3344,6 +3354,13 @@
     "cause": null,
     "sources": [
       "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "published",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/answers.ts:state"
     ]
   },
   {

@@ -144,7 +144,7 @@ impl Inputs<'_> {
                 .get_or_init(|| {
                     let mut found = OwnerCards::default();
                     for c in rows(&self.data["reports"]["cards"]) {
-                        if c["doc"]["state"] == "open"
+                        if cards::is_open(c, rows(&self.data["answers"]))
                             && ["question", "judgement", "action"].contains(&s(&c["doc"]["kind"]))
                         {
                             match c["writer"].as_str() {

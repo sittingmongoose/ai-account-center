@@ -2,6 +2,15 @@ use super::*;
 fn closing(e: &V) -> bool {
     ["answer", "note", "done"].contains(&s(&e["answer"]["kind"]))
 }
+pub(super) fn is_open(row: &V, answers: &[V]) -> bool {
+    let doc = &row["doc"];
+    doc["state"] == "open"
+        && !answers.iter().filter(|e| closing(e)).any(|e| {
+            e["answer"]["cardId"] == doc["id"]
+                && e["answer"]["cardSeq"] == doc["seq"]
+                && e["answer"]["cardSha256"] == row["sha256"]
+        })
+}
 fn delivery(i: &Inputs, entry: &V) -> Option<V> {
     let share = &entry["share"];
     let bell = &entry["doorbell"];
@@ -34,7 +43,9 @@ fn delivery(i: &Inputs, entry: &V) -> Option<V> {
             String::new()
         })
     };
-    let (state, at, detail) = if share["state"] == "skipped" {
+    let (state, at, detail) = if entry["sharedOnly"] == true {
+        ("published", V::Null, json!("The signed answer is on the share."))
+    } else if share["state"] == "skipped" {
         ("failed", share["at"].clone(), share["detail"].clone())
     } else if share["state"] == "failed" {
         let n = share["attempts"].as_u64()?;
@@ -161,13 +172,7 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
     let mut open = Vec::new();
     for row in i.data["reports"]["cards"].as_array()? {
         let doc = &row["doc"];
-        if doc["state"] != "open"
-            || answers.iter().filter(|e| closing(e)).any(|e| {
-                e["answer"]["cardId"] == doc["id"]
-                    && e["answer"]["cardSeq"] == doc["seq"]
-                    && e["answer"]["cardSha256"] == row["sha256"]
-            })
-        {
+        if !is_open(row, answers) {
             continue;
         }
         let notes=answers.iter().filter(|e|!closing(e)&&e["answer"]["cardId"]==doc["id"]).map(|e|Some(json!({"kind":if e["answer"]["kind"]=="object"{"object"}else{"note"},"note":e["answer"]["note"],"at":e["answer"]["answeredAt"],"delivery":delivery(i,e)?}))).collect::<Option<Vec<_>>>()?;
@@ -231,6 +236,59 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
         && !reports["scannedAt"].is_null()
         && number(&i.age(i.at(&reports["scannedAt"]))).unwrap_or(0.0) <= 60.0;
     Some(
-        json!({"source":"agent-reports","open":open,"answerHistoryProblem":i.data["answerHistoryProblem"],"answered":if s(&i.data["answerHistoryProblem"]).is_empty(){json!(history)}else{V::Null},"batches":batches,"complete":complete}),
+        json!({"source":"agent-reports","open":open,"answerHistoryProblem":i.data["answerHistoryProblem"],"answered":if !history.is_empty() || s(&i.data["answerHistoryProblem"]).is_empty(){json!(history)}else{V::Null},"batches":batches,"complete":complete}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn published_answer_closes_only_its_exact_version() {
+        let mut doc = json!({
+            "id": "vm.lead--SR1", "writer": "vm.lead", "seq": 2308, "state": "open",
+            "kind": "question", "urgency": "today"
+        });
+        let asked = json!({"doc": doc, "sha256": "fixture-hash"});
+        let entry = json!({
+            "sharedOnly": true, "card": doc,
+            "answer": {
+                "kind": "answer", "cardId": "vm.lead--SR1", "cardSeq": 2308,
+                "cardSha256": "fixture-hash", "choice": ["A"],
+                "answeredAt": "2026-11-18T18:50:41.881Z"
+            },
+            "share": {"state": "done"}, "doorbell": {"state": "skipped"}
+        });
+        let facts = serde_json::from_value(json!({"dates":{}, "epochs":{}, "order":{}})).unwrap();
+        let mut i = Inputs {
+            data: Data::Whole(json!({
+                "answers": [entry], "reports": {"cards": [asked], "threads": []}
+            })),
+            ctx: Context::new(facts),
+            now: 0,
+            owner_cards: std::cell::OnceCell::new(),
+            trace: RefCell::new(trace::Recorder::default()),
+        };
+        let view = compose(&i).unwrap();
+        assert_eq!(view["open"], json!([]));
+        let answer = &view["answered"][0]["answer"];
+        assert_eq!(answer["choice"], json!(["A"]));
+        assert_eq!(answer["answeredAt"], "2026-11-18T18:50:41.881Z");
+        assert_eq!(answer["delivery"]["state"], "published");
+
+        doc["seq"] = json!(2309);
+        doc["whatChanged"] = json!("New information.");
+        let Data::Whole(ref mut data) = i.data else {
+            unreachable!()
+        };
+        // Either a re-ask or different bytes at the same seq remain open.
+        data["reports"]["cards"][0] = json!({"doc": doc, "sha256": "fixture-hash"});
+        assert_eq!(compose(&i).unwrap()["open"][0]["seq"], 2309);
+        let Data::Whole(ref mut data) = i.data else {
+            unreachable!()
+        };
+        data["reports"]["cards"][0] = json!({"doc": asked["doc"], "sha256": "other-hash"});
+        assert_eq!(compose(&i).unwrap()["open"][0]["seq"], 2308);
+    }
 }
