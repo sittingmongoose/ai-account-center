@@ -35,7 +35,9 @@ export interface ReaderFileRow {
   /** The fixed refusal sentence when refused, never file text; null when accepted. */
   reason: string | null;
   /** Only on thread.json and status.json rows: the pinned thread this report is shown under,
-   * or null when no pinned T3 thread has this id. Omitted for kinds pins do not apply to. */
+   * or null when no pinned T3 thread has this id. Omitted for kinds pins do not apply to, and
+   * while pins have not been read yet (`agent-report check` reads a missing pin as AAC not
+   * saying, never as "no pinned thread has this id"). */
   pin?: { t3Thread: string; title: string } | null;
 }
 
@@ -114,8 +116,16 @@ export class ReadersCheckWriter {
     );
   }
 
-  /** Replaces the status-side rows (thread.json, tasks.json, status.json, cards) from one scan. */
-  recordStatusScan(reports: AgentReportsState, statuses: StatusDocsState, pins: MergedPin[]): void {
+  /**
+   * Replaces the status-side rows (thread.json, tasks.json, status.json, cards) from one scan.
+   * `pins: null` means the pinned threads have not been read yet (before the first pins collect):
+   * the thread and status rows then leave `pin` out entirely rather than saying no pin has the id.
+   */
+  recordStatusScan(
+    reports: AgentReportsState,
+    statuses: StatusDocsState,
+    pins: MergedPin[] | null
+  ): void {
     // Only the pairs put during this call count for the refusal skip (N3): a row from an
     // earlier scan must never hide this scan's refusal.
     const current = new Set<string>();
@@ -137,7 +147,7 @@ export class ReadersCheckWriter {
         readAt: iso(row.firstSeenAt),
         result: row.problem ? 'refused' : 'accepted',
         reason: row.problem?.reason ?? null,
-        pin: matchPin(row.doc.agent.t3Thread, pins),
+        ...(pins ? { pin: matchPin(row.doc.agent.t3Thread, pins) } : {}),
       });
     }
     for (const row of reports.tasks) {
@@ -168,12 +178,13 @@ export class ReadersCheckWriter {
         readAt: iso(row.firstSeenAt),
         result: row.problem ? 'refused' : 'accepted',
         reason: row.problem?.reason ?? null,
-        pin: matchPin(t3ThreadOf(row.doc), pins),
+        ...(pins ? { pin: matchPin(t3ThreadOf(row.doc), pins) } : {}),
       });
     }
     // Files the readers refused with no good copy to keep: the row is the refusal itself.
     // A file whose good copy this scan rowed keeps its seq, sha and pin (F6); a row from
-    // an earlier scan never hides this scan's refusal (N3).
+    // an earlier scan never hides this scan's refusal (N3). Before pins have been read,
+    // even a refusal says nothing about the pin (the `pin` key stays out).
     for (const problem of [...reports.problems, ...statuses.problems]) {
       const [writer, rest] = writerAndFile(problem.file);
       if (!writer || !rest) continue;
@@ -185,7 +196,7 @@ export class ReadersCheckWriter {
         readAt: iso(problem.since),
         result: 'refused',
         reason: problem.reason,
-        ...(rest === 'thread.json' || rest === 'status.json' ? { pin: null } : {}),
+        ...(pins && (rest === 'thread.json' || rest === 'status.json') ? { pin: null } : {}),
       });
     }
   }

@@ -68,18 +68,21 @@ export function unknownOutcomes(runs: readonly RunDoc[]): Map<string, number> {
 /** The reviews that count: `task.type` review, naming a known run, not ending before that run. */
 export interface ReviewIndex {
   of(runId: string): RunDoc[];
-  /** Runs with a review record that do not count: wrong task type, unknown or later target. */
+  /** Runs with a review record that do not count: wrong task type, unknown or later target,
+   * or their own run unscored (no catalog model or task type). */
   ignored: number;
 }
 
 /**
  * Reviews by the run they review. `joinOnly` are review runs outside a filtered view (a later
  * date, another task type) that still review its runs: they join, but are never rows and never
- * counted as ignored.
+ * counted as ignored. `mayReview` says which runs' reviews count at all: one whose own run is
+ * unscored (sb-R3) reviews nothing, so its verdict moves no blind-review measure.
  */
 export function buildReviewIndex(
   runs: readonly RunDoc[],
-  joinOnly: readonly RunDoc[] = []
+  joinOnly: readonly RunDoc[] = [],
+  mayReview: (run: RunDoc) => boolean = () => true
 ): ReviewIndex {
   const known = new Map(runs.map((run) => [run.id, run]));
   const byTarget = new Map<string, RunDoc[]>();
@@ -89,6 +92,7 @@ export function buildReviewIndex(
     if (!run.review) continue;
     const target = known.get(run.review.of);
     if (
+      !mayReview(run) ||
       run.task.type !== 'review' ||
       !target ||
       target.id === run.id ||

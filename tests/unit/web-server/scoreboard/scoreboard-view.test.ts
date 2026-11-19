@@ -15,6 +15,7 @@ import {
   type ScoreboardView,
 } from '../../../../src/web-server/scoreboard/scoreboard-view';
 import { ScoreboardService } from '../../../../src/web-server/scoreboard/scoreboard-service';
+import { seedCatalog } from '../../../../src/web-server/scoreboard/catalog';
 import { nodeReaderFs } from '../../../../src/web-server/status/agent-reports-reader';
 import { run as projectRun } from '../../../../src/web-server/status/run-schema';
 import { NOW, tempDirs } from '../status/status-test-helpers';
@@ -74,7 +75,9 @@ describe('the fixture view', () => {
     expect(runs.detail).toContain('vm.scoreboard-lead--damaged.json');
     expect(runs.detail).toContain('contains NUL bytes');
     expect(runs.detail).toContain('1 run with no model or task type not scored');
-    expect(runs.detail).toContain('1 review ignored: not a review run, or no earlier known run');
+    expect(runs.detail).toContain(
+      '1 review ignored: not a review run, no earlier known run, or its own run not scored'
+    );
     expect(catalog.id).toBe('scoreboard-catalog');
     expect(catalog.state).toBe('ok');
     // audit-read is in the catalog now (building and PM-user views), so nothing is left unscored by task type.
@@ -522,6 +525,97 @@ describe('what is not scored', () => {
         view.unscored.scanLimit
     );
     expect(view.sources[0].detail).toContain('past the limit');
+  });
+
+  // sb-R3: a review whose own run is unscored (a model the catalog does not list) still counted
+  // toward the blind-review measures of the runs it reviewed.
+  it('reviews written by unscored runs count toward no blind-review measure', async () => {
+    const root = dirs.make('scoreboard-unscored-reviews-');
+    fs.mkdirSync(path.join(root, 'v1/catalog'), { recursive: true });
+    await seedCatalog(root);
+    const build = (local: string) =>
+      writeRun(
+        root,
+        runDoc('vm.lead', local, {
+          endedAt: '2026-11-06T16:00:00Z',
+          task: { id: local, type: 'build', title: local, size: { tasks: 1 } },
+        })
+      );
+    for (const local of ['A', 'B', 'C']) build(local);
+    const UNSCORED_MODEL = { provider: 'mystery', id: 'mystery-9', harness: null, effort: null };
+    const review = (
+      local: string,
+      of: string,
+      at: string,
+      fields: { model?: unknown; verdict: string; overturned?: boolean }
+    ) =>
+      writeRun(
+        root,
+        runDoc('mac.reviews', local, {
+          endedAt: at,
+          task: { id: local, type: 'review', title: `Review ${local}`, size: null },
+          ...(fields.model ? { model: fields.model } : {}),
+          review: {
+            of: `vm.lead--${of}`,
+            verdict: fields.verdict,
+            findings: { high: 0, medium: 0, low: 0 },
+            overturned: fields.overturned ?? false,
+            disputed: false,
+            by: null,
+          },
+        })
+      );
+    review('R1', 'A', '2026-11-06T17:00:00Z', { verdict: 'fail', overturned: true });
+    // A later pass from an unscored reviewer: before the fix it rescued item A.
+    review('R2', 'A', '2026-11-06T18:00:00Z', {
+      model: UNSCORED_MODEL,
+      verdict: 'pass',
+    });
+    review('R3', 'B', '2026-11-06T17:00:00Z', { verdict: 'pass' });
+    review('R5', 'C', '2026-11-06T17:00:00Z', { verdict: 'pass' });
+    // An unscored reviewer's fail with an overturn: before the fix it failed item C.
+    review('R6', 'C', '2026-11-06T18:00:00Z', {
+      model: UNSCORED_MODEL,
+      verdict: 'fail',
+      overturned: true,
+    });
+    // An unscored reviewer joining from outside a filtered view (the store path) is skipped too.
+    const joinReview = projectRun(
+      runDoc('nas1.reviews', 'J1', {
+        endedAt: '2026-11-06T19:00:00Z',
+        task: { id: 'J1', type: 'review', title: 'Review J1', size: null },
+        model: UNSCORED_MODEL,
+        review: {
+          of: 'vm.lead--B',
+          verdict: 'fail',
+          findings: { high: 0, medium: 0, low: 0 },
+          overturned: true,
+          disputed: false,
+          by: null,
+        },
+      }) as unknown as Record<string, unknown>,
+      'nas1.reviews'
+    );
+    const options = { root: () => root, now: () => NOW };
+    const runs = new RunsReader(options);
+    const catalog = new CatalogReader(options);
+    await Promise.all([runs.scan(), catalog.scan()]);
+    const view = buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root,
+      runs: runs.snapshot(),
+      catalog: catalog.snapshot(),
+      joinReviews: [joinReview],
+    });
+    const opus = rows(view, 'building', 'build').find((r) => r.model.includes('opus'))?.observed;
+    // A stays failed (R1), B and C stay passed: the unscored reviews moved nothing.
+    expect(opus?.measures.quality).toMatchObject({ of: 2, per: 3 });
+    expect(opus?.measures.quality).toMatchObject({ firstTry: 2 });
+    // Only A is overturned (R1); C's overturn came from an unscored run and never counted.
+    expect(opus?.measures.overclaim).toMatchObject({ value: 0.3333, of: 1, per: 3 });
+    // The two in-view unscored reviews are named as ignored, like any review that counts nowhere.
+    expect(view.sources[0].detail).toContain('2 reviews ignored');
   });
 });
 

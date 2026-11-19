@@ -9,9 +9,40 @@ pub struct Index {
     by_target: HashMap<String, Vec<V>>,
     pub ignored: usize,
 }
+/// A run's canonical model id: the id alone when it already names its provider or has none.
+pub fn model(run: &V) -> V {
+    let id = s(&run["model"]["id"]);
+    let p = s(&run["model"]["provider"]);
+    if id.is_empty() {
+        V::Null
+    } else {
+        json!(if p.is_empty() || id.starts_with(&format!("{p}/")) {
+            id.to_owned()
+        } else {
+            format!("{p}/{id}")
+        })
+    }
+}
 impl Index {
-    pub fn new(docs: &[V], join: &[V], ctx: &Context) -> Option<Self> {
+    /// Reviews by the run they review. `join` are review runs outside a filtered view that still
+    /// review its runs: they join, but are never rows and never counted as ignored. A review
+    /// counts only when its own run is scored (sb-R3) — a catalog model and task type, the same
+    /// row rules — so an unscored run's verdict moves no blind-review measure.
+    pub fn new(
+        docs: &[V],
+        join: &[V],
+        known_models: &HashSet<&str>,
+        known_types: &HashSet<&str>,
+        ctx: &Context,
+    ) -> Option<Self> {
         let known: HashMap<_, _> = docs.iter().map(|d| (s(&d["id"]), d)).collect();
+        let scored = |run: &V| {
+            let kind = s(&run["task"]["type"]);
+            !run["model"]["id"].is_null()
+                && !kind.is_empty()
+                && known_types.contains(kind)
+                && known_models.contains(&s(&model(run)))
+        };
         let mut by_target: HashMap<String, Vec<V>> = HashMap::new();
         let mut ignored = 0;
         for run in docs
@@ -23,7 +54,8 @@ impl Index {
             }
             let target = known.get(s(&run["review"]["of"]));
             let valid = if let Some(target) = target {
-                run["task"]["type"] == "review"
+                scored(run)
+                    && run["task"]["type"] == "review"
                     && target["id"] != run["id"]
                     && ctx.epoch(&run["endedAt"])? >= ctx.epoch(&target["endedAt"])?
             } else {

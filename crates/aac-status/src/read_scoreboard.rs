@@ -2,7 +2,7 @@
 //! the existing accepted reader state; no share scan, store write or provider refresh occurs.
 use crate::{
     read_context::{Context, Envelope, age, array, js_whitespace, number, plural, s},
-    read_measures::{Index, decisive, measures, outcome},
+    read_measures::{Index, decisive, measures, model, outcome},
 };
 use aac_num::view;
 use serde_json::{Value as V, json};
@@ -20,19 +20,6 @@ fn newest(a: &V, b: &V, ctx: &Context) -> std::cmp::Ordering {
     ctx.epoch(&b["endedAt"])
         .cmp(&ctx.epoch(&a["endedAt"]))
         .then_with(|| ctx.compare(s(&a["id"]), s(&b["id"])))
-}
-fn model(run: &V) -> V {
-    let id = s(&run["model"]["id"]);
-    let p = s(&run["model"]["provider"]);
-    if id.is_empty() {
-        V::Null
-    } else {
-        json!(if p.is_empty() || id.starts_with(&format!("{p}/")) {
-            id.to_owned()
-        } else {
-            format!("{p}/{id}")
-        })
-    }
 }
 fn summary(run: &V, models: &[V]) -> V {
     let id = model(run);
@@ -556,7 +543,7 @@ fn runs_source_of(input: &V, docs: &[V], unscored: usize, index: &Index, now: i6
     }
     if index.ignored > 0 {
         parts.push(format!(
-            "{} ignored: not a review run, or no earlier known run.",
+            "{} ignored: not a review run, no earlier known run, or its own run not scored.",
             plural(index.ignored, "review")
         ));
     }
@@ -833,7 +820,7 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     unknown_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| ctx.compare(&a.0, &b.0)));
     examples.sort_by(|a, b| newest(a, b, &ctx));
     let unscored = json!({"total":scan_limit+unreadable+no_model+no_type+unknown_model+unknown_type,"scanLimit":scan_limit,"unreadable":unreadable,"noModel":no_model,"noTaskType":no_type,"unknownModel":unknown_model,"unknownTaskType":unknown_type,"unknownModels":unknown_counts.iter().take(20).map(|(id,n)|json!({"id":id,"runs":n})).collect::<Vec<_>>(),"examples":examples.into_iter().take(10).collect::<Vec<_>>()});
-    let index = Index::new(docs, &array(&input["joinReviews"]), &ctx)?;
+    let index = Index::new(docs, &array(&input["joinReviews"]), &known_models, &known_types, &ctx)?;
     let mut bases = HashMap::new();
     for task in types {
         bases.insert(

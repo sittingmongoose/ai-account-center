@@ -48,6 +48,11 @@ import {
 } from './analytics-remote-transport';
 import { readAnalyticsCaptureSettings } from './analytics-capture-settings';
 import {
+  loadClaudeMirrorOwners,
+  mirrorOwnersFile,
+  saveClaudeMirrorOwners,
+} from './analytics-remote-mirror-owners';
+import {
   MAX_REMOTE_CACHE_BYTES,
   fitRemoteCache,
   parseRemoteCacheDiscard,
@@ -1273,40 +1278,45 @@ function cachedHostSources(
   return { results, states };
 }
 
-type HostRows = Pick<RemoteCache, 'rows' | 'srows' | 'fingerprints'>;
+/**
+ * One host's rows for mirror selection. `lastScanAt` says whether the part is a confirmed read
+ * (a cache file that exists, or a fresh scan): a blank cache from a missing file keeps it null,
+ * so a saved mirror owner whose host is merely unread is never treated as having given it up.
+ */
+type HostRows = Pick<RemoteCache, 'rows' | 'srows' | 'fingerprints' | 'lastScanAt'>;
 
-/** Local workers may finish after the remote scan; re-elect before publishing. */
+/** Local workers may finish after the remote scan; re-select before publishing. */
 function mirrorReconciler(
   parts: Map<AnalyticsScanHost, HostRows>,
   results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>,
   states: AnalyticsRemoteSourceState[],
-  inventory: () => ClaudeLogNames
+  inventory: () => ClaudeLogNames,
+  owners: ReadonlyMap<string, AnalyticsScanHost>
 ): () => void {
   const baseline = states.map((state) => ({ ...state }));
   return () => {
     states.splice(0, states.length, ...baseline.map((state) => ({ ...state })));
-    selectClaudeMirrors(parts, results, states, inventory());
+    selectClaudeMirrors(parts, results, states, inventory(), owners);
     states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
   };
 }
 
 /**
- * Caches always retain RAW mirror rows. Select only after every host has settled,
- * including cache fallbacks, so scan order cannot change totals. Hashing basenames
- * matches session and agent logs without exporting private paths. Re-selecting on
- * every read (including cache-only reads) makes a pruned original's mirror count
- * immediately, even when the helper's mirror fingerprint has not changed.
+ * Elects one owner per orphan Claude mirror, fixed host order among the hosts that hold it.
+ * A saved owner (the owners file beside the caches) survives while its host is unread — a cache
+ * file that is missing (or was discarded) leaves the mirror counted nowhere rather than moving
+ * it to the next host, whose hours would double with the owner's once it returns (history-L5).
+ * A saved owner whose host confirmed a read without the mirror gave it up (pruned there), so the
+ * fixed order re-elects; a name no host holds anymore is dropped. The table is saved best-effort.
  */
-function selectClaudeMirrors(
-  parts: Map<AnalyticsScanHost, HostRows>,
-  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>,
-  states: AnalyticsRemoteSourceState[],
-  local: ClaudeLogNames
-): void {
-  const originals = new Set(local.originals);
-  for (const part of parts.values())
-    for (const print of Object.values(part.fingerprints.claude ?? {}))
-      if (print.claudeName && print.claudeMirror === false) originals.add(print.claudeName);
+function electClaudeMirrorOwners(
+  cacheDir: string,
+  parts: Map<AnalyticsScanHost, HostRows>
+): Map<string, AnalyticsScanHost> {
+  const holdsMirror = (part: HostRows, name: string): boolean =>
+    part.rows.some(
+      (row) => row.k === 'claude' && part.fingerprints.claude?.[row.f]?.claudeName === name
+    );
   const owners = new Map<string, AnalyticsScanHost>();
   // Fixed host order elects one orphan mirror; network completion order never wins.
   for (const host of REMOTE_ANALYTICS_HOSTS) {
@@ -1318,6 +1328,41 @@ function selectClaudeMirrors(
         owners.set(print.claudeName, host);
     }
   }
+  const file = mirrorOwnersFile(cacheDir);
+  const saved = loadClaudeMirrorOwners(file);
+  for (const [name, host] of saved) {
+    // Gone from every host: the mirror is history, and a returning copy elects fresh.
+    if (![...parts.values()].some((part) => holdsMirror(part, name))) continue;
+    // The owner confirmed a read without the mirror: pruned there, so the next holder wins.
+    const part = parts.get(host);
+    if (part?.lastScanAt && !holdsMirror(part, name)) continue;
+    owners.set(name, host);
+  }
+  const same =
+    saved.size === owners.size && [...saved].every(([name, host]) => owners.get(name) === host);
+  if (!same) saveClaudeMirrorOwners(file, owners);
+  return owners;
+}
+
+/**
+ * Caches always retain RAW mirror rows. Select only after every host has settled,
+ * including cache fallbacks, so scan order cannot change totals. Hashing basenames
+ * matches session and agent logs without exporting private paths. Re-selecting on
+ * every read (including cache-only reads) makes a pruned original's mirror count
+ * immediately, even when the helper's mirror fingerprint has not changed. `owners`
+ * is the election above: fixed-order, saved owners kept through a missing cache file.
+ */
+function selectClaudeMirrors(
+  parts: Map<AnalyticsScanHost, HostRows>,
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>,
+  states: AnalyticsRemoteSourceState[],
+  local: ClaudeLogNames,
+  owners: ReadonlyMap<string, AnalyticsScanHost>
+): void {
+  const originals = new Set(local.originals);
+  for (const part of parts.values())
+    for (const print of Object.values(part.fingerprints.claude ?? {}))
+      if (print.claudeName && print.claudeMirror === false) originals.add(print.claudeName);
   for (let index = results.length - 1; index >= 0; index--)
     if (results[index].tool === 'claude') results.splice(index, 1);
   for (const [host, part] of parts) {
@@ -1415,11 +1460,13 @@ export function loadAnalyticsRemoteCachedSources(
     states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
   }
   states.splice(0, states.length, ...coalesceSourceStates(states));
+  const owners = electClaudeMirrorOwners(cacheDir, parts);
   const reconcileClaudeMirrors = mirrorReconciler(
     parts,
     results,
     states,
-    () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
+    () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs),
+    owners
   );
   reconcileClaudeMirrors();
   return {
@@ -1987,7 +2034,14 @@ export async function loadAnalyticsRemoteSources(
           }
         }
         await yieldTurn();
-        parts.set(host, { rows: merged, srows: mergedSessions, fingerprints: prints });
+        parts.set(host, {
+          rows: merged,
+          srows: mergedSessions,
+          fingerprints: prints,
+          // A fresh scan is a confirmed read, so a saved mirror owner that lost its mirror
+          // here is treated as pruned (the election may hand it to the next holder).
+          lastScanAt: scannedAt,
+        });
         // Identity evidence of the sessions still kept, newest answer first, bounded like the rows.
         const keptKeys = new Set(mergedSessions.map((row) => row.s));
         const sessions: Record<string, AnalyticsSessionEvidence> = {};
@@ -2318,11 +2372,13 @@ export async function loadAnalyticsRemoteSources(
     else catchingUp[tool] = catchUpText(entry);
   }
   states.splice(0, states.length, ...coalesceSourceStates(states));
+  const owners = electClaudeMirrorOwners(cacheDir, parts);
   const reconcileClaudeMirrors = mirrorReconciler(
     parts,
     results,
     states,
-    () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
+    () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs),
+    owners
   );
   reconcileClaudeMirrors();
   return {

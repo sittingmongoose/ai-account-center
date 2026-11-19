@@ -86,7 +86,8 @@ export class PinnedThreadsCollector {
   private merged: MergedPin[] = [];
   private problems: PinsNote[] = [];
   private composed: PinnedView | null = null;
-  /** False until the first collect lands, so no update is composed over an empty pin list. */
+  /** False until the first collect lands (the merge included), so no update is composed over an
+   * empty pin list and no receipt says "no pinned thread" while pins are still unread. */
   private collected = false;
   readonly docs: StatusDocsReader;
 
@@ -126,7 +127,6 @@ export class PinnedThreadsCollector {
   /** Every machine's pins, re-read: the VM from its database, the others over ssh. */
   async collect(): Promise<void> {
     if (!this.handle) return;
-    this.collected = true;
     const now = this.now();
     await Promise.all(
       PINS_MACHINES.map(async (machine) => {
@@ -166,6 +166,8 @@ export class PinnedThreadsCollector {
         ? [{ machine, code: 'truncated' as const, notShown: state.notShown }]
         : [];
     });
+    // Only a collect that landed counts: one still in flight has merged nothing yet.
+    this.collected = true;
   }
 
   /** One machine's good rows (with its not-shown remainder), or its failure code. */
@@ -232,8 +234,15 @@ export class PinnedThreadsCollector {
     docs?: StatusDocsState
   ): Promise<PinnedPanel> {
     const statuses = docs ?? this.docs.snapshot();
-    // Check receipts describe reader acceptance even when pins or native composition are unavailable.
-    this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
+    // Check receipts describe reader acceptance even when pins or native composition are
+    // unavailable. Before the first collect lands there are no pins to match, so the receipts
+    // leave `pin` out (agent-report reads that as AAC not saying) instead of telling every
+    // writer "no pinned T3 thread has this id".
+    this.deps.readersCheck?.recordStatusScan(
+      reports,
+      statuses,
+      this.collected ? this.merged : null
+    );
     this.deps.readersCheck?.flushSoon();
     if (!this.handle) return this.view();
     // Before the first collect there are no pins to compose over; the reports scan that runs
