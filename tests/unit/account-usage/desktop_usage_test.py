@@ -949,28 +949,125 @@ class AntigravityServiceTests(unittest.TestCase):
         self.assertEqual(by["gemini-5h"]["label"], "Gemini Models · 5-hour · In the Antigravity app")
         self.assertEqual(result["plan"], "Google AI Pro")
 
-    def test_one_service_failing_leaves_it_out_and_the_other_still_shows(self):
+    def assert_unavailable(self, windows, keys):
+        by = {w["key"]: w for w in windows}
+        for key in keys:
+            self.assertEqual(by[key]["status"], "unavailable", key)
+            self.assertIsNone(by[key]["usedPercent"], key)  # never zero
+            self.assertIsNone(by[key]["remainingPercent"], key)
+            self.assertIsNone(by[key]["resetAt"], key)
+
+    def test_one_service_failing_is_carried_as_unavailable_pools_and_the_other_still_shows(self):
         down = helpers.UsageError("error", "The usage service is temporarily unavailable.")
         result, _ = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": down,
                                APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
-        self.assertEqual([w["key"] for w in result["windows"]], ["gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h", "gemini-argon-wtu-weekly"])
+        cli_keys = ["cli-gemini-weekly", "cli-gemini-5h", "cli-3p-weekly", "cli-3p-5h", "cli-gemini-argon-wtu-weekly"]
+        app_keys = ["gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h", "gemini-argon-wtu-weekly"]
+        self.assertEqual([w["key"] for w in result["windows"]], cli_keys + app_keys)
+        self.assert_unavailable(result["windows"], cli_keys)
+        self.assertEqual(result["windows"][0]["label"], "Gemini Models · Weekly · In T3 (Antigravity CLI)")
+        self.assertAlmostEqual(result["windows"][9]["usedPercent"], 37.83, places=2)
         result, _ = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO,
                                APP + "retrieveUserQuotaSummary": down})
-        self.assertEqual([w["key"] for w in result["windows"]], ["cli-gemini-weekly", "cli-gemini-5h", "cli-3p-weekly", "cli-3p-5h",
-                                                                 "cli-gemini-argon-wtu-weekly"])
-        self.assertFalse(any(w["usedPercent"] == 0 and w["key"].startswith("gemini-") for w in result["windows"]))
+        self.assertEqual([w["key"] for w in result["windows"]], cli_keys + app_keys)
+        self.assert_unavailable(result["windows"], app_keys)
+        self.assertAlmostEqual(result["windows"][1]["usedPercent"], 29.68, places=2)
+        self.assertNotIn("status", result["windows"][1])
 
     def test_both_services_failing_raises_instead_of_showing_zero(self):
         down = helpers.UsageError("error", "The usage service is temporarily unavailable.")
         with self.assertRaises(helpers.UsageError):
             self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": down, APP + "retrieveUserQuotaSummary": down})
 
-    def test_a_credential_google_refuses_on_either_service_needs_sign_in(self):
+    def test_a_403_on_one_service_is_that_service_unavailable_and_on_every_service_needs_sign_in(self):
+        # L1: a permission failure scoped to one host keeps the other host's reading; a refusal on
+        # every quota service (or on loadCodeAssist) is a confirmed credential rejection.
         refused = helpers.UsageError("needs_sign_in", "The saved account could not authenticate with the usage service.")
+        result, _ = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": refused,
+                               APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
+        self.assert_unavailable(result["windows"], ["cli-gemini-5h", "cli-gemini-weekly"])
+        self.assertAlmostEqual({w["key"]: w for w in result["windows"]}["gemini-weekly"]["usedPercent"], 0.09, places=2)
+        result, calls = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO,
+                                   APP + "retrieveUserQuotaSummary": refused})
+        self.assert_unavailable(result["windows"], ["gemini-5h", "gemini-weekly"])
+        for replies in ({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": refused,
+                         APP + "retrieveUserQuotaSummary": refused},
+                        {APP + "loadCodeAssist": refused}):
+            with self.assertRaises(helpers.UsageError) as caught:
+                self.read(replies)
+            self.assertEqual(caught.exception.status, "needs_sign_in")
+
+    def test_a_429_on_the_first_service_holds_the_account_and_makes_no_further_request(self):
+        # M1: the throttle keeps its type and Retry-After, and the other host is not asked.
+        throttled = helpers.UsageError("error", "Throttled.", failure_code="rate_limited", retry_after=321)
         with self.assertRaises(helpers.UsageError) as caught:
-            self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": refused,
-                       APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
-        self.assertEqual(caught.exception.status, "needs_sign_in")
+            self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": throttled,
+                       APP + "retrieveUserQuotaSummary": AssertionError("no request after a throttle")})
+        self.assertEqual(caught.exception.failure_code, "rate_limited")
+        self.assertEqual(caught.exception.retry_after, 321)
+
+    def test_a_429_on_the_second_service_keeps_the_verified_reading_and_its_cooldown(self):
+        throttled = helpers.UsageError("error", "Throttled.", failure_code="rate_limited", retry_after=654)
+        result, calls = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO,
+                                   APP + "retrieveUserQuotaSummary": throttled})
+        self.assertEqual(result["retryAfterSeconds"], 654)
+        self.assertAlmostEqual(result["windows"][1]["usedPercent"], 29.68, places=2)
+        self.assert_unavailable(result["windows"], ["gemini-5h", "gemini-weekly", "gemini-argon-wtu-weekly"])
+        self.assertEqual(calls.count(APP + "retrieveUserQuotaSummary"), 1)
+
+    def timed_read(self, durations, replies, started=4.0):
+        """The collector's deadline in the fixture: each request advances a fake monotonic clock."""
+        clock = [started]
+        request_calls = []
+
+        def request(url, headers=None, body=None, form=False):
+            request_calls.append((url, clock[0]))
+            clock[0] += durations.get(url, 1.0)
+            reply = replies[url]
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+        result = helpers.account("antigravity", "ubuntu")
+        with patch("desktop_usage.request_json", request), patch("desktop_usage.time") as fake_time:
+            fake_time.monotonic.side_effect = lambda: clock[0]
+            usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result, budget_started=0.0)
+        return result, request_calls, clock[0]
+
+    def test_both_required_summaries_come_before_the_optional_read_inside_one_deadline(self):
+        # M2, the review's replay: 4 s identity, 5 s project, 3 s CLI summary without Gemini, an 8 s
+        # optional CLI read that would time out, and an 8 s app summary. Before the fix the optional
+        # read ran first and the worker published at 28 s, past its 25 s cutoff.
+        no_gemini = {"groups": [CLI_SUMMARY_PRO["groups"][1]]}
+        timeout = helpers.UsageError("error", "The usage service could not be reached within its time limit.")
+        result, calls, ended = self.timed_read(
+            {APP + "loadCodeAssist": 5, CLI + "retrieveUserQuotaSummary": 3, CLI + "retrieveUserQuota": 8,
+             APP + "retrieveUserQuotaSummary": 8},
+            {APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": no_gemini,
+             CLI + "retrieveUserQuota": timeout, APP + "retrieveUserQuotaSummary": APP_SUMMARY_PRO})
+        self.assertEqual([url for url, _ in calls], [APP + "loadCodeAssist", CLI + "retrieveUserQuotaSummary",
+                                                     APP + "retrieveUserQuotaSummary"])
+        self.assertLessEqual(ended, 22)  # 3 s left of 25 to publish
+        self.assertIn("gemini-weekly", [w["key"] for w in result["windows"]])
+        self.assertIn("cli-3p-weekly", [w["key"] for w in result["windows"]])
+
+    def test_a_slow_or_timed_out_service_still_publishes_the_other_inside_the_deadline(self):
+        timeout = helpers.UsageError("error", "The usage service could not be reached within its time limit.")
+        # The app summary times out after its full 8 s socket: the CLI reading still publishes.
+        result, calls, ended = self.timed_read(
+            {APP + "loadCodeAssist": 5, CLI + "retrieveUserQuotaSummary": 3, APP + "retrieveUserQuotaSummary": 8},
+            {APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO,
+             APP + "retrieveUserQuotaSummary": timeout})
+        self.assertLessEqual(ended, 22)
+        self.assert_unavailable(result["windows"], ["gemini-5h", "gemini-weekly"])
+        self.assertAlmostEqual(result["windows"][1]["usedPercent"], 29.68, places=2)
+        # A CLI summary so slow that the app summary could no longer finish in time: it is not made.
+        result, calls, ended = self.timed_read(
+            {APP + "loadCodeAssist": 5, CLI + "retrieveUserQuotaSummary": 8},
+            {APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": CLI_SUMMARY_PRO,
+             APP + "retrieveUserQuotaSummary": AssertionError("no time left for this request")}, started=6.0)
+        self.assertNotIn(APP + "retrieveUserQuotaSummary", [url for url, _ in calls])
+        self.assertLessEqual(ended, 22)
+        self.assert_unavailable(result["windows"], ["gemini-5h", "3p-weekly"])
 
     def test_free_shows_zero_on_both_services_weekly_only(self):
         result, _ = self.read({APP + "loadCodeAssist": LOAD_FREE, CLI + "retrieveUserQuotaSummary": FREE_SUMMARY,
@@ -989,8 +1086,9 @@ class AntigravityServiceTests(unittest.TestCase):
         # If a summary ever omits the Gemini group, the per-model read derives it; on the CLI's service
         # that list carries the Gemini 4 Neon models inside the Gemini Models windows (same fraction).
         no_gemini = {"groups": [CLI_SUMMARY_PRO["groups"][1]]}
+        # L3: Flash untouched and Neon spent, so only Neon's membership can put 29.68% in the window.
         per_model = {"buckets": [
-            {"modelId": "gemini-3.8-flash-high", "remainingFraction": 0.7032202, "resetTime": "2026-11-20T03:06:23Z", "tokenType": "WTUS"},
+            {"modelId": "gemini-3.8-flash-high", "remainingFraction": 1, "resetTime": "2026-11-20T03:06:23Z", "tokenType": "WTUS"},
             {"modelId": "gemini-4-neon-xhigh", "remainingFraction": 0.7032202, "resetTime": "2026-11-20T03:06:23Z", "tokenType": "WTUS"},
             {"modelId": "gemini-4-neon-high", "remainingFraction": 0.7032202, "resetTime": "2026-11-20T03:06:23Z", "tokenType": "WTUS"}]}
         result, calls = self.read({APP + "loadCodeAssist": LOAD_PRO, CLI + "retrieveUserQuotaSummary": no_gemini,
@@ -999,6 +1097,7 @@ class AntigravityServiceTests(unittest.TestCase):
         cli_gemini = [w for w in result["windows"] if w["key"].startswith("cli-") and "Gemini" in w["label"] and "Argon" not in w["label"]]
         self.assertTrue(cli_gemini, result["windows"])
         self.assertAlmostEqual(cli_gemini[0]["usedPercent"], 29.68, places=2)
+        self.assertEqual(cli_gemini[0]["modelIds"], ["gemini-3.8-flash-high", "gemini-4-neon-high", "gemini-4-neon-xhigh"])
         self.assertFalse(any("neon" in w["key"].lower() or "Neon" in w["label"] for w in result["windows"]))
 
 if __name__ == "__main__":

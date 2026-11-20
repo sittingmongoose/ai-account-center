@@ -168,6 +168,12 @@ def _window(value):
         if sampled is None:
             return None
         result.update(status="cached", sampledAt=sampled)
+    elif value.get("status") == "unavailable":
+        # A pool whose quota service failed this read (Antigravity): it has no numbers by design.
+        if any(result.get(field) is not None for field in (
+                "usedPercent", "remainingPercent", "used", "limit", "remaining", "resetAt", "expiresAt")):
+            return None
+        result["status"] = "unavailable"
     pool = _text(value.get("poolId"), 160)
     if pool:
         result["poolId"] = pool
@@ -182,7 +188,7 @@ def _window(value):
                               re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,159}", item)]
     # The same fields plan_usage._valid_windows accepts: Qwen's plan subscription row carries only
     # its expiry, and rejecting that one row discarded the whole verified reading.
-    if not any(result.get(field) is not None for field in (
+    if result.get("status") != "unavailable" and not any(result.get(field) is not None for field in (
             "usedPercent", "remainingPercent", "used", "limit", "remaining", "resetAt", "expiresAt",
             "unlimited", "enabled")):
         return None

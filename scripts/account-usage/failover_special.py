@@ -397,9 +397,12 @@ def _quota(credential, sample):
         sample["reportedPlan"] = reported
     # Both services, T3's CLI first; this path keeps its summary-only reads (no per-model call).
     windows = []
-    for service, _groups, service_windows, _retry in desktop.antigravity_services(
-            HttpClient.request_json, headers, project, lambda: False):
-        windows += desktop.antigravity_service_label(service_windows, service)
+    for service in desktop.antigravity_services(HttpClient.request_json, headers, project, per_model=False):
+        if service["status"] == "rate_limited":
+            # This collector's contract: a quota throttle drops the partial reading and reaches the
+            # account-wide failover hold with its Retry-After (the shared read made no further request).
+            raise service["error"]
+        windows += desktop.antigravity_service_label(service["windows"], service["service"])
     sample["windows"] = windows + desktop.normalize_antigravity_credits(load)
 
 

@@ -11,6 +11,7 @@ import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
   antigravityView,
   antigravityColumns,
+  antigravityServiceFacts,
   antigravityWindowLabel,
   antigravityMissingWindow,
   antigravityNoQuota,
@@ -1140,6 +1141,7 @@ export function detailsViewModel(data, id, ctx = {}) {
   const facts = [
     ...antigravityPlanFacts(account),
     { label: 'Status', value: statusWord(account), mono: false },
+    ...antigravityServiceFacts(account),
     {
       label: 'Sampled',
       value: validDate(account.sampledAt)

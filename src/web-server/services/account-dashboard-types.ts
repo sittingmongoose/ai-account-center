@@ -41,8 +41,12 @@ export interface DashboardAccountWindow {
   clears?: string[];
   unlimited?: boolean;
   enabled?: boolean;
-  /** Retained optional quota rows keep their original observation time. */
-  status?: 'cached';
+  /**
+   * Retained optional quota rows keep their original observation time (`cached`). An
+   * `unavailable` row is a pool whose quota service failed this read (Antigravity's T3 CLI
+   * or app service): it never carries numbers, and it is never recorded as an observation.
+   */
+  status?: 'cached' | 'unavailable';
   sampledAt?: string;
   /**
    * Present, and always true, only when `resetAt` is at or before the response time and

@@ -293,6 +293,7 @@ fn has_live_reading(account: Acc, service: &str) -> R<bool> {
             !is_str(w.get("kind"), "balance")
                 && !is_str(w.get("status"), "cached")
                 && !is_true(w.get("cached"))
+                && !is_str(w.get("status"), "unavailable")
                 && antigravity_service(w.key()) == service
         }))
 }

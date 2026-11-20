@@ -59,9 +59,13 @@ def collect_snapshot(profile: SavedProfile, deps: QuotaDependencies) -> dict:
         # The existing normalizer's bounded DTO is the only output. Never
         # derive model pool IDs or entitlement from display names/percentages.
         windows = []
-        allowed = {'key','label','usedPercent','remainingPercent','resetAt','windowMinutes','used','limit','unit','kind','remaining','expiresAt','unlimited','enabled','poolId','poolIdSource','poolLabel','modelIds'}
+        allowed = {'key','label','usedPercent','remainingPercent','resetAt','windowMinutes','used','limit','unit','kind','remaining','expiresAt','unlimited','enabled','poolId','poolIdSource','poolLabel','modelIds','status'}
         for window in data['windows'][:64]:
-            if isinstance(window, dict): windows.append({k:v for k,v in window.items() if k in allowed})
+            if isinstance(window, dict):
+                window = {k:v for k,v in window.items() if k in allowed}
+                # Only a failed quota service's marker passes; any other status is not this DTO's.
+                if window.get('status') != 'unavailable': window.pop('status', None)
+                windows.append(window)
         stamp = deps.now().astimezone(dt.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
         base.update(status='fresh', email=identity.email, plan=data.get('plan'),
                     fetchedAt=stamp, sampledAt=stamp, windows=windows, pools=data.get('pools', []))
@@ -126,16 +130,16 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
             raise AuthError('Antigravity did not return a usable quota project.')
         plan, reported = desktop.antigravity_reported_plan(load)
         windows, pools, throttled = [], [], None
-        # Both services (T3's CLI first, then the app); each optional per-model read runs
-        # only when that summary carries no Gemini group and the worker budget still fits
-        # its socket timeout, so a slow optional endpoint can never cost a summary sample.
-        for service, groups, service_windows, retry in desktop.antigravity_services(
-                helpers.request_json, headers, project,
-                lambda: (clock() - budget_started).total_seconds() <= desktop.AGY_OPTIONAL_BUDGET_SECONDS):
-            pools += structural_pools(groups, service_windows, service)
-            windows += desktop.antigravity_service_label(service_windows, service)
-            if retry is not None and throttled is None:
-                throttled = retry
+        # Both services (T3's CLI first, then the app) against the worker's one deadline: both
+        # required summaries first, optional per-model reads after them only while they still fit,
+        # so the worker always has time to publish what is complete before its 25 s cutoff.
+        for service in desktop.antigravity_services(
+                helpers.request_json, headers, project, lambda: (clock() - budget_started).total_seconds()):
+            if service['status'] == 'ok':
+                pools += structural_pools(service['groups'], service['windows'], service['service'])
+            windows += desktop.antigravity_service_label(service['windows'], service['service'])
+            if service['retryAfter'] is not None and throttled is None:
+                throttled = service['retryAfter']
         windows += desktop.normalize_antigravity_credits(load)
         result = {'email': email, 'plan': plan, 'windows': windows, 'pools': pools,
                   **({'reportedPlan': reported} if reported else {})}

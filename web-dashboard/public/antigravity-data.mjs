@@ -24,8 +24,12 @@ export function antigravityColumns(accounts) {
     .filter(window => !['balance', 'spend', 'extra_usage'].includes(window.kind) && window.unlimited !== true);
   const canonical = windows.some(window => ANTIGRAVITY_COLUMNS.some(column => column.key === window.key));
   const columns = canonical ? ANTIGRAVITY_COLUMNS.map(column => ({ ...column })) : [];
-  for (const window of windows)
-    if (!columns.some(column => column.key === window.key)) columns.push({ key: window.key, label: antigravityWindowLabel(window) });
+  // Extra pools (such as each service's Gemini 4 Argon): T3's first, then the app's, each in the
+  // order the accounts report them, so a pair never shows app-first.
+  for (const service of ['cli', 'app'])
+    for (const window of windows)
+      if (antigravityService(window.key) === service && !columns.some(column => column.key === window.key))
+        columns.push({ key: window.key, label: antigravityWindowLabel(window) });
   return columns;
 }
 export function antigravityMissingWindow(account, key) {
@@ -44,7 +48,20 @@ function antigravityHasLiveReading(account, service) {
   return account?.status === 'ok'
     && visibleUsageWindows('antigravity', account.windows)
       .some(window => window.kind !== 'balance' && window.status !== 'cached' && window.cached !== true
-        && antigravityService(window.key) === service);
+        && window.status !== 'unavailable' && antigravityService(window.key) === service);
+}
+const SERVICE_NAMES = { cli: 'T3 (Antigravity CLI)', app: 'The Antigravity app' };
+/** Details: a quota service that failed this read (its pools arrive as `unavailable` windows) is named,
+ *  so a Live account never hides it; the other service's readings stay as they are. */
+export function antigravityServiceFacts(account) {
+  if (account?.provider !== 'antigravity' || !Array.isArray(account.windows)) return [];
+  return ['cli', 'app']
+    .filter(service => account.windows.some(window => window?.status === 'unavailable' && antigravityService(window.key) === service))
+    .map(service => ({
+      label: 'Notice',
+      value: `${SERVICE_NAMES[service]} quota could not be read this time; its pools show Unavailable. The other readings are live.`,
+      mono: false,
+    }));
 }
 export function antigravityNoQuota(account) {
   return account?.provider === 'antigravity' && account.antigravityPlan?.quotaPolicy === 'none'

@@ -1064,7 +1064,7 @@
      "antigravity:profile:t3-only": 1
     }
    },
-   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 2 accounts\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini 5hr\"},{\"key\":\"cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini wk\"},{\"key\":\"cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT 5hr\"},{\"key\":\"cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT wk\"},{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"shortLabel\":\"App Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"shortLabel\":\"App Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"shortLabel\":\"App Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"shortLabel\":\"App Claude GPT wk\"},{\"key\":\"gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\"},{\"key\":\"cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\"}],\"rows\":[{\"id\":\"antigravity:profile:app-only\",\"provider\":\"antigravity\",\"profile\":\"app-only\",\"email\":\"app-only@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:app-only|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini Models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini Models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0.09,\"valueText\":\"0.09\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":37.83,\"valueText\":\"37.83\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]},{\"id\":\"antigravity:profile:t3-only\",\"provider\":\"antigravity\",\"profile\":\"t3-only\",\"email\":\"t3-only@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:t3-only|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":29.68,\"valueText\":\"29.68\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":8.48,\"valueText\":\"8.48\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini 5-hour, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini weekly, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT 5-hour, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT weekly, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":2},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Nov 1, 7:00 PM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 2 accounts\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini 5hr\"},{\"key\":\"cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini wk\"},{\"key\":\"cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT 5hr\"},{\"key\":\"cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT wk\"},{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"shortLabel\":\"App Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"shortLabel\":\"App Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"shortLabel\":\"App Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"shortLabel\":\"App Claude GPT wk\"},{\"key\":\"cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\"},{\"key\":\"gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\"}],\"rows\":[{\"id\":\"antigravity:profile:app-only\",\"provider\":\"antigravity\",\"profile\":\"app-only\",\"email\":\"app-only@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:app-only|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini Models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini Models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0.09,\"valueText\":\"0.09\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":37.83,\"valueText\":\"37.83\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]},{\"id\":\"antigravity:profile:t3-only\",\"provider\":\"antigravity\",\"profile\":\"t3-only\",\"email\":\"t3-only@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:t3-only|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":29.68,\"valueText\":\"29.68\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":8.48,\"valueText\":\"8.48\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini 5-hour, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini weekly, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT 5-hour, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT weekly, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:t3-only|gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":2},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Nov 1, 7:00 PM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
   },
   {
    "name": "antigravity-plan#6",
@@ -1231,6 +1231,505 @@
     "updatedAt": "2026-11-02T00:00:00.000Z",
     "accounts": [
      {
+      "id": "antigravity:profile:gmail",
+      "provider": "antigravity",
+      "providerLabel": "Antigravity",
+      "plan": "Reported plan",
+      "email": "gmail@example.com",
+      "platform": "ubuntu",
+      "status": "ok",
+      "fetchedAt": "2026-11-02T00:00:00.000Z",
+      "sampledAt": "2026-11-02T00:00:00.000Z",
+      "windows": [
+       {
+        "key": "cli-gemini-weekly",
+        "label": "Gemini Models · Weekly · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": null,
+        "remainingPercent": null,
+        "windowMinutes": 10080,
+        "resetAt": null,
+        "status": "unavailable"
+       },
+       {
+        "key": "cli-gemini-5h",
+        "label": "Gemini Models · 5-hour · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": null,
+        "remainingPercent": null,
+        "windowMinutes": 300,
+        "resetAt": null,
+        "status": "unavailable"
+       },
+       {
+        "key": "cli-3p-weekly",
+        "label": "Claude and GPT models · Weekly · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": null,
+        "remainingPercent": null,
+        "windowMinutes": 10080,
+        "resetAt": null,
+        "status": "unavailable"
+       },
+       {
+        "key": "cli-3p-5h",
+        "label": "Claude and GPT models · 5-hour · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": null,
+        "remainingPercent": null,
+        "windowMinutes": 300,
+        "resetAt": null,
+        "status": "unavailable"
+       },
+       {
+        "key": "cli-gemini-argon-wtu-weekly",
+        "label": "Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": null,
+        "remainingPercent": null,
+        "windowMinutes": 10080,
+        "resetAt": null,
+        "status": "unavailable"
+       },
+       {
+        "key": "gemini-weekly",
+        "label": "Gemini Models · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0.09,
+        "remainingPercent": 99.91,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "gemini-5h",
+        "label": "Gemini Models · 5-hour · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "3p-weekly",
+        "label": "Claude and GPT models · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "3p-5h",
+        "label": "Claude and GPT models · 5-hour · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "gemini-argon-wtu-weekly",
+        "label": "Gemini 4 Argon · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 37.83,
+        "remainingPercent": 62.17,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       }
+      ],
+      "antigravityPlan": {
+       "quotaPolicy": "five-hour-weekly",
+       "thirdPartyModels": true
+      },
+      "capabilities": {
+       "antigravityProfileId": "gmail",
+       "antigravityHostIds": [
+        "ubuntu"
+       ],
+       "antigravityCanActivate": true
+      }
+     }
+    ]
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1793577600000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ],
+    "zone": {
+     "from": 1783209600000,
+     "to": 1828137600000,
+     "offsets": [
+      [
+       1783209600000,
+       -240
+      ],
+      [
+       1793512800000,
+       -300
+      ],
+      [
+       1805007600000,
+       -240
+      ],
+      [
+       1825567200000,
+       -300
+      ]
+     ]
+    }
+   },
+   "presentation": {
+    "dates": {
+     "1793577600000": {
+      "iso": "2026-11-02T00:00:00.000Z",
+      "clock": "7:00 PM",
+      "day": "Nov 1"
+     },
+     "1783209600000": {
+      "iso": "2026-07-05T00:00:00.000Z",
+      "clock": "8:00 PM",
+      "day": "Jul 4"
+     },
+     "1828137600000": {
+      "iso": "2027-12-07T00:00:00.000Z",
+      "clock": "7:00 PM",
+      "day": "Dec 6"
+     },
+     "1793512800000": {
+      "iso": "2026-11-01T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 1"
+     },
+     "1805007600000": {
+      "iso": "2027-03-14T07:00:00.000Z",
+      "clock": "3:00 AM",
+      "day": "Mar 14"
+     },
+     "1825567200000": {
+      "iso": "2027-11-07T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 7"
+     },
+     "1793581200000": {
+      "iso": "2026-11-02T01:00:00.000Z",
+      "clock": "8:00 PM",
+      "day": "Nov 1"
+     }
+    },
+    "epochs": {
+     "2026-11-02T00:00:00.000Z": 1793577600000,
+     "2026-11-02T01:00:00.000Z": 1793581200000
+    },
+    "order": {
+     "antigravity:profile:gmail": 0
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 1 account\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini 5hr\"},{\"key\":\"cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini wk\"},{\"key\":\"cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT 5hr\"},{\"key\":\"cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT wk\"},{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"shortLabel\":\"App Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"shortLabel\":\"App Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"shortLabel\":\"App Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"shortLabel\":\"App Claude GPT wk\"},{\"key\":\"cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\"},{\"key\":\"gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\"}],\"rows\":[{\"id\":\"antigravity:profile:gmail\",\"provider\":\"antigravity\",\"profile\":\"gmail\",\"email\":\"gmail@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:gmail|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini Models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini Models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0.09,\"valueText\":\"0.09\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:gmail|gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":37.83,\"valueText\":\"37.83\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Nov 1, 7:00 PM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "antigravity-plan#8",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-11-02T00:00:00.000Z",
+    "accounts": [
+     {
+      "id": "antigravity:profile:app-only",
+      "provider": "antigravity",
+      "providerLabel": "Antigravity",
+      "plan": "Reported plan",
+      "email": "app-only@example.com",
+      "platform": "ubuntu",
+      "status": "ok",
+      "fetchedAt": "2026-11-02T00:00:00.000Z",
+      "sampledAt": "2026-11-02T00:00:00.000Z",
+      "windows": [
+       {
+        "key": "gemini-weekly",
+        "label": "Gemini Models · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0.09,
+        "remainingPercent": 99.91,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "gemini-5h",
+        "label": "Gemini Models · 5-hour · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "3p-weekly",
+        "label": "Claude and GPT models · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "3p-5h",
+        "label": "Claude and GPT models · 5-hour · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "gemini-argon-wtu-weekly",
+        "label": "Gemini 4 Argon · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 37.83,
+        "remainingPercent": 62.17,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       }
+      ],
+      "antigravityPlan": {
+       "quotaPolicy": "five-hour-weekly",
+       "thirdPartyModels": true
+      },
+      "capabilities": {
+       "antigravityProfileId": "app-only",
+       "antigravityHostIds": [
+        "ubuntu"
+       ],
+       "antigravityCanActivate": true
+      }
+     },
+     {
+      "id": "antigravity:profile:both",
+      "provider": "antigravity",
+      "providerLabel": "Antigravity",
+      "plan": "Reported plan",
+      "email": "both@example.com",
+      "platform": "ubuntu",
+      "status": "ok",
+      "fetchedAt": "2026-11-02T00:00:00.000Z",
+      "sampledAt": "2026-11-02T00:00:00.000Z",
+      "windows": [
+       {
+        "key": "cli-gemini-weekly",
+        "label": "Gemini Models · Weekly · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": 8.48,
+        "remainingPercent": 91.52,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "cli-gemini-5h",
+        "label": "Gemini Models · 5-hour · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": 29.68,
+        "remainingPercent": 70.32,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "cli-3p-weekly",
+        "label": "Claude and GPT models · Weekly · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "cli-3p-5h",
+        "label": "Claude and GPT models · 5-hour · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "cli-gemini-argon-wtu-weekly",
+        "label": "Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "gemini-weekly",
+        "label": "Gemini Models · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0.09,
+        "remainingPercent": 99.91,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "gemini-5h",
+        "label": "Gemini Models · 5-hour · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "3p-weekly",
+        "label": "Claude and GPT models · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "3p-5h",
+        "label": "Claude and GPT models · 5-hour · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 0,
+        "remainingPercent": 100,
+        "windowMinutes": 300,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       },
+       {
+        "key": "gemini-argon-wtu-weekly",
+        "label": "Gemini 4 Argon · Weekly · In the Antigravity app",
+        "kind": "rate_limit",
+        "usedPercent": 37.83,
+        "remainingPercent": 62.17,
+        "windowMinutes": 10080,
+        "resetAt": "2026-11-02T01:00:00.000Z"
+       }
+      ],
+      "antigravityPlan": {
+       "quotaPolicy": "five-hour-weekly",
+       "thirdPartyModels": true
+      },
+      "capabilities": {
+       "antigravityProfileId": "both",
+       "antigravityHostIds": [
+        "ubuntu"
+       ],
+       "antigravityCanActivate": true
+      }
+     }
+    ]
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1793577600000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ],
+    "zone": {
+     "from": 1783209600000,
+     "to": 1828137600000,
+     "offsets": [
+      [
+       1783209600000,
+       -240
+      ],
+      [
+       1793512800000,
+       -300
+      ],
+      [
+       1805007600000,
+       -240
+      ],
+      [
+       1825567200000,
+       -300
+      ]
+     ]
+    }
+   },
+   "presentation": {
+    "dates": {
+     "1793577600000": {
+      "iso": "2026-11-02T00:00:00.000Z",
+      "clock": "7:00 PM",
+      "day": "Nov 1"
+     },
+     "1783209600000": {
+      "iso": "2026-07-05T00:00:00.000Z",
+      "clock": "8:00 PM",
+      "day": "Jul 4"
+     },
+     "1828137600000": {
+      "iso": "2027-12-07T00:00:00.000Z",
+      "clock": "7:00 PM",
+      "day": "Dec 6"
+     },
+     "1793512800000": {
+      "iso": "2026-11-01T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 1"
+     },
+     "1805007600000": {
+      "iso": "2027-03-14T07:00:00.000Z",
+      "clock": "3:00 AM",
+      "day": "Mar 14"
+     },
+     "1825567200000": {
+      "iso": "2027-11-07T06:00:00.000Z",
+      "clock": "1:00 AM",
+      "day": "Nov 7"
+     },
+     "1793581200000": {
+      "iso": "2026-11-02T01:00:00.000Z",
+      "clock": "8:00 PM",
+      "day": "Nov 1"
+     }
+    },
+    "epochs": {
+     "2026-11-02T00:00:00.000Z": 1793577600000,
+     "2026-11-02T01:00:00.000Z": 1793581200000
+    },
+    "order": {
+     "antigravity:profile:app-only": 0,
+     "antigravity:profile:both": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 2 accounts\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini 5hr\"},{\"key\":\"cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini wk\"},{\"key\":\"cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT 5hr\"},{\"key\":\"cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT wk\"},{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"shortLabel\":\"App Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"shortLabel\":\"App Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"shortLabel\":\"App Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"shortLabel\":\"App Claude GPT wk\"},{\"key\":\"cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\"},{\"key\":\"gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"shortLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\"}],\"rows\":[{\"id\":\"antigravity:profile:app-only\",\"provider\":\"antigravity\",\"profile\":\"app-only\",\"email\":\"app-only@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:app-only|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini Models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini Models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0.09,\"valueText\":\"0.09\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:app-only|gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":37.83,\"valueText\":\"37.83\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]},{\"id\":\"antigravity:profile:both\",\"provider\":\"antigravity\",\"profile\":\"both\",\"email\":\"both@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:both|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":29.68,\"valueText\":\"29.68\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini Models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":8.48,\"valueText\":\"8.48\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · 5-hour · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT models · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini Models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini Models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0.09,\"valueText\":\"0.09\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · 5-hour · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT models · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|cli-gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In T3 (Antigravity CLI)\",\"hasValue\":true,\"value\":0,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:both|gemini-argon-wtu-weekly\",\"label\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"fullLabel\":\"Gemini 4 Argon · Weekly · In the Antigravity app\",\"hasValue\":true,\"value\":37.83,\"valueText\":\"37.83\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":2},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Nov 1, 7:00 PM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "antigravity-plan#9",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-11-02T00:00:00.000Z",
+    "accounts": [
+     {
       "id": "antigravity:profile:workspace",
       "provider": "antigravity",
       "providerLabel": "Antigravity",
@@ -1377,7 +1876,7 @@
    "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 2 accounts\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"2\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini 5hr\"},{\"key\":\"cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini wk\"},{\"key\":\"cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT 5hr\"},{\"key\":\"cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT wk\"},{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"shortLabel\":\"App Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"shortLabel\":\"App Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"shortLabel\":\"App Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"shortLabel\":\"App Claude GPT wk\"}],\"rows\":[{\"id\":\"antigravity:profile:workspace\",\"provider\":\"antigravity\",\"profile\":\"workspace\",\"email\":\"workspace@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"No Antigravity quota on this plan\",\"amountsRuns\":[{\"text\":\"No Antigravity quota on this plan\",\"strong\":false,\"tone\":\"\"}],\"amountsWords\":[{\"text\":\"No\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"quota\",\"strong\":false,\"tone\":\"\"},{\"text\":\"on\",\"strong\":false,\"tone\":\"\"},{\"text\":\"this\",\"strong\":false,\"tone\":\"\"},{\"text\":\"plan\",\"strong\":false,\"tone\":\"\"}],\"cells\":[{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"\",\"label\":\"\",\"fullLabel\":\"\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"\",\"caption\":\"\",\"captionTip\":\"\"}]},{\"id\":\"antigravity:profile:pro\",\"provider\":\"antigravity\",\"profile\":\"pro\",\"email\":\"pro@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:pro|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:pro|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:pro|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:pro|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:pro|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"gemini-5h\",\"hasValue\":true,\"value\":25,\"valueText\":\"25\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:pro|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"Gemini weekly, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:pro|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT 5-hour, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:pro|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT weekly, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":2},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Nov 1, 7:00 PM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
   },
   {
-   "name": "antigravity-plan#8",
+   "name": "antigravity-plan#10",
    "dashboard": {
     "schemaVersion": 1,
     "updatedAt": "2026-11-02T00:00:00.000Z",
@@ -1509,7 +2008,7 @@
    "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 1 account\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini 5hr\"},{\"key\":\"cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Gemini wk\"},{\"key\":\"cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT 5hr\"},{\"key\":\"cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"shortLabel\":\"T3 Claude GPT wk\"},{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"shortLabel\":\"App Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"shortLabel\":\"App Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"shortLabel\":\"App Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"shortLabel\":\"App Claude GPT wk\"}],\"rows\":[{\"id\":\"antigravity:profile:workspace\",\"provider\":\"antigravity\",\"profile\":\"workspace\",\"email\":\"workspace@example.com\",\"plan\":\"Reported plan\",\"meta\":\"Reported plan · Ubuntu · just now\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:profile:workspace|cli-gemini-5h\",\"label\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:workspace|cli-gemini-weekly\",\"label\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Gemini weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:workspace|cli-3p-5h\",\"label\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT 5-hour, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:workspace|cli-3p-weekly\",\"label\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"fullLabel\":\"Claude and GPT weekly, in T3 (Antigravity CLI)\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:workspace|gemini-5h\",\"label\":\"Gemini 5-hour, in the Antigravity app\",\"fullLabel\":\"Gemini 5-hour, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:workspace|gemini-weekly\",\"label\":\"Gemini weekly, in the Antigravity app\",\"fullLabel\":\"gemini-weekly\",\"hasValue\":true,\"value\":25,\"valueText\":\"25\",\"overText\":\"\",\"reset\":\"resets in 1h 0m\",\"resetExact\":\"Resets Nov 1, 8:00 PM\",\"resetSoon\":true,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:workspace|3p-5h\",\"label\":\"Claude and GPT 5-hour, in the Antigravity app\",\"fullLabel\":\"Claude and GPT 5-hour, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:profile:workspace|3p-weekly\",\"label\":\"Claude and GPT weekly, in the Antigravity app\",\"fullLabel\":\"Claude and GPT weekly, in the Antigravity app\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Nov 1, 7:00 PM · just now\",\"source\":\"Unknown source · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Nov 1, 7:00 PM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
   },
   {
-   "name": "antigravity-plan#9",
+   "name": "antigravity-plan#11",
    "dashboard": {
     "schemaVersion": 1,
     "updatedAt": "2026-11-02T00:00:00.000Z",

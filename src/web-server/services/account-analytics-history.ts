@@ -83,6 +83,13 @@ export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
   const kind = ['rate_limit', 'balance', 'spend', 'extra_usage'].includes(String(value.kind))
     ? (value.kind as DashboardAccountWindow['kind'])
     : undefined;
+  // A pool whose quota service failed this read: it keeps its column, never a number.
+  const unavailable =
+    value.status === 'unavailable' &&
+    ['usedPercent', 'remainingPercent', 'used', 'limit', 'remaining', 'resetAt', 'expiresAt'].every(
+      (field) => value[field] === null || value[field] === undefined
+    );
+  if (value.status === 'unavailable' && !unavailable) return null;
   return {
     key: value.key as string,
     label: value.label as string,
@@ -100,6 +107,7 @@ export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
     ...(typeof value.unlimited === 'boolean' ? { unlimited: value.unlimited } : {}),
     ...(typeof value.enabled === 'boolean' ? { enabled: value.enabled } : {}),
     ...(cachedSampledAt ? { status: 'cached' as const, sampledAt: cachedSampledAt } : {}),
+    ...(unavailable ? { status: 'unavailable' as const } : {}),
     ...(safePoolId(value.poolId) ? { poolId: value.poolId } : {}),
     ...(value.poolIdSource === 'provider-id' || value.poolIdSource === 'provider-bucket-membership'
       ? { poolIdSource: value.poolIdSource }
@@ -308,6 +316,7 @@ export function appendAccountAnalyticsSnapshot(
     const windows = healthy
       ? account.windows.slice(0, 256).flatMap((window) => {
           const safe = analyticsWindow(window);
+          if (safe?.status === 'unavailable') return []; // a failed quota service is no observation
           if (safe?.status === 'cached') {
             const actualSampleTime = Date.parse(safe.sampledAt ?? '');
             if (actualSampleTime > now || actualSampleTime < cutoff) return [];

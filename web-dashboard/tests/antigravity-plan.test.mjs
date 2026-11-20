@@ -282,6 +282,72 @@ test('a free account reads 0 on both services, weekly only, Claude and GPT still
     assert.equal(cells[key].naText, 'Weekly only', key);
 });
 
+// A quota service that failed this read arrives as its pools with no numbers and status "unavailable".
+const unavailable = (windows) =>
+  windows.map((w) => ({
+    ...w,
+    usedPercent: null,
+    remainingPercent: null,
+    resetAt: null,
+    status: 'unavailable',
+  }));
+
+test('a failed T3 service shows Unavailable in Details with a notice while the app stays live', () => {
+  const pro = account('gmail', { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true }, [
+    ...unavailable(tonightT3),
+    ...tonightApp,
+  ]);
+  const details = detailsViewModel(data([pro]), pro.id, { now });
+  const notice = details.facts.find((fact) => fact.label === 'Notice');
+  assert.equal(
+    notice?.value,
+    'T3 (Antigravity CLI) quota could not be read this time; its pools show Unavailable. The other readings are live.'
+  );
+  assert.equal(details.facts.filter((fact) => fact.label === 'Notice').length, 1);
+  const meter = (key) => details.meters.find((m) => m.key === `${pro.id}|${key}`);
+  for (const key of ['cli-gemini-5h', 'cli-gemini-weekly', 'cli-gemini-argon-wtu-weekly']) {
+    assert.equal(meter(key)?.hasValue, false, key);
+    assert.equal(meter(key)?.naText, 'Unavailable', key);
+    assert.equal(meter(key)?.valueText, '', key);
+  }
+  assert.equal(meter('gemini-weekly')?.valueText, '0.09');
+  assert.equal(meter('gemini-argon-wtu-weekly')?.valueText, '37.83');
+  // Home keeps the failed service's known pool columns, Argon included, as Unavailable.
+  const v = section([pro]);
+  const at = v.columns.findIndex((column) => column.key === 'cli-gemini-argon-wtu-weekly');
+  assert.notEqual(at, -1);
+  assert.equal(v.rows[0].cells[at].naText, 'Unavailable');
+  assert.equal(v.rows[0].cells[at].hasValue, false);
+  // A healthy reading has no notice.
+  const healthy = account('ok', { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true }, [
+    ...tonightT3,
+    ...tonightApp,
+  ]);
+  assert.equal(
+    detailsViewModel(data([healthy]), healthy.id, { now }).facts.some((f) => f.label === 'Notice'),
+    false
+  );
+});
+
+test('a failed service is never a live reading of that service, so its missing pools stay Unavailable', () => {
+  const plan = { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true };
+  const failedT3 = account('failed-t3', plan, [...unavailable(tonightT3), ...tonightApp]);
+  assert.equal(antigravityMissingWindow(failedT3, 'cli-new-pool'), 'Unavailable');
+  assert.equal(antigravityMissingWindow(failedT3, 'new-pool'), 'Not reported');
+});
+
+test('paired extra pools show T3 first even when an app-only row comes first', () => {
+  const plan = { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true };
+  const appOnly = account('app-only', plan, tonightApp);
+  const both = account('both', plan, [...tonightT3, ...tonightApp]);
+  const keys = section([appOnly, both]).columns.map((column) => column.key);
+  assert.ok(
+    keys.indexOf('cli-gemini-argon-wtu-weekly') < keys.indexOf('gemini-argon-wtu-weekly'),
+    keys.join()
+  );
+  assert.deepEqual(keys.slice(-2), ['cli-gemini-argon-wtu-weekly', 'gemini-argon-wtu-weekly']);
+});
+
 test('no-quota plans with no windows use the existing row text and retain reported windows when present', () => {
   const empty = account(
     'workspace',
