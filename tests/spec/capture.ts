@@ -451,10 +451,13 @@ for (const r of inventory) {
   if (r.path.startsWith('/v0/management')) r.writes = false;
 }
 inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
-// G13/G6/G10 and H/J moved their public admission to the Rust listener. Their M0 rows and
+// The migrated groups run public admission in the Rust listener. Their M0 rows and
 // contracts stay the replay corpus (`routes.json`); the TypeScript router no longer registers
 // them, so this recorder keeps the committed rows instead of re-recording a 404.
 const MOVED_TO_RUST = new Set([
+  'GET /api/accounts/analytics',
+  'GET /api/accounts/analytics/capture',
+  'PUT /api/accounts/analytics/capture',
   'GET /api/antigravity/profiles',
   'GET /api/antigravity/profiles/quotas',
   'POST /api/app-updates/cancel',
@@ -746,6 +749,7 @@ try {
     path.join(root, 'src/web-server/rust-service-health.ts'),
     path.join(root, 'config/rust-service-routes.json'),
     path.join(root, 'crates/aac-http/src/public_auth/reset_routes.rs'),
+    path.join(root, 'crates/aac-http/src/public_auth/analytics_routes.rs'),
     path.join(root, 'tests/fixtures/reset-adapter/reset-claim-routes.ts'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))
@@ -942,7 +946,7 @@ try {
   if (!composed && rustMode === 'shadow') {
     // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
     // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
-    // compared; the Analytics stub stops at its query check before any Rust composition.
+    // compared.
     // Profiles now replay at the native public listener. The legacy recorder never sends
     // private requests for those routes.
     for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)

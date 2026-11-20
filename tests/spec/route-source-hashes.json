@@ -1,7 +1,7 @@
 {
   "config/rust-service-routes.json": "72f5f6c264aa4c55a5a2fa113e1f7a926885dc3150fddd0bc94be5b439d43102",
   "crates/aac-http/src/public_auth/analytics_routes.rs": "b57c4c69dd6ab19ceb733a3030cf2dcca593962a0ccaaeadec753c46713de083",
-  "crates/aac-http/src/public_auth/reset_routes.rs": "49a8cb39eca10921aa35d15d2bcba586d4077aea95751813d83148fb35839389",
+  "crates/aac-http/src/public_auth/reset_routes.rs": "6619b9425511e29f8b47fa30384ea627099774a29bb4432d40c864bde4e7cc0e",
   "src/web-server/compose-request.ts": "b48b41b7f36c47236965168743dde68b39e8161e2f6508416f951b1d264c92f4",
   "src/web-server/compose-server.ts": "88495222e3f5f674f679305bce85e2fe70b482d30675ed78ca53a9027d9f8d97",
   "src/web-server/index.ts": "67daeb7c7e079c722c17572722d27e1b98c32c4a0b2c6cbdf8ac3307f55c04dd",
@@ -20,7 +20,7 @@
   "src/web-server/routes/auth-routes.ts": "c4f557b23e83b0b149f675fe1138bac3246346df4aaa5b380bd41a98a94f9e85",
   "src/web-server/routes/auth-session-routes.ts": "9087f7b4312dcf028faa52d4e278b33e469b7a82161bc1d95e7c34d60d01d71e",
   "src/web-server/routes/bar-routes.ts": "bdc16629846cc448521898aaac9ab7ff077899984873daadc4d94ab9dcb0fd5d",
-  "src/web-server/routes/home-view-routes.ts": "0eefb3ac9ca9c82ccc773f03d16aa2c3e748229a1fc61eb4253ea163a78ea033",
+  "src/web-server/routes/home-view-routes.ts": "7a2c40467ae87b3ce576c0ef2f4550eb0bb430216d2b9275448b7e9b71ac44a2",
   "src/web-server/routes/index.ts": "1e9feeeb37c6ccb93871505e2bdad1010752913cbc4cb21ee618dba3a508ee96",
   "src/web-server/routes/revalidated-view.ts": "58d7382a0314411bb4e6b5cb079b0a8c73de2d9026521679b270e98b21b7923a",
   "src/web-server/routes/scoreboard-routes.ts": "736e70b0d9b639f8af6177156f8885e93ad03935e3220298cc3ce6ab5de9ccf1",
