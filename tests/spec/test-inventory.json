@@ -441,6 +441,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers/claude_mirrors.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/analytics_writers/experiment_roots.rs",
       "kind": "internal",
       "evidence": [],
