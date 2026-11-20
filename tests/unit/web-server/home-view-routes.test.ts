@@ -17,6 +17,7 @@ import { createHomeViewRouter } from '../../../src/web-server/routes/home-view-r
 import { createAccountDashboardRouter } from '../../../src/web-server/routes/account-dashboard-routes';
 import { RustService } from '../../../src/web-server/rust-service';
 import {
+  openPairs,
   readAntigravityInventory,
   readClaudeDesktopProfiles,
   runtimeInventory,
@@ -523,9 +524,15 @@ describe('compose() for /api/views/home over a private socket', () => {
       }),
     };
     expect(await readClaudeDesktopProfiles(req, res)).toEqual([
-      // A row that can be opened carries this process's Open progress (none: null); one without an id cannot.
-      { id: 'a', email: 'a@example.test', openOperation: null },
+      // The reply carries no Open field: unknown here, which is not the same as "no Open running".
+      { id: 'a', email: 'a@example.test' },
       { email: 'b@example.test' },
+    ]);
+    // A row without the field makes the Open state unknown; a row carrying null means "none running".
+    expect(openPairs([{ id: 'a' }])).toBeNull();
+    expect(openPairs([{ id: 'a', openOperation: null }])).toEqual([]);
+    expect(openPairs([{ id: 'a', openOperation: { id: 'op_1' } }])).toEqual([
+      ['a', { id: 'op_1' }],
     ]);
     expect(seen.map((r) => [r.url, r.body])).toEqual([['/api/claude/desktop-profiles', '']]);
     expect(s.stats.served).toBe(1);
@@ -569,8 +576,69 @@ describe('compose() for /api/views/home over a private socket', () => {
     expect(await readAntigravityInventory(req, res)).toEqual(raw);
     expect(seen.filter((r) => r.url === '/api/antigravity/profiles')).toHaveLength(3);
     // An owner that cannot answer is unavailable (null), never an empty inventory.
-    inventoryReply = { status: 503, body: JSON.stringify({ error: 'TypeScript read fallback required' }) };
+    inventoryReply = {
+      status: 503,
+      body: JSON.stringify({ error: 'TypeScript read fallback required' }),
+    };
     expect(await readAntigravityInventory(req, res)).toBeNull();
+  });
+
+  it('an active Open on the profiles route reaches Home, and an unreadable owner stays unavailable', async () => {
+    const s = service();
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
+    });
+    const operation = {
+      id: 'op_1',
+      platform: 'mac',
+      state: 'opening',
+      confirmedCount: 0,
+      totalCount: 2,
+      message: null,
+    };
+    // The public profiles route serves each profile's live Open progress (Profiles::open).
+    reply = {
+      status: 200,
+      body: JSON.stringify({
+        profiles: [{ id: 'p1', email: 'one@example.test', openOperation: operation }],
+      }),
+    };
+    const res = { locals: { rustService: s } } as unknown as Response;
+    expect(await readClaudeDesktopProfiles(req, res)).toEqual([
+      { id: 'p1', email: 'one@example.test', openOperation: operation },
+    ]);
+    // Retained Home answers with the same rows (production profiles read, the group off so no fed answer).
+    const instance = express();
+    instance.use((rq, rs, next) => {
+      Object.assign(rq, { session: { authenticated: true }, sessionID: 'fixture-session' });
+      rs.locals.rustService = s;
+      next();
+    });
+    instance.use(
+      '/api/views',
+      createHomeViewRouter({
+        getDashboard: async () => structuredClone(dashboard),
+        scope: () => getCcsDir(),
+      })
+    );
+    const own = await new Promise<Server>((resolve) => {
+      const started = instance.listen(0, '127.0.0.1', () => resolve(started));
+    });
+    const address = own.address();
+    if (!address || typeof address === 'string') throw new Error('No test port');
+    const url = `http://127.0.0.1:${address.port}/api/views/home?platform=mac`;
+    try {
+      const body = (await (
+        await fetch(url, { headers: { 'x-aac-home-context': header(CONTEXT) } })
+      ).json()) as { profiles?: { openOperation?: unknown }[] };
+      expect(body.profiles?.[0].openOperation).toEqual(operation);
+      // An owner that cannot answer leaves the Open state unknown: the TS manifest rows carry no
+      // field, so the fed path declines instead of feeding an empty list (home-feed.test.ts).
+      reply = { status: 503, body: JSON.stringify({ error: 'TypeScript read fallback required' }) };
+      expect(await readClaudeDesktopProfiles(req, res)).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
   });
 
   it('Home and /api/antigravity/profiles agree on a non-empty saved registry (the shipping switch unset)', async () => {
@@ -638,8 +706,11 @@ describe('compose() for /api/views/home over a private socket', () => {
         body: JSON.stringify({ error: 'TypeScript read fallback required' }),
       };
       expect(
-        (await (await fetch(homeUrl, { headers: { 'x-aac-home-context': header(CONTEXT) } })).json())
-          .antigravity
+        (
+          await (
+            await fetch(homeUrl, { headers: { 'x-aac-home-context': header(CONTEXT) } })
+          ).json()
+        ).antigravity
       ).toBeNull();
       expect(await (await fetch(profilesUrl)).json()).toBeNull();
     } finally {

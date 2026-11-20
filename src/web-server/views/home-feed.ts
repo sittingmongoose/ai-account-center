@@ -288,6 +288,12 @@ export interface HomeFedRequest {
   read: HomeDashboardRead;
   /** The Antigravity runtime's inventory, as the original handler reads it. */
   inventory: unknown;
+  /**
+   * The public Open owner's live progress for this scope, as `[profileId, operation]` pairs — the
+   * same state the profiles route reads. Null when it cannot be read: the fed path declines rather
+   * than feeding an empty list, which the page would draw as "no Open running".
+   */
+  opens: unknown[] | null;
   /** The CCS directory the TS readers use (`getCcsDir()`). */
   scope: string;
 }
@@ -314,6 +320,7 @@ export async function answerHomeFed(
   if (input.context && !homeZoneAgrees(input.context)) return declined('zone');
   if (!passFaithful(dashboard)) return declined('input');
   const feeds = feedsOf(service, boot);
+  if (!Array.isArray(input.opens)) return declined('input');
   const inventoryExact = jsonExact(input.inventory);
   let generations: Generation[];
   if (producerOn(service)) {
@@ -324,8 +331,7 @@ export async function answerHomeFed(
       platform: input.platform,
       secure: input.secure,
       dashboard,
-      // G13: Open progress now lives in the Rust owner and rides the desktop-profiles read.
-      opens: [],
+      opens: input.opens,
       antigravity: input.inventory,
     });
     if (!produced) return declined('feed');
@@ -339,8 +345,8 @@ export async function answerHomeFed(
       { generation: produced.antigravity },
     ];
   } else {
-    // G13: Open progress now lives in the Rust owner and rides the desktop-profiles read.
-    const opens = JSON.stringify([]);
+    // G13: Open progress lives in the Rust owner and arrives with the profiles read.
+    const opens = JSON.stringify(input.opens);
     // R1b: the inventory's own JSON text is its change key: its ISO envelope (`rustReadInput`) is a function of
     // that text, so it is computed only when the key changes. A value JSON cannot carry exactly is pushed as null.
     const antigravityKey = inventoryExact

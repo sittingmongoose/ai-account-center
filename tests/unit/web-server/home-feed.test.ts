@@ -53,6 +53,8 @@ const THROWS = Symbol('throws');
 let dashboard: AccountDashboard;
 let updatedAt: string;
 let inventory: unknown;
+/** The profiles read's rows: null is an unreadable owner (the fed path must decline, not feed []). */
+let profilesFixture: unknown[] | null = null;
 
 function fixture(): AccountDashboard {
   return {
@@ -170,7 +172,7 @@ function app(fed: boolean) {
       }),
       getDashboard: async () =>
         withPassedResetsAt({ ...structuredClone(dashboard), updatedAt }, NOW),
-      readProfiles: async () => [{ id: 'p1', email: 'one@example.invalid', openOperation: null }],
+      readProfiles: async () => structuredClone(profilesFixture),
       readInventory: async () => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
       runtimeInventory: async () => {
         if (inventory === THROWS) throw new Error('runtime sentinel');
@@ -211,6 +213,7 @@ beforeEach(async () => {
   dashboard = fixture();
   updatedAt = '2026-11-14T11:59:00.000Z';
   inventory = { schemaVersion: 1, hostId: 'ubuntu', profiles: [] };
+  profilesFixture = [{ id: 'p1', email: 'one@example.invalid', openOperation: null }];
   // Each service reads its group once (its first request): the fed one with the group on, the plain one off.
   process.env.AAC_RUST_GROUP_HOME = 'on';
   service = new StandIn();
@@ -608,6 +611,53 @@ describe('GET /api/views/home, the Rust feed producer (G17)', () => {
     } finally {
       delete process.env.AAC_RUST_HOME_PRODUCER;
     }
+  });
+
+  it('an active Open on the profiles read rides into the pushed home-opens feed, not the empty list', async () => {
+    const operation = {
+      id: 'op_1',
+      platform: 'mac',
+      state: 'opening',
+      confirmedCount: 0,
+      totalCount: 2,
+      message: null,
+    };
+    profilesFixture = [{ id: 'p1', email: 'one@example.invalid', openOperation: operation }];
+    expect((await get(fedUrl)).status).toBe(200);
+    const pushed = service.puts.find((p) => p.source === 'home-opens');
+    expect(JSON.parse(pushed?.data ?? 'null')).toEqual([['p1', operation]]);
+  });
+
+  it("an active Open rides into the producer's raw input, not the empty list", async () => {
+    process.env.AAC_RUST_HOME_PRODUCER = 'on';
+    const operation = {
+      id: 'op_1',
+      platform: 'mac',
+      state: 'opening',
+      confirmedCount: 0,
+      totalCount: 2,
+      message: null,
+    };
+    profilesFixture = [{ id: 'p1', email: 'one@example.invalid', openOperation: operation }];
+    try {
+      expect((await get(fedUrl)).status).toBe(200);
+      expect(service.inputsCalls.at(-1)?.opens).toEqual([['p1', operation]]);
+    } finally {
+      delete process.env.AAC_RUST_HOME_PRODUCER;
+    }
+  });
+
+  it('an unreadable profiles read declines the fed path instead of feeding an empty Open list', async () => {
+    profilesFixture = null;
+    const response = await get(fedUrl);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toBe(RUST_BYTES);
+    expect(service.views).toHaveLength(0);
+    expect(sources()).not.toContain('home-opens');
+    const body = JSON.parse(text) as { profiles?: unknown; view?: unknown };
+    expect(body.profiles).toBeNull();
+    expect(body.view).toBeNull();
   });
 
   it('producer off (the default): the TS producer pushes as before', async () => {

@@ -26,7 +26,7 @@ import {
 import { getCcsDir } from '../../utils/config-manager';
 import { ProfileError } from '../../errors/error-types';
 import { listClaudeDesktopProfileMetadata } from '../services/claude-desktop-profile-service';
-import { composeWithRust, readOwnedValueWithRust, RustService } from '../rust-service';
+import { composeWithRust, readOwnedValueWithRust } from '../rust-service';
 import {
   acceptRustDesktopProfiles,
   acceptRustDesktopProfilesWithOperations,
@@ -87,39 +87,43 @@ export async function readAntigravityInventory(
   );
 }
 
-/** G13: whether this request's service bound the Rust Open owner (mode on + group on). */
-function claudeOpenDelegates(res: Response): boolean {
-  const service: unknown = res.locals.rustService;
-  return service instanceof RustService && service.claudeOpenEnabled;
-}
-
 /**
  * GET /desktop-profiles' list through the native manifest read; the TS reader is the fallback.
- * `openOperation` is the progress of a 202 Open (null when none is known): this process's Open
- * store, added to the manifest rows whoever read them — or, with the Rust Open owner bound, the
- * rows already carry it and the composition validates that shape instead.
+ * The public route adds each profile's live Open progress (`Profiles::open`); the rows keep it.
+ * The TS reader has no Open state (the owner is the Rust boot), so its rows carry no
+ * `openOperation`: unknown, which must not be read as "no Open running".
  */
 export async function readClaudeDesktopProfiles(req: Request, res: Response): Promise<unknown[]> {
   const scope = getCcsDir();
-  // This process keeps no Open store any more (the Open group is Rust-owned): without the Rust
-  // owner bound, the progress of a 202 Open is unknown here, and each id-bearing row says so.
-  const withOperations = <T extends { id?: unknown }>(profiles: T[]) =>
-    profiles.map((profile) =>
-      typeof profile.id === 'string' && profile.id ? { ...profile, openOperation: null } : profile
-    );
   const body = await readOwnedValueWithRust(
     req,
     res,
     '/api/claude/desktop-profiles',
     scope,
-    claudeOpenDelegates(res)
-      ? acceptRustDesktopProfilesWithOperations
-      : acceptRustDesktopProfiles(withOperations),
-    async () => ({ profiles: withOperations(await listClaudeDesktopProfileMetadata()) })
+    // Rows already carrying the field (the owner's answer) are served as they are; others are
+    // left without it rather than stamped with a null this process cannot vouch for.
+    (value) =>
+      acceptRustDesktopProfilesWithOperations(value) ??
+      acceptRustDesktopProfiles((rows) => rows)(value),
+    async () => ({ profiles: await listClaudeDesktopProfileMetadata() })
   );
   const profiles = (body as { profiles?: unknown } | undefined)?.profiles;
   if (!Array.isArray(profiles)) throw new ProfileError('Claude desktop profiles were not read.');
   return profiles;
+}
+
+/** The Open progress the profiles read carries, as the fed input's `[profileId, operation]` pairs. Null: unknown. */
+export function openPairs(profiles: unknown[]): unknown[] | null {
+  const pairs: unknown[] = [];
+  for (const row of profiles) {
+    if (!row || typeof row !== 'object') continue;
+    const { id, openOperation } = row as { id?: unknown; openOperation?: unknown };
+    if (typeof id !== 'string' || !id) continue;
+    // A row without the field is an owner answer this process does not have: unavailable, not empty.
+    if (!('openOperation' in row)) return null;
+    if (openOperation !== null && openOperation !== undefined) pairs.push([id, openOperation]);
+  }
+  return pairs;
 }
 
 export interface HomeViewRouterDeps {
@@ -164,9 +168,18 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
     let read: HomeDashboardRead | null | undefined;
     // R1: the runtime inventory the fed path read, so a fallback answers from the same reads.
     let fedInventory: { value: unknown } | undefined;
+    // One profiles read serves both paths: the fed input's Open progress and the fallback's list.
+    let profilesRead: Promise<unknown[] | null> | null = null;
+    const readProfiles = (): Promise<unknown[] | null> =>
+      (profilesRead ??= Promise.resolve()
+        .then(() => (deps.readProfiles ?? readClaudeDesktopProfiles)(req, res))
+        .then(
+          (profiles) => profiles,
+          () => null
+        ));
     const fed = homeFedService(res);
     if (fed) {
-      const [homeRead, inventory] = await Promise.all([
+      const [homeRead, inventory, profiles] = await Promise.all([
         (deps.readHomeDashboard ?? readAccountDashboardForHome)(platform, refresh === 'true', {
           secureTransport,
         }).catch(() => null),
@@ -174,16 +187,19 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
           (value) => ({ value }),
           () => null
         ),
+        readProfiles(),
       ]);
       read = homeRead;
       fedInventory = inventory ?? undefined;
-      if (homeRead && inventory) {
+      const opens = profiles ? openPairs(profiles) : null;
+      if (homeRead && inventory && opens) {
         const answered = await answerHomeFed(req, res, fed, {
           platform,
           secure: secureTransport,
           context,
           read: { dashboard: withOfferedViews(homeRead.dashboard, res), now: homeRead.now },
           inventory: inventory.value,
+          opens: opens,
           scope: (deps.scope ?? getCcsDir)(),
         });
         if (answered) return;
@@ -198,7 +214,7 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
         : (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
             secureTransport,
           }).catch(() => null),
-      (deps.readProfiles ?? readClaudeDesktopProfiles)(req, res).catch(() => null),
+      readProfiles(),
       (deps.readInventory ?? readAntigravityInventory)(req, res, fedInventory).catch(() => null),
     ]);
     if (!dashboard) {
