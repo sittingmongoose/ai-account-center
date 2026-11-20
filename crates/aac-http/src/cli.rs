@@ -182,7 +182,7 @@ fn dispatch(raw: &[String]) -> Result<i32, String> {
     Ok(0)
 }
 
-/// CUT1 = A (Jared, 2026-11-19): these admin families are managed in the dashboard's Settings
+/// CUT1 = A (2026-11-19): these admin families are managed in the dashboard's Settings
 /// page; the CLI points there instead of duplicating the writers.
 fn settings_covered(family: &str) -> i32 {
     let (section, what) = match family {

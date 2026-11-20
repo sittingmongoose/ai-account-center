@@ -207,9 +207,9 @@ mod tests {
         let profile = json!({
             "email":"Owner@Example.com","id":"livia","canOpen":true,
             "mac":{"launcherName":"Claude","profilePath":"/Users/x/Applications/Claude.app",
-                   "sshHost":"jared-mac","canOpen":true},
+                   "sshHost":"fixture-mac","canOpen":true},
             "windows":{"launcherName":"Claude","profilePath":"C:\\Users\\x\\AppData\\Local\\Claude",
-                       "isDefault":true,"sshHost":"jared-windows"}
+                       "isDefault":true,"sshHost":"fixture-windows"}
         });
         let target = claude_target(std::path::Path::new("/fixture"), &profile).unwrap();
         assert_eq!(target.account_id, "claude:livia");
@@ -218,12 +218,12 @@ mod tests {
         assert_eq!(target.expected_email.as_deref(), Some("Owner@Example.com"));
         assert_eq!(
             target.binding,
-            r#"{"email":"Owner@Example.com","id":"livia","mac":{"launcherName":"Claude","profilePath":"/Users/x/Applications/Claude.app","sshHost":"jared-mac"},"windows":{"launcherName":"Claude","profilePath":"C:\\Users\\x\\AppData\\Local\\Claude","isDefault":true,"sshHost":"jared-windows"}}"#
+            r#"{"email":"Owner@Example.com","id":"livia","mac":{"launcherName":"Claude","profilePath":"/Users/x/Applications/Claude.app","sshHost":"fixture-mac"},"windows":{"launcherName":"Claude","profilePath":"C:\\Users\\x\\AppData\\Local\\Claude","isDefault":true,"sshHost":"fixture-windows"}}"#
         );
         let source = &target.primary_sources[0];
         assert_eq!(source.host.host, "windows");
         assert_eq!(source.host.platform, "windows");
-        assert_eq!(source.host.ssh_host.as_deref(), Some("jared-windows"));
+        assert_eq!(source.host.ssh_host.as_deref(), Some("fixture-windows"));
         assert_eq!(source.selector, "claude-desktop-profile:default");
         assert_eq!(
             source.claude_profile.as_ref().unwrap()["profilePath"],

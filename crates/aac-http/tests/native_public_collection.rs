@@ -13,6 +13,12 @@ use tokio::{
 
 use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 
+fn host_alias(machine: &str) -> &'static str {
+    aac_status::computers::registry()[machine]["sshAlias"]
+        .as_str()
+        .expect("fixture peer alias")
+}
+
 fn file(root: &Path, name: &str, body: Value) {
     let file = root.join(name);
     fs::write(&file, body.to_string()).unwrap();
@@ -84,11 +90,11 @@ async fn public_transport_fixture(agent_on: bool, history_only: bool) {
             "id":"fixture-mac","email":"fixture@example.invalid",
             "mac":{"launcherName":"Claude Fixture","launcherPath":"/Applications/Claude Fixture.app",
                 "profilePath":"/Users/fixture/Library/Application Support/Claude-fixture",
-                "sshHost":"jared-mac"}
+                "sshHost":host_alias("mac")}
         },{
             "id":"fixture-win","email":"windows@example.invalid",
             "windows":{"launcherName":"Claude Fixture","profilePath":windows_profile,
-                "sshHost":"jared-windows","isDefault":false}
+                "sshHost":host_alias("windows"),"isDefault":false}
         }]}),
     );
     fs::write(root.join("fixture-key"), "test identity").unwrap();
@@ -97,6 +103,11 @@ async fn public_transport_fixture(agent_on: bool, history_only: bool) {
     let run = root.join("run");
     fs::create_dir(&run).unwrap();
     fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
+    file(
+        &root,
+        "fixture-computers.json",
+        aac_status::computers::registry().clone(),
+    );
     let ssh = root.join("ssh");
     fs::write(
         &ssh,
@@ -109,27 +120,30 @@ import shlex
 import sys
 
 root = Path(__file__).parent
+computers = json.loads((root / "fixture-computers.json").read_text(encoding="utf-8"))
+mac = computers["mac"]["sshAlias"]
+windows = computers["windows"]["sshAlias"]
 args = sys.argv[1:]
 if args[0] == "-G":
     sys.exit(0)
 assert args[-3] == "--"
 assert "StrictHostKeyChecking=yes" in args
 host, command = args[-2:]
-assert host in {"jared-mac", "jared-windows", "nas1-agent", "alexis-windows"}
+assert host in {mac, windows, "nas1-agent", "alexis-windows"}
 if command.startswith("powershell.exe"):
     assert len(command) < 8191
     outer = base64.b64decode(command.rsplit(" ", 1)[1]).decode("utf-16-le")
     command = base64.b64decode(re.search(r"'-EncodedCommand' '([A-Za-z0-9+/=]+)'", outer)[1]).decode("utf-16-le")
     if "$encoded = [Console]::In.ReadToEnd()" in command:
         command = base64.b64decode(sys.stdin.buffer.read(), validate=True).decode("utf-16-le")
-agent_program = shlex.split(command)[-1] if host == "jared-mac" else ""
+agent_program = shlex.split(command)[-1] if host == mac else ""
 if "case 'probe'" in agent_program:
-    assert host == "jared-mac"
+    assert host == mac
     print(json.dumps({"name":"aac-agent","version":"0.1.0","protocol":1,"target":"aarch64-apple-darwin"}))
 elif "case 'run'" in agent_program:
     request = json.loads(sys.stdin.buffer.readline())
     if request["verb"] == "claude-host":
-        assert host == "jared-mac"
+        assert host == mac
         if request["args"]["op"] == "open":
             (root / "agent-open").write_text(host)
             sys.exit(1)
@@ -142,7 +156,7 @@ elif "case 'run'" in agent_program:
         value = {"fallback":"python"}
     print(json.dumps({"type":"result","protocol":1,"id":request["id"],"value":value}))
 elif command.startswith('/usr/bin/python3 -c '):
-    assert host == "jared-mac"
+    assert host == mac
     envelope = json.load(sys.stdin)
     assert envelope["request"] == {
         "op": "session",
@@ -152,7 +166,7 @@ elif command.startswith('/usr/bin/python3 -c '):
     (root / "host-session").write_text(host)
     print('{"signedIn":false}')
 elif "aac-desktop-history" in command or "[IO.File]::ReadAllText($history)" in command:
-    if host == "jared-mac":
+    if host == mac:
         path = shlex.split(command)[-1]
         expected = "/Users/fixture/Library/Application Support/Claude-fixture/plan-usage-history.json"
     else:
@@ -164,16 +178,16 @@ elif "aac-desktop-history" in command or "[IO.File]::ReadAllText($history)" in c
     (root / (host + "-history")).write_text(path)
     # The fake models a populated file at the exact path, and no file at the directory.
     if path == expected:
-        print(json.dumps({"version":2,"samples":[{"t":1795123200000,"u":{"fh":25 if host == "jared-mac" else 42}}]}))
+        print(json.dumps({"version":2,"samples":[{"t":1795123200000,"u":{"fh":25 if host == mac else 42}}]}))
     else:
         print("CCS_DESKTOP_USAGE_MISSING")
 else:
-    if host == "jared-mac":
+    if host == mac:
         argv = shlex.split(command)
         assert argv[:2] == ["/bin/sh", "-c"]
         assert "/Applications/Claude Fixture.app" in argv[2]
     else:
-        assert host == "jared-windows"
+        assert host == windows
         assert "Start-ScheduledTask" in command and "fixture-win" in command
     (root / (host + "-open")).write_text(host)
 "#,
@@ -191,9 +205,9 @@ else:
                 "id":"fixture-pending","label":"Pending fixture","createdAt":"2026-11-19T20:00:00.000Z",
                 "mac":{"launcherName":"Claude Pending","launcherPath":"/Applications/Claude Pending.app",
                     "profilePath":"/Users/fixture/Library/Application Support/Claude-pending",
-                    "sshHost":"jared-mac"},
+                    "sshHost":host_alias("mac")},
                 "windows":{"launcherName":"Claude Pending","profilePath":"C:\\Users\\fixture\\AppData\\Roaming\\Claude-pending",
-                    "sshHost":"jared-windows"}
+                    "sshHost":host_alias("windows")}
             }]}),
         );
         file(
@@ -330,7 +344,7 @@ else:
             fs::read_to_string(root.join("agent-session"))
                 .ok()
                 .as_deref(),
-            Some("jared-mac"),
+            Some(host_alias("mac")),
             "agent-on lifecycle session reached the pinned agent"
         );
         assert!(!root.join("host-session").exists());
@@ -349,7 +363,7 @@ else:
         assert_eq!(state["account"]["status"], "needs_sign_in");
         assert_eq!(
             fs::read_to_string(root.join("pending-session")).unwrap(),
-            "jared-mac"
+            host_alias("mac")
         );
         let uncertain = client
             .post(format!(
@@ -365,10 +379,10 @@ else:
         assert_eq!(uncertain.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(
             fs::read_to_string(root.join("agent-open")).unwrap(),
-            "jared-mac"
+            host_alias("mac")
         );
         assert!(
-            !root.join("jared-mac-open").exists(),
+            !root.join(format!("{}-open", host_alias("mac"))).exists(),
             "indeterminate Open replayed via fixed SSH"
         );
         child.kill().await.unwrap();
@@ -377,7 +391,7 @@ else:
 
     assert_eq!(
         fs::read_to_string(root.join("host-session")).unwrap(),
-        "jared-mac"
+        host_alias("mac")
     );
     if history_only {
         for (platform, id, percent, host, expected_path) in [
@@ -385,14 +399,14 @@ else:
                 "mac",
                 "fixture-mac",
                 25,
-                "jared-mac",
+                host_alias("mac"),
                 "/Users/fixture/Library/Application Support/Claude-fixture/plan-usage-history.json",
             ),
             (
                 "windows",
                 "fixture-win",
                 42,
-                "jared-windows",
+                host_alias("windows"),
                 r"C:\Users\fixture\AppData\Roaming\Claude-fixture\plan-usage-history.json",
             ),
         ] {
@@ -422,8 +436,8 @@ else:
         return;
     }
     for (platform, profile_id, host) in [
-        ("mac", "fixture-mac", "jared-mac"),
-        ("windows", "fixture-win", "jared-windows"),
+        ("mac", "fixture-mac", host_alias("mac")),
+        ("windows", "fixture-win", host_alias("windows")),
     ] {
         let response = client
             .post(format!(

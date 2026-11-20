@@ -1,5 +1,5 @@
 # Lane E (M3D4 staged, M3D5 pinned): place the hash-pinned aac-agent in AAC's cache folder on
-# this Windows computer (JaredGamingPC, Alexis). The lead runs this on each live computer; the
+# this Windows computer. The lead runs this on each live computer; the
 # Rust service admits only an already installed, pinned agent and never uploads one itself.
 # This script never builds (build on aac-winbuild with: node scripts/build-agent.js) and never
 # edits config or trust files.

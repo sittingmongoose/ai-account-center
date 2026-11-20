@@ -191,19 +191,19 @@ mod tests {
         );
         let mut producer = Producer::new(root.clone(), owners()).with_home(None);
         producer.mac_session_fixture = Some(|alias, launcher| {
-            assert_eq!(alias, "jared-mac");
+            assert_eq!(alias, "fixture-mac");
             assert_eq!(
                 *launcher,
-                json!({"launcherName":"Claude Mac","profilePath":"/Users/fixture/Claude","sshHost":"jared-mac"})
+                json!({"launcherName":"Claude Mac","profilePath":"/Users/fixture/Claude","sshHost":"fixture-mac"})
             );
             json!({"signedIn":false})
         });
         let profile = json!({
             "email":"owner@example.com","id":"livia",
             "mac":{"launcherName":"Claude Mac","launcherPath":"/Applications/Claude.app",
-                   "profilePath":"/Users/fixture/Claude","sshHost":"jared-mac"},
+                   "profilePath":"/Users/fixture/Claude","sshHost":"fixture-mac"},
             "windows":{"launcherName":"Claude","profilePath":"C:\\Users\\x\\AppData\\Local\\Claude",
-                       "isDefault":true,"sshHost":"jared-windows"}
+                       "isDefault":true,"sshHost":"fixture-windows"}
         });
         fixture_file(
             &root,
@@ -265,7 +265,7 @@ mod tests {
                 row["capabilities"]["claudePlatforms"],
                 json!(["mac", "windows"])
             );
-            assert!(!row.to_string().contains("jared-"));
+            assert!(!row.to_string().contains("fixture-"));
         }
     }
 }

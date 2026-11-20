@@ -14,10 +14,13 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent
+COMPUTERS = json.loads((ROOT / "fixture-computers.json").read_text(encoding="utf-8"))
+MAC = COMPUTERS["mac"]["sshAlias"]
+WINDOWS = COMPUTERS["windows"]["sshAlias"]
 HOSTS = {
     "ubuntu": ("ubuntu", "x86_64-unknown-linux-gnu"),
-    "jared-mac": ("mac", "aarch64-apple-darwin"),
-    "jared-windows": ("windows", "x86_64-pc-windows-msvc"),
+    MAC: ("mac", "aarch64-apple-darwin"),
+    WINDOWS: ("windows", "x86_64-pc-windows-msvc"),
     "nas1-agent": ("ubuntu", "x86_64-unknown-linux-gnu"),
     "alexis-windows": ("windows", "x86_64-pc-windows-msvc"),
     "odroid": ("ubuntu", "x86_64-unknown-linux-gnu"),
@@ -114,11 +117,11 @@ def main():
         stage = "probe" if sys.argv[1:] == ["--version"] else "run"
         trace(host, stage)
     if stage == "probe":
-        if host == "jared-windows" and (ROOT / "missing-windows-agent").exists():
+        if host == WINDOWS and (ROOT / "missing-windows-agent").exists():
             sys.exit(87)
         print(json.dumps({"name":"aac-agent","version":"0.1.0","protocol":1,"target":HOSTS[host][1]}))
     else:
-        if host == "jared-windows" and (ROOT / "hold-windows-connection").exists():
+        if host == WINDOWS and (ROOT / "hold-windows-connection").exists():
             trace(host, "connecting", True)
             until = time.monotonic() + 5
             while not (ROOT / "release-windows-connection").exists() and time.monotonic() < until:
@@ -131,7 +134,7 @@ def main():
             assert "AAC_APP_UPDATE_STATE_DIR" not in os.environ
         start = request["args"]["action"]
         if start == "prepare-update":
-            if host == "jared-windows" and (ROOT / "old-windows-agent").exists():
+            if host == WINDOWS and (ROOT / "old-windows-agent").exists():
                 trace(host, "legacy-refusal", True)
                 print(json.dumps({"type":"failure","protocol":1,"id":request["id"],
                                   "failure":{"cause":"refused","reason":None,

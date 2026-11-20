@@ -14,9 +14,11 @@ import subprocess
 import tempfile
 import time
 
+COMPUTERS = json.loads((pathlib.Path(__file__).resolve().parents[3]
+                        / "web-dashboard/public/computers.json").read_text(encoding="utf-8"))
 HOSTS = {
-    "mac": ("jared-mac", "/usr/bin/python3"),
-    "windows": ("jared-windows", "python.exe"),
+    "mac": (COMPUTERS["mac"]["sshAlias"], "/usr/bin/python3"),
+    "windows": (COMPUTERS["windows"]["sshAlias"], "python.exe"),
     "nas1": ("nas1-agent", "/usr/bin/python3"),
     "alexis": ("alexis-windows", "python.exe"),
     "ubuntu": ("ubuntuserver", "/usr/bin/python3"),

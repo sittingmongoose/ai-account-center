@@ -612,17 +612,17 @@ mod tests {
     #[test]
     fn marker_names_bind_profile_platform_and_nonce() {
         assert_eq!(
-            marker_name("platyr-windows-0123456789abcdef0123456789abcdef.json"),
-            Some(("platyr", "windows", "0123456789abcdef0123456789abcdef"))
+            marker_name("gmail-windows-0123456789abcdef0123456789abcdef.json"),
+            Some(("gmail", "windows", "0123456789abcdef0123456789abcdef"))
         );
         assert_eq!(
             marker_name("unknown-mac-0123456789abcdef0123456789abcdef.json"),
             None
         );
         assert_eq!(
-            marker_name("platyr-linux-0123456789abcdef0123456789abcdef.json"),
+            marker_name("gmail-linux-0123456789abcdef0123456789abcdef.json"),
             None
         );
-        assert_eq!(marker_name("platyr-mac-short.json"), None);
+        assert_eq!(marker_name("gmail-mac-short.json"), None);
     }
 }

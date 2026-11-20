@@ -679,14 +679,14 @@ const proxyErrorCases: string[][] = [
   ['dashboard', 'proxy', 'status', 'extra'],
   ['dashboard', 'proxy', 'set'],
   ['dashboard', 'proxy', 'set', '--address'],
-  ['dashboard', 'proxy', 'set', '--address', '192.168.50.20'],
+  ['dashboard', 'proxy', 'set', '--address', '10.23.45.67'],
   ['dashboard', 'proxy', 'set', '--origin', 'https://aac.example.test'],
   [
     'dashboard',
     'proxy',
     'set',
     '--address',
-    '192.168.50.20',
+    '10.23.45.67',
     '--origin',
     'https://aac.example.test',
     '--wat',
@@ -696,7 +696,7 @@ const proxyErrorCases: string[][] = [
     'proxy',
     'set',
     '--address',
-    '192.168.50.20',
+    '10.23.45.67',
     '--origin',
     'https://a.test',
     '--origin',
@@ -719,7 +719,7 @@ for (const args of proxyErrorCases) {
 const CONFIG_SEEDS: Record<string, string> = {
   'status absent': '',
   'status lan on':
-    'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 192.168.50.20\n  public_origin: https://aac.example.test\n',
+    'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 10.23.45.67\n  public_origin: https://aac.example.test\n',
   'status refused list':
     'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 8.8.8.8\n',
   'status local kind': 'version: 1\ndashboard_tls:\n  trusted_proxy: tailscale-serve\n',
@@ -754,7 +754,7 @@ const MUTATIONS: MutationCase[] = [
     name: 'set from nothing',
     seed: '',
     writes: true,
-    args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test'],
+    args: ['set', '--address', '10.23.45.67', '--origin', 'https://aac.example.test'],
   },
   {
     name: 'set with existing config',
@@ -763,7 +763,7 @@ const MUTATIONS: MutationCase[] = [
     args: [
       'set',
       '--address',
-      '192.168.50.20',
+      '10.23.45.67',
       '--address',
       '10.0.0.5',
       '--origin',
@@ -786,13 +786,13 @@ const MUTATIONS: MutationCase[] = [
     name: 'set refuses a bad origin',
     seed: 'version: 1\n',
     writes: false,
-    args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test/path'],
+    args: ['set', '--address', '10.23.45.67', '--origin', 'https://aac.example.test/path'],
   },
   {
     name: 'set refuses a local kind without --replace',
     seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: tailscale-serve\n',
     writes: false,
-    args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test'],
+    args: ['set', '--address', '10.23.45.67', '--origin', 'https://aac.example.test'],
   },
   {
     name: 'set replaces a local kind with --replace',
@@ -801,7 +801,7 @@ const MUTATIONS: MutationCase[] = [
     args: [
       'set',
       '--address',
-      '192.168.50.20',
+      '10.23.45.67',
       '--origin',
       'https://aac.example.test',
       '--replace',
@@ -809,20 +809,20 @@ const MUTATIONS: MutationCase[] = [
   },
   {
     name: 'set no-op on identical values',
-    seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 192.168.50.20\n  public_origin: https://aac.example.test\n',
+    seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 10.23.45.67\n  public_origin: https://aac.example.test\n',
     writes: false,
-    args: ['set', '--address', '192.168.50.20', '--origin', 'https://aac.example.test'],
+    args: ['set', '--address', '10.23.45.67', '--origin', 'https://aac.example.test'],
   },
   { name: 'off when already off', seed: 'version: 1\n', writes: false, args: ['off'] },
   {
     name: 'off removes the lan block',
-    seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 192.168.50.20\n  public_origin: https://aac.example.test\n',
+    seed: 'version: 1\ndashboard_tls:\n  trusted_proxy: lan-https-proxy\n  trusted_proxy_addresses:\n    - 10.23.45.67\n  public_origin: https://aac.example.test\n',
     writes: true,
     args: ['off'],
   },
   {
     name: 'off keeps other tls keys',
-    seed: 'version: 1\ndashboard_tls:\n  trusted_proxy_addresses:\n    - 192.168.50.20\n  https_listener:\n    enabled: true\n    port: 3443\n    cert_path: /tmp/c.pem\n    key_path: /tmp/k.pem\n',
+    seed: 'version: 1\ndashboard_tls:\n  trusted_proxy_addresses:\n    - 10.23.45.67\n  https_listener:\n    enabled: true\n    port: 3443\n    cert_path: /tmp/c.pem\n    key_path: /tmp/k.pem\n',
     writes: true,
     args: ['off'],
   },

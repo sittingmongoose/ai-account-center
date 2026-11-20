@@ -26,6 +26,9 @@ const fixed = process.env.AAC_TEST_WORKER_SOURCE;
 if (snapshot) assert.equal(process.platform, 'win32', 'the share writer is retained on Windows');
 const source =
   process.env.AAC_TEST_WORKER_SOURCE ?? fileURLToPath(new URL('../..', import.meta.url));
+const computers = JSON.parse(
+  await readFile(new URL('../../web-dashboard/public/computers.json', import.meta.url), 'utf8')
+);
 const base = await mkdtemp(path.join(os.tmpdir(), 'aac-native-worker-'));
 const root = path.join(base, '.ccs');
 const share = path.join(base, 'usage-share');
@@ -98,12 +101,12 @@ try {
     launcherName: 'Claude Fixture',
     launcherPath: '/Applications/Claude Fixture.app',
     profilePath: '/Users/fixture/Library/Application Support/Claude-fixture',
-    sshHost: 'jared-mac',
+    sshHost: computers.mac.sshAlias,
   };
   const windows = {
     launcherName: 'Claude Fixture',
     profilePath: 'C:/Users/fixture/AppData/Roaming/Claude-fixture',
-    sshHost: 'jared-windows',
+    sshHost: computers.windows.sshAlias,
   };
   const endpoint = (alias) => ({ alias, hostname: 'fixture-host', username: 'fixture', port: 22 });
   await write(path.join(root, 'claude-desktop-profiles.json'), {

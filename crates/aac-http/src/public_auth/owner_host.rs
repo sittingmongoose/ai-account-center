@@ -418,12 +418,6 @@ impl OwnerHost {
         }
     }
 
-    /// Warm the embedded private service before the first read.
-    pub(super) async fn warm(&self) {
-        #[cfg(unix)]
-        let _ = self.link().await;
-    }
-
     #[cfg(unix)]
     async fn status_event_link(&self) -> Option<ServiceLink> {
         if self.embed {

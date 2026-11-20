@@ -11,15 +11,18 @@ use std::{
 };
 
 const SOURCE: &str = include_str!("../../../tests/spec/agent/app-update-transport-fixture.py");
-const HOSTS: [(&str, &str); 7] = [
-    ("ubuntu", "ubuntu"),
-    ("mac", "jared-mac"),
-    ("windows", "jared-windows"),
-    ("nas1", "nas1-agent"),
-    ("alexis", "alexis-windows"),
-    ("odroid", "odroid"),
-    ("1070ti", "1070ti"),
-];
+fn host_alias(machine: &str) -> &'static str {
+    aac_status::computers::registry()[machine]["sshAlias"]
+        .as_str()
+        .unwrap_or("ubuntu")
+}
+
+fn hosts() -> [(&'static str, &'static str); 7] {
+    [
+        "ubuntu", "mac", "windows", "nas1", "alexis", "odroid", "1070ti",
+    ]
+    .map(|machine| (machine, host_alias(machine)))
+}
 
 #[test]
 fn fixture_transport_and_service_api() {
@@ -33,6 +36,11 @@ fn fixture_transport_and_service_api() {
         fs::write(path, SOURCE).expect("write fixture command");
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("fixture executable");
     }
+    fs::write(
+        root.join("fixture-computers.json"),
+        aac_status::computers::registry().to_string(),
+    )
+    .expect("fixture computer registry");
     let artifact = aac_core::sha256_hex(SOURCE.as_bytes());
     let catalog = json!({"artifacts":[
         {"file":bin,"target":"x86_64-unknown-linux-gnu","version":"0.1.0","sha256":artifact},
@@ -118,10 +126,10 @@ async fn service_fixture_child() {
     let rows = done["results"].as_array().expect("job rows");
     assert_eq!(rows.len(), 84);
     for (status, expected) in [
-        ("updated", HOSTS.len()),
-        ("held", HOSTS.len()),
-        ("action_required", HOSTS.len()),
-        ("not_installed", 9 * HOSTS.len()),
+        ("updated", hosts().len()),
+        ("held", hosts().len()),
+        ("action_required", hosts().len()),
+        ("not_installed", 9 * hosts().len()),
     ] {
         assert_eq!(
             rows.iter().filter(|r| r["status"] == status).count(),
@@ -130,7 +138,7 @@ async fn service_fixture_child() {
     }
     let fresh = AppUpdates::new(root.clone());
     assert_eq!(fresh.status().await.body["job"], done);
-    for (id, host) in HOSTS {
+    for (id, host) in hosts() {
         let events = trace(&root, host);
         assert_eq!(
             events.iter().filter(|v| v["stage"] == "probe").count(),
@@ -153,7 +161,7 @@ async fn service_fixture_child() {
     assert_eq!(owner.start().await.status, 409);
     assert_eq!(fresh.cancel().await.status, 409, "other job owner's cancel");
     until(&owner, |job| {
-        HOSTS
+        hosts()
             .iter()
             .all(|(id, _)| job["hosts"][id]["phase"] == "downloading")
     })
@@ -170,10 +178,10 @@ async fn service_fixture_child() {
             .iter()
             .filter(|v| v["status"] == "skipped")
             .count(),
-        HOSTS.len()
+        hosts().len()
     );
     assert_eq!(owner.cancel().await.status, 200);
-    for (_, host) in HOSTS {
+    for (_, host) in hosts() {
         let trace = trace(&root, host);
         assert!(
             trace
@@ -191,7 +199,7 @@ async fn service_fixture_child() {
     fs::write(root.join("hold-windows-connection"), "fixture").expect("hold Windows SSH");
     assert_eq!(owner.start().await.status, 202);
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !trace(&root, "jared-windows")
+        while !trace(&root, host_alias("windows"))
             .iter()
             .any(|row| row["stage"] == "connecting")
         {
@@ -204,7 +212,7 @@ async fn service_fixture_child() {
     fs::write(root.join("release-windows-connection"), "fixture").expect("release Windows SSH");
     let done = until(&owner, |job| job["state"] == "completed").await;
     assert_eq!(
-        trace(&root, "jared-windows")
+        trace(&root, host_alias("windows"))
             .iter()
             .filter(|row| row["stage"] == "update")
             .count(),
@@ -249,7 +257,7 @@ async fn service_fixture_child() {
             .iter()
             .any(|row| row["platform"] == "alexis" && row["status"] == "updated")
     );
-    let windows_trace = trace(&root, "jared-windows");
+    let windows_trace = trace(&root, host_alias("windows"));
     assert_eq!(
         windows_trace
             .iter()
@@ -276,7 +284,11 @@ async fn service_fixture_child() {
     fs::write(root.join("catalog.json"), catalog.to_string()).expect("catalog without Mac");
     fs::write(root.join("missing-windows-agent"), "fixture")
         .expect("missing installed Windows agent");
-    let hosts = [("mac", "jared-mac"), ("windows", "jared-windows")].map(|(platform, host)| {
+    let hosts = [
+        ("mac", host_alias("mac")),
+        ("windows", host_alias("windows")),
+    ]
+    .map(|(platform, host)| {
         (
             platform,
             host,

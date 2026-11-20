@@ -99,7 +99,7 @@ const overrides: Record<string, Contract> =
       )
     : {};
 // The native owner rows share the platform contract with the earlier composition rows.
-// Select them only when this boot enables the native owner.
+// Cut boots always use those owners, including when the private worker starts.
 const nativeStoreHomeRow = (method: string, route: string) =>
   method === 'GET' && groups['store-usage-home'].test(method + ' ' + route);
 const nativeGroupRow = (method: string, route: string) =>
@@ -140,13 +140,12 @@ if (mode === 'cut') {
       .filter(Boolean)
       .join(' '),
     AAC_RUST_STORE: 'on',
-    AAC_RUST_GROUP_STATUS: 'off',
-    AAC_RUST_GROUP_SCOREBOARD: 'off',
+    AAC_RUST_GROUP_STATUS: 'on',
+    AAC_RUST_GROUP_SCOREBOARD: 'on',
     AAC_RUST_GROUP_HOME: 'on',
     AAC_RUST_HOME_VIEW: 'off',
     AAC_RUST_GROUP_APP_UPDATES: 'off',
-    // The migration lanes serve Accounts and Re-check natively in both modes, so the native
-    // collection runs here too; the worker still owns its remaining routes.
+    // Both boots exercise the same native collection and public route owners.
     AAC_RUST_GROUP_COLLECTION: 'on',
     AAC_AGENT_VERBS: 'off',
     AAC_AGENT_TRANSPORT: 'off',
@@ -397,7 +396,7 @@ try {
       AAC_TS_SIDECAR: 'off',
     });
   }
-  if (group === undefined && mode === 'cut-rust-only') {
+  if (group === undefined && mode !== 'fixture') {
     environment.AAC_RUST_GROUP_HOME = 'on';
     // Use the same unmounted Status reports fixture as the scoped replay. The
     // collection rows exercise their own samples elsewhere in this full run.
@@ -465,7 +464,9 @@ try {
       assert(
         answer.accounts.every(
           (account: { status: string; windows: unknown[]; sampledAt: unknown }) =>
-            account.status === 'unavailable' && account.windows.length === 0 && account.sampledAt === null
+            account.status === 'unavailable' &&
+            account.windows.length === 0 &&
+            account.sampledAt === null
         )
       );
       assert.equal(answer.activity.accountAttribution, 'unavailable');
@@ -504,9 +505,12 @@ try {
           name === 'GET /api/accounts/registry' &&
           (role === 'session' || role === 'bar');
         const mine =
-          (mode !== 'fixture' && nativeStoreHomeRow(route.method, route.path)) ||
-          (nativeGroupRow(route.method, route.path) &&
-            environment.AAC_RUST_CUT_NATIVE_ROUTES === 'on');
+          (mode !== 'fixture' &&
+            (nativeStoreHomeRow(route.method, route.path) ||
+              nativeGroupRow(route.method, route.path))) ||
+          (mode === 'fixture' &&
+            environment.AAC_RUST_CUT_NATIVE_ROUTES === 'on' &&
+            nativeGroupRow(route.method, route.path));
         const nativeContract = mine ? overrides['native/contract/' + fixture] : undefined;
         const nativeRoute = nativeContract === undefined ? undefined : route.path;
         const contract: Contract =
