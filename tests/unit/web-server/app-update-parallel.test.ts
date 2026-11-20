@@ -58,6 +58,7 @@ describe('Update apps runs every computer at once', () => {
       nas1: 300,
       alexis: 250,
       odroid: 350,
+      '1070ti': 350,
     };
     const started: Record<string, number> = {};
     const service = new AppUpdateService({

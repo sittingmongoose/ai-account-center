@@ -987,6 +987,7 @@ mod tests {
         assert_eq!(machine_label("nas1"), Some("Nas1"));
         assert_eq!(machine_label("alexis"), Some("Alexis PC"));
         assert_eq!(machine_label("odroid"), Some("Odroid"));
+        assert_eq!(machine_label("1070ti"), Some("1070ti"));
         assert_eq!(machine_label("elsewhere"), None);
     }
 

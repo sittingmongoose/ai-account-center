@@ -9,7 +9,7 @@ import {
 } from '../../../src/web-server/services/dashboard-hosts';
 
 describe('dashboard host facts', () => {
-  it('names the six fixed computers', () => {
+  it('names the seven fixed computers', () => {
     expect([...DASHBOARD_HOSTS]).toEqual([
       'ubuntu',
       'mac',
@@ -17,13 +17,14 @@ describe('dashboard host facts', () => {
       'nas1',
       'alexis',
       'odroid',
+      '1070ti',
     ]);
   });
 
   it('gives every host exactly one OS kind and one label', () => {
     expect(Object.keys(HOST_OS).sort()).toEqual([...DASHBOARD_HOSTS].sort());
     expect(Object.keys(HOST_LABELS).sort()).toEqual([...DASHBOARD_HOSTS].sort());
-    expect(HOST_OS).toEqual({ ubuntu: 'linux', mac: 'mac', windows: 'windows', nas1: 'linux', alexis: 'windows', odroid: 'linux' });
+    expect(HOST_OS).toEqual({ ubuntu: 'linux', mac: 'mac', windows: 'windows', nas1: 'linux', alexis: 'windows', odroid: 'linux', '1070ti': 'linux' });
     expect(HOST_LABELS).toEqual({
       ubuntu: 'Ubuntu',
       mac: 'Mac',
@@ -31,6 +32,7 @@ describe('dashboard host facts', () => {
       nas1: 'Nas1',
       alexis: 'Alexis PC',
       odroid: 'Odroid',
+      '1070ti': '1070ti',
     });
   });
 
@@ -38,6 +40,7 @@ describe('dashboard host facts', () => {
     ['ubuntu', 'ubuntu'],
     ['nas1', 'ubuntu'],
     ['odroid', 'ubuntu'],
+    ['1070ti', 'ubuntu'],
     ['mac', 'mac'],
     ['windows', 'windows'],
     ['alexis', 'windows'],

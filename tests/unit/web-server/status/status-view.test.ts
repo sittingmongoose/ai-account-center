@@ -73,6 +73,7 @@ async function inputs(root: string, extra: Partial<StatusInputs> = {}): Promise<
       nas1: ok(sample()),
       alexis: ok(sample()),
       odroid: ok(sample()),
+      '1070ti': ok(sample()),
     },
     browsers: none(),
     simlock: none(),
@@ -688,6 +689,7 @@ describe('status view', () => {
           nas1: { data: sample({ memAvailableBytes: 4.2 * GIB }), asOf: NOW - 10_000, error: null },
           alexis: { data: sample(), asOf: NOW - 30_000, error: null },
           odroid: { data: sample(), asOf: NOW - 30_000, error: null },
+          '1070ti': { data: sample(), asOf: NOW - 30_000, error: null },
         },
         browsers: {
           data: [

@@ -36,13 +36,21 @@ const isUsageLogSource = (source: unknown) =>
 
 describe('package-owned computer registry', () => {
   it('adds Alexis as another Windows computer while preserving OS kinds', () => {
-    expect(DASHBOARD_HOSTS).toEqual(['ubuntu', 'mac', 'windows', 'nas1', 'alexis', 'odroid']);
+    expect(DASHBOARD_HOSTS).toEqual([
+      'ubuntu',
+      'mac',
+      'windows',
+      'nas1',
+      'alexis',
+      'odroid',
+      '1070ti',
+    ]);
     expect(HOST_OS.alexis).toBe('windows');
     expect(helperPlatform('alexis')).toBe('windows');
     expect(helperPlatform('nas1')).toBe('ubuntu');
     expect(COMPUTERS.alexis.label).toBe('Alexis PC');
     expect(PLATFORMS).toEqual(DASHBOARD_HOSTS);
-    expect(EXPECTED_RESULTS).toBe(72);
+    expect(EXPECTED_RESULTS).toBe(84);
     expect(Object.isFrozen(COMPUTERS.alexis)).toBe(true);
   });
   it('uses only the fixed Alexis SSH alias and a Windows helper command', async () => {
@@ -113,6 +121,33 @@ describe('package-owned computer registry', () => {
     const view = await import('../../../web-dashboard/public/view-model.mjs');
     expect(view.UPDATE_HOST_IDS).toEqual(DASHBOARD_HOSTS);
     expect(view.platformLabel('odroid')).toBe('Odroid');
+  });
+  it('treats 1070ti as another remote Ubuntu computer wherever Nas1 is one', async () => {
+    expect(SSH_ALIASES['1070ti']).toBe('1070ti');
+    expect(HOST_OS['1070ti']).toBe(HOST_OS.nas1);
+    expect(helperPlatform('1070ti')).toBe('ubuntu');
+    expect(REMOTE_MACHINES['1070ti']).toBe('linux');
+    expect(machineSshAlias('1070ti')).toBe('1070ti');
+    for (const name of ['1070ti', '1070ti.local'])
+      expect(registryMachine(name, null)).toBe('1070ti');
+    expect(localComputer('1070ti', 'linux')).toBe('1070ti');
+    expect(isWriterName('1070ti.fixture')).toBe(true);
+    const invocation = await appUpdateInvocation('1070ti', '');
+    expect(invocation.args.at(-2)).toBe('1070ti');
+    expect(invocation.args.at(-1)).toContain('--platform ubuntu');
+    expect(await configuredUsageHosts()).toContainEqual({
+      host: '1070ti',
+      platform: 'ubuntu',
+      sshHost: '1070ti',
+    });
+    expect(sourceHost({ platform: 'ubuntu', sshHost: '1070ti' })).toBe('1070ti');
+    expect(analyticsRemoteTargets('1070ti')).toHaveLength(analyticsRemoteTargets('nas1').length);
+    expect((await resolveAnalyticsRemoteHosts())['1070ti']).toBe('1070ti');
+    // Dynamic: view-model.mjs imports computers.json as an ES module, and a static import here would
+    // replace the CommonJS require dashboard-hosts.ts reads the same file with (a Bun module-cache key).
+    const view = await import('../../../web-dashboard/public/view-model.mjs');
+    expect(view.UPDATE_HOST_IDS).toEqual(DASHBOARD_HOSTS);
+    expect(view.platformLabel('1070ti')).toBe('1070ti');
   });
   it('keeps both generations of account files on the existing platform + alias protocol', () => {
     for (const [platform, sshHost, host] of [

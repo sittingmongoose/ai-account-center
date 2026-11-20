@@ -110,8 +110,8 @@ describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
     expect(MESSAGES.t3_unreachable).toContain('AAC did not write');
   });
 
-  it('expects twelve apps on six computers and keeps the rollback app set frozen', () => {
-    expect(EXPECTED_RESULTS).toBe(72);
+  it('expects twelve apps on seven computers and keeps the rollback app set frozen', () => {
+    expect(EXPECTED_RESULTS).toBe(84);
     expect(Object.keys(UPDATE_APP_LABELS)).toHaveLength(12);
     expect(LEGACY_STORAGE_APPS).toHaveLength(10);
     expect(LEGACY_STORAGE_APPS).not.toContain('cursor-cli');

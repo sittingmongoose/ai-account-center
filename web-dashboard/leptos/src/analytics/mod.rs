@@ -412,8 +412,16 @@ mod tests {
     #[test]
     fn the_loading_fallback_names_every_registered_computer() {
         let labels = computer_labels();
-        assert!(labels.len() >= 6, "{labels:?}");
-        for label in ["Ubuntu", "Mac", "Windows", "Nas1", "Alexis PC", "Odroid"] {
+        assert!(labels.len() >= 7, "{labels:?}");
+        for label in [
+            "Ubuntu",
+            "Mac",
+            "Windows",
+            "Nas1",
+            "Alexis PC",
+            "Odroid",
+            "1070ti",
+        ] {
             assert!(
                 labels.iter().any(|name| name == label),
                 "{label}: {labels:?}"

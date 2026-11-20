@@ -110,7 +110,7 @@ async function fixture(): Promise<any> {
     timeZone: 'America/New_York',
     reports: reader.snapshot(),
     registry: none(),
-    machines: { vm: none(), mac: none(), windows: none(), nas1: none(), alexis: none(), odroid: none() },
+    machines: { vm: none(), mac: none(), windows: none(), nas1: none(), alexis: none(), odroid: none(), '1070ti': none() },
     browsers: none(),
     simlock: none(),
     usage: null,

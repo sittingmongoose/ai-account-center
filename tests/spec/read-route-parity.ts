@@ -56,7 +56,7 @@ try {
     timeZone: 'UTC',
     reports: reader.snapshot(),
     registry: none(),
-    machines: { vm: none(), nas1: none(), mac: none(), windows: none(), alexis: none(), odroid: none() },
+    machines: { vm: none(), nas1: none(), mac: none(), windows: none(), alexis: none(), odroid: none(), '1070ti': none() },
     browsers: none(),
     simlock: none(),
     usage: null,
