@@ -471,6 +471,24 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers/history.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/analytics_writers/migration.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/analytics_writers/scan_state.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/antigravity_host.rs",
       "kind": "helper",
       "evidence": [
@@ -970,6 +988,12 @@
     },
     {
       "file": "crates/aac-http/tests/g4_parity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/kimi_history.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1660,6 +1684,12 @@
       ]
     },
     {
+      "file": "crates/aac-store/tests/kimi_history.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-store/tests/log_recovery.rs",
       "kind": "internal",
       "evidence": [],
@@ -1937,6 +1967,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/incremental.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/kimi_history.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-usage/tests/readers.rs",
       "kind": "internal",
       "evidence": [],
@@ -1944,6 +1986,12 @@
     },
     {
       "file": "native/aac-usage/tests/resume.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/review_settled_append.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
