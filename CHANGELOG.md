@@ -26,6 +26,7 @@
 
 ### Fixed
 
+* **usage:** A usage period that restarts with a new reset time no longer counts the jump from the old period's reading as burn: a rate and "full in" come only from readings inside one period, even when the earlier reset had already passed.
 * **app-updates:** Codex, Codex Desktop and desktop apps that Update all relaunches on Linux now start outside the dashboard's cgroup. They stayed in it before, so their memory counted against the dashboard's limit, and one leftover process kept `memory.peak` alive across dashboard restarts.
 * **antigravity:** A revoked or expired Antigravity refresh grant (HTTP 400 `invalid_grant` from Google's token endpoint) now shows Sign in again instead of temporarily unavailable.
 

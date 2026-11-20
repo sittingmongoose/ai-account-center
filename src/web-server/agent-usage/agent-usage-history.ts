@@ -273,7 +273,9 @@ function upcoming(reading: Reading): reading is Reading & { resetAt: number } {
  * - any reported reset time falls between them (`earlier.at < reset <= later.at`), whichever
  *   reading reported it, one without a percentage included, so a source that omits the time cannot
  *   hide a reset;
- * - both name an upcoming reset and those differ by more than 10 minutes;
+ * - both name a reset time and those differ by more than 10 minutes, whether the earlier one has
+ *   passed or not: a reading that still names the old period after a restart is never burn in the
+ *   new one;
  * - use falls: by more than a point when both name the same upcoming reset (a rolling window
  *   easing), by any amount otherwise, since a reset cannot then be told from noise.
  */
@@ -290,12 +292,13 @@ function currentPeriod(readings: Reading[], extraBoundaries: number[] = []): Rea
     const earlier = usable[start - 1];
     const later = usable[start];
     if (boundaries.some((reset) => earlier.at < reset && reset <= later.at)) break;
-    const sameUpcoming = upcoming(earlier) && upcoming(later);
     if (
-      sameUpcoming &&
-      Math.abs((earlier.resetAt as number) - (later.resetAt as number)) > RESET_SHIFT_MS
+      earlier.resetAt !== null &&
+      later.resetAt !== null &&
+      Math.abs(earlier.resetAt - later.resetAt) > RESET_SHIFT_MS
     )
       break;
+    const sameUpcoming = upcoming(earlier) && upcoming(later);
     const fall = (earlier.used as number) - (later.used as number);
     if (fall > (sameUpcoming ? RESET_DROP_POINTS : 0)) break;
     start--;
