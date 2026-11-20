@@ -414,9 +414,15 @@ mod tests {
         let labels = computer_labels();
         assert!(labels.len() >= 6, "{labels:?}");
         for label in ["Ubuntu", "Mac", "Windows", "Nas1", "Alexis PC", "Odroid"] {
-            assert!(labels.iter().any(|name| name == label), "{label}: {labels:?}");
+            assert!(
+                labels.iter().any(|name| name == label),
+                "{label}: {labels:?}"
+            );
         }
-        assert_eq!(listed(&labels[..2]), format!("{} and {}", labels[0], labels[1]));
+        assert_eq!(
+            listed(&labels[..2]),
+            format!("{} and {}", labels[0], labels[1])
+        );
     }
 
     #[test]
