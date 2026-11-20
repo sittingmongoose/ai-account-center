@@ -739,7 +739,7 @@
     },
     "largeFiles": {
       "countOver400": 66,
-      "countOver600": 27,
+      "countOver600": 28,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -771,7 +771,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1109
+          "loc": 1114
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
@@ -787,19 +787,19 @@
         },
         {
           "file": "src/web-server/status/status-view.ts",
-          "loc": 888
+          "loc": 903
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",
           "loc": 887
         },
         {
-          "file": "src/web-server/usage/native-quota-collector.ts",
-          "loc": 815
+          "file": "src/web-server/status/status-service.ts",
+          "loc": 821
         },
         {
-          "file": "src/web-server/services/app-update-service.ts",
-          "loc": 807
+          "file": "src/web-server/usage/native-quota-collector.ts",
+          "loc": 815
         }
       ]
     }

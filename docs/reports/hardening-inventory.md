@@ -58,7 +58,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | files with createLogger | 44/462 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
-| files > 600 LOC | 27 |
+| files > 600 LOC | 28 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -89,12 +89,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/analytics-remote-transport.ts` | 1719 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1154 |
-| `src/web-server/status/status-collectors.ts` | 1109 |
+| `src/web-server/status/status-collectors.ts` | 1114 |
 | `src/web-server/services/usage-failover-service.ts` | 1084 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/account-dashboard-service.ts` | 993 |
-| `src/web-server/status/status-view.ts` | 888 |
+| `src/web-server/status/status-view.ts` | 903 |
 | `src/web-server/services/account-analytics-service.ts` | 887 |
+| `src/web-server/status/status-service.ts` | 821 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
-| `src/web-server/services/app-update-service.ts` | 807 |
 
