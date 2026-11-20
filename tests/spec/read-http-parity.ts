@@ -126,7 +126,6 @@ if (worker < 0) {
   const { createStatusRouter } = await import('../../src/web-server/routes/status-routes');
   const { createScoreboardRouter } = await import('../../src/web-server/routes/scoreboard-routes');
   const { createShareRouter } = await import('../../src/web-server/routes/share-route');
-  const { createStoreRouter } = await import('../../src/web-server/routes/store-routes');
   const { apiAuthMiddleware } = await import('../../src/web-server/middleware/auth-middleware');
   const { apiErrorHandler } = await import('../../src/web-server/routes/api-router');
   const { loadNativeStore } = await import('../../src/store/native-loader');
@@ -237,7 +236,6 @@ if (worker < 0) {
     next();
   });
   app.use('/api', apiAuthMiddleware);
-  app.use('/api/store', createStoreRouter({ store: () => store, now: () => NOW }));
   app.use(
     '/api/scoreboard',
     createScoreboardRouter(() => scoreboard)
@@ -266,7 +264,6 @@ if (worker < 0) {
     const base = `http://127.0.0.1:${(server.address() as any).port}`;
     const rows: any[] = [];
     const routes = [
-      '/api/store/status',
       '/api/status',
       '/api/scoreboard',
       '/api/status/files/vm.fixture/media/image.png',
@@ -346,15 +343,15 @@ if (worker < 0) {
     if (mode === 'on') {
       assert.equal(legacyCalls.status, 0, 'on must not construct the TS Status view');
       assert.equal(legacyCalls.scoreboard, 0, 'on must not construct the TS Scoreboard base');
-      assert.ok(bridge.stats.served >= 5, 'all five routes must actually use Rust');
+      assert.ok(bridge.stats.served >= 4, 'all four routes must actually use Rust');
     }
     if (mode === 'shadow') {
-      for (let i = 0; i < 200 && bridge.stats.shadowed < 5; i++)
+      for (let i = 0; i < 200 && bridge.stats.shadowed < 4; i++)
         await new Promise((r) => setTimeout(r, 5));
       if (bridge.stats.differences > 0)
         console.log('shadow differences:', JSON.stringify(bridge.diagnostics().routes));
       assert.equal(bridge.stats.differences, 0);
-      assert.ok(bridge.stats.shadowed >= 5);
+      assert.ok(bridge.stats.shadowed >= 4);
     }
     function rss(pid: number) {
       try {
@@ -430,7 +427,7 @@ if (worker < 0) {
       JSON.stringify({ mode, rows, metrics, stats: bridge.stats, legacyCalls })
     );
     console.log(
-      `Native fixture HTTP ${mode}: five routes match, served=${bridge.stats.served}, shadow=${bridge.stats.shadowed}, TS builders=${JSON.stringify(legacyCalls)}`
+      `Native fixture HTTP ${mode}: four routes match, served=${bridge.stats.served}, shadow=${bridge.stats.shadowed}, TS builders=${JSON.stringify(legacyCalls)}`
     );
   } finally {
     await new Promise<void>((r) => server.close(() => r()));

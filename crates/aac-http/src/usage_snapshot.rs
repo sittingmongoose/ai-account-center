@@ -6,11 +6,11 @@
 //! payload until G5/G10 and the store handoff land; the publisher's deadline recheck, atomic
 //! writes, staleness and once-an-hour rollups are all the ported TS behaviour.
 
+use crate::registered::snapshot_settings as read_settings;
 use aac_snapshot::client::{
     client_source_folder, computer_registry_file, runner_source_folder, sync_snapshot_client,
 };
 use aac_snapshot::publisher::{Deps, SnapshotPublisher};
-use aac_snapshot::settings::validate_settings;
 use aac_snapshot::snapshot::{LongBurnEntry, LongBurnSpan, SampleEvent};
 use aac_views::decline::Decline;
 use serde_json::{Value, json};
@@ -303,16 +303,6 @@ fn rollups(
         Ok((hourly, daily)) => Ok(Some((hourly, daily))),
         Err(_) => Err(()),
     }
-}
-
-/// The saved snapshot setting, or None while no folder is configured (registry row read).
-fn read_settings(root: &Path) -> Option<aac_snapshot::SnapshotSettings> {
-    let (file, policy) = crate::registered::file(root, "agent-usage-snapshot")?;
-    let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
-        return None;
-    };
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    validate_settings(&value)
 }
 
 /// The dashboard refresh interval, defaulting to 60 seconds as the TS reader does.

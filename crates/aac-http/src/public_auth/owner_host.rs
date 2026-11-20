@@ -141,25 +141,14 @@ impl OwnerHost {
                 return Some(owners.clone());
             }
             let ccs = self.root.canonicalize().ok()?;
-            // The explicit switch is the user's: with it off, no store is opened here either.
-            let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off");
             let (reports, registry_dir) = share_roots(
                 std::env::var("AAC_AGENT_REPORTS_DIR").ok().as_deref(),
                 std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok().as_deref(),
             );
             let config = crate::owners::Config {
                 ccs_dir: ccs.clone(),
-                store: (!store_off).then(|| crate::store_host::StoreBoot {
-                    binding_identity: aac_store::build_identity(),
-                    dir: ccs.join("store"),
-                    retention_days: 0,
-                    cache_bytes: None,
-                    activity_retention_days: None,
-                    snapshot_directory: None,
-                    share_backup_dir: None,
-                    share_backup_off: true,
-                }),
-                owned: Some(crate::owners::OwnedBoot {
+                store: crate::store_host::StoreBoot::for_public(&ccs),
+                owned: enabled().then_some(crate::owners::OwnedBoot {
                     reports_root: reports,
                     registry_dir,
                     status: true,
@@ -173,7 +162,9 @@ impl OwnerHost {
             // The hosted store opens once, before any route reads it (the service does this in
             // its boot); a request must never wait behind an unopened Engine.
             if let Some(store) = owners.store.clone() {
-                let _ = tokio::task::spawn_blocking(move || store.open_at_boot()).await;
+                let opener = store.clone();
+                let _ = tokio::task::spawn_blocking(move || opener.open_at_boot()).await;
+                tokio::spawn(store.jobs(self.local_stop.clone()));
             }
             if let Some(owner) = &owners.scoreboard_owned {
                 // The first request sees a catalog and runs from the same prepared generation.
@@ -331,6 +322,8 @@ impl OwnerHost {
         {
             let _ = self.link().await;
         }
+        #[cfg(not(unix))]
+        let _ = self.local().await;
     }
 
     /// Stop the service this boot started, if any (a running one belongs to its own supervisor).
@@ -368,12 +361,10 @@ impl OwnerHost {
     /// never decide whether a private local root has a store; each reader takes its default.
     #[cfg(unix)]
     fn boot_config_from(&self, reports: Option<&str>, registry: Option<&str>) -> Option<Json> {
-        if std::env::var("AAC_RUST_STORE").as_deref() == Ok("off") {
-            return None;
-        }
         let on = |env: &str| std::env::var(env).as_deref() != Ok("off");
         let (reports_root, registry_dir) = share_roots(reports, registry);
         let ccs = self.root.canonicalize().ok()?;
+        let store = crate::store_host::StoreBoot::for_public(&ccs)?;
         let boot_id = random_hex::<12>()?;
         let secret = random_hex::<32>()?;
         let socket = ccs
@@ -385,14 +376,7 @@ impl OwnerHost {
             "socketPath": socket,
             "secret": secret,
             "bootId": boot_id,
-            "store": {
-                "dir": ccs.join("store"),
-                "retentionDays": 0,
-                "bindingIdentity": aac_store::build_identity(),
-                "snapshotDirectory": null,
-                "shareBackupDir": null,
-                "shareBackupOff": true,
-            },
+            "store": store,
             "owned": {
                 "reportsRoot": reports_root.to_string_lossy(),
                 "registryDir": registry_dir.to_string_lossy(),

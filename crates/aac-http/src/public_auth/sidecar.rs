@@ -65,7 +65,7 @@ impl Sidecar {
             .then(|| aac_files::OwnedStore::claim_collection(root).map_err(io::Error::other))
             .transpose()?;
         let proof = storage::hex(&storage::random::<32>().map_err(|_| invalid())?);
-        let collection = if native_collection {
+        let collection = if native_collection || cfg!(windows) {
             Some(CollectionFeed::start(&proof).await?)
         } else {
             None

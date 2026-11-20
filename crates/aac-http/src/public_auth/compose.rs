@@ -43,10 +43,6 @@ const CUT_ROUTES: &[(&str, &[&str])] = &[
         &["GET", "POST", "PUT", "PATCH", "DELETE"],
     ),
     ("/api/status/files/:owner/*relative", &["GET"]),
-    ("/api/store/status", &["GET"]),
-    ("/api/usage/history", &["GET"]),
-    ("/api/usage/at", &["GET"]),
-    ("/api/usage/burn", &["GET"]),
 ];
 
 pub(super) fn cut_route(method: &Method, path: &str) -> bool {
@@ -113,6 +109,10 @@ mod tests {
             (Method::GET, "/api/views/home"),
             (Method::HEAD, "/api/views/home/"),
             (Method::OPTIONS, "/api/views/home"),
+            (Method::GET, "/api/store/status"),
+            (Method::HEAD, "/api/usage/history/"),
+            (Method::GET, "/api/usage/at"),
+            (Method::OPTIONS, "/api/usage/burn"),
         ] {
             assert!(!cut_route(&method, path), "{method} {path}");
         }

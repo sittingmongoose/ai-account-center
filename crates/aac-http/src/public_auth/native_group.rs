@@ -36,10 +36,10 @@ impl Routes {
         Self { host }
     }
 
-    /// Whether this boot answers `method path` itself: the switch is on and the pattern is one
-    /// of the worker-removal routes.
+    /// Store reads are native on every cut boot. Status and Scoreboard keep their cutover switch.
     pub(super) fn owns(&self, method: &Method, path: &str) -> bool {
-        super::owner_host::enabled() && owns_route(method, path)
+        (store_path(path) && matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS))
+            || (super::owner_host::enabled() && owns_route(method, path))
     }
 
     fn root(&self) -> &Path {
@@ -127,11 +127,15 @@ fn owns_route(method: &Method, path: &str) -> bool {
     path == "/api/status"
         || path == "/api/status/answers"
         || path == "/api/scoreboard"
-        || path == "/api/store/status"
-        || path == "/api/usage/history"
-        || path == "/api/usage/at"
-        || path == "/api/usage/burn"
+        || store_path(path)
         || media(path).is_some()
+}
+
+fn store_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/store/status" | "/api/usage/history" | "/api/usage/at" | "/api/usage/burn"
+    )
 }
 
 /// `(writer, relative path)` of a card-media route, with the reference's path shapes.
@@ -212,7 +216,11 @@ fn browser_only(access: &DashboardAccess) -> Option<Reply> {
 fn store_read(access: &DashboardAccess, facts: &Facts) -> Option<Reply> {
     match &access.principal {
         DashboardPrincipal::Anonymous => {
-            return Some(no_store(super::plain(401, "Authentication required")));
+            return Some(no_store(super::error(
+                401,
+                "auth_required",
+                "Authentication required",
+            )));
         }
         DashboardPrincipal::Browser { .. } => {
             let cross_site = facts
@@ -256,11 +264,17 @@ fn store_failed() -> Reply {
     ))
 }
 
+fn store_json(value: &Json) -> Reply {
+    no_store(super::json_bytes(200, aac_views::js_json::write(value)))
+}
+
 fn unavailable_status() -> Reply {
-    no_store(json_reply(
-        200,
-        &json!({"state": "unavailable", "reason": "missing"}),
-    ))
+    let reason = if crate::store_host::disabled() {
+        "disabled"
+    } else {
+        "missing"
+    };
+    store_json(&json!({"state": "unavailable", "reason": reason}))
 }
 
 fn now_ms() -> u64 {
@@ -278,18 +292,25 @@ async fn store_route(
     path: &str,
     raw: Option<&str>,
 ) -> Reply {
+    if crate::store_host::disabled() {
+        return store_unavailable();
+    }
     if let Some(owners) = routes.local().await {
-        let Some(store) = owners.store.clone() else {
+        let Some(store) = owners
+            .store
+            .as_ref()
+            .filter(|store| store.analytics_engine().is_some())
+        else {
             return store_unavailable();
         };
         let now = now_ms();
         let answer = match path {
-            "/api/usage/history" => crate::usage_routes::history(&store, raw, now).await,
-            "/api/usage/at" => crate::usage_routes::at(&store, raw, now).await,
-            _ => crate::usage_routes::burn(&store, raw, now).await,
+            "/api/usage/history" => crate::usage_routes::history(store, raw, now).await,
+            "/api/usage/at" => crate::usage_routes::at(store, raw, now).await,
+            _ => crate::usage_routes::burn(store, raw, now).await,
         };
         return match answer {
-            Ok(value) => no_store(json_reply(200, &value)),
+            Ok(value) => store_json(&value),
             Err(_) => store_failed(),
         };
     }
@@ -304,9 +325,9 @@ async fn store_route(
         None => path.to_owned(),
     };
     match routes.request("GET", &uri, &principal, &[], None).await {
-        Some(reply) if declined(&reply) => store_unavailable(),
+        Some(reply) if decline_reason(&reply) == Some("unsupported") => store_unavailable(),
         Some(reply) if reply.status == 200 => match json_of(&reply) {
-            Some(value) => no_store(json_reply(200, &value)),
+            Some(value) => store_json(&value),
             None => store_failed(),
         },
         Some(_) => store_failed(),
@@ -320,8 +341,19 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
     let raw = req.uri().query().map(str::to_owned);
     let raw = raw.as_deref().filter(|query| !query.is_empty());
     let facts = Facts::of(access, &req);
+    if store_path(&path) && req.method() == Method::OPTIONS {
+        return super::lifecycle::options("GET, HEAD", "9");
+    }
     match path.as_str() {
-        "/api/store/status" => store_status(routes, access, &facts).await,
+        "/api/store/status" => {
+            if let Some(reply) = store_read(access, &facts) {
+                return reply;
+            }
+            if raw.is_some_and(|query| query.split('&').any(|pair| !pair.is_empty())) {
+                return invalid_query();
+            }
+            super::revalidate_json(store_status(routes, access).await, req.headers())
+        }
         "/api/usage/history" | "/api/usage/at" | "/api/usage/burn" => {
             if let Some(reply) = store_read(access, &facts) {
                 return reply;
@@ -334,7 +366,7 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
             if !valid {
                 return invalid_query();
             }
-            store_route(routes, access, &path, raw).await
+            super::revalidate_json(store_route(routes, access, &path, raw).await, req.headers())
         }
         "/api/status/answers" if req.method() == Method::POST => {
             answers_post(routes, access, req, &facts, raw).await
@@ -354,17 +386,17 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
 
 /// `GET /api/store/status`: the hosted store's writer status, or the fallback's honest
 /// "unavailable" (never an invented one).
-async fn store_status(routes: &Routes, access: &DashboardAccess, facts: &Facts) -> Reply {
-    if let Some(reply) = store_read(access, facts) {
-        return reply;
+async fn store_status(routes: &Routes, access: &DashboardAccess) -> Reply {
+    if crate::store_host::disabled() {
+        return unavailable_status();
     }
     if let Some(owners) = routes.local().await {
-        let Some(store) = owners.store.as_ref() else {
+        let Some(store) = owners.store.clone() else {
             return unavailable_status();
         };
-        return match store.status_value() {
-            Ok(value) => no_store(json_reply(200, &value)),
-            Err(_) => store_failed(),
+        return match tokio::task::spawn_blocking(move || store.status_value()).await {
+            Ok(Ok(value)) => store_json(&value),
+            _ => store_failed(),
         };
     }
     let Some(principal) = access.service_principal() else {
@@ -385,7 +417,7 @@ async fn store_status(routes: &Routes, access: &DashboardAccess, facts: &Facts) 
                     Some("ready" | "degraded" | "unavailable")
                 ) =>
             {
-                no_store(json_reply(200, &value))
+                store_json(&value)
             }
             _ => store_failed(),
         },

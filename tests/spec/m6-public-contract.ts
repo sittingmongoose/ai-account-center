@@ -100,15 +100,12 @@ const overrides: Record<string, Contract> =
     : {};
 // The native owner rows share the platform contract with the earlier composition rows.
 // Select them only when this boot enables the native owner.
+const nativeStoreHomeRow = (method: string, route: string) =>
+  method === 'GET' && groups['store-usage-home'].test(method + ' ' + route);
 const nativeGroupRow = (method: string, route: string) =>
   (method === 'POST' && route === '/api/status/answers') ||
   (method === 'GET' &&
-    (route === '/api/status' ||
-      route.startsWith('/api/status/') ||
-      route === '/api/store/status' ||
-      route.startsWith('/api/usage/') ||
-      route === '/api/scoreboard' ||
-      ((mode === 'cut-rust-only' || group === 'store-usage-home') && route === '/api/views/home')));
+    (route === '/api/status' || route.startsWith('/api/status/') || route === '/api/scoreboard'));
 const recordNative = process.argv
   .find((arg) => arg.startsWith('--record-native='))
   ?.slice('--record-native='.length);
@@ -142,8 +139,10 @@ if (mode === 'cut') {
     NODE_OPTIONS: [environment.NODE_OPTIONS, '--require=' + JSON.stringify(preload)]
       .filter(Boolean)
       .join(' '),
-    AAC_RUST_STORE: 'off',
-    AAC_RUST_GROUP_HOME: 'off',
+    AAC_RUST_STORE: 'on',
+    AAC_RUST_GROUP_STATUS: 'off',
+    AAC_RUST_GROUP_SCOREBOARD: 'off',
+    AAC_RUST_GROUP_HOME: 'on',
     AAC_RUST_HOME_VIEW: 'off',
     AAC_RUST_GROUP_APP_UPDATES: 'off',
     // The migration lanes serve Accounts and Re-check natively in both modes, so the native
@@ -442,15 +441,15 @@ try {
           windowsPreflightReason !== undefined &&
           name === 'GET /api/accounts/registry' &&
           (role === 'session' || role === 'bar');
-        const mine = nativeGroupRow(route.method, route.path);
-        const statusContract =
-          mine && environment.AAC_RUST_CUT_NATIVE_ROUTES === 'on'
-            ? overrides['native/contract/' + fixture]
-            : undefined;
-        const nativeRoute = statusContract === undefined ? undefined : route.path;
+        const mine =
+          (mode !== 'fixture' && nativeStoreHomeRow(route.method, route.path)) ||
+          (nativeGroupRow(route.method, route.path) &&
+            environment.AAC_RUST_CUT_NATIVE_ROUTES === 'on');
+        const nativeContract = mine ? overrides['native/contract/' + fixture] : undefined;
+        const nativeRoute = nativeContract === undefined ? undefined : route.path;
         const contract: Contract =
           (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
-          statusContract ??
+          nativeContract ??
           (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
         const { request } = contract;

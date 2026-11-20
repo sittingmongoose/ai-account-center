@@ -1261,20 +1261,23 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             if !valid {
                 return decline(handler, Decline::Shape);
             }
-            let Some(host) = shared.store.clone() else {
+            let Some(host) = shared
+                .store
+                .as_ref()
+                .filter(|host| host.analytics_engine().is_some())
+            else {
                 return decline(row.handler, Decline::Unsupported);
             };
             let answer = match handler {
                 Handler::UsageHistory => {
-                    crate::usage_routes::history(&host, raw.as_deref(), aac_store::engine::now_ms())
+                    crate::usage_routes::history(host, raw.as_deref(), aac_store::engine::now_ms())
                         .await
                 }
                 Handler::UsageAt => {
-                    crate::usage_routes::at(&host, raw.as_deref(), aac_store::engine::now_ms())
-                        .await
+                    crate::usage_routes::at(host, raw.as_deref(), aac_store::engine::now_ms()).await
                 }
                 _ => {
-                    crate::usage_routes::burn(&host, raw.as_deref(), aac_store::engine::now_ms())
+                    crate::usage_routes::burn(host, raw.as_deref(), aac_store::engine::now_ms())
                         .await
                 }
             };
@@ -1975,7 +1978,7 @@ async fn serve_inner(
         tokio::task::spawn_blocking(move || opener.open_at_boot());
         let jobs = Arc::clone(host);
         let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(async move { store_jobs(jobs, stop).await });
+        tokio::spawn(jobs.jobs(stop));
         // G14: the quota sampler and activity scheduler run when the front door feeds them on.
         let writers_host = Arc::clone(host);
         let writers_stop = Arc::clone(&jobs_stop);
@@ -2117,22 +2120,6 @@ async fn serve_inner(
         let _ = task.await;
     }
     served
-}
-
-/// R3: the store jobs loop â€” the first pass minutes after start, then every 15 minutes,
-/// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
-/// when the service ends.
-async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBool>) {
-    tokio::time::sleep(Duration::from_millis(crate::store_host::FIRST_PASS_MS)).await;
-    loop {
-        if stop.load(Ordering::Acquire) {
-            return;
-        }
-        let pass = Arc::clone(&host);
-        let _ =
-            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
-        tokio::time::sleep(Duration::from_millis(crate::store_host::MAINTAIN_EVERY_MS)).await;
-    }
 }
 
 #[cfg(test)]

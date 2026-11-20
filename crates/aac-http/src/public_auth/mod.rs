@@ -555,8 +555,8 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    let owner_host = (enabled || cut)
-        .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
+    let owner_host =
+        (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
         let worker_directory = snapshot
@@ -572,6 +572,10 @@ pub(crate) async fn run_public_at(
         .as_ref()
         .and_then(|worker| worker.collection.as_ref())
     {
+        #[cfg(windows)]
+        if let Some(host) = &owner_host {
+            feed.set_store(host);
+        }
         #[cfg(unix)]
         if let Some(link) = adopted.clone() {
             feed.set_adopted(link);
@@ -586,7 +590,6 @@ pub(crate) async fn run_public_at(
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let group_routes = owner_host
         .as_ref()
-        .filter(|_| enabled)
         .map(|host| Arc::new(native_group::Routes::new(host.clone())));
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
         let routes = lifecycle_host::Routes::new(host);
@@ -838,10 +841,6 @@ pub(crate) async fn run_public_at(
     if let Some(host) = &owner_host {
         host.stop().await;
     }
-    #[cfg(unix)]
-    if let Some(host) = &owner_host {
-        host.stop().await;
-    }
     if let Some(worker) = worker {
         worker.stop().await;
     }
@@ -1031,6 +1030,21 @@ fn empty(status: u16) -> Reply {
     StatusCode::from_u16(status)
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
         .into_response()
+}
+
+/// Preserve the conditional GET/HEAD behavior of an Express JSON response.
+fn revalidate_json(mut reply: Reply, headers: &HeaderMap) -> Reply {
+    if reply.status().is_success()
+        && header(reply.headers(), "etag").is_some_and(|etag| static_ui::fresh(headers, etag, None))
+    {
+        *reply.status_mut() = StatusCode::NOT_MODIFIED;
+        reply.headers_mut().remove(axum::http::header::CONTENT_TYPE);
+        reply
+            .headers_mut()
+            .remove(axum::http::header::CONTENT_LENGTH);
+        *reply.body_mut() = Body::empty();
+    }
+    reply
 }
 
 pub(crate) fn plain(status: u16, message: &str) -> Reply {

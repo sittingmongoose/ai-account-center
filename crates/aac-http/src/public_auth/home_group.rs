@@ -118,6 +118,9 @@ fn query(request: &Request) -> Option<(&'static str, bool)> {
 
 impl Home {
     async fn get(&self, access: &DashboardAccess, request: Request) -> Reply {
+        if request.method() == Method::OPTIONS {
+            return super::lifecycle::options("GET, HEAD", "9");
+        }
         match access.principal {
             DashboardPrincipal::Anonymous => {
                 return super::error(401, "auth_required", "Authentication required");
@@ -141,10 +144,12 @@ impl Home {
         // and validates it, and an unreadable one leaves the answer without a view.
         let page = header(request.headers(), CONTEXT_HEADER).map(str::to_owned);
         let validators = header(request.headers(), "if-none-match");
-        self.read(access, platform, refresh, page.as_deref(), validators)
+        let reply = self
+            .read(access, platform, refresh, page.as_deref(), validators)
             .await
             .map(set_no_store)
-            .unwrap_or_else(|| set_no_store(super::plain(500, UNREADABLE)))
+            .unwrap_or_else(|| set_no_store(super::plain(500, UNREADABLE)));
+        super::revalidate_json(reply, request.headers())
     }
 
     /// The answer: the producer's three generations, the fed view, or the legacy shape with no view.

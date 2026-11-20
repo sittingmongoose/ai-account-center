@@ -224,6 +224,7 @@ export class RustSupervisor {
     // for the one writer) and the store not disabled. Everything else keeps the store here.
     if (
       this.mode === 'on' &&
+      !(process.platform === 'win32' && process.env.AAC_CUT_PUBLIC_OWNERS === '1') &&
       rustStoreSwitchOn() &&
       (process.env.AAC_STORE ?? '').trim().toLowerCase() !== 'off'
     ) {
