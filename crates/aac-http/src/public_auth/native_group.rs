@@ -600,7 +600,11 @@ async fn status(
         return reply;
     }
     if raw.is_some() {
-        return super::error(400, "unexpected_query", UNEXPECTED_QUERY_STATUS);
+        return no_store(super::error(
+            400,
+            "unexpected_query",
+            UNEXPECTED_QUERY_STATUS,
+        ));
     }
     let Some((time_zone, offsets)) = status_zone(routes.root()) else {
         return decline_because("zone");
