@@ -917,7 +917,7 @@
           },
           "server": {
             "version": "8.10.0",
-            "commit": "4ddd69fc",
+            "commit": "<commit>",
             "views": [
               "home"
             ]
@@ -1468,7 +1468,7 @@
           },
           "server": {
             "version": "8.10.0",
-            "commit": "4ddd69fc",
+            "commit": "<commit>",
             "views": [
               "home"
             ]
