@@ -282,6 +282,31 @@ describe('agent usage burn rate', () => {
     expect(burn.last15Minutes).toBe(12);
   });
 
+  it('does not count a jump across a period restart as burn', () => {
+    // OpenCode Go weekly, 2026-11-19: 21:32 still named the weekly reset that had just passed
+    // and read 0%; 21:35 named the next week's reset and read 39%. That is not 300%/h.
+    const restart = burnRate(
+      [reading(3, 0, NOW - 5 * MINUTE), reading(0, 39, NOW + 7 * 24 * 60 * MINUTE)],
+      null
+    );
+    expect(restart.periodStartedAt).toBe(new Date(NOW).toISOString());
+    expect(restart.last5Minutes).toBeNull();
+    expect(restart.pace).toBeNull();
+    expect(restart.projectedFullAt).toBeNull();
+    expect(restart.runsOutBeforeReset).toBeNull();
+    // A reset drop still splits, and the 24-hour rate is not measured across it.
+    const reset = burnRate([reading(10, 90), reading(4, 2), reading(0, 4)], null);
+    expect(reset.periodStartedAt).toBe(new Date(NOW - 4 * MINUTE).toISOString());
+    expect(reset.last24Hours).toBeNull();
+    // Within one reported period an ordinary series keeps its rate.
+    const period = NOW + 60 * MINUTE;
+    const steady = [reading(10, 20, period), reading(5, 25, period), reading(0, 30, period)];
+    const burn = burnRate(steady, null);
+    expect(burn.last5Minutes).toBe(60);
+    expect(burn.pace).toBe(60);
+    expect(burn.paceMinutes).toBe(5);
+  });
+
   it('treats a moved reset time as a new period, and a flat window as not running out', () => {
     const moved = [
       reading(30, 50, NOW + 60 * MINUTE),
@@ -513,6 +538,22 @@ describe('agent usage burn rate', () => {
     expect(
       usageHistory([row], projected, null, NOW, recent).rates.get('codex:gmail')?.get(key)?.pace
     ).toBeNull();
+  });
+
+  it('publishes no burn when the stored reading names a reset from before the restart', () => {
+    const weekly = NOW + 7 * 24 * 60 * MINUTE;
+    const row = account({
+      windows: [window({ usedPercent: 39, resetAt: new Date(weekly).toISOString() })],
+    });
+    const stored = [record(row, 3, 0, new Date(NOW - 5 * MINUTE).toISOString())];
+    const { snapshot } = buildSnapshotFiles(
+      { accounts: [row], history: history(stored), sampledAt: NOW },
+      60
+    );
+    const burn = snapshot.accounts[0].windows[0].burn;
+    expect(burn?.pace ?? null).toBeNull();
+    expect(burn?.projectedFullAt ?? null).toBeNull();
+    expect(burn?.periodStartedAt).toBe(new Date(NOW).toISOString());
   });
 
   it("keeps an account's history through an outage, without a reading or a pace", () => {
