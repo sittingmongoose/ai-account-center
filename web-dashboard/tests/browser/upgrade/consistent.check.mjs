@@ -15,7 +15,7 @@ const control = (page, values) => page.evaluate(async values => (await fetch('/_
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
 })).json(), values);
 const frame = (page, ms = 15000) => page.waitForFunction(() => window.__aacFrame === true && !!document.querySelector('.shell,.signin-page'), null, { timeout: ms });
-const state = page => page.evaluate(async () => ({ frame: window.__aacFrame === true, path: location.pathname + location.search + location.hash, text: document.body.innerText.slice(0, 220), usableHome: !!document.querySelector('.home') && /Claude/.test(document.querySelector('.home').innerText) && !/view version/.test(document.body.innerText), names: await caches.keys() }));
+const state = page => page.evaluate(async () => ({ frame: window.__aacFrame === true, path: location.pathname + location.search + location.hash, text: document.body.innerText.slice(0, 220), usableHome: !!document.querySelector('.home') && /Claude/.test(document.querySelector('.home').innerText) && !/view version/.test(document.body.innerText), splash: !!document.getElementById('aac-boot') || !!document.querySelector('.boot-splash'), names: await caches.keys() }));
 async function start(t, version) {
   await t.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'allow' });
   await t.goto('/__upgrade/ready');
@@ -78,9 +78,12 @@ for (const [version, setting] of [['previous', 'previousUi'], ['fix1', 'fix1Ui']
     const online = await state(t.page);
     await t.check('entry page recovers usable Home with matching retained controllers online', online.frame && online.usableHome, JSON.stringify(online));
     await t.equal('recovery preserves destination, query and fragment', online.path, '/app/home?e2e#kept');
+    // a saved runtime predates the loading splash: the entry page takes it down once that copy has started
+    await t.equal('the recovered app is not left under the loading splash', online.splash, false);
     await t.page.goto('about:blank');
     const after = await offline(t, origin, '/?e2e#kept');
     await t.check('next offline launch starts the retained app', after.frame, JSON.stringify(after));
+    await t.equal('the offline retained app is not left under the loading splash', after.splash, false);
     await t.equal('only the retained cache survives the failed install', JSON.stringify(after.names), JSON.stringify(['aac-shell-' + previous.shellBuildId]));
     await t.shot('retained-' + version, 'Offline retained app after interrupted cross-version navigation. Synthetic data only.');
     await t.noConsoleErrors('only the deliberately interrupted wasm request may fail', { allow: [/Failed to load resource:.*(?:status of 503|ERR_FAILED).*\/aac_web_bg\.wasm/] });
