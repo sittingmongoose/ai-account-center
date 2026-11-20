@@ -561,8 +561,22 @@ impl AppUpdates {
                 .as_ref()
                 .err()
                 .is_some_and(|err| err.cause == aac_core::Cause::Timeout);
-        self.change(|job| job.finish_host(host, event, timed_out))
-            .await;
+        let old_agent = !admitted
+            && matches!(
+                event,
+                Some(Event::Failure { failure, .. })
+                    if failure.cause == aac_core::Cause::Refused
+                        && failure.detail.as_str() == "invalid apps action"
+            );
+        self.change(|job| {
+            if old_agent {
+                job.fill(host, "failed", "agent_update_required");
+                job.host_done(host);
+            } else {
+                job.finish_host(host, event, timed_out);
+            }
+        })
+        .await;
     }
 
     async fn signal_cancel(&self, host: Host, id: &str, token: CancellationToken, until: Instant) {
