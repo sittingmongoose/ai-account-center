@@ -26,6 +26,7 @@ use std::time::Duration;
 /// write to a `busy` decline the in-process store never gave.
 const STORE_PERMITS: usize = 4;
 /// The longest store request body (`captureReports` already caps its batch at 8 MiB in ops).
+#[cfg(unix)]
 pub(crate) const STORE_INPUT_CAP: usize = 16 * 1024 * 1024;
 
 const MINUTE_MS: u64 = 60_000;
