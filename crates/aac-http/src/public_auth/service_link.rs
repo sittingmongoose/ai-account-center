@@ -31,6 +31,7 @@ const ENDPOINT_HEADER: &str = "x-aac-service-boot";
 /// The private transport's reply cap: the largest route answer (a media chunk or a view).
 const REPLY_CAP: usize = 16 * 1024 * 1024;
 const DEADLINE: Duration = Duration::from_secs(10);
+const HEALTH_PRINCIPAL: &str = r#"{"kind":"session","id":"public-health","role":"public"}"#;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +53,21 @@ pub(super) struct ServiceLink {
 }
 
 impl ServiceLink {
+    pub(super) fn embedded(socket: PathBuf, secret: String, boot_id: String) -> Self {
+        Self {
+            socket,
+            secret,
+            boot_id,
+            native_lifecycle: false,
+        }
+    }
+
+    pub(super) async fn healthy(&self) -> bool {
+        self.request("GET", "/api/health", HEALTH_PRINCIPAL, &[], None)
+            .await
+            .is_some_and(|reply| reply.status == 200)
+    }
+
     /// `run/aac-http.json` under the boot root, checked exactly as the store publisher does:
     /// the file is private, the socket is the named boot folder's own socket with the private
     /// owner and mode, and the tokens are the shapes the service writes.
@@ -93,13 +109,13 @@ impl ServiceLink {
     /// Select a ready, compatible boot once. A live incompatible listener may still own
     /// collection, including a pre-lease build. Its supervisor must stop it before startup.
     pub(super) async fn acquire_lifecycle(root: &Path) -> io::Result<Option<Self>> {
-        let Some(link) = Self::load(root).filter(|link| link.native_lifecycle) else {
+        let Some(link) = Self::load(root) else {
             return Ok(None);
         };
-        let principal = r#"{"kind":"session","id":"public-health","role":"public"}"#;
-        if let Some(health) = link
-            .request("GET", "/api/health", principal, &[], None)
-            .await
+        if link.native_lifecycle
+            && let Some(health) = link
+                .request("GET", "/api/health", HEALTH_PRINCIPAL, &[], None)
+                .await
         {
             let binary = std::env::current_exe()?.with_file_name("aac-http");
             let expected =
@@ -127,7 +143,7 @@ impl ServiceLink {
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "an incompatible private lifecycle service must stop before collection can start",
+                "an incompatible private service must stop before the dashboard can start",
             )),
         }
     }

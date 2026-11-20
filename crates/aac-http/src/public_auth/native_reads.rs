@@ -1,7 +1,6 @@
-//! The cut's authenticated access to the remaining store host.
-use super::service_link::ServiceLink;
+//! The native sampler sends writes to the same private generation that serves its reads.
+use super::owner_host::OwnerHost;
 use serde_json::json;
-use std::path::PathBuf;
 
 /// The front door's service principal word (`VerifiedPrincipal::valid`).
 const SERVICE: &str = r#"{"kind":"session","id":"front-door","role":"service"}"#;
@@ -9,17 +8,10 @@ const SERVICE: &str = r#"{"kind":"session","id":"front-door","role":"service"}"#
 /// Forward a completed native generation to the existing store owner. The G14
 /// sampler consumes its regular feed and keeps its history import order.
 pub(super) async fn publish_usage(
-    root: PathBuf,
+    host: &OwnerHost,
     cache: &crate::account_usage::AccountUsageCache,
     now: i64,
 ) {
-    let link = tokio::task::spawn_blocking(move || ServiceLink::load(&root))
-        .await
-        .ok()
-        .flatten();
-    let Some(link) = link else {
-        return;
-    };
     let Some(snapshot) = crate::analytics_route::snapshot(cache, now) else {
         return;
     };
@@ -28,7 +20,7 @@ pub(super) async fn publish_usage(
         "data": snapshot,
         "facts": {},
     });
-    let _ = link
+    let _ = host
         .request(
             "PUT",
             "/internal/feed/analytics-dashboard",
@@ -39,15 +31,8 @@ pub(super) async fn publish_usage(
         .await;
 }
 /// One pushed usage sample: the service's share writer takes it on its own blocking task.
-pub(super) async fn usage_sample(root: PathBuf, payload: serde_json::Value) -> bool {
-    let link = tokio::task::spawn_blocking(move || ServiceLink::load(&root))
-        .await
-        .ok()
-        .flatten();
-    let Some(link) = link else {
-        return false;
-    };
-    link.request(
+pub(super) async fn usage_sample(host: &OwnerHost, payload: serde_json::Value) -> bool {
+    host.request(
         "POST",
         "/internal/usage-snapshot/sample",
         SERVICE,

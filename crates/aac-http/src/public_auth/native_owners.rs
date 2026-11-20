@@ -47,6 +47,7 @@ pub(super) struct Groups {
     pub(super) lifecycle: bool,
     writes: bool,
     pub(super) home: bool,
+    pub(super) renewal: bool,
     #[cfg(unix)]
     store: bool,
 }
@@ -74,6 +75,7 @@ impl Groups {
             store,
             collection: on("collection", "AAC_RUST_GROUP_COLLECTION"),
             writes: on("writes", "AAC_RUST_GROUP_WRITES"),
+            renewal: on("renewal", "AAC_RUST_GROUP_RENEWAL"),
             home: on("home", "AAC_RUST_GROUP_HOME")
                 || std::env::var("AAC_RUST_HOME_VIEW").as_deref() == Ok("on"),
         }
@@ -193,9 +195,11 @@ impl PublicSampling {
         #[cfg(unix)]
         if let Some(writer) = &self.share_without_store {
             writer.accept_native(payload);
-        } else {
-            super::native_reads::usage_sample(root.to_owned(), payload).await;
+        } else if let Some(host) = self.status.upgrade() {
+            super::native_reads::usage_sample(&host, payload).await;
         }
+        #[cfg(unix)]
+        let _ = root;
         #[cfg(windows)]
         {
             let accounts = payload["event"]["accounts"].as_array().map_or(0, Vec::len);
@@ -715,15 +719,11 @@ impl Usage {
                         owner.publish();
                         if let Some(host) = sampling.status.upgrade() {
                             host.record_status_sample(&cache).await;
-                        }
-                        #[cfg(unix)]
-                        if sampling.store {
-                            super::native_reads::publish_usage(
-                                owner.root.clone(),
-                                &cache,
-                                super::now(),
-                            )
-                            .await;
+                            #[cfg(unix)]
+                            if sampling.store {
+                                super::native_reads::publish_usage(&host, &cache, super::now())
+                                    .await;
+                            }
                         }
                         if let Some(payload) = owner.share_sample(&cache, &sampling.signins).await {
                             sampling.publish_share(&owner.root, payload).await;

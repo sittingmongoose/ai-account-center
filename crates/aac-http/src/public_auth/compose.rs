@@ -3,7 +3,7 @@ use super::{DashboardAccess, DashboardPrincipal, Reply, error, request_log::Requ
 use axum::{
     body::Body,
     extract::Request,
-    http::{HeaderMap, HeaderName, HeaderValue, Method, Uri},
+    http::{HeaderMap, HeaderName, HeaderValue, Uri},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hyper::client::conn::http1;
@@ -14,128 +14,6 @@ use tokio::{net::TcpStream, sync::Semaphore};
 
 const PROOF: &str = "x-aac-compose-proof";
 const ACCESS: &str = "x-aac-compose-access";
-
-/// The literal second segments `/api/accounts` mounts. A request for one is never matched by
-/// the `:id` pattern: Express reaches the literal router first, and the settings family is
-/// native now, so forwarding it as an account id would answer from the wrong owner.
-const ACCOUNT_LITERALS: &[&str] = &[
-    "add",
-    "analytics",
-    "dashboard",
-    "preferences",
-    "registry",
-    "settings",
-    "signin-command",
-    "signin-jobs",
-    "trash",
-    "visibility",
-];
-
-// Only the cut uses this list. The composition fixture remains a reference for
-// the complete legacy router, including its handling of unknown methods.
-const CUT_ROUTES: &[(&str, &[&str])] = &[];
-
-pub(super) fn cut_route(method: &Method, path: &str) -> bool {
-    let method = if method == Method::HEAD {
-        Method::GET.as_str()
-    } else {
-        method.as_str()
-    };
-    let path = path.strip_suffix('/').unwrap_or(path);
-    CUT_ROUTES.iter().any(|(pattern, methods)| {
-        if method != Method::OPTIONS.as_str() && !methods.contains(&method) {
-            return false;
-        }
-        let mut segments = path.split('/');
-        for part in pattern.split('/') {
-            let Some(segment) = segments.next() else {
-                return false;
-            };
-            if part.starts_with('*') {
-                return !segment.is_empty() || segments.next().is_some_and(|next| !next.is_empty());
-            }
-            if (part.starts_with(':') && segment.is_empty())
-                || (!part.starts_with(':') && part != segment)
-                || (part == ":id" && ACCOUNT_LITERALS.contains(&segment))
-            {
-                return false;
-            }
-        }
-        segments.next().is_none()
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cut_forwards_only_the_adapter_contract() {
-        assert!(!cut_route(&Method::GET, "/api/accounts/analytics"));
-        assert!(!cut_route(&Method::HEAD, "/api/accounts/analytics"));
-        // These settings, profile and app-update routes are native on both platforms.
-        assert!(!cut_route(&Method::GET, "/api/accounts/dashboard"));
-        assert!(!cut_route(&Method::HEAD, "/api/accounts/dashboard"));
-        assert!(!cut_route(&Method::POST, "/api/accounts/zai:usage/recheck"));
-        assert!(!cut_route(&Method::POST, "/api/accounts/example/recheck"));
-        assert!(!cut_route(&Method::GET, "/api/accounts/settings"));
-        assert!(!cut_route(&Method::PUT, "/api/accounts/settings"));
-        assert!(!cut_route(&Method::GET, "/api/accounts/preferences"));
-        assert!(!cut_route(&Method::PUT, "/api/accounts/preferences"));
-        assert!(!cut_route(&Method::PATCH, "/api/accounts/preferences"));
-        assert!(!cut_route(&Method::GET, "/api/accounts/visibility"));
-        assert!(!cut_route(&Method::PUT, "/api/accounts/visibility"));
-        assert!(!cut_route(&Method::PATCH, "/api/accounts/visibility"));
-        for (method, path) in [
-            (Method::GET, "/api/app-updates/status"),
-            (Method::POST, "/api/app-updates/start"),
-            (Method::POST, "/api/app-updates/cancel"),
-            (Method::GET, "/api/claude/desktop-profiles"),
-            (Method::GET, "/api/claude/desktop-profiles/usage"),
-            (Method::POST, "/api/claude/desktop-profiles/example/open"),
-            (Method::POST, "/api/claude/history-snapshots/cleanup"),
-            (Method::GET, "/api/codex/profiles"),
-            (Method::GET, "/api/codex/profiles/quotas"),
-            (Method::GET, "/api/antigravity/profiles"),
-            (Method::GET, "/api/antigravity/profiles/quotas"),
-            (Method::GET, "/api/views/home"),
-            (Method::HEAD, "/api/views/home/"),
-            (Method::OPTIONS, "/api/views/home"),
-            (Method::GET, "/api/store/status"),
-            (Method::HEAD, "/api/usage/history/"),
-            (Method::GET, "/api/usage/at"),
-            (Method::OPTIONS, "/api/usage/burn"),
-        ] {
-            assert!(!cut_route(&method, path), "{method} {path}");
-        }
-        assert!(!cut_route(
-            &Method::POST,
-            "/api/accounts/example/reset-claims/prepare"
-        ));
-        for path in [
-            "/api/status",
-            "/api/scoreboard",
-            "/api/status/answers",
-            "/api/status/files/example/nested/file.md",
-            "/api/status/deliverable",
-        ] {
-            for method in [Method::GET, Method::HEAD, Method::POST, Method::OPTIONS] {
-                assert!(!cut_route(&method, path), "{method} {path}");
-            }
-        }
-        assert!(!cut_route(&Method::GET, "/api/status/files/example"));
-        assert!(!cut_route(&Method::POST, "/api/accounts//recheck"));
-        assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));
-        assert!(!cut_route(&Method::GET, "/api/accounts/signin-command"));
-        assert!(!cut_route(&Method::GET, "/api/accounts/trash"));
-        assert!(!cut_route(&Method::GET, "/api/accounts/registry"));
-        assert!(!cut_route(&Method::POST, "/api/accounts/add"));
-        assert!(!cut_route(&Method::PUT, "/api/accounts/zai:usage/key"));
-        assert!(!cut_route(&Method::PATCH, "/api/accounts/zai:usage"));
-        assert!(!cut_route(&Method::GET, "/api/auth/session"));
-        assert!(!cut_route(&Method::GET, "/internal/collection/recheck"));
-    }
-}
 
 #[derive(Clone)]
 pub(super) struct Backend {
