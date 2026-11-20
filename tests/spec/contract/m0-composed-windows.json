@@ -1476,19 +1476,19 @@
         "logs": null,
         "checkpoints": {
           "activity/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "capture/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "runs/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 3
           },
           "usage/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           }
         },
@@ -1525,19 +1525,19 @@
         "logs": null,
         "checkpoints": {
           "activity/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "capture/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "runs/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 3
           },
           "usage/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           }
         },
@@ -1575,19 +1575,19 @@
         "logs": null,
         "checkpoints": {
           "activity/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "capture/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           },
           "runs/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 3
           },
           "usage/ledger": {
-            "lastSequence": 2,
+            "lastSequence": "<checkpoint-sequence>",
             "projectorVersion": 1
           }
         },
@@ -2347,6 +2347,30 @@
                 "detail": "Waiting for the first reading."
               },
               "warnings": []
+            },
+            {
+              "id": "odroid",
+              "label": "Odroid",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
             }
           ]
         },
@@ -2652,6 +2676,30 @@
             {
               "id": "alexis",
               "label": "Alexis PC",
+              "state": "stale",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading.",
+              "cpu": null,
+              "memory": null,
+              "disk": [],
+              "browsers": null,
+              "recordings": null,
+              "gpuPct": null,
+              "sessions": [],
+              "slotsSource": {
+                "id": "browsers",
+                "label": "Browsers and recordings",
+                "state": "missing",
+                "asOf": null,
+                "ageSeconds": null,
+                "detail": "Waiting for the first reading."
+              },
+              "warnings": []
+            },
+            {
+              "id": "odroid",
+              "label": "Odroid",
               "state": "stale",
               "asOf": null,
               "ageSeconds": null,
@@ -3523,7 +3571,7 @@
           },
           "server": {
             "version": "8.10.0",
-            "commit": "a8845466",
+            "commit": "<build-commit>",
             "views": [
               "home"
             ]
@@ -4074,7 +4122,7 @@
           },
           "server": {
             "version": "8.10.0",
-            "commit": "a8845466",
+            "commit": "<build-commit>",
             "views": [
               "home"
             ]
