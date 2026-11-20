@@ -61,7 +61,10 @@ const railPose = () => {
 		if (!n.textContent.trim() || !n.parentElement?.checkVisibility?.()) continue;
 		const range = document.createRange();
 		range.selectNodeContents(n);
-		for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) texts.push({ x: r.x, y: r.y, r: r.right, text: n.textContent.trim().slice(0, 24) });
+		// A Range rect is the font's box (20 px tall for a 16 px line), which reaches above both the CSS line box
+		// and the painted glyphs; clip it to the inline element's own box, the line the page actually lays out.
+		const inline = n.parentElement.getBoundingClientRect();
+		for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) texts.push({ x: Math.max(r.x, inline.x), y: Math.max(r.y, inline.y), r: Math.min(r.right, inline.right), text: n.textContent.trim().slice(0, 24) });
 	}
 	return {
 		chrome: document.documentElement.dataset.chrome, side: document.documentElement.dataset.railSide || '', w: innerWidth, h: innerHeight,
@@ -172,8 +175,10 @@ export const tests = {
 					near.map((r) => `"${r.text}" at ${Math.round(r.dx)},${Math.round(r.dy)}`).join('; ') || 'no text near the corner');
 				await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
 				// A pinned thread's sheet ends at the rail: never under the strip, its clock or the camera (review U1).
-				// The pin is required: without it the check fails, it does not pass silently (review L4).
-				const pin = await t.page.$('.c2-row');
+				// The pin is required: without it the check fails, it does not pass silently (review L4). The first
+				// pose's page can draw before the server's first pin collect and the next status poll (10 s), so wait
+				// for the row rather than race that first paint (the kit seeds the pin: kit-pins.mjs).
+				const pin = await t.page.waitForSelector('.c2-row', { timeout: 20000 }).catch(() => null);
 				await t.check(`${label}: a pinned thread to open`, !!pin);
 				if (pin) {
 					await t.page.click('.c2-row');

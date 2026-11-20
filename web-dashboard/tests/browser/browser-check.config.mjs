@@ -73,6 +73,13 @@ export default (ctx) => {
 				const { writeScoreboardFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'scoreboard-fixture.mjs')).href);
 				writeScoreboardFixture(reports);
 			}
+			// The rail test opens a pinned thread's sheet. Pins live in T3's state database under HOME, so the kit seeds
+			// one there and one fixture report that names it (kit-pins.mjs); a pin with no report is silent and draws no
+			// row. Skip it for `--set reports=` (that flow copies real reports for comparisons) and for realPins.
+			if (!ctx.args.reports && !ctx.args.realPins) {
+				const { seedKitPin } = await import('./kit-pins.mjs');
+				await seedKitPin({ home, reports });
+			}
 			// D7 (`--set rustHome=1`): the kit's own Rust service builds Home from the data checks stub in the page
 			// (rust-home-builder.mjs); the server under test never sees that data.
 			if (rustHome) builder = await startRustBuilder(rustBinary, root);
