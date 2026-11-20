@@ -14,7 +14,7 @@ enum ReviewR2Check {
           "email": "\(id)@example.com", "plan": "pro", "platform": "ubuntu", "host": "nas1",
           "source": "Fixture", "status": hidden ? "unavailable" : "ok", "isActive": false,
           "trayHidden": hidden, "sampledAt": "2026-10-15T12:00:00Z",
-          "windows": [["key": "gemini-5h", "label": "Gemini", "usedPercent": 20, "poolId": "watched"]],
+          "windows": [["key": "cli-gemini-5h", "label": "Gemini", "usedPercent": 20, "poolId": "watched"]],
           "capabilities": ["antigravityProfileId": id, "antigravityHostIds": ["ubuntu"], "claudePlatforms": []]]
       }
       func dashboard(_ accounts: [[String: Any]]) throws -> AccountDashboard {
@@ -28,7 +28,7 @@ enum ReviewR2Check {
       let (host, _, window) = PreviewRenderer.host(sample, options: PreviewRenderer.Options([]))
       defer { window.orderOut(nil) }
       let text = try PreviewRenderer.recognizedText(host).joined(separator: " ")
-      check(AlignmentProbe.frames["antigravity-auto|header"] == nil && AlignmentProbe.frames["meter|shown|gemini-5h|notch"] == nil
+      check(AlignmentProbe.frames["antigravity-auto|header"] == nil && AlignmentProbe.frames["meter|shown|cli-gemini-5h|notch"] == nil
         && !text.contains("Activate") && !text.contains("Auto-switch"), "no switch control, notch or Activate renders")
       check(!text.contains("hidden@example.com") && text.lowercased().contains("nas1"), "only shown rows render with host provenance")
 

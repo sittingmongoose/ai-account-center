@@ -355,8 +355,8 @@ enum PreviewRenderer {
         let target = hit(point, label: view.identifier?.rawValue ?? "nested")
         return !(target is DetailsRowButton)
       }
-      // Selected-row alignment: in every switchable section, the check's left edge must sit on the Activate
-      // capsule's left edge and "Active" on the "Activate" label's x, within 0.5 pt, at the slot's
+      // Selected-row alignment: in the Codex and Antigravity sections, the Active mark's check must sit on the
+      // action slot's leading edge and "Active" the check plus its gap after it, within 0.5 pt, at the slot's
       // trailing-anchored position: list padding 8, platter inset 4, row trailing 6, the reserved
       // chevron column and its column gap, then the slot.
       var alignment: [[String: Any]] = []
@@ -364,26 +364,22 @@ enum PreviewRenderer {
       for provider in ["codex", "antigravity"] {
         let gap = provider == "antigravity" ? TrayMetrics.antigravityColumnGap : TrayMetrics.columnGap
         let expectedIconX = host.bounds.width - 8 - TrayMetrics.groupInset - TrayMetrics.rowTrailing
-          - TrayMetrics.chevronColumn - gap - TrayMetrics.switchSlot
-        let expectedLabelX = expectedIconX + TrayMetrics.activateInset
+          - TrayMetrics.chevronColumn - gap - TrayMetrics.actionSlot
+        let expectedLabelX = expectedIconX + TrayMetrics.activeLabelInset
         let ids = visible.filter { $0.provider == provider }.map(\.id)
         func edges(_ part: String) -> [CGFloat] {
-          ids.compactMap { id in
-            AlignmentProbe.frames["slot|activate-\(id)|\(part)"]?.minX ?? AlignmentProbe.frames["slot|active-\(id)|\(part)"]?.minX
-          }
+          ids.compactMap { id in AlignmentProbe.frames["slot|active-\(id)|\(part)"]?.minX }
         }
         let icons = edges("icon"), labels = edges("label")
         let subs = ids.compactMap { AlignmentProbe.frames["slot|active-\($0)|sub"]?.minX }
         func widths(_ part: String) -> [CGFloat] {
-          ids.compactMap { id in
-            AlignmentProbe.frames["slot|activate-\(id)|\(part)"]?.width ?? AlignmentProbe.frames["slot|active-\(id)|\(part)"]?.width
-          }
+          ids.compactMap { id in AlignmentProbe.frames["slot|active-\(id)|\(part)"]?.width }
         }
         let slotWidths = widths("icon")
         let spread = { (values: [CGFloat]) -> CGFloat in (values.max() ?? 0) - (values.min() ?? 0) }
         let absolute = icons.allSatisfy { abs($0 - expectedIconX) <= 0.5 }
           && (labels + subs).allSatisfy { abs($0 - expectedLabelX) <= 0.5 }
-        let fits = slotWidths.allSatisfy { $0 <= TrayMetrics.switchSlot + 0.5 }
+        let fits = slotWidths.allSatisfy { $0 <= TrayMetrics.actionSlot + 0.5 }
         let ok = (icons.count >= 2 ? spread(icons) <= 0.5 && spread(labels + subs) <= 0.5 : true) && absolute && fits
         alignmentPassed = alignmentPassed && ok
         alignment.append(["section": provider, "slots": icons.count, "iconLeftEdges": icons.map { Double($0) },
@@ -499,10 +495,10 @@ enum PreviewRenderer {
         let fill = AlignmentProbe.frames["meter|\(key)|fill"]
         guard let window = account.visibleWindows.first(where: { $0.key == parts[1] }) else {
           // Cells with no window behind them render a dashed track with no fill, never a
-          // fake reading: the "Not reported yet" Fable cell, and an Antigravity column the account
-          // does not report (the muted Weekly only / Not on plan / Unavailable cell).
+          // fake reading: the "Not reported yet" Fable cell, and a T3 Antigravity column the account
+          // does not report (the muted Weekly only / Not on plan / Not reported / Unavailable cell).
           let windowless = (parts[1] == "seven_day_fable" && account.provider == "claude")
-            || (account.provider == "antigravity" && TrayColumns.antigravityKeys.contains(parts[1]))
+            || (account.provider == "antigravity" && TrayColumns.isAntigravityCLI(parts[1]))
           if windowless && fill == nil { continue }
           failures.append("\(key): no such window on \(account.id)"); continue
         }

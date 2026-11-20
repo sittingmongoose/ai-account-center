@@ -138,7 +138,7 @@ enum HoverStack {
     return frontIndex > backIndex
   }
 
-  /// A live control drawn in front of `view` holds the point: a footer button over a row (or its Activate or
+  /// A live control drawn in front of `view` holds the point: a footer button over a row (or its Finish setup or
   /// Open button) that scrolled under the footer, or the gear over Settings' Value. Only the frontmost tag
   /// presents, and a row under such a control does not highlight. Rows never cover: a row's full-width target is
   /// an overlay drawn over its own nested controls, which yield the other way (`nestedControl`).
@@ -441,7 +441,7 @@ extension View {
 }
 
 /// The full-row Details target. It yields to nested controls (anything carrying a HoverHelp or a
-/// RowActionExclusion), so an Activate, Open or packs click never also opens Details.
+/// RowActionExclusion), so a Finish setup, Open or packs click never also opens Details.
 struct DetailsRowTarget: NSViewRepresentable {
   let tooltip: String
   let identifier: String

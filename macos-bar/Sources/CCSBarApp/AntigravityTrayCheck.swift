@@ -53,7 +53,8 @@ enum AntigravityTrayCheck {
     // CLI unavailable: Unavailable in the row (five T3 cells, including Argon) and a notice in Details.
     let down = try dashboard { $0.filter { $0["provider"] as? String != "antigravity" || $0["id"] as? String == "antigravity:t3-down" } }
     let downPanel = try panelText(down)
-    check(noAppNumber(downPanel) && count(downPanel, "Unavailable") >= 5, "a failed T3 service reads Unavailable, never the app's number")
+    check(noAppNumber(downPanel) && count(downPanel, "Unavailable") >= 5,
+      "a failed T3 service reads Unavailable, never the app's number (read \(count(downPanel, "Unavailable")) Unavailable: \(downPanel))")
     let downDetails = try detailsText(down, "antigravity:t3-down")
     check(noAppNumber(downDetails) && downDetails.contains("could not be read"), "Details names the failed T3 service, no app number")
 
@@ -78,8 +79,10 @@ enum AntigravityTrayCheck {
         && !lower.contains("as active"),
         "\(name), none active: no switch control, auto-switch fact or active-account prompt renders")
     }
-    check(!AlignmentProbe.frames.keys.contains { $0.lowercased().contains("activate") || $0.contains("auto") },
-      "no switch control is laid out")
+    let switchProbes = AlignmentProbe.frames.keys.filter { key in
+      key.lowercased().contains("activate") || key.contains("-auto|") || key.lowercased().contains("autoswitch")
+    }.sorted()
+    check(switchProbes.isEmpty, "no switch control is laid out \(switchProbes)")
     let active = try dashboard { accounts in
       accounts.map { account in
         var account = account
