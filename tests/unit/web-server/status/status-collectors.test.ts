@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import os from 'os';
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -384,6 +385,25 @@ describe('status collectors', () => {
     );
   });
 
+  it('reads the disk the home folder is on, here and over ssh, not the system disk', async () => {
+    // The Odroid and the 1070ti keep the OS on / and agent work on a separate /home (2026-11-20).
+    const asked: string[] = [];
+    const sample = await readLocalMachine({
+      statfs: async (target: string) => {
+        asked.push(target);
+        return { bavail: 10, bsize: 4096, blocks: 100 } as fs.StatsFs;
+      },
+      readFile: async (file: string) =>
+        file === '/proc/stat'
+          ? 'cpu  100 0 50 800 50 0 0 0\n'
+          : 'MemTotal: 1000 kB\nMemAvailable: 500 kB\n',
+    } as never);
+    expect(asked).toEqual([os.homedir()]);
+    expect(sample.disk?.mount).toBe(os.homedir());
+    expect(machineProbeCommand('linux')).toContain('df -Pk "$HOME"');
+    expect(machineProbeCommand('linux')).not.toContain('df -Pk /');
+  });
+
   it('a local disk or CPU read that fails leaves the rest of the reading and names the part', async () => {
     const eio = () => Object.assign(new Error('EIO'), { code: 'EIO' });
     const statfs = async () => ({ bavail: 10, bsize: 4096, blocks: 100 }) as fs.StatsFs;
@@ -411,7 +431,7 @@ describe('status collectors', () => {
     });
     expect(noCpu.cpuTimes).toBeNull();
     expect(noCpu.cpuError).toBe('The CPU counters could not be read.');
-    expect(noCpu.disk?.mount).toBe('/');
+    expect(noCpu.disk?.mount).toBe(os.homedir());
     expect(noCpu.diskError).toBeUndefined();
     // A failed /proc/meminfo keeps the OS figure and the CPU counters.
     const noMeminfo = await readLocalMachine({
