@@ -4402,6 +4402,13 @@
       ]
     },
     {
+      "file": "web-dashboard/tests/browser/checks/live-updates.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "web-dashboard/tests/browser/checks/overlay-close.check.mjs",
       "kind": "HTTP",
       "evidence": [
@@ -4439,6 +4446,13 @@
     },
     {
       "file": "web-dashboard/tests/browser/checks/smoke.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/splash.check.mjs",
       "kind": "HTTP",
       "evidence": [
         "HTTP"
