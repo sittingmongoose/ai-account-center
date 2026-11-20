@@ -296,6 +296,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-files/src/presence.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-files/src/profile_writes.rs",
       "kind": "internal",
       "evidence": [],
@@ -898,7 +904,8 @@
       "file": "crates/aac-http/tests/native_public_collection.rs",
       "kind": "HTTP",
       "evidence": [
-        "HTTP"
+        "HTTP",
+        "helper"
       ]
     },
     {
