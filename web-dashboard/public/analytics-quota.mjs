@@ -6,6 +6,7 @@
 // Truthfulness: quota observations are snapshots per account and window, never added, averaged or merged
 // across accounts; a missing reading is a gap, never zero; a reset is never bridged by a line; projections are
 // labelled as projections; at most two decimals.
+import { antigravityWindowLabel } from './antigravity-data.mjs';
 import { visibleUsageWindows, isWeeklyScoped, scopedModelLabel } from './visible-usage.mjs';
 import { usedPercent, currentUsedPercent, isFable, isMeterWindow, period, windowLabel, planLabel, valueText, hiddenProviders } from './view-model.mjs';
 import { H, D, clockTxt, hourTxt, mdTxt, wmdTxt, wdTxt, timeTxt, duration, untilTxt, dayStart, addDays, bucketStart, nextBucket, dashLine, dashPolyline } from './analytics-usage.mjs';
@@ -37,13 +38,19 @@ const unitAmount = (value, unit) => {
 };
 
 // ---------------------------------------------------------------- accounts
-const MAIN_WINDOW = { codex: 'seven_day', claude: 'seven_day', antigravity: 'gemini-weekly' };
+const MAIN_WINDOW = { codex: 'seven_day', claude: 'seven_day', antigravity: 'cli-gemini-weekly' };
+const ANTIGRAVITY_APP_WEEKLY = 'gemini-weekly';
+const NO_T3_HISTORY = 'No T3 Gemini weekly history in this range';
+export const antigravitySeriesOrder = key => key === MAIN_WINDOW.antigravity ? 0 : key === ANTIGRAVITY_APP_WEEKLY ? 1 : 2;
 /** The window a quota-history row summarises: the canonical weekly window, else the first weekly rate limit,
  *  else the first rate limit with a reading, else the first rate limit; never a weekly-scoped
- *  (Fable/Opus/...) window and never an amount, so a scoped weekly is never mistaken for the account weekly. */
+ *  (Fable/Opus/...) window and never an amount, so a scoped weekly is never mistaken for the account weekly.
+ *  Antigravity's CLI and app quotas are separate, so Antigravity only uses the canonical window. */
 export function mainWindow(account) {
   const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && typeof window === 'object' && !['balance', 'extra_usage', 'spend'].includes(window?.kind) && !isWeeklyScoped(window));
-  return windows.find(window => window.key === MAIN_WINDOW[account?.provider])
+  const canonical = windows.find(window => window.key === MAIN_WINDOW[account?.provider]);
+  if (account?.provider === 'antigravity') return canonical || null;
+  return canonical
     || windows.find(window => period(window) === 'week' && usedPercent(window) !== null)
     || windows.find(window => usedPercent(window) !== null)
     || windows[0] || null;
@@ -89,7 +96,20 @@ export function quotaAccounts(payload, ctx = {}) {
   // `settings.hiddenAccountIds`). The trays' own switch (`trayHidden`) is never read here.
   const hiddenIds = new Set(Array.isArray(ctx.dashboard?.settings?.hiddenAccountIds) ? ctx.dashboard.settings.hiddenAccountIds : []);
   return current.filter(a => known.has(a.provider) && !hidden.has(a.provider) && a.hidden !== true && !hiddenIds.has(a.id)).map(a => {
-    const windows = visibleUsageWindows(a.provider, a.windows).map(w => ({
+    const analytics = history.get(a.id) || null;
+    const reported = visibleUsageWindows(a.provider, a.windows);
+    if (a.provider === 'antigravity') {
+      // Keep the CLI row visible before its first reading. A historical app series can
+      // still be charted when the live dashboard no longer reports that window.
+      const historical = Array.isArray(analytics?.windows) ? analytics.windows : [];
+      for (const key of [MAIN_WINDOW.antigravity, ANTIGRAVITY_APP_WEEKLY]) {
+        if (!reported.some(w => w.key === key)
+          && (key === MAIN_WINDOW.antigravity || historical.some(w => w?.key === key))) {
+          reported.push({ key, label: antigravityWindowLabel({ key }), kind: 'rate_limit' });
+        }
+      }
+    }
+    const windows = reported.map(w => ({
       key: text(w.key), label: text(w.label), short: windowLabel(a.provider, w), period: period(w), fable: isFable(w), scoped: isWeeklyScoped(w),
       // a reading from before a reset that has passed is no current reading (F6)
       used: isMeterWindow(w) && w.unlimited !== true ? currentUsedPercent(a, w, now) : null, meter: isMeterWindow(w),
@@ -99,7 +119,7 @@ export function quotaAccounts(payload, ctx = {}) {
     }));
     return {
       id: a.id, provider: a.provider, email: text(a.email) || text(a.label) || 'Identity unavailable', label: text(a.label), plan: text(a.plan),
-      active: LIVE_LOGIN.includes(a.provider) && a.isActive === true, windows, analytics: history.get(a.id) || null,
+      active: LIVE_LOGIN.includes(a.provider) && a.isActive === true, windows, analytics,
     };
   });
 }
@@ -109,6 +129,10 @@ const mainOf = acc => {
   return raw ? acc.windows.find(w => w.raw === raw) || null : null;
 };
 const histStart = (payload, now) => Date.parse(payload?.history?.oldestSampleAt || payload?.history?.collectedSince) || now - D;
+function antigravityHistoryBounds(range, now) {
+  const from = Date.parse(range?.from), to = Date.parse(range?.to);
+  return [finite(from) ? from : -Infinity, finite(to) ? Math.min(to, now) : now];
+}
 
 /** Where the recent pace takes a window by its reset (only from readings of the same reset period). */
 export function project(acc, w, now, history = null) {
@@ -130,10 +154,15 @@ export function project(acc, w, now, history = null) {
 
 // ---------------------------------------------------------------- sparklines and the shared axis
 /** Step runs of a window's history in a 600 x 24 viewbox, coloured by each run's own value; gaps stay gaps. */
-export function sparkRuns(acc, w, t0, now) {
+export function sparkRuns(acc, w, t0, now, range) {
   const empty = { calmLine: '', warnLine: '', critLine: '', overLine: '', calmFill: '', warnFill: '', critFill: '', overFill: '', limit: '', points: 0 };
   if (!w) return { ...empty, na: 'No usage window reported' };
-  const pts = historyOf(acc.analytics, w.key).filter(p => p.t >= t0);
+  const isAntigravity = acc.provider === 'antigravity';
+  const [from, to] = isAntigravity ? antigravityHistoryBounds(range, now) : [t0, Infinity];
+  const pts = historyOf(acc.analytics, w.key).filter(p => p.t >= Math.max(t0, from) && p.t <= to);
+  if (isAntigravity && w.key === MAIN_WINDOW.antigravity && !pts.some(p => p.v !== null)) {
+    return { ...empty, na: NO_T3_HISTORY };
+  }
   if (!pts.length) return { ...empty, na: 'No history yet' };
   const Wv = 600, Hv = 24;
   const x = t => (t - t0) / Math.max(1, now - t0) * Wv;
@@ -186,7 +215,7 @@ export const MONO_ADVANCE = 7.15;
 const DASHES = [[], [9, 4], [9, 3, 2, 3]];
 function focusWindows(acc) {
   const ms = meters(acc);
-  if (acc.provider === 'antigravity') return ms;
+  if (acc.provider === 'antigravity') return ms.sort((a, b) => antigravitySeriesOrder(a.key) - antigravitySeriesOrder(b.key));
   const order = { '5h': 0, week: 1, month: 2, other: 3 };
   return ms.slice().sort((a, b) => order[a.period] - order[b.period] || a.scoped - b.scoped).slice(0, 3);
 }
@@ -205,8 +234,8 @@ export function focusChart(acc, payload, ctx) {
   const obsEnd = pad.l + obsW, fStart = pad.l + obsW + gap;
   const t0 = Math.max(now - 7 * D, histStart(payload, now) - 20 * 60e3), t1 = now;
   const prim = mainOf(acc);
-  // Cursor's legacy monthly pools and X subscription pool are different allowances, even when
-  // their reported durations happen to match. Only the same pool key is a comparable series.
+  // Cursor's monthly pools and Antigravity's CLI and app pools are separate allowances.
+  // Compare them only with the same window key on another account.
   const peers = (ctx.accounts || []).filter(a => a.provider === acc.provider && (acc.provider !== 'cursor' || (prim && a.windows.some(w => w.meter && w.key === prim.key))));
   const comparable = peers.length > 1;
   const cmp = !!ctx.compare && comparable;
@@ -214,21 +243,22 @@ export function focusChart(acc, payload, ctx) {
   let series;
   if (cmp && prim) {
     series = peers.map((a, i) => {
-      const w = a.windows.find(x => x.key === prim.key && x.meter) || (acc.provider !== 'cursor' && meters(a).find(x => !x.scoped && x.period === prim.period));
+      const w = a.windows.find(x => x.key === prim.key && x.meter) || (!['cursor', 'antigravity'].includes(acc.provider) && meters(a).find(x => !x.scoped && x.period === prim.period));
       return w ? { acc: a, w, shade: shadeOf(i), dash: i % 3, width: a.id === acc.id ? 2.4 : 1.9, name: tagOf(a) + (a.active ? ' (active)' : ''), tag: tagOf(a) } : null;
     }).filter(Boolean);
   } else {
-    series = focusWindows(acc).map((w, i) => ({ acc, w, shade: shadeOf(i), dash: i % 3, width: w === prim ? 2.4 : 1.9, name: w.raw?.label ? fullName(acc.provider, w) : w.short, tag: w.short }));
-    series.sort((a, b) => (a.w === prim) - (b.w === prim));
+    series = focusWindows(acc).map((w, i) => ({ acc, w, shade: shadeOf(i), dash: i % 3, width: w === prim ? 2.4 : 1.9, name: acc.provider === 'antigravity' || w.raw?.label ? fullName(acc.provider, w) : w.short, tag: w.short }));
+    if (acc.provider !== 'antigravity') series.sort((a, b) => (a.w === prim) - (b.w === prim));
   }
   const base = { id: acc.id, provider: acc.provider, w: W, h: Hc, comparable, compare: cmp, cmpLabel: comparable && prim ? `Compare ${prim.short.toLowerCase()} across ${QUOTA_PROVIDERS.find(p => p[0] === acc.provider)?.[1] || acc.provider} accounts` : '' };
   if (!series.length) return { ...base, empty: 'No usage windows to chart.', shapes: [], labels: [], dots: [], legend: [], stops: [], lut: [], foot: '' };
+  const [from, to] = acc.provider === 'antigravity' ? antigravityHistoryBounds(payload?.range, now) : [-Infinity, Infinity];
   const historyCache = new Map();
   const historyFor = (account, key) => {
     const snapshot = account.analytics;
     let windows = historyCache.get(snapshot);
     if (!windows) { windows = new Map(); historyCache.set(snapshot, windows); }
-    if (!windows.has(key)) windows.set(key, historyOf(snapshot, key));
+    if (!windows.has(key)) windows.set(key, historyOf(snapshot, key).filter(p => p.t >= from && p.t <= to));
     return windows.get(key);
   };
   const histories = new Map(series.map(s => [s, historyFor(s.acc, s.w.key)]));
@@ -373,6 +403,8 @@ export function focusChart(acc, payload, ctx) {
     legend.push({ name: s.name, kind: 'series', shade: s.shade, dash: s.dash, width: s.width });
   }
   shape(marksD, 'ink-3');
+  // Draw the primary Antigravity line last so overlaps do not obscure it.
+  if (acc.provider === 'antigravity' && !cmp) lines.push(lines.shift());
   for (const l of lines) shapes.push({ fill: '', op: 1, round: false, ...l, layer: 1 });
   for (const f of fg) shapes.push({ fill: '', op: 1, shade: 0, round: false, ...f, layer: 2 });
 
@@ -436,7 +468,7 @@ export function focusChart(acc, payload, ctx) {
       const v = valueAt(s, t, inF);
       return { name: s.name, value: v === 'reset' ? 'after reset' : v === 'nodata' ? 'too little data' : finite(v) ? `${valueText(v)}%` : 'no reading', shade: s.shade };
     });
-    const pv = valueAt(series[series.length - 1], t, inF);
+    const pv = valueAt(acc.provider === 'antigravity' && !cmp ? series[0] : series[series.length - 1], t, inF);
     return { x: pt(x), time: `${inF ? 'Projected · ' : ''}${timeTxt(t)}`.toUpperCase(), proj: inF, rows, dotY: finite(pv) ? pt(Y(pv)) : -1 };
   };
   for (const t of times) stops.push(stopFor(t, xo(t), false));
@@ -459,13 +491,15 @@ export function focusChart(acc, payload, ctx) {
     for (const [s, i] of pool) { const dd = Math.abs(s.x - mx); if (dd < bd) { bd = dd; best = i; } }
     lut.push(best);
   }
+  const missingT3 = acc.provider === 'antigravity' && !historyFor(acc, MAIN_WINDOW.antigravity).some(p => p.t >= t0 && p.v !== null);
   return {
     ...base, empty: '', shapes, labels, dots, legend, stops, lut,
     plot: { l: pad.l, t: pad.t, w: plotW, h: plotH },
-    foot: `Hourly snapshots; a gap is a missing reading, never zero. Dashed verticals mark resets; dotted lines carry the recent pace to the reset.${cmp ? ' Overlay only: accounts are never added together.' : ''}`,
+    foot: `${missingT3 ? NO_T3_HISTORY + '. ' : ''}Hourly snapshots; a gap is a missing reading, never zero. Dashed verticals mark resets; dotted lines carry the recent pace to the reset.${cmp ? ' Overlay only: accounts are never added together.' : ''}`,
   };
 }
 function fullName(provider, w) {
+  if (provider === 'antigravity') return antigravityWindowLabel(w);
   if (w.scoped) return `${scopedModelLabel(w)} weekly`;
   if (provider === 'codex') return { week: 'Weekly', '5h': '5-hour' }[w.label] || w.label || w.short;
   if (provider === 'claude') return { 'Five-hour usage': '5-hour usage' }[w.label] || w.label || w.short;
@@ -494,7 +528,7 @@ export function quotaView(payload, ctx = {}) {
       const w = mainOf(acc);
       const v = w ? w.used : null;
       const nextR = meters(acc).filter(x => x.resetAt && x.resetAt > now).sort((a, b) => a.resetAt - b.resetAt)[0];
-      const spark = sparkRuns(acc, w, axis.t0, now);
+      const spark = sparkRuns(acc, w, axis.t0, now, payload?.range);
       if (open.has(acc.id)) focus.push(focusChart(acc, payload, { now, width: ctx.focusWidth, height: ctx.focusHeight, compare: compare.has(acc.id), accounts }));
       return {
         id: acc.id, provider, label: acc.email, active: acc.active, plan: planLabel(acc.plan, provider),

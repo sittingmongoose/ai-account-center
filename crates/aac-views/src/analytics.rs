@@ -383,6 +383,14 @@ struct Series {
     last: Option<String>,
 }
 
+fn antigravity_series_order(window: &Spread) -> u8 {
+    match window.get("key").and_then(Value::as_str) {
+        Some("cli-gemini-weekly") => 0,
+        Some("gemini-weekly") => 1,
+        _ => 2,
+    }
+}
+
 fn account_series(
     ctx: &Context,
     account: &Account,
@@ -427,7 +435,11 @@ fn account_series(
     }
     let bucket_ms = range.bucket_minutes * 60_000.0;
     let mut out_windows = Vec::new();
-    for (identity_key, window) in preferred.entries().into_iter().take(MAX_WINDOWS) {
+    let mut entries = preferred.entries();
+    if account.value.get("provider").and_then(Value::as_str) == Some("antigravity") {
+        entries.sort_by_key(|(_, window)| antigravity_series_order(window));
+    }
+    for (identity_key, window) in entries.into_iter().take(MAX_WINDOWS) {
         let mut buckets: OrderedMap<(f64, Spread)> = OrderedMap::new();
         for record in &selected {
             let mut matching = None;

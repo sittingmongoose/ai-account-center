@@ -1,6 +1,7 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { cursorPlanLabel } from './cursor-data.mjs';
-import { mainWindow } from './analytics-quota.mjs';
+import { antigravityWindowLabel } from './antigravity-data.mjs';
+import { antigravitySeriesOrder, mainWindow } from './analytics-quota.mjs';
 import { lazyFormat } from './time-format.mjs';
 
 export { mainWindow };
@@ -28,6 +29,10 @@ const usedPercent = value => percentage(value?.usedPercent) ?? (finite(value?.re
 const windowKind = value => ['rate_limit', 'balance', 'spend', 'extra_usage'].includes(value) ? value : '';
 const historyIdentity = (account, window) => [text(account.id), text(window.key), text(window.label), text(window.unit), windowKind(window.kind)];
 function compareHistories(account, first, second) {
+  if (account.provider === 'antigravity') {
+    const order = antigravitySeriesOrder(first.key) - antigravitySeriesOrder(second.key);
+    if (order) return order;
+  }
   const a = historyIdentity(account, first), b = historyIdentity(account, second);
   for (let index = 1; index < a.length; index++) {
     const comparison = a[index].localeCompare(b[index]);
@@ -213,7 +218,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
   const percentMaximum = Math.max(100, ...histories.filter(row => row.plot.metricPercent).map(row => row.plot.axisMaximum));
   const allCharts = histories.map(({ account, window, key, plot: initial }) => {
     const plot = initial.metricPercent ? { ...initial, chartTop: `${axisNumber(percentMaximum)}%`, chartMiddle: `${axisNumber(percentMaximum / 2)}%`, points: initial.points.map(point => ({ ...point, percent: point.percent * initial.axisMaximum / percentMaximum })) } : initial;
-    return { key, title: `${text(account.email) || text(account.label) || 'Account'} · ${text(window.label) || 'Usage'}`, subtitle: [text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1], text(window.unit), account.provider === 'codex' && account.isActive ? 'Active Codex' : '', metricValueKind(window) === 'percent' ? 'Percent used' : metricValueKind(window) === 'remaining' ? 'Remaining balance' : 'Reported usage'].filter(Boolean).join(' · '), note: [status(account.status), text(account.platform), text(account.source), plot.chartNote].filter(Boolean).join(' · '), top: plot.chartTop, middle: plot.chartMiddle, bottom: plot.chartBottom, start: plot.chartStart, end: plot.chartEnd, points: plot.points };
+    return { key, title: `${text(account.email) || text(account.label) || 'Account'} · ${account.provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage'}`, subtitle: [text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1], text(window.unit), account.provider === 'codex' && account.isActive ? 'Active Codex' : '', metricValueKind(window) === 'percent' ? 'Percent used' : metricValueKind(window) === 'remaining' ? 'Remaining balance' : 'Reported usage'].filter(Boolean).join(' · '), note: [status(account.status), text(account.platform), text(account.source), plot.chartNote].filter(Boolean).join(' · '), top: plot.chartTop, middle: plot.chartMiddle, bottom: plot.chartBottom, start: plot.chartStart, end: plot.chartEnd, points: plot.points };
   });
   choices.metrics = [{ id: 'all', label: 'All histories' }, ...allCharts.map(row => {
     const [, key, , unit, kind] = JSON.parse(row.key);
@@ -281,7 +286,7 @@ export function quotaHistory(accounts, histories, range, now = Date.now()) {
         id: text(account.id), key: key || text(account.id), provider,
         label: text(account.email) || text(account.label) || 'Account identity unavailable',
         sub: [provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), text(account.platform)].filter(Boolean).join(' · '),
-        windowLabel: window ? text(window.label) || 'Usage' : 'No quota reported',
+        windowLabel: window ? (provider === 'antigravity' ? antigravityWindowLabel(window) : text(window.label) || 'Usage') : 'No quota reported',
         hasValue: current !== null, value: current ?? 0, valueText: current === null ? '' : number(current),
         reset: window ? relativeReset(window.resetAt, now) : '',
         active: provider === 'codex' && account.isActive === true,
