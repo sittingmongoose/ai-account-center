@@ -209,6 +209,29 @@ describe('GET /api/views/home', () => {
     }
   });
 
+  it("the front door's Open pairs reach Home's rows (the sidecar worker has no Open tracker)", async () => {
+    const operation = {
+      id: 'op_1',
+      platform: 'mac',
+      state: 'opening',
+      confirmedCount: 0,
+      totalCount: 2,
+      message: null,
+    };
+    const progress = Buffer.from(JSON.stringify([['a', operation]])).toString('base64url');
+    const withHeader = await fetch(`${baseUrl}/api/views/home`, {
+      headers: {
+        'x-test-session': 'true',
+        'x-aac-home-context': header(CONTEXT),
+        'x-aac-open-progress': progress,
+      },
+    });
+    const body = (await withHeader.json()) as {
+      profiles?: { id?: string; openOperation?: unknown }[];
+    };
+    expect(body.profiles?.[0].openOperation).toEqual(operation);
+  });
+
   it('default-ready: the group unset offers Home with the service on even with AAC_RUST_HOME_VIEW off', async () => {
     process.env.AAC_RUST_HOME_VIEW = 'off';
     delete process.env.AAC_RUST_GROUP_HOME;
