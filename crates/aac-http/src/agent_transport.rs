@@ -68,6 +68,8 @@ pub(crate) struct UsageHost {
     pub(crate) id: String,
     pub(crate) platform: &'static str,
     pub(crate) alias: Option<String>,
+    pub(crate) agent_available: bool,
+    pub(crate) fixed_ssh_available: bool,
 }
 
 struct Registry {
@@ -283,6 +285,30 @@ impl Registry {
         let (index, _) = matches.next()?;
         matches.next().is_none().then_some(index)
     }
+
+    fn usage_hosts(&self, clients: Option<&AgentClients>) -> Vec<UsageHost> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let platform = match entry.config.os {
+                    OperatingSystem::Linux => "ubuntu",
+                    OperatingSystem::Mac => "mac",
+                    OperatingSystem::Windows => "windows",
+                };
+                let remote = matches!(entry.config.transport, TransportConfig::Ssh { .. });
+                UsageHost {
+                    id: entry.config.id.as_str().to_owned(),
+                    platform,
+                    alias: remote.then(|| entry.config.id.as_str().to_owned()),
+                    agent_available: clients
+                        .and_then(|clients| clients.get(index))
+                        .is_some_and(Option::is_some),
+                    fixed_ssh_available: remote && entry.computer.is_some(),
+                }
+            })
+            .collect()
+    }
 }
 
 /// Wait for one boot initialization result without extending the caller's deadline.
@@ -496,31 +522,8 @@ impl Agents {
         let Ok(registry) = registered.as_ref() else {
             return Vec::new();
         };
-        let Some(clients) = loaded(self.clients.subscribe(), deadline).await else {
-            return Vec::new();
-        };
-        let Ok(clients) = clients.as_ref() else {
-            return Vec::new();
-        };
-        registry
-            .entries
-            .iter()
-            .zip(clients)
-            .filter(|(_, client)| client.is_some())
-            .map(|(entry, _)| {
-                let platform = match entry.config.os {
-                    OperatingSystem::Linux => "ubuntu",
-                    OperatingSystem::Mac => "mac",
-                    OperatingSystem::Windows => "windows",
-                };
-                let remote = matches!(entry.config.transport, TransportConfig::Ssh { .. });
-                UsageHost {
-                    id: entry.config.id.as_str().to_owned(),
-                    platform,
-                    alias: remote.then(|| entry.config.id.as_str().to_owned()),
-                }
-            })
-            .collect()
+        let clients = loaded(self.clients.subscribe(), deadline).await;
+        registry.usage_hosts(clients.as_deref().and_then(|clients| clients.as_ref().ok()))
     }
 
     pub(crate) async fn app_call(
@@ -855,31 +858,28 @@ impl Agents {
         deadline_ms: u64,
         max_bytes: usize,
         call_id: &str,
-    ) -> Result<Value, String> {
-        let selector = Selector {
-            platform: platform.to_string(),
-            ssh_host: ssh_host.map(str::to_string),
-        };
+    ) -> Result<Value, Cause> {
+        let selector = Selector::usage(platform, ssh_host);
         let started = tokio::time::Instant::now();
         let budget = deadline_ms
             .checked_sub(FRONT_DOOR_MARGIN_MS)
             .filter(|ms| *ms > 0)
-            .ok_or_else(|| "deadline".to_string())?;
+            .ok_or(Cause::Timeout)?;
         let permit = self
             .slots
             .clone()
             .try_acquire_owned()
-            .map_err(|_| "busy".to_string())?;
+            .map_err(|_| Cause::Busy)?;
         let deadline = started + Duration::from_millis(budget);
         let client = self
-            .client(&selector, deadline)
+            .checked_client(&selector, deadline)
             .await
-            .ok_or_else(|| "unavailable".to_string())?;
-        let args_text = serde_json::to_string(args).map_err(|_| "shape".to_string())?;
+            .map_err(|failure| failure.cause)?;
+        let args_text = serde_json::to_string(args).map_err(|_| Cause::Refused)?;
         let wire = format!(
             "{{\"protocol\":1,\"verb\":\"scan-usage\",\"id\":\"{call_id}\",\"deadlineMs\":{deadline_ms},\"args\":{args_text}}}"
         );
-        let request = serde_json::from_str::<Request>(&wire).map_err(|_| "shape".to_string())?;
+        let request = serde_json::from_str::<Request>(&wire).map_err(|_| Cause::Refused)?;
         let mut options = CallOptions::new(Duration::ZERO, max_bytes);
         options.deadline = deadline;
         options.scan = true;
@@ -889,13 +889,14 @@ impl Agents {
         let events = client
             .call_controlled_encoded(&request, wire.as_bytes(), &options, controls, progress)
             .await
-            .map_err(|_| "transport".to_string())?;
+            .map_err(|failure| failure.cause)?;
         match events.last() {
             Some(Event::Result { value, .. }) if value != &json!({"fallback":"python"}) => {
                 Ok(value.clone())
             }
-            Some(Event::Failure { failure, .. }) => Err(format!("{:?}", failure.cause)),
-            _ => Err("reply".to_string()),
+            Some(Event::Result { .. }) => Err(Cause::AgentMissing),
+            Some(Event::Failure { failure, .. }) => Err(failure.cause),
+            _ => Err(Cause::Damaged),
         }
     }
 
@@ -1009,8 +1010,51 @@ impl Drop for AbortOnDrop {
 
 #[cfg(test)]
 mod tests {
-    use super::control_line;
+    use super::{Entry, Registry, control_line};
     use aac_protocol::Control;
+    use serde_json::json;
+
+    #[test]
+    fn analytics_registry_names_computers_even_without_clients() {
+        let entries = [
+            ("ubuntu", "linux"),
+            ("mac", "mac"),
+            ("windows", "windows"),
+            ("alexis", "windows"),
+        ]
+        .into_iter()
+        .map(|(id, os)| Entry {
+            config: serde_json::from_value(json!({
+                "id": id, "label": id, "os": os,
+                "transport": if id == "ubuntu" {
+                    json!({"kind": "local"})
+                } else {
+                    json!({"kind": "ssh", "host": id, "user": null, "port": null, "key": ""})
+                },
+            }))
+            .expect("computer config"),
+            computer: None,
+        })
+        .collect();
+        let registry = Registry {
+            entries,
+            package: Default::default(),
+            agent_enabled: false,
+        };
+        let hosts = registry.usage_hosts(None);
+        assert_eq!(
+            hosts
+                .iter()
+                .map(|host| host.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ubuntu", "mac", "windows", "alexis"]
+        );
+        assert!(
+            hosts
+                .iter()
+                .all(|host| !host.agent_available && !host.fixed_ssh_available)
+        );
+    }
 
     #[test]
     fn a_cancel_with_a_newline_is_one_compact_line() {

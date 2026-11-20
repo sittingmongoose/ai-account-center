@@ -144,10 +144,6 @@ stub('utils/managed-process.js', {
   stopProcessBroker: async () => {},
   runManagedCommand: async () => ({ stdout: '', stderr: '', exitCode: 1, timedOut: false }),
 });
-stub('web-server/services/account-analytics-service.js', {
-  startAccountAnalyticsSampling: noop,
-  stopAccountAnalyticsSampling: noop,
-});
 stub('web-server/services/account-lifecycle-runtime.js', {
   startAccountLifecycleMaintenance: noop,
   stopAccountLifecycleMaintenance: noop,

@@ -441,6 +441,18 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_writers/experiment_roots.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/analytics_writers/fixed_scanner.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/antigravity_host.rs",
       "kind": "helper",
       "evidence": [
@@ -1736,6 +1748,12 @@
       ]
     },
     {
+      "file": "crates/aac-views/src/analytics_activity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-views/src/antigravity.rs",
       "kind": "internal",
       "evidence": [],
@@ -2037,13 +2055,6 @@
     },
     {
       "file": "tests/integration/web-server/usage-hub-endpoint.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/integration/web-server/usage-worker.test.ts",
       "kind": "HTTP",
       "evidence": [
         "HTTP"
@@ -3505,13 +3516,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/web-server/account-analytics-activity.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
       "file": "tests/unit/web-server/account-analytics-attribution.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -3533,33 +3537,6 @@
     },
     {
       "file": "tests/unit/web-server/account-analytics-log-sources.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/account-analytics-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/account-analytics-saved-views.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/account-analytics-service.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/account-analytics-sources.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3758,32 +3735,12 @@
     },
     {
       "file": "tests/unit/web-server/analytics-capture-cache-limit.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/analytics-cursor-devin.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/analytics-explicit-refresh.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/analytics-local-freshness.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/analytics-local-scanner.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -4219,10 +4176,9 @@
     },
     {
       "file": "tests/unit/web-server/hung-disk-deadlines.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/import-cycles.test.ts",

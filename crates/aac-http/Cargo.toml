@@ -47,6 +47,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 sha2.workspace = true
 sha1.workspace = true
 flate2 = "1"
+zstd = "0.14"
 subtle = "2.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
@@ -66,6 +67,8 @@ tempfile.workspace = true
 
 [dev-dependencies]
 aac-renewal = { workspace = true, features = ["parity-fixtures"] }
+aac-usage = { path = "../../native/aac-usage" }
+rusqlite = "0.37"
 tokio-tungstenite = "0.29"
 
 [target.'cfg(windows)'.dependencies]

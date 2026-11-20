@@ -328,6 +328,9 @@ fn stored_window(safe: &Map<String, Value>) -> Option<WindowObs> {
 
 /// `storeWindow`: one whitelisted window in the store's shape.
 pub fn store_window(value: &Value) -> Option<WindowObs> {
+    if value["status"] == "unavailable" {
+        return None;
+    }
     stored_window(&analytics_window(value)?)
 }
 
@@ -437,7 +440,11 @@ pub fn decode_observation(value: &Value) -> Option<DecodedObservation> {
         source,
         status: status.to_owned(),
         is_active: record.get("isActive").and_then(Value::as_bool).unwrap_or(false),
-        windows: windows.iter().filter_map(analytics_window).collect(),
+        windows: windows
+            .iter()
+            .filter(|window| window["status"] != "unavailable")
+            .filter_map(analytics_window)
+            .collect(),
     })
 }
 

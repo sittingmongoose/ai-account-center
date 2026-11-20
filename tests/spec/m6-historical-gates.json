@@ -21,7 +21,9 @@
     "tests/unit/web-server/app-update-routes.test.ts": "The Express app-update handlers were retired. Native app-updates M0 and the Rust HTTP outcome fixture cover the contract.",
     "tests/unit/web-server/claude-open-progress.test.ts": "The TypeScript Claude Open progress service was retired. The Rust Open operation, socket and profile fixtures cover the owner.",
     "tests/unit/web-server/codex-routes.test.ts": "The TypeScript Codex profiles router was retired. The native profiles group covers its public routes.",
-    "tests/unit/store/store-routes.test.ts": "The Express store adapter was retired. The native history store HTTP file runs its public admission and query checks."
+    "tests/unit/store/store-routes.test.ts": "The Express store adapter was retired. The native history store HTTP file runs its public admission and query checks.",
+    "tests/unit/web-server/account-analytics-routes.test.ts": "The Analytics Express adapter was retired. Strict Analytics M0 and the native HTTP tests replay the public read and capture contracts.",
+    "tests/integration/web-server/usage-worker.test.ts": "The Analytics Node worker scheduler was retired. The Rust scanner and native Analytics writer tests cover the new path."
   },
   "safety": [
     "native/aac-status/tests/reset_history_identity.rs",

@@ -8,21 +8,10 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AccountAnalyticsService } from '../../src/web-server/services/account-analytics-service';
-import { AccountAnalyticsActivityService } from '../../src/web-server/services/account-analytics-activity';
 import {
   appendAccountAnalyticsSnapshot,
-  FileAccountAnalyticsHistoryStore,
   type AccountAnalyticsHistoryData,
 } from '../../src/web-server/services/account-analytics-history';
-import {
-  loadAnalyticsRemoteCachedSources,
-  loadAnalyticsRemoteSources,
-} from '../../src/web-server/services/analytics-remote-sources';
-import {
-  parseAnalyticsRemoteResponse,
-  type AnalyticsRemoteResponse,
-} from '../../src/web-server/services/analytics-remote-transport';
 import { buildDashboardProviders } from '../../src/web-server/services/dashboard-provider-registry';
 import { defaultAnalyticsProviderTable } from '../../src/web-server/services/account-analytics-providers';
 import { resolveAccountAnalyticsRange } from '../../src/web-server/services/account-analytics-range';
@@ -825,107 +814,6 @@ export function registryTable(): RegistryListingFacts[] {
 // Analytics
 // ---------------------------------------------------------------------------
 
-const FILE = (host: string, kind: string) =>
-  createHash('sha256').update(`${host}:${kind}`).digest('hex');
-const print = (n: number) => ({
-  size: 10 + n,
-  mtimeMs: 20 + n,
-  head: 'a'.repeat(64),
-  tail: 'b'.repeat(64),
-});
-const row = (kind: string, file: string, hour: string, i: number) => ({
-  k: kind,
-  f: file,
-  m: kind === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-4-6',
-  h: hour,
-  i,
-  o: Math.floor(i / 10),
-  cr: 3,
-  cw: 1,
-  c: 0,
-  n: 2,
-});
-const permissionDenied = {
-  kinds: {
-    claude: {
-      installed: true,
-      signals: ['home'],
-      roots: [
-        {
-          root: 'c3'.repeat(8),
-          origin: 'default',
-          state: 'unreadable',
-          cause: 'permission_denied',
-          counts: { filesFound: 0, newestMtime: null },
-        },
-      ],
-      counts: { roots: 1, filesFound: 0, filesRead: 0, filesFailed: 0, newestMtime: null },
-    },
-  },
-};
-
-/**
- * Two concurrent scans of all four computers, written to the real v8 remote cache. Each computer
- * must save only its own cell notes (wave 30). Mac reads fully (read);
- * Windows reads fully, then partially with an unreadable folder (partial, cached with the first
- * pass's full-read age); Nas1's Claude folder is permission denied and its OMP is not installed;
- * Alexis has only partial reads (no complete read recorded).
- */
-export async function prepareRemoteCaches(cacheDir: string): Promise<void> {
-  if (fs.existsSync(path.join(cacheDir, 'analytics-remote-v1'))) return;
-  fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
-  const passes = [NOW - 2 * HOUR, NOW - HOUR];
-  for (const [pass, at] of passes.entries()) {
-    // All four computers in one scan, as the dashboard runs it: their jobs interleave.
-    await loadAnalyticsRemoteSources(NOW - 31 * DAY, {
-      cacheDir,
-      now: () => at,
-      force: true,
-      hosts: async () => ({
-        mac: 'mac-alias',
-        windows: 'windows-alias',
-        nas1: 'nas1-alias',
-        alexis: 'alexis-alias',
-      }),
-      localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
-      localExperimentRoots: () => ({}),
-      claudeLogNames: () => ({ originals: new Set(), complete: true }),
-      runHelper: async (_alias, host, request) => {
-        const kinds: Record<string, unknown> = {};
-        const rows: unknown[] = [];
-        let discovery: unknown;
-        for (const kind of request.kinds) {
-          const file = FILE(host, kind);
-          if (kind === 'codex') {
-            const partial =
-              (host === 'windows' && pass === 1) || host === 'alexis'
-                ? { partial: true, unreadableFolders: 1 }
-                : {};
-            kinds[kind] = { state: 'ok', fingerprints: { [file]: print(pass) }, ...partial };
-            rows.push(
-              row(kind, file, '2026-11-14 15:00', 100 * (pass + 1)),
-              row(kind, file, '2026-11-13 09:00', 40)
-            );
-          } else if (kind === 'claude' && host === 'nas1') {
-            kinds[kind] = { state: 'not_installed', partial: true, fingerprints: {} };
-            discovery = permissionDenied;
-          } else kinds[kind] = { state: 'not_installed', fingerprints: {} };
-        }
-        return parseAnalyticsRemoteResponse(
-          JSON.stringify({
-            version: 2,
-            truncated: false,
-            kinds,
-            rows,
-            srows: [],
-            ...(discovery ? { discovery } : {}),
-          })
-        ) as AnalyticsRemoteResponse;
-      },
-    });
-  }
-}
-
 function historyData(accounts: DashboardAccount[]): AccountAnalyticsHistoryData {
   let data: AccountAnalyticsHistoryData | null = null;
   const old = accounts.map((a) =>
@@ -959,107 +847,6 @@ function historyData(accounts: DashboardAccount[]): AccountAnalyticsHistoryData 
   return data as AccountAnalyticsHistoryData;
 }
 
-export async function analyticsService(
-  scope: string,
-  dashboardAccountsOverride: DashboardAccount[] | null,
-  history: 'ok' | 'unavailable' = 'ok'
-): Promise<AccountAnalyticsService> {
-  const cacheDir = path.join(scope, 'cache');
-  await prepareRemoteCaches(cacheDir);
-  const activity = new AccountAnalyticsActivityService({
-    scope: () => scope,
-    now: () => NOW,
-    requests: () => [],
-    remote: async (cutoff) => loadAnalyticsRemoteCachedSources(cutoff, { cacheDir }),
-    remoteCached: (cutoff) => loadAnalyticsRemoteCachedSources(cutoff, { cacheDir }),
-    localScannerOwned: () => [],
-    refreshIntervalSeconds: () => 60,
-  });
-  const probe: AccountAnalyticsQuery = {
-    platform: 'mac',
-    range: '7d',
-    provider: 'all',
-    account: 'all',
-    tz: 'UTC',
-  };
-  for (let attempt = 0; attempt < 400; attempt++) {
-    const answer = await activity.get(probe, NOW - 7 * DAY, NOW, { tz: 'UTC' });
-    if (!answer.refreshing && answer.status !== 'loading') break;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  const accounts = dashboardAccountsOverride ?? dashboardAccounts();
-  const store = new FileAccountAnalyticsHistoryStore(scope);
-  if (history === 'ok') await store.write(historyData(dashboardAccounts()));
-  return new AccountAnalyticsService({
-    getDashboard: async () => dashboard(accounts) as never,
-    getActivity: (query, from, to, options) => activity.get(query, from, to, options),
-    createHistoryStore: () =>
-      history === 'ok'
-        ? store
-        : {
-            read: async () => {
-              throw new Error('fixture history unreadable');
-            },
-            write: async () => {},
-          },
-    scope: () => scope,
-    now: () => NOW,
-    storedHistory: async () => null,
-    samplingIntervalMs: () => 60_000,
-    freshBudgetMs: 10_000,
-  });
-}
-
-export function analyticsForms(): Array<{
-  name: string;
-  query: string;
-  rust: boolean;
-  compared?: boolean;
-  dashboard?: DashboardAccount[];
-  history?: 'ok' | 'unavailable';
-}> {
-  return [
-    { name: '7 days, every source state', query: 'range=7d&tz=UTC', rust: true },
-    { name: 'all stored', query: 'range=all&tz=UTC', rust: true },
-    {
-      name: '24 hours, Codex, New York',
-      query: 'range=24h&provider=codex&tz=America/New_York',
-      rust: true,
-    },
-    { name: 'one account, 30 days', query: 'range=30d&account=codex:work&tz=UTC', rust: true },
-    {
-      name: 'custom days, Tokyo',
-      query: 'range=custom&from=2026-11-10&to=2026-11-13&tz=Asia/Tokyo',
-      rust: true,
-    },
-    {
-      name: 'this month, London, Windows',
-      query: 'range=month&platform=windows&tz=Europe/London',
-      rust: true,
-    },
-    {
-      name: 'quota history unreadable',
-      query: 'range=7d&tz=UTC',
-      rust: true,
-      history: 'unavailable',
-    },
-    {
-      name: 'non-ASCII address (Rust refuses)',
-      query: 'range=7d&tz=UTC',
-      rust: false,
-      dashboard: [account({ email: 'Jörg@Example.com' })],
-    },
-    {
-      name: 'numeric window key (TS input gate refuses)',
-      query: 'range=7d&tz=UTC',
-      rust: false,
-      compared: false,
-      dashboard: [account({ windows: [window({ key: 7 as never })] })],
-    },
-  ];
-}
-
-/** Generated composition inputs: ranges, filters, history, hidden rules and window churn. */
 export function analyticsTable(): Array<{
   rangeInput: AccountAnalyticsRangeInput;
   compose: AccountAnalyticsComposeInput;

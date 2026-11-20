@@ -68,12 +68,6 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8') + '\n');
     expect(buildStatus.sourceHash()).not.toBe(beforeHash);
     expect(buildUi.leptosFingerprint(leptosCrate).sha256).not.toBe(beforeLeptos);
-    const activity = await load('src/web-server/services/account-analytics-activity.ts');
-    // The new Linux entry gets exactly the sources every other Linux computer gets (nas1), whatever that list holds.
-    const coldStates = activity.coldScanningSourceStates() as Array<{ host: string }>;
-    const nas1Sources = coldStates.filter((entry) => entry.host === 'nas1').length;
-    expect(nas1Sources).toBeGreaterThan(0);
-    expect(coldStates.filter((entry) => entry.host === 'future')).toHaveLength(nas1Sources);
     const updates = await load('src/web-server/services/app-update-contract.ts');
     expect(updates.PLATFORMS).toContain('future');
     expect(updates.EXPECTED_RESULTS).toBe(96);

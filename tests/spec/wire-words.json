@@ -392,8 +392,6 @@
       "src/web-server/agent-usage/agent-usage-projection.ts:account.status",
       "src/web-server/agent-usage/agent-usage-projection.ts:window.status",
       "src/web-server/agent-usage/agent-usage-snapshot.ts:account.status",
-      "src/web-server/services/account-analytics-activity.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-compose.ts:account.status",
       "src/web-server/services/account-analytics-compose.ts:status",
       "src/web-server/services/account-analytics-compose.ts:window?.status",
@@ -404,8 +402,6 @@
       "src/web-server/services/account-analytics-history.ts:value.status",
       "src/web-server/services/account-analytics-projection.ts:status",
       "src/web-server/services/account-analytics-providers.ts:account.status",
-      "src/web-server/services/account-analytics-service.ts:account.status",
-      "src/web-server/services/account-analytics-service.ts:previous?.status",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/account-analytics-types.ts:status",
       "src/web-server/services/account-dashboard-projection.ts:cacheReason",
@@ -533,7 +529,6 @@
     "sources": [
       "scripts/account-usage/failover_usage.py:statuses",
       "scripts/analytics-remote/analytics_usage_remote.py:states[kind]",
-      "src/web-server/services/account-analytics-activity.ts:states",
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-sources.ts:state.tool"
     ]
@@ -953,7 +948,6 @@
       "scripts/app-updates/app_update_t3.py:host.get('state')",
       "scripts/app-updates/app_update_t3.py:hosts['ubuntu'].get('state')",
       "src/store/store-service.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:state",
       "src/web-server/status/answers.ts:a.state",
       "src/web-server/status/answers.ts:b.state",
@@ -1188,7 +1182,6 @@
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
       "src/store/store-service.ts:state",
       "src/web-server/rust-profile-input.ts:OPEN_OPERATION_STATES",
-      "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:row.status",
@@ -1372,9 +1365,6 @@
     "cause": null,
     "sources": [
       "src/web-server/compose-server.ts:result.status",
-      "src/web-server/services/account-analytics-activity.ts:status",
-      "src/web-server/services/account-analytics-service.ts:result.status",
-      "src/web-server/services/analytics-writer-feeds.ts:r.status",
       "src/web-server/services/signin-health-service.ts:result.status",
       "src/web-server/usage-hub/usage-hub-accounts.ts:result.status"
     ]
@@ -2005,10 +1995,7 @@
     "cause": null,
     "sources": [
       "src/store/activity-answer.ts:status",
-      "src/web-server/services/account-analytics-activity.ts:answerSourceStates",
-      "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-projection.ts:status",
-      "src/web-server/services/account-analytics-service.ts:answer.activity.status",
       "src/web-server/services/account-analytics-types.ts:status"
     ]
   },
@@ -2531,7 +2518,6 @@
       "src/store/activity-coverage.ts:state",
       "src/store/activity-reports.ts:state",
       "src/store/usage-report.ts:UsageReportState",
-      "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:read?.state",
@@ -2643,8 +2629,6 @@
       "src/store/activity-coverage.ts:state",
       "src/store/activity-reports.ts:state",
       "src/store/usage-report.ts:UsageReportState",
-      "src/web-server/services/account-analytics-activity.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:state.state",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:kind.state",
@@ -2813,16 +2797,12 @@
       "src/web-server/scoreboard/runs-store.ts:this.last?.state",
       "src/web-server/scoreboard/runs-types.ts:state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-compose.ts:account.status",
       "src/web-server/services/account-analytics-compose.ts:status",
       "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
       "src/web-server/services/account-analytics-history.ts:account.status",
       "src/web-server/services/account-analytics-projection.ts:status",
       "src/web-server/services/account-analytics-providers.ts:account.status",
-      "src/web-server/services/account-analytics-service.ts:account.status",
-      "src/web-server/services/account-analytics-service.ts:previous?.status",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/account-analytics-types.ts:status",
       "src/web-server/services/account-dashboard-projection.ts:account.status",
@@ -3057,13 +3037,6 @@
       "src/store/activity-coverage.ts:state",
       "src/store/activity-reports.ts:state",
       "src/store/usage-report.ts:UsageReportState"
-    ]
-  },
-  {
-    "word": "pass_limit",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/account-analytics-activity.ts:cause"
     ]
   },
   {
@@ -3660,8 +3633,6 @@
     "word": "rejected",
     "cause": null,
     "sources": [
-      "src/web-server/services/account-analytics-activity.ts:result.status",
-      "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/signin-health-service.ts:reason",
       "src/web-server/services/signin-health-service.ts:result.status",
       "src/web-server/services/signin-jobs.ts:state",
@@ -3870,7 +3841,6 @@
       "src/codex-auth/codex-activation-runtime.ts:status.status",
       "src/store/activity-coverage.ts:b.state",
       "src/store/store-service.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:state",
       "src/web-server/services/claude-account-lifecycle.ts:state"
     ]
@@ -4398,9 +4368,6 @@
       "src/store/activity-coverage.ts:state",
       "src/store/activity-reports.ts:state",
       "src/store/usage-report.ts:UsageReportState",
-      "src/web-server/services/account-analytics-activity.ts:entry.state",
-      "src/web-server/services/account-analytics-activity.ts:old.state",
-      "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:read?.state",
@@ -4569,7 +4536,6 @@
     "sources": [
       "scripts/app-updates/app_update_common.py:status",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
-      "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:status",
@@ -5157,7 +5123,6 @@
     "cause": null,
     "sources": [
       "src/store/activity-reports.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:states",
       "src/web-server/services/analytics-remote-sources.ts:states"
     ]
   },
@@ -5224,15 +5189,12 @@
       "src/web-server/routes/account-visibility-routes.ts:body.state",
       "src/web-server/routes/account-visibility-routes.ts:state",
       "src/web-server/rust-service-values.ts:status",
-      "src/web-server/services/account-analytics-activity.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-compose.ts:status",
       "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
       "src/web-server/services/account-analytics-history.ts:safe?.status",
       "src/web-server/services/account-analytics-history.ts:status",
       "src/web-server/services/account-analytics-history.ts:value.status",
       "src/web-server/services/account-analytics-projection.ts:status",
-      "src/web-server/services/account-analytics-service.ts:status",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/account-analytics-types.ts:state",
       "src/web-server/services/account-analytics-types.ts:status",

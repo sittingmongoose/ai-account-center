@@ -85,7 +85,8 @@ impl Sidecar {
         } else {
             "aac-http"
         });
-        let mut child = Command::new("node")
+        let mut child = Command::new("node");
+        child
             .arg(script)
             .env("CCS_DIR", root)
             .env("AAC_RUST_CUT_WORKER", "1")
@@ -115,11 +116,16 @@ impl Sidecar {
                 "AAC_CUT_COLLECTION_FEED",
                 collection
                     .as_ref()
+                    .filter(|_| native_collection)
                     .map(CollectionFeed::address)
                     .unwrap_or_default(),
             )
-            .env("AAC_CUT_COLLECTION_PROOF", &proof)
-            .spawn()?;
+            .env("AAC_CUT_COLLECTION_PROOF", &proof);
+        #[cfg(windows)]
+        if let Some(feed) = &collection {
+            child.env("AAC_CUT_STORE_FEED", feed.address());
+        }
+        let mut child = child.spawn()?;
         let mut input = child.stdin.take().ok_or_else(invalid)?;
         input.write_all(format!("{proof}\n").as_bytes()).await?;
         let mut output = BufReader::new(child.stdout.take().ok_or_else(invalid)?);

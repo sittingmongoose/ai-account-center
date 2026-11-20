@@ -33,7 +33,9 @@ pub(super) struct CollectionFeed {
 }
 
 impl CollectionFeed {
-    pub(super) async fn start(proof: &str) -> io::Result<Self> {
+    pub(super) async fn start(
+        proof: &str,
+    ) -> io::Result<Self> {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
         let source = Source {
@@ -79,28 +81,6 @@ impl CollectionFeed {
     }
 }
 
-impl Drop for CollectionFeed {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Selection {
-    platform: String,
-    secure: bool,
-    refresh: bool,
-}
-
-fn authorized(source: &Source, headers: &HeaderMap) -> bool {
-    headers
-        .get("x-aac-collection-proof")
-        .is_some_and(|proof| bool::from(source.proof.as_bytes().ct_eq(proof.as_bytes())))
-}
-
-/// The remaining Analytics and Status consumers use the public boot's store on Windows.
-/// The public router never mounts this private endpoint.
 #[cfg(windows)]
 async fn store_call(
     State(source): State<Source>,

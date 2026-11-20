@@ -28,10 +28,6 @@ async function server() {
     timelines.push(row);
     return row;
   };
-  const { AccountAnalyticsActivityService } = load(
-    'web-server/services/account-analytics-activity'
-  );
-  const { AccountAnalyticsService } = load('web-server/services/account-analytics-service');
   const { accountAnalyticsIdentity } = load('web-server/services/account-analytics-history');
   const { runCommand } = load('web-server/status/status-collectors');
   const express = require(path.join(checkout, 'node_modules/express'));
@@ -158,17 +154,6 @@ async function server() {
   });
   const baseQuery = { platform: 'mac', range: '30d', provider: 'all', account: 'all', tz: 'UTC' };
   memory('fixture-loaded');
-  // Repeated minute/range heads exercise the wave 3 answer and projection retention bounds.
-  for (let i = 0; i < 36; i++) {
-    await analytics.get({
-      ...baseQuery,
-      range: 'custom',
-      tz: i % 2 ? 'America/New_York' : 'UTC',
-      from: new Date(now - (720 - i * 12) * 3600000).toISOString().slice(0, 10),
-      to: new Date(now - 86400000).toISOString().slice(0, 10),
-    });
-    await sleep(1);
-  }
   global.gc?.();
   const retained = memory('warm-cache-gc');
   const caches = {
@@ -237,15 +222,6 @@ async function server() {
       global.gc?.();
       retention.push(memory(phase));
     };
-    analytics.answers?.clear();
-    release('released-answers');
-    for (const state of activity.states?.values() ?? [])
-      activity.projections?.delete(state.sources);
-    activity.latestProjections?.clear();
-    release('released-projections');
-    activity.states?.clear();
-    release('released-sources');
-    await activity.shutdown();
     listener.close();
     let brokerRss = null;
     try {

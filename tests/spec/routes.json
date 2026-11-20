@@ -177,7 +177,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/account-analytics-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/analytics_routes.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -191,7 +191,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/account-analytics-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/analytics_routes.rs",
     "writes": true,
     "milestone": "M5"
   },
@@ -205,7 +205,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/account-analytics-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/analytics_routes.rs",
     "writes": false,
     "milestone": "M3"
   },

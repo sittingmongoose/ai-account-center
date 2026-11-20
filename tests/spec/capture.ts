@@ -256,10 +256,6 @@ await stub('src/utils/managed-process.ts', {
   stopProcessBroker: async () => {},
   runManagedCommand: async () => ({ stdout: '', stderr: '', exitCode: 1, timedOut: false }),
 });
-await stub('src/web-server/services/account-analytics-service.ts', {
-  startAccountAnalyticsSampling: noop,
-  stopAccountAnalyticsSampling: noop,
-});
 await stub('src/web-server/services/account-lifecycle-runtime.ts', {
   startAccountLifecycleMaintenance: noop,
   stopAccountLifecycleMaintenance: noop,
@@ -428,7 +424,7 @@ for (const r of inventory) {
   if (r.path.startsWith('/v0/management')) r.writes = false;
 }
 inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'en'));
-// Profiles, app updates and Status moved their public admission to the Rust listener. Their M0 rows and
+// The migrated groups run public admission in the Rust listener. Their M0 rows and
 // contracts stay the replay corpus (`routes.json`); the TypeScript router no longer registers
 // them, so this recorder keeps the committed rows instead of re-recording a 404.
 const MOVED_TO_RUST = new Set([
@@ -438,6 +434,9 @@ const MOVED_TO_RUST = new Set([
   'POST /api/status/answers',
   'GET /api/status/deliverable',
   'GET /api/status',
+  'GET /api/accounts/analytics',
+  'GET /api/accounts/analytics/capture',
+  'PUT /api/accounts/analytics/capture',
   'GET /api/antigravity/profiles',
   'GET /api/antigravity/profiles/quotas',
   'POST /api/app-updates/cancel',
@@ -736,6 +735,7 @@ try {
     path.join(root, 'crates/aac-http/src/public_auth/reset_routes.rs'),
     path.join(root, 'crates/aac-http/src/public_auth/native_group.rs'),
     path.join(root, 'crates/aac-http/src/public_auth/home_group.rs'),
+    path.join(root, 'crates/aac-http/src/public_auth/analytics_routes.rs'),
     path.join(root, 'tests/fixtures/reset-adapter/reset-claim-routes.ts'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))

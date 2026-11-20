@@ -26,7 +26,6 @@ import {
 import accountDashboardRoutes from './account-dashboard-routes';
 import accountPreferencesRoutes from './account-preferences-routes';
 import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
-import accountAnalyticsRoutes from './account-analytics-routes';
 import accountVisibilityRoutes from './account-visibility-routes';
 import accountLifecycleRoutes, { createAccountLifecycleRouter } from './account-lifecycle-routes';
 import authRoutes from './auth-routes';
@@ -91,7 +90,6 @@ apiRoutes.use((req, res, next) => {
 apiRoutes.use('/accounts', accountDashboardRoutes);
 apiRoutes.use('/accounts', accountPreferencesRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
-apiRoutes.use('/accounts', accountAnalyticsRoutes);
 apiRoutes.use('/accounts', accountVisibilityRoutes);
 if (process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1') {
   apiRoutes.use('/accounts', accountLifecycleRoutes);

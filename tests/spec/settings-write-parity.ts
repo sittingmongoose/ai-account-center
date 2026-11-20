@@ -27,9 +27,6 @@ const { createAccountRefreshSettingsRouter } = await import(
   '../../src/web-server/routes/account-refresh-settings-routes'
 );
 
-const { createAccountAnalyticsRouter } = await import(
-  '../../src/web-server/routes/account-analytics-routes'
-);
 
 const { createAccountVisibilityRouter } = await import(
   '../../src/web-server/routes/account-visibility-routes'
@@ -37,7 +34,6 @@ const { createAccountVisibilityRouter } = await import(
 const visibilityFile = path.join(ccs, 'account-visibility.json');
 
 const file = path.join(ccs, 'account-refresh-settings.json');
-const captureFile = path.join(ccs, 'analytics-capture.json');
 const cases = [
   {
     body: '{"refreshIntervalSeconds":120}',
@@ -118,17 +114,6 @@ async function run(mode: 'off' | 'shadow' | 'on'): Promise<void> {
     });
     let changed = 0;
     app.use('/api/accounts', createAccountRefreshSettingsRouter({ onChanged: () => changed++ }));
-    let clears = 0;
-    app.use(
-      '/api/accounts',
-      createAccountAnalyticsRouter({
-        clearCwds: () => {
-          assert.equal(fs.readFileSync(captureFile, 'utf8'), '{"cwd":false}\n');
-          clears++;
-          return { folders: 3, caches: 2 };
-        },
-      })
-    );
     let visibilityChanges = 0;
     app.use(
       '/api/accounts',
@@ -183,82 +168,6 @@ async function run(mode: 'off' | 'shadow' | 'on'): Promise<void> {
       assert.equal(service.stats.fallbacks, 0, label);
     }
 
-    const capture = (
-      body: string,
-      origin = base,
-      session = true,
-      query = '',
-      contentType = 'application/json'
-    ) =>
-      fetch(base + '/api/accounts/analytics/capture' + query, {
-        method: 'PUT',
-        headers: {
-          origin,
-          'content-type': contentType,
-          ...(session ? { 'x-fixture-session': 'yes' } : {}),
-        },
-        body,
-      });
-    fs.writeFileSync(captureFile, '{"cwd":true}\n', { mode: 0o600 });
-    for (const [request, status, expected] of [
-      [
-        () => capture('{"cwd":false}', base, false),
-        401,
-        '{"error":"Authentication required","code":"auth_required"}',
-      ],
-      [
-        () => capture('{"cwd":false}', 'https://untrusted.example'),
-        403,
-        '{"error":"Capture settings require the dashboard origin.","code":"origin_required"}',
-      ],
-      [
-        () => capture('{"cwd":false}', ''),
-        403,
-        '{"error":"Capture settings require the dashboard origin.","code":"origin_required"}',
-      ],
-      [
-        () => capture('{"cwd":false}', base, true, '?unexpected=1'),
-        400,
-        '{"error":"Unexpected capture settings query.","code":"invalid_query"}',
-      ],
-      [
-        () => capture('{"cwd":false}', base, true, '', 'text/plain'),
-        415,
-        '{"error":"Capture settings require application/json."}',
-      ],
-      ...['{}', '{"cwd":0}', '{"cwd":true,"extra":false}'].map(
-        (body) =>
-          [
-            () => capture(body),
-            400,
-            JSON.stringify({
-              error: 'Send {"cwd": true} or {"cwd": false}.',
-              code: 'invalid_body',
-            }),
-          ] as const
-      ),
-    ] as const) {
-      const response = await request();
-      assert.equal(response.status, status, mode);
-      assert.equal(await response.text(), expected, mode);
-      assert.equal(fs.readFileSync(captureFile, 'utf8'), '{"cwd":true}\n');
-      assert.equal(clears, 0);
-    }
-    for (const cwd of [false, true]) {
-      const response = await capture(JSON.stringify({ cwd }));
-      assert.equal(response.status, 200, mode);
-      assert.equal(response.headers.get('cache-control'), 'no-store', mode);
-      assert.equal(
-        await response.text(),
-        cwd ? '{"cwd":true}' : '{"cwd":false,"cleared":{"folders":3,"caches":2}}',
-        mode
-      );
-      assert.equal(clears, 1, mode);
-      assert.equal(fs.readFileSync(captureFile, 'utf8'), JSON.stringify({ cwd }) + '\n');
-      writes++;
-      assert.equal(service.stats.served, mode === 'on' ? writes : 0, mode);
-      assert.equal(service.stats.fallbacks, 0, mode);
-    }
     const visibility = (method: string, body: unknown, origin = base, session = true) =>
       fetch(base + '/api/accounts/visibility', {
         method,
@@ -401,7 +310,7 @@ try {
   await run('shadow');
   if (!tsOnly) await run('on');
   console.log(
-    `settings write parity: ${cases.length} refresh + 10 capture + 8 visibility cases x ${tsOnly ? 'off/shadow' : 'off/shadow/on'}`
+    `settings write parity: ${cases.length} refresh + 8 visibility cases x ${tsOnly ? 'off/shadow' : 'off/shadow/on'}`
   );
 } finally {
   fs.rmSync(home, { recursive: true, force: true });

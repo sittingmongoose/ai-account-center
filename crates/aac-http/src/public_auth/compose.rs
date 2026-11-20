@@ -33,7 +33,7 @@ const ACCOUNT_LITERALS: &[&str] = &[
 
 // Only the cut uses this list. The composition fixture remains a reference for
 // the complete legacy router, including its handling of unknown methods.
-const CUT_ROUTES: &[(&str, &[&str])] = &[("/api/accounts/analytics", &["GET"])];
+const CUT_ROUTES: &[(&str, &[&str])] = &[];
 
 pub(super) fn cut_route(method: &Method, path: &str) -> bool {
     let method = if method == Method::HEAD {
@@ -71,6 +71,8 @@ mod tests {
 
     #[test]
     fn cut_forwards_only_the_adapter_contract() {
+        assert!(!cut_route(&Method::GET, "/api/accounts/analytics"));
+        assert!(!cut_route(&Method::HEAD, "/api/accounts/analytics"));
         // These settings, profile and app-update routes are native on both platforms.
         assert!(!cut_route(&Method::GET, "/api/accounts/dashboard"));
         assert!(!cut_route(&Method::HEAD, "/api/accounts/dashboard"));

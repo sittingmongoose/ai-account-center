@@ -100,6 +100,9 @@ pub struct Boot {
     /// The private collection producer triggers the existing G18 writer.
     #[serde(default)]
     pub native_usage_snapshot: bool,
+    /// The public host started this private service without a worker.
+    #[serde(default)]
+    embedded_dashboard: bool,
 }
 
 pub use crate::owners::OwnedBoot;
@@ -209,6 +212,7 @@ impl Boot {
                 "renewal",
                 "nativeLifecycle",
                 "nativeUsageSnapshot",
+                "embeddedDashboard",
             ],
         )
     }
@@ -1462,38 +1466,39 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     Err(reason) => decline(row.handler, reason),
                 };
             }
-            let Some(engine) = shared
-                .store
-                .as_ref()
-                .and_then(|host| host.analytics_engine())
-            else {
+            let Some(store) = shared.store.clone() else {
                 return decline(row.handler, Decline::Unsupported);
             };
             let root = shared.boot.ccs_dir.clone();
             // The same fed dashboard generation Accounts and Home render, as the read's input.
-            let snapshot = shared
-                .feeds
-                .latest("analytics-dashboard")
-                .ok()
-                .and_then(|generation| {
-                    serde_json::from_str::<serde_json::Value>(generation.data.get()).ok()
-                });
+            let cache = shared.account_usage.clone();
+            let feeds = shared.feeds.clone();
             let live = Arc::clone(&shared.analytics_live);
             match shared
                 .limits
                 .blocking(row.pool, move || {
-                    crate::analytics_route::compose(
+                    store.wait_ready();
+                    let engine = store.analytics_engine().ok_or(Decline::Internal)?;
+                    let now = aac_store::engine::now_ms() as i64;
+                    let snapshot = analytics_snapshot(&cache, &feeds, now);
+                    let answer = crate::analytics_route::compose(
                         engine,
                         &root,
                         snapshot.as_ref(),
                         &live,
                         query.as_deref(),
-                        aac_store::engine::now_ms() as i64,
-                    )
+                        now,
+                    );
+                    crate::analytics_route::encode(answer, query.as_deref())
                 })
                 .await
             {
-                Ok(value) => Json(value).into_response(),
+                Ok((status, bytes)) => (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    bytes,
+                )
+                    .into_response(),
                 Err(reason) => decline(row.handler, reason),
             }
         }
@@ -1777,7 +1782,13 @@ async fn serve_inner(
     fs::set_permissions(&boot.socket_path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
-    let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
+    let cut_boot = boot.embedded_dashboard
+        || native.is_some()
+        || std::env::var("AAC_RUST_CUT_WORKER").as_deref() == Ok("1");
+    let agents = Arc::new(crate::agent_transport::Agents::with_default(
+        boot.ccs_dir.clone(),
+        cut_boot,
+    ));
     let feeds = cache.feeds.clone();
     let app_update_jobs = app_update_jobs.or_else(|| {
         native_app_updates.then(|| {
@@ -1921,6 +1932,7 @@ async fn serve_inner(
     let writers_feeds = state.0.feeds.clone();
     let writers_ccs = state.0.boot.ccs_dir.clone();
     let writers_live = Arc::clone(&state.0.analytics_live);
+    let writers_cache = state.0.account_usage.clone();
     let router = router
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state.clone());
@@ -1983,7 +1995,7 @@ async fn serve_inner(
         tokio::spawn(async move {
             crate::analytics_writers::analytics_jobs(
                 writers_host,
-                writers_feeds,
+                move |now| analytics_snapshot(&writers_cache, &writers_feeds, now),
                 writers_agents,
                 writers_ccs,
                 writers_live,
@@ -2034,7 +2046,6 @@ async fn serve_inner(
     });
     let task = producer.zip(native).map(|(producer, native)| {
         let stop = cancel.clone();
-        let store = store.clone();
         let root = state.0.boot.ccs_dir.clone();
         let samples = std::sync::Mutex::new(crate::status_produce::UsageSamples::default());
         tokio::spawn(async move {
@@ -2062,17 +2073,9 @@ async fn serve_inner(
                         {
                             produce.set_usage(Some(usage));
                         }
-                        let store = store.clone();
                         let owner = lifecycle_owner.as_ref();
                         let share = share.as_ref();
                         async move {
-                            if let Some(store) = store {
-                                let cache = cache.clone();
-                                let _ = tokio::task::spawn_blocking(move || {
-                                    store.record_native_account_usage(&cache)
-                                })
-                                .await;
-                            }
                             if let (Some(owner), Some((writer, signins))) = (owner, share)
                                 && let Some(payload) =
                                     owner.private_share_sample(&cache, signins).await
@@ -2114,6 +2117,17 @@ async fn serve_inner(
         let _ = task.await;
     }
     served
+}
+
+fn analytics_snapshot(
+    cache: &crate::account_usage::AccountUsageCache,
+    feeds: &crate::feed::Feeds,
+    now: i64,
+) -> Option<serde_json::Value> {
+    crate::analytics_route::snapshot(cache, now).or_else(|| {
+        let generation = feeds.latest("analytics-dashboard").ok()?;
+        serde_json::from_str(generation.data.get()).ok()
+    })
 }
 
 #[cfg(test)]

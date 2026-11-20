@@ -21,6 +21,17 @@ use std::sync::{
 };
 use std::time::Duration;
 
+pub(crate) async fn jobs(host: Arc<StoreHost>, stop: Arc<std::sync::atomic::AtomicBool>) {
+    use std::{sync::atomic::Ordering, time::Duration};
+    tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
+    while !stop.load(Ordering::Acquire) {
+        let pass = Arc::clone(&host);
+        let _ =
+            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
+        tokio::time::sleep(Duration::from_millis(MAINTAIN_EVERY_MS)).await;
+    }
+}
+
 /// Store calls in flight at most (L1's store pool size). Unlike the read pools, a full pool
 /// queues: the NAPI binding queues on libuv's pool too, and a producer must not lose a
 /// write to a `busy` decline the in-process store never gave.
@@ -281,7 +292,7 @@ impl StoreHost {
         }
     }
 
-    fn wait_ready(&self) {
+    pub(crate) fn wait_ready(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         while !state.ready {
             state = self
@@ -321,20 +332,6 @@ impl StoreHost {
         answer
             .await
             .map_err(|_| "service_down: the store host is stopping".to_string())?
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn record_native_account_usage(
-        &self,
-        cache: &crate::account_usage::AccountUsageCache,
-    ) {
-        self.wait_ready();
-        let now = aac_store::engine::now_ms() as i64;
-        if let (Some(engine), Some(updated_at)) = (self.engine(), aac_num::ecma::to_iso_string(now))
-            && let Ok(observations) = cache.store_observations(&updated_at, now, i64::MIN)
-        {
-            let _ = aac_store::usage::record(&engine, observations);
-        }
     }
 
     fn record_dashboard(&self, args: &str) -> Result<String, String> {

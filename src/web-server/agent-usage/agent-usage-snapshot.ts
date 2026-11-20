@@ -32,7 +32,7 @@ import {
   longBurnKey,
   onAccountAnalyticsSample,
   type AccountAnalyticsSampleEvent,
-} from '../services/account-analytics-service';
+} from './usage-sample-events';
 import { getAacStore, type LongBurnSpan } from '../../store/store-service';
 import {
   buildRollupExports,
