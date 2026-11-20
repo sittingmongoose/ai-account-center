@@ -16,6 +16,7 @@ async function statusFixture(t, name) {
   const dist = path.resolve(t.args.repo ?? root, 'dist/web-server/status');
   const { AgentReportsReader } = require(path.join(dist, 'agent-reports-reader.js'));
   const { buildStatusView } = require(path.join(dist, 'status-view.js'));
+  const { MACHINE_IDS } = require(path.resolve(dist, '../services/dashboard-hosts.js'));
   const share = path.join(t.state.home, name);
   const now = Date.now();
   const reader = new AgentReportsReader({ root: () => share, now: () => now });
@@ -26,9 +27,7 @@ async function statusFixture(t, name) {
     sections: [{ type: 'text', title: 'Fixture details', body: 'Some details.', fold: true }],
   });
   const missing = { data: null, asOf: null, error: null };
-  const machines = Object.fromEntries(
-    ['vm', 'mac', 'windows', 'nas1', 'alexis'].map((id) => [id, missing])
-  );
+  const machines = Object.fromEntries(MACHINE_IDS.map((id) => [id, missing]));
   const done = { state: 'done', at: new Date(now).toISOString(), detail: null, attempts: 1 };
   const recorded = {
     id: 'recorded-answer',
