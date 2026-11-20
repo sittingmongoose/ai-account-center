@@ -12,23 +12,15 @@ The panel is 760 logical pixels wide (850 tall), clamped to the monitor's work a
   then "Pairing", "Securing this tray" or "Signed out".
 - **Claude, Codex, Antigravity:** one card each with column captions over the meters. Claude shows 5-hour, Weekly and,
   for Max plans only, Fable (`seven_day_fable`; "Not reported yet" when a Max account has no Fable window; Pro accounts
-  get no Fable cell). Each Claude row ends with the Open on Mac / Open on Windows pair. Antigravity shows four columns
-  when the dashboard reports them — Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly; a window a plan
-  does not have is a muted cell ("Weekly only", "Not on plan"), a plan with no bundled quota says so on its row, and the
-  expanded details add the plan summary, its models and the "AI credits (overage)" row.
-- **Selected row:** the active Codex or Antigravity account's row is a softly accent-tinted surface with a hairline
-  accent outline, and its address turns semibold. Its action slot shows a filled check and "Active" with "on Ubuntu"
-  under it, as plain text with no box, at the action slot's leading edge. When the active login changes the
-  highlight glides to the new row. With one Antigravity account and none reported active, the slot says
-  "Not reported / as active". Account switching (Activate, auto-switch, its threshold and notch) was removed on
-  2026-11-14: the tray reads usage and opens Claude profiles; it switches no login.
+  get no Fable cell). Each Claude row ends with the Open on Mac / Open on Windows pair. Antigravity shows T3's CLI quota under
+  "In T3 (Antigravity CLI)" with 5-hour and weekly columns for Gemini and Claude/GPT. Failed CLI readings and
+  app-only dashboards show "Unavailable". App quotas and AI credit balances are in the dashboard's Details pop-up.
+  The tray keeps the plan summary, model list and plan-specific quota messages.
 - **Other providers** (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go, and any provider the server adds later,
   with a neutral mark): one card per provider with up to three labelled meters; Qwen's packs button lists every pack.
-- **Footer:** Dashboard; Refresh; Settings.
+- **Footer:** Dashboard, Refresh and Settings.
 
-Click any row to expand its details (every window, balance, expiry and the account's actions); nested buttons keep
-their own action, and a click on a row's action slot — a resting button or the gaps around one — never expands or
-collapses the row. Hover tints a row, brightens its tracks and shows a chevron.
+Click any row to expand its usage details and available actions. Nested buttons handle their own clicks. Hover tints a row, brightens its tracks and shows a chevron.
 
 ## Data rules
 
@@ -45,8 +37,7 @@ even when this computer's clock is behind. The refresh timer re-checks this on e
 reset passes while the panel is open. The trays follow only the dashboard's per-provider "Show in tray" switch
 (`providers[].trayVisible`, or `settings.trayHiddenProviders`); "Show on dashboard" (`providers[].visible`) never hides
 anything here. An account is left out when its own "Show in tray" is off (`accounts[].trayHidden`); the dashboard's
-per-account "Show on dashboard" (`accounts[].hidden`) never hides it here, so all four combinations work. Provider ids, Codex profiles,
-Claude profile ids and Antigravity profile ids come from the data and are accepted only when they are URI and path
+per-account "Show on dashboard" (`accounts[].hidden`) never hides it here, so all four combinations work. Provider ids and Claude profile ids come from the data and are accepted only when they are URI and path
 safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
 
 Claude "Open on Mac" and "Open on Windows" both POST `/api/claude/desktop-profiles/:id/open` with
@@ -80,8 +71,8 @@ failure retries until the deadline; a signed-out key or refused HTTP destination
   60 degree turn. Rows tint on hover (140 ms), details expand with an animated height, Settings slides over the list,
   Refresh spins and eases to rest. Windows' "show animations" setting off turns motion off.
 - **Tray menu:** right-click shows a restyled menu (Open accounts, Open dashboard, Refresh now, Settings, Quit) in the
-  panel's palette and font, with Windows 11 rounded corners. The tooltip carries usage: "AI Account Center · Codex:
-  codex-2, 91% weekly left".
+  panel's palette and font, with Windows 11 rounded corners. When one Codex account is shown, the tooltip can
+  include its weekly usage remaining.
 
 ## Sign-in and pairing
 
@@ -174,9 +165,7 @@ address.
 
 ## Dashboard data and safety
 
-The dashboard still sends a fixed `codexAutoSwitch` (always off) for trays built before account switching was removed;
-this tray no longer reads or requires it, and ignores `antigravityAutoSwitch` and `antigravityCanActivate` from an
-older dashboard.
+The tray ignores retired switching fields from older dashboards.
 Failed refreshes keep the last sample, label it stale and disable account controls until a fresh read. Windowless
 setup and no-quota rows reserve a message column; an unexpected render failure shows an inline refresh error.
 Row metadata names failed and unavailable readings. Provenance uses `host` (for example `nas1`) before `platform`.
@@ -237,12 +226,8 @@ in command-line arguments. HTTP is accepted for local network origins; other ori
   `AAC_TRAY_STATE_DIR`.
 - `--check-live <report>`: reads the configured dashboard without mutation (provider counts, id validation).
 - `--render-fixture <dir> [light|dark]`: renders the real panel from the bundled sanitized fixture
-  (`CCSBar/Fixtures/dashboard.json`, example.com identities) to PNGs, with Settings, details, a new active login, two Antigravity
-  accounts, a hidden provider and an unknown provider, and measures the selected-row rule (check and "Active" on the
-  slot's leading edge and label x within 0.5 px, before and after the active login changes), that no switch control renders, the platter's glide, one x for
-  every section's name and first meter, whole compact resets, real gear and X clicks, and two runtime rules: refreshes
-  (hidden or shown) leave no theme handlers behind, and an idle panel, shown or hidden, uses no CPU. It never connects
-  anywhere.
+  (`CCSBar/Fixtures/dashboard.json`, example.com identities) to PNGs. It checks the Antigravity CLI rows,
+  row and meter alignment, compact reset labels, Settings, and refresh and idle behavior without a network connection.
 - `--render-proof <png>`: renders the live panel against the configured dashboard without a second tray instance.
 - `--e2e <step> <dir>`: one live end-to-end step against a sandbox dashboard (pair, wrong-password, pairing-off,
   reads, rotate, revoked, pair-again, disconnect, migrate, migrate-aged, repair-held, password-off, configure-twice),

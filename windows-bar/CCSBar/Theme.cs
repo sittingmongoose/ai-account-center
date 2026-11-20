@@ -78,8 +78,8 @@ public static class Theme
         ["Crit"] = ("#CF4127", "#FF6D50"), ["CritA"] = ("#F3A28A", "#A1331F"), ["Over"] = ("#8C1D48", "#FF5C93"),
         ["CalmText"] = ("#15202B", "#E6ECF2"), ["WarnText"] = ("#9A6100", "#F5C35D"), ["CritText"] = ("#BC3219", "#FF8469"), ["OverText"] = ("#8C1D48", "#FF7AA6"),
         ["GoodText"] = ("#1C7D6E", "#5AD3BF"), ["TipBg"] = ("#15202B", "#E6ECF2"), ["TipFg"] = ("#F2F5F8", "#101820"),
-        // color-mix(accent 9%, card), accent at 38% (platter); accent 45% into rule (accent-line buttons); accent 5% (active hover)
-        ["Platter"] = ("#E8EDF9", "#1F2B3A"), ["PlatterLine"] = ("#612552CC", "#6186ABFF"), ["AccentLine"] = ("#87A0DA", "#516995"), ["ActiveHover"] = ("#0D2552CC", "#0D86ABFF"),
+        // Accent mixed into the rule for buttons.
+        ["AccentLine"] = ("#87A0DA", "#516995"),
         ["WarnSoft"] = ("#F7F4EC", "#242928"), ["WarnLine"] = ("#D3C4A5", "#635B40"), ["CritSoft"] = ("#F8F1F0", "#232328"), ["CritLine"] = ("#D6B8B6", "#5C4243"),
         ["Shadow"] = ("#2615202B", "#66000000"),
         // Sign-in screen (trays/tray.css, the sign-in block): contours, elevation figures, scale bar, graticule,

@@ -609,7 +609,7 @@ public partial class MainWindow
                 meter.BeginAnimation(Meter.ShownProperty, null); meter.Shown = 0;
                 Motion.To(meter, Meter.ShownProperty, target, Motion.Draw, Motion.Out, delay: 180, from: 0);
             }
-            Dispatcher.BeginInvoke(new Action(() => { PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
+            Dispatcher.BeginInvoke(new Action(UpdateFade), DispatcherPriority.Loaded);
         });
         FlashStatus(flash);
         RenderFooter(); SampleChanged?.Invoke();

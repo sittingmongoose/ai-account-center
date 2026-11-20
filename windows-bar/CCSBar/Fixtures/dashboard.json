@@ -719,6 +719,54 @@
     "sampledAt": "2026-10-01T15:15:19.000Z",
     "isActive": false,
     "windows": [
+    {
+     "key": "cli-gemini-weekly",
+     "label": "Gemini Models · Weekly · In T3 (Antigravity CLI)",
+     "usedPercent": 8.48,
+     "remainingPercent": 91.52,
+     "resetAt": "2026-10-02T21:11:24.000Z",
+     "windowMinutes": 10080,
+     "used": null,
+     "limit": null,
+     "unit": null,
+     "kind": "rate_limit"
+    },
+    {
+     "key": "cli-gemini-5h",
+     "label": "Gemini Models · 5-hour · In T3 (Antigravity CLI)",
+     "usedPercent": 29.68,
+     "remainingPercent": 70.32,
+     "resetAt": "2026-10-01T20:15:19.000Z",
+     "windowMinutes": 300,
+     "used": null,
+     "limit": null,
+     "unit": null,
+     "kind": "rate_limit"
+    },
+    {
+     "key": "cli-3p-weekly",
+     "label": "Claude and GPT models · Weekly · In T3 (Antigravity CLI)",
+     "usedPercent": 0,
+     "remainingPercent": 100,
+     "resetAt": "2026-10-08T15:15:19.000Z",
+     "windowMinutes": 10080,
+     "used": null,
+     "limit": null,
+     "unit": null,
+     "kind": "rate_limit"
+    },
+    {
+     "key": "cli-3p-5h",
+     "label": "Claude and GPT models · 5-hour · In T3 (Antigravity CLI)",
+     "usedPercent": 0,
+     "remainingPercent": 100,
+     "resetAt": "2026-10-01T20:15:19.000Z",
+     "windowMinutes": 300,
+     "used": null,
+     "limit": null,
+     "unit": null,
+     "kind": "rate_limit"
+    },
      {
       "key": "gemini-weekly",
       "label": "Gemini Models · Weekly",
@@ -813,6 +861,30 @@
     "sampledAt": "2026-10-01T15:15:19.000Z",
     "isActive": false,
     "windows": [
+    {
+     "key": "cli-gemini-weekly",
+     "label": "Gemini Models · Weekly · In T3 (Antigravity CLI)",
+     "usedPercent": 22.5,
+     "remainingPercent": 77.5,
+     "resetAt": "2026-10-02T21:11:24.000Z",
+     "windowMinutes": 10080,
+     "used": null,
+     "limit": null,
+     "unit": null,
+     "kind": "rate_limit"
+    },
+    {
+     "key": "cli-3p-weekly",
+     "label": "Claude and GPT models · Weekly · In T3 (Antigravity CLI)",
+     "usedPercent": 8,
+     "remainingPercent": 92,
+     "resetAt": "2026-10-08T15:15:19.000Z",
+     "windowMinutes": 10080,
+     "used": null,
+     "limit": null,
+     "unit": null,
+     "kind": "rate_limit"
+    },
      {
       "key": "gemini-weekly",
       "label": "Gemini Models · Weekly",
@@ -854,6 +926,48 @@
      "thirdPartyModels": true,
      "creditsOverage": false
     }
+   },
+   {
+    "id": "antigravity:example-5",
+    "provider": "antigravity",
+    "providerLabel": "Antigravity",
+    "label": "Antigravity account 5",
+    "email": "antigravity-5@example.com",
+    "plan": "Google AI Pro",
+    "platform": "ubuntu",
+    "status": "ok",
+    "windows": [
+     {
+      "key": "cli-gemini-5h",
+      "label": "Gemini Models · 5-hour · In T3 (Antigravity CLI)",
+      "status": "unavailable",
+      "kind": "rate_limit"
+     },
+     {
+      "key": "cli-gemini-weekly",
+      "label": "Gemini Models · Weekly · In T3 (Antigravity CLI)",
+      "status": "unavailable",
+      "kind": "rate_limit"
+     },
+     {
+      "key": "cli-3p-5h",
+      "label": "Claude and GPT models · 5-hour · In T3 (Antigravity CLI)",
+      "status": "unavailable",
+      "kind": "rate_limit"
+     },
+     {
+      "key": "cli-3p-weekly",
+      "label": "Claude and GPT models · Weekly · In T3 (Antigravity CLI)",
+      "status": "unavailable",
+      "kind": "rate_limit"
+     },
+     {
+      "key": "gemini-weekly",
+      "label": "Gemini Models · Weekly · In the Antigravity app",
+      "usedPercent": 12.34,
+      "kind": "rate_limit"
+     }
+    ]
    },
    {
     "id": "antigravity:example-4",

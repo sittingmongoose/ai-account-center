@@ -231,7 +231,6 @@ public sealed class DashboardAccount
     public string? Message { get; set; }
     public string? FetchedAt { get; set; }
     public string? SampledAt { get; set; }
-    public bool IsActive { get; set; }
     /// <summary>"Show in tray" off for this account or its provider (accounts[].trayHidden); missing means shown. The
     /// dashboard's accounts[].hidden is deliberately not read.</summary>
     public bool? TrayHidden { get; set; }
@@ -293,11 +292,8 @@ public sealed class QuotaWindow
 
 public sealed class AccountCapabilities
 {
-    public string? CodexProfile { get; set; }
     public string? ClaudeProfileId { get; set; }
     public List<string> ClaudePlatforms { get; set; } = new();
-    public string? AntigravityProfileId { get; set; }
-    public List<string>? AntigravityHostIds { get; set; }
 }
 
 /// <summary>The Open progress of one Claude profile, exactly as GET /api/claude/desktop-profiles reports it
@@ -352,8 +348,6 @@ public sealed class AntigravityPlan
     public List<string> Models { get; set; } = new();
     /// <summary>Whether the plan has any Claude/GPT model at the sample time.</summary>
     public bool? ThirdPartyModels { get; set; }
-    /// <summary>True when purchased AI credits can serve as the overage (pro and ultra).</summary>
-    public bool? CreditsOverage { get; set; }
 
     [JsonIgnore] public bool IsProOrUltra => Class is "pro" or "pro-trial" or "ultra" or "ultra-5x" or "ultra-20x";
 }
@@ -431,6 +425,7 @@ public static class Formatting
 
     public static QuotaWindow[] VisibleWindows(DashboardAccount account) => account.Windows.Where(window =>
     {
+        if (account.Provider == "antigravity" && !window.Key.StartsWith("cli-", StringComparison.Ordinal)) return false;
         var key = Normalize(window.Key); var label = Normalize(window.Label);
         // The exact global Fable window alone gates on Max (and on having a reading); a surface-scoped
         // window (seven_day_fable_*) stays a visible scoped meter on every plan and never feeds the Fable cell.
@@ -708,20 +703,22 @@ public static class Formatting
     }
     public static string PercentWith(double value, int decimals) => value.ToString("F" + decimals, CultureInfo.CurrentCulture) + "%";
 
-    /// <summary>Notification-area tooltip (max 127 characters): the active Codex account's weekly % left.</summary>
+    /// <summary>Notification-area tooltip (max 127 characters): weekly % left when exactly one Codex account is shown.</summary>
     public static string TrayTooltip(AccountDashboard? dashboard, bool stale = false, bool configured = true, string? signInState = null)
     {
         const string name = "AI Account Center";
         if (!configured) return name + " · " + (string.IsNullOrEmpty(signInState) ? "Not paired" : signInState);
-        var active = dashboard is null || dashboard.Hidden.Contains("codex") ? null : dashboard.ShownAccounts.FirstOrDefault(account => account.Provider == "codex" && account.IsActive);
-        var weekly = active is null ? null : CodexPrimaryWindows(active).FirstOrDefault(window => window.Key == "seven_day");
+        var codex = dashboard is null || dashboard.Hidden.Contains("codex") ? Array.Empty<DashboardAccount>()
+            : dashboard.ShownAccounts.Where(account => account.Provider == "codex").Take(2).ToArray();
+        var account = codex.Length == 1 ? codex[0] : null;
+        var weekly = account is null ? null : CodexPrimaryWindows(account).FirstOrDefault(window => window.Key == "seven_day");
         string text = name;
-        if (active is not null && weekly is not null && PendingReset(active, weekly) is not null)
-            text = $"{name} · Codex: {(active.Email ?? active.Label).Split('@')[0]}, weekly reset, new reading pending";
-        else if (active is not null && weekly?.DisplayPercent is double used)
+        if (account is not null && weekly is not null && PendingReset(account, weekly) is not null)
+            text = $"{name} · Codex: {(account.Email ?? account.Label).Split('@')[0]}, weekly reset, new reading pending";
+        else if (account is not null && weekly?.DisplayPercent is double used)
         {
             var left = Math.Max(0, 100 - used);
-            var who = (active.Email ?? active.Label).Split('@')[0];
+            var who = (account.Email ?? account.Label).Split('@')[0];
             text = $"{name} · Codex: {who}, {PercentWith(left, Decimals(left))} weekly left";
         }
         if (stale) text += " · last sample";

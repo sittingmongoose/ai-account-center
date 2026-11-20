@@ -107,31 +107,8 @@ public static class Ui
         return button;
     }
 
-    /// <summary>Filled check-circle: accent disc, accent-ink check drawn by a dash offset.</summary>
-    public static Grid CheckCircle(double size, bool draw)
-    {
-        var grid = new Grid { Width = size, Height = size, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = new ScaleTransform(1, 1) };
-        var canvas = new Canvas { Width = 20, Height = 20 };
-        canvas.Children.Add(new Ellipse { Width = 16.5, Height = 16.5, Fill = Theme.Brush("Accent"), Margin = new Thickness(1.75) });
-        var check = new Path { Data = Icons.Geometry("M6.4 10.3 l2.5 2.5 4.8-5"), Stroke = Theme.Brush("AccentInk"), StrokeThickness = 1.9, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round, StrokeDashArray = new DoubleCollection { 6, 6 }, StrokeDashOffset = 0 };
-        canvas.Children.Add(check);
-        grid.Children.Add(new Viewbox { Child = canvas });
-        if (draw && Motion.Enabled)
-        {
-            grid.Opacity = 0;
-            Motion.To(grid, UIElement.OpacityProperty, 1, 300);
-            var scale = (ScaleTransform)grid.RenderTransform;
-            Motion.To(scale, ScaleTransform.ScaleXProperty, 1, 300, from: 0.6);
-            Motion.To(scale, ScaleTransform.ScaleYProperty, 1, 300, from: 0.6);
-            check.StrokeDashOffset = 6;
-            Motion.To(check, Shape.StrokeDashOffsetProperty, 0, 380, delay: 150, from: 6);
-        }
-        return grid;
-    }
-
     /// <summary>The section column grid: mark | identity | meters | action slot | tail. The first meter starts on the
-    /// same x in every section (14 px after the identity, as in the concept), the tracks stay uniform, and the two- and
-    /// four-meter sections share their trailing shape, so the action slot starts on one line. With four meters
+    /// same x in every section (14 px after the identity, as in the concept), the tracks stay uniform across the section. With four meters
     /// (Antigravity) the gap before the last column widens so the widest caption ("Claude/GPT 5-hour") fits above it.</summary>
     public static Grid SectionGrid(int meters, double acts, double identity = 162, double mark = 22)
     {
@@ -519,7 +496,7 @@ public sealed class Segmented : Border
     }
 }
 
-/// <summary>A themed dropdown menu (threshold choices, Qwen packs) in a non-activating popup.</summary>
+/// <summary>A themed dropdown menu for Qwen packs in a non-activating popup.</summary>
 public static class Menus
 {
     public static Popup Create(UIElement target, FrameworkElement content, PlacementMode placement = PlacementMode.Bottom, double minWidth = 150)

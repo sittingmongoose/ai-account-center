@@ -21,12 +21,19 @@ using System.Windows.Threading;
 namespace CCSBar;
 
 /// <summary>
-/// The Daylight Atlas Windows panel. Rows are rebuilt from each sample, but meters and the selected-row platter are
-/// kept by key across rebuilds, so a changed reading animates from what was on screen and an account switch glides.
+/// The Daylight Atlas Windows panel. Rows are rebuilt from each sample, but meters are kept by key
+/// across rebuilds so changed readings animate from what was on screen.
 /// </summary>
 public partial class MainWindow : Window
 {
     private sealed record Column(string Key, string Caption, Func<DashboardAccount, QuotaWindow?> Pick);
+
+    private const string AntigravityCliLabel = "In T3 (Antigravity CLI)";
+    private static readonly (string Key, string Caption)[] AntigravityKeys =
+    [
+        ("cli-gemini-5h", "Gemini 5-hour"), ("cli-gemini-weekly", "Gemini weekly"),
+        ("cli-3p-5h", "Claude/GPT 5-hour"), ("cli-3p-weekly", "Claude/GPT weekly"),
+    ];
 
     private DashboardClient? client;
     private ConnectionSettings? connection;
@@ -37,9 +44,6 @@ public partial class MainWindow : Window
     private readonly HashSet<string> expanded = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Meter> meters = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double?> shownAtHide = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Border> platters = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string?> platterFor = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, FrameworkElement> activeRows = new(StringComparer.Ordinal);
     private DateTimeOffset lastFailure = DateTimeOffset.MinValue;
     private DateTime lastHidden = DateTime.MinValue;
     private string? statusFlash;
@@ -169,7 +173,6 @@ public partial class MainWindow : Window
     internal ConnectionSettings? StoredConnectionForCheck => connection;
     internal Preferences PreferencesForCheck => preferences;
     internal void ToggleDetailsForCheck(string id) => ToggleDetails(id);
-    internal Border? PlatterFor(string provider) => platters.TryGetValue(provider, out var platter) ? platter : null;
     internal void SetRefreshingForCheck(bool spinning) => SetRefreshing(spinning);
     internal bool RefreshSpinning => refreshTurn.HasAnimatedProperties;
     internal bool RenderDirtyForCheck => renderDirty;
@@ -214,7 +217,7 @@ public partial class MainWindow : Window
             // previous open's panel stood on screen for 3 to 5 frames and then vanished as the entrance began from
             // transparent: the open flickered, reset and reopened (FW4 tray flicker).
             // Samples that arrived while hidden painted nothing: rebuild once now, before the entrance animation
-            // reads the meters, so the panel shows the latest reading and the platter lands on open (N6).
+            // reads the meters, so the panel opens with the latest reading (N6).
             if (renderDirty) FlushDeferredRender();
             var handle = new WindowInteropHelper(this).Handle;
             if (handle != IntPtr.Zero)
@@ -228,8 +231,7 @@ public partial class MainWindow : Window
             PlayOpen();
             if (signInVisible && signInView is not null && !signInEntered) { signInEntered = true; signInView.PlayEntrance(true); }
             if (busy) SetRefreshing(true);
-            // A sample that arrived while the panel was hidden had no layout yet: place the selected-row platter now.
-            Dispatcher.BeginInvoke(new Action(() => { PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
+            Dispatcher.BeginInvoke(new Action(UpdateFade), DispatcherPriority.Loaded);
         }
         Activate();
     }
@@ -508,8 +510,6 @@ public partial class MainWindow : Window
         var offset = ContentScroll.VerticalOffset;
         var entrance = EntranceInProgress();
         foreach (var meter in meters.Values) Ui.Detach(meter);
-        foreach (var platter in platters.Values) Ui.Detach(platter);
-        activeRows.Clear();
         ContentPanel.Children.Clear();
         if (staleSample) ContentPanel.Children.Add(StaleBanner());
         var hidden = dashboard.Hidden;
@@ -529,7 +529,7 @@ public partial class MainWindow : Window
         if (entrance is not null) ContinueEntrance(entrance);
         RenderFooter();
         if (busy || staleSample) DisableMutations();
-        Dispatcher.BeginInvoke(new Action(() => { ContentScroll.ScrollToVerticalOffset(offset); PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
+        Dispatcher.BeginInvoke(new Action(() => { ContentScroll.ScrollToVerticalOffset(offset); UpdateFade(); }), DispatcherPriority.Loaded);
     }
 
     /// <summary>The list blocks' entrance state while an open's entrance is still playing (only PlayOpen moves a
@@ -645,18 +645,19 @@ public partial class MainWindow : Window
         }
         if (provider == "codex")
             return new() { new("5h", "5-hour", a => Formatting.CodexPrimaryWindows(a).FirstOrDefault(w => w.Key == "five_hour")), new("week", "Weekly", a => Formatting.CodexPrimaryWindows(a).FirstOrDefault(w => w.Key == "seven_day")) };
-        // Antigravity: Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour and Claude/GPT weekly when reported
-        // (ANTIGRAVITY-SPEC); unknown extra windows still fall back to the generic path, capped at five so a
-        // pool the four columns don't name yet (a new Antigravity pool reports under its own key) gets a cell.
-        var known = new[] { ("gemini-5h", "Gemini 5-hour"), ("gemini-weekly", "Gemini weekly"), ("3p-5h", "Claude/GPT 5-hour"), ("3p-weekly", "Claude/GPT weekly") };
-        var keys = accounts.SelectMany(Meters).Select(window => window.Key).Distinct(StringComparer.Ordinal).ToList();
-        var result = known.Where(item => keys.Contains(item.Item1)).Select(item => new Column(item.Item1, item.Item2, a => Meters(a).FirstOrDefault(w => w.Key == item.Item1))).ToList();
-        foreach (var key in keys)
+        // Preserve the CLI columns when an older dashboard supplies only the app's readings.
+        var windows = accounts.SelectMany(Meters).DistinctBy(window => window.Key).ToArray();
+        var keys = windows.Select(window => window.Key).ToHashSet(StringComparer.Ordinal);
+        bool noCli = keys.Count == 0 && accounts.Any(account =>
+            account.Status != "needs_sign_in" && account.AntigravityPlan?.QuotaPolicy != "none");
+        var result = AntigravityKeys.Where(item => noCli || keys.Contains(item.Key))
+            .Select(item => new Column(item.Key, item.Caption, a => Meters(a).FirstOrDefault(w => w.Key == item.Key))).ToList();
+        foreach (var sample in windows)
         {
             if (result.Count >= 5) break;
-            if (result.Any(column => column.Key == key)) continue;
-            var sample = accounts.SelectMany(Meters).First(window => window.Key == key);
-            result.Add(new Column(key, ShortLabel(provider, sample), a => Meters(a).FirstOrDefault(w => w.Key == key)));
+            if (result.Any(column => column.Key == sample.Key)) continue;
+            var caption = sample.Label.Replace(" · " + AntigravityCliLabel, "", StringComparison.Ordinal);
+            result.Add(new Column(sample.Key, caption, a => Meters(a).FirstOrDefault(w => w.Key == sample.Key)));
         }
         return result;
     }
@@ -668,37 +669,19 @@ public partial class MainWindow : Window
     private UIElement AccountSection(string provider, DashboardAccount[] accounts)
     {
         var columns = Columns(provider, accounts);
-        var switchable = provider is "codex" or "antigravity";
-        double acts = provider == "claude" ? 62 : 108;
+        double acts = provider == "claude" ? 62 : 0;
         var stack = new StackPanel();
-        // Account switching (Activate, auto-switch and its header tools) was removed on 2026-11-14. Several Antigravity
-        // accounts keep the two-line header: the "<name> active" meta needs the whole name line, captions go below.
-        var separate = provider == "antigravity" && accounts.Length > 1;
+        var separate = provider == "antigravity" && columns.Count > 0;
         stack.Children.Add(SectionHeader(provider, accounts, columns, acts, separateCaptions: separate));
         if (separate) stack.Children.Add(CaptionRow(columns, acts));
-        var rowsGrid = new Grid { Margin = new Thickness(0, 0, 0, 0) };
-        var rowsStack = new StackPanel();
-        if (switchable)
-        {
-            if (!platters.TryGetValue(provider, out var platter))
-            {
-                platter = new Border { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(4, 0, 4, 0), CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), IsHitTestVisible = false, Opacity = 0, RenderTransform = new TranslateTransform() };
-                platter.Background = Theme.Brush("Platter"); platter.BorderBrush = Theme.Brush("PlatterLine");
-                platters[provider] = platter;
-            }
-            rowsGrid.Children.Add(platter);
-        }
-        rowsGrid.Children.Add(rowsStack);
+        var rows = new StackPanel();
         for (int i = 0; i < accounts.Length; i++)
         {
             var account = accounts[i];
-            var separator = i > 0 && !(switchable && (account.IsActive || accounts[i - 1].IsActive));
-            var row = AccountRow(provider, account, accounts, columns, acts, separator);
-            rowsStack.Children.Add(row);
-            if (switchable && account.IsActive) activeRows[provider] = row;
-            if (expanded.Contains(account.Id)) rowsStack.Children.Add(DetailsHost(AccountDetails(provider, account, accounts), open: true));
+            rows.Children.Add(AccountRow(provider, account, columns, acts, separator: i > 0));
+            if (expanded.Contains(account.Id)) rows.Children.Add(DetailsHost(AccountDetails(provider, account), open: true));
         }
-        stack.Children.Add(rowsGrid);
+        stack.Children.Add(rows);
         var card = Card(stack); card.Uid = "section:" + provider; card.Padding = new Thickness(0, 0, 0, 2);
         return card;
     }
@@ -715,15 +698,17 @@ public partial class MainWindow : Window
         identity.Children.Add(name);
         var count = Ui.Text(accounts.Length.ToString(CultureInfo.CurrentCulture), 12, "Ink3"); count.Margin = new Thickness(7, 0, 0, 0); count.VerticalAlignment = VerticalAlignment.Bottom; count.Padding = new Thickness(0, 0, 0, 1);
         identity.Children.Add(count);
-        var meta = SectionMeta(provider, accounts);
-        if (meta is not null) { meta.Margin = new Thickness(9, 0, 0, 0); meta.VerticalAlignment = VerticalAlignment.Bottom; meta.Padding = new Thickness(0, 0, 0, 1); identity.Children.Add(meta); }
         if (separateCaptions)
         {
-            // The name line on its own, captions on the next line (several Antigravity accounts).
+            // The source label shares the name line, with meter captions on the next line.
             var line = new DockPanel { Margin = new Thickness(12, 6, 10, 0), MinHeight = 22, LastChildFill = false };
             var head = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             // The mark sits centred in the grid's 22 px mark column and the name starts on the identity column (22 + 14).
             var mark2 = Ui.Mark(provider, 16); mark2.Margin = new Thickness(3, 0, 17, 0); head.Children.Add(mark2); head.Children.Add(identity);
+            var source = Ui.Text(AntigravityCliLabel, 12, "Ink3");
+            source.Margin = new Thickness(9, 0, 0, 0);
+            source.VerticalAlignment = VerticalAlignment.Center;
+            head.Children.Add(source);
             line.Children.Add(head);
             return line;
         }
@@ -756,32 +741,15 @@ public partial class MainWindow : Window
         return grid;
     }
 
-    private static TextBlock? SectionMeta(string provider, DashboardAccount[] accounts)
-    {
-        // Codex shows no header meta: it overlapped the 5-hour column and repeats the selected row.
-        if (provider == "claude" || provider == "codex" || provider == "antigravity" && accounts.Length < 2) return null;
-        var active = accounts.FirstOrDefault(account => account.IsActive);
-        var text = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), TextTrimming = TextTrimming.CharacterEllipsis, Uid = "section-meta" };
-        if (active is null) text.Inlines.Add(new Run("active account not reported yet"));
-        else
-        {
-            text.Inlines.Add(new Run(ShortName(active)) { Foreground = Theme.Brush("GoodText"), FontWeight = FontWeights.SemiBold });
-            text.Inlines.Add(new Run(" active"));
-        }
-        return text;
-    }
-
     private static string ShortName(DashboardAccount account) => (account.Email ?? account.Label).Split('@')[0];
 
-    private FrameworkElement AccountRow(string provider, DashboardAccount account, DashboardAccount[] accounts, List<Column> columns, double acts, bool separator)
+    private FrameworkElement AccountRow(string provider, DashboardAccount account, List<Column> columns, double acts, bool separator)
     {
-        var switchable = provider is "codex" or "antigravity";
-        var active = switchable && account.IsActive;
         var grid = Ui.SectionGrid(columns.Count, acts);
         grid.Margin = new Thickness(12, 6, 10, 6); grid.MinHeight = 33;
         var mark = Ui.Mark(provider, 20); grid.Children.Add(mark);
         var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        var email = Ui.Text(account.Email ?? account.Label, 13, "Ink", active ? FontWeights.SemiBold : FontWeights.Medium, trim: true);
+        var email = Ui.Text(account.Email ?? account.Label, 13, "Ink", FontWeights.Medium, trim: true);
         identity.Children.Add(email);
         identity.Children.Add(RowMeta(account, OpenText(account.Id)));
         identity.ToolTip = Ui.Tip(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan, account.Provider), Formatting.PlatformName(account.Provenance), account.SampledAt is null ? "" : "sampled " + Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part))));
@@ -806,14 +774,16 @@ public partial class MainWindow : Window
             Grid.SetColumn(cell, Ui.MeterColumn(i));
             // Meters are reused by key across samples, so every placement states its span: the pool marker covers
             // both Claude/GPT columns when the whole pool is off the plan.
-            var poolMarker = provider == "antigravity" && columns[i].Key == "3p-5h"
-                && account.AntigravityPlan?.ThirdPartyModels == false && columns[i].Pick(account) is null;
-            Grid.SetColumnSpan(cell, poolMarker ? 3 : 1);
+            var spanPool = columns[i].Key == "cli-3p-5h"
+                && columns.ElementAtOrDefault(i + 1) is { Key: "cli-3p-weekly" } weekly && weekly.Pick(account) is null
+                && cell is Meter { ValueShown: "Not on plan" };
+            Grid.SetColumnSpan(cell, spanPool ? 3 : 1);
             grid.Children.Add(cell);
+            if (spanPool) i++;
         }
-        var slot = ActionSlot(provider, account, accounts);
+        var slot = ActionSlot(account);
         if (slot is not null) { var surface = SlotSurface(slot); Grid.SetColumn(surface, Ui.ActsColumn(columns.Count)); grid.Children.Add(surface); }
-        return RowShell(grid, account.Id, separator, active, () => ToggleDetails(account.Id), "View every usage window, balance and reset for " + (account.Email ?? account.Label), columns.Count);
+        return RowShell(grid, account.Id, separator, () => ToggleDetails(account.Id), "View usage details for " + (account.Email ?? account.Label), columns.Count);
     }
 
     /// <summary>The row's secondary line. A Claude Open in progress takes it, in the same style, until it ends.</summary>
@@ -847,21 +817,18 @@ public partial class MainWindow : Window
         var window = column.Pick(account);
         if (window is null)
         {
-            // A window a plan does not have gets an honest muted cell, never a fake 0% (ANTIGRAVITY-SPEC); the plan
-            // summary is the tooltip. Accounts without antigravityPlan render as before: no reported window, no cell.
-            if (provider == "antigravity" && account.AntigravityPlan is { } plan)
+            if (provider != "antigravity") return null;
+            if (Meters(account).Any(w => w.Status != "unavailable") && account.AntigravityPlan is { } plan)
             {
-                if (column.Key.StartsWith("3p", StringComparison.Ordinal) && plan.ThirdPartyModels == false)
-                {
-                    // The whole Claude/GPT pool is off the plan: one marker across both of its columns.
-                    if (column.Key == "3p-5h") return MutedMeter(key, plan.Summary, "Not on plan");
-                    return null; // the marker from the 5-hour column spans this one
-                }
+                if (column.Key is "cli-3p-5h" or "cli-3p-weekly" && plan.ThirdPartyModels == false)
+                    return MutedMeter(key, plan.Summary, "Not on plan");
                 if (plan.QuotaPolicy == "weekly" && IsFiveHourKey(column.Key))
                     return MutedMeter(key, plan.Summary, "Weekly only");
             }
-            return null; // no reported window, no cell
+            return MutedMeter(key, AntigravityCliLabel, "Unavailable");
         }
+        if (provider == "antigravity" && window.Status == "unavailable")
+            return MutedMeter(key, Formatting.WindowLabel(account, window), "Unavailable");
         var meter = ShowMeter(key, MeterKind.Compact, CompactSpec(account, window));
         meter.Margin = new Thickness(0, 0, 8, 0); // the 8 px overage gutter (a muted cell keeps none, set in MutedMeter)
         return meter;
@@ -926,35 +893,27 @@ public partial class MainWindow : Window
         return string.Join(" · ", parts);
     }
 
-    /// <summary>The fixed action slot. Claude: the Open pair, right-aligned. Codex and Antigravity: the active label
-    /// with no button chrome on the live login's row (account switching was removed on 2026-11-14).</summary>
-    private FrameworkElement? ActionSlot(string provider, DashboardAccount account, DashboardAccount[] accounts)
+    /// <summary>The Open actions for a Claude profile, when the dashboard reports them.</summary>
+    private FrameworkElement? ActionSlot(DashboardAccount account)
     {
-        if (provider == "claude")
+        if (account.Provider != "claude") return null;
+        var id = account.Capabilities.ClaudeProfileId;
+        if (!Formatting.IsSafeClaudeProfile(id)) return null;
+        var pair = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+        // Both platform buttons rest for the whole Open, so no second one starts for this account.
+        var openRunning = OpenRunning(account.Id);
+        foreach (var platform in new[] { "mac", "windows" }.Where(account.Capabilities.ClaudePlatforms.Contains))
         {
-            var id = account.Capabilities.ClaudeProfileId;
-            if (!Formatting.IsSafeClaudeProfile(id)) return null;
-            var pair = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
-            // Both platform buttons rest for the whole Open, so no second one starts for this account.
-            var openRunning = OpenRunning(account.Id);
-            foreach (var platform in new[] { "mac", "windows" }.Where(account.Capabilities.ClaudePlatforms.Contains))
-            {
-                var name = platform == "mac" ? "Mac" : "Windows";
-                // Sign-in needed on this computer: the glyph takes the warning colour and the tip says Open shows the
-                // sign-in window. Open stays allowed.
-                var signIn = account.SignInNeededPlatforms.Contains(platform);
-                var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush(signIn ? "WarnText" : "Ink2")), ToolTip = Ui.Tip(OpenTip(account, platform)), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation", IsEnabled = !openRunning, Tag = (Func<bool>)(() => !OpenRunning(account.Id)) };
-                System.Windows.Automation.AutomationProperties.SetName(button, signIn ? "Open on " + name + ", sign-in needed" : "Open on " + name);
-                button.Click += async (_, _) => await OpenClaude(account, platform);
-                pair.Children.Add(button);
-            }
-            return pair;
+            var name = platform == "mac" ? "Mac" : "Windows";
+            // Sign-in needed on this computer: the glyph takes the warning colour and the tip says Open shows the
+            // sign-in window. Open stays allowed.
+            var signIn = account.SignInNeededPlatforms.Contains(platform);
+            var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush(signIn ? "WarnText" : "Ink2")), ToolTip = Ui.Tip(OpenTip(account, platform)), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation", IsEnabled = !openRunning, Tag = (Func<bool>)(() => !OpenRunning(account.Id)) };
+            System.Windows.Automation.AutomationProperties.SetName(button, signIn ? "Open on " + name + ", sign-in needed" : "Open on " + name);
+            button.Click += async (_, _) => await OpenClaude(account, platform);
+            pair.Children.Add(button);
         }
-        if (account.IsActive) return ActiveLabel(account, false);
-        if (provider == "codex") return null;
-        // Antigravity
-        if (accounts.Any(other => other.IsActive)) return null;
-        return NotReportedLabel();
+        return pair;
     }
 
     /// <summary>The Open tip: plain, or, when that computer's profile is not signed in, what Open will show.</summary>
@@ -964,34 +923,6 @@ public partial class MainWindow : Window
         return account.SignInNeededPlatforms.Contains(platform)
             ? "Sign-in needed on " + name + ". Open shows the Claude sign-in window for " + (account.Email ?? account.Label) + "; sign in once on that computer."
             : "Open " + (account.Email ?? account.Label) + " in Claude on " + name;
-    }
-
-    public static FrameworkElement ActiveLabel(DashboardAccount account, bool draw)
-    {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Uid = "active-label" };
-        var check = Ui.CheckCircle(18, draw); check.Uid = "active-check"; check.VerticalAlignment = VerticalAlignment.Center;
-        row.Children.Add(check);
-        var words = new StackPanel { Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        var title = Ui.Text("Active", 12.5, "Ink", FontWeights.SemiBold); title.Uid = "active-text"; title.LineHeight = 14; title.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
-        words.Children.Add(title);
-        var where = Formatting.PlatformName(account.Provenance);
-        if (where.Length > 0) { var on = Ui.Text("on " + where, 11, "Ink3"); on.LineHeight = 14; on.LineStackingStrategy = LineStackingStrategy.BlockLineHeight; words.Children.Add(on); }
-        row.Children.Add(words);
-        row.ToolTip = Ui.Tip("Active " + Formatting.ProviderName(account.Provider) + " account" + (where.Length > 0 ? " on " + where : ""));
-        return row;
-    }
-
-    private static FrameworkElement NotReportedLabel()
-    {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
-        var ring = new System.Windows.Shapes.Ellipse { Width = 18, Height = 18, Stroke = Theme.Brush("Ink4"), StrokeThickness = 1.5, StrokeDashArray = new DoubleCollection { 2, 1.6 } };
-        ring.Uid = "slot-ring"; row.Children.Add(ring);
-        var words = new StackPanel { Margin = new Thickness(6, 0, 0, 0) };
-        var title = Ui.Text("Not reported", 12.5, "Ink2", FontWeights.Medium); title.LineHeight = 14; title.LineStackingStrategy = LineStackingStrategy.BlockLineHeight; words.Children.Add(title);
-        var sub = Ui.Text("as active", 11, "Ink3"); sub.LineHeight = 14; sub.LineStackingStrategy = LineStackingStrategy.BlockLineHeight; words.Children.Add(sub);
-        row.Children.Add(words);
-        row.ToolTip = Ui.Tip("The dashboard has not reported which Antigravity account is active");
-        return row;
     }
 
     /// <summary>The row's action slot never toggles the row. The surface fills the slot cell and swallows a press on
@@ -1008,10 +939,10 @@ public partial class MainWindow : Window
 
     /// <summary>Full-row click target with a hover tint (140 ms), a press tint, the track lift and the chevron.
     /// Nested buttons keep their own action: they handle the mouse, so the row never sees their clicks.</summary>
-    private FrameworkElement RowShell(FrameworkElement content, string id, bool separator, bool active, Action click, string tooltip, int meterColumns)
+    private FrameworkElement RowShell(FrameworkElement content, string id, bool separator, Action click, string tooltip, int meterColumns)
     {
         var root = new Grid { Background = Brushes.Transparent, Cursor = Cursors.Hand, Uid = "row:" + id, MinHeight = 45 };
-        var hover = new Border { CornerRadius = new CornerRadius(8), Background = Theme.Brush(active ? "ActiveHover" : "RowHover"), Opacity = expanded.Contains(id) ? 1 : 0, Margin = active ? new Thickness(4, 0, 4, 0) : new Thickness(0) };
+        var hover = new Border { CornerRadius = new CornerRadius(8), Background = Theme.Brush("RowHover"), Opacity = expanded.Contains(id) ? 1 : 0 };
         var press = new Border { CornerRadius = new CornerRadius(8), Background = Theme.Brush("RowPress"), Opacity = 0, Margin = hover.Margin };
         root.Children.Add(hover); root.Children.Add(press);
         if (separator) root.Children.Add(new Border { Height = 1, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(46, 0, 12, 0), Background = Theme.Brush("Rule2"), IsHitTestVisible = false });
@@ -1061,40 +992,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>The selected-row platter: one per section, placed on the active row; on a switch it glides from the
-    /// old row to the new one (translate and height, 440 ms ease-out, no overshoot).</summary>
-    private void PlacePlatters()
-    {
-        foreach (var (provider, platter) in platters)
-        {
-            if (platter.Parent is not Grid rowsGrid) continue;
-            var shift = (TranslateTransform)platter.RenderTransform;
-            if (!activeRows.TryGetValue(provider, out var row) || !row.IsLoaded && row.ActualHeight == 0)
-            {
-                Motion.To(platter, OpacityProperty, 0, 200);
-                platterFor[provider] = null;
-                continue;
-            }
-            var y = row.TranslatePoint(new Point(0, 0), rowsGrid).Y;
-            var height = row.ActualHeight;
-            var id = row.Uid;
-            platterFor.TryGetValue(provider, out var previous);
-            var glide = previous is not null && previous != id && IsVisible && platter.Opacity > 0.5;
-            if (glide)
-            {
-                Motion.To(shift, TranslateTransform.YProperty, y, 440, Motion.Out);
-                Motion.To(platter, HeightProperty, height, 440, Motion.Out, from: double.IsNaN(platter.Height) ? height : platter.Height);
-            }
-            else
-            {
-                shift.BeginAnimation(TranslateTransform.YProperty, null); shift.Y = y;
-                platter.BeginAnimation(HeightProperty, null); platter.Height = height;
-            }
-            if (platter.Opacity < 1) Motion.To(platter, OpacityProperty, 1, previous is null && IsVisible ? 260 : 0);
-            platterFor[provider] = id;
-        }
-    }
-
     // ---------------- other providers: one row per provider (today's representative rule)
 
     private static int StatusRank(string status) => status switch { "ok" => 0, "cached" => 1, "needs_sign_in" => 2, "unavailable" => 3, "error" => 4, _ => 5 };
@@ -1124,7 +1021,6 @@ public partial class MainWindow : Window
         var period = Period(window);
         if (Formatting.IsFable(window)) return "Fable";
         if (Formatting.IsWeeklyScoped(window)) return Formatting.ScopedModelLabel(window);
-        if (provider == "antigravity") return (window.Key.StartsWith("gemini", StringComparison.OrdinalIgnoreCase) ? "Gemini " : "Claude & GPT ") + (period == "5h" ? "5-hour" : "weekly");
         if (provider == "cursor") return window.Key switch { "plan-reported" => "Included", "autoPercentUsed" => "Cursor models", "apiPercentUsed" => "Other models", _ => window.Label };
         if (provider == "zai") return window.Key switch { "usage-1" => "5-hour tokens", "usage-2" => "Weekly tokens", "usage-3" => "Monthly requests", _ => window.Label };
         var per = period switch { "5h" => "5-hour", "week" => "Weekly", "month" => "Monthly", _ => null };
@@ -1181,7 +1077,7 @@ public partial class MainWindow : Window
             var packs = Formatting.QwenPacks(representative);
             if (packs.Length > 0) { var button = QwenPacksButton(packs); Grid.SetColumn(button, 6); grid.Children.Add(button); }
         }
-        var row = RowShell(grid, "prov:" + provider, false, false, () => ToggleDetails("prov:" + provider), "View all " + Formatting.ProviderName(provider) + " usage windows, balances and reset times", -1);
+        var row = RowShell(grid, "prov:" + provider, false, () => ToggleDetails("prov:" + provider), "View all " + Formatting.ProviderName(provider) + " usage windows, balances and reset times", -1);
         var stack = new StackPanel();
         stack.Children.Add(row);
         if (expanded.Contains("prov:" + provider)) stack.Children.Add(DetailsHost(ProviderDetails(provider, accounts), open: true));
@@ -1271,7 +1167,7 @@ public partial class MainWindow : Window
         {
             var account = dashboard.ShownAccounts.FirstOrDefault(candidate => candidate.Id == id);
             if (account is null) return;
-            body = AccountDetails(account.Provider, account, DetailAccounts(dashboard, account.Provider));
+            body = AccountDetails(account.Provider, account);
         }
         stack.Children.Insert(index + 1, DetailsHost(body, open: false));
         if (busy || staleSample) DisableMutations();
@@ -1302,18 +1198,17 @@ public partial class MainWindow : Window
             Motion.To(inner, OpacityProperty, 1, 220, delay: 60, from: 0);
             Motion.To((TranslateTransform)inner.RenderTransform, TranslateTransform.YProperty, 0, 300, delay: 60, from: -4);
         };
-        host.SizeChanged += (_, _) => PlacePlatters();
         return host;
     }
 
     private void CollapseDetails(FrameworkElement host)
     {
-        if (!Motion.Enabled) { Ui.Detach(host); PlacePlatters(); UpdateFade(); return; }
-        Motion.To(host, HeightProperty, 0, 300, Motion.InOut, from: host.ActualHeight, completed: (_, _) => { Ui.Detach(host); PlacePlatters(); UpdateFade(); });
+        if (!Motion.Enabled) { Ui.Detach(host); UpdateFade(); return; }
+        Motion.To(host, HeightProperty, 0, 300, Motion.InOut, from: host.ActualHeight, completed: (_, _) => { Ui.Detach(host); UpdateFade(); });
         if (host is Border { Child: UIElement inner }) Motion.To(inner, OpacityProperty, 0, 180);
     }
 
-    private FrameworkElement AccountDetails(string provider, DashboardAccount account, DashboardAccount[] siblings)
+    private FrameworkElement AccountDetails(string provider, DashboardAccount account)
     {
         var panel = new StackPanel();
         panel.Children.Add(DetailWindows(account));
@@ -1331,11 +1226,6 @@ public partial class MainWindow : Window
                 button.Click += async (_, _) => await OpenClaude(account, platform);
                 actions.Children.Add(button);
             }
-        else if (provider is "codex" or "antigravity")
-        {
-            var slot = ActionSlot(provider, account, siblings);
-            if (slot is not null) actions.Children.Add(slot);
-        }
         if (actions.Children.Count > 0) panel.Children.Add(actions);
         return panel;
     }
@@ -1381,7 +1271,10 @@ public partial class MainWindow : Window
                 var used = window.Unlimited || window.Enabled == false ? null : window.DisplayPercent;
                 var reset = window.ResetAt is null ? "No reset reported" : Formatting.ResetLong(window.ResetAt);
                 if (window.Status == "cached") reset += " · cached " + Formatting.Relative(window.SampledAt);
-                var meter = ShowMeter("detail:" + account.Id + "|" + window.Key, MeterKind.Detail, Formatting.PendingReset(account, window) is DateTimeOffset pending
+                var meter = ShowMeter("detail:" + account.Id + "|" + window.Key, MeterKind.Detail,
+                    account.Provider == "antigravity" && window.Status == "unavailable"
+                    ? new MeterSpec(null, Formatting.WindowLabel(account, window), Label: Formatting.WindowLabel(account, window))
+                    : Formatting.PendingReset(account, window) is DateTimeOffset pending
                     ? PendingSpec(account, window, pending, MeterKind.Detail, Formatting.WindowLabel(account, window))
                     : new MeterSpec(used, MeterTip(account, window), Label: Formatting.WindowLabel(account, window), Reset: reset, Amount: AmountText(window),
                     NaText: window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable"));
@@ -1390,7 +1283,8 @@ public partial class MainWindow : Window
             }
             panel.Children.Add(grid);
         }
-        else panel.Children.Add(Ui.Text(account.Status == "needs_sign_in" ? "Sign-in required" : "Usage unavailable", 12, "WarnText"));
+        else panel.Children.Add(Ui.Text(account.Status == "needs_sign_in" ? "Sign-in required"
+            : account.Provider == "antigravity" ? "Unavailable" : "Usage unavailable", 12, "WarnText"));
         if (amounts.Length > 0)
         {
             var list = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
@@ -1406,10 +1300,7 @@ public partial class MainWindow : Window
                 row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 var icon = Icons.Icon(window.Kind == "balance" && window.Key.Contains("pack", StringComparison.OrdinalIgnoreCase) ? "pack" : "wallet", 14, Theme.Brush("Ink3"));
                 row.Children.Add(icon);
-                // The plan's credits row reads "AI credits (overage)", with what the credits are for under it.
-                var agPlan = account.AntigravityPlan;
-                var credits = agPlan is not null && window.Key == "google-ai-credits";
-                var label = Ui.Text(credits ? "AI credits (overage)" : Formatting.WindowLabel(account, window), 12.5, "Ink2", trim: true); Grid.SetColumn(label, 2); row.Children.Add(label);
+                var label = Ui.Text(Formatting.WindowLabel(account, window), 12.5, "Ink2", trim: true); Grid.SetColumn(label, 2); row.Children.Add(label);
                 var rollup = Formatting.IsResetPackRollup(account, window);
                 var value = Ui.Text((rollup ? Formatting.ResetPackRollupValue(window) : null) ?? AmountValue(window), 12.5, "Ink", FontWeights.SemiBold); Grid.SetColumn(value, 3); row.Children.Add(value);
                 var subParts = new List<string>();
@@ -1417,8 +1308,7 @@ public partial class MainWindow : Window
                 // next reset is available from its ResetAt. It is an amount, never a meter reset.
                 var allowance = window.Key == "session_reset_allowance";
                 var refill = Formatting.ClearsText(window);
-                if (credits) subParts.Add(agPlan!.CreditsOverage == false ? "Not usable for Antigravity on this plan." : "Used only after the plan quota runs out, when AI Credit Overages is on.");
-                else if (rollup) { var packs = Formatting.ResetPackRollupDetail(window); if (packs.Length > 0) subParts.Add(packs); }
+                if (rollup) { var packs = Formatting.ResetPackRollupDetail(window); if (packs.Length > 0) subParts.Add(packs); }
                 else if (window.ExpiresAt is not null || (window.Kind is "balance" && !allowance)) subParts.Add(Formatting.Expiration(window.ExpiresAt));
                 if (refill.Length > 0) subParts.Add(refill);
                 if (allowance && Formatting.NextAvailable(window.ResetAt) is { Length: > 0 } next) subParts.Add(next);
@@ -1432,12 +1322,11 @@ public partial class MainWindow : Window
         return panel;
     }
 
-    /// <summary>Details order the Antigravity windows per pool (Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour,
-    /// Claude/GPT weekly); other windows keep the reported order.</summary>
-    private static int AntigravityWindowOrder(QuotaWindow window) => window.Key switch
+    private static int AntigravityWindowOrder(QuotaWindow window)
     {
-        "gemini-5h" => 0, "gemini-weekly" => 1, "3p-5h" => 2, "3p-weekly" => 3, _ => 4
-    };
+        var index = Array.FindIndex(AntigravityKeys, item => item.Key == window.Key);
+        return index >= 0 ? index : AntigravityKeys.Length;
+    }
 
     /// <summary>The expanded Antigravity details' plan block (ANTIGRAVITY-SPEC): the plan summary, the models on
     /// the plan, and the family-pool note on pro and ultra. Accounts without antigravityPlan render as before.</summary>
@@ -1564,7 +1453,7 @@ public partial class MainWindow : Window
     private bool OpenRunning(string accountId) => openProgress.TryGetValue(accountId, out var progress) && progress.Running;
 
     /// <summary>One Open's progress on its row: the secondary line shows it and the Open buttons rest until it ends.
-    /// The rows are rebuilt exactly as a new sample rebuilds them, so meters and the platter keep their places.</summary>
+    /// The rows are rebuilt exactly as a new sample rebuilds them, so meters keep their places.</summary>
     internal void SetOpenProgress(string accountId, ClaudeOpenProgress? progress)
     {
         if (progress is null) openProgress.Remove(accountId); else openProgress[accountId] = progress;
@@ -1600,7 +1489,6 @@ public partial class MainWindow : Window
         foreach (var element in Descendants(ContentPanel).Concat(Descendants(FooterNotePanel)))
         {
             if (element is Button button && button.Uid.StartsWith("mutation", StringComparison.Ordinal)) button.IsEnabled = false;
-            if (element is ToggleSwitch toggle) toggle.SetEnabled(false);
         }
     }
 
@@ -1615,7 +1503,6 @@ public partial class MainWindow : Window
         {
             if (element is Button { Tag: Func<bool> gate, IsEnabled: false } button
                 && button.Uid.StartsWith("mutation", StringComparison.Ordinal) && gate()) button.IsEnabled = true;
-            else if (element is ToggleSwitch { Tag: Func<bool> toggleGate } toggle && toggleGate()) toggle.SetEnabled(true);
         }
     }
 

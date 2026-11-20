@@ -93,7 +93,7 @@ public partial class App : System.Windows.Application
                 proof.Show();
                 await proof.Refresh(false);
                 proof.UpdateLayout();
-                // Let the Loaded-priority work (the selected-row platter placement) run before the capture.
+                // Let the Loaded-priority work (the layout updates) run before the capture.
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
                 proof.UpdateLayout();
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
