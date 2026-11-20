@@ -473,11 +473,11 @@ if (require.main === module) {
       console.log(`[OK] Host agent for ${result.targets.join(', ')} matches its manifest.`);
     else
       console.warn(
-        '[!] No host agent in this build: every computer keeps the labelled helper. Build it on each target with: bun run agent:build'
+        '[!] No host agent in this build. Update apps requires a pinned agent. Build it on each target with: bun run agent:build'
       );
     if (result.missing.length)
       console.warn(
-        `[!] Trusted catalog names ${result.missing.join(', ')} but this build carries no such agent; those computers keep the labelled helper until their prebuilt folder is collected.`
+        `[!] Trusted catalog names ${result.missing.join(', ')} but this build carries no such agent; those computers need a packaged agent and a matching installation for Update apps.`
       );
   } catch (error) {
     console.error(

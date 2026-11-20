@@ -112,6 +112,8 @@ def main():
         stage = "probe" if sys.argv[1:] == ["--version"] else "run"
         trace(host, stage)
     if stage == "probe":
+        if host == "jared-windows" and (ROOT / "missing-windows-agent").exists():
+            sys.exit(87)
         print(json.dumps({"name":"aac-agent","version":"0.1.0","protocol":1,"target":HOSTS[host][1]}))
     else:
         if host == "jared-windows" and (ROOT / "hold-windows-connection").exists():

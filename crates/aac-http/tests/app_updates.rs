@@ -262,6 +262,61 @@ async fn service_fixture_child() {
             .count(),
         2
     );
+    // Start a fresh boot with no Mac pin and a pinned Windows binary missing on the host.
+    let mut catalog = serde_json::from_slice::<Value>(
+        &fs::read(root.join("catalog.json")).expect("fixture catalog"),
+    )
+    .expect("catalog JSON");
+    catalog["artifacts"]
+        .as_array_mut()
+        .expect("pins")
+        .retain(|pin| pin["target"] != "aarch64-apple-darwin");
+    fs::write(root.join("catalog.json"), catalog.to_string()).expect("catalog without Mac");
+    fs::write(root.join("missing-windows-agent"), "fixture")
+        .expect("missing installed Windows agent");
+    let hosts = [("mac", "jared-mac"), ("windows", "jared-windows")].map(|(platform, host)| {
+        (
+            platform,
+            host,
+            trace(&root, host)
+                .iter()
+                .filter(|row| row["stage"] == "update")
+                .count(),
+        )
+    });
+    let owner = AppUpdates::new(root.clone());
+    assert_eq!(owner.start().await.status, 202);
+    let done = until(&owner, |job| job["state"] == "failed").await;
+    let results = done["results"]
+        .as_array()
+        .expect("complete setup-required rows");
+    for (platform, host, earlier_updates) in hosts {
+        let affected = results
+            .iter()
+            .filter(|row| row["platform"] == platform)
+            .collect::<Vec<_>>();
+        assert_eq!(affected.len(), 12);
+        for row in affected {
+            assert_eq!(
+                row["message"],
+                "This computer's AAC agent needs setup before Update apps can run here."
+            );
+            assert_eq!(row["status"], "failed");
+            assert_eq!(row["updateAttempted"], false);
+        }
+        assert_eq!(
+            trace(&root, host)
+                .iter()
+                .filter(|row| row["stage"] == "update")
+                .count(),
+            earlier_updates
+        );
+    }
+    assert!(
+        results
+            .iter()
+            .any(|row| row["platform"] == "alexis" && row["status"] == "updated")
+    );
 }
 
 fn trace(root: &Path, host: &str) -> Vec<Value> {

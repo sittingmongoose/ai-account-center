@@ -2996,6 +2996,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/scripts/build-agent.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/scripts/build-status-native.test.ts",
       "kind": "internal",
       "evidence": [],

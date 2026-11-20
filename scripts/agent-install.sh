@@ -7,7 +7,7 @@
 #
 # Usage: sh scripts/agent-install.sh <binary> <sha256>
 #   <binary>  the packaged aac-agent for this computer (dist/agent/<target>/aac-agent)
-#   <sha256>  its pinned digest from src/web-server/services/agent-artifacts.json
+#   <sha256>  its pinned digest from config/agent-artifacts.json
 #
 # Verifies the source digest, stages a .part copy, verifies it again, renames atomically, then
 # requires the --version handshake {name, version, protocol, target} for this OS.

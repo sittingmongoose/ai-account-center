@@ -561,16 +561,28 @@ impl AppUpdates {
                 .as_ref()
                 .err()
                 .is_some_and(|err| err.cause == aac_core::Cause::Timeout);
-        let old_agent = !admitted
-            && matches!(
-                event,
-                Some(Event::Failure { failure, .. })
-                    if failure.cause == aac_core::Cause::Refused
-                        && failure.detail.as_str() == "invalid apps action"
-            );
+        let setup_message = if admitted {
+            None
+        } else if terminal.as_ref().is_err_and(|error| {
+            matches!(
+                error.cause,
+                aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch
+            )
+        }) {
+            Some("agent_setup_required")
+        } else if matches!(
+            event,
+            Some(Event::Failure { failure, .. })
+                if failure.cause == aac_core::Cause::Refused
+                    && failure.detail.as_str() == "invalid apps action"
+        ) {
+            Some("agent_update_required")
+        } else {
+            None
+        };
         self.change(|job| {
-            if old_agent {
-                job.fill(host, "failed", "agent_update_required");
+            if let Some(message) = setup_message {
+                job.fill(host, "failed", message);
                 job.host_done(host);
             } else {
                 job.finish_host(host, event, timed_out);

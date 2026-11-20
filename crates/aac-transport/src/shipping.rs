@@ -64,7 +64,12 @@ impl AgentArtifact {
     }
 
     fn verify(&self) -> Result<(), Failure> {
-        let bytes = aac_files::read_bounded(&self.path, artifact_cap())?;
+        let bytes = aac_files::read_bounded(&self.path, artifact_cap()).map_err(|_| {
+            Failure::new(
+                Cause::AgentMismatch,
+                "pinned agent artifact could not be read",
+            )
+        })?;
         if aac_core::sha256_hex(&bytes) != self.hash {
             return Err(Failure::new(
                 Cause::AgentMismatch,

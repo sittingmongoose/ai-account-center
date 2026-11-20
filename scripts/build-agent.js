@@ -3,7 +3,7 @@
 /**
  * The host agent binary (crates/aac-agent; TARGET-DESIGN 5.2, DESIGN-M3-COMPLETE 4.5, lane E):
  * one self-contained `aac-agent` per target, hash-pinned in the trusted catalog
- * (src/web-server/services/agent-artifacts.json). M3D4 answered: ship in stages, VM first;
+ * (config/agent-artifacts.json). M3D4 answered: ship in stages, VM first;
  * M3D5 answered: the VM's current key with AAC-pinned known_hosts. The service admits only an
  * already installed agent; the lead places it on each remote computer with scripts/agent-install.sh
  * or scripts/agent-install.ps1. This script never installs on a live computer.
@@ -25,7 +25,7 @@
  *
  *   node scripts/build-agent.js --catalog-entry
  *     Prints the trusted-catalog entry for this computer's prebuilt target. The lead reviews and
- *     commits it into src/web-server/services/agent-artifacts.json; nothing here edits the catalog.
+ *     commits it into config/agent-artifacts.json; nothing here edits the catalog.
  */
 const fs = require('fs');
 const os = require('os');
@@ -36,7 +36,7 @@ const { spawnSync } = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const PREBUILT = path.join(ROOT, 'crates', 'aac-agent', 'prebuilt');
 const DIST = path.join(ROOT, 'dist', 'agent');
-const CATALOG = path.join(ROOT, 'src', 'web-server', 'services', 'agent-artifacts.json');
+const CATALOG = path.join(ROOT, 'config', 'agent-artifacts.json');
 const TARGETS = {
   'linux-x64': 'x86_64-unknown-linux-gnu',
   'darwin-arm64': 'aarch64-apple-darwin',
