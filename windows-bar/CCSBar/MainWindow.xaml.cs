@@ -921,7 +921,7 @@ public partial class MainWindow : Window
     {
         var name = platform == "mac" ? "Mac" : "Windows";
         return account.SignInNeededPlatforms.Contains(platform)
-            ? "Sign-in needed on " + name + ". Open shows the Claude sign-in window for " + (account.Email ?? account.Label) + "; sign in once on that computer."
+            ? "Claude Desktop needs a sign-in on " + name + ". Open shows the Claude Desktop sign-in window for " + (account.Email ?? account.Label) + "; sign in once on that computer. Claude Code sign-ins are checked separately."
             : "Open " + (account.Email ?? account.Label) + " in Claude on " + name;
     }
 
