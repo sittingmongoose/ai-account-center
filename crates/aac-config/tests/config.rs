@@ -425,3 +425,31 @@ fn dashboard_security_refuses_yaml_aliases_in_auth_and_trusted_networks() {
         assert_eq!(error.cause, Cause::Damaged);
     }
 }
+
+#[test]
+fn saving_refuses_an_alias_from_a_retired_block_into_active_settings() {
+    // The retired `channels` block aliases the anchor `dashboard_auth` defines. A save
+    // re-renders active values and copies retired bytes, so the alias would dangle and the
+    // next read would refuse the config.
+    let cross = "dashboard_auth: &shared\n  enabled: true\n  username: admin\n\
+                 channels: {status: *shared}\n";
+    let (active, retired) = split_active(cross).unwrap();
+    assert_eq!(active["dashboard_auth"]["username"], "admin");
+    assert!(retired["channels"].contains("*shared"));
+    let mut value = active;
+    value["dashboard_auth"]["session_lifetime_days"] = json!(30);
+    let error = render_active(cross, &value).expect_err("a save would dangle the alias");
+    assert_eq!(error.cause, Cause::Damaged);
+
+    // An anchor used only inside retired blocks survives: their bytes are copied verbatim.
+    let contained =
+        "dashboard_auth: {enabled: true}\nchannels: &c {status: {a: 1}}\nthinking: *c\n";
+    let (active, _) = split_active(contained).unwrap();
+    let mut value = active;
+    value["dashboard_auth"]["session_lifetime_days"] = json!(30);
+    let saved = render_active(contained, &value).unwrap();
+    assert!(saved.contains("*c"));
+    let (again, retired) = split_active(&saved).unwrap();
+    assert_eq!(again["dashboard_auth"]["session_lifetime_days"], 30);
+    assert!(retired["thinking"].contains("*c"));
+}

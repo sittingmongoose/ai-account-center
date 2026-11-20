@@ -20,6 +20,13 @@ fn unsupported_security_yaml() -> Failure {
     )
 }
 
+fn unsupported_retired_alias() -> Failure {
+    Failure::new(
+        Cause::Damaged,
+        "config.yaml: a retired section aliases an active YAML anchor; saving would break that alias",
+    )
+}
+
 struct Entry {
     key: String,
     start: usize,
@@ -29,6 +36,27 @@ struct Root {
     entries: Vec<Entry>,
     end: usize,
     flow: bool,
+    /// Anchor id to the root entry that defines it.
+    anchors: BTreeMap<usize, usize>,
+    /// Alias anchor ids used inside each root entry.
+    aliases: Vec<(usize, usize)>,
+}
+
+impl Root {
+    /// Whether a retired entry aliases an anchor an active entry defines. Retired bytes are
+    /// copied verbatim while active values are re-rendered, so such an alias would dangle.
+    fn retired_alias_from_active(&self) -> bool {
+        self.aliases.iter().any(|(entry, id)| {
+            self.entries
+                .get(*entry)
+                .is_some_and(|entry| RETIRED_SECTIONS.contains(&entry.key.as_str()))
+                && self.anchors.get(id).is_some_and(|owner| {
+                    self.entries
+                        .get(*owner)
+                        .is_some_and(|owner| !RETIRED_SECTIONS.contains(&owner.key.as_str()))
+                })
+        })
+    }
 }
 
 // The scanner's Key marker includes an explicit '?' indicator, unlike the parser's Scalar
@@ -86,6 +114,9 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
         .collect();
     let mut entries = Vec::new();
     let mut keys = BTreeSet::new();
+    let mut anchors = BTreeMap::new();
+    let mut aliases = Vec::new();
+    let mut current: Option<usize> = None;
     let mut depth = 0usize;
     let mut documents = 0usize;
     let mut root_seen = false;
@@ -105,6 +136,21 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
                         && is_merge_key(key, *style, tag.as_ref()) =>
                 {
                     return Err(unsupported_security_yaml());
+                }
+                _ => {}
+            }
+        }
+        if depth > 0
+            && let Some(entry) = current
+        {
+            match &event {
+                Event::Alias(id) => aliases.push((entry, *id)),
+                Event::Scalar(_, _, anchor, _)
+                | Event::SequenceStart(anchor, _)
+                | Event::MappingStart(anchor, _)
+                    if *anchor != 0 =>
+                {
+                    anchors.insert(*anchor, entry);
                 }
                 _ => {}
             }
@@ -165,6 +211,7 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
                     start: entry_start,
                     column,
                 });
+                current = Some(entries.len() - 1);
                 expect_key = false;
             }
             Event::MappingStart(..) | Event::SequenceStart(..) if depth > 0 => {
@@ -182,6 +229,7 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
                     if !expect_key {
                         return Err(damaged());
                     }
+                    current = None;
                     root_end = Some(start);
                 } else if depth == 1 {
                     expect_key = true;
@@ -200,6 +248,8 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
                     entries,
                     end: root_end.ok_or_else(damaged)?,
                     flow,
+                    anchors,
+                    aliases,
                 });
             }
             _ => return Err(damaged()),
@@ -265,6 +315,9 @@ pub(super) fn render_active(original: &str, value: &serde_json::Value) -> Result
         }
         Err(error) => return Err(error),
     };
+    if root.retired_alias_from_active() {
+        return Err(unsupported_retired_alias());
+    }
     let entries: Vec<_> = root
         .entries
         .iter()

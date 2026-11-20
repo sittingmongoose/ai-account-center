@@ -137,9 +137,18 @@ impl Journal {
         if !valid_job_id(job_id) {
             return None;
         }
-        let bytes = self.store(job_id).ok()?.read().ok()?;
+        let store = self.store(job_id).ok()?;
+        let bytes = store.read().ok()?;
         let mut entry: Entry = serde_json::from_slice(&bytes).ok()?;
+        // Entries written before the recovery projection kept the live device code and the
+        // result email. Rewrite one as soon as it is read, rather than leaving the old bytes
+        // on disk until pruning moves them to trash.
+        let unprojected = entry.job["verification"] != Value::Null
+            || entry.job["result"]["email"].as_str().is_some();
         entry.job = recovery_job(&entry.job);
+        if unprojected && let Ok(bytes) = serde_json::to_vec(&entry) {
+            let _ = store.write(&bytes);
+        }
         Some(entry)
     }
 
@@ -507,6 +516,98 @@ mod tests {
         assert_eq!(persisted.job["state"], "succeeded");
         assert_eq!(persisted.job["result"]["accountId"], "codex:work");
         assert_eq!(persisted.job["result"]["email"], Value::Null);
+    }
+
+    fn write_private(path: &std::path::Path, bytes: &[u8]) {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        std::io::Write::write_all(&mut options.open(path).unwrap(), bytes).unwrap();
+    }
+
+    fn files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files_under(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    // A pre-fix file kept the live device code and the result email in its job.
+    fn legacy_entry(id: &str, finished_at: i64) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "job": {
+                "id": id,
+                "provider": "codex",
+                "kind": "device-code",
+                "mode": "add",
+                "accountId": Value::Null,
+                "profileName": "work",
+                "platform": "ubuntu",
+                "state": "succeeded",
+                "verification": {
+                    "url": "https://auth.openai.com/codex/device",
+                    "userCode": "ABCD-EFGH",
+                    "expiresAt": "2026-11-18T00:15:00.000Z"
+                },
+                "result": {
+                    "accountId": "codex:work",
+                    "email": "person@example.test",
+                    "plan": "plus"
+                },
+                "error": Value::Null,
+                "startedAt": "2026-11-18T00:00:00.000Z",
+                "updatedAt": "2026-11-18T00:01:00.000Z",
+                "expiresAt": "2026-11-18T00:15:00.000Z"
+            },
+            "relayPid": null,
+            "cliPid": null,
+            "ownerPid": std::process::id(),
+            "frontDoorPid": null,
+            "installPending": false,
+            "cancelRequested": false,
+            "finishedAt": finished_at
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_pre_fix_entry_is_scrubbed_before_pruning_can_keep_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Journal::open(dir.path()).unwrap();
+        let now = 1_763_424_000_000i64;
+        let id = "job_0123456789abcdef";
+        let file = dir.path().join(format!("signin-jobs/{id}.json"));
+        write_private(&file, &legacy_entry(id, now - RETENTION_MS));
+
+        let entry = journal.read(id).unwrap();
+        assert_eq!(entry.job["verification"], Value::Null);
+        assert_eq!(entry.job["result"]["email"], Value::Null);
+        assert_eq!(entry.job["result"]["accountId"], "codex:work");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("ABCD-EFGH") && !text.contains("person@example.test"));
+
+        // A reader that prunes first must not move the unprojected bytes into trash.
+        write_private(&file, &legacy_entry(id, now - RETENTION_MS));
+        journal.prune(now);
+        assert!(!file.exists());
+        let mut remaining = Vec::new();
+        files_under(&journal.dir(), &mut remaining);
+        for path in remaining {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                !text.contains("ABCD-EFGH") && !text.contains("person@example.test"),
+                "{} kept the pre-fix fields",
+                path.display()
+            );
+        }
     }
 
     #[test]

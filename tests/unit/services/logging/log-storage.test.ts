@@ -158,4 +158,53 @@ describe('log storage', () => {
     expect(fs.existsSync(oldArchive)).toBe(false);
     expect(fs.existsSync(freshArchive)).toBe(true);
   });
+
+  function interruptedRotation(): {
+    current: string;
+    archiveDir: string;
+    linked: string;
+    distinct: string[];
+  } {
+    const config = createEmptyUnifiedConfig();
+    config.logging.rotate_mb = 10;
+    saveUnifiedConfig(config);
+    invalidateLoggingConfigCache();
+    const current = getCurrentLogPath();
+    const archiveDir = getLogArchiveDir();
+    fs.mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
+    const distinct = ['ccs-big-a.jsonl', 'ccs-big-b.jsonl'].map((name, index) => {
+      const file = path.join(archiveDir, name);
+      fs.writeFileSync(file, Buffer.alloc(10 * 1024 * 1024, 'z'));
+      const at = new Date(Date.now() - (2 - index) * 60 * 60 * 1000);
+      fs.utimesSync(file, at, at);
+      return file;
+    });
+    fs.writeFileSync(current, Buffer.alloc(10 * 1024 * 1024, 'x'));
+    // A writer stopped between the hard link and the unlink of the current file.
+    const linked = path.join(archiveDir, 'ccs-interrupted.jsonl');
+    fs.linkSync(current, linked);
+    return { current, archiveDir, linked, distinct };
+  }
+
+  it('finishes an interrupted rotation instead of evicting a distinct archive', () => {
+    const { current, archiveDir, linked, distinct } = interruptedRotation();
+
+    appendStructuredLogEntry(createEntry({ id: 'after-interrupted-rotation' }));
+
+    expect(distinct.every((file) => fs.existsSync(file))).toBe(true);
+    expect(fs.readdirSync(archiveDir)).toHaveLength(3);
+    expect(fs.readFileSync(current, 'utf8')).toContain('after-interrupted-rotation');
+    expect(fs.statSync(linked).nlink).toBe(1);
+  });
+
+  it('prune finishes an interrupted rotation without waiting for a new entry', () => {
+    const { current, archiveDir, linked, distinct } = interruptedRotation();
+
+    pruneExpiredLogArchives();
+
+    expect(fs.existsSync(current)).toBe(false);
+    expect(fs.readdirSync(archiveDir)).toHaveLength(3);
+    expect(distinct.every((file) => fs.existsSync(file))).toBe(true);
+    expect(fs.statSync(linked).nlink).toBe(1);
+  });
 });
