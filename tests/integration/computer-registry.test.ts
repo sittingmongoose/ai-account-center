@@ -57,7 +57,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     fs.writeFileSync(file, JSON.stringify(rows));
     const load = (module: string) => import(pathToFileURL(path.join(fixture, module)).href);
     const hosts = await load('src/web-server/services/dashboard-hosts.ts');
-    expect(hosts.DASHBOARD_HOSTS).toHaveLength(7);
+    expect(hosts.DASHBOARD_HOSTS).toHaveLength(8);
     expect(hosts.helperPlatform('future')).toBe('ubuntu');
     expect(hosts.sourceComputer({ platform: 'ubuntu', sshHost: 'future-linux' })).toBe('future');
     const buildStatus = await load('scripts/build-status-native.js');
@@ -76,7 +76,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(coldStates.filter((entry) => entry.host === 'future')).toHaveLength(nas1Sources);
     const updates = await load('src/web-server/services/app-update-contract.ts');
     expect(updates.PLATFORMS).toContain('future');
-    expect(updates.EXPECTED_RESULTS).toBe(84);
+    expect(updates.EXPECTED_RESULTS).toBe(96);
     const transport = await load('src/web-server/services/app-update-hosts.ts');
     expect((await transport.appUpdateInvocation('future', '')).args.slice(-2)).toEqual([
       'future-linux',
@@ -149,7 +149,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(schema.properties.agent.properties.machine.enum).toContain('future');
     const view = await load('web-dashboard/public/view-model.mjs');
     expect(view.UPDATE_HOST_IDS).toContain('future');
-    expect(view.updateTotal(null)).toBe(84);
+    expect(view.updateTotal(null)).toBe(96);
     expect(view.platformLabel('future')).toBe('Future Linux');
     const accounts = await load('web-dashboard/public/accounts-view.mjs');
     for (const tool of ['omp', 'muse', 'zcode', 'claude-code', 'codex'])

@@ -4,5 +4,6 @@
   "windows": {"label": "Windows", "os": "windows", "sshAlias": "jared-windows", "machineId": "windows", "machineLabel": "Windows PC", "shortLabel": "Windows", "subtitle": "desktop", "names": ["windows", "jared-windows"], "legacy": true, "sentenceLabel": "Windows"},
   "nas1": {"label": "Nas1", "os": "linux", "sshAlias": "nas1-agent", "machineId": "nas1", "machineLabel": "Nas1", "shortLabel": "Nas1", "subtitle": "second Ubuntu computer", "names": ["nas1"], "legacy": false, "sentenceLabel": "Nas1"},
   "alexis": {"label": "Alexis PC", "os": "windows", "sshAlias": "alexis-windows", "machineId": "alexis", "machineLabel": "Alexis PC", "shortLabel": "Alexis PC", "subtitle": "Windows computer", "names": ["alexis", "AlexisGamingPC"], "legacy": false, "sentenceLabel": "Alexis PC"},
-  "odroid": {"label": "Odroid", "os": "linux", "sshAlias": "odroid", "machineId": "odroid", "machineLabel": "Odroid", "shortLabel": "Odroid", "subtitle": "third Ubuntu computer", "names": ["odroid", "Odroid"], "legacy": false, "sentenceLabel": "Odroid"}
+  "odroid": {"label": "Odroid", "os": "linux", "sshAlias": "odroid", "machineId": "odroid", "machineLabel": "Odroid", "shortLabel": "Odroid", "subtitle": "third Ubuntu computer", "names": ["odroid", "Odroid"], "legacy": false, "sentenceLabel": "Odroid"},
+  "1070ti": {"label": "1070ti", "os": "linux", "sshAlias": "1070ti", "machineId": "1070ti", "machineLabel": "1070ti", "shortLabel": "1070ti", "subtitle": "fourth Ubuntu computer", "names": ["1070ti"], "legacy": false, "sentenceLabel": "the 1070ti"}
 }

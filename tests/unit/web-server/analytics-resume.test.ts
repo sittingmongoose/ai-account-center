@@ -91,7 +91,7 @@ function answer(codex: Record<string, unknown>, rows: unknown[], srows: unknown[
   );
 }
 
-const hosts = async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null });
+const hosts = async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null, '1070ti': null });
 const cacheFile = (cache: string) => path.join(cache, 'analytics-remote-v1', 'nas1.json');
 const codexCell = (states: Array<{ host: string; tool: string }>) =>
   states.find((entry) => entry.host === 'nas1' && entry.tool === 'codex') as

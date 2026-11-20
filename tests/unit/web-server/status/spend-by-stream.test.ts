@@ -108,6 +108,7 @@ describe('spendByStream pass-through', () => {
         nas1: { data: null, asOf: null, error: null },
         alexis: { data: null, asOf: null, error: null },
         odroid: { data: null, asOf: null, error: null },
+        '1070ti': { data: null, asOf: null, error: null },
       },
       browsers: { data: null, asOf: null, error: null },
       simlock: { data: null, asOf: null, error: null },

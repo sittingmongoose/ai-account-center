@@ -341,7 +341,7 @@ could not be read (since 10:01 AM). Showing its reading from 10:00 AM."); the ot
 with no good reading yet has no row; the registry's `detail` names it.
 `blockedOn.kind` is any short slug (documented: `owner`, `agent`, `review`, `lock`, `resource`, `quota`).
 
-**Machine**: `{ id: "vm" | "mac" | "windows" | "nas1" | "alexis" | "odroid", label, state: "ok" | "stale" | "unreachable", asOf, ageSeconds,
+**Machine**: `{ id: "vm" | "mac" | "windows" | "nas1" | "alexis" | "odroid" | "1070ti", label, state: "ok" | "stale" | "unreachable", asOf, ageSeconds,
 detail, cpu: { cores, load1, busyPct }, memory: { availableGb, totalGb }, disk: [ { mount, freeGb, totalGb } ],
 browsers: { running, max }, recordings: { running, max }, gpuPct, sessions: [ { id, url, owner, recording,
 ageSeconds } ], slotsSource, warnings: [ "Disk 17.7 GB free, under the 50 GB floor" ] }`. Floors: 50 GB disk, 6 GB memory (the

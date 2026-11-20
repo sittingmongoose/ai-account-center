@@ -225,7 +225,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 130,
-            "pattern": "^(vm|mac|windows|nas1|alexis|odroid)\\.[a-z0-9][a-z0-9.-]{0,62}--[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+            "pattern": "^(vm|mac|windows|nas1|alexis|odroid|1070ti)\\.[a-z0-9][a-z0-9.-]{0,62}--[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
           }
         },
         "required": [
@@ -268,7 +268,7 @@
     },
     "writer": {
       "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-fo-lead.",
-      "pattern": "^(?!.*--)(vm|mac|windows|nas1|alexis|odroid)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1|alexis|odroid|1070ti)\\.[a-z0-9][a-z0-9.-]{0,62}$",
       "type": "string"
     },
     "writtenAt": {

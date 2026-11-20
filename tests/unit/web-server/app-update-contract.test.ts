@@ -73,7 +73,7 @@ const IN_USE_WORDS =
   'is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.';
 
 describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () => {
-  it('lists twelve apps in a fixed order and expects sixty rows across five computers', () => {
+  it('lists twelve apps in a fixed order and expects eighty-four rows across seven computers', () => {
     expect(Object.keys(UPDATE_APP_LABELS)).toEqual([
       'antigravity-cli',
       'muse-code',

@@ -2682,6 +2682,7 @@ describe('native local analytics activity', () => {
     const answer = await service.get(QUERY, FROM, NOW);
     const cursor = answer.sources.filter((entry) => entry.tool === 'cursor');
     expect(cursor.map((entry) => `${entry.host}:${entry.state}`).sort()).toEqual([
+      '1070ti:unavailable',
       'alexis:unavailable',
       'mac:unavailable',
       'odroid:unavailable',
@@ -2699,6 +2700,7 @@ describe('native local analytics activity', () => {
       'cursor:nas1',
       'cursor:alexis',
       'cursor:odroid',
+      'cursor:1070ti',
     ]);
     expect(fixed.every((entry) => entry.state === 'unavailable' && entry.rowCount === 0)).toBe(
       true

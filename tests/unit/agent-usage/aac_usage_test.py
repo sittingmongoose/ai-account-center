@@ -44,9 +44,10 @@ def snapshot(generated):
 
 
 class ReaderTests(unittest.TestCase):
-    def test_shared_computer_labels_include_alexis_odroid_and_published_future(self):
+    def test_shared_computer_labels_include_alexis_odroid_1070ti_and_published_future(self):
         self.assertEqual(aac.HOSTS["alexis"], "Alexis PC")
         self.assertEqual(aac.HOSTS["odroid"], "Odroid")
+        self.assertEqual(aac.HOSTS["1070ti"], "1070ti")
         with tempfile.TemporaryDirectory() as folder:
             file = Path(folder) / "computers.json"
             file.write_text(json.dumps({"future": {"label": "Future Linux", "machineLabel": "Future Linux"}}))

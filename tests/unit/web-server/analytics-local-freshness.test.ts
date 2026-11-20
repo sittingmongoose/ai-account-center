@@ -154,7 +154,7 @@ it.each([false, true])(
       cacheDir,
       force: true,
       now: () => NOW,
-      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null }),
       localScanner: () => ({ ok: true }),
       runLocal: async () => response(),
     });
@@ -220,7 +220,7 @@ it.each([false, true])(
       cacheDir,
       force: true,
       now: () => NOW,
-      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null }),
       localScanner: () => ({ ok: false, cause: 'binary_missing' }),
       runLocal: async () => {
         throw Error('unavailable scanner must not run');
@@ -246,7 +246,7 @@ it.each([
       cacheDir: path.join(root, 'cache'),
       force: true,
       now: () => NOW,
-      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null }),
       localScanner: () => ({ ok: true }),
       runLocal: async () => response(complete),
     });

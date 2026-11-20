@@ -123,7 +123,7 @@ function codexAnswer(complete: boolean, input = 150) {
   );
 }
 
-const noRemote = async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null });
+const noRemote = async () => ({ mac: null, windows: null, nas1: null, alexis: null, odroid: null, '1070ti': null });
 
 describe('the scanner on this computer', () => {
   it('checks freshness with the native reader for every local Analytics tool', async () => {

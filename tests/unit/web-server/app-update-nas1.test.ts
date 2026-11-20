@@ -224,8 +224,9 @@ describe('a job saved before Nas1 existed', () => {
       nas1: done,
       alexis: done,
       odroid: done,
+      '1070ti': done,
     });
-    // The old job keeps its own total, and never blocks the next four-computer run.
+    // The old job keeps its own total, and never blocks the next full run.
     expect(job.expectedResults).toBe(24);
     service.start();
     for (let i = 0; i < 30 && service.getStatus().job?.state === 'running'; i++)
