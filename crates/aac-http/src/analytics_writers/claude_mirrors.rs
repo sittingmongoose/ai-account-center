@@ -169,7 +169,7 @@ mod tests {
         let mut parts = [part("mac", 0, true, time), part("ubuntu", 1, false, time)];
         let mut states = [state("mac", "ok"), state("ubuntu", "ok")];
         select(&mut parts, &mut states, &Owners::new());
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().expect("fixture directory");
         let pricing = super::super::ResolverPricing::new(fixture.path());
         let workers = parts
             .iter()
@@ -202,27 +202,34 @@ mod tests {
         assert_eq!(reports[0]["state"], "no_usage");
         assert_eq!(measured[0]["computer"], "ubuntu");
         assert_eq!(reports[0]["sessions"], json!([]));
-        assert_eq!(measured[0]["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            measured[0]["sessions"]
+                .as_array()
+                .expect("session rows")
+                .len(),
+            1
+        );
 
-        let engine = ops::open_engine(fixture.path().to_str().unwrap(), None, None).unwrap();
+        let engine = ops::open_engine(fixture.path().to_str().expect("fixture path"), None, None)
+            .expect("open activity store");
         let receipt = ops::call(
             &engine,
             "activityIngest",
             &json!({ "reports": reports }).to_string(),
         )
-        .unwrap();
+        .expect("ingest activity reports");
         assert_eq!(receipt["refused"], json!([]));
         let range = ops::call(
             &engine,
             "activityRange",
             &json!({ "fromMs": now - 86_400_000, "toMs": now }).to_string(),
         )
-        .unwrap();
+        .expect("read activity range");
         let tokens: u64 = range["rows"]
             .as_array()
-            .unwrap()
+            .expect("activity range rows")
             .iter()
-            .map(|row| row[5].as_u64().unwrap())
+            .map(|row| row[5].as_u64().expect("input token count"))
             .sum();
         assert_eq!(tokens, 100);
     }
@@ -231,11 +238,11 @@ mod tests {
     fn analytics_claude_mirror_keeps_the_saved_owner_until_a_complete_read() {
         let mut states = [state("nas1", "ok"), state("mac", "ok")];
         let mut parts = [part("nas1", 0, true, 0), part("mac", 1, true, 0)];
-        let owners = select(&mut parts, &mut states, &Owners::new()).unwrap();
+        let owners = select(&mut parts, &mut states, &Owners::new()).expect("initial mirror owner");
         assert_eq!(parts[0].rows.len(), 1);
         assert!(parts[1].sessions.is_empty());
 
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().expect("fixture directory");
         save(fixture.path(), &owners);
         let owners = load(fixture.path());
         let mut states = [state("nas1", "unreadable"), state("mac", "ok")];
@@ -255,8 +262,11 @@ mod tests {
             },
             part("mac", 1, true, 0),
         ];
-        let reelected = select(&mut parts, &mut states, &owners).unwrap();
-        assert_eq!(reelected.get("same-basename-digest").unwrap(), "mac");
+        let reelected = select(&mut parts, &mut states, &owners).expect("re-elected mirror owner");
+        assert_eq!(
+            reelected.get("same-basename-digest").map(String::as_str),
+            Some("mac")
+        );
         assert_eq!(parts[1].rows.len(), 1);
         assert_eq!(parts[1].sessions.len(), 1);
     }
