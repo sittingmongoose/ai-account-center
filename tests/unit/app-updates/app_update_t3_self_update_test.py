@@ -180,6 +180,23 @@ class RunningT3SelfUpdate(unittest.TestCase):
         self.assertEqual(row["messageCode"], "restart_failed")
         self.assertEqual(row["version"], NEW)  # What is installed now, not the old snapshot.
 
+    def test_t3_that_does_not_come_back_is_restart_failed_even_when_the_revoke_fails(self):
+        # Review of e7ba47269 (Medium 1): wait_ready fails inside bearer, bearer's finally cannot revoke
+        # through the same broken new build, and t3_session_revoke_failed replaced restart_failed.
+        @contextlib.contextmanager
+        def revoke_fails(cli, base, deadline, scopes=("providers:manage", "orchestration:read"), prefix="aac-acp-"):
+            try:
+                yield "token"
+            finally:
+                raise common.UpdateFailure("t3_session_revoke_failed")
+
+        mock.patch.object(t3_rpc, "bearer", side_effect=revoke_fails).start()
+        install = self.mac()
+        row, _wait = self.run_update(install, FakeT3(install),
+                                     ready=common.UpdateFailure("t3_not_ready", cause="t3_not_ready", reason="previous_server"))
+        self.assertEqual(row["status"], "restart_failed")
+        self.assertEqual(row["messageCode"], "restart_failed")
+
     def test_t3_installing_a_newer_build_than_the_lookup_reports_that_build(self):
         newer = "0.1.12-nightly.20261120.5010"
         install = self.windows()

@@ -799,7 +799,7 @@ def desktop_self_update(host, target, deadline, accept, phase=None, ready_second
     """
     phase = phase or (lambda name: None)
     cli, base, origin = discover(host)
-    handed_off, version = False, None
+    handed_off, ready, version = False, False, None
     try:
         with bearer(cli, base, deadline, scopes=(MAINTAIN_SCOPE,), prefix="aac-t3-update-") as token:
             client = Rpc(origin, token, deadline)
@@ -829,12 +829,17 @@ def desktop_self_update(host, target, deadline, accept, phase=None, ready_second
                 client.close()
             try:
                 wait_ready(host, deadline, version, seconds=ready_seconds)
+                ready = True
             except UpdateFailure as error:
                 raise UpdateFailure("restart_failed", cause="t3_not_ready", reason=error.reason or "t3_not_ready") from None
     except UpdateFailure as error:
-        if handed_off and version and error.code == "t3_session_revoke_failed":
+        if handed_off and ready and version and error.code == "t3_session_revoke_failed":
             # Confirmed on the new build; the short-lived session ends at its own TTL.
             return version
+        if handed_off and not ready and error.code == "t3_session_revoke_failed":
+            # The revoke failed while restart_failed was in flight (bearer's finally replaces it):
+            # the relaunched T3 never answered on the new build, whatever its installer wrote.
+            raise UpdateFailure("restart_failed", cause="t3_not_ready", reason="t3_not_ready") from None
         if handed_off and error.code != "restart_failed":
             raise UpdateFailure("restart_failed", cause=error.cause or "unknown", reason=error.reason or "after_handoff") from None
         if not handed_off and error.code not in ("update_failed", "t3_absent"):
