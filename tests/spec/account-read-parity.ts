@@ -1,5 +1,5 @@
 /**
- * M3 part 3: GET /api/accounts/{visibility,preferences,registry,analytics} through the real TS
+ * M3 part 3: GET /api/accounts/{visibility,preferences,registry} through the real TS
  * routers over HTTP, in off, on and shadow modes, against the goldens in
  * contract/m3-part3-account-reads.json. On mode must serve every case marked `rust` from the
  * Rust service with no TS reader/composer call, and log a TS fallback for every other case;
@@ -88,14 +88,22 @@ if (worker < 0) {
         throw new Error(result.stderr || result.stdout || `${mode}: account read worker failed`);
       reports.push(JSON.parse(fs.readFileSync(file, 'utf8')) as Report);
     }
-    const expected = (JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Array<{ name: string }>).filter(
-      (row) => !HOSTLESS.has(row.name)
-    );
+    // Keep the nine original Analytics HTTP replies as references. The public native Analytics
+    // M0 run and positive store-backed tests cover the retired Express adapter now.
+    const analytics = (row: Row) => row.route.startsWith('/api/accounts/analytics?');
+    const golden = JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Row[];
+    const archivedAnalytics = golden.filter(analytics);
+    assert.equal(archivedAnalytics.length, 9, 'the original Analytics reference rows are retained');
+    assert.ok(!reports[0].rows.some(analytics), 'the Express route is retired');
+    const expected = golden.filter((row) => !HOSTLESS.has(row.name) && !analytics(row));
     const expectedText = JSON.stringify(expected, null, 2) + '\n';
     const bytes = JSON.stringify(reports[0].rows, null, 2) + '\n';
     if (process.argv.includes('--regenerate')) {
       assert.equal(HOSTLESS.size, 0, 'record the goldens on a POSIX host');
-      fs.writeFileSync(GOLDEN, bytes);
+      fs.writeFileSync(
+        GOLDEN,
+        JSON.stringify([...reports[0].rows, ...archivedAnalytics], null, 2) + '\n'
+      );
     } else assert.ok(expectedText === bytes, 'account read golden bytes changed');
     for (const report of reports) {
       for (const [index, row] of report.rows.entries())

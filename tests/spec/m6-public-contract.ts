@@ -449,7 +449,7 @@ try {
       environment,
       false,
       mode,
-      process.platform === 'win32' && mode === 'cut-rust-only' && group === undefined
+      process.platform === 'win32' && mode !== 'fixture' && group === undefined
     );
   let rust = await boot();
   try {

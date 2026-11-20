@@ -340,9 +340,6 @@ fs.mkdirSync(ui);
 fs.mkdirSync(path.join(ui, 'app'));
 fs.writeFileSync(path.join(ui, 'app', 'index.html'), '<div id="aac-app-fixture"></div>');
 const { apiRoutes } = await import('../../src/web-server/routes');
-const { default: referenceResetRoutes } =
-  await import('../fixtures/reset-adapter/reset-claim-routes');
-apiRoutes.use('/accounts', referenceResetRoutes);
 const { startServer } = await import('../../src/web-server');
 const serverOptions = { port: 0, host: '127.0.0.1', staticDir: ui, rustServiceBinary: rustBinary };
 const instance = composed
@@ -427,6 +424,10 @@ inventory.sort((a, b) => (a.path + a.method).localeCompare(b.path + b.method, 'e
 // contracts stay the replay corpus (`routes.json`); the TypeScript router no longer registers
 // them, so this recorder keeps the committed rows instead of re-recording a 404.
 const MOVED_TO_RUST = new Set([
+  'POST /api/accounts/:accountId/reset-claims/check',
+  'POST /api/accounts/:accountId/reset-claims/prepare',
+  'GET /api/accounts/:accountId/reset-claims',
+  'POST /api/accounts/:accountId/reset-claims',
   'GET /api/scoreboard',
   'GET /api/status/@regex:^\\/files\\/([^/]+)\\/(.+)$',
   'GET /api/status/answers',
