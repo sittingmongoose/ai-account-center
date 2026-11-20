@@ -291,9 +291,11 @@ export function withClaudeSignIn(
   }
   const hosts = claudeSignInHosts(platforms);
   const live = account.status === 'ok';
+  // The sign-in a computer is missing is this account's Claude Desktop profile there. AAC's sign-in health
+  // tracks Claude Code logins, which can be fine at the same time, so the note names which login it means.
   const message = live
     ? account.message
-    : `Sign-in needed on ${hosts}. Open shows the sign-in window.`;
+    : `Claude Desktop needs a sign-in on ${hosts}. Open shows its sign-in window. Claude Code sign-ins are checked separately.`;
   return {
     ...rest,
     signInNeeded: platforms,

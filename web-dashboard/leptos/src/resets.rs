@@ -305,8 +305,16 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         "refill-windows-unconfirmed" if provider == "codex" => {
             "AAC can't read this account's Codex limits right now, so it won't use this reset.".into()
         }
+        // Claude names every limit a reset refills; AAC confirms a claim only on limits the account reports, so a
+        // reset naming one the account isn't reporting (a Pro account with no Fable week, say) waits for it.
+        "refill-windows-unconfirmed" if provider == "claude" => {
+            "Claude says this reset also refills a limit this account isn't reporting right now, so AAC couldn't check that using it worked. Use reset appears once Claude reports every limit it refills.".into()
+        }
         "refill-windows-unconfirmed" => "AAC can't confirm which limit this refills right now.".into(),
-        "signed-out" if provider == "claude" => "Listed resets need a verified OAuth sign-in on Windows. Sign in again before using them.".into(),
+        // Resets go through the account's Claude Desktop profile on Windows, never its Claude Code sign-in.
+        "signed-out" if provider == "claude" => {
+            "Resets go through this account's Claude Desktop sign-in on Windows, which is signed out (Claude Code sign-ins are separate). Open the account on Windows and sign in to Claude Desktop to use them.".into()
+        }
         "signed-out" => "This login is signed out.".into(),
         "cooldown" => "The provider asked AAC to wait before another reset.".into(),
         "rate-limited" if provider == "claude" => "Claude is limiting reset requests. Try again later.".into(),
@@ -966,8 +974,15 @@ mod inventory_read_note_tests {
         assert!(text.contains("Claude is limiting reset requests"));
         assert!(!text.contains("Mac-only"));
         assert!(!text.contains("No resets"));
+        // Resets go through the account's Claude Desktop profile on Windows, not its Claude Code sign-in, so the
+        // prompt names Claude Desktop (AAC's sign-in health tracks Claude Code and can say ok at the same time).
         let signed_out = why_not("signed-out", "claude");
-        assert!(signed_out.contains("Listed resets need a verified OAuth sign-in on Windows"));
+        assert!(signed_out.contains("Claude Desktop"), "{signed_out}");
+        assert!(signed_out.contains("on Windows"), "{signed_out}");
+        assert!(
+            signed_out.contains("Claude Code sign-ins are separate"),
+            "{signed_out}"
+        );
         assert!(
             inventory_read_note(
                 &Load::Ready(Inventory {
@@ -2311,10 +2326,36 @@ mod tests {
             "{none}"
         );
         assert!(none.contains("can't read"), "{none}");
-        assert_eq!(
-            why_not("refill-windows-unconfirmed", "claude"),
-            "AAC can't confirm which limit this refills right now."
+        let claude = why_not("refill-windows-unconfirmed", "claude");
+        assert!(claude.contains("isn't reporting"), "{claude}");
+        assert!(claude.contains("Use reset appears"), "{claude}");
+    }
+
+    #[test]
+    fn a_claude_reset_naming_an_unreported_limit_stays_listed_and_says_when_use_reset_appears() {
+        // A Pro account's full reset names five_hour, seven_day and seven_day_overage_included, but the account
+        // reports no seven_day_overage_included right now: the server blocks the claim (AAC could not confirm
+        // it), and the page still lists the reset as available and says when the button comes.
+        let mut g = grant(
+            "full",
+            1,
+            Some(20.0),
+            false,
+            Some("refill-windows-unconfirmed"),
         );
+        g["refillsText"] = "Refills your 5-hour and weekly allowances.".into();
+        let rows = rows_from_inventory(&inventory(vec![g]), "claude", NOW);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phase, Phase::Ready);
+        assert!(!rows[0].claimable);
+        assert!(
+            rows[0].note.contains("Use reset appears"),
+            "{}",
+            rows[0].note
+        );
+        let (lead, rest) = summary(&rows, "claim", &fake_day);
+        assert_eq!(lead, "1 rate-limit reset ready.");
+        assert_eq!(rest, "It expires day+20.");
     }
 
     #[test]
