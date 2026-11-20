@@ -15,9 +15,8 @@ namespace CCSBar;
 
 /// <summary>
 /// Offline render checks (--render-fixture DIR): the real panel drawn from the bundled sanitized fixture
-/// (example.com identities, captured 2026-10-01) in Light and Dark, with Settings, an expanded row and a new active
-/// login. Measures the selected-row alignment rule: the check and "Active" must land on the slot's leading edge and
-/// label x within 0.5 px, before and after the active login changes. Never connects anywhere and never changes an account.
+/// (example.com identities, captured 2026-10-01) in Light and Dark, with Settings and expanded details.
+/// Never connects anywhere or changes an account.
 /// </summary>
 public static class FixtureRender
 {
@@ -55,15 +54,10 @@ public static class FixtureRender
             window.ApplyDashboardSample(Clone(fixture));
             await Settle(window);
             SavePng(window, Path.Combine(directory, $"panel-{name}.png"));
-            report.Checks[$"{name}_codex_active_aligned_before_switch"] = Aligned(window, "codex", measures, name + "_before");
-            report.Checks[$"{name}_antigravity_slot_on_codex_slot_line"] = SlotLine(window, measures, name);
-            report.Checks[$"{name}_platter_on_active_row"] = PlatterOn(window, "codex", "row:codex:example-2", measures, name + "_before");
             report.Checks[$"{name}_fable_on_max_only"] = Fable(window);
             report.Checks[$"{name}_provider_order_today"] = Order(window, new[] { "section:claude", "section:codex", "section:antigravity", "provider:cursor", "provider:muse", "provider:kimi-code", "provider:qwen", "provider:zai", "provider:opencode-go" });
             report.Checks[$"{name}_tabular_instrument_sans_resolves"] = FontResolves();
             report.Checks[$"{name}_section_columns_and_names_aligned"] = Columns(window, measures, name);
-            var codexSection = FindUid(window.ContentPanel, "section:codex");
-            report.Checks[$"{name}_codex_header_has_no_active_meta"] = codexSection is not null && FindUid(codexSection, "section-meta") is null;
             // Account switching was removed on 2026-11-14: no Activate, auto-switch toggle or threshold anywhere, and the
             // footer's left side stays empty.
             report.Checks[$"{name}_no_switch_controls"] = window.FooterNotePanel.Content is null
@@ -71,37 +65,23 @@ public static class FixtureRender
                 && FindUid(window.ContentPanel, "mutation:toggle") is null
                 && FindUid(window.ContentPanel, "mutation:drop") is null;
 
-            // The active login changes: codex-3 becomes active; the platter moves to it and the alignment still holds.
-            var switched = Clone(fixture);
-            foreach (var account in switched.Accounts.Where(account => account.Provider == "codex")) account.IsActive = account.Id == "codex:example-3";
-            window.ApplyDashboardSample(switched);
-            await Settle(window);
-            SavePng(window, Path.Combine(directory, $"panel-{name}-switched.png"));
-            report.Checks[$"{name}_codex_active_aligned_after_switch"] = Aligned(window, "codex", measures, name + "_after");
-            report.Checks[$"{name}_platter_follows_switch"] = PlatterOn(window, "codex", "row:codex:example-3", measures, name + "_after");
-
-            // Two signed-in Antigravity accounts, the second one active: Antigravity uses the same slot and indicator.
+            // Two Antigravity accounts share the same quota columns.
             var twoAg = Clone(fixture);
             var first = twoAg.Accounts.First(account => account.Provider == "antigravity");
-            first.Capabilities.AntigravityProfileId = "example-1"; first.Capabilities.AntigravityHostIds = new() { "ubuntu" };
             var second = Clone(new AccountDashboard { Accounts = { first } }).Accounts[0];
-            second.Id = "antigravity:example-2"; second.Email = "antigravity-2@example.com"; second.Label = "Antigravity account 2"; second.IsActive = true; second.Capabilities.AntigravityProfileId = "example-2";
+            second.Id = "antigravity:example-2"; second.Email = "antigravity-2@example.com"; second.Label = "Antigravity account 2";
             // A same-day reset beside a two-decimal value: the tightest compact cell (live data showed "5:1...").
-            second.Windows.First(window => window.Key == "gemini-weekly").ResetAt = capturedAt.AddHours(5).AddMinutes(15).ToString("O");
+            second.Windows.First(window => window.Key == "cli-gemini-weekly").ResetAt = capturedAt.AddHours(5).AddMinutes(15).ToString("O");
             twoAg.Accounts.Insert(twoAg.Accounts.IndexOf(first) + 1, second);
             window.ApplyDashboardSample(twoAg);
             await Settle(window);
             SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-two.png"));
-            report.Checks[$"{name}_antigravity_active_aligned"] = Aligned(window, "antigravity", measures, name + "_ag") && SameLine(measures, name + "_ag_slot", name + "_before_slot");
-            report.Checks[$"{name}_antigravity_platter_on_active_row"] = PlatterOn(window, "antigravity", "row:antigravity:example-2", measures, name + "_ag");
             report.Checks[$"{name}_antigravity_two_columns_and_names_aligned"] = Columns(window, measures, name + "_ag2");
-            var agTwoSection = FindUid(window.ContentPanel, "section:antigravity");
-            report.Checks[$"{name}_antigravity_header_keeps_active_meta"] = agTwoSection is not null && FindUid(agTwoSection, "section-meta") is not null;
             var compact = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Compact && meter.IsVisible).ToArray();
-            var tight = compact.FirstOrDefault(meter => meter.Key == "antigravity:example-2|gemini-weekly");
+            var tight = compact.FirstOrDefault(meter => meter.Key == "antigravity:example-2|cli-gemini-weekly");
             report.Notes[$"{name}_tight_reset_shown"] = tight?.ResetShown ?? "missing";
             report.Checks[$"{name}_compact_resets_shown_whole"] = tight is not null && compact.All(meter => !meter.ResetClipped);
-            // The active one of the two hidden in the tray: only the other is listed.
+            // Hide one of the two accounts and keep the other visible.
             var agHidden = Clone(twoAg);
             agHidden.Accounts.First(account => account.Id == "antigravity:example-2").TrayHidden = true;
             window.ApplyDashboardSample(agHidden);
@@ -113,7 +93,7 @@ public static class FixtureRender
             // Antigravity plan display (ANTIGRAVITY-SPEC): the fixture's three plans on the four columns — the Pro
             // account shows all four meters, the Free account's missing 5-hour cells read "Weekly only" and "Not on
             // plan", and the Workspace row says it has no quota. Then the expanded details: pools ordered Gemini
-            // 5-hour first, whole pool titles, the AI credits (overage) row with its hint.
+            // 5-hour first, whole pool titles, and the plan's details.
             window.ApplyDashboardSample(Clone(fixture));
             await Settle(window);
             SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-plans.png"));
@@ -121,11 +101,11 @@ public static class FixtureRender
             report.Checks[$"{name}_antigravity_four_columns_and_plans"] = planSection is not null
                 && FindUid(planSection, "row:antigravity:example-3") is not null && FindUid(planSection, "row:antigravity:example-4") is not null;
             var planMeters = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.IsVisible).ToArray();
-            var weeklyOnly = planMeters.FirstOrDefault(meter => meter.Key == "antigravity:example-3|gemini-5h");
-            var weeklyOnlyThird = planMeters.FirstOrDefault(meter => meter.Key == "antigravity:example-3|3p-5h");
+            var weeklyOnly = planMeters.FirstOrDefault(meter => meter.Key == "antigravity:example-3|cli-gemini-5h");
+            var weeklyOnlyThird = planMeters.FirstOrDefault(meter => meter.Key == "antigravity:example-3|cli-3p-5h");
             report.Checks[$"{name}_antigravity_muted_cells_are_honest"] = weeklyOnly is { DrawnUnavailable: true } && weeklyOnly.ValueShown == "Weekly only"
                 && weeklyOnlyThird is { DrawnUnavailable: true } && weeklyOnlyThird.ValueShown == "Weekly only"
-                && planMeters.Any(meter => meter.Key == "antigravity:example-3|gemini-weekly" && meter.Target is 22.5);
+                && planMeters.Any(meter => meter.Key == "antigravity:example-3|cli-gemini-weekly" && meter.Target is 22.5);
             report.Checks[$"{name}_antigravity_no_quota_row_line"] = planSection is not null
                 && All(planSection).OfType<TextBlock>().Any(text => text.Text == "No Antigravity quota on this plan");
             // Without third-party models one "Not on plan" marker spans both Claude/GPT columns (a Free account
@@ -133,12 +113,12 @@ public static class FixtureRender
             var withoutThird = Clone(fixture);
             var free = withoutThird.Accounts.First(account => account.Id == "antigravity:example-3");
             free.AntigravityPlan!.ThirdPartyModels = false;
-            free.Windows.RemoveAll(window => window.Key.StartsWith("3p", StringComparison.Ordinal));
+            free.Windows.RemoveAll(window => window.Key.StartsWith("cli-3p", StringComparison.Ordinal));
             window.ApplyDashboardSample(withoutThird);
             await Settle(window);
-            var notOnPlan = All(window.ContentPanel).OfType<Meter>().FirstOrDefault(meter => meter.IsVisible && meter.Key == "antigravity:example-3|3p-5h");
+            var notOnPlan = All(window.ContentPanel).OfType<Meter>().FirstOrDefault(meter => meter.IsVisible && meter.Key == "antigravity:example-3|cli-3p-5h");
             var markerRow = FindUid(window.ContentPanel, "row:antigravity:example-3");
-            var markerCell = markerRow is null ? null : All(markerRow).FirstOrDefault(element => element is Meter meter && meter.Key == "antigravity:example-3|3p-5h") as FrameworkElement;
+            var markerCell = markerRow is null ? null : All(markerRow).FirstOrDefault(element => element is Meter meter && meter.Key == "antigravity:example-3|cli-3p-5h") as FrameworkElement;
             report.Checks[$"{name}_antigravity_not_on_plan_cell"] = notOnPlan is { DrawnUnavailable: true } && notOnPlan.ValueShown == "Not on plan"
                 && markerCell is { } spanned && System.Windows.Controls.Grid.GetColumnSpan(spanned) == 3;
             window.ToggleDetailsForCheck("antigravity:example-1");
@@ -147,14 +127,13 @@ public static class FixtureRender
             var detailMeters = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Detail && meter.IsVisible).Select(meter => meter.Key).ToArray();
             report.Checks[$"{name}_antigravity_details_pool_order"] = detailMeters.SequenceEqual(new[]
             {
-                "detail:antigravity:example-1|gemini-5h", "detail:antigravity:example-1|gemini-weekly", "detail:antigravity:example-1|3p-5h", "detail:antigravity:example-1|3p-weekly",
+                "detail:antigravity:example-1|cli-gemini-5h", "detail:antigravity:example-1|cli-gemini-weekly", "detail:antigravity:example-1|cli-3p-5h", "detail:antigravity:example-1|cli-3p-weekly",
             });
             var planBlocks = All(window.ContentPanel).OfType<TextBlock>().Select(text => text.Text).ToArray();
             report.Checks[$"{name}_antigravity_details_plan_notes"] = planBlocks.Contains("Refreshes every 5 hours up to a weekly limit.")
                 && planBlocks.Any(text => text.StartsWith("Models: Gemini 3.8 Flash", StringComparison.Ordinal))
                 && planBlocks.Contains("Family members sharing this plan may share one quota pool.")
-                && planBlocks.Contains("AI credits (overage)")
-                && planBlocks.Contains("Used only after the plan quota runs out, when AI Credit Overages is on.");
+                && !planBlocks.Contains("AI credits (overage)");
             report.Checks[$"{name}_antigravity_details_not_truncated"] = planDetails is not null && NoClippedText(planDetails);
             SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-details.png"));
             window.ToggleDetailsForCheck("antigravity:example-1");
@@ -237,13 +216,16 @@ public static class FixtureRender
             // The restyled notification-area menu (WinForms ContextMenuStrip with the Atlas renderer).
             report.Checks[$"{name}_tray_menu_styled"] = TrayMenu(Path.Combine(directory, $"tray-menu-{name}.png"));
 
-            // A sample that arrives while the panel is hidden (background start) still gets its platter on open.
+            // A sample that arrives while the panel is hidden is visible on open.
             var hiddenFirst = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Width = 760, Height = 850 };
             hiddenFirst.UseFixtureConnection();
+            hiddenFirst.SimulateHideForCheck();
             hiddenFirst.ApplyDashboardSample(Clone(fixture));
+            var deferred = hiddenFirst.RenderDirtyForCheck;
             hiddenFirst.ShowPanel();
             await Settle(hiddenFirst);
-            report.Checks[$"{name}_platter_placed_after_hidden_sample"] = PlatterOn(hiddenFirst, "codex", "row:codex:example-2", measures, name + "_hidden");
+            report.Checks[$"{name}_hidden_sample_renders_on_open"] = deferred && !hiddenFirst.RenderDirtyForCheck
+                && FindUid(hiddenFirst.ContentPanel, "row:codex:example-2") is not null;
             hiddenFirst.AllowClose = true; hiddenFirst.Close();
 
             await SignInStates(report, measures, directory, name);
@@ -262,15 +244,14 @@ public static class FixtureRender
             signIn.AllowClose = true; signIn.Close();
             window.AllowClose = true; window.Close();
         }
-        report.Checks["tray_tooltip_reports_active_codex_weekly_left"] = Formatting.TrayTooltip(fixture) == "AI Account Center · Codex: codex-2, 91% weekly left";
+        report.Checks["tray_tooltip_does_not_choose_a_codex_account"] = Formatting.TrayTooltip(fixture) == "AI Account Center";
         if (only is null || only.Equals("light", StringComparison.OrdinalIgnoreCase)) { await MotionChecks(report, fixture, measures); await RuntimeChecks(report, fixture, measures); await ResetPendingRender(report, fixture, capturedAt, directory); }
         foreach (var (key, value) in measures) report.Measurements[key] = Math.Round(value, 3);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
 
-    /// <summary>Runs real animations and samples them every frame: a meter moving 9% to 63% and the platter gliding
-    /// to a new row must ease out and never pass their targets.</summary>
+    /// <summary>Samples a meter every frame as it eases from 9% to 63%.</summary>
     private static async Task MotionChecks(CheckReport report, AccountDashboard fixture, Dictionary<string, double> measures)
     {
         Motion.Enabled = true;
@@ -286,28 +267,21 @@ public static class FixtureRender
             var meter = All(window.ContentPanel).OfType<Meter>().First(candidate => candidate.Key == "codex:example-2|week");
             var startShown = meter.Shown;
             var changed = Clone(fixture);
-            foreach (var account in changed.Accounts.Where(account => account.Provider == "codex")) account.IsActive = account.Id == "codex:example-3";
             changed.Accounts.First(account => account.Id == "codex:example-2").Windows.First(window => window.Key == "seven_day").UsedPercent = 63;
-            var platter = window.PlatterFor("codex")!;
-            var shift = (TranslateTransform)platter.RenderTransform;
-            var startY = shift.Y;
             window.ApplyDashboardSample(changed);
             await Settle(window);
-            var target = FindUid(window.ContentPanel, "row:codex:example-3")!.TranslatePoint(new Point(0, 0), (UIElement)platter.Parent).Y;
-            var shownSamples = new List<double>(); var ySamples = new List<double>();
+            var shownSamples = new List<double>();
             var started = DateTime.UtcNow;
             while ((DateTime.UtcNow - started).TotalMilliseconds < 1400)
             {
-                shownSamples.Add(meter.Shown); ySamples.Add(shift.Y);
+                shownSamples.Add(meter.Shown);
                 await Task.Delay(16);
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
             }
-            bool monotonic(List<double> values, bool rising) { for (int i = 1; i < values.Count; i++) if (rising ? values[i] + 1e-6 < values[i - 1] : values[i] - 1e-6 > values[i - 1]) return false; return true; }
+            bool Monotonic(List<double> values) { for (int i = 1; i < values.Count; i++) if (values[i] + 1e-6 < values[i - 1]) return false; return true; }
             measures["motion_meter_from"] = startShown; measures["motion_meter_max"] = shownSamples.Max(); measures["motion_meter_final"] = meter.Shown; measures["motion_meter_samples"] = shownSamples.Count;
             measures["motion_meter_distinct_frames"] = shownSamples.Distinct().Count();
-            measures["motion_platter_from"] = startY; measures["motion_platter_target"] = target; measures["motion_platter_max"] = ySamples.Max(); measures["motion_platter_final"] = shift.Y;
-            report.Checks["meter_eases_to_value_without_overshoot"] = Math.Abs(startShown - 9) < 0.01 && shownSamples.Max() <= 63 + 1e-6 && Math.Abs(meter.Shown - 63) < 0.01 && monotonic(shownSamples, true) && shownSamples.Distinct().Count() > 3;
-            report.Checks["platter_glides_without_overshoot"] = target > startY && ySamples.Max() <= target + 1e-6 && Math.Abs(shift.Y - target) < 0.5 && monotonic(ySamples, true) && ySamples.Distinct().Count() > 3;
+            report.Checks["meter_eases_to_value_without_overshoot"] = Math.Abs(startShown - 9) < 0.01 && shownSamples.Max() <= 63 + 1e-6 && Math.Abs(meter.Shown - 63) < 0.01 && Monotonic(shownSamples) && shownSamples.Distinct().Count() > 3;
         }
         finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }
     }
@@ -705,24 +679,6 @@ public static class FixtureRender
 
     private static double Y(FrameworkElement element, Window window) => element.TranslatePoint(new Point(0, 0), window).Y;
 
-    /// <summary>The active row's label sits at its slot's leading edge: the check on the slot's left and "Active" 24 px
-    /// (the check plus its gap) to its right.</summary>
-    private static bool Aligned(MainWindow window, string provider, Dictionary<string, double> measures, string tag)
-    {
-        var section = FindUid(window.ContentPanel, "section:" + provider);
-        if (section is null) return false;
-        var actives = All(section).Where(element => element.Uid == "active-label" && element.IsVisible).ToArray();
-        if (actives.Length != 1) return false;
-        var active = actives[0];
-        var slot = All(section).FirstOrDefault(element => element.Uid == "slot" && element.IsVisible && All(element).Contains(active));
-        if (slot is null) return false;
-        var check = All(active).First(element => element.Uid == "active-check");
-        var text = All(active).OfType<TextBlock>().First(element => element.Uid == "active-text");
-        var slotLeft = X(slot, window);
-        measures[tag + "_slot"] = slotLeft; measures[tag + "_check"] = X(check, window); measures[tag + "_active_text"] = X(text, window);
-        return Math.Abs(X(check, window) - slotLeft) <= 0.5 && Math.Abs(X(text, window) - (slotLeft + 24)) <= 0.5;
-    }
-
     /// <summary>Every account section's name starts on one x, and the first meter (and its caption) starts on one x,
     /// whatever the number of meters.</summary>
     private static bool Columns(MainWindow window, Dictionary<string, double> measures, string tag)
@@ -740,31 +696,6 @@ public static class FixtureRender
             measures[$"{tag}_{provider}_name_x"] = names[^1]; measures[$"{tag}_{provider}_first_meter_x"] = first;
         }
         return names.Max() - names.Min() <= 0.5 && meters.Max() - meters.Min() <= 0.5;
-    }
-
-    private static bool SameLine(Dictionary<string, double> measures, string a, string b) => measures.TryGetValue(a, out var x) && measures.TryGetValue(b, out var y) && Math.Abs(x - y) <= 0.5;
-
-    /// <summary>Antigravity's slot ring (the "Not reported" label) starts on the Codex slot line.</summary>
-    private static bool SlotLine(MainWindow window, Dictionary<string, double> measures, string name)
-    {
-        var section = FindUid(window.ContentPanel, "section:antigravity");
-        var codexSlot = All(FindUid(window.ContentPanel, "section:codex")!).FirstOrDefault(element => element.Uid == "slot" && element.IsVisible);
-        if (section is null || codexSlot is null) return false;
-        var ring = FindUid(section, "slot-ring");
-        if (ring is null) return false;
-        measures[name + "_ag_ring"] = X(ring, window);
-        return Math.Abs(X(ring, window) - X(codexSlot, window)) <= 0.5;
-    }
-
-    private static bool PlatterOn(MainWindow window, string provider, string rowUid, Dictionary<string, double> measures, string tag)
-    {
-        var row = FindUid(window.ContentPanel, rowUid);
-        var platter = window.PlatterFor(provider);
-        if (row is null || platter is null || platter.Opacity < 0.99) return false;
-        var rowY = row.TranslatePoint(new Point(0, 0), window).Y;
-        var platterY = platter.TranslatePoint(new Point(0, 0), window).Y;
-        measures[tag + "_row_y"] = rowY; measures[tag + "_platter_y"] = platterY;
-        return Math.Abs(rowY - platterY) <= 0.5 && Math.Abs(row.ActualHeight - platter.ActualHeight) <= 0.5;
     }
 
     private static bool Fable(MainWindow window)

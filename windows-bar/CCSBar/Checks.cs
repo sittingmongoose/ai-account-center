@@ -30,6 +30,7 @@ public static partial class Checks
     {
         var report = new CheckReport();
         await ReviewR2Checks(report);
+        AntigravityServiceChecks(report);
         report.Checks["cursor_plan_names_are_provider_scoped"] = Formatting.PlanLabel("plus", "cursor") == "X Plus" && Formatting.PlanLabel("plus", "codex") == "Plus";
         report.Checks["new_and_legacy_cursor_ultra_remain_distinct"] = Formatting.PlanLabel("unified_ultra", "cursor") == "X Ultra" && Formatting.PlanLabel("ultra", "cursor") == "Cursor Ultra" && Formatting.PlanLabel("ultra", "antigravity") == "Ultra";
         report.Checks["cursor_legacy_and_unknown_plans_are_preserved"] = Formatting.PlanLabel("pro_plus", "cursor") == "Pro+" && Formatting.PlanLabel("future-plan", "cursor") == "future-plan" && Formatting.PlanLabel(null, "cursor") == "";
@@ -52,9 +53,9 @@ public static partial class Checks
         var rawQuota = new QuotaWindow { Key = "monthly", Label = "Monthly", Used = 49.8765, Limit = 500.4321, UsedPercent = 9.966683, Remaining = 450.5556 };
         Formatting.Amount(rawQuota.Remaining.Value, null);
         report.Checks["presentation_rounding_preserves_raw_precision"] = rawQuota.Used == 49.8765 && rawQuota.Limit == 500.4321 && rawQuota.UsedPercent == 9.966683 && rawQuota.Remaining == 450.5556;
-        var pro = new DashboardAccount { Provider = "codex", Capabilities = new AccountCapabilities { CodexProfile = "party" }, Windows = new List<QuotaWindow> { new() { Key = "five_hour", Label = "5h", WindowMinutes = 300 }, new() { Key = "weekly", Label = "Weekly", UsedPercent = 8 }, new() { Key = "extra_additional_2", Label = "Chat pass weekly", UsedPercent = 20 } } };
+        var pro = new DashboardAccount { Provider = "codex", Windows = new List<QuotaWindow> { new() { Key = "five_hour", Label = "5h", WindowMinutes = 300 }, new() { Key = "weekly", Label = "Weekly", UsedPercent = 8 }, new() { Key = "extra_additional_2", Label = "Chat pass weekly", UsedPercent = 20 } } };
         report.Checks["pro_unreported_fivehour_and_chatpass_hidden"] = Formatting.VisibleWindows(pro).Select(window => window.Key).SequenceEqual(new[] { "weekly" });
-        pro.Capabilities.CodexProfile = "lex"; pro.Windows[0].UsedPercent = 120;
+        pro.Windows[0].UsedPercent = 120;
         report.Checks["reported_lex_fivehour_retained"] = Formatting.VisibleWindows(pro).Any(window => window.Key == "five_hour" && window.DisplayPercent == 120);
         var fullCodex = JsonSerializer.Deserialize<DashboardAccount>("""
             {"provider":"codex","capabilities":{"codexProfile":"lex"},"windows":[
@@ -69,14 +70,10 @@ public static partial class Checks
         report.Checks["codex_canonical_zero_is_real_and_extra_quotas_stay_in_details"] = Formatting.CodexPrimaryWindows(fullCodex)[0].DisplayPercent == 0 && fullCodex.Windows.Count == 6 && Formatting.VisibleWindows(fullCodex).Select(window => window.Key).SequenceEqual(new[] { "extra_additional_1", "five_hour", "seven_day", "extra_monthly", "extra_balance" });
         fullCodex.Windows.RemoveAll(window => window.Key is "five_hour" or "seven_day");
         report.Checks["codex_no_core_dto_does_not_promote_additional_duration_or_balance"] = Formatting.CodexPrimaryWindows(fullCodex).Length == 0 && Formatting.VisibleWindows(fullCodex).Length == 3 && fullCodex.Windows.Any(window => window.WindowMinutes == 300 && window.DisplayPercent == 92);
-        foreach (var profile in new[] { "gmail", "party" })
-        {
-            fullCodex.Capabilities.CodexProfile = profile;
-            fullCodex.Windows.Add(new() { Key = "five_hour", Label = "5h", WindowMinutes = 300 });
-            fullCodex.Windows.Add(new() { Key = "seven_day", Label = "Weekly", WindowMinutes = 10080, UsedPercent = 0 });
-            report.Checks["codex_" + profile + "_absent_pro_fivehour_not_substituted_by_extra"] = Formatting.CodexPrimaryWindows(fullCodex).Select(window => window.Key).SequenceEqual(new[] { "seven_day" }) && Formatting.CodexPrimaryWindows(fullCodex)[0].DisplayPercent == 0;
-            fullCodex.Windows.RemoveAll(window => window.Key is "five_hour" or "seven_day");
-        }
+        fullCodex.Windows.Add(new() { Key = "five_hour", Label = "5h", WindowMinutes = 300 });
+        fullCodex.Windows.Add(new() { Key = "seven_day", Label = "Weekly", WindowMinutes = 10080, UsedPercent = 0 });
+        report.Checks["codex_absent_fivehour_not_substituted_by_extra"] = Formatting.CodexPrimaryWindows(fullCodex)
+            .Select(window => (window.Key, window.DisplayPercent)).SequenceEqual(new[] { ("seven_day", (double?)0) });
         var claude = new DashboardAccount { Provider = "claude", Plan = "max", Windows = new List<QuotaWindow> { new() { Key = "seven_day_fable", Label = "Weekly Fable usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 0, ResetAt = "2026-10-08T12:00:00Z" }, new() { Key = "seven_day_opus", Label = "Weekly Opus usage", UsedPercent = 32 } } };
         report.Checks["max_fable_retains_actual_zero_percentage_and_reset"] = Formatting.VisibleWindows(claude).Any(window => window.Key == "seven_day_fable" && window.DisplayPercent == 0 && window.ResetAt == "2026-10-08T12:00:00Z");
         claude.Plan = "pro";
@@ -197,9 +194,7 @@ public static partial class Checks
             report.Checks["schema_v1"] = dashboard.SchemaVersion == 1;
             report.Checks["account_inventory_present"] = dashboard.Accounts.Count > 0;
             report.Checks["provider_ids_are_safe"] = dashboard.Accounts.All(a => Formatting.IsSafeId(a.Provider));
-            report.Checks["safe_codex_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.CodexProfile is not null).All(a => a.Provider == "codex" && Formatting.IsSafeProfile(a.Capabilities.CodexProfile));
             report.Checks["safe_claude_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.ClaudeProfileId is not null).All(a => a.Provider == "claude" && Formatting.IsSafeClaudeProfile(a.Capabilities.ClaudeProfileId));
-            report.Checks["safe_antigravity_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.AntigravityProfileId is not null).All(a => a.Provider == "antigravity" && Formatting.IsSafeId(a.Capabilities.AntigravityProfileId));
             report.Accounts = dashboard.Accounts.Count;
             report.Providers = dashboard.Accounts.GroupBy(a => a.Provider).ToDictionary(g => g.Key, g => g.Count());
             report.Passed = report.Checks.Values.All(value => value);
@@ -276,7 +271,6 @@ public static partial class Checks
                     && FixtureRender.FindUid(window.ContentPanel, "row:r2") is not null;
             }
             var shown = fixture.Accounts[0]; shown.Status = "error"; shown.Host = "nas1";
-            shown.Capabilities.AntigravityProfileId = "fixture";
             shown.Windows.Add(new QuotaWindow { Key = "gemini-5h", PoolId = "other", UsedPercent = 20 });
             shown.Windows.Add(new QuotaWindow { Key = "3p-5h", PoolId = "watched", UsedPercent = 30 });
             fixture.Accounts.Add(new DashboardAccount { Id = "hidden", Provider = "antigravity", TrayHidden = true, Status = "unavailable" });
@@ -425,13 +419,13 @@ public static partial class Checks
         // An older dashboard still sends the retired switching fields (account switching was removed on 2026-11-14): the
         // tray ignores them and keeps the rest of the dashboard.
         var antigravity = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"isActive\":true,\"capabilities\":{\"antigravityProfileId\":\"a\",\"antigravityHostIds\":[\"ubuntu\"],\"antigravityCanActivate\":true}}],\"codexAutoSwitch\":{},\"antigravityAutoSwitch\":{\"enabled\":true,\"thresholdUsedPercent\":90,\"activationInProgress\":false}}", Formatting.Json)!;
-        report.Checks["retired_switching_fields_are_ignored"] = antigravity.Accounts[0].Capabilities.AntigravityProfileId == "a" && antigravity.Accounts[0].IsActive
+        report.Checks["retired_switching_fields_are_ignored"] = antigravity.Accounts[0].Id == "antigravity:a"
             && DashboardClient.SupportedDashboard(antigravity);
-        var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", Capabilities = new AccountCapabilities { CodexProfile = "b" }, Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
+        var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", Email = "codex-2@example.com", Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
         var tooltip = Formatting.TrayTooltip(dashboard);
         report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex: codex-2, 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
             && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · Not paired" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
-            && Formatting.TrayTooltip(new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = new string('x', 200) + "@example.com", Windows = { new QuotaWindow { Key = "seven_day", UsedPercent = 1 } } } } }).Length <= 127;
+            && Formatting.TrayTooltip(new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", Email = new string('x', 200) + "@example.com", Windows = { new QuotaWindow { Key = "seven_day", UsedPercent = 1 } } } } }).Length <= 127;
         report.Checks["value_easing_never_overshoots"] = Motion.NeverOvershoots(Motion.Out) && Motion.NeverOvershoots(Motion.InOut) && !Motion.NeverOvershoots(Motion.Spring);
         report.Checks["severity_ramp_matches_dashboard"] = Theme.Severity(79.99) == "calm" && Theme.Severity(80) == "warn" && Theme.Severity(95) == "crit" && Theme.Severity(100) == "crit" && Theme.Severity(100.01) == "over" && Theme.Severity(null) == "na" && Theme.Severity(double.NaN) == "na";
         var dot = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
@@ -530,7 +524,7 @@ public static partial class Checks
             report.Checks["reset_pending_text_names_the_reset_and_no_number"] = forms[0] == Formatting.ResetAt(resetAt) + " · new reading pending" && forms[0].StartsWith("Reset at ", StringComparison.Ordinal)
                 && forms.All(form => !form.Contains('%')) && Formatting.ResetPendingLong(resetAt).EndsWith(" · new reading pending", StringComparison.Ordinal);
             report.Notes["reset_pending_text"] = forms[0];
-            var codex = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", SampledAt = "2026-10-02T10:00:00Z", Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080, ResetAt = past } } } } };
+            var codex = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", Email = "codex-2@example.com", SampledAt = "2026-10-02T10:00:00Z", Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080, ResetAt = past } } } } };
             var pendingTip = Formatting.TrayTooltip(codex);
             codex.Accounts[0].SampledAt = "2026-10-02T11:30:00Z";
             report.Checks["tray_tooltip_hides_weekly_percent_after_its_reset"] = pendingTip == "AI Account Center · Codex: codex-2, weekly reset, new reading pending" && Formatting.TrayTooltip(codex) == "AI Account Center · Codex: codex-2, 90.75% weekly left";
@@ -1041,6 +1035,74 @@ public static partial class Checks
         var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
         var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
         return $"http://127.0.0.1:{port}";
+    }
+
+    private static void AntigravityServiceChecks(CheckReport report)
+    {
+        const string cli = "In T3 (Antigravity CLI)";
+        var keys = new[] { "gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly" };
+        var cliKeys = keys.Select(key => "cli-" + key).ToArray();
+        var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+        try
+        {
+            window.UseFixtureConnection();
+            foreach (var scenario in new[] { "cli_only_rows", "cli_unavailable", "legacy_app_only" })
+            {
+                var legacy = scenario == "legacy_app_only";
+                var unavailable = scenario == "cli_unavailable";
+                var account = new DashboardAccount { Id = "fixture", Provider = "antigravity", Status = "ok" };
+                for (var i = 0; i < keys.Length; i++)
+                    account.Windows.Add(new() { Key = keys[i], Label = legacy ? keys[i] : $"{keys[i]} · In the Antigravity app", UsedPercent = 60 + i });
+                if (!legacy)
+                    for (var i = 0; i < cliKeys.Length; i++)
+                        account.Windows.Add(new()
+                        {
+                            Key = cliKeys[i], Label = $"{keys[i]} · {cli}",
+                            Status = unavailable ? "unavailable" : null, UsedPercent = unavailable ? null : 20 + i,
+                        });
+
+                window.ApplyDashboardSample(new AccountDashboard { Accounts = { account } });
+                var section = FixtureRender.FindUid(window.ContentPanel, "section:antigravity");
+                if (section is System.Windows.FrameworkElement element)
+                {
+                    element.Measure(new System.Windows.Size(730, double.PositiveInfinity));
+                    element.Arrange(new System.Windows.Rect(0, 0, 730, element.DesiredSize.Height));
+                }
+                var controls = Walk(window.ContentPanel).ToArray();
+                var meters = controls.OfType<Meter>().Where(meter => meter.Kind == MeterKind.Compact).ToArray();
+                window.ToggleDetailsForCheck(account.Id);
+                var details = Walk(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Detail).ToArray();
+                var detailText = Walk(window.ContentPanel).OfType<System.Windows.Controls.TextBlock>().Select(block => block.Text).ToArray();
+                window.ToggleDetailsForCheck(account.Id);
+                report.Checks["antigravity_" + scenario] = !window.IsStale
+                    && controls.OfType<System.Windows.Controls.TextBlock>().Any(block => block.Text == cli)
+                    && !detailText.Any(label => label.Contains("In the Antigravity app", StringComparison.Ordinal))
+                    && meters.Select(meter => meter.Key).SequenceEqual(cliKeys.Select(key => "fixture|" + key))
+                    && meters.All(meter => !meter.ValueClipped)
+                    && (legacy ? details.Length == 0 && detailText.Contains("Unavailable")
+                        : details.Select(meter => meter.Key).SequenceEqual(cliKeys.Select(key => "detail:fixture|" + key)))
+                    && (legacy || unavailable
+                        ? meters.Concat(details).All(meter => meter is { Target: null, DrawnUnavailable: true, ValueShown: "Unavailable" })
+                        : meters.Select(meter => meter.Target).SequenceEqual(new double?[] { 20, 21, 22, 23 }));
+            }
+
+            var retired = JsonSerializer.Deserialize<AccountDashboard>("""
+                {"accounts":[{"id":"codex:old","provider":"codex","isActive":true},
+                 {"id":"antigravity:old","provider":"antigravity","isActive":true},
+                 {"id":"antigravity:other","provider":"antigravity","isActive":false}],
+                 "codexAutoSwitch":{"enabled":true},"antigravityAutoSwitch":{"enabled":true}}
+                """, Formatting.Json)!;
+            window.ApplyDashboardSample(retired);
+            window.ToggleDetailsForCheck("codex:old");
+            window.ToggleDetailsForCheck("antigravity:old");
+            var switching = Walk(window.ContentPanel).ToArray();
+            report.Checks["retired_account_switching_ui_is_absent"] = !window.IsStale
+                && FixtureRender.FindUid(window.ContentPanel, "row:codex:old") is not null
+                && FixtureRender.FindUid(window.ContentPanel, "row:antigravity:old") is not null
+                && !switching.Any(element => element is ToggleSwitch
+                    || element.Uid is "mutation:activate" or "active-label" or "section-meta" or "slot-ring");
+        }
+        finally { window.AllowClose = true; window.Close(); }
     }
 
     private static IEnumerable<System.Windows.FrameworkElement> Walk(System.Windows.DependencyObject parent)
