@@ -160,10 +160,11 @@ mod tests {
 
     #[test]
     fn migration_verifies_resumes_and_leaves_unrelated_history_alone() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().expect("fixture home");
         let root = home.path();
         let store = root.join("store");
-        let engine = aac_store::ops::open_engine(&store.to_string_lossy(), None, None).unwrap();
+        let engine = aac_store::ops::open_engine(&store.to_string_lossy(), None, None)
+            .expect("open fixture store");
         let files = [
             (
                 "account-analytics/quota-history-v1.json",
@@ -186,11 +187,12 @@ mod tests {
         ];
         for (name, bytes) in files {
             let path = root.join(name);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, bytes).unwrap();
+            fs::create_dir_all(path.parent().expect("fixture parent"))
+                .expect("create fixture directory");
+            fs::write(path, bytes).expect("write legacy fixture");
         }
         let other = root.join("cache/another-writer.tmp");
-        fs::write(&other, b"keep").unwrap();
+        fs::write(&other, b"keep").expect("write unrelated fixture");
         let mut seen = 0;
         assert!(
             migrate(&engine, root, || {
@@ -205,43 +207,56 @@ mod tests {
         );
         assert!(!root.join(files[0].0).exists());
         assert!(root.join(files[1].0).exists());
-        assert!(engine.get_meta(MARKER).unwrap().is_none());
-        run(&engine, root).unwrap();
+        assert!(
+            engine
+                .get_meta(MARKER)
+                .expect("read migration marker")
+                .is_none()
+        );
+        run(&engine, root).expect("migrate legacy fixtures");
         for (name, bytes) in files {
             assert!(!root.join(name).exists());
             assert_eq!(
                 analytics_cache::archived(&engine, &format!("legacy/{name}"))
-                    .unwrap()
+                    .expect("read archived fixture")
                     .as_deref(),
                 Some(bytes)
             );
         }
-        assert_eq!(fs::read(&other).unwrap(), b"keep");
+        assert_eq!(fs::read(&other).expect("read unrelated fixture"), b"keep");
         assert!(migrate(&engine, root, || panic!("already migrated")).is_ok());
     }
 
     #[test]
     fn migration_preserves_rows_and_capture_can_remove_archived_folders() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().expect("fixture home");
         let root = home.path();
-        let engine =
-            aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None).unwrap();
+        let engine = aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None)
+            .expect("open fixture store");
         let name = "cache/analytics-remote-v1/mac.json";
         let path = root.join(name);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::create_dir_all(path.parent().expect("fixture parent"))
+            .expect("create fixture directory");
         fs::write(
             &path,
             br#"{"fingerprints":{},"rows":[{"i":17}],"sessions":{"one":{"cwd":"/private"}}}"#,
         )
-        .unwrap();
-        run(&engine, root).unwrap();
+        .expect("write fixture record");
+        run(&engine, root).expect("migrate legacy fixtures");
         assert!(!path.exists());
-        assert_eq!(analytics_cache::clear_remote_folders(&engine).unwrap(), 1);
-        assert_eq!(analytics_cache::clear_remote_folders(&engine).unwrap(), 0);
+        assert_eq!(
+            analytics_cache::clear_remote_folders(&engine).expect("clear archived working folders"),
+            1
+        );
+        assert_eq!(
+            analytics_cache::clear_remote_folders(&engine).expect("clear archived working folders"),
+            0
+        );
         let bytes = analytics_cache::archived(&engine, &format!("legacy/{name}"))
-            .unwrap()
-            .unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            .expect("read archived cache")
+            .expect("archived cache exists");
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("decode archived cache");
         assert_eq!(value["rows"][0]["i"], 17);
         assert_eq!(value["sessions"]["one"]["cwd"], serde_json::Value::Null);
     }

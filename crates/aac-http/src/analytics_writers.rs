@@ -456,6 +456,7 @@ async fn activity_pass(
     let pricing = ResolverPricing::new(ccs_dir);
     let mut remote: Vec<Value> = Vec::new();
     let mut states: Vec<Value> = Vec::new();
+    let mut checkpoints = Vec::new();
     let preferences = crate::account_reads::preferences(ccs_dir);
     let kinds = aac_providers::scanner_kinds()
         .map(str::to_owned)
@@ -483,7 +484,7 @@ async fn activity_pass(
         if generic {
             states.push(json!({ "tool": "jsonl", "host": host, "state": "no_reader" }));
         }
-        let mut args = scan_request(
+        let args = scan_request(
             &kinds,
             cutoff,
             extra_roots,
@@ -493,28 +494,9 @@ async fn activity_pass(
                 .as_ref(),
         );
         let settled_before = activity::settled_before(engine, host).unwrap_or_default();
-        args["fingerprints"] = json!(cache.fingerprints);
-        args["fingerprints"]["_store"] = json!({ "settledBefore": settled_before });
-        let mut batches = Vec::new();
-        if args.to_string().len() <= 8 * 1024 * 1024 {
-            batches.push((kinds.clone(), args));
-        } else {
-            let fingerprints = std::mem::take(&mut args["fingerprints"]);
-            for kind in &kinds {
-                let mut one = args.clone();
-                one["kinds"] = json!([kind]);
-                one["fingerprints"] = json!({
-                    (kind): fingerprints[kind],
-                    "_store": fingerprints["_store"],
-                });
-                if one.to_string().len() > 8 * 1024 * 1024
-                    && let Some(map) = one["fingerprints"].as_object_mut()
-                {
-                    map.remove(kind);
-                }
-                batches.push((vec![kind.clone()], one));
-            }
-        }
+        let batches = scan_state::requests(args, &kinds, &cache.fingerprints, &settled_before);
+        let mut scanned = false;
+        let start_state = states.len();
         for (batch, args) in batches {
             let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
             let mut answer = if computer.agent_available {
@@ -541,6 +523,7 @@ async fn activity_pass(
             }
             match answer {
                 Ok(answer) if valid_scan_answer(&answer, &batch) => {
+                    scanned = true;
                     for kind in &batch {
                         let (mut state, mut cause) = scan_state(&answer, kind);
                         if overflow.contains(kind.as_str())
@@ -596,17 +579,36 @@ async fn activity_pass(
                 _ => states.extend(failed_scan_states(host, &batch, false)),
             }
         }
-        if let Err(error) = cache.save(engine, host) {
-            tracing::warn!(
-                code = error.code,
-                "Analytics scanner state could not be saved"
-            );
+        if scanned {
+            match cache.encode() {
+                Ok(bytes) => checkpoints.push((format!("live/scanner/{host}"), bytes)),
+                Err(error) => {
+                    tracing::warn!(
+                        code = error.code,
+                        "Analytics scanner state could not be saved"
+                    );
+                    for source in &mut states[start_state..] {
+                        if matches!(source["state"].as_str(), Some("ok" | "no_usage")) {
+                            source["state"] = json!("unreadable");
+                            source["cause"] = json!("source_limit");
+                        }
+                    }
+                }
+            }
         }
     }
     // Shape and ingest under the lock; a superseding generation drops this pass's writes.
     let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
     if generation != guard.generation {
         return;
+    }
+    for (key, bytes) in checkpoints {
+        if let Err(error) = aac_store::analytics_cache::put(engine, &key, &bytes) {
+            tracing::warn!(
+                code = error.code,
+                "Analytics scanner state could not be saved"
+            );
+        }
     }
     let local: HashMap<String, Vec<Value>> = HashMap::new();
     let local_complete: HashSet<String> = HashSet::new();
@@ -844,7 +846,7 @@ mod tests {
         .expect("fixture rollout");
         let store =
             aac_store::ops::open_engine(&ccs.path().join("store").to_string_lossy(), None, None)
-                .unwrap();
+                .expect("open fixture store");
         let snapshot = experiment_roots::run_slice(&store, home.path(), 1);
         let roots = snapshot.scanner_roots();
         let kinds = aac_providers::scanner_kinds()

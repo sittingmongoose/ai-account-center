@@ -508,7 +508,7 @@ mod tests {
         let ccs = tempfile::tempdir().expect("fixture CCS_HOME");
         let store =
             aac_store::ops::open_engine(&ccs.path().join("store").to_string_lossy(), None, None)
-                .unwrap();
+                .expect("open fixture store");
         let base = home.path().join("PM-Experiments");
         let claude = r#"{"type":"assistant","sessionId":"fixture","version":"1","cwd":"/fixture"}"#;
         for folder in [
@@ -550,7 +550,11 @@ mod tests {
             "the first round is still discovering"
         );
         assert_eq!(first.roots[&Kind::Claude], [base.join("claude")]);
-        assert!(analytics_cache::get(&store, DISCOVERY).unwrap().is_some());
+        assert!(
+            analytics_cache::get(&store, DISCOVERY)
+                .expect("read discovery checkpoint")
+                .is_some()
+        );
         let finished = slice(&store, home.path(), 2, 100, deadline());
         assert!(!finished.scanning);
         assert_eq!(finished.roots[&Kind::Claude], [base.join("claude")]);
