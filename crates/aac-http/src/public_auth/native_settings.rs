@@ -354,23 +354,23 @@ pub(super) fn owners() -> Owners {
 /// `readAccountRefreshSettings`: the documented default answers an absent, linked, special,
 /// oversized or unparsable file; only a valid stored interval is published.
 fn settings_read(root: &Path) -> Value {
-    let default = json!({"refreshIntervalSeconds": 60});
-    let Some((file, policy)) = registered::file(root, "account-refresh-settings") else {
-        return default;
-    };
-    let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
-        return default;
-    };
-    let Ok(value) = crate::json_object::from_slice::<Value>(&bytes, &["refreshIntervalSeconds"])
-    else {
-        return default;
-    };
-    value
-        .get("refreshIntervalSeconds")
-        .and_then(Value::as_i64)
-        .filter(|seconds| (30..=3600).contains(seconds))
-        .map(|seconds| json!({"refreshIntervalSeconds": seconds}))
-        .unwrap_or(default)
+    json!({"refreshIntervalSeconds": refresh_interval_seconds(root)})
+}
+
+/// Read the interval with the same admission and default as the Settings endpoint.
+pub(crate) fn refresh_interval_seconds(root: &Path) -> u64 {
+    fn read(root: &Path) -> Option<u64> {
+        let (file, policy) = registered::file(root, "account-refresh-settings")?;
+        let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
+            return None;
+        };
+        let value =
+            crate::json_object::from_slice::<Value>(&bytes, &["refreshIntervalSeconds"]).ok()?;
+        value["refreshIntervalSeconds"]
+            .as_u64()
+            .filter(|seconds| (30..=3600).contains(seconds))
+    }
+    read(root).unwrap_or(60)
 }
 
 enum SettingsError {

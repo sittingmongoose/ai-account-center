@@ -1,43 +1,9 @@
-import { execFile } from 'child_process';
-import * as path from 'path';
-import { getCcsDir } from '../../utils/config-manager';
-import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-markdown';
-import {
-  configuredUsageHosts,
-  localUsageHost,
-  localUsagePython,
-  signinHelperBundle,
-  usageHelperCommand,
-} from './usage-failover-transport';
-import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
-import {
-  agentTransport,
-  agentVerbs,
-  runSignInAgent,
-  collectSignInWithFallback,
-} from './agent-verbs';
-import { pollRustSignIns, projectRustSignIns } from '../rust-service-transport';
-import {
-  readClaudeSignInRenewal,
-  type ClaudeSignInRenewal,
-  type ClaudeSignInRenewalRow,
-} from './claude-signin-renewal';
-
-/**
- * Sign-in expiry health for every Claude OAuth login on the machines AAC
- * collects from. The collector (scripts/account-usage/signin_expiry.py) reads
- * only the two OAuth times and token presence from each config dir — token
- * values are never read or transported. Remote machines run the collector
- * from an in-memory stdin bundle, so nothing is ever installed on their
- * disks; the hosts are the same configured ones every other usage transport
- * uses. Results are cached for at most five minutes, never past a published
- * deadline: a stamp that crosses after collection drops the cache on read
- * (deadlines under the 30 s floor age out with the floor), while stamps
- * already past at collection are facts about the past and keep the cache.
- * One collection pass only: a row whose deadline crossed while its hosts
- * were still collecting is downgraded to unavailable in that same pass, so
- * the whole fetch always settles inside the publisher's slot.
- */
+// Pure TypeScript reference for the native sign-in projection fixture.
+import type { SnapshotSignInProfile } from '../../../src/web-server/agent-usage/agent-usage-markdown';
+import type {
+  ClaudeSignInRenewal,
+  ClaudeSignInRenewalRow,
+} from '../../../src/web-server/services/claude-signin-renewal';
 
 export interface SignInProfile extends SnapshotSignInProfile {
   /** The machine this report came from; present on every published row. */
@@ -128,40 +94,8 @@ export function mergeRenewal(
   return merged;
 }
 
-/** The collected report with the runner's rows merged in, on a copy: the cached report is never changed. */
-export async function withRenewal(
-  health: SignInHealth,
-  readRenewal: () => Promise<ClaudeSignInRenewal | null> = () => readClaudeSignInRenewal()
-): Promise<SignInHealth> {
-  const renewal = await readRenewal().catch(() => null);
-  if (!renewal) return health;
-  const now = Date.now();
-  if (agentVerbs() === 'on' && agentTransport() === 'on') {
-    const projection = await projectRustSignIns(getCcsDir(), {
-      machines: health.machines,
-      renewal,
-      now,
-    });
-    if (validMachineRows(projection?.machines))
-      return { ...health, machines: projection.machines, renewal };
-  }
-  return { ...health, machines: mergeRenewal(health.machines, renewal, now), renewal };
-}
-
-function validMachineRows(value: unknown): value is Record<string, SignInProfile[]> {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    Object.values(value).every(Array.isArray)
-  );
-}
-
 const CACHE_MIN_MS = 30_000;
 const CACHE_MAX_MS = 5 * 60 * 1000;
-/** Each host's collection settles inside this; the publisher's slot is longer. */
-const HOST_LIMIT_MS = 45_000;
-const COLLECTOR = 'signin_expiry.py';
 /** Accepted as-is; anything else is sanitized to a safe bounded identifier. */
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
 /** The non-secret Codex auth.json field names an unsupported row may list:
@@ -194,79 +128,6 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u206
  * arrives through JSON. UTF-8 output (the snapshot markdown) would
  * replace it with U+FFFD, silently retargeting a published path. */
 const UNPAIRED_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
-
-/** The only failure words ever published for a failed collection. Raw
- * stderr names routing details (the resolved hostname or address behind
- * an ssh alias, the remote user), so it is classified, never quoted. */
-export function collectorFailureWord(stderr: string): string {
-  const text = stderr.toLowerCase();
-  if (text.includes('timed out') || text.includes('timeout')) return 'collection timed out';
-  if (text.includes('connection refused')) return 'connection refused';
-  if (text.includes('permission denied')) return 'machine sign-in refused';
-  if (
-    text.includes('could not resolve') ||
-    text.includes('no such host') ||
-    text.includes('name or service not known') ||
-    text.includes('no route to host') ||
-    text.includes('network is unreachable') ||
-    text.includes('connection reset') ||
-    text.includes('host is down')
-  )
-    return 'host unreachable';
-  return 'collector failed';
-}
-
-const FAILURE_WORDS = new Set([
-  'collection timed out',
-  'connection refused',
-  'machine sign-in refused',
-  'host unreachable',
-  'collector failed',
-  'no profiles reported',
-]);
-
-/** The publication boundary for every rejection, setup failures included:
- * a bundle read or process spawn can throw errors quoting absolute paths
- * or the ssh target, so only the fixed words above ever publish. */
-export function publishableFailureReason(reason: unknown): string {
-  return typeof reason === 'string' && FAILURE_WORDS.has(reason) ? reason : 'collector failed';
-}
-
-async function runCollector(
-  command: string,
-  args: string[],
-  timeoutMs: number,
-  input?: string
-): Promise<string> {
-  const program = await sshLaunch(command, args);
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      program,
-      args,
-      {
-        timeout: timeoutMs,
-        maxBuffer: 1024 * 1024,
-        env: command === 'ssh' ? sshEnvironment() : process.env,
-      },
-      (error, stdout, stderr) => {
-        if (error && stdout.length === 0) {
-          reject(new Error(collectorFailureWord(stderr ?? '')));
-          return;
-        }
-        resolve(stdout);
-      }
-    );
-    child.on('error', () => {
-      /* handled through the empty-stdout branch above */
-    });
-    if (input !== undefined) {
-      child.stdin?.on('error', () => {
-        /* ssh exit is handled without remote text */
-      });
-      child.stdin?.end(input);
-    }
-  });
-}
 
 /** A safe bounded identifier: an unreadable name never deletes the row. */
 export function sanitizeName(raw: unknown): string {
@@ -398,57 +259,6 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
   return profile;
 }
 
-function unavailableHost(machine: string, error: string): SignInProfile[] {
-  return [
-    {
-      name: machine,
-      provider: 'claude',
-      platform: machine,
-      machine,
-      state: 'unavailable',
-      fixCommand: '',
-      error: error.replace(/\s+/g, ' ').trim().slice(0, 120),
-    },
-  ];
-}
-
-async function collectLocal(referenceOnly: boolean): Promise<string> {
-  return collectSignInWithFallback(
-    () => (referenceOnly ? Promise.resolve(null) : runSignInAgent(localUsageHost())),
-    async () => {
-      // The packaged helper, resolved from this module like the sibling usage
-      // transports, run by this host's own installed python when it has one,
-      // scoped to the dashboard's configured CCS directory (CCS_HOME and
-      // --config-dir installs keep their saved-instance homes and venv).
-      const helper = path.resolve(__dirname, '../../../scripts/account-usage', COLLECTOR);
-      const ccsDir = getCcsDir();
-      return runCollector(localUsagePython({ ccsDir }), [helper, '--ccs-dir', ccsDir], 20_000);
-    }
-  );
-}
-
-type UsageHostEntry = Awaited<ReturnType<typeof configuredUsageHosts>>[number];
-
-async function collectRemote(host: UsageHostEntry, referenceOnly: boolean): Promise<string> {
-  return collectSignInWithFallback(
-    () => (referenceOnly ? Promise.resolve(null) : runSignInAgent(host)),
-    async () => {
-      // The collector runs from an in-memory stdin bundle: helper source never
-      // lands on the remote disk, and a clean host reports instead of failing.
-      const bundle = await signinHelperBundle();
-      return runCollector(
-        'ssh',
-        await sshArgv(host.sshHost as string, usageHelperCommand(host.platform), {
-          interval: 5,
-          countMax: 1,
-        }),
-        30_000,
-        JSON.stringify({ request: {}, helperSource: bundle })
-      );
-    }
-  );
-}
-
 export function parseRows(stdout: string, machine: string): SignInProfile[] {
   try {
     const value = JSON.parse(stdout);
@@ -486,25 +296,6 @@ export function parseRows(stdout: string, machine: string): SignInProfile[] {
   return [];
 }
 
-interface CacheEntry {
-  /** When collection started: only deadlines crossing after this moment
-   * invalidate the cache — stamps already past at collection are facts
-   * about the past (an idle login's expired access token, a logged-out
-   * row's end), not news, and must not force a recollection every read. */
-  collectedAt: number;
-  until: number;
-  health: Promise<SignInHealth>;
-}
-
-let cache: CacheEntry | null = null;
-
-/** Whether one stamp of a live row has crossed by `now`. Access and
- * refresh stamps count only inside (since, now]: already past at
- * collection they are facts the row's state already accounts for. The
- * known login end is different: a live row whose end is already past
- * here cannot be a live future fact under any clock, so a remote whose
- * clock runs behind still counts as crossed — and the same holds for
- * a past refresh end when the row names no login end at all. */
 function stampCrossed(value: string | null | undefined, since: number, now: number): boolean {
   if (!value) return false;
   const at = Date.parse(value);
@@ -537,19 +328,6 @@ export function deadlineCrossedForRow(
   );
 }
 
-export function hasPassedDeadline(health: SignInHealth, since: number, now: number): boolean {
-  for (const rows of Object.values(health.machines)) {
-    for (const row of rows) {
-      // Only a live state's claim can be falsified by a crossing, exactly
-      // as in downgradeCrossedRows: a terminal row's crossed end was
-      // already observed as terminal and must not force a recollection.
-      if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') continue;
-      if (deadlineCrossedForRow(row, since, now)) return true;
-    }
-  }
-  return false;
-}
-
 /** The earliest future state deadline across a report, or null. */
 export function nextDeadlineAt(health: SignInHealth, nowMs: number): number | null {
   let earliest: number | null = null;
@@ -575,113 +353,6 @@ export function cacheTtlFor(health: SignInHealth, nowMs: number): number {
   return Math.max(CACHE_MIN_MS, Math.min(CACHE_MAX_MS, deadline - nowMs));
 }
 
-export function getSignInHealth(
-  readRenewal?: () => Promise<ClaudeSignInRenewal | null>
-): Promise<SignInHealth> {
-  return collectedSignInHealth().then((health) => withRenewal(health, readRenewal));
-}
-
-function collectedSignInHealth(): Promise<SignInHealth> {
-  const now = Date.now();
-  if (cache && now < cache.until) {
-    // A deadline that crossed after collection — including one that passed
-    // while its own collection was still running — drops the cache on read.
-    const entry = cache;
-    return entry.health.then((value) => {
-      if (!hasPassedDeadline(value, entry.collectedAt, Date.now())) return value;
-      // Concurrent waiters share one recollection: only the waiter that
-      // still owns the cache slot replaces it; the rest join the fresh one.
-      if (cache !== entry) return cache ? cache.health : refresh();
-      cache = null;
-      return refresh();
-    });
-  }
-  return refresh();
-}
-
-/** The native per-host poll, when the agent transport and verbs are on. */
-async function pollNativeHosts(hosts: UsageHostEntry[]): Promise<{
-  machines: Record<string, SignInProfile[]>;
-  referenceHosts: string[];
-} | null> {
-  if (agentVerbs() !== 'on' || agentTransport() !== 'on') return null;
-  const value = (await pollRustSignIns(getCcsDir(), hosts)) as {
-    machines?: unknown;
-    referenceHosts?: unknown;
-  } | null;
-  if (
-    !validMachineRows(value?.machines) ||
-    !Array.isArray(value?.referenceHosts) ||
-    !value.referenceHosts.every((host) => hosts.some((entry) => entry.host === host))
-  )
-    return null;
-  return { machines: value.machines, referenceHosts: value.referenceHosts };
-}
-
-/** One collection pass. Hosts race their own settlement deadline, so a
- * single wedged machine cannot hold allSettled past the publisher's slot
- * and wipe successful machines' rows with it. */
-async function collectOnce(): Promise<SignInHealth> {
-  const machines: Record<string, SignInProfile[]> = {};
-  const hosts = await configuredUsageHosts();
-  const deadline = Date.now() + HOST_LIMIT_MS;
-  const native = await pollNativeHosts(hosts);
-  const results = await Promise.allSettled(
-    hosts.map((host) => {
-      const rows = native?.machines[host.host];
-      if (rows?.length) return Promise.resolve(rows);
-      const referenceOnly = native?.referenceHosts.includes(host.host) ?? false;
-      const runner = host.sshHost
-        ? collectRemote(host, referenceOnly)
-        : collectLocal(referenceOnly);
-      return new Promise<string | SignInProfile[]>((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error('collection timed out')),
-          Math.max(0, deadline - Date.now())
-        );
-        timer.unref?.();
-        runner.then(
-          (value) => {
-            clearTimeout(timer);
-            resolve(value);
-          },
-          (error) => {
-            clearTimeout(timer);
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-        );
-      });
-    })
-  );
-  hosts.forEach((host, index) => {
-    const result = results[index];
-    if (result.status === 'fulfilled') {
-      const rows =
-        typeof result.value === 'string' ? parseRows(result.value, host.host) : result.value;
-      if (rows.length > 0) {
-        machines[host.host] = rows;
-        return;
-      }
-    }
-    // Every rejection passes the allowlist boundary: a setup failure (the
-    // bundle read, a spawn error) can quote absolute paths or the ssh
-    // target, so its text never reaches the published error either.
-    const reason =
-      result.status === 'rejected'
-        ? publishableFailureReason(
-            result.reason instanceof Error ? result.reason.message : result.reason
-          )
-        : 'no profiles reported';
-    machines[host.host] = unavailableHost(host.host, reason);
-  });
-  if (!machines.ubuntu) {
-    // A dashboard hosted on the Mac or Windows collects no Ubuntu route:
-    // the machine names itself rather than silently disappearing.
-    machines.ubuntu = unavailableHost('ubuntu', 'no collection route from this host');
-  }
-  return { generatedAt: new Date().toISOString(), machines };
-}
-
 /** Rows whose state may already be stale: a live state's deadline that
  * crossed while collection was running. Terminal and unreadable rows make
  * no claim a crossing can falsify, so they stand as collected. */
@@ -704,57 +375,4 @@ export function downgradeCrossedRows(health: SignInHealth, since: number, now: n
     }
   }
   return downgraded;
-}
-
-function refresh(): Promise<SignInHealth> {
-  const now = Date.now();
-  const entry: CacheEntry = {
-    collectedAt: now,
-    until: now + CACHE_MAX_MS,
-    health: undefined as unknown as Promise<SignInHealth>,
-  };
-  entry.health = (async (): Promise<SignInHealth> => {
-    let value: SignInHealth;
-    try {
-      // One pass, always inside the publisher's slot: rows a deadline
-      // crossed mid-collection are downgraded in place, never recollected
-      // here, and the short floor below lets the next sample recheck them.
-      value = await collectOnce();
-    } catch (error) {
-      // A collection that could not even resolve its hosts is a failed
-      // collection, not an empty success: the rejection reaches the
-      // snapshot publisher, which publishes its named collection-
-      // failed row. Swallowing it into an empty map would silently
-      // drop the whole sign-in section. The retry waits only the floor.
-      entry.until = Date.now() + CACHE_MIN_MS;
-      throw error;
-    }
-    const settledAt = Date.now();
-    if (agentVerbs() === 'on' && agentTransport() === 'on') {
-      const projected = await projectRustSignIns(getCcsDir(), {
-        machines: value.machines,
-        collectedAt: entry.collectedAt,
-        now: settledAt,
-      });
-      if (
-        validMachineRows(projected?.machines) &&
-        typeof projected?.ttlMs === 'number' &&
-        Number.isSafeInteger(projected.ttlMs) &&
-        projected.ttlMs >= CACHE_MIN_MS &&
-        projected.ttlMs <= CACHE_MAX_MS
-      ) {
-        entry.until = settledAt + projected.ttlMs;
-        return { ...value, machines: projected.machines };
-      }
-    }
-    const downgraded = downgradeCrossedRows(value, entry.collectedAt, settledAt);
-    entry.until = settledAt + (downgraded ? CACHE_MIN_MS : cacheTtlFor(value, settledAt));
-    return value;
-  })();
-  cache = entry;
-  return entry.health;
-}
-
-export function invalidateSignInHealthCache(): void {
-  cache = null;
 }

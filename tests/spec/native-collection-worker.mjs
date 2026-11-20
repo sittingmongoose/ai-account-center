@@ -12,7 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const launcher = process.env.AAC_M6_TARGET_CLI;
 assert(launcher && path.isAbsolute(launcher), 'set AAC_M6_TARGET_CLI to a native build');
 const snapshot = process.argv.includes('--snapshot');
-if (snapshot) assert.equal(process.platform, 'win32', 'the share writer is retained on Windows');
+const disabled = process.argv.includes('--collection-off');
+assert(!(snapshot && disabled), 'select one collection fixture');
 const source =
   process.env.AAC_TEST_WORKER_SOURCE ?? fileURLToPath(new URL('../..', import.meta.url));
 const base = await mkdtemp(path.join(os.tmpdir(), 'aac-native-worker-'));
@@ -98,38 +99,6 @@ try {
       state.fetchedAt = Date.now();
       return [];
     };
-    if (${snapshot}) {
-      const read = globalThis.fetch;
-      globalThis.fetch = async (url, options) => {
-        const response = await read(url, options);
-        if (!response.ok || !String(url).endsWith('/sample')) return response;
-        const generation = await response.json();
-        for (const row of generation.accounts.filter((entry) => entry.id === ${JSON.stringify(id)})) {
-          const usedPercent = row.label === 'Before' ? 20 : 35;
-          row.status = 'ok';
-          row.sampledAt = new Date(generation.sampledAt).toISOString();
-          row.windows = [{
-            key: 'five-hour', label: '5 hours', kind: 'rate_limit', usedPercent,
-            remainingPercent: 100 - usedPercent, windowMinutes: 300, resetAt: null,
-            used: null, limit: null, unit: null,
-          }];
-        }
-        return Response.json(generation);
-      };
-    }
-    // Exercise the real snapshot writer without running remote sign-in probes.
-    Bun.plugin({ name: 'fixture-sign-in', setup(build) {
-      build.onLoad({ filter: /signin-health-service\\.ts$/ }, async ({path}) => {
-        const original = await Bun.file(path).text();
-        return {
-          loader: 'ts',
-          contents: original.replace(
-            'return collectedSignInHealth().then((health) => withRenewal(health, readRenewal));',
-            'return Promise.resolve({machines:{},errors:{},fetchedAt:new Date().toISOString()});'
-          ),
-        };
-      });
-    } });
     await import(${JSON.stringify(module('sidecar.ts'))});
   `
   );
@@ -166,7 +135,7 @@ try {
         AAC_RUST_CUT_NATIVE_ROUTES: 'off',
         AAC_RUST_HOME_VIEW: 'off',
         AAC_RUST_GROUP_HOME: 'on',
-        AAC_RUST_GROUP_COLLECTION: 'on',
+        AAC_RUST_GROUP_COLLECTION: disabled ? 'off' : 'on',
         AAC_RUST_GROUP_APP_UPDATES: 'off',
         AAC_STATUS_DOORBELL: 'off',
         AAC_STORE_SHARE_BACKUP_DIR: 'off',
@@ -194,7 +163,37 @@ try {
   });
   assert.equal(login.status, 200);
   const cookie = login.headers.get('set-cookie').split(';')[0];
-  if (snapshot) {
+  if (disabled) {
+    const dashboardPath = '/api/accounts/dashboard';
+    const headers = { cookie, origin, 'content-type': 'application/json' };
+    const read = await send(dashboardPath, { headers });
+    assert.equal(read.status, 503);
+    assert.equal(read.headers.get('cache-control'), 'no-store');
+    const unavailable = {
+      error: 'Account usage collection is unavailable.',
+      code: 'collection_unavailable',
+    };
+    assert.deepEqual(await read.json(), unavailable);
+    const head = await send(dashboardPath, { method: 'HEAD', headers });
+    assert.equal(head.status, 503);
+    assert.equal(await head.text(), '');
+    const badQuery = await send(dashboardPath + '?platform=unknown', { headers });
+    assert.equal(badQuery.status, 400);
+    const recheck = (body, requestHeaders = headers) =>
+      send('/api/accounts/' + id + '/recheck', {
+        method: 'POST',
+        headers: requestHeaders,
+        body,
+      });
+    const checked = await recheck('{}');
+    assert.equal(checked.status, 503);
+    assert.equal(checked.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await checked.json(), unavailable);
+    assert.equal((await recheck('[]')).status, 400);
+    assert.equal((await recheck('{}', { cookie, 'content-type': 'application/json' })).status, 403);
+    assert.equal(await readFile(calls, 'utf8'), '');
+    console.log('Disabled collection: 6 HTTP checks passed with the worker present.');
+  } else if (snapshot) {
     const file = path.join(share, 'usage.json');
     const native = await send('/api/accounts/dashboard', { headers: { cookie } });
     assert.equal(native.status, 200);
@@ -209,21 +208,21 @@ try {
     await registry('After');
     const second = await sample('After');
     assert(Date.parse(second.generatedAt) > Date.parse(first.generatedAt));
-    const history = await readJson(path.join(root, 'account-analytics', 'quota-history-v1.json'));
-    assert.deepEqual(
-      history.records
-        .filter((row) => row.accountId === id)
-        .map((row) => row.windows[0].usedPercent),
-      [20, 35],
-      'both native generations must be recorded in local quota history'
-    );
+    for (const generation of [first, second]) {
+      const row = generation.accounts.find((account) => account.id === id);
+      assert(row, 'the native account identity reaches the share');
+      assert(
+        !row.windows.some((window) => typeof window.usedPercent === 'number'),
+        'a missing credential must never become a usage measurement'
+      );
+    }
     assert(await readJson(path.join(share, 'history.json')));
     assert.equal(
       await readFile(calls, 'utf8'),
       '',
       'snapshot publication must not collect in the worker'
     );
-    console.log('Windows usage share: 1 scenario passed (two native generations).');
+    console.log('Native usage share: 1 scenario passed (two native generations).');
   } else {
     const routes = [
       '/api/views/home?platform=mac',

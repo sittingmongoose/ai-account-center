@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { handleUsageSnapshotCommand } from '../../../src/commands/usage-snapshot-command';
-import { readSnapshotSettings } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import { readSnapshotSettings } from '../../../src/web-server/agent-usage/agent-usage-settings';
 
 let home = '';
 let saved: Record<'CCS_HOME' | 'CCS_DIR', string | undefined> = {

@@ -1830,7 +1830,6 @@ async fn serve_inner(
     let package_root = crate::agent_transport::package_root();
     let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(
         boot.ccs_dir.clone(),
-        package_root.clone().unwrap_or_else(|| boot.ccs_dir.clone()),
         store.clone(),
     ));
     let claude_open = claude_open_package.map(|package| {
@@ -2079,10 +2078,8 @@ async fn serve_inner(
                             if let (Some(owner), Some((writer, signins))) = (owner, share)
                                 && let Some(payload) =
                                     owner.private_share_sample(&cache, signins).await
-                                && let Ok(bytes) = serde_json::to_vec(&payload)
-                                && bytes.len() <= crate::usage_snapshot::USAGE_SAMPLE_CAP
                             {
-                                let _ = writer.accept(axum::body::Bytes::from(bytes));
+                                writer.accept_native(payload);
                             }
                         }
                     },

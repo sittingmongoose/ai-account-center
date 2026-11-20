@@ -16,7 +16,7 @@ mod native_group;
 pub(crate) mod native_owners;
 #[cfg(unix)]
 mod native_reads;
-mod native_settings;
+pub(crate) mod native_settings;
 mod owner_host;
 mod policy;
 mod profile_routes;
@@ -543,8 +543,8 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    let owner_host = (enabled || cut)
-        .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
+    let owner_host =
+        (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
         let worker_directory = snapshot
@@ -560,6 +560,10 @@ pub(crate) async fn run_public_at(
         .as_ref()
         .and_then(|worker| worker.collection.as_ref())
     {
+        #[cfg(windows)]
+        if let Some(host) = &owner_host {
+            feed.set_store(host);
+        }
         #[cfg(unix)]
         if let Some(link) = adopted.clone() {
             feed.set_adopted(link);

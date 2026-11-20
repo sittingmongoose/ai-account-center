@@ -1,10 +1,6 @@
-//! G18 wiring: the front door pushes each finished analytics sample to
-//! `POST /internal/usage-snapshot/sample`; the service runs the `aac-snapshot` publisher with
-//! real file effects. The publish pass runs on its own blocking task, never holding a read
-//! permit, so a stalled share holds one write and never the dashboard (the TS publisher's
-//! rule). Sign-in rows, the renewal summary and the rollup files arrive pre-fetched in the
-//! payload until G5/G10 and the store handoff land; the publisher's deadline recheck, atomic
-//! writes, staleness and once-an-hour rollups are all the ported TS behaviour.
+//! The native usage share publisher used by the active collection owner.
+//! The blocking task keeps slow share writes outside the request and collection pools.
+//! The hosted store supplies history, burn and rollups when it is available.
 
 use aac_snapshot::client::{
     client_source_folder, computer_registry_file, runner_source_folder, sync_snapshot_client,
@@ -12,13 +8,15 @@ use aac_snapshot::client::{
 use aac_snapshot::publisher::{Deps, SnapshotPublisher};
 use aac_snapshot::settings::validate_settings;
 use aac_snapshot::snapshot::{LongBurnEntry, LongBurnSpan, SampleEvent};
+#[cfg(unix)]
 use aac_views::decline::Decline;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
 /// The sample payload cap: the quota history alone is bounded at 32 MiB, plus accounts and facts.
 pub(crate) const USAGE_SAMPLE_CAP: usize = 40 * 1024 * 1024;
 
@@ -37,7 +35,7 @@ pub(crate) struct UsageSnapshot {
     /// The boot root, for the saved snapshot setting (the active-sample guard).
     ccs_dir: PathBuf,
     /// The hosted store, whose own reads answer the history, long burn and rollups.
-    store: Option<Arc<crate::store_host::StoreHost>>,
+    store: OnceLock<Arc<crate::store_host::StoreHost>>,
 }
 
 fn now_ms() -> i64 {
@@ -57,7 +55,12 @@ fn hostname() -> String {
             return trimmed.to_owned();
         }
     }
-    std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned())
+    std::env::var(if cfg!(windows) {
+        "COMPUTERNAME"
+    } else {
+        "HOSTNAME"
+    })
+    .unwrap_or_else(|_| "unknown".to_owned())
 }
 
 fn span(value: &Value) -> LongBurnSpan {
@@ -71,16 +74,12 @@ fn span(value: &Value) -> LongBurnSpan {
 
 impl UsageSnapshot {
     /// Build the publisher with the service's real file effects under the boot root.
-    pub(crate) fn new(
-        ccs_dir: PathBuf,
-        package_root: PathBuf,
-        store: Option<Arc<crate::store_host::StoreHost>>,
-    ) -> Self {
+    pub(crate) fn new(ccs_dir: PathBuf, store: Option<Arc<crate::store_host::StoreHost>>) -> Self {
         let boot_root = ccs_dir.clone();
         let facts: Arc<Mutex<Option<Facts>>> = Arc::new(Mutex::new(None));
         let settings_root = ccs_dir.clone();
         let refresh_root = ccs_dir.clone();
-        let client_root = package_root.clone();
+        let client_root = crate::agent_transport::package_root().unwrap_or_else(|| ccs_dir.clone());
         let sign_in_facts = Arc::clone(&facts);
         let renewal_facts = Arc::clone(&facts);
         let rollup_facts = Arc::clone(&facts);
@@ -135,20 +134,37 @@ impl UsageSnapshot {
             publisher: Arc::new(SnapshotPublisher::new(deps)),
             facts,
             ccs_dir: boot_root,
-            store,
+            store: store.map(OnceLock::from).unwrap_or_default(),
         }
+    }
+
+    /// Bind the Windows publisher to the boot's existing store when publication first needs it.
+    #[cfg(windows)]
+    pub(crate) fn attach_store(&self, store: Arc<crate::store_host::StoreHost>) {
+        let _ = self.store.set(store);
     }
 
     /// Accept one pushed sample onto its own blocking task: parse, note its readings, then
     /// publish. Returns at once; neither the parse nor the share write holds the socket or a
     /// read permit, so a stalled share holds one write and never the dashboard.
+    #[cfg(unix)]
     pub(crate) fn accept(&self, bytes: axum::body::Bytes) -> Result<Value, Decline> {
+        self.queue(move || serde_json::from_slice::<Value>(&bytes).map_err(|_| ()));
+        Ok(json!({ "accepted": true }))
+    }
+
+    /// Publish a completed generation assembled by the collector in this process.
+    pub(crate) fn accept_native(&self, payload: Value) {
+        self.queue(move || Ok(payload));
+    }
+
+    fn queue(&self, payload: impl FnOnce() -> Result<Value, ()> + Send + 'static) {
         let publisher = Arc::clone(&self.publisher);
         let facts_slot = Arc::clone(&self.facts);
-        let store = self.store.clone();
+        let store = self.store.get().cloned();
         let boot_root = self.ccs_dir.clone();
         tokio::task::spawn_blocking(move || {
-            let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else {
+            let Ok(payload) = payload() else {
                 tracing::warn!(target: "aac_http", event = "agent_usage_snapshot.sample_unparsable", "A pushed usage sample could not be parsed");
                 return;
             };
@@ -190,7 +206,6 @@ impl UsageSnapshot {
                 *facts_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
         });
-        Ok(json!({ "accepted": true }))
     }
 }
 
@@ -317,8 +332,5 @@ fn read_settings(root: &Path) -> Option<aac_snapshot::SnapshotSettings> {
 
 /// The dashboard refresh interval, defaulting to 60 seconds as the TS reader does.
 fn read_refresh_seconds(root: &Path) -> f64 {
-    match crate::unix::read_settings(root) {
-        Ok(settings) => settings.refresh_interval_seconds as f64,
-        Err(_) => 60.0,
-    }
+    crate::public_auth::native_settings::refresh_interval_seconds(root) as f64
 }

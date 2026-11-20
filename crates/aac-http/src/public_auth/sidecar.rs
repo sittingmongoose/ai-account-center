@@ -57,7 +57,7 @@ impl Sidecar {
             .filter(|file| file.is_absolute() && file.is_file())
             .ok_or_else(|| io::Error::other("the packaged dashboard sidecar is missing"))?;
         let proof = storage::hex(&storage::random::<32>().map_err(|_| invalid())?);
-        let collection = if native_collection {
+        let collection = if native_collection || cfg!(windows) {
             Some(CollectionFeed::start(&proof).await?)
         } else {
             None
@@ -91,7 +91,7 @@ impl Sidecar {
                 "AAC_CUT_PUBLIC_COLLECTION",
                 if native_collection { "1" } else { "0" },
             )
-            .env_remove("AAC_CUT_WORKER_COLLECTION")
+            .env("AAC_CUT_WORKER_COLLECTION", "0")
             .env("AAC_RUST_COMPOSE", "1")
             .env("AAC_RUST_SERVICE", "on")
             .env("AAC_RUST_SERVICE_BINARY", binary)

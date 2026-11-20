@@ -18,7 +18,7 @@ import {
   goldenSignIn,
   goldenSignInRenewal,
 } from '../../../tests/unit/web-server/agent-usage-golden/fixture';
-import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-files';
 import { renderSnapshotMarkdown } from '../../../src/web-server/agent-usage/agent-usage-markdown';
 import { RecentReadings } from '../../../src/web-server/agent-usage/agent-usage-history';
 import { accountAnalyticsIdentity } from '../../../src/web-server/services/account-analytics-history';

@@ -24,7 +24,7 @@ import {
   type AacStore,
   type StoreReportCapture,
 } from '../../store/store-service';
-import { buildSnapshotFiles } from '../agent-usage/agent-usage-snapshot';
+import { buildSnapshotFiles } from '../agent-usage/agent-usage-files';
 import { RecentReadings } from '../agent-usage/agent-usage-history';
 import {
   onAccountAnalyticsSample,

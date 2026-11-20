@@ -399,13 +399,13 @@
       "src/store/usage-observations.ts:account.status",
       "src/store/usage-observations.ts:safe.status",
       "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/agent-usage/agent-usage-files.ts:account.status",
       "src/web-server/agent-usage/agent-usage-history.ts:row.status",
       "src/web-server/agent-usage/agent-usage-history.ts:window.status",
       "src/web-server/agent-usage/agent-usage-markdown.ts:account.status",
       "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
       "src/web-server/agent-usage/agent-usage-projection.ts:account.status",
       "src/web-server/agent-usage/agent-usage-projection.ts:window.status",
-      "src/web-server/agent-usage/agent-usage-snapshot.ts:account.status",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-compose.ts:account.status",
@@ -781,11 +781,7 @@
     "cause": null,
     "sources": [
       "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
-      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
-      "src/web-server/agent-usage/agent-usage-snapshot.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:state",
-      "src/web-server/services/signin-health-service.ts:states"
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state"
     ]
   },
   {
@@ -1396,7 +1392,6 @@
       "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-service.ts:result.status",
       "src/web-server/services/analytics-writer-feeds.ts:r.status",
-      "src/web-server/services/signin-health-service.ts:result.status",
       "src/web-server/usage-hub/usage-hub-accounts.ts:result.status"
     ]
   },
@@ -2062,10 +2057,7 @@
       "scripts/claude-signin/claude_signin.py:row['state']",
       "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
       "src/web-server/agent-usage/agent-usage-markdown.ts:state",
-      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
-      "src/web-server/services/signin-health-service.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:state",
-      "src/web-server/services/signin-health-service.ts:states"
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES"
     ]
   },
   {
@@ -2511,9 +2503,7 @@
     "sources": [
       "scripts/claude-signin/claude_signin.py:row.get('state')",
       "scripts/claude-signin/claude_signin.py:row['state']",
-      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
-      "src/web-server/services/signin-health-service.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:state"
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES"
     ]
   },
   {
@@ -2825,14 +2815,13 @@
       "src/store/activity-reports.ts:state",
       "src/store/usage-observations.ts:account.status",
       "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/agent-usage/agent-usage-files.ts:account.status",
       "src/web-server/agent-usage/agent-usage-history.ts:row.status",
       "src/web-server/agent-usage/agent-usage-markdown.ts:account.status",
       "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
       "src/web-server/agent-usage/agent-usage-markdown.ts:state",
       "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
       "src/web-server/agent-usage/agent-usage-settings.ts:read.state",
-      "src/web-server/agent-usage/agent-usage-snapshot.ts:account.status",
-      "src/web-server/agent-usage/agent-usage-snapshot.ts:row.state",
       "src/web-server/middleware/dashboard-session-store.ts:read.state",
       "src/web-server/routes/account-visibility-routes.ts:current.state",
       "src/web-server/routes/bar-routes.ts:status",
@@ -2907,9 +2896,6 @@
       "src/web-server/services/opencode-console-wallet-service.ts:this.result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:value.status",
       "src/web-server/services/private-json-store.ts:state",
-      "src/web-server/services/signin-health-service.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:state",
-      "src/web-server/services/signin-health-service.ts:states",
       "src/web-server/services/usage-failover-contract.ts:reading.status",
       "src/web-server/services/usage-failover-contract.ts:status",
       "src/web-server/services/usage-failover-contract.ts:value.status",
@@ -3700,8 +3686,6 @@
     "sources": [
       "src/web-server/services/account-analytics-activity.ts:result.status",
       "src/web-server/services/account-analytics-activity.ts:status",
-      "src/web-server/services/signin-health-service.ts:reason",
-      "src/web-server/services/signin-health-service.ts:result.status",
       "src/web-server/services/signin-jobs.ts:state",
       "src/web-server/services/signin-output.ts:SignInOutputState",
       "src/web-server/services/signin-output.ts:this.state"
@@ -4789,7 +4773,6 @@
       "src/web-server/scoreboard/catalog.ts:state",
       "src/web-server/scoreboard/runs-reader.ts:state",
       "src/web-server/scoreboard/runs-store.ts:state",
-      "src/web-server/services/signin-health-service.ts:state",
       "src/web-server/status/agent-reports-reader.ts:state",
       "src/web-server/status/card-schema.ts:state",
       "src/web-server/status/quota-report.ts:state",
@@ -4883,6 +4866,7 @@
     "cause": null,
     "sources": [
       "src/antigravity/ubuntu-runtime-bridge.ts:typeof value.restartState",
+      "src/store/store-host-client.ts:typeof failure?.error",
       "src/web-server/rust-profile-input.ts:typeof value.state",
       "src/web-server/services/additional-account-service.ts:museTransientFailure",
       "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
@@ -4902,8 +4886,6 @@
       "src/web-server/services/cursor-account-reader.ts:typeof value.cause",
       "src/web-server/services/dashboard-device-records.ts:revokedReason",
       "src/web-server/services/dashboard-device-records.ts:typeof record.revokedReason",
-      "src/web-server/services/signin-health-service.ts:typeof reason",
-      "src/web-server/services/signin-health-service.ts:typeof row.state",
       "src/web-server/services/usage-failover-cache.ts:typeof record.primaryFailure",
       "src/web-server/services/usage-failover-service.ts:typeof value.primaryFailure",
       "src/web-server/status/status-docs.ts:reason",
@@ -5321,7 +5303,6 @@
       "src/web-server/agent-usage/agent-usage-markdown.ts:state",
       "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
       "src/web-server/agent-usage/agent-usage-projection.ts:status",
-      "src/web-server/agent-usage/agent-usage-snapshot.ts:state",
       "src/web-server/routes/account-visibility-routes.ts:body.state",
       "src/web-server/routes/account-visibility-routes.ts:state",
       "src/web-server/routes/store-routes.ts:state",
@@ -5357,9 +5338,6 @@
       "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:status",
-      "src/web-server/services/signin-health-service.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:state",
-      "src/web-server/services/signin-health-service.ts:states",
       "src/web-server/services/signin-session-agent.ts:reason",
       "src/web-server/services/usage-failover-antigravity.ts:status",
       "src/web-server/services/usage-failover-codex.ts:status",
@@ -5651,8 +5629,6 @@
       "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
       "src/web-server/agent-usage/agent-usage-markdown.ts:state",
       "src/web-server/services/account-dashboard-types.ts:quotaStatus",
-      "src/web-server/services/signin-health-service.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:states",
       "src/web-server/usage/native-quota-collector.ts:quotaStatus",
       "src/web-server/usage/native-quota-collector.ts:state.cachedRow.quotaStatus"
     ]
@@ -5857,11 +5833,7 @@
     "cause": null,
     "sources": [
       "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
-      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
-      "src/web-server/agent-usage/agent-usage-snapshot.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:row.state",
-      "src/web-server/services/signin-health-service.ts:state",
-      "src/web-server/services/signin-health-service.ts:states"
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state"
     ]
   },
   {

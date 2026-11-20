@@ -1038,7 +1038,12 @@ export function startAccountAnalyticsSampling(
     return;
   }
   if (!nativeCollection && !workerReadsNative()) singleton().start();
-  if (process.platform === 'win32' && nativeCollection && workerReadsNative()) {
+  if (
+    process.platform === 'win32' &&
+    nativeCollection &&
+    workerReadsNative() &&
+    process.env.AAC_CUT_PUBLIC_COLLECTION === '1'
+  ) {
     stopNativeSamples ??= startNativeSamples();
   }
   // Usage history is collected in the background too, so it grows while no page is open.

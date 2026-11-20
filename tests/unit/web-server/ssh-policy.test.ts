@@ -43,15 +43,10 @@ import {
   runClaudeHistoryHelper,
 } from '../../../src/web-server/services/claude-desktop-transport';
 import { runClaudeHostOverSsh } from '../../../src/web-server/services/claude-host-transport';
-import { SSH_ALIASES, helperPlatform } from '../../../src/web-server/services/dashboard-hosts';
+import { SSH_ALIASES } from '../../../src/web-server/services/dashboard-hosts';
 import { MuseAccountLifecycle } from '../../../src/web-server/services/muse-account-lifecycle';
 import { OpenCodeConsoleWalletService } from '../../../src/web-server/services/opencode-console-wallet-service';
 import {
-  getSignInHealth,
-  invalidateSignInHealthCache,
-} from '../../../src/web-server/services/signin-health-service';
-import {
-  configuredUsageHosts,
   privateUsageInvocation,
   usageHelperCommand,
 } from '../../../src/web-server/services/usage-failover-transport';
@@ -148,7 +143,6 @@ beforeEach(() => {
 afterEach(() => {
   mock.restore();
   invalidateClaudeDesktopLiveUsageCache();
-  invalidateSignInHealthCache();
   if (previousEnv.CCS_HOME === undefined) delete process.env.CCS_HOME;
   else process.env.CCS_HOME = previousEnv.CCS_HOME;
   if (previousEnv.CCS_DIR === undefined) delete process.env.CCS_DIR;
@@ -388,28 +382,6 @@ describe('opencode-console-wallet-service', () => {
         keepalive(5, 1)
       )
     );
-  });
-});
-
-describe('signin-health-service', () => {
-  it('collects from every configured host with interval 5 / count 1', async () => {
-    const calls = captureExec(() => '{"schemaVersion":1,"profiles":[]}');
-    await getSignInHealth(async () => null);
-    const remote = sshCalls(calls);
-    // Every remote host this machine collects from: the machine running the test is local, not SSH (on Nas1 that
-    // drops nas1), so the expected set comes from the same host table, never a fixed count.
-    const hosts = (await configuredUsageHosts()).flatMap((entry) =>
-      entry.sshHost ? [[entry.host, entry.sshHost] as [keyof typeof SSH_ALIASES, string]] : []
-    );
-    expect(hosts.length).toBeGreaterThan(0);
-    expect(remote).toHaveLength(hosts.length);
-    for (const [host, alias] of hosts) {
-      const call = remote.find((candidate) => candidate.args.includes(alias));
-      expect(call).toBeDefined();
-      expect(call!.args).toEqual(
-        await expectedArgv(alias, usageHelperCommand(helperPlatform(host)), keepalive(5, 1))
-      );
-    }
   });
 });
 

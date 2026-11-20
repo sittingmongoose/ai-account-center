@@ -482,11 +482,29 @@ try {
           served = endpoint;
           // The route inventory stores the pattern; capture supplies this query explicitly.
           if (/accounts\/(dashboard|analytics)$/.test(endpoint)) endpoint += '?fixture=invalid';
-          const response = await send(rust.url, endpoint, {
+          const requestOptions = {
             method: request.method === 'ALL' ? 'POST' : request.method,
             headers,
             body: request.body === undefined ? undefined : JSON.stringify(request.body),
-          });
+          };
+          let response = await send(rust.url, endpoint, requestOptions);
+          // The recorded Nas1 bar row contains the first completed machine and pin sample.
+          // Wait for that generation and then compare the entire response as usual.
+          const pinned = (expectedBody as { pinned?: { machineProblems?: unknown[] } } | null)
+            ?.pinned;
+          if (nativeRoute === '/api/status' && pinned?.machineProblems && response.status === 200) {
+            const deadline = Date.now() + 6000;
+            while (
+              (await response.clone().json()).pinned?.unavailable ===
+                'the pinned threads have not been read yet' &&
+              Date.now() < deadline
+            ) {
+              await response.arrayBuffer();
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              response = await send(rust.url, endpoint, requestOptions);
+              if (response.status !== 200) break;
+            }
+          }
           status = response.status;
           const text = await response.text();
           try {

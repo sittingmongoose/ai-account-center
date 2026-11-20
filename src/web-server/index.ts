@@ -57,8 +57,7 @@ import {
   startAccountLifecycleMaintenance,
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
-import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
-import { rustAnalyticsWritersOn, rustGroupOn } from './rust-service-groups';
+import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
 import {
   closeAacStore,
   onStoreHostFallback,
@@ -68,8 +67,6 @@ import {
 } from '../store/store-service';
 import { startScoreboardService } from './scoreboard/scoreboard-service';
 import { setStatusRustService, startStatusService } from './status/status-service';
-import { getSignInHealth } from './services/signin-health-service';
-import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
 import { createUsageHubRouter } from './usage-hub/usage-hub-router';
 import { startProcessBroker, stopProcessBroker } from '../utils/managed-process';
@@ -332,7 +329,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   };
   server.on('upgrade', onUpgrade);
   let httpsServer: https.Server | null = null;
-  let stopAgentUsageSnapshot: (() => void) | null = null;
   let stopStoreMaintenance: (() => void) | null = null;
   let stopStoreHostJobsWatch: (() => void) | null = null;
   let stopStoreFallbackWatch: (() => void) | null = null;
@@ -369,8 +365,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     detachRustEvents?.();
     stopAccountLifecycleMaintenance();
     stopAccountAnalyticsSampling();
-    stopAgentUsageSnapshot?.();
-    stopAgentUsageSnapshot = null;
     stopStoreMaintenance?.();
     stopStoreMaintenance = null;
     stopStoreHostJobsWatch?.();
@@ -423,34 +417,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // Only a build that is actually serving becomes the one installers must keep.
       if (!options.sidecar && recordRunningBuild(getCcsDir(), packagedBuild) > 0)
         logger.warn('web.deployed_build.unrecorded', 'Running build could not be recorded');
-      // Agent usage snapshot (off until a folder is set): written after every analytics sample.
-      // G18: with the service on, groups.usageSnapshot on and the native writers owning the
-      // sample, the service triggers its own publication (the native owner's sample carries the
-      // accounts; the service's store answers history, burn and rollups). Every other
-      // composition keeps the TypeScript publisher.
-      stopAgentUsageSnapshot =
-        process.platform !== 'win32' &&
-        rustService.mode === 'on' &&
-        rustGroupOn('usageSnapshot') &&
-        rustAnalyticsWritersOn()
-          ? null
-          : startAgentUsageSnapshot({
-              signIn: async () => {
-                const health = await getSignInHealth();
-                return Object.values(health.machines).flat();
-              },
-              signInRenewal: async () => {
-                const renewal = await readClaudeSignInRenewal();
-                return renewal
-                  ? {
-                      runner: renewal.runner,
-                      generatedAt: renewal.generatedAt,
-                      stale: renewal.stale,
-                      needsYou: renewal.needsYou,
-                    }
-                  : null;
-              },
-            });
       // The history store (docs/store.md): opened before the first sample, which waits for it;
       // without the native module the dashboard runs as before, without stored history.
       // R3: while the service hosts the store, its jobs run there; this loop starts only
@@ -482,10 +448,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       stopStatusService = startStatusService();
       // Scoreboard catalog seeds (runs are read on demand).
       startScoreboardService();
-      startAccountAnalyticsSampling(
-        rustService,
-        options.sidecar === true && process.env.AAC_CUT_PUBLIC_COLLECTION === '1'
-      );
+      startAccountAnalyticsSampling(rustService, options.sidecar === true);
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
       if (
         !rustService.lifecycleInPrivate &&

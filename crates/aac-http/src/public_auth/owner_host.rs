@@ -210,7 +210,7 @@ impl OwnerHost {
     /// Start the platform's public owners (the same `NativeOwners` the direct call site used).
     /// The host is then the one place that owns them and their jobs.
     pub(super) fn start_public(
-        &self,
+        self: &std::sync::Arc<Self>,
         groups: native_owners::Groups,
         hub: HubCache,
         events: DashboardEvents,
@@ -222,6 +222,8 @@ impl OwnerHost {
             hub,
             events,
             worker_directory,
+            #[cfg(windows)]
+            std::sync::Arc::downgrade(self),
         )?;
         *self.public.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(PublicOwners { native, jobs });

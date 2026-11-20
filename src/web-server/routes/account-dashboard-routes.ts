@@ -48,8 +48,7 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
       // providers[].signIn constrains flows carrying a key or code to secure transport.
       const secureTransport = isSecureTransport(req);
       const context = { secureTransport };
-      const service =
-        process.env.AAC_CUT_WORKER_COLLECTION === '1' ? null : dashboardCollectionService(res);
+      const service = dashboardCollectionService(res);
       if (service && (!deps.getDashboard || deps.readDashboard)) {
         if (process.env.AAC_RUST_CUT_WORKER === '1' && process.platform !== 'win32') {
           const result = await service.fedView(
