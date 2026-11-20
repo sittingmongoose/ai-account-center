@@ -186,6 +186,81 @@ fn the_current_file_rotates_by_size_and_archives_are_pruned() {
     assert!(archive.join("ccs-big-b.jsonl").exists() && archive.join("ccs-big-c.jsonl").exists());
 }
 
+/// A 10 MiB archive with the given age, so three distinct rotations fit the 32 MiB cap.
+fn archive_file(archive: &Path, name: &str, age: Duration) -> std::path::PathBuf {
+    fs::create_dir_all(archive).unwrap();
+    let path = archive.join(name);
+    fs::write(&path, vec![b'z'; 10 * 1024 * 1024]).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::now() - age)
+        .unwrap();
+    path
+}
+
+/// Leave `current.jsonl` linked from the archive, as a stop between link and unlink does.
+fn interrupted_rotation(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let logs = dir.join("logs");
+    let archive = logs.join("archive");
+    fs::create_dir_all(&archive).unwrap();
+    let current = logs.join("current.jsonl");
+    fs::write(&current, vec![b'x'; 10 * 1024 * 1024]).unwrap();
+    let linked = archive.join("ccs-interrupted.jsonl");
+    fs::hard_link(&current, &linked).unwrap();
+    (current, linked)
+}
+
+#[test]
+fn an_interrupted_rotation_is_finished_before_the_next_append() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.yaml"),
+        "version: 10\nlogging:\n  rotate_mb: 10\n",
+    )
+    .unwrap();
+    let archive = dir.path().join("logs/archive");
+    let first = archive_file(&archive, "ccs-big-a.jsonl", Duration::from_secs(2 * 3600));
+    let second = archive_file(&archive, "ccs-big-b.jsonl", Duration::from_secs(3600));
+    let (current, linked) = interrupted_rotation(dir.path());
+    let log = Log::new(dir.path().to_path_buf());
+
+    write(&log, Level::Info, "after interrupted rotation");
+
+    // The archive keeps the old bytes; the still-full current file is not rotated again.
+    assert_eq!(fs::read_dir(&archive).unwrap().count(), 3);
+    assert!(first.exists() && second.exists() && linked.exists());
+    assert_eq!(lines(&current).len(), 1);
+    assert_eq!(lines(&current)[0]["message"], "after interrupted rotation");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert!(fs::metadata(&linked).unwrap().nlink() == 1);
+    }
+}
+
+#[test]
+fn prune_finishes_an_interrupted_rotation_without_waiting_for_an_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.yaml"),
+        "version: 10\nlogging:\n  rotate_mb: 10\n",
+    )
+    .unwrap();
+    let archive = dir.path().join("logs/archive");
+    let first = archive_file(&archive, "ccs-big-a.jsonl", Duration::from_secs(2 * 3600));
+    let second = archive_file(&archive, "ccs-big-b.jsonl", Duration::from_secs(3600));
+    let (current, linked) = interrupted_rotation(dir.path());
+    let log = Log::new(dir.path().to_path_buf());
+
+    log.prune(&log.config());
+
+    assert!(!current.exists(), "the interrupted rotation is finished");
+    assert_eq!(fs::read_dir(&archive).unwrap().count(), 3);
+    assert!(first.exists() && second.exists() && linked.exists());
+}
+
 #[test]
 fn rotation_and_append_wait_for_another_log_writer() {
     let dir = tempfile::tempdir().unwrap();

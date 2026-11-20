@@ -38,7 +38,44 @@ function logWriter(): FileLease {
   }
 }
 
+/**
+ * Finish a rotation that linked the current file into the archive and then stopped before
+ * the unlink. The archive keeps the bytes; prune must not charge the inode per name.
+ */
+function finishInterruptedRotation(): void {
+  const currentLogPath = getCurrentLogPath();
+  let stats: fs.Stats;
+  try {
+    stats = fs.lstatSync(currentLogPath);
+  } catch {
+    return;
+  }
+  if (!stats.isFile() || stats.nlink < 2) return;
+  const archiveDir = getLogArchiveDir();
+  let names: string[];
+  try {
+    names = fs.readdirSync(archiveDir);
+  } catch {
+    return;
+  }
+  const archived = names.some((name) => {
+    try {
+      const linked = fs.lstatSync(path.join(archiveDir, name));
+      return linked.isFile() && linked.dev === stats.dev && linked.ino === stats.ino;
+    } catch {
+      return false;
+    }
+  });
+  if (!archived) return;
+  try {
+    fs.unlinkSync(currentLogPath);
+  } catch {
+    /* The next writer retries the same check. */
+  }
+}
+
 function rotateCurrentLogIfNeeded(): void {
+  finishInterruptedRotation();
   const config = getResolvedLoggingConfig();
   const currentLogPath = getCurrentLogPath();
 
@@ -87,6 +124,9 @@ export function pruneExpiredLogArchives(): void {
 }
 
 function pruneLocked(): void {
+  // A crash mid-rotation leaves the current file linked from the archive; finish that
+  // rotation before measuring the archive, so this inode is charged once.
+  finishInterruptedRotation();
   const config = getResolvedLoggingConfig();
   const archiveDir = getLogArchiveDir();
   if (!fs.existsSync(archiveDir)) {
@@ -94,7 +134,14 @@ function pruneLocked(): void {
   }
 
   const cutoffMs = Date.now() - config.retain_days * ONE_DAY_MS;
-  const archives: { file: string; size: number; mtime: number }[] = [];
+  const archives: {
+    file: string;
+    size: number;
+    mtime: number;
+    dev: number;
+    ino: number;
+    nlink: number;
+  }[] = [];
   for (const entry of fs.readdirSync(archiveDir)) {
     const archivePath = path.join(archiveDir, entry);
     try {
@@ -104,15 +151,36 @@ function pruneLocked(): void {
       }
       if (stats.mtimeMs < cutoffMs) {
         fs.unlinkSync(archivePath);
-      } else archives.push({ file: archivePath, size: stats.size, mtime: stats.mtimeMs });
+      } else {
+        archives.push({
+          file: archivePath,
+          size: stats.size,
+          mtime: stats.mtimeMs,
+          dev: stats.dev,
+          ino: stats.ino,
+          nlink: stats.nlink,
+        });
+      }
     } catch {
       continue;
     }
   }
-  let bytes = archives.reduce((sum, item) => sum + item.size, 0);
-  for (const archive of archives.sort(
-    (a, b) => a.mtime - b.mtime || a.file.localeCompare(b.file)
-  )) {
+  // A second name for an inode already counted is dropped, not charged again.
+  const charged: typeof archives = [];
+  for (const archive of archives) {
+    if (
+      archive.nlink > 1 &&
+      charged.some((seen) => seen.dev === archive.dev && seen.ino === archive.ino)
+    ) {
+      try {
+        fs.unlinkSync(archive.file);
+      } catch {
+        /* Retry next prune. */
+      }
+    } else charged.push(archive);
+  }
+  let bytes = charged.reduce((sum, item) => sum + item.size, 0);
+  for (const archive of charged.sort((a, b) => a.mtime - b.mtime || a.file.localeCompare(b.file))) {
     if (bytes <= LOG_ARCHIVE_BYTE_CAP) break;
     try {
       fs.unlinkSync(archive.file);

@@ -453,6 +453,7 @@ impl Log {
     }
 
     fn rotate_if_needed(&self, config: &LogConfig) {
+        self.finish_interrupted_rotation();
         let current = self.current();
         let Ok(meta) = fs::symlink_metadata(&current) else {
             return;
@@ -496,12 +497,40 @@ impl Log {
         self.prune_locked(config);
     }
 
+    /// A rotation publishes `current.jsonl` under an archive name and then unlinks the
+    /// original as a separate call. If the process stopped between them, one inode is still
+    /// visible under both names and pruning would charge its bytes twice. The caller holds
+    /// the writer lease, so unlink the original: the archive already keeps the data.
+    fn finish_interrupted_rotation(&self) {
+        let current = self.current();
+        let Ok(meta) = fs::symlink_metadata(&current) else {
+            return;
+        };
+        if !meta.is_file() || !multiply_linked(&meta) {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(self.archive_dir()) else {
+            return;
+        };
+        let archived = entries.flatten().any(|entry| {
+            fs::symlink_metadata(entry.path())
+                .is_ok_and(|linked| linked.is_file() && same_inode(&meta, &linked))
+        });
+        if archived {
+            let _ = fs::remove_file(&current);
+        }
+    }
+
     fn prune_locked(&self, config: &LogConfig) {
+        // A crash mid-rotation leaves `current.jsonl` linked from the archive; finish that
+        // rotation before measuring the archive, so this inode is charged once.
+        self.finish_interrupted_rotation();
         let Ok(entries) = fs::read_dir(self.archive_dir()) else {
             return;
         };
         let cutoff_ms = now_ms() as f64 - config.retain_days * ONE_DAY.as_millis() as f64;
         let mut kept: Vec<(PathBuf, u64, f64)> = Vec::new();
+        let mut charged: Vec<fs::Metadata> = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(meta) = fs::symlink_metadata(&path) else {
@@ -517,8 +546,15 @@ impl Log {
                 .map_or(0.0, |d| d.as_millis() as f64);
             if mtime < cutoff_ms {
                 let _ = fs::remove_file(&path);
+            } else if multiply_linked(&meta) && charged.iter().any(|seen| same_inode(seen, &meta)) {
+                // A second name for an inode already counted: drop the name, not the bytes.
+                let _ = fs::remove_file(&path);
             } else {
-                kept.push((path, meta.len(), mtime));
+                let size = meta.len();
+                kept.push((path, size, mtime));
+                if multiply_linked(&meta) {
+                    charged.push(meta);
+                }
             }
         }
         let mut bytes: u64 = kept.iter().map(|k| k.1).sum();
@@ -532,6 +568,33 @@ impl Log {
             }
         }
     }
+}
+
+/// Whether the inode behind `meta` has another name in this filesystem namespace.
+#[cfg(unix)]
+fn multiply_linked(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() > 1
+}
+
+#[cfg(not(unix))]
+fn multiply_linked(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    meta.number_of_links() > 1
+}
+
+#[cfg(unix)]
+fn same_inode(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_inode(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    left.creation_time() == right.creation_time()
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
 }
 
 fn private_dir(path: &Path) -> std::io::Result<()> {
