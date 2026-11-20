@@ -316,15 +316,15 @@ test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, th
 
 test('Antigravity is the same kind of section, with no live login until the native inventory names one', () => {
   const windows = [
-    window({ key: 'gemini-weekly', label: 'Gemini Models · Weekly', usedPercent: 0.0886 }),
+    window({ key: 'cli-gemini-weekly', label: 'Gemini Models · Weekly', usedPercent: 0.0886 }),
     window({
-      key: 'gemini-5h',
+      key: 'cli-gemini-5h',
       label: 'Gemini Models · 5-hour',
       windowMinutes: 300,
       usedPercent: 0,
     }),
-    window({ key: '3p-weekly', label: 'Claude and GPT models · Weekly' }),
-    window({ key: '3p-5h', label: 'Claude and GPT models · 5-hour', windowMinutes: 300 }),
+    window({ key: 'cli-3p-weekly', label: 'Claude and GPT models · Weekly' }),
+    window({ key: 'cli-3p-5h', label: 'Claude and GPT models · 5-hour', windowMinutes: 300 }),
   ];
   const ag = section(
     dashboardViewModel(
@@ -345,10 +345,9 @@ test('Antigravity is the same kind of section, with no live login until the nati
   assert.equal(ag.kind, 'accounts');
   assert.deepEqual(
     ag.columns.map((c) => c.label),
-    ['Gemini 5-hour, in T3 (Antigravity CLI)', 'Gemini weekly, in T3 (Antigravity CLI)', 'Claude and GPT 5-hour, in T3 (Antigravity CLI)', 'Claude and GPT weekly, in T3 (Antigravity CLI)', 'Gemini 5-hour, in the Antigravity app', 'Gemini weekly, in the Antigravity app', 'Claude and GPT 5-hour, in the Antigravity app', 'Claude and GPT weekly, in the Antigravity app']
+    ['Gemini 5-hour, in T3 (Antigravity CLI)', 'Gemini weekly, in T3 (Antigravity CLI)', 'Claude and GPT 5-hour, in T3 (Antigravity CLI)', 'Claude and GPT weekly, in T3 (Antigravity CLI)']
   );
-  assert.equal(ag.rows[0].cells[5].valueText, '0.09');
-  assert.equal(ag.rows[0].cells[1].naText, 'Unavailable');  // no T3 reading here: never zero
+  assert.equal(ag.rows[0].cells[1].valueText, '0.09');
   assert.equal(ag.rows[0].active, false);
   assert.equal('canActivate' in ag.rows[0], false);
   assert.equal('auto' in ag, false);
@@ -1264,10 +1263,10 @@ test('antigravity columns carry single-line short labels for the stacked 2x2 gri
         capabilities: {},
         antigravityPlan: { quotaPolicy: 'shared', thirdPartyModels: true },
         windows: [
-          agWindow('gemini-5h', 'Gemini Models · 5-hour', 300),
-          agWindow('gemini-weekly', 'Gemini Models · Weekly', 10080),
-          agWindow('3p-5h', 'Claude and GPT models · 5-hour', 300),
-          agWindow('3p-weekly', 'Claude and GPT models · Weekly', 10080),
+          agWindow('cli-gemini-5h', 'Gemini Models · 5-hour', 300),
+          agWindow('cli-gemini-weekly', 'Gemini Models · Weekly', 10080),
+          agWindow('cli-3p-5h', 'Claude and GPT models · 5-hour', 300),
+          agWindow('cli-3p-weekly', 'Claude and GPT models · Weekly', 10080),
         ],
       }),
     ]),
@@ -1276,12 +1275,12 @@ test('antigravity columns carry single-line short labels for the stacked 2x2 gri
   const columns = section(vm, 'antigravity').columns;
   assert.deepEqual(
     columns.map((col) => col.shortLabel),
-    ['T3 Gemini 5hr', 'T3 Gemini wk', 'T3 Claude GPT 5hr', 'T3 Claude GPT wk', 'App Gemini 5hr', 'App Gemini wk', 'App Claude GPT 5hr', 'App Claude GPT wk']
+    ['T3 Gemini 5hr', 'T3 Gemini wk', 'T3 Claude GPT 5hr', 'T3 Claude GPT wk']
   );
   // the full labels stay for the table heads and Details
   assert.deepEqual(
     columns.map((col) => col.label),
-    ['Gemini 5-hour, in T3 (Antigravity CLI)', 'Gemini weekly, in T3 (Antigravity CLI)', 'Claude and GPT 5-hour, in T3 (Antigravity CLI)', 'Claude and GPT weekly, in T3 (Antigravity CLI)', 'Gemini 5-hour, in the Antigravity app', 'Gemini weekly, in the Antigravity app', 'Claude and GPT 5-hour, in the Antigravity app', 'Claude and GPT weekly, in the Antigravity app']
+    ['Gemini 5-hour, in T3 (Antigravity CLI)', 'Gemini weekly, in T3 (Antigravity CLI)', 'Claude and GPT 5-hour, in T3 (Antigravity CLI)', 'Claude and GPT weekly, in T3 (Antigravity CLI)']
   );
 });
 
