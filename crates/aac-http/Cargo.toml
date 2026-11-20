@@ -30,6 +30,7 @@ aac-store.workspace = true
 aac-status.workspace = true
 aac-renewal.workspace = true
 aac-snapshot.workspace = true
+aac-usage = { path = "../../native/aac-usage" }
 base64 = "0.22"
 indexmap = "2.14.2"
 libc.workspace = true
@@ -67,7 +68,6 @@ tempfile.workspace = true
 
 [dev-dependencies]
 aac-renewal = { workspace = true, features = ["parity-fixtures"] }
-aac-usage = { path = "../../native/aac-usage" }
 rusqlite = "0.37"
 tokio-tungstenite = "0.29"
 
