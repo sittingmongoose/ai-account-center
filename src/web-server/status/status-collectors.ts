@@ -13,7 +13,7 @@ import {
  * - the pm-mail registry (threads that do not report yet);
  * - `browser-check slots --json` (browsers, recordings, GPU on every machine);
  * - `simlock status --json` (phone capacity and leases; never tokens);
- * - a machine reading (CPU, memory, system disk): the local computer from /proc and statfs, every
+ * - a machine reading (CPU, memory, the disk the home folder is on): the local computer from /proc and statfs, every
  *   other registered computer (Mac, Windows, Nas1, Alexis, Odroid, 1070ti) with one short read-only
  *   command over the dashboard's existing ssh aliases (the app-update hosts);
  * - the other computers' pinned T3 threads: one short read-only `sqlite3 -json`
@@ -755,7 +755,7 @@ export const REMOTE_MACHINES = Object.freeze(
   )
 ) as Readonly<Record<Exclude<MachineId, 'vm'>, HostOs>>;
 
-const LINUX_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk / | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
+const LINUX_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk "$HOME" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
 // Each memory source must succeed with one clean value: a failed or multi-line hw.memsize, or a
 // failed or self-conflicting memory_pressure, publishes no memory reading (never an invented one).
@@ -983,9 +983,12 @@ export async function readLocalMachine(
   let disk: MachineSample['disk'] = null;
   let diskError: string | undefined;
   try {
-    const stats = await (options.statfs ?? fs.promises.statfs)('/');
+    // The disk the home folder is on: agent work lives there, and on a split layout (the Odroid's
+    // eMMC system disk with /home on NVMe) the system disk's free space says nothing about it.
+    const home = os.homedir();
+    const stats = await (options.statfs ?? fs.promises.statfs)(home);
     disk = {
-      mount: '/',
+      mount: home,
       freeBytes: Number(stats.bavail) * Number(stats.bsize),
       totalBytes: Number(stats.blocks) * Number(stats.bsize),
     };
