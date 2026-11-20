@@ -7,7 +7,13 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ClaudeSignInRenewal } from '../../../src/web-server/services/claude-signin-renewal';
-import type { SignInHealth } from '../../../src/web-server/services/signin-health-service';
+import {
+  cacheTtlFor,
+  downgradeCrossedRows,
+  mergeRenewal,
+  parseRows,
+  type SignInHealth,
+} from './signin-reference';
 
 const fixture = JSON.parse(await Bun.stdin.text()) as {
   root: string;
@@ -26,12 +32,8 @@ Object.assign(process.env, {
 
 // The modules read CCS_DIR and the agent gates when they load, so the fixture environment is
 // assigned above before these imports; a static import would evaluate them first.
-const { registerRustAgentConnection, pollRustSignIns, projectRustSignIns } = await import(
-  '../../../src/web-server/rust-service-transport'
-);
-const { cacheTtlFor, downgradeCrossedRows, mergeRenewal, parseRows } = await import(
-  '../../../src/web-server/services/signin-health-service'
-);
+const { registerRustAgentConnection, pollRustSignIns, projectRustSignIns } =
+  await import('../../../src/web-server/rust-service-transport');
 
 const close = registerRustAgentConnection(
   fixture.root,

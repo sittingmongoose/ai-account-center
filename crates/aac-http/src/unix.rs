@@ -97,7 +97,7 @@ pub struct Boot {
     /// The private service owns lifecycle when it already owns the collection generation.
     #[serde(default)]
     pub native_lifecycle: bool,
-    /// The private collection producer triggers the existing G18 writer.
+    /// Legacy boot field retained for compatibility with the previous supervisor.
     #[serde(default)]
     pub native_usage_snapshot: bool,
     /// The public host started this private service without a worker.
@@ -1841,7 +1841,6 @@ async fn serve_inner(
     let package_root = crate::agent_transport::package_root();
     let usage = Arc::new(crate::usage_snapshot::UsageSnapshot::new(
         boot.ccs_dir.clone(),
-        package_root.clone().unwrap_or_else(|| boot.ccs_dir.clone()),
         store.clone(),
     ));
     let claude_open = claude_open_package.map(|package| {
@@ -2035,7 +2034,7 @@ async fn serve_inner(
     }
     let cancel = aac_transport::CancellationToken::new();
     let lifecycle_owner = state.0.lifecycle.clone();
-    let share = state.0.boot.native_usage_snapshot.then(|| {
+    let share = lifecycle_owner.as_ref().map(|_| {
         (
             Arc::clone(&state.0.usage),
             aac_renewal::claude::ClaudeSignInRenewalReader::new(
@@ -2079,10 +2078,8 @@ async fn serve_inner(
                             if let (Some(owner), Some((writer, signins))) = (owner, share)
                                 && let Some(payload) =
                                     owner.private_share_sample(&cache, signins).await
-                                && let Ok(bytes) = serde_json::to_vec(&payload)
-                                && bytes.len() <= crate::usage_snapshot::USAGE_SAMPLE_CAP
                             {
-                                let _ = writer.accept(axum::body::Bytes::from(bytes));
+                                writer.accept_native(payload);
                             }
                         }
                     },

@@ -108,6 +108,22 @@ pub(in crate::public_auth) fn admission(
     Ok(())
 }
 
+pub(super) async fn input(
+    access: &DashboardAccess,
+    raw_id: &str,
+    request: Request,
+) -> Result<(String, serde_json::Map<String, Value>), Reply> {
+    admission(access, &request)?;
+    let body = object_body(request, BODY_CAP)
+        .await
+        .ok_or_else(super::super::invalid_body)?;
+    let id = super::super::decode_component(raw_id).ok_or_else(invalid_id)?;
+    if !crate::account_reads::public_account_id(&Value::String(id.clone())) {
+        return Err(invalid_id());
+    }
+    Ok((id, body))
+}
+
 impl Usage {
     pub(super) async fn recheck(
         &self,
@@ -116,18 +132,10 @@ impl Usage {
         request: Request,
     ) -> Reply {
         use super::super::{error, invalid_body};
-        if let Err(reply) = admission(access, &request) {
-            return reply;
-        }
-        let Some(body) = object_body(request, BODY_CAP).await else {
-            return invalid_body();
+        let (id, body) = match input(access, raw_id, request).await {
+            Ok(input) => input,
+            Err(reply) => return reply,
         };
-        let Some(id) = super::super::decode_component(raw_id) else {
-            return invalid_id();
-        };
-        if !crate::account_reads::public_account_id(&Value::String(id.clone())) {
-            return invalid_id();
-        }
 
         if !sources::is_additional_account_id(&id) {
             return self.other_recheck(&id, body).await;

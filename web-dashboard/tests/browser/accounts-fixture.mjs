@@ -60,8 +60,8 @@ export function updateJob() {
 			let diagnostics;
 			if (appId === 'antigravity-cli' && host === 'nas1') {
 				status = 'failed'; message = 'The download stopped: connection reset.';
-				// What a helper now says about a failed row: its cause, what ran, the step times and the output's tail.
-				diagnostics = { cause: 'installer_failed', command: 'agy update', exitCode: 1, phases: { checking: 900, updating: 4200 }, tail: 'Error: connection reset by peer' };
+				// Include old saved fields to check that the page hides them.
+				diagnostics = { cause: 'installer_failed', tool: 'agy', command: 'agy update', exitCode: 1, phases: { checking: 900, updating: 4200 }, tail: 'Error: connection reset by peer' };
 			}
 			results.push({ platform: host, appId, appLabel, status, version, previousVersion, message, ...(diagnostics ? { diagnostics } : {}) });
 		}

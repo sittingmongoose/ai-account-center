@@ -18,12 +18,14 @@ import {
   goldenSignIn,
   goldenSignInRenewal,
 } from '../../../tests/unit/web-server/agent-usage-golden/fixture';
-import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import {
+  buildSnapshotFiles,
+  longBurnKey,
+  type AccountAnalyticsSampleEvent,
+} from '../../../src/web-server/agent-usage/agent-usage-files';
 import { renderSnapshotMarkdown } from '../../../src/web-server/agent-usage/agent-usage-markdown';
 import { RecentReadings } from '../../../src/web-server/agent-usage/agent-usage-history';
 import { accountAnalyticsIdentity } from '../../../src/web-server/services/account-analytics-history';
-import { longBurnKey } from '../../../src/web-server/services/account-analytics-service';
-import type { AccountAnalyticsSampleEvent } from '../../../src/web-server/services/account-analytics-service';
 import type { AccountAnalyticsHistoryData, AccountAnalyticsObservation } from '../../../src/web-server/services/account-analytics-history';
 import type { DashboardAccount, DashboardAccountWindow, DashboardAccountStatus, UsageCacheReason } from '../../../src/web-server/services/account-dashboard-types';
 

@@ -27,9 +27,6 @@ require(
 ).CodexProfileRenewalService.prototype.start = () => {};
 // Public startup stays real. Unrelated background readers/producers have no work here.
 require(
-  path.join(repo, 'dist/web-server/agent-usage/agent-usage-snapshot')
-).startAgentUsageSnapshot = () => () => {};
-require(
   path.join(repo, 'dist/web-server/services/account-lifecycle-runtime')
 ).startAccountLifecycleMaintenance = () => {};
 global.fetch = () => Promise.reject(new Error('fixture refuses outbound fetch'));

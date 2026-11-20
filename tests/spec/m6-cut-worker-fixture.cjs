@@ -16,7 +16,6 @@ const replacements = {
     startAccountLifecycleMaintenance: noop,
     stopAccountLifecycleMaintenance: noop,
   },
-  '/web-server/agent-usage/agent-usage-snapshot.js': { startAgentUsageSnapshot: stop },
   '/antigravity/production-runtime.js': { getInstalledAntigravityRuntimeFactory: () => null },
   '/codex-auth/codex-activation-lock.js': { getActivationCodexHome: () => process.env.CODEX_HOME },
   '/web-server/services/app-update-service.js': {

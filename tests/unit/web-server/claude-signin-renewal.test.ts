@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test';
+import path from 'node:path';
 import {
   parseClaudeSignInRenewal,
   readClaudeSignInRenewal,
 } from '../../../src/web-server/services/claude-signin-renewal';
-import { mergeRenewal } from '../../../src/web-server/services/signin-health-service';
+import { mergeRenewal } from '../../spec/agent/signin-reference';
 
 const NOW = Date.parse('2026-11-03T12:00:00Z');
 const H = 3600 * 1000;
@@ -128,7 +129,7 @@ describe('claude sign-in renewal file', () => {
     const read = await readClaudeSignInRenewal({
       folder: async () => '/share',
       readFile: async (name) => {
-        expect(name).toBe('/share/claude-signins.json');
+        expect(name).toBe(path.join('/share', 'claude-signins.json'));
         return JSON.stringify(file());
       },
       now: () => NOW,

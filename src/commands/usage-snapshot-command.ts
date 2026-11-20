@@ -11,7 +11,7 @@
  *
  * The running dashboard reads the setting (`~/.ccs/agent-usage-snapshot.json`) after each
  * refresh, so a change applies within a minute: no restart is needed. Nothing secret is written:
- * see src/web-server/agent-usage/agent-usage-snapshot.ts.
+ * see crates/aac-snapshot.
  */
 import fs from 'fs';
 import path from 'path';
@@ -22,7 +22,7 @@ import {
   SNAPSHOT_JSON,
   writeSnapshotSettings,
   type SnapshotLocation,
-} from '../web-server/agent-usage/agent-usage-snapshot';
+} from '../web-server/agent-usage/agent-usage-settings';
 import { span } from '../web-server/agent-usage/agent-usage-markdown';
 
 export interface UsageSnapshotCommandIo {

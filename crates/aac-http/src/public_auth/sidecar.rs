@@ -21,8 +21,6 @@ pub(super) struct Sidecar {
     pub cache: PathBuf,
     pub collection: Option<CollectionFeed>,
     _cache_directory: tempfile::TempDir,
-    #[cfg(unix)]
-    _collection_lease: Option<aac_files::OwnedStore>,
 }
 
 #[derive(Deserialize)]
@@ -58,12 +56,6 @@ impl Sidecar {
             .or_else(|| package_root().map(|path| path.join("dist/web-server/sidecar.js")))
             .filter(|file| file.is_absolute() && file.is_file())
             .ok_or_else(|| io::Error::other("the packaged dashboard sidecar is missing"))?;
-        let worker_collection = !native_collection;
-        // Reserve the same root lease before enabling the worker sampler.
-        #[cfg(unix)]
-        let collection_lease = worker_collection
-            .then(|| aac_files::OwnedStore::claim_collection(root).map_err(io::Error::other))
-            .transpose()?;
         let proof = storage::hex(&storage::random::<32>().map_err(|_| invalid())?);
         let collection = if native_collection || cfg!(windows) {
             Some(CollectionFeed::start(&proof).await?)
@@ -100,10 +92,7 @@ impl Sidecar {
                 "AAC_CUT_PUBLIC_COLLECTION",
                 if native_collection { "1" } else { "0" },
             )
-            .env(
-                "AAC_CUT_WORKER_COLLECTION",
-                if worker_collection { "1" } else { "0" },
-            )
+            .env("AAC_CUT_WORKER_COLLECTION", "0")
             .env("AAC_RUST_COMPOSE", "1")
             .env("AAC_RUST_SERVICE", "on")
             .env("AAC_RUST_SERVICE_BINARY", binary)
@@ -156,12 +145,10 @@ impl Sidecar {
             child,
             input: Some(input),
             output: Some(output),
-            backend: Backend::new(address, &proof, worker_collection)?,
+            backend: Backend::new(address, &proof)?,
             cache,
             collection,
             _cache_directory: cache_directory,
-            #[cfg(unix)]
-            _collection_lease: collection_lease,
         }))
     }
 

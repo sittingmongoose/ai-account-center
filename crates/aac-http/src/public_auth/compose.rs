@@ -142,7 +142,6 @@ pub(super) struct Backend {
     address: SocketAddr,
     proof: HeaderValue,
     slots: Arc<Semaphore>,
-    pub(super) collection_fallback: bool,
 }
 
 impl Backend {
@@ -163,14 +162,10 @@ impl Backend {
         let proof = secret
             .and_then(|value| value.into_string().ok())
             .ok_or_else(invalid)?;
-        Self::new(address, &proof, false).map(Some)
+        Self::new(address, &proof).map(Some)
     }
 
-    pub(super) fn new(
-        address: SocketAddr,
-        proof: &str,
-        collection_fallback: bool,
-    ) -> io::Result<Self> {
+    pub(super) fn new(address: SocketAddr, proof: &str) -> io::Result<Self> {
         if !address.ip().is_loopback() || address.port() == 0 || !super::storage::is_hex(proof, 64)
         {
             return Err(io::Error::other("invalid composition backend"));
@@ -181,7 +176,6 @@ impl Backend {
             address,
             proof,
             slots: Arc::new(Semaphore::new(32)),
-            collection_fallback,
         })
     }
 

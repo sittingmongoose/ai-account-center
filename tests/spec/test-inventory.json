@@ -743,6 +743,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/native_owners.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_codex.rs",
       "kind": "safety",
       "evidence": [
@@ -3709,12 +3716,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/web-server/agent-usage-snapshot.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/web-server/agent-verb-families.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -4408,20 +4409,6 @@
       "evidence": [
         "helper",
         "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/signin-health-hosts.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/signin-health-service.test.ts",
-      "kind": "helper",
-      "evidence": [
-        "helper"
       ]
     },
     {

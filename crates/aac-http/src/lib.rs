@@ -68,7 +68,6 @@ mod table;
 #[cfg(unix)]
 mod unix;
 mod usage_routes;
-#[cfg(unix)]
 mod usage_snapshot;
 pub mod view_reply;
 mod visibility_write;

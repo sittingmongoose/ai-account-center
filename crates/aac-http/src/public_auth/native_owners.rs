@@ -47,9 +47,6 @@ pub(super) struct Groups {
     pub(super) lifecycle: bool,
     writes: bool,
     pub(super) home: bool,
-    /// G18: the service owns the aac-usage share writer this boot.
-    #[cfg(unix)]
-    usage_snapshot: bool,
     #[cfg(unix)]
     store: bool,
 }
@@ -79,8 +76,6 @@ impl Groups {
             writes: on("writes", "AAC_RUST_GROUP_WRITES"),
             home: on("home", "AAC_RUST_GROUP_HOME")
                 || std::env::var("AAC_RUST_HOME_VIEW").as_deref() == Ok("on"),
-            #[cfg(unix)]
-            usage_snapshot: on("usageSnapshot", "AAC_RUST_GROUP_USAGESNAPSHOT"),
         }
     }
 }
@@ -132,9 +127,7 @@ struct Usage {
     antigravity: Option<Arc<crate::antigravity_host::Host>>,
     owners: Owners,
     agents: Arc<Agents>,
-    /// The sign-in expiry rows and when they were read (the TS health cache's five minutes).
-    #[cfg(unix)]
-    signin_cache: Mutex<Option<(i64, Value)>>,
+    signin_cache: Mutex<Option<SignInHealth>>,
 }
 
 #[cfg(unix)]
@@ -146,16 +139,73 @@ enum Publication {
     Private(Published),
 }
 
+#[derive(Clone)]
+struct SignInHealth {
+    since: i64,
+    expires: i64,
+    machines: Map<String, Value>,
+}
+
+impl SignInHealth {
+    fn current(&self, now: i64) -> bool {
+        now < self.expires
+            && self
+                .machines
+                .values()
+                .filter_map(Value::as_array)
+                .flatten()
+                .all(|row| crate::signins::crossed(row, self.since, now) == Ok(false))
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn signin_health_cache_uses_the_earlier_of_crossed_expiry_and_ttl() {
+    let mut health = SignInHealth {
+        since: 1_000,
+        expires: 31_000,
+        machines: Map::from_iter([(
+            "ubuntu".into(),
+            json!([{"state": "ok", "accessExpiresAt": "1970-01-01T00:00:02.000Z"}]),
+        )]),
+    };
+    assert!(health.current(1_999));
+    assert!(!health.current(2_000));
+    health.since = 2_001;
+    assert!(health.current(30_999));
+    assert!(!health.current(31_000));
+}
+
 struct PublicSampling {
     signins: ClaudeSignInRenewalReader,
     server: Value,
     status: std::sync::Weak<super::owner_host::OwnerHost>,
     #[cfg(unix)]
-    store: bool,
-    #[cfg(unix)]
-    usage_snapshot: bool,
+    share_without_store: Option<crate::usage_snapshot::UsageSnapshot>,
     #[cfg(windows)]
-    worker_snapshot: bool,
+    share: crate::usage_snapshot::UsageSnapshot,
+}
+
+impl PublicSampling {
+    async fn publish_share(&self, root: &std::path::Path, payload: Value) {
+        #[cfg(unix)]
+        if let Some(writer) = &self.share_without_store {
+            writer.accept_native(payload);
+        } else {
+            super::native_reads::usage_sample(root.to_owned(), payload).await;
+        }
+        #[cfg(windows)]
+        {
+            let accounts = payload["event"]["accounts"].as_array().map_or(0, Vec::len);
+            if crate::usage_snapshot::sample_active(root, accounts)
+                && let Some(host) = self.status.upgrade()
+                && let Some(store) = host.local().await.and_then(|owners| owners.store.clone())
+            {
+                self.share.attach_store(store);
+            }
+            self.share.accept_native(payload);
+        }
+    }
 }
 
 fn lifecycle_facts() -> crate::account_usage::dashboard::Lifecycle {
@@ -274,19 +324,17 @@ impl NativeOwners {
                 owners: owners.clone(),
                 agents: agents.clone(),
                 root: root.clone(),
-                #[cfg(unix)]
                 signin_cache: Mutex::default(),
             });
             let sampling = PublicSampling {
-                signins: ClaudeSignInRenewalReader::new(root, Default::default()),
+                signins: ClaudeSignInRenewalReader::new(root.clone(), Default::default()),
                 server,
                 status,
                 #[cfg(unix)]
-                store: groups.store && worker_directory.is_some(),
-                #[cfg(unix)]
-                usage_snapshot: groups.usage_snapshot,
+                share_without_store: (!groups.store)
+                    .then(|| crate::usage_snapshot::UsageSnapshot::new(root, None)),
                 #[cfg(windows)]
-                worker_snapshot: worker_directory.is_some(),
+                share: crate::usage_snapshot::UsageSnapshot::new(root, None),
             };
             let sampler = usage.clone();
             jobs.sampling = Some(tokio::spawn(async move {
@@ -449,6 +497,7 @@ impl NativeOwners {
         self.events.publish(DashboardEvent::AccountsChanged {});
     }
 
+    #[cfg(unix)]
     pub(super) fn owns_collection(method: &Method, path: &str) -> bool {
         let path = path.trim_end_matches('/');
         Self::dashboard_route(method, path) || recheck::route(method, path).is_some()
@@ -527,9 +576,13 @@ impl NativeOwners {
             return lifecycle_label::handle(self, &id, request).await;
         }
         if let Some(id) = recheck::route(request.method(), path).map(str::to_owned) {
-            let reply = match self.usage.as_ref().filter(|_| self.writes) {
-                Some(usage) => usage.recheck(&access, &id, request).await,
-                None => unavailable(),
+            let reply = match &self.usage {
+                Some(usage) if self.writes => usage.recheck(&access, &id, request).await,
+                Some(_) => unavailable(),
+                None => match recheck::input(&access, &id, request).await {
+                    Ok(_) => collection_unavailable(),
+                    Err(reply) => reply,
+                },
             };
             return no_store(reply);
         }
@@ -546,7 +599,10 @@ impl NativeOwners {
             return no_store(super::plain(401, "Authentication required"));
         }
         let Some(usage) = &self.usage else {
-            return unavailable();
+            return match crate::dashboard_fed::selection(&uri) {
+                Some(_) => collection_unavailable(),
+                None => crate::dashboard_fed::invalid_selection(),
+            };
         };
         let cache = usage.cache.clone();
         let secure = access.secure_transport;
@@ -657,43 +713,15 @@ impl Usage {
                         if let Some(host) = sampling.status.upgrade() {
                             host.record_status_sample(&cache).await;
                         }
-                        #[cfg(unix)]
-                        if sampling.store {
-                            super::native_reads::publish_usage(
-                                owner.root.clone(),
-                                &cache,
-                                super::now(),
-                            )
-                            .await;
-                        }
-                        #[cfg(windows)]
-                        if sampling.worker_snapshot {
-                            let now = super::now();
-                            if let Some(timestamp) = super::storage::iso(now) {
-                                cache.publish_completed_sample(&timestamp, now);
-                            }
-                        }
-                        #[cfg(not(any(unix, windows)))]
-                        let _ = (&sampling, &cache);
-                        // G18: the native sample triggers the share writer itself: the store's
-                        // history, long burn and rollups are added by the service, and the
-                        // sign-in facts are collected here (only while a folder is set). The
-                        // publisher and its facts are the Unix service's; Windows keeps the TS
-                        // writer.
-                        #[cfg(unix)]
-                        if sampling.usage_snapshot
-                            && let Some(payload) =
-                                owner.share_sample(&cache, &sampling.signins).await
-                        {
-                            super::native_reads::usage_sample(owner.root.clone(), payload).await;
+                        if let Some(payload) = owner.share_sample(&cache, &sampling.signins).await {
+                            sampling.publish_share(&owner.root, payload).await;
                         }
                     }
                 },
             )
             .await;
     }
-    #[cfg(unix)]
-    /// G18: push this sample to the service's share writer. Every sample's readings count, even
+    /// G18: pass this sample to the boot's share writer. Every sample's readings count, even
     /// one whose write the service skips, so the reading ring sees the same cadence; the sign-in
     /// probes and the store facts run only while a folder is set and there are accounts.
     async fn share_sample(
@@ -705,24 +733,23 @@ impl Usage {
         let timestamp = super::storage::iso(now)?;
         let accounts = cache.merged_accounts(&timestamp, now).ok()?;
         let active = crate::usage_snapshot::sample_active(&self.root, accounts.len());
+        let report = active
+            .then(|| signins.read())
+            .flatten()
+            .map(|report| report.to_json());
         let sign_in = if active {
-            self.sign_in_facts(signins).await
+            self.sign_in_facts(report.as_ref()).await
         } else {
             json!({ "rows": [], "failed": false, "since": now })
         };
-        let renewal = if active {
-            signins.read().map(|report| {
-                let full = report.to_json();
-                json!({
-                    "runner": full["runner"],
-                    "generatedAt": full["generatedAt"],
-                    "stale": full["stale"],
-                    "needsYou": full["needsYou"],
-                })
+        let renewal = report.map(|full| {
+            json!({
+                "runner": full["runner"],
+                "generatedAt": full["generatedAt"],
+                "stale": full["stale"],
+                "needsYou": full["needsYou"],
             })
-        } else {
-            None
-        };
+        });
         Some(json!({
             "event": { "accounts": accounts, "history": null, "sampledAt": now },
             "signIn": sign_in,
@@ -731,42 +758,32 @@ impl Usage {
         }))
     }
 
-    #[cfg(unix)]
-    /// The sign-in expiry rows of every configured computer, under the publisher's 60 s limit; a
-    /// failed or timed-out pass is named (`failed`), never sent as an empty success.
-    async fn sign_in_facts(self: &Arc<Self>, signins: &ClaudeSignInRenewalReader) -> Value {
-        let since = super::now();
-        // Five minutes, like the TypeScript health cache, so one page cannot make every
-        // computer run the expiry collector on every sample.
-        let cached = {
-            let guard = self.signin_cache.lock().unwrap_or_else(|p| p.into_inner());
-            guard
-                .as_ref()
-                .filter(|entry| since - entry.0 < 300_000)
-                .map(|entry| entry.1.clone())
-        };
-        if let Some(mut fresh) = cached {
-            if let Some(map) = fresh.as_object_mut() {
-                map.insert("since".into(), json!(since));
+    /// Cache the host observations. The renewal report is read independently for each sample.
+    async fn sign_in_facts(&self, renewal: Option<&Value>) -> Value {
+        let now = super::now();
+        let cached = self
+            .signin_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .filter(|health| health.current(now))
+            .cloned();
+        let health = match cached {
+            Some(health) => health,
+            None => {
+                let Some(health) = self.collect_sign_in_health(now).await else {
+                    return json!({ "rows": [], "failed": true, "since": now });
+                };
+                *self.signin_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(health.clone());
+                health
             }
-            return fresh;
-        }
-        let hosts = configured_signin_hosts();
-        let read = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            crate::signins::poll::read(&self.agents, &self.root, hosts),
-        )
-        .await;
-        let Ok(Ok(batch)) = read else {
-            return json!({ "rows": [], "failed": true, "since": since });
         };
-        let rows = match signins.read() {
+        let rows = match renewal {
             Some(renewal) => {
-                let merged =
-                    crate::signins::merge_renewal(batch.machines, &renewal.to_json(), super::now());
-                merged.unwrap_or_default()
+                crate::signins::merge_renewal(health.machines.clone(), renewal, super::now())
+                    .unwrap_or(health.machines)
             }
-            None => batch.machines,
+            None => health.machines,
         };
         let rows: Vec<Value> = rows
             .values()
@@ -774,13 +791,36 @@ impl Usage {
             .flatten()
             .cloned()
             .collect();
-        let facts = json!({ "rows": rows, "failed": false, "since": since });
-        *self.signin_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((since, facts.clone()));
-        facts
+        json!({ "rows": rows, "failed": false, "since": health.since })
+    }
+
+    async fn collect_sign_in_health(&self, since: i64) -> Option<SignInHealth> {
+        let hosts = configured_signin_hosts();
+        let mut batch = crate::signins::poll::read(&self.agents, &self.root, hosts)
+            .await
+            .ok()?;
+        for host in batch.reference_hosts {
+            batch.machines.insert(
+                host.clone(),
+                json!([{
+                    "name": host, "provider": "claude", "platform": host, "machine": host,
+                    "state": "unavailable", "fixCommand": "", "error": "collection unavailable"
+                }]),
+            );
+        }
+        let now = super::now();
+        let (machines, ttl) = crate::signins::settle(batch.machines, since, now).ok()?;
+        let Value::Object(machines) = machines else {
+            return None;
+        };
+        Some(SignInHealth {
+            since,
+            expires: now.saturating_add(ttl),
+            machines,
+        })
     }
 }
 
-#[cfg(unix)]
 /// The computers a sign-in poll reads, in the account collectors' order: this one, then every
 /// remote whose packaged alias is set (`configuredUsageHosts`). The same packaged registry
 /// (`web-dashboard/public/computers.json`) the collectors and the coordinator read.
@@ -792,16 +832,20 @@ fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
         .unwrap_or(Value::Null)
     });
     let entries = COMPUTERS.as_object().cloned().unwrap_or_default();
-    let hostname = std::env::var("HOSTNAME")
-        .ok()
-        .or_else(|| {
-            aac_files::read_bounded(std::path::Path::new("/proc/sys/kernel/hostname"), 256)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .map(|text| text.trim().to_owned())
-        })
-        .unwrap_or_default()
-        .to_lowercase();
+    let hostname = std::env::var(if cfg!(windows) {
+        "COMPUTERNAME"
+    } else {
+        "HOSTNAME"
+    })
+    .ok()
+    .or_else(|| {
+        aac_files::read_bounded(std::path::Path::new("/proc/sys/kernel/hostname"), 256)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .map(|text| text.trim().to_owned())
+    })
+    .unwrap_or_default()
+    .to_lowercase();
     let platform = |id: &str| -> String {
         match entries
             .get(id)
@@ -853,9 +897,10 @@ fn configured_signin_hosts() -> Vec<crate::signins::poll::Host> {
 }
 
 /// This service's own helper platform (`helperPlatform(localComputer())`).
-#[cfg(unix)]
 fn instance_platform() -> String {
-    if cfg!(target_os = "macos") {
+    if cfg!(windows) {
+        "windows".to_owned()
+    } else if cfg!(target_os = "macos") {
         "mac".to_owned()
     } else {
         "ubuntu".to_owned()
@@ -893,6 +938,14 @@ async fn object_body(request: Request, limit: usize) -> Option<Map<String, Value
 pub(super) fn no_store(mut reply: Reply) -> Reply {
     super::set_header(&mut reply, "cache-control", "no-store");
     reply
+}
+
+pub(super) fn collection_unavailable() -> Reply {
+    super::error(
+        503,
+        "collection_unavailable",
+        "Account usage collection is unavailable.",
+    )
 }
 
 fn unavailable() -> Reply {

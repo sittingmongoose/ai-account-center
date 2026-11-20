@@ -50,6 +50,25 @@ struct DashboardQuery {
     refresh: Option<String>,
 }
 
+pub(crate) fn invalid_selection() -> Response {
+    crate::public_auth::plain(400, "Select a valid desktop platform and refresh value.")
+}
+
+pub(crate) fn selection(uri: &Uri) -> Option<(&'static str, bool)> {
+    let Query(query) = Query::<DashboardQuery>::try_from_uri(uri).ok()?;
+    let platform = match query.platform.as_deref().unwrap_or("mac") {
+        "mac" => "mac",
+        "windows" => "windows",
+        _ => return None,
+    };
+    let refresh = match query.refresh.as_deref().unwrap_or("false") {
+        "false" => false,
+        "true" => true,
+        _ => return None,
+    };
+    Some((platform, refresh))
+}
+
 fn invalid() -> Response {
     (
         StatusCode::BAD_REQUEST,
@@ -94,24 +113,12 @@ fn latest_with(
     secure: bool,
     public: bool,
 ) -> Result<Response, Decline> {
-    let invalid = || {
-        if public {
-            crate::public_auth::plain(400, "Select a valid desktop platform and refresh value.")
+    let Some((platform, refresh)) = selection(uri) else {
+        return Ok(if public {
+            invalid_selection()
         } else {
             invalid()
-        }
-    };
-    let Ok(Query(query)) = Query::<DashboardQuery>::try_from_uri(uri) else {
-        return Ok(invalid());
-    };
-    let platform = match query.platform.as_deref().unwrap_or("mac") {
-        platform @ ("mac" | "windows") => platform,
-        _ => return Ok(invalid()),
-    };
-    let refresh = match query.refresh.as_deref().unwrap_or("false") {
-        "false" => false,
-        "true" => true,
-        _ => return Ok(invalid()),
+        });
     };
     if refresh {
         cache.request_refresh();

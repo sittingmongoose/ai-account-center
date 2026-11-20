@@ -1,8 +1,8 @@
 import { ConfigError, NetworkError } from '../errors/error-types';
 
-/** The compatibility worker reads the boot's native producer until it owns the collection lease. */
+/** The compatibility worker reads the boot's native producer. */
 export function workerReadsNative(): boolean {
-  return process.env.AAC_RUST_CUT_WORKER === '1' && process.env.AAC_CUT_WORKER_COLLECTION !== '1';
+  return process.env.AAC_RUST_CUT_WORKER === '1';
 }
 
 export async function readNativeCollection(

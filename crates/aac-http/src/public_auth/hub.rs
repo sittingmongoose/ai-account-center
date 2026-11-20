@@ -89,20 +89,30 @@ pub(crate) fn publish_native_snapshot(directory: &std::path::Path, dashboards: V
 
 #[derive(Clone, Default)]
 /// Latest projection of the Mac and Windows dashboard cache, shared with the public router.
-pub struct HubCache(Arc<RwLock<Arc<Vec<Account>>>>);
+pub struct HubCache {
+    accounts: Arc<RwLock<Arc<Vec<Account>>>>,
+    collection_disabled: bool,
+}
 
 impl HubCache {
+    pub(super) fn for_collection(enabled: bool) -> Self {
+        Self {
+            collection_disabled: !enabled,
+            ..Self::default()
+        }
+    }
+
     /// Replaces the cached T3 answers from the existing dashboard snapshots in Mac, Windows order.
     /// Producers supply the public dashboard DTOs after applying their usual reset-time pass.
     pub fn publish_dashboard_cache(&self, dashboards: &[Value]) {
         let next = Arc::new(projection::project(dashboards));
-        if let Ok(mut cache) = self.0.write() {
+        if let Ok(mut cache) = self.accounts.write() {
             *cache = next;
         }
     }
 
     fn accounts(&self) -> Arc<Vec<Account>> {
-        self.0
+        self.accounts
             .read()
             .map_or_else(|_| Arc::default(), |accounts| accounts.clone())
     }
@@ -380,6 +390,11 @@ impl Hub {
         let path = parts.uri.path().get(MOUNT.len()..).unwrap_or_default();
         let path = path.strip_suffix('/').unwrap_or(path);
         match (&parts.method, path) {
+            (&Method::GET | &Method::HEAD, "/auth-files") | (&Method::POST, "/api-call")
+                if self.cache.collection_disabled =>
+            {
+                super::native_owners::collection_unavailable()
+            }
             (&Method::GET | &Method::HEAD, "/auth-files") => {
                 let files = self
                     .accounts()

@@ -27,7 +27,7 @@ import accountDashboardRoutes from './account-dashboard-routes';
 import accountPreferencesRoutes from './account-preferences-routes';
 import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
 import accountVisibilityRoutes from './account-visibility-routes';
-import accountLifecycleRoutes, { createAccountLifecycleRouter } from './account-lifecycle-routes';
+import accountLifecycleRoutes from './account-lifecycle-routes';
 import authRoutes from './auth-routes';
 import barRoutes from './bar-routes';
 
@@ -86,15 +86,15 @@ apiRoutes.use((req, res, next) => {
   }
 });
 
-// The account dashboard and native account controls.
-apiRoutes.use('/accounts', accountDashboardRoutes);
+// The account dashboard, native account controls and the Status tab are mounted.
+if (process.env.AAC_RUST_CUT_WORKER !== '1') {
+  apiRoutes.use('/accounts', accountDashboardRoutes);
+}
 apiRoutes.use('/accounts', accountPreferencesRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
 apiRoutes.use('/accounts', accountVisibilityRoutes);
 if (process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1') {
   apiRoutes.use('/accounts', accountLifecycleRoutes);
-} else if (process.env.AAC_CUT_WORKER_COLLECTION === '1') {
-  apiRoutes.use('/accounts', createAccountLifecycleRouter({ recheckOnly: true }));
 }
 apiRoutes.use('/auth', authRoutes);
 apiRoutes.use('/bar', barRoutes);

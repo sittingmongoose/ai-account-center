@@ -362,7 +362,7 @@ try {
     socketPath: path.join(folder, 'http.sock'),
     files,
     nativeLifecycle: true,
-    nativeUsageSnapshot: true,
+    nativeUsageSnapshot: !(configOff || envOff),
   };
   let service;
   if (dead) {
