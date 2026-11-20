@@ -9,6 +9,10 @@ memory (same user, read-only, identity re-verified) and fall back to the legacy
 same-user DPAPI session capsule, verified again against this native account
 and organization before any balance request. Credential values are never
 persisted or emitted.
+Resets read through the Desktop profile first. When it is signed out (or signed
+in to another account), they read through an unexpired Claude Code login on the
+same computer whose saved email is the account's, after the live profile names
+the same account, organization and email. AAC never refreshes either login.
 """
 
 import argparse
