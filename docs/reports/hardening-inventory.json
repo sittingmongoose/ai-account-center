@@ -767,7 +767,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1158
+          "loc": 1200
         },
         {
           "file": "src/antigravity/registry.ts",
