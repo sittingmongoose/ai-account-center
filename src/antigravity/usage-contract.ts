@@ -64,15 +64,6 @@ export interface AntigravityPublicProfile {
 }
 
 /**
- * Present only when the installed Antigravity CLI no longer matches the
- * reviewed native pin: managed updates are paused until the new build is reviewed.
- * Mirrors NativeUpdatePaused in native-version.ts.
- */
-export interface AntigravityNativeUpdatePaused {
-  installedVersion: string | null;
-}
-
-/**
  * Present only when the installed runtime service is not running and a
  * read-only check found why (runtime-health.ts): a parser module the service
  * cannot load, or a failed user unit. Starting the service again would fail.
@@ -93,7 +84,6 @@ export interface AntigravityInventory {
   schemaVersion: 1;
   hostId: AntigravityHostId;
   profiles: AntigravityPublicProfile[];
-  nativeUpdatePaused?: AntigravityNativeUpdatePaused;
   runtimeServiceProblem?: AntigravityRuntimeServiceProblem;
 }
 

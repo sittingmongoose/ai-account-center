@@ -944,7 +944,7 @@ function antigravitySection(accounts, data, inventory, now) {
     run(rows.length, true),
     run(` ${rows.length === 1 ? 'account' : 'accounts'}`),
   ];
-  const problem = native.antigravityServiceProblem || native.antigravityUpdatePaused;
+  const problem = native.antigravityServiceProblem;
   return {
     id: 'antigravity',
     kind: 'accounts',

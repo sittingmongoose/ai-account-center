@@ -4,7 +4,6 @@
  * both: crates/aac-views/src/antigravity.rs.
  */
 import { AntigravityError } from './errors';
-import { isNativeVersion } from './native-version';
 import { publicRuntimeServiceProblem } from './runtime-health';
 import type { AntigravityDashboardAccount, AntigravityInventory } from './usage-contract';
 import {
@@ -29,15 +28,6 @@ export function publicInventory(value: AntigravityInventory): AntigravityInvento
   return {
     schemaVersion: 1,
     hostId: 'ubuntu',
-    ...(value.nativeUpdatePaused
-      ? {
-          nativeUpdatePaused: {
-            installedVersion: isNativeVersion(value.nativeUpdatePaused.installedVersion)
-              ? value.nativeUpdatePaused.installedVersion
-              : null,
-          },
-        }
-      : {}),
     ...runtimeServiceProblemField(value.runtimeServiceProblem),
     profiles: value.profiles.map((profile) => {
       if (

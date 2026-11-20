@@ -956,7 +956,7 @@ fn antigravity_section(
         run(n.to_string(), true, ""),
         plain(format!(" {}", plural(n))),
     ];
-    let problem = native.service_problem.or(native.update_paused);
+    let problem = native.service_problem;
     Ok(SectionView {
         id: "antigravity".into(),
         kind: "accounts".into(),
