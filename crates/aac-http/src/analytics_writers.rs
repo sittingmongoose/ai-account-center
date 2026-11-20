@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod analytics_jsonl;
 mod experiment_roots;
 mod experiment_signatures;
 mod fixed_scanner;
@@ -426,6 +427,10 @@ async fn activity_pass(
     let kinds = aac_providers::scanner_kinds()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    // Saved Generic JSONL sources have no scanner kind: this writer reads them itself.
+    let mut mapped: Vec<Value> = Vec::new();
+    let mut mapped_state = false;
+    let mut mapped_complete = false;
     for computer in &computers {
         let host = computer.id.as_str();
         let (mut extra_roots, mut overflow, generic) = extra_roots(preferences.as_ref(), host);
@@ -435,7 +440,13 @@ async fn activity_pass(
             experiments.add_zcode_paths(&mut extra_roots, &mut overflow);
         }
         if generic {
-            states.push(json!({ "tool": "jsonl", "host": host, "state": "no_reader" }));
+            let read = analytics_jsonl::read(preferences.as_ref(), host, cutoff, now, &pricing);
+            mapped_state |= read.state.is_some();
+            mapped_complete = read.complete;
+            if let Some(state) = read.state {
+                states.push(state);
+            }
+            mapped = read.data;
         }
         let args = scan_request(
             &kinds,
@@ -526,8 +537,14 @@ async fn activity_pass(
     if generation != guard.generation {
         return;
     }
-    let local: HashMap<String, Vec<Value>> = HashMap::new();
-    let local_complete: HashSet<String> = HashSet::new();
+    let mut local: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut local_complete: HashSet<String> = HashSet::new();
+    if mapped_state {
+        local.insert("jsonl".into(), mapped);
+        if mapped_complete {
+            local_complete.insert("jsonl".into());
+        }
+    }
     let scanner_owned: HashSet<String> = kinds.into_iter().collect();
     let args = ReportArgs {
         local: &local,
