@@ -78,6 +78,7 @@ enum ReviewR2Check {
       signInHost.window?.orderOut(nil)
       check(disconnectedText.contains("saved password") && !disconnectedText.contains("forgot its device key") && !disconnectedText.contains("revoked it"), "password Disconnect uses password wording")
     } catch { failures.append("view check error: \(error)") }
+    do { try AntigravityTrayCheck.run(check) } catch { failures.append("Antigravity view check error: \(error)") }
     if failures.isEmpty { print("PASS native review row, tooltip and sign-out checks") }
     else { for failure in failures { print("FAIL \(failure)") } }
     exit(failures.isEmpty ? 0 : 1)

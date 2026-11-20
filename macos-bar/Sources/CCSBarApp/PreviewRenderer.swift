@@ -94,7 +94,7 @@ enum PreviewRenderer {
   }
 
   /// The Details popover's content for one account (or a provider's accounts), as the popover shows it.
-  private static func detailsHost(_ dashboard: AccountDashboard, accountID: String, options: Options) throws -> NSView {
+  static func detailsHost(_ dashboard: AccountDashboard, accountID: String, options: Options) throws -> NSView {
     NSApplication.shared.setActivationPolicy(.prohibited)
     let appearance = NSAppearance(named: options.appearance == "dark" ? .darkAqua : .aqua)
     NSApplication.shared.appearance = appearance
