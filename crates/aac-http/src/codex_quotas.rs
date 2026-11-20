@@ -113,11 +113,11 @@ fn empty_envelope(data: Value) -> aac_status::read_context::Envelope {
 }
 
 /// The saved profiles as the quota view reads them: name and login validity.
-pub(crate) fn saved_profiles(root: &Path) -> Vec<Value> {
-    let Ok((_, records)) = read_codex_profile_registry(root) else {
-        return Vec::new();
-    };
-    records
+/// A missing registry is an empty list; any other read or shape fault is `Err`, the same
+/// distinction the reader and the profile summary make.
+pub(crate) fn saved_profiles(root: &Path) -> Result<Vec<Value>, ()> {
+    let (_, records) = read_codex_profile_registry(root)?;
+    Ok(records
         .iter()
         .map(|record| {
             let identity = read_auth(
@@ -128,12 +128,14 @@ pub(crate) fn saved_profiles(root: &Path) -> Vec<Value> {
             );
             json!({"name": record.name, "authValid": identity.valid})
         })
-        .collect()
+        .collect())
 }
 
 /// The public quota answer from the saved profiles and the collector rows the caller holds.
 pub(crate) fn answer(root: &Path, dashboard_rows: Vec<Value>, now: i64) -> Option<Value> {
-    let profiles = saved_profiles(root);
+    // An unreadable or invalid registry declines; only a known empty or absent one answers
+    // with no profiles.
+    let profiles = saved_profiles(root).ok()?;
     if profiles.is_empty() {
         return aac_views::codex_profiles::quotas(empty_envelope(json!({
             "profiles": [],
@@ -207,4 +209,50 @@ pub(crate) fn answer(root: &Path, dashboard_rows: Vec<Value>, now: i64) -> Optio
     }))
     .ok()?;
     aac_views::codex_profiles::quotas(envelope).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOW: i64 = 1_700_000_000_000;
+
+    #[test]
+    fn an_absent_registry_is_an_empty_inventory() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let value = answer(directory.path(), Vec::new(), NOW).expect("the empty answer");
+        assert_eq!(value["profiles"], json!([]));
+    }
+
+    #[test]
+    fn an_unreadable_registry_is_not_an_empty_inventory() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        // A directory where the registry file belongs reads as a non-NotFound fault.
+        std::fs::create_dir(directory.path().join("codex-profiles.yaml")).expect("fault");
+        assert!(
+            answer(directory.path(), Vec::new(), NOW).is_none(),
+            "an unreadable registry must decline, not report no profiles"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_registered_profile_with_a_read_fault_is_not_an_empty_inventory() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("temporary root");
+        let registry = directory.path().join("codex-profiles.yaml");
+        std::fs::write(
+            &registry,
+            "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+        )
+        .expect("registry");
+        std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o000))
+            .expect("read fault");
+        assert!(
+            answer(directory.path(), Vec::new(), NOW).is_none(),
+            "one registered profile with a read fault must decline, not report an empty inventory"
+        );
+        std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600))
+            .expect("restore for cleanup");
+    }
 }

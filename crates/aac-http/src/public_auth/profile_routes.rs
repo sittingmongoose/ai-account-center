@@ -892,6 +892,43 @@ mod tests {
         assert_eq!(profiles.host_requests(), 0);
     }
 
+    /// M8: a registered profile whose registry cannot be read answers the route's existing
+    /// quota error, not a 200 saying the user has no profiles.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreadable_registry_answers_the_quota_error_not_an_empty_inventory() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("temporary root");
+        let root = directory.path().to_path_buf();
+        let registry = root.join("codex-profiles.yaml");
+        std::fs::write(
+            &registry,
+            "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+        )
+        .expect("registry");
+        std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o000))
+            .expect("read fault");
+        let profiles = Profiles::start(
+            root,
+            Arc::new(Vec::new),
+            Arc::new(Agents::new(directory.path().to_path_buf())),
+        );
+        let request = Request::builder()
+            .uri("/api/codex/profiles/quotas")
+            .extension(super::super::DashboardAccess::test_browser())
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = profiles.handle(request).await;
+        assert_eq!(response.status(), 500);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"error": "Codex profile usage could not be read safely."})
+        );
+    }
+
     #[test]
     fn the_route_shapes_match_the_retired_router() {
         assert!(Profiles::owns(
