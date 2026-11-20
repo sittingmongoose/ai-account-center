@@ -1073,6 +1073,8 @@ fn scan_failure_text(cause: &str) -> &'static str {
         "helper_failed" => "the usage reader stopped with an error on this computer",
         "unreadable_folder" => "a folder searched for logs could not be read",
         "read_failed" => "its logs were found but could not be read",
+        "unsafe_root" => "a saved usage log source has an unsafe root",
+        "bad_mapping" => "a saved generic JSONL source has an invalid field mapping",
         "no_local_usage_records" => "the tool keeps no local usage records",
         "timeout" => "the scan took longer than its time limit",
         "bad_response" => "the computer's answer was not a usage report",
