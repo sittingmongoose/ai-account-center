@@ -183,6 +183,12 @@ fn public_trash_entry(entry: &Value) -> Option<Value> {
             return None;
         }
     }
+    if entry
+        .get("restorePending")
+        .is_some_and(|pending| pending != true || state != "trashed")
+    {
+        return None;
+    }
     if let Some(done) = entry.get("purgedHosts") {
         let done = done.as_array()?;
         if state != "deleting"

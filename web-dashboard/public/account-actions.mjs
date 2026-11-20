@@ -251,6 +251,7 @@ export function errorText(error, ctx = {}) {
     case 'app_state_unknown': return t('Could not check the app', 'Whether Claude is open could not be checked. Nothing was changed. Try again later.');
     case 'trash_cross_volume': return t('Trash is on another disk', `${host} keeps the trash on another disk, so nothing was moved.`);
     case 'remove_failed': return t('Not removed', 'The account could not be removed safely. Nothing was changed.');
+    case 'restore_pending': return t('Profile restored', 'The profile is back. Retry Restore to clear its trash entry.');
     case 'restore_failed': return t('Not restored', 'The profile could not be put back safely. It stays in the trash.');
     case 'purge_incomplete': {
       const receipts = [['mac', 'Mac'], ['windows', 'Windows']].flatMap(([key, label]) => {

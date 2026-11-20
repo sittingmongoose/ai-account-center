@@ -90,14 +90,15 @@ where
             }
         }
     }
-    let host_failed = failed.is_some();
     let result = match failed {
         Some(error) => Err(error),
         None => perform(Effect::Commit).await.map(|_| ()),
     };
     if result.is_err()
-        && (matches!(workflow, Workflow::Add | Workflow::Remove)
-            || (workflow == Workflow::Restore && host_failed))
+        && matches!(
+            workflow,
+            Workflow::Add | Workflow::Remove | Workflow::Restore
+        )
     {
         for effect in undo.into_iter().rev() {
             let _ = perform(effect).await;
@@ -113,4 +114,34 @@ pub async fn compatibility_pipe(mode: &str) -> io::Result<()> {
     let pipe = crate::lifecycle_effect_pipe::Pipe::new();
     let result = run(workflow, |effect| pipe.perform(effect.wire_name())).await;
     crate::lifecycle_effect_pipe::finish(result.map(|_| true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn restore_inventory_failure_undoes_both_host_moves() {
+        let mut steps = Vec::new();
+        let result = run(Workflow::Restore, |effect| {
+            steps.push(effect.wire_name());
+            std::future::ready(if matches!(effect, Effect::Commit) {
+                Err("inventory write")
+            } else {
+                Ok(true)
+            })
+        })
+        .await;
+        assert_eq!(result, Err("inventory write"));
+        assert_eq!(
+            steps,
+            [
+                "apply-mac",
+                "apply-windows",
+                "commit",
+                "undo-windows",
+                "undo-mac"
+            ]
+        );
+    }
 }

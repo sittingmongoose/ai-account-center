@@ -83,6 +83,11 @@ impl Refusal {
         "purge_failed",
         "The profile could not be deleted safely. It stays in the trash.",
     );
+    const RESTORE_PENDING: Self = Self::new(
+        500,
+        "restore_pending",
+        "The profile is restored. Its trash entry still needs to be cleared.",
+    );
     const RESTORE: Self = Self::new(
         500,
         "restore_failed",
@@ -146,6 +151,13 @@ impl Refusal {
             None => error(self.status, self.code, self.message),
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RestoreWrite {
+    Reserve,
+    Inventory,
+    Retire,
 }
 
 pub(super) struct Trash {
@@ -243,7 +255,10 @@ impl Trash {
         let target = id.clone();
         let reviewed = tokio::task::spawn_blocking(move || {
             let entry = find(read_trash(&root).ok_or(Refusal::UNKNOWN)?, action, &target)?;
-            if !purging && profile_exists(&root, account_id(&entry), false).unwrap_or(false) {
+            if !purging
+                && profile_exists(&root, account_id(&entry), false).unwrap_or(false)
+                && !restored_inventory(&root, &entry).unwrap_or(false)
+            {
                 return Err(Refusal::IN_USE);
             }
             Ok(entry)
@@ -354,6 +369,9 @@ impl Trash {
         let writer = self.claim("claude-trash").map_err(|_| Refusal::PURGE)?;
         let mut entries = read_trash(&self.root).ok_or(Refusal::PURGE)?;
         let entry = current(&mut entries, Action::Purge, id, reviewed)?;
+        if restored_inventory(&self.root, entry)? {
+            return Err(Refusal::RESTORE_PENDING);
+        }
         if protected(entry) {
             return Err(Refusal::new(
                 409,
@@ -364,6 +382,10 @@ impl Trash {
         if due_by.is_some_and(|cutoff| !due(entry, cutoff)) {
             return Err(Refusal::UNKNOWN);
         }
+        entry
+            .as_object_mut()
+            .ok_or(Refusal::PURGE)?
+            .remove("restorePending");
         entry["state"] = json!("deleting");
         let mut entry = entry.clone();
         let position = entries
@@ -432,19 +454,40 @@ impl Trash {
     }
 
     async fn restore(&self, id: &str, reviewed: &str) -> Result<String, Refusal> {
+        self.restore_with(id, reviewed, |_, writer, document| save(writer, document))
+            .await
+    }
+
+    async fn restore_with(
+        &self,
+        id: &str,
+        reviewed: &str,
+        write: impl Fn(RestoreWrite, &OwnedStore, &Value) -> Result<(), Refusal> + Sync,
+    ) -> Result<String, Refusal> {
         let writer = self.claim("claude-trash")?;
         let mut entries = read_trash(&self.root).ok_or(Refusal::RESTORE)?;
-        let entry = current(&mut entries, Action::Restore, id, reviewed)?.clone();
-        let account = account_id(&entry);
+        let mut entry = current(&mut entries, Action::Restore, id, reviewed)?.clone();
+        let account = format!("claude:{}", account_id(&entry));
         let pending = self.claim("claude-pending")?;
         let inventory = self.claim("claude-desktop-profiles")?;
-        if profile_exists(&self.root, account, true)? {
+        if restored_inventory(&self.root, &entry)? {
+            entries.retain(|row| row["trashId"] != id);
+            write(
+                RestoreWrite::Retire,
+                &writer,
+                &json!({"version":1,"entries":entries}),
+            )
+            .map_err(|_| Refusal::RESTORE_PENDING)?;
+            return Ok(account);
+        }
+        if profile_exists(&self.root, account_id(&entry), true)? {
             return Err(Refusal::IN_USE);
         }
-        let (source, target) = if entry["source"] == "pending" {
-            ("claude-pending", &pending)
+        let source = restore_store(&entry);
+        let target = if source == "claude-pending" {
+            &pending
         } else {
-            ("claude-desktop-profiles", &inventory)
+            &inventory
         };
         let mut document = profile_document(&self.root, source)?;
         document["profiles"]
@@ -454,11 +497,26 @@ impl Trash {
         if source == "claude-pending" && manifest::parse_pending(&document).is_none() {
             return Err(Refusal::WRITE);
         }
+        if entry["restorePending"] != true {
+            entry["restorePending"] = json!(true);
+            *current(&mut entries, Action::Restore, id, reviewed)? = entry.clone();
+            write(
+                RestoreWrite::Reserve,
+                &writer,
+                &json!({"version":1,"entries":entries}),
+            )?;
+        }
+        let profile = account_id(&entry);
+        let write = &write;
         claude_lifecycle::run(Workflow::Restore, |effect| {
             let (entry, document) = (&entry, &document);
             async move {
                 if matches!(effect, Effect::Commit) {
-                    save(target, document)?;
+                    if let Err(error) = write(RestoreWrite::Inventory, target, document)
+                        && !restored_inventory(&self.root, entry).unwrap_or(false)
+                    {
+                        return Err(error);
+                    }
                     return Ok(true);
                 }
                 let host = host(effect);
@@ -469,7 +527,7 @@ impl Trash {
                 let undo = matches!(effect, Effect::UndoMac | Effect::UndoWindows);
                 let op = if undo { "trash" } else { "restore" };
                 let args = json!({
-                    "op":op,"host":host,"profileId":account,
+                    "op":op,"host":host,"profileId":profile,
                     "trashName":detail["trashName"],"launcher":launcher
                 });
                 let receipt = self.host_call(host, detail, args).await;
@@ -488,8 +546,13 @@ impl Trash {
         })
         .await?;
         entries.retain(|row| row["trashId"] != id);
-        save(&writer, &json!({"version":1,"entries":entries})).map_err(|_| Refusal::RESTORE)?;
-        Ok(format!("claude:{account}"))
+        write(
+            RestoreWrite::Retire,
+            &writer,
+            &json!({"version":1,"entries":entries}),
+        )
+        .map_err(|_| Refusal::RESTORE_PENDING)?;
+        Ok(account)
     }
 
     async fn host_call(&self, host: &str, detail: &Value, args: Value) -> Option<Value> {
@@ -524,7 +587,7 @@ fn current<'a>(
 fn fingerprint(entry: &Value) -> String {
     aac_core::sha256_hex(aac_views::js_json::write(&json!({
         "trashId":entry["trashId"],"state":entry["state"],"entry":entry["entry"],
-        "hosts":entry["hosts"],"purgedHosts":entry["purgedHosts"]
+        "hosts":entry["hosts"],"purgedHosts":entry["purgedHosts"],"restorePending":entry["restorePending"]
     })))
 }
 
@@ -597,6 +660,29 @@ fn profile_document(root: &Path, id: &str) -> Result<Value, Refusal> {
         return Err(Refusal::WRITE);
     }
     Ok(document)
+}
+
+fn restore_store(entry: &Value) -> &'static str {
+    if entry["source"] == "pending" {
+        "claude-pending"
+    } else {
+        "claude-desktop-profiles"
+    }
+}
+
+fn restored_inventory(root: &Path, entry: &Value) -> Result<bool, Refusal> {
+    if entry["restorePending"] != true {
+        return Ok(false);
+    }
+    let store = restore_store(entry);
+    let mut expected = entry["entry"].clone();
+    if store == "claude-pending" && expected.get("expectedEmail").is_none() {
+        expected["expectedEmail"] = Value::Null;
+    }
+    let doc = profile_document(root, store)?;
+    Ok(doc["profiles"]
+        .as_array()
+        .is_some_and(|profiles| profiles.contains(&expected)))
 }
 
 fn profile_exists(root: &Path, id: &str, fold: bool) -> Result<bool, Refusal> {
@@ -1176,6 +1262,65 @@ mod tests {
             .unwrap_or_else(|_| panic!("inventory"));
         assert_eq!(inventory["profiles"], json!([entry["entry"]]));
         assert!(read_trash(&owner.root).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_retries_one_failed_inventory_write() {
+        retry_failed_write(RestoreWrite::Inventory).await;
+    }
+
+    #[tokio::test]
+    async fn restore_retries_only_cleanup_after_the_inventory_was_published() {
+        retry_failed_write(RestoreWrite::Retire).await;
+    }
+
+    async fn retry_failed_write(stage: RestoreWrite) {
+        let (_dir, owner, entry) = fixture();
+        let writer = owner
+            .claim("claude-trash")
+            .unwrap_or_else(|_| panic!("trash lease"));
+        save(&writer, &json!({"version":1,"entries":[entry]}))
+            .unwrap_or_else(|_| panic!("trash write"));
+        drop(writer);
+        let failure = owner
+            .restore_with(ID, &fingerprint(&entry), |step, writer, doc| {
+                if step == stage {
+                    Err(Refusal::WRITE)
+                } else {
+                    save(writer, doc)
+                }
+            })
+            .await
+            .unwrap_err();
+        let mut held = read_trash(&owner.root).unwrap();
+        assert_eq!(held.len(), 1);
+        let pending = held.remove(0);
+        assert_eq!(pending["restorePending"], true);
+        let published =
+            profile_exists(&owner.root, "work", true).unwrap_or_else(|_| panic!("inventory"));
+        assert_eq!(published, stage == RestoreWrite::Retire);
+        if published {
+            assert_eq!(failure.code, "restore_pending");
+        }
+        assert_eq!(
+            owner
+                .restore_with(ID, &fingerprint(&pending), |step, writer, doc| {
+                    assert!(
+                        !published || step == RestoreWrite::Retire,
+                        "cleanup must not replay publish"
+                    );
+                    save(writer, doc)
+                })
+                .await
+                .unwrap_or_else(|_| panic!("retry")),
+            "claude:work"
+        );
+        assert!(read_trash(&owner.root).unwrap().is_empty());
+        assert_eq!(
+            profile_document(&owner.root, "claude-desktop-profiles")
+                .unwrap_or_else(|_| panic!("inventory"))["profiles"],
+            json!([entry["entry"]])
+        );
     }
 
     #[tokio::test]
