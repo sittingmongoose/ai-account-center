@@ -38,29 +38,50 @@ import { homeFedService, homeViewService, withOfferedViews } from '../views/offe
 import { homeReadInput, isHomeView, parseHomeContext } from '../views/home-context';
 import { answerHomeFed } from '../views/home-feed';
 
-/** The empty Ubuntu inventory when no runtime is installed (the retired runtime service). */
-function emptyInventory(): AntigravityInventory {
-  return { schemaVersion: 1, hostId: 'ubuntu', profiles: [] };
+/**
+ * The runtime's inventory from its native owner: the same read `GET /api/antigravity/profiles`
+ * answers with (`profile_reads` in the Rust listener). The retired TypeScript runtime service is
+ * gone, so an owner that cannot answer is an *unavailable* read (the promise rejects), never an
+ * invented empty inventory the page would draw as "no saved profiles".
+ */
+export async function runtimeInventory(req: Request, res: Response): Promise<unknown> {
+  return readOwnedValueWithRust(
+    req,
+    res,
+    '/api/antigravity/profiles',
+    getCcsDir(),
+    (body) => (isRustAntigravityInventory(body) ? { value: body } : null),
+    async () => {
+      throw new ProfileError('Antigravity accounts could not be read safely.');
+    }
+  );
 }
 
-/** The runtime's inventory, or the empty Ubuntu one: the native owner reads the runtime now. */
-export async function runtimeInventory(): Promise<unknown> {
-  return emptyInventory();
-}
-
-/** GET /profiles' answer composed from the read (fed or the empty fallback), through Rust. */
+/**
+ * GET /profiles' answer composed from the read (fed or a fresh owner read), through Rust. An
+ * unavailable read stays unavailable (`null`); it is never composed from an empty inventory.
+ */
 export async function readAntigravityInventory(
   req: Request,
   res: Response,
   read?: { value: unknown }
 ): Promise<unknown> {
-  const inventory = (read ? read.value : emptyInventory()) as AntigravityInventory;
+  let inventory: unknown;
+  if (read) inventory = read.value;
+  else {
+    try {
+      inventory = await runtimeInventory(req, res);
+    } catch {
+      return null;
+    }
+  }
+  if (!isRustAntigravityInventory(inventory)) return null;
   return composeWithRust(
     req,
     res,
     '/api/antigravity/profiles',
     () => rustAntigravityInventoryInput(inventory),
-    () => publicInventory(inventory),
+    () => publicInventory(inventory as AntigravityInventory),
     isRustAntigravityInventory
   );
 }
@@ -87,8 +108,8 @@ export interface HomeViewRouterDeps {
   readInventory?: (req: Request, res: Response, read?: { value: unknown }) => Promise<unknown>;
   /** R1: the dashboard before its per-response pass, with that pass's clock. */
   readHomeDashboard?: typeof readAccountDashboardForHome;
-  /** R1: the Antigravity runtime's inventory. */
-  runtimeInventory?: () => Promise<unknown>;
+  /** R1: the Antigravity runtime's inventory (the native owner's read). */
+  runtimeInventory?: (req: Request, res: Response) => Promise<unknown>;
   /** R1: the CCS directory the TS readers use. */
   scope?: () => string;
 }
@@ -129,7 +150,7 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
         (deps.readHomeDashboard ?? readAccountDashboardForHome)(platform, refresh === 'true', {
           secureTransport,
         }).catch(() => null),
-        (deps.runtimeInventory ?? runtimeInventory)().then(
+        (deps.runtimeInventory ?? runtimeInventory)(req, res).then(
           (value) => ({ value }),
           () => null
         ),

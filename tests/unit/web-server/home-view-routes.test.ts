@@ -19,6 +19,7 @@ import { RustService } from '../../../src/web-server/rust-service';
 import {
   readAntigravityInventory,
   readClaudeDesktopProfiles,
+  runtimeInventory,
 } from '../../../src/web-server/routes/home-view-routes';
 
 import { getCcsDir } from '../../../src/utils/config-manager';
@@ -400,6 +401,8 @@ describe('compose() for /api/views/home over a private socket', () => {
   const secret = 'e'.repeat(64);
   const bootId = 'd'.repeat(24);
   let reply: { status: number; body: string } = { status: 200, body: JSON.stringify(VIEW) };
+  /** The native owner's answer to GET /api/antigravity/profiles with no TS input (the raw read). */
+  let inventoryReply: { status: number; body: string } | null = null;
   let seen: {
     method?: string;
     url?: string;
@@ -414,9 +417,14 @@ describe('compose() for /api/views/home over a private socket', () => {
       const principal = JSON.parse(String(req.headers['x-aac-principal']));
       seen.push({ method: req.method, url: req.url, principal, cookie: req.headers.cookie, body });
       res.setHeader('x-aac-service-boot', bootId);
+      // The owner's own read: an empty body is the native inventory (`profile_reads`).
+      const answer =
+        inventoryReply && req.url === '/api/antigravity/profiles' && body === ''
+          ? inventoryReply
+          : reply;
       // as the real service: Home is for a verified dashboard session only
-      res.statusCode = principal.kind === 'session' ? reply.status : 401;
-      res.end(principal.kind === 'session' ? reply.body : '{"error":"Authentication required"}');
+      res.statusCode = principal.kind === 'session' ? answer.status : 401;
+      res.end(principal.kind === 'session' ? answer.body : '{"error":"Authentication required"}');
     });
   });
   const req = {
@@ -447,6 +455,7 @@ describe('compose() for /api/views/home over a private socket', () => {
   beforeEach(() => {
     seen = [];
     reply = { status: 200, body: JSON.stringify(VIEW) };
+    inventoryReply = null;
   });
 
   it('sends the envelope once as the read body, with a hashed session principal, and serves a valid view', async () => {
@@ -528,13 +537,112 @@ describe('compose() for /api/views/home over a private socket', () => {
   it("Home's Antigravity copy is composed as GET /api/antigravity/profiles composes it", async () => {
     const s = service();
     const res = { locals: { rustService: s } } as unknown as Response;
-    reply = { status: 503, body: JSON.stringify({ error: 'TypeScript read fallback required' }) };
-    expect(await readAntigravityInventory(req, res)).toEqual({
+    // The service reads its own boot root only; this test home is the worker's.
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
+    });
+    // The native owner's read: one saved profile, as profile_reads answers with no TS input.
+    const raw = {
       schemaVersion: 1,
       hostId: 'ubuntu',
-      profiles: [],
+      profiles: [
+        {
+          id: 'gmail',
+          email: 'gmail@example.test',
+          plan: 'Google AI Pro',
+          selected: true,
+          available: true,
+          runtimeVerified: true,
+          identityVerified: true,
+          credentialRevision: 'f'.repeat(64),
+          savedAt: '2026-10-01T16:40:00.000Z',
+        },
+      ],
+    };
+    inventoryReply = { status: 200, body: JSON.stringify(raw) };
+    // The composed copy the same route answers for that read.
+    reply = { status: 200, body: JSON.stringify(raw) };
+    expect(await runtimeInventory(req, res)).toEqual(raw);
+    expect(seen.at(-1)?.url).toBe('/api/antigravity/profiles');
+    expect(seen.at(-1)?.body).toBe('');
+    expect(await readAntigravityInventory(req, res)).toEqual(raw);
+    expect(seen.filter((r) => r.url === '/api/antigravity/profiles')).toHaveLength(3);
+    // An owner that cannot answer is unavailable (null), never an empty inventory.
+    inventoryReply = { status: 503, body: JSON.stringify({ error: 'TypeScript read fallback required' }) };
+    expect(await readAntigravityInventory(req, res)).toBeNull();
+  });
+
+  it('Home and /api/antigravity/profiles agree on a non-empty saved registry (the shipping switch unset)', async () => {
+    const s = service();
+    Object.assign((s as unknown as { lease: { connection: object } }).lease.connection, {
+      ccsDir: getCcsDir(),
     });
-    expect(seen.map((r) => r.url)).toEqual(['/api/antigravity/profiles']);
-    expect(s.stats.fallbacks).toBe(1);
+    // One saved profile, as the native owner reads the registry.
+    const raw = {
+      schemaVersion: 1,
+      hostId: 'ubuntu',
+      profiles: [
+        {
+          id: 'gmail',
+          email: 'gmail@example.test',
+          plan: 'Google AI Pro',
+          selected: true,
+          available: true,
+          runtimeVerified: true,
+          identityVerified: true,
+          credentialRevision: 'f'.repeat(64),
+          savedAt: '2026-10-01T16:40:00.000Z',
+        },
+      ],
+    };
+    inventoryReply = { status: 200, body: JSON.stringify(raw) };
+    reply = { status: 200, body: JSON.stringify(raw) };
+    // The retained Home path: production inventory deps (no injection), the group is off so the fed path declines.
+    const instance = express();
+    instance.use((rq, rs, next) => {
+      Object.assign(rq, { session: { authenticated: true }, sessionID: 'fixture-session' });
+      rs.locals.rustService = s;
+      next();
+    });
+    instance.use(
+      '/api/views',
+      createHomeViewRouter({
+        getDashboard: async () => structuredClone(dashboard),
+        readProfiles: async () => [{ id: 'a', name: 'A', openOperation: null }],
+        scope: () => getCcsDir(),
+      })
+    );
+    instance.get('/api/antigravity/profiles', async (rq, rs) => {
+      rs.json(await readAntigravityInventory(rq, rs));
+    });
+    const own = await new Promise<Server>((resolve) => {
+      const started = instance.listen(0, '127.0.0.1', () => resolve(started));
+    });
+    const address = own.address();
+    if (!address || typeof address === 'string') throw new Error('No test port');
+    const homeUrl = `http://127.0.0.1:${address.port}/api/views/home?platform=mac`;
+    const profilesUrl = `http://127.0.0.1:${address.port}/api/antigravity/profiles`;
+    try {
+      const homeReply = await (
+        await fetch(homeUrl, { headers: { 'x-aac-home-context': header(CONTEXT) } })
+      ).json();
+      const profilesReply = await (await fetch(profilesUrl)).json();
+      // The same saved profile reaches both answers.
+      expect(homeReply.antigravity).toEqual(profilesReply);
+      expect(homeReply.antigravity.profiles).toHaveLength(1);
+      expect(homeReply.antigravity.profiles[0].id).toBe('gmail');
+      // An unavailable read is unavailable on both, never an empty inventory.
+      inventoryReply = {
+        status: 503,
+        body: JSON.stringify({ error: 'TypeScript read fallback required' }),
+      };
+      expect(
+        (await (await fetch(homeUrl, { headers: { 'x-aac-home-context': header(CONTEXT) } })).json())
+          .antigravity
+      ).toBeNull();
+      expect(await (await fetch(profilesUrl)).json()).toBeNull();
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
   });
 });
