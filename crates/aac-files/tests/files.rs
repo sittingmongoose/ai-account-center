@@ -240,3 +240,126 @@ fn private_modes_and_symlink_refusal() {
             .is_err()
     );
 }
+
+fn private_file(path: &Path, bytes: &[u8]) {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    std::io::Write::write_all(&mut options.open(path).unwrap(), bytes).unwrap();
+}
+
+fn private_dir(path: &Path) {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path).unwrap();
+}
+
+fn age(path: &Path, seconds: u64) {
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds);
+    std::fs::File::options()
+        .read(true)
+        .open(path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+}
+
+fn dead_pid() -> u32 {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+#[test]
+#[cfg(unix)]
+fn an_aged_legacy_takeover_gate_does_not_block_the_next_session_owner() {
+    let root = tempfile::tempdir().unwrap();
+    let auth = root.path().join("auth");
+    private_dir(&auth);
+    let (host, boot) = aac_files::process::host_boot().unwrap();
+    let claim = serde_json::json!({
+        "pid": dead_pid(), "host": host, "boot": boot, "writer": "rust", "token": "crashed"
+    });
+    private_file(
+        &auth.join("sessions.owner"),
+        &serde_json::to_vec(&claim).unwrap(),
+    );
+    // A pre-cut listener made the gate and stopped before replacing the dead claim.
+    let gate = auth.join("sessions.owner.lock");
+    std::fs::create_dir(&gate).unwrap();
+    age(&gate, 61);
+    let owner = auth_owner::SessionOwner::take(root.path()).expect("stale gate is reclaimed");
+    owner.verify().unwrap();
+    assert!(!gate.exists());
+    drop(owner);
+    assert!(!auth.join("sessions.owner").exists());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_crash_released_takeover_gate_is_reclaimed_immediately() {
+    let root = tempfile::tempdir().unwrap();
+    let auth = root.path().join("auth");
+    private_dir(&auth);
+    let (host, boot) = aac_files::process::host_boot().unwrap();
+    let claim = serde_json::json!({
+        "pid": dead_pid(), "host": host, "boot": boot, "writer": "rust", "token": "crashed"
+    });
+    private_file(
+        &auth.join("sessions.owner"),
+        &serde_json::to_vec(&claim).unwrap(),
+    );
+    // The gate a Rust takeover creates under its kernel lease; the crash released the lease.
+    let gate = auth.join("sessions.owner.lock");
+    let mut builder = std::fs::DirBuilder::new();
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o1700);
+    }
+    builder.create(&gate).unwrap();
+    let owner = auth_owner::SessionOwner::take(root.path()).expect("crash-released gate");
+    owner.verify().unwrap();
+    assert!(!gate.exists());
+    drop(owner);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn an_abandoned_empty_legacy_config_marker_is_reclaimed() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("config.yaml.lock");
+    // The pre-cut writer's exclusive open, stopped before the first byte.
+    private_file(&marker, b"");
+    age(&marker, 6);
+    let lock = ConfigLock::take(dir.path()).expect("stale empty marker is reclaimed");
+    assert!(marker.exists());
+    drop(lock);
+    assert!(!marker.exists());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_fresh_or_open_empty_config_marker_stays_busy() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("config.yaml.lock");
+    private_file(&marker, b"");
+    assert_eq!(ConfigLock::take(dir.path()).unwrap_err().cause, Cause::Busy);
+    age(&marker, 6);
+    // A legacy writer stopped after its exclusive open still holds the descriptor.
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&marker)
+        .unwrap();
+    assert_eq!(ConfigLock::take(dir.path()).unwrap_err().cause, Cause::Busy);
+    drop(writer);
+    assert!(ConfigLock::take(dir.path()).is_ok());
+}
