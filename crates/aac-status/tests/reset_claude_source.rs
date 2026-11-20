@@ -298,7 +298,7 @@ fn assert_refill_scope(name: &str) {
     let expected = case["claimable"].as_bool().unwrap();
     let (dir, command) = setup();
     std::fs::write(dir.path().join("web-usage"), "").unwrap();
-    let usage = json!({"five_hour":{"utilization":100}, "limits":[case["limit"].clone()],
+    let usage = json!({"five_hour":{"utilization":100}, "seven_day":{"utilization":80}, "limits":[case["limit"].clone()],
         "cedar_ember":{"eligible":true,"grants":[{"id":"fixture_grant","resets_left":1,"resets_total":1,
             "paused":false,"usable_now":true,"clears":["seven_day_overage_included"],"gives_back_weekly":true}]}});
     std::fs::write(dir.path().join("refill-usage.json"), usage.to_string()).unwrap();
