@@ -314,3 +314,57 @@ fn the_doorbell_runs_pm_mail_with_the_body_on_stdin() {
     // PATH first, then the share's fallback; a bare name when neither holds it.
     assert_eq!(find_pm_mail(Some(dir.path().as_os_str())), bin);
 }
+
+#[test]
+fn the_windows_wrapper_layout_launches_python_with_an_argument_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("pm-mail");
+    let cmd = dir.path().join("pm-mail.cmd");
+    std::fs::write(
+        &script,
+        "import sys\nfrom pathlib import Path\nroot = Path(__file__).resolve().parent\n(root / 'args').write_text('\\n'.join(sys.argv[1:]) + '\\n', encoding='utf-8')\n(root / 'stdin').write_bytes(sys.stdin.buffer.read())\n",
+    )
+    .unwrap();
+    std::fs::write(&cmd, "@python \"%~dp0pm-mail\" %*\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    assert_eq!(windows_wrapper_script(&script).as_deref(), Some(script.as_path()));
+    assert_eq!(windows_wrapper_script(&cmd).as_deref(), Some(script.as_path()));
+    let launch = pm_mail_launch(&cmd, "lead", "2 answers from the owner (deck-7)").expect("windows layout resolves");
+    assert_eq!(launch.args[0], script.as_os_str());
+    assert_eq!(
+        &launch.args[1..],
+        [
+            std::ffi::OsString::from("--as"),
+            std::ffi::OsString::from(DOORBELL_SENDER),
+            std::ffi::OsString::from("send"),
+            std::ffi::OsString::from("lead"),
+            std::ffi::OsString::from("2 answers from the owner (deck-7)"),
+        ]
+    );
+    let found = find_pm_mail(Some(dir.path().as_os_str()));
+    assert!(found == cmd || found == script);
+    let body = "line one\nline two";
+    let ok = pm_mail_ring(
+        &cmd,
+        "lead",
+        "2 answers from the owner (deck-7)",
+        body,
+        std::time::Duration::from_secs(5),
+    );
+    assert_eq!(
+        ok,
+        RingResult {
+            ok: true,
+            detail: "Rang lead through pm-mail.".into()
+        }
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("args")).unwrap(),
+        "--as\naac-answers\nsend\nlead\n2 answers from the owner (deck-7)\n"
+    );
+    assert_eq!(std::fs::read_to_string(dir.path().join("stdin")).unwrap(), body);
+}

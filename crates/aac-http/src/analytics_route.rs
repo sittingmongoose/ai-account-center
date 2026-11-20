@@ -249,7 +249,7 @@ pub(crate) fn compose(
     if refresh {
         live.request_refresh();
     }
-    let scanning = refresh || live.scanning();
+    let scanning = live.refreshing();
     let platform = query
         .get("platform")
         .and_then(Value::as_str)
@@ -393,5 +393,65 @@ mod tests {
         assert_eq!(answer["range"]["preset"], "7d");
         assert_eq!(answer["range"]["tz"], "UTC");
         assert!(answer["accounts"].is_array());
+    }
+
+    fn encoded(result: Answer, query: &str) -> Value {
+        let (_, bytes) = encode(result, Some(query)).expect("encode");
+        serde_json::from_slice(&bytes).expect("json")
+    }
+
+    #[test]
+    fn a_pending_analytics_refresh_stays_queued_until_the_pass_completes() {
+        let root = tempfile::tempdir().expect("fixture root");
+        let store = root.path().join("store");
+        let engine = aac_store::ops::open_engine(store.to_str().expect("store path"), None, None)
+            .expect("open fixture store");
+        let engine = Arc::new(engine);
+        let live = crate::analytics_live::Live::default();
+        let now = 1_795_046_400_000;
+        let first = encoded(
+            compose(
+                Arc::clone(&engine),
+                root.path(),
+                None,
+                &live,
+                Some("range=7d&tz=UTC&refresh=true"),
+                now,
+            ),
+            "range=7d&tz=UTC&refresh=true",
+        );
+        let fetched = first["activity"]["fetchedAt"].clone();
+        assert_eq!(first["refreshing"], json!(true));
+        assert_eq!(first["activity"]["refreshing"], json!(true));
+        let queued = encoded(
+            compose(
+                Arc::clone(&engine),
+                root.path(),
+                None,
+                &live,
+                Some("range=7d&tz=UTC"),
+                now,
+            ),
+            "range=7d&tz=UTC",
+        );
+        assert_eq!(queued["refreshing"], json!(true));
+        assert_eq!(queued["activity"]["refreshing"], json!(true));
+        assert_eq!(queued["activity"]["fetchedAt"], fetched);
+        let live = std::sync::Arc::new(live);
+        drop(live.pass());
+        let later = 1_795_046_460_000;
+        let done = encoded(
+            compose(
+                engine,
+                root.path(),
+                None,
+                &live,
+                Some("range=7d&tz=UTC"),
+                later,
+            ),
+            "range=7d&tz=UTC",
+        );
+        assert_eq!(done["refreshing"], json!(false));
+        assert_eq!(done["activity"]["refreshing"], json!(false));
     }
 }

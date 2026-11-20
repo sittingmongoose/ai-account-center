@@ -12,6 +12,7 @@ use aac_files::read::Read;
 use aac_status::read_context::Envelope;
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::Arc;
 
 /// `listClaudeDesktopProfileMetadata`'s rows. TS reads through a symlink and may accept a
 /// larger multi-byte manifest, so both stay with the TS reader.
@@ -41,11 +42,8 @@ pub(crate) fn compose_manifest(bytes: Option<&[u8]>) -> Option<Value> {
 }
 
 /// The process's one installed Antigravity host (TS keeps the same module-wide runtime).
-fn antigravity_host(root: &Path) -> Option<&'static crate::antigravity_host::Host> {
-    static HOST: std::sync::OnceLock<Option<crate::antigravity_host::Host>> =
-        std::sync::OnceLock::new();
-    HOST.get_or_init(|| crate::antigravity_host::Host::from_root(root))
-        .as_ref()
+fn antigravity_host(root: &Path) -> Option<Arc<crate::antigravity_host::Host>> {
+    crate::antigravity_host::Host::shared(root)
 }
 
 fn now_ms() -> i64 {

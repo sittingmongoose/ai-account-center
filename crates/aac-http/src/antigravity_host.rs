@@ -15,8 +15,9 @@ use crate::antigravity_runtime::{
     LiveIdentity, hash_word, inventory_with_probes, read_state, sha256_hex,
 };
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// The installed native runtime, from `<ccs>/antigravity-switching/runtime-installation.json`.
 struct Installed {
@@ -104,7 +105,16 @@ type HealthRun = dyn Fn(&str, &[&str], u64) -> Option<String> + Send + Sync;
 type HealthRunner = Box<HealthRun>;
 type VersionReader = Box<dyn FnMut() -> Option<String> + Send>;
 
-/// The installed runtime host for one CCS scope.
+/// The process's one Antigravity host per CCS root (Accounts and Profiles share it).
+fn hosts() -> &'static Mutex<HashMap<PathBuf, Arc<Host>>> {
+    static HOSTS: OnceLock<Mutex<HashMap<PathBuf, Arc<Host>>>> = OnceLock::new();
+    HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn host_key(ccs: &Path) -> PathBuf {
+    ccs.canonicalize().unwrap_or_else(|_| ccs.to_path_buf())
+}
+
 /// The installed runtime host for one CCS scope.
 pub struct Host {
     ccs: PathBuf,
@@ -146,6 +156,42 @@ impl Host {
                 cooldowns: Cooldowns::default(),
             }),
         })
+    }
+
+    /// The long-lived host for this CCS root: Accounts and Profiles share one quota owner.
+    pub fn shared(ccs: &Path) -> Option<Arc<Self>> {
+        let key = host_key(ccs);
+        {
+            let map = hosts().lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Some(host) = map.get(&key) {
+                return Some(Arc::clone(host));
+            }
+        }
+        let host = Arc::new(Self::from_root(ccs)?);
+        let mut map = hosts().lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Some(existing) = map.get(&key) {
+            return Some(Arc::clone(existing));
+        }
+        map.insert(key, Arc::clone(&host));
+        Some(host)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_shared(ccs: &Path, host: Arc<Self>) {
+        let key = host_key(ccs);
+        hosts()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(key, host);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_shared(ccs: &Path) {
+        let key = host_key(ccs);
+        hosts()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&key);
     }
 
     /// The service's own construction: `$HOME`, `/usr/bin/python3` and the packaged scripts.
@@ -666,6 +712,183 @@ print(json.dumps({{"format":"antigravity-consumer-json",
         assert_eq!(
             quotas["accounts"][0]["windows"][0]["usedPercent"],
             json!(40)
+        );
+    }
+
+    fn counting_quota_script(email: &str, subject: &str) -> String {
+        format!(
+            r#"import base64,hashlib,json,os,sys
+request = json.load(sys.stdin)
+credential = base64.b64decode(request["credentialBase64"]) if "credentialBase64" in request else b""
+fingerprint = hashlib.sha256(credential).hexdigest()
+here = os.path.dirname(os.path.abspath(__file__))
+if request.get("operation") == "identity":
+    identity = {{"email":"{email}","subject":"{subject}","plan":"Google AI Pro",
+                "verifiedAt":"2026-10-01T17:00:00.000Z","source":"provider-userinfo"}}
+    key = hashlib.sha256(json.dumps(["antigravity", identity["email"], identity["subject"]],
+                                    separators=(",", ":")).encode()).hexdigest()
+    print(json.dumps({{**identity, "credentialRevision": fingerprint, "identityKey": key}}))
+else:
+    count_file = os.path.join(here, "quota-count")
+    services_file = os.path.join(here, "quota-services")
+    try:
+        n = int(open(count_file).read().strip() or "0") + 1
+    except Exception:
+        n = 1
+    open(count_file, "w").write(str(n))
+    open(services_file, "a").write("app\nt3\n")
+    pct = 30 + n
+    window = lambda key: {{"key": key, "label": "Weekly", "usedPercent": pct,
+        "resetAt": "2026-10-08T17:00:00.000Z", "windowMinutes": 10080}}
+    print(json.dumps({{"profileId":"gmail","identityKey":request["identityKey"],
+        "credentialRevision":request["credentialRevision"],"email":"{email}","plan":"Google AI Pro",
+        "status":"fresh","fetchedAt":"2026-10-01T17:00:00.000Z","sampledAt":"2026-10-01T17:00:00.000Z",
+        "windows":[window("gemini-weekly"), window("cli-gemini-weekly")],
+        "source":"native-consumer","identityVerified":True,"identityValidation":"verified"}}))
+"#
+        )
+    }
+
+    struct SharedHostGuard(PathBuf);
+    impl Drop for SharedHostGuard {
+        fn drop(&mut self) {
+            Host::clear_shared(&self.0);
+        }
+    }
+
+    #[test]
+    fn accounts_and_profiles_share_one_quota_owner_per_profile() {
+        let Some(python) = python() else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let ccs = temp.path().join(".ccs");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&ccs).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let identity_value = json!({
+            "email": "gmail@example.com",
+            "subject": "fixture-authoritative-subject-gmail",
+            "plan": "Google AI Pro",
+            "verifiedAt": "2026-10-01T16:40:00.000Z",
+            "source": "provider-userinfo",
+        });
+        let identity = LiveIdentity::from_value(&identity_value).unwrap();
+        let revision = sha256_hex(CREDENTIAL);
+        write(
+            &ccs.join("antigravity-profiles/registry-000000000001.json"),
+            json!({
+                "version": 1, "revision": 1,
+                "profiles": [{
+                    "id": "gmail", "email": "gmail@example.com",
+                    "identityKey": identity.identity_key(), "plan": "Google AI Pro",
+                    "credential": {"fingerprint": revision, "format": "fake-native-json",
+                                   "identity": identity_value,
+                                   "savedAt": "2026-10-01T16:40:00.000Z"},
+                }],
+                "active": {"profileId": "gmail", "verifiedAt": "2026-10-01T16:40:00.000Z"},
+                "transaction": null,
+            })
+            .to_string()
+            .as_bytes(),
+            0o600,
+        );
+        write(
+            &ccs.join("antigravity-instances/gmail/ubuntu")
+                .join(format!("credential-{revision}.bin")),
+            CREDENTIAL,
+            0o600,
+        );
+        write(
+            &home.join(".gemini/antigravity-cli/antigravity-oauth-token"),
+            CREDENTIAL,
+            0o600,
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(home.join(".gemini"), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        let native = script(
+            temp.path(),
+            "native.py",
+            &format!(
+                r#"import json
+print(json.dumps({{"format":"antigravity-consumer-json",
+    "credentialBase64":"{}",
+    "revision":"{}"}}))
+"#,
+                base64::engine::general_purpose::STANDARD.encode(CREDENTIAL),
+                revision
+            ),
+        );
+        let quota = script(
+            temp.path(),
+            "quota.py",
+            &counting_quota_script("gmail@example.com", "fixture-authoritative-subject-gmail"),
+        );
+        let health = script(temp.path(), "health.py", "");
+        let collectors = temp.path().join("collectors");
+        std::fs::create_dir_all(&collectors).unwrap();
+        let host = std::sync::Arc::new(
+            Host::new(
+                &Paths {
+                    ccs: &ccs,
+                    home: &home,
+                    python: &python,
+                    quota: &quota,
+                    native: &native,
+                    collectors: &collectors,
+                    health: &health,
+                },
+                Box::new(|file, _args, _timeout| {
+                    (file != "systemctl").then(|| r#"{"ok":true}"#.to_owned())
+                }),
+                Box::new(|| None),
+            )
+            .unwrap(),
+        );
+        Host::install_shared(&ccs, std::sync::Arc::clone(&host));
+        let _guard = SharedHostGuard(ccs.clone());
+        let now = crate::antigravity_runtime::js_date("2026-10-01T17:00:00.000Z").unwrap();
+        let accounts = host.accounts(false, now).expect("accounts quota");
+        let profiles =
+            crate::profile_reads::antigravity_quotas(&ccs, false, now).expect("profiles quota");
+        let count = std::fs::read_to_string(temp.path().join("quota-count")).unwrap();
+        let services = std::fs::read_to_string(temp.path().join("quota-services")).unwrap();
+        assert_eq!(count.trim(), "1");
+        assert_eq!(services, "app\nt3\n");
+        let accounts_pct = &accounts[0]["windows"][0]["usedPercent"];
+        let profiles_pct = &profiles["accounts"][0]["windows"][0]["usedPercent"];
+        assert_eq!(accounts_pct, profiles_pct);
+        assert_eq!(accounts_pct.as_f64(), Some(31.0));
+        let keys: Vec<_> = accounts[0]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|window| window["key"].as_str())
+            .collect();
+        assert_eq!(keys, ["gemini-weekly", "cli-gemini-weekly"]);
+        let profile_keys: Vec<_> = profiles["accounts"][0]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|window| window["key"].as_str())
+            .collect();
+        assert_eq!(profile_keys, keys);
+        let again = host.accounts(false, now).expect("cached accounts");
+        assert_eq!(again[0]["windows"][0]["usedPercent"].as_f64(), Some(31.0));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("quota-count"))
+                .unwrap()
+                .trim(),
+            "1"
         );
     }
 }
