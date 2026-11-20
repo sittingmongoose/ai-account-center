@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import path from 'node:path';
 import {
   parseClaudeSignInRenewal,
   readClaudeSignInRenewal,
@@ -128,7 +129,7 @@ describe('claude sign-in renewal file', () => {
     const read = await readClaudeSignInRenewal({
       folder: async () => '/share',
       readFile: async (name) => {
-        expect(name).toBe('/share/claude-signins.json');
+        expect(name).toBe(path.join('/share', 'claude-signins.json'));
         return JSON.stringify(file());
       },
       now: () => NOW,

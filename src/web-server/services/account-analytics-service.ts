@@ -1,4 +1,14 @@
 import { readNativeCollection, workerReadsNative } from '../native-collection-feed';
+import {
+  longBurnKey,
+  type AccountAnalyticsLongBurn,
+  type AccountAnalyticsSampleEvent,
+} from '../agent-usage/agent-usage-files';
+export {
+  longBurnKey,
+  type AccountAnalyticsLongBurn,
+  type AccountAnalyticsSampleEvent,
+} from '../agent-usage/agent-usage-files';
 import { broadcastDashboardEvent } from '../dashboard-events';
 import { privateFileOwners } from '../../shared/private-files';
 import { publishSampledDashboard } from '../views/dashboard-feed';
@@ -43,7 +53,7 @@ import {
   type AccountAnalyticsComposeInput,
   type AccountAnalyticsRangeInput,
 } from './account-analytics-compose';
-import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
+import type { DashboardAccount } from './account-dashboard-types';
 import type {
   AccountAnalytics,
   AccountAnalyticsActivity,
@@ -57,12 +67,7 @@ import {
   type AccountAnalyticsHistoryData,
   type AccountAnalyticsHistoryStore,
 } from './account-analytics-history';
-import {
-  openAacStore,
-  STORE_RETENTION_DAYS,
-  type AacStore,
-  type LongBurnSpan,
-} from '../../store/store-service';
+import { openAacStore, STORE_RETENTION_DAYS, type AacStore } from '../../store/store-service';
 import {
   MAX_ACCOUNTS_PER_SAMPLE,
   storeObservationFromAccount,
@@ -143,36 +148,9 @@ export type AccountAnalyticsOwnedComposer = (
 /** A computation slower than this is logged with its phases (`analytics.read_timing`). */
 const SLOW_READ_MS = 1_000;
 
-/** Long-period burn of one window: 7 and 30 days across resets, from the store's rollups. */
-export interface AccountAnalyticsLongBurn {
-  last7Days: LongBurnSpan;
-  last30Days: LongBurnSpan;
-}
-
-/**
- * What one finished sample saw: the accounts it recorded (one row per account, the best of both
- * dashboard views) and the quota history after recording them, or null while that history cannot
- * be read. Listeners run after the sample, never inside it, and cannot delay or fail it.
- */
-export interface AccountAnalyticsSampleEvent {
-  accounts: DashboardAccount[];
-  history: AccountAnalyticsHistoryData | null;
-  sampledAt: number;
-  /**
-   * With the store: each live window's 7- and 30-day burn, keyed by `longBurnKey`. Absent
-   * without the store.
-   */
-  longBurn?: Map<string, AccountAnalyticsLongBurn>;
-}
-
 const DAY_MS = 86_400_000;
 /** The 7-day rolling history the agent snapshot publishes. */
 const SNAPSHOT_HISTORY_MS = 7 * DAY_MS;
-
-/** The key of `AccountAnalyticsSampleEvent.longBurn`: account identity and window identity. */
-export function longBurnKey(account: DashboardAccount, window: DashboardAccountWindow): string {
-  return JSON.stringify([accountAnalyticsIdentity(account), analyticsWindowIdentity(window)]);
-}
 
 async function defaultUsageStore(scope: string): Promise<AacStore | null> {
   // The store lives under the default CCS folder; another scope keeps its JSON file.

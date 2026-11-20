@@ -4,7 +4,7 @@ import { COMPUTERS } from '../services/dashboard-hosts';
  * `AgentUsageSnapshot`, with the publish-time `signInNow` as its only clock input. The rendered
  * files are a live external contract other agents read every minute -- their bytes are pinned
  * by the golden test -- so wording changes happen here and cannot touch the publish loop that
- * lives in agent-usage-snapshot.ts.
+ * lives in agent-usage-files.ts.
  */
 import type { AgentUsageAccount, AgentUsageWindow } from './agent-usage-projection';
 import type { BurnRate } from './agent-usage-history';

@@ -1,7 +1,9 @@
 import {
-  longBurnKey,
-  type AccountAnalyticsSampleEvent,
-} from '../services/account-analytics-service';
+  accountAnalyticsIdentity,
+  analyticsWindowIdentity,
+  type AccountAnalyticsHistoryData,
+} from '../services/account-analytics-history';
+import type { DashboardAccount, DashboardAccountWindow } from '../services/account-dashboard-types';
 import type { LongBurnSpan } from '../../store/store-service';
 import {
   HISTORY_HOURS,
@@ -18,6 +20,33 @@ import type {
   SnapshotSignInProfile,
   SnapshotSignInRenewal,
 } from './agent-usage-markdown';
+
+/** Long-period burn of one window: 7 and 30 days across resets, from the store's rollups. */
+export interface AccountAnalyticsLongBurn {
+  last7Days: LongBurnSpan;
+  last30Days: LongBurnSpan;
+}
+
+/**
+ * What one finished sample saw: the accounts it recorded (one row per account, the best of both
+ * dashboard views) and the quota history after recording them, or null while that history cannot
+ * be read. Listeners run after the sample, never inside it, and cannot delay or fail it.
+ */
+export interface AccountAnalyticsSampleEvent {
+  accounts: DashboardAccount[];
+  history: AccountAnalyticsHistoryData | null;
+  sampledAt: number;
+  /**
+   * With the store: each live window's 7- and 30-day burn, keyed by `longBurnKey`. Absent
+   * without the store.
+   */
+  longBurn?: Map<string, AccountAnalyticsLongBurn>;
+}
+
+/** The key of `AccountAnalyticsSampleEvent.longBurn`: account identity and window identity. */
+export function longBurnKey(account: DashboardAccount, window: DashboardAccountWindow): string {
+  return JSON.stringify([accountAnalyticsIdentity(account), analyticsWindowIdentity(window)]);
+}
 
 export interface AgentUsageHistoryFile {
   version: 1;
