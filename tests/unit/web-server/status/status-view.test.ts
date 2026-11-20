@@ -82,6 +82,43 @@ async function inputs(root: string, extra: Partial<StatusInputs> = {}): Promise<
 }
 
 describe('status view', () => {
+  it('draws the overall Simlock cap after the platforms, under its own words', async () => {
+    const root = dirs.make();
+    const capacity = [
+      { platform: 'global', running: 5, max: 5, reserved: 0, overLimit: false },
+      { platform: 'ios', running: 2, max: 4, reserved: 0, overLimit: false },
+      { platform: 'android', running: 3, max: 3, reserved: 0, overLimit: false },
+      { platform: 'watch', running: null, max: null, reserved: null, overLimit: false },
+    ];
+    const view = buildStatusView(
+      await inputs(root, {
+        simlock: {
+          data: { capacity, leases: [], problems: [] },
+          asOf: NOW,
+          error: null,
+        },
+      })
+    );
+    expect(view.simlock.capacity.map((c) => [c.platform, c.label, c.overall])).toEqual([
+      ['ios', 'iPhone', false],
+      ['android', 'Android', false],
+      ['watch', 'Other', false],
+      ['global', 'All phones at once', true],
+    ]);
+    expect(view.simlock.capacity.filter((c) => !c.overall).map((c) => c.platform)).toEqual([
+      'ios',
+      'android',
+      'watch',
+    ]);
+    expect(view.simlock.capacity.at(-1)).toMatchObject({
+      platform: 'global',
+      label: 'All phones at once',
+      overall: true,
+      running: 5,
+      max: 5,
+    });
+  });
+
   it('keeps old cards open and labels the last known heartbeat only for quiet writers', async () => {
     const root = dirs.make();
     const day = 86_400_000;

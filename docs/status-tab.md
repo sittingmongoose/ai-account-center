@@ -355,8 +355,10 @@ CPU, memory and disk stay current. While `browser-check` answers, each machine's
 the host's reason ("Nas1: ... (since 10:01 AM). Showing its reading from 10:00 AM."), or with unknown (null) counts and
 "No reading yet." when it never answered; `missing` (`asOf: null`) when `browser-check` has no row for it.
 
-**Capacity** (Simlock): `{ platform, running, max, reserved, overLimit }` (one row per platform Simlock lists,
-including `global`). **Lease**: `{ device, deviceLabel, platform, holder, since, expiresAt, lastKnown }`
+**Capacity** (Simlock): `{ platform, label, overall, running, max, reserved, overLimit }` (one row per platform
+Simlock lists; `label` is the row's words: "iPhone", "Android", or "Other" only for a platform the page does not
+know; `global` is the overall cap across platforms, carries `overall: true`, is labelled "All phones at once" and
+comes after the platform rows). **Lease**: `{ device, deviceLabel, platform, holder, since, expiresAt, lastKnown }`
 (`lastKnown`: the lease is on a gateway worker that is not connected, so it is the last known, not a current lease). Device ids and holders
 are shown as Simlock reports them (`holder` is the worker label, else the requester id); lease ids, owner ids and tokens
 never.

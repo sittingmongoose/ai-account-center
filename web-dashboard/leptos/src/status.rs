@@ -594,8 +594,33 @@ fn platform_label(platform: &str) -> &'static str {
     match platform {
         "ios" => "iPhone",
         "android" => "Android",
+        "global" => "All phones at once",
         _ => "Other",
     }
+}
+
+/// A row's words from the server; the local words stand in for a server that sends none.
+fn capacity_label(c: &Capacity) -> String {
+    if c.label.is_empty() {
+        platform_label(&c.platform).to_string()
+    } else {
+        c.label.clone()
+    }
+}
+
+/// The platform rows in their order, then the overall cap (`global`) last, so it is never one of them.
+fn phone_capacity_rows(capacity: &[Capacity]) -> Vec<&Capacity> {
+    let mut platforms = Vec::new();
+    let mut overall = Vec::new();
+    for row in capacity {
+        if row.overall || row.platform == "global" {
+            overall.push(row);
+        } else {
+            platforms.push(row);
+        }
+    }
+    platforms.extend(overall);
+    platforms
 }
 
 #[component]
@@ -639,11 +664,12 @@ fn PhonesPanel() -> impl IntoView {
                 let s = simlock.get();
                 view! {
                     <div class="ph-cap rows">
-                        {s.capacity.iter().map(|c| {
+                        {phone_capacity_rows(&s.capacity).into_iter().map(|c| {
                             let words = c.running.zip(c.max);
+                            let label = capacity_label(c);
                             view! {
-                                <div>
-                                    <span class="cap">{platform_label(&c.platform)}</span>
+                                <div data-role=c.overall.then_some("overall")>
+                                    <span class="cap">{label}</span>
                                     {match words {
                                         Some((r, m)) => view! { <p class="big" data-tone=c.over_limit.then_some("crit")>{r.to_string()}" "<small>{format!("of {m}{}", if c.platform == "ios" && r > 0 { " in use" } else { "" })}</small></p> }.into_any(),
                                         None => view! { <p class="big"><small>"Not reported"</small></p> }.into_any(),
@@ -976,6 +1002,56 @@ mod tests {
         );
         assert!(
             panel.updates[0].blocked.text.is_empty() && panel.updates[1].looping.text.is_empty()
+        );
+    }
+
+    fn cap(platform: &str, label: &str, overall: bool) -> Capacity {
+        Capacity {
+            platform: platform.to_string(),
+            label: label.to_string(),
+            overall,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_overall_phone_cap_is_last_and_not_a_platform() {
+        let rows = vec![
+            cap("global", "All phones at once", true),
+            cap("ios", "iPhone", false),
+            cap("android", "Android", false),
+            cap("watch", "Other", false),
+        ];
+        let ordered: Vec<String> = phone_capacity_rows(&rows)
+            .into_iter()
+            .map(capacity_label)
+            .collect();
+        assert_eq!(
+            ordered,
+            ["iPhone", "Android", "Other", "All phones at once"]
+        );
+        let drawn = phone_capacity_rows(&rows);
+        assert_eq!(
+            drawn.iter().filter(|row| !row.overall).count(),
+            3,
+            "the overall cap is not counted as a platform"
+        );
+        assert_eq!(drawn.last().unwrap().platform, "global");
+        assert!(drawn.last().unwrap().overall);
+    }
+
+    #[test]
+    fn a_missing_server_label_falls_back_to_the_same_words() {
+        assert_eq!(capacity_label(&cap("ios", "", false)), "iPhone");
+        assert_eq!(
+            capacity_label(&cap("global", "", false)),
+            "All phones at once"
+        );
+        assert_eq!(capacity_label(&cap("watch", "", false)), "Other");
+        // The server's words win when it sends them.
+        assert_eq!(
+            capacity_label(&cap("android", "Android emulator", false)),
+            "Android emulator"
         );
     }
 }

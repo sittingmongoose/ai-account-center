@@ -1,4 +1,5 @@
 /** Shared words, numbers and limits of the Status tab view. */
+import type { SimlockCapacity } from './status-collectors';
 
 export const STATUS_VIEW_VERSION = 1;
 export const POLL_SECONDS = 30;
@@ -77,4 +78,45 @@ export function gb(bytes: number | null): number | null {
 
 export function round1(value: number | null): number | null {
   return value === null || !Number.isFinite(value) ? null : Math.round(value * 10) / 10;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Simlock capacity
+
+/** A Simlock capacity row as the page draws it: its words, and whether it is the overall cap. */
+export interface SimlockCapacityView extends SimlockCapacity {
+  label: string;
+  /** The overall cap across platforms (`global`), never one of the platform rows. */
+  overall: boolean;
+}
+
+const SIMLOCK_PLATFORM_WORDS: Readonly<Record<string, string>> = {
+  ios: 'iPhone',
+  android: 'Android',
+  global: 'All phones at once',
+};
+
+/** "iPhone", "Android", the overall cap's words, or "Other" only for an unknown platform name. */
+export function simlockPlatformLabel(platform: string): string {
+  return Object.prototype.hasOwnProperty.call(SIMLOCK_PLATFORM_WORDS, platform)
+    ? SIMLOCK_PLATFORM_WORDS[platform]
+    : 'Other';
+}
+
+/**
+ * The capacity rows in draw order: every platform Simlock lists in its own order, then the overall cap
+ * (`global`, `overall: true`) last, so it is never read or labelled as one more platform.
+ */
+export function simlockCapacityRows(capacity: readonly SimlockCapacity[]): SimlockCapacityView[] {
+  const platforms: SimlockCapacityView[] = [];
+  const overall: SimlockCapacityView[] = [];
+  for (const row of capacity) {
+    const view = {
+      ...row,
+      label: simlockPlatformLabel(row.platform),
+      overall: row.platform === 'global',
+    };
+    (view.overall ? overall : platforms).push(view);
+  }
+  return [...platforms, ...overall];
 }

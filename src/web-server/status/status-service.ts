@@ -57,6 +57,8 @@ import {
   parseBrowserSlots,
   parseSimlockStatus,
   PmMailRegistryReader,
+  SIMLOCK_FALLBACK_ITEM,
+  SIMLOCK_FALLBACK_REASON,
   readLocalMachine,
   readRemoteMachine,
   runCommand,
@@ -522,10 +524,17 @@ export class StatusService {
   }
 
   async collectSimlock(): Promise<void> {
-    const result = await this.run()(findExecutable('simlock'), ['status', '--json'], {
-      timeoutMs: 20_000,
-      maxBytes: 4 * 1024 * 1024,
-    });
+    const simlock = findExecutable('simlock');
+    const options = { timeoutMs: 20_000, maxBytes: 4 * 1024 * 1024 };
+    // The gateway is the fleet's reading. Only when it does not answer may this computer's worker stand in,
+    // and then the panel says so: a local worker's 1 iPhone is not the fleet's capacity.
+    const gateway = await this.run()(simlock, ['status', '--json', '--gateway'], options);
+    let result = gateway;
+    let workerOnly = false;
+    if (gateway.code !== 0) {
+      result = await this.run()(simlock, ['status', '--json'], options);
+      workerOnly = result.code === 0;
+    }
     const now = this.now();
     if (result.code !== 0) {
       this.simlock = failed(this.simlock, commandFailure('simlock', result), now, result.missing);
@@ -533,13 +542,25 @@ export class StatusService {
       try {
         const status = parseSimlockStatus(JSON.parse(result.stdout));
         const before = this.simlock.problems ?? [];
-        const problems: ReadProblem[] = status.problems.map((p) => {
-          const seen = p.lastSeenAt ? Date.parse(p.lastSeenAt) : NaN;
-          const last = before.find((b) => b.item === p.item);
-          return Number.isFinite(seen)
-            ? { item: p.item, reason: p.reason, since: seen }
-            : nextProblem(last, p.item, p.reason, now);
-        });
+        const problems: ReadProblem[] = [
+          ...(workerOnly
+            ? [
+                nextProblem(
+                  before.find((b) => b.item === SIMLOCK_FALLBACK_ITEM),
+                  SIMLOCK_FALLBACK_ITEM,
+                  SIMLOCK_FALLBACK_REASON,
+                  now
+                ),
+              ]
+            : []),
+          ...status.problems.map((p) => {
+            const seen = p.lastSeenAt ? Date.parse(p.lastSeenAt) : NaN;
+            const last = before.find((b) => b.item === p.item);
+            return Number.isFinite(seen)
+              ? { item: p.item, reason: p.reason, since: seen }
+              : nextProblem(last, p.item, p.reason, now);
+          }),
+        ];
         this.simlock = { ...succeeded(status, now), problems };
       } catch (error) {
         this.simlock = failed(
