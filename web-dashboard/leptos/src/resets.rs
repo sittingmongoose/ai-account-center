@@ -109,6 +109,8 @@ pub struct ClaimResult {
     pub provider_success: bool,
     #[serde(deserialize_with = "nullable")]
     pub windows: Vec<Refilled>,
+    #[serde(deserialize_with = "nullable")]
+    pub unobserved_windows: Vec<String>,
     /// The target limits' usage in the read the claim was sent on (history, never current usage).
     #[serde(deserialize_with = "nullable")]
     pub sent_usage: Vec<Refilled>,
@@ -302,8 +304,12 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         }
         "grant-unavailable" => "The provider says this reset can't be used yet.".into(),
         "redeeming" => "OpenAI is using this reset now.".into(),
+        "no-weekly-usage" => "Overall weekly usage is at 0%. AAC needs weekly usage to verify this reset.".into(),
         "refill-windows-unconfirmed" if provider == "codex" => {
             "AAC can't read this account's Codex limits right now, so it won't use this reset.".into()
+        }
+        "refill-windows-unconfirmed" if provider == "claude" => {
+            "Use reset becomes available when Claude reports the usage AAC needs to verify this reset.".into()
         }
         "refill-windows-unconfirmed" => "AAC can't confirm which limit this refills right now.".into(),
         // Resets go through the account's Claude Desktop profile on Windows, never its Claude Code sign-in.
@@ -621,6 +627,15 @@ fn result_words(r: &ClaimResult, provider: &str) -> Said {
         check: false,
     };
     match r.outcome.as_str() {
+        "claimed" if !r.unobserved_windows.is_empty() => {
+            let limits = r.unobserved_windows.iter().map(|id| match id.as_str() {
+                "five_hour" => "5-hour limit",
+                "seven_day" => "weekly limit",
+                "seven_day_overage_included" => "Fable included usage",
+                _ => id,
+            }).collect::<Vec<_>>().join(", ");
+            plain(&format!("Reset confirmed from the limits AAC could check. No comparable reading for {limits}."))
+        }
         "claimed" => plain("Reset applied and confirmed."),
         // A Codex claim is confirmed by the exact credit being spent, not by any limit falling.
         "claimed-unconfirmed" if r.provider_success && provider == "codex" => Said {
@@ -2325,8 +2340,37 @@ mod tests {
         assert!(none.contains("can't read"), "{none}");
         assert_eq!(
             why_not("refill-windows-unconfirmed", "claude"),
-            "AAC can't confirm which limit this refills right now."
+            "Use reset becomes available when Claude reports the usage AAC needs to verify this reset."
         );
+    }
+
+    #[test]
+    fn empty_weekly_usage_explains_the_missing_button_and_the_no_send_refusal() {
+        let why = "Overall weekly usage is at 0%. AAC needs weekly usage to verify this reset.";
+        assert_eq!(why_not("no-weekly-usage", "claude"), why);
+        let refusal = Refusal {
+            reason: Some("no-weekly-usage".into()),
+            sent: Some(false),
+            ..Default::default()
+        };
+        let result = refusal_said(&refusal, "claude");
+        assert_eq!(result.text, format!("Not used: {why} Nothing was sent."));
+        assert!(!result.check);
+    }
+
+    #[test]
+    fn a_confirmed_claude_reset_names_unobserved_limits() {
+        let result: ClaimResult = serde_json::from_value(serde_json::json!({
+            "outcome": "claimed",
+            "unobservedWindows": ["seven_day_overage_included"]
+        }))
+        .unwrap();
+        let said = result_said(&result, "claude");
+        assert_eq!(
+            said.text,
+            "Reset confirmed from the limits AAC could check. No comparable reading for Fable included usage."
+        );
+        assert!(!said.bad && !said.check);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 [
   {
     "name": "exact-model",
-    "claimable": true,
+    "hasFableReading": true,
     "limit": {
       "kind": "weekly_scoped",
       "group": "weekly",
@@ -16,7 +16,7 @@
   },
   {
     "name": "known-surface",
-    "claimable": false,
+    "hasFableReading": false,
     "limit": {
       "kind": "weekly_scoped",
       "group": "weekly",
@@ -31,7 +31,7 @@
   },
   {
     "name": "surface-only",
-    "claimable": false,
+    "hasFableReading": false,
     "limit": {
       "kind": "weekly_scoped",
       "group": "weekly",
@@ -44,7 +44,7 @@
   },
   {
     "name": "unknown-surface",
-    "claimable": false,
+    "hasFableReading": false,
     "limit": {
       "kind": "weekly_scoped",
       "group": "weekly",

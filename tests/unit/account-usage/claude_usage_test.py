@@ -1992,8 +1992,8 @@ class ResetWebInventoryTests(unittest.TestCase):
             clears=["seven_day_overage_included"], gives_back_weekly=True)
         result = usage.reset_host(self.request)
         self.assertNotIn("unavailable", result)
-        self.assertEqual("seven_day_overage_included" in result["windows"], case["claimable"])
-        if case["claimable"]:
+        self.assertEqual("seven_day_overage_included" in result["windows"], case["hasFableReading"])
+        if case["hasFableReading"]:
             self.assertEqual(result["windows"]["seven_day_overage_included"], 37)
 
     def test_astra_exact_model_control(self):

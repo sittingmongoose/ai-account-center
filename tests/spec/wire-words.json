@@ -2634,6 +2634,13 @@
     ]
   },
   {
+    "word": "no-weekly-usage",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
     "word": "node_launch_failed",
     "cause": "provider_error",
     "sources": [
