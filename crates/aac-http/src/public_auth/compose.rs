@@ -21,6 +21,8 @@ const PROOF: &str = "x-aac-compose-proof";
 const ACCESS: &str = "x-aac-compose-access";
 /// The public owner's live Claude Open progress, for the retained Home handler in the worker.
 const OPEN_PROGRESS: &str = "x-aac-open-progress";
+/// The boot's Open pairs reader (`[profileId, operation]`), attached once the profile owner exists.
+type OpenPairs = Arc<dyn Fn() -> Value + Send + Sync>;
 
 /// The literal second segments `/api/accounts` mounts. A request for one is never matched by
 /// the `:id` pattern: Express reaches the literal router first, and the settings family is
@@ -151,7 +153,7 @@ pub(super) struct Backend {
     pub(super) collection_fallback: bool,
     /// Set once the boot's profile owner exists: the live Open pairs this front door forwards to
     /// the worker's retained Home handler (the worker has no service lease in this composition).
-    open_pairs: Arc<Mutex<Option<Arc<dyn Fn() -> Value + Send + Sync>>>>,
+    open_pairs: Arc<Mutex<Option<OpenPairs>>>,
 }
 
 impl Backend {
@@ -196,7 +198,7 @@ impl Backend {
     }
 
     /// Attach the public Open owner so `/api/views/home` carries its live progress to the worker.
-    pub(super) fn attach_open(&self, pairs: Arc<dyn Fn() -> Value + Send + Sync>) {
+    pub(super) fn attach_open(&self, pairs: OpenPairs) {
         if let Ok(mut slot) = self.open_pairs.lock() {
             *slot = Some(pairs);
         }
