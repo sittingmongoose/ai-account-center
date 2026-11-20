@@ -85,7 +85,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/account-activity-collector.ts` | 4028 |
 | `src/web-server/services/analytics-remote-sources.ts` | 2399 |
 | `src/web-server/status/answers.ts` | 2069 |
-| `src/web-server/services/analytics-remote-transport.ts` | 1764 |
+| `src/web-server/services/analytics-remote-transport.ts` | 1765 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1206 |
 | `src/web-server/status/status-collectors.ts` | 1158 |

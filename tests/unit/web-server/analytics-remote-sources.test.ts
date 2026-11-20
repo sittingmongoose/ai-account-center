@@ -292,9 +292,9 @@ describe('analytics remote helper integrity', () => {
   });
 
   /** Records ssh starts; the helper's answer is an empty scan. */
-  function captureSsh(): Array<{ args: string[]; input: string }> {
+  function captureSsh() {
     const calls: Array<{ args: string[]; input: string }> = [];
-    spyOn(childProcess, 'execFile').mockImplementation(((
+    const execute = ((
       _file: string,
       args: string[],
       _options: unknown,
@@ -322,8 +322,8 @@ describe('analytics remote helper integrity', () => {
           },
         },
       };
-    }) as never);
-    return calls;
+    }) as typeof childProcess.execFile;
+    return { calls, execute };
   }
 
   it('runs a helper packaged with CRLF line endings as its pinned LF text', async () => {
@@ -332,13 +332,13 @@ describe('analytics remote helper integrity', () => {
     const lf = withLfLineEndings(fs.readFileSync(analyticsHelperPath())).toString('latin1');
     const copy = path.join(cache, 'analytics_usage_remote.py');
     fs.writeFileSync(copy, Buffer.from(lf.replace(/\n/g, '\r\n'), 'latin1'));
-    const calls = captureSsh();
+    const { calls, execute } = captureSsh();
     try {
       await runAnalyticsRemoteHelper(
         'mac-alias',
         'mac',
         { kinds: ['omp'], minDateMs: MIN_DATE, fingerprints: {} },
-        { helperPath: copy }
+        { helperPath: copy, execute }
       );
       expect(calls).toHaveLength(1);
       const sent = (JSON.parse(calls[0].input) as { helperSource: string }).helperSource;
@@ -352,7 +352,7 @@ describe('analytics remote helper integrity', () => {
   });
 
   it('refuses a changed or missing helper before any ssh session', async () => {
-    const calls = captureSsh();
+    const { calls, execute } = captureSsh();
     const changed = path.join(cache, 'changed.py');
     fs.writeFileSync(
       changed,
@@ -371,7 +371,7 @@ describe('analytics remote helper integrity', () => {
             'mac-alias',
             'mac',
             { kinds: ['omp'], minDateMs: MIN_DATE, fingerprints: {} },
-            { helperPath }
+            { helperPath, execute }
           )
         ).rejects.toBeInstanceOf(AnalyticsHelperIntegrityError);
       expect(calls).toHaveLength(0);

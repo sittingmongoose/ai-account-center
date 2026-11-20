@@ -11,8 +11,12 @@ import {
   analyticsHelperCommand,
   fixedAnalyticsRemoteAliases,
   resolveAnalyticsRemoteHosts,
+  runAnalyticsRemoteHelper,
 } from '../../../src/web-server/services/analytics-remote-transport';
-import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
+import {
+  loadAnalyticsRemoteSources,
+  LOCAL_SCANNER_KINDS,
+} from '../../../src/web-server/services/analytics-remote-sources';
 import { NAS1_SSH_ALIAS, SSH_ALIASES } from '../../../src/web-server/services/dashboard-hosts';
 import { forbiddenWordsIn } from './nas1-no-switching';
 
@@ -100,9 +104,9 @@ interface SshCall {
 }
 
 /** Replaces every way this process could start another one, recording ssh and refusing the rest. */
-function interceptProcesses(): { ssh: SshCall[]; other: string[] } {
+function interceptProcesses() {
   const seen = { ssh: [] as SshCall[], other: [] as string[] };
-  spyOn(childProcess, 'execFile').mockImplementation(((
+  const execute = ((
     file: string,
     args: string[],
     _options: unknown,
@@ -124,7 +128,7 @@ function interceptProcesses(): { ssh: SshCall[]; other: string[] } {
         },
       },
     };
-  }) as never);
+  }) as typeof childProcess.execFile;
   spyOn(childProcess, 'execFileSync').mockImplementation(((file: string, args: string[]) => {
     expect(file).toMatch(/(^|[\/])ssh(\.exe)?$/);
     expect(args[0]).toBe('-G');
@@ -136,7 +140,16 @@ function interceptProcesses(): { ssh: SshCall[]; other: string[] } {
       throw new Error(`unexpected ${name}`);
     }) as never);
   }
-  return seen;
+  return { ...seen, execute };
+}
+
+function readThroughSsh(execute: typeof childProcess.execFile) {
+  return loadAnalyticsRemoteSources(MIN_DATE, {
+    cacheDir: cache,
+    runHelper: (alias, host, request) =>
+      runAnalyticsRemoteHelper(alias, host, request, { execute }),
+    localScanner: () => ({ ok: false, cause: 'fixture' }),
+  });
 }
 
 describe('the only ssh command built for Nas1 by the analytics scan', () => {
@@ -144,12 +157,17 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
     const seen = interceptProcesses();
     // The real alias resolver and the real transport: only the process start itself is replaced.
     // No launcher names the Mac or Windows here, so Nas1 is the one host with an alias.
-    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, { cacheDir: cache });
+    const { states } = await readThroughSsh(seen.execute);
     expect(seen.other).toEqual([]);
     expect(seen.ssh.length).toBeGreaterThan(0);
-    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(6);
+    expect(
+      states
+        .filter((entry) => entry.host === 'nas1')
+        .map((entry) => entry.tool)
+        .sort()
+    ).toEqual([...LOCAL_SCANNER_KINDS].sort());
     for (const call of seen.ssh.filter((call) => call.args.includes('nas1-agent'))) {
-      expect(call.file).toMatch(/(^|[\/])ssh(\.exe)?$/);
+      expect(path.basename(call.file)).toMatch(/^ssh(\.exe)?$/);
       const separator = call.args.indexOf('--');
       expect(separator).toBeGreaterThan(0);
       // After the options come exactly the destination and the one remote command.
@@ -163,7 +181,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       // The options are the fixed non-interactive set, never forwarding, a proxy or a local command.
       expect(call.args.slice(0, separator)).toEqual([
         '-T',
-        ...(await sshOptions(destination)),
+        ...(await sshOptions(destination, seen.execute)),
         '-o',
         'ServerAliveInterval=5',
         '-o',
@@ -205,7 +223,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       },
     ]);
     const seen = interceptProcesses();
-    await loadAnalyticsRemoteSources(MIN_DATE, { cacheDir: cache });
+    await readThroughSsh(seen.execute);
     expect(seen.other).toEqual([]);
     const destinations = new Map<string, string>();
     for (const call of seen.ssh) {

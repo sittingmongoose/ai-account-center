@@ -1209,7 +1209,7 @@ export async function runAnalyticsRemoteHelper(
   sshHost: string,
   platform: AnalyticsRemoteHost,
   request: AnalyticsRemoteRequest,
-  deps: { timeoutMs?: number; helperPath?: string } = {}
+  deps: { timeoutMs?: number; helperPath?: string; execute?: typeof execFile } = {}
 ): Promise<AnalyticsRemoteResponse> {
   if (!isSafeUsageSshAlias(sshHost)) {
     throw new ValidationError('Analytics remote SSH alias is not configured safely.');
@@ -1243,10 +1243,11 @@ export async function runAnalyticsRemoteHelper(
   if (input.length > MAX_RESPONSE_BYTES)
     throw new ValidationError('Analytics remote request is invalid.');
   const command = analyticsHelperCommand(platform);
-  const sshArgs0 = await sshArgv(sshHost, command, { interval: 5, countMax: 6 });
-  const sshArgs0Program = await sshLaunch('ssh', sshArgs0);
+  const execute = deps.execute ?? execFile;
+  const sshArgs0 = await sshArgv(sshHost, command, { interval: 5, countMax: 6 }, execute);
+  const sshArgs0Program = await sshLaunch('ssh', sshArgs0, execute);
   const stdout = await new Promise<string>((resolve, reject) => {
-    const child = execFile(
+    const child = execute(
       sshArgs0Program,
       sshArgs0,
       {

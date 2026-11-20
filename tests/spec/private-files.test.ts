@@ -58,6 +58,7 @@ describe('the registry rules', () => {
     expect(Object.keys(moved).filter((id) => moved[id] === 'rust-service')).toEqual([
       'opencode-wallet-account',
       'cursor-account-observation',
+      'cursor-quota-observation',
       'account-usage-cooldown',
       'account-usage-observations',
       'claude-live-snapshots',
@@ -73,7 +74,9 @@ describe('the registry rules', () => {
       )?.id
     ).toBe('muse-usage-peer-links');
     expect(files.PRIVATE_FILE_ROWS.find((r) => r.id === 'readers-check')?.movesWith).toBe('status');
-    expect(files.PRIVATE_FILE_ROWS.find((r) => r.id === 'catalog-seed')?.movesWith).toBe('scoreboard');
+    expect(files.PRIVATE_FILE_ROWS.find((r) => r.id === 'catalog-seed')?.movesWith).toBe(
+      'scoreboard'
+    );
   });
 
   it('refuses the rows aac_files::registry::parse refuses', () => {
@@ -102,13 +105,17 @@ describe('the registry rules', () => {
     });
   });
 
-  it('names only route groups in movesWith', () => {
+  it('names only route and native owner groups in movesWith', () => {
     const groups = new Set(
-      JSON.parse(
-        fs.readFileSync(path.join(root, 'config/rust-service-routes.json'), 'utf8')
-      ).map((r: { group: string }) => r.group)
+      JSON.parse(fs.readFileSync(path.join(root, 'config/rust-service-routes.json'), 'utf8')).map(
+        (r: { group: string }) => r.group
+      )
     );
     groups.add('public-auth');
+    groups.add('lifecycle');
+    expect(
+      files.PRIVATE_FILE_ROWS.filter((row) => row.movesWith === 'lifecycle').map((row) => row.id)
+    ).toEqual(['opencode-wallet-source']);
     for (const row of files.PRIVATE_FILE_ROWS)
       if (row.movesWith !== null) expect(groups.has(row.movesWith)).toBe(true);
   });
@@ -304,13 +311,11 @@ describe('one writer per file', () => {
     );
     expect(supervisor).toContain("this.mode === 'on'");
     expect(supervisor).toContain("rustGroupOn('writes')");
-    expect(supervisor).toContain(
-      "group === 'writes' && this.writesOn"
-    );
+    expect(supervisor).toContain("group === 'writes' && this.writesOn");
     expect(supervisor).toContain("group === 'collection' && collectionOn");
     // R4: the settle is group-aware (the readers-check row flips only when both owned
     // groups run; the catalog seed with the scoreboard group).
-    expect(supervisor).toMatch(/settlePrivateFileOwners\(\(group\) => \{/);
+    expect(supervisor).toMatch(/settlePrivateFileOwners\(\s*\(group\) => \{/);
     expect(supervisor).toMatch(/rustOwnedStatusOn\(\) && rustOwnedScoreboardOn\(\)/);
     const owners = files.privateFileOwners();
     expect(Object.keys(owners).sort()).toEqual(files.PRIVATE_FILE_ROWS.map((r) => r.id).sort());
