@@ -317,18 +317,18 @@ pub(crate) async fn burn(host: &StoreHost, raw: Option<&str>, now: u64) -> Resul
             })
         })
         .collect();
-    let burn = ask(
-        host,
-        "burnLong",
-        json!({ "series": refs, "spansMs": spans, "nowMs": now }),
-    )
-    .await?;
-    let periods = ask(
-        host,
-        "periods",
-        json!({ "series": refs, "fromMs": now.saturating_sub(longest), "toMs": now }),
-    )
-    .await?;
+    let (burn, periods) = tokio::try_join!(
+        ask(
+            host,
+            "burnLong",
+            json!({ "series": refs, "spansMs": spans, "nowMs": now }),
+        ),
+        ask(
+            host,
+            "periods",
+            json!({ "series": refs, "fromMs": now.saturating_sub(longest), "toMs": now }),
+        ),
+    )?;
     let (burn, periods) = (
         burn.as_array().cloned().ok_or(Decline::Internal)?,
         periods.as_array().cloned().ok_or(Decline::Internal)?,

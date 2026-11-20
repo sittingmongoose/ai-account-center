@@ -296,6 +296,9 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                         | Handler::ResetClaims
                         | Handler::CursorAccount
                         | Handler::Store
+                        | Handler::UsageHistory
+                        | Handler::UsageAt
+                        | Handler::UsageBurn
                         | Handler::UsageSample
                         | Handler::ClaudeOpen
                         | Handler::ClaudeHistoryCleanup
@@ -446,19 +449,19 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
                     Handler::UsageHistory => {
                         method == axum::http::Method::GET
                             && row.path == "/api/usage/history"
-                            && row.budget_ms == 400
+                            && row.budget_ms == 0
                             && roles == [Role::Admin, Role::Device]
                     }
                     Handler::UsageAt => {
                         method == axum::http::Method::GET
                             && row.path == "/api/usage/at"
-                            && row.budget_ms == 400
+                            && row.budget_ms == 0
                             && roles == [Role::Admin, Role::Device]
                     }
                     Handler::UsageBurn => {
                         method == axum::http::Method::GET
                             && row.path == "/api/usage/burn"
-                            && row.budget_ms == 400
+                            && row.budget_ms == 0
                             && roles == [Role::Admin, Role::Device]
                     }
                     _ => true,
@@ -511,6 +514,9 @@ mod tests {
                     | Handler::ResetClaims
                     | Handler::CursorAccount
                     | Handler::Store
+                    | Handler::UsageHistory
+                    | Handler::UsageAt
+                    | Handler::UsageBurn
                     | Handler::UsageSample
                     | Handler::ClaudeOpen
                     | Handler::ClaudeHistoryCleanup
@@ -586,9 +592,9 @@ mod tests {
         for good in [
             r#"{"method":"GET","path":"/api/status/answers","owner":"rust","group":"status","roles":["admin"],"budgetMs":400,"handler":"status-answers-read"}"#,
             r#"{"method":"POST","path":"/api/status/answers","owner":"rust","group":"status","roles":["admin"],"budgetMs":0,"handler":"status-answers-post"}"#,
-            r#"{"method":"GET","path":"/api/usage/history","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":400,"handler":"usage-history"}"#,
-            r#"{"method":"GET","path":"/api/usage/at","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":400,"handler":"usage-at"}"#,
-            r#"{"method":"GET","path":"/api/usage/burn","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":400,"handler":"usage-burn"}"#,
+            r#"{"method":"GET","path":"/api/usage/history","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":0,"handler":"usage-history"}"#,
+            r#"{"method":"GET","path":"/api/usage/at","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":0,"handler":"usage-at"}"#,
+            r#"{"method":"GET","path":"/api/usage/burn","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":0,"handler":"usage-burn"}"#,
         ] {
             assert!(rows(&format!("[{good},{tail}]")).is_ok(), "{good}");
         }
@@ -598,9 +604,11 @@ mod tests {
             // the answers read as a write
             r#"{"method":"POST","path":"/api/status/answers","owner":"rust","group":"status","roles":["admin"],"budgetMs":400,"handler":"status-answers-read"}"#,
             // a usage read with the wrong path
-            r#"{"method":"GET","path":"/api/usage","owner":"rust","group":"store","roles":["admin"],"budgetMs":400,"handler":"usage-history"}"#,
+            r#"{"method":"GET","path":"/api/usage","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":0,"handler":"usage-history"}"#,
             // a usage read open to the service role
-            r#"{"method":"GET","path":"/api/usage/at","owner":"rust","group":"store","roles":["service"],"budgetMs":400,"handler":"usage-at"}"#,
+            r#"{"method":"GET","path":"/api/usage/at","owner":"rust","group":"store","roles":["service"],"budgetMs":0,"handler":"usage-at"}"#,
+            // a capped timeout bypasses the store's queue for a wide-range read
+            r#"{"method":"GET","path":"/api/usage/burn","owner":"rust","group":"store","roles":["admin","device"],"budgetMs":400,"handler":"usage-burn"}"#,
         ] {
             assert!(rows(&format!("[{bad},{tail}]")).is_err(), "{bad}");
         }
