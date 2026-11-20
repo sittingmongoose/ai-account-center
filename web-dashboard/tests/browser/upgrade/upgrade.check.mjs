@@ -26,7 +26,9 @@ const control = (t, values) =>
 async function previousRelease(t) {
   await t.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'allow' });
   await t.goto('/__upgrade/ready');
-  await control(t, { oldWorker: true, delayClassicMs: 0, failPath: null });
+  // Name this checkout's packaged UI: the fixture server keeps whichever build the last test chose (reload.check.mjs
+  // leaves its second build), and the update these tests check is from the previous release to this build.
+  await control(t, { uiVersion: 'current', oldWorker: true, delayClassicMs: 0, failPath: null });
   await t.page.evaluate(async () => {
     await navigator.serviceWorker.register('/sw.js');
     await navigator.serviceWorker.ready;

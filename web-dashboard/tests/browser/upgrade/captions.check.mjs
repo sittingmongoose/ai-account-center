@@ -1,4 +1,17 @@
 // The same synthetic Analytics data and Safari-width poses as max round 2, with actual text ranges.
+import { analyticsFixture } from '../device/analytics-fixture.mjs';
+import { homeAccounts } from '../home-fixture.mjs';
+import { usageView } from '../../../public/analytics-usage.mjs';
+
+// The captions are what this build reports for the fixture server's Analytics payload (fixture-server.cjs builds it
+// with one window ending 2026-11-16T02:00Z), read here through the page's own model and default page state: the
+// expected text follows the fixture, never a number frozen in this file.
+const PAYLOAD = analyticsFixture({ range: '7d', now: Date.parse('2026-11-16T02:00:00Z'), accounts: homeAccounts().accounts });
+const PAGE = { range: '7d', from: null, to: null, prov: 'all', split: false, cache: false, donut: 'tokens', heat: 'cost', cbmSort: 'cost' };
+const HOUR = 3_600_000;
+/** The KPI sub-line for `key` at `now`, as the page's Analytics model words it. */
+const captionAt = (now, key) => usageView(PAYLOAD, PAGE, { now }).kpis.find((kpi) => kpi.key === key).sub.map((run) => run.text).join('');
+
 export const tests = {
   async 'Analytics KPI captions stay inside dense phone and Duo cards'(t) {
     for (const pose of [
@@ -23,7 +36,12 @@ export const tests = {
         }
         return { text: caption.textContent, bad };
       }));
-      await t.check(pose.name + ': both reported captions are present', info.some(c => c.text.includes('API-equivalent estimate')) && info.some(c => c.text.includes('94M uncached input tokens')), JSON.stringify(info));
+      // The input total steps on the hour (the range's start moves with the clock), so the hour before this read is
+      // accepted too: a page rendered a moment before a boundary reported the older one. The cost line moves by the
+      // minute for the same reason, so only its wording is asserted.
+      const now = await t.page.evaluate(() => Date.now());
+      const inputs = [captionAt(now, 'in'), captionAt(now - HOUR, 'in')].filter((text) => text.length > 0);
+      await t.check(pose.name + ': both reported captions are present', inputs.some((text) => info.some((c) => c.text.includes(text))) && info.some(c => c.text.includes('API-equivalent estimate')), JSON.stringify({ expected: { input: inputs, cost: 'API-equivalent estimate' }, info }));
       await t.check(pose.name + ': every caption stays inside its card', info.length > 0 && info.every(c => c.bad.length === 0), JSON.stringify(info));
       await t.shot('captions-' + pose.name, 'Synthetic Analytics captions at ' + pose.width + ' CSS pixels, no clipping or hidden text.');
     }
