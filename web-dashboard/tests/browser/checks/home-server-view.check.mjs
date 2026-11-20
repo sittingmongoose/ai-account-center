@@ -111,7 +111,7 @@ export const tests = {
 			const js = await jsView(t, r.body, r.context);
 			await t.check(`${label}: this browser's view-model.mjs builds the same JSON`, js === JSON.stringify(r.body.view), firstDifference(js, JSON.stringify(r.body.view)));
 			const gravity = r.body.view.sections.find((section) => section.id === 'antigravity');
-			await t.equal(`${label}: Home renders only the T3 quota pools`, gravity.columns.map((column) => column.key), ['cli-gemini-weekly', 'cli-3p-weekly']);
+			await t.equal(`${label}: Home renders only the T3 quota pools`, gravity.columns.map((column) => column.key), ['cli-gemini-5h', 'cli-gemini-weekly', 'cli-3p-5h', 'cli-3p-weekly']);
 			const rustDom = await homeDom(t);
 			const rustPixels = await t.page.screenshot({ fullPage: true });
 			await t.shot(`rust-${label.replace(' ', '-')}`, `Home drawn from the Rust view (${label}, fixture data)`);
