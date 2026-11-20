@@ -278,7 +278,7 @@ describe('a standing scan failure (the Alexis PC case)', () => {
 
   it('says the scan failed and why, never the last good scan as current, also from the cache after a restart', async () => {
     const cache = path.join(dir, 'cache');
-    const hosts = async () => ({ mac: null, windows: null, nas1: null, alexis: 'alexis-windows' });
+    const hosts = async () => ({ mac: null, windows: null, nas1: null, alexis: 'alexis-windows', odroid: null });
     let now = Date.parse('2026-11-12T17:06:35Z');
     // 17:06: a scan that worked: Codex logs held no usage, Claude had no logs yet, OMP had usage.
     await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -348,7 +348,7 @@ describe('a standing scan failure (the Alexis PC case)', () => {
 
   it('names a failure only on the tools it stopped, never on tools read a minute before', async () => {
     const cache = path.join(dir, 'cache');
-    const hosts = async () => ({ mac: null, windows: null, nas1: null, alexis: 'alexis-windows' });
+    const hosts = async () => ({ mac: null, windows: null, nas1: null, alexis: 'alexis-windows', odroid: null });
     const codexPending = () => {
       const body = {
         version: 2,

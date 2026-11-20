@@ -134,7 +134,7 @@ function answer(withFolder = true) {
   );
 }
 
-const hosts = async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null });
+const hosts = async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null, odroid: null });
 const cacheText = () =>
   fs.readFileSync(path.join(cache, 'analytics-remote-v1', 'nas1.json'), 'utf8');
 const scan = (withFolder = true) =>

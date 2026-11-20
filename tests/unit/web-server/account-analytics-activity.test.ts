@@ -2684,6 +2684,7 @@ describe('native local analytics activity', () => {
     expect(cursor.map((entry) => `${entry.host}:${entry.state}`).sort()).toEqual([
       'alexis:unavailable',
       'mac:unavailable',
+      'odroid:unavailable',
       'ubuntu:unavailable',
       'windows:no_reader',
     ]);
@@ -2697,6 +2698,7 @@ describe('native local analytics activity', () => {
       'cursor:windows',
       'cursor:nas1',
       'cursor:alexis',
+      'cursor:odroid',
     ]);
     expect(fixed.every((entry) => entry.state === 'unavailable' && entry.rowCount === 0)).toBe(
       true

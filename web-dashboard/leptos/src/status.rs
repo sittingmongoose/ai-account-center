@@ -960,6 +960,7 @@ mod tests {
     fn machine_labels_use_the_packaged_registry() {
         assert_eq!(machine_label("nas1"), Some("Nas1"));
         assert_eq!(machine_label("alexis"), Some("Alexis PC"));
+        assert_eq!(machine_label("odroid"), Some("Odroid"));
         assert_eq!(machine_label("elsewhere"), None);
     }
 

@@ -50,13 +50,14 @@ async function finish(service: AppUpdateService, limitMs = 3000) {
 }
 
 describe('Update apps runs every computer at once', () => {
-  it('finishes in about the slowest host, not the sum of all four', async () => {
+  it('finishes in about the slowest host, not the sum of every computer', async () => {
     const delays: Record<UpdatePlatform, number> = {
       ubuntu: 600,
       mac: 400,
       windows: 200,
       nas1: 300,
       alexis: 250,
+      odroid: 350,
     };
     const started: Record<string, number> = {};
     const service = new AppUpdateService({
@@ -79,7 +80,7 @@ describe('Update apps runs every computer at once', () => {
     const job = service.getStatus().job!;
     expect(job.state).toBe('completed');
     expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 12);
-    // Serial would be >= 1500 ms; parallel is the slowest host plus scheduling.
+    // Serial would be >= 1750 ms; parallel is the slowest host plus scheduling.
     expect(elapsed).toBeGreaterThanOrEqual(595);
     expect(elapsed).toBeLessThan(1000);
     expect(Math.max(...Object.values(started)) - Math.min(...Object.values(started))).toBeLessThan(

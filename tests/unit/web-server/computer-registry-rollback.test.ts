@@ -1,4 +1,4 @@
-import { LEGACY_STORAGE_APPS } from '../../../src/web-server/services/app-update-contract';
+import { EXPECTED_RESULTS, LEGACY_STORAGE_APPS } from '../../../src/web-server/services/app-update-contract';
 import { afterEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
@@ -174,15 +174,21 @@ describe('computer registry rollback storage', () => {
     });
     service.start();
     try {
-      for (let i = 0; i < 20 && service.getStatus().job!.results.length < 60; i++)
+      for (
+        let i = 0;
+        i < 20 && service.getStatus().job!.results.length < DASHBOARD_HOSTS.length * rows.length;
+        i++
+      )
         await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(service.getStatus().job!.results).toHaveLength(60);
+      expect(service.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * rows.length);
       const old = new LegacyAppUpdateReader(root).getStatus().job!;
       expect(old.state).toBe('running');
       expect(old.expectedResults).toBe(40);
       expect(old.results).toHaveLength(40);
       expect(old.results.every((row) => legacyHosts.includes(row.platform) && LEGACY_STORAGE_APPS.includes(row.appId))).toBe(true);
-      expect(new AppUpdateService({ ccsDir: root }).getStatus().job!.results).toHaveLength(60);
+      expect(new AppUpdateService({ ccsDir: root }).getStatus().job!.results).toHaveLength(
+        DASHBOARD_HOSTS.length * rows.length
+      );
     } finally {
       release(payload());
       await complete(service);
@@ -208,7 +214,7 @@ describe('computer registry rollback storage', () => {
       JSON.stringify({ ...expanded, job: { ...expanded.job, id: 'bad-id' } }),
       JSON.stringify({
         ...expanded,
-        job: { ...expanded.job, results: Array(61).fill(expanded.job.results[0]) },
+        job: { ...expanded.job, results: Array(EXPECTED_RESULTS + 1).fill(expanded.job.results[0]) },
       }),
     ]) {
       fs.writeFileSync(file, value);

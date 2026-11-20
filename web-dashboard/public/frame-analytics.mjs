@@ -28,6 +28,7 @@ import { chromeView } from './view-model.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
 import { rememberSeen, ANALYTICS_SAVED_KEY } from './auth-view.mjs';
 import { relTxt } from './analytics-usage.mjs';
+import { HOST_IDS, HOST_LABELS } from './computers.mjs';
 
 /** The header and the chrome line are worded again this often while the page is shown (bridge.js does the same). */
 export const HEAD_EVERY_MS = 15_000;
@@ -44,7 +45,7 @@ export const SAVED_MAX_CHARS = 2_500_000;
 
 /** A kept or served answer timed more than this ahead of this clock is from an earlier read (clocks can differ). */
 export const FUTURE_SLACK_MS = 120_000;
-const REMOTE_NAMES = { mac: 'Mac', windows: 'Windows', nas1: 'Nas1' };
+const REMOTE_NAMES = Object.fromEntries(HOST_IDS.filter((h) => h !== 'ubuntu').map((h) => [h, HOST_LABELS[h]]));
 /** The remote computers a scan is still waiting on, by name, in page order. */
 const remoteNames = (list) => (Array.isArray(list) ? Object.keys(REMOTE_NAMES).filter((h) => list.includes(h)).map((h) => REMOTE_NAMES[h]) : []);
 

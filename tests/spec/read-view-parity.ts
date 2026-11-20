@@ -238,7 +238,7 @@ try {
     reports: reader.snapshot(),
     registry: none(),
     machines: Object.fromEntries(
-      ['vm', 'mac', 'windows', 'nas1', 'alexis'].map((id) => [
+      ['vm', 'mac', 'windows', 'nas1', 'alexis', 'odroid'].map((id) => [
         id,
         { data: structuredClone(sample), asOf: now - 30000, error: null },
       ])

@@ -110,8 +110,8 @@ describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
     expect(MESSAGES.t3_unreachable).toContain('AAC did not write');
   });
 
-  it('expects twelve apps on five computers and keeps the rollback app set frozen', () => {
-    expect(EXPECTED_RESULTS).toBe(60);
+  it('expects twelve apps on six computers and keeps the rollback app set frozen', () => {
+    expect(EXPECTED_RESULTS).toBe(72);
     expect(Object.keys(UPDATE_APP_LABELS)).toHaveLength(12);
     expect(LEGACY_STORAGE_APPS).toHaveLength(10);
     expect(LEGACY_STORAGE_APPS).not.toContain('cursor-cli');
@@ -195,11 +195,11 @@ describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
     });
     service.start();
     try {
-      for (let i = 0; i < 50 && service.getStatus().job!.results.length < 60; i++)
+      for (let i = 0; i < 50 && service.getStatus().job!.results.length < EXPECTED_RESULTS; i++)
         await new Promise((resolve) => setTimeout(resolve, 0));
       const next = new AppUpdateService({ ccsDir: root }).getStatus().job!;
-      expect(next.expectedResults).toBe(60);
-      expect(next.results).toHaveLength(60);
+      expect(next.expectedResults).toBe(EXPECTED_RESULTS);
+      expect(next.results).toHaveLength(EXPECTED_RESULTS);
       expect(next.hosts!.mac.currentApp).toBe('antigravity-acp');
       const old = new LegacyAppUpdateReader(root).getStatus().job!;
       expect(old.expectedResults).toBe(40);

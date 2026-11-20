@@ -307,6 +307,7 @@ mod platform_tests {
             ("windows", "windows"),
             ("nas1", "linux"),
             ("alexis", "windows"),
+            ("odroid", "linux"),
         ] {
             assert_eq!(
                 platform_svg(id, crate::status::computer(id)),

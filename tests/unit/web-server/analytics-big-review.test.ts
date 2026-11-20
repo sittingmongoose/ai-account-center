@@ -76,7 +76,7 @@ async function scans(answers: AnalyticsRemoteResponse[], intervalMs = 600_000) {
       cacheDir: cache,
       now: () => clock,
       force: true,
-      hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null }),
+      hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null, odroid: null }),
       localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
       runHelper: async (_alias, _host, request) => ({
         ...base,
@@ -380,7 +380,7 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
         cacheDir: cache,
         now: () => Date.parse('2026-10-02T00:02:01Z'),
         force: false,
-        hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null }),
+        hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null, odroid: null }),
         localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
         runHelper: async () => {
           helperCalls++;
@@ -473,7 +473,7 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
       cacheDir: cache,
       now: () => Date.parse('2026-10-02T00:00:00Z'),
       force: true,
-      hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null }),
+      hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null, odroid: null }),
       localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
       runHelper: async (_alias, _host, request) => ({
         ...base,

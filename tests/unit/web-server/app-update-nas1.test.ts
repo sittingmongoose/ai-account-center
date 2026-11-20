@@ -223,6 +223,7 @@ describe('a job saved before Nas1 existed', () => {
       windows: { ...done, currentApp: 'omp' },
       nas1: done,
       alexis: done,
+      odroid: done,
     });
     // The old job keeps its own total, and never blocks the next four-computer run.
     expect(job.expectedResults).toBe(24);
