@@ -591,6 +591,30 @@
               "detail": "Waiting for the first reading."
             },
             "warnings": []
+          },
+          {
+            "id": "odroid",
+            "label": "Odroid",
+            "state": "stale",
+            "asOf": null,
+            "ageSeconds": null,
+            "detail": "Waiting for the first reading.",
+            "cpu": null,
+            "memory": null,
+            "disk": [],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
           }
         ]
       },
@@ -619,7 +643,7 @@
         "overLimitBudgets": 0
       }
     },
-    "wireSha256": "f70bda4f9bb6df9759a67b5a3a67b41323f6ce46796bd6660b8d19ab2c520722"
+    "wireSha256": "102d4a267bebaa34122055e016e2ac8eda0600846d1f7de1d7e8aa3cf281d87c"
   },
   {
     "route": "/api/scoreboard",
