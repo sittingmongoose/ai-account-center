@@ -191,7 +191,9 @@ export function createHomeViewRouter(deps: HomeViewRouterDeps = {}): Router {
       ]);
       read = homeRead;
       fedInventory = inventory ?? undefined;
-      const opens = profiles ? openPairs(profiles) : null;
+      // With the Rust Open owner bound, its live progress rides the profiles read; without it no
+      // Open operation can exist in this boot (the TS store is gone), so the list is known empty.
+      const opens = profiles ? (service.claudeOpenEnabled ? openPairs(profiles) : []) : null;
       if (homeRead && inventory && opens) {
         const answered = await answerHomeFed(req, res, fed, {
           platform,

@@ -23,6 +23,7 @@ import { RustService } from '../../src/web-server/rust-service';
 import {
   createHomeViewRouter,
   readAntigravityInventory,
+  readClaudeDesktopProfiles,
   runtimeInventory,
 } from '../../src/web-server/routes/home-view-routes';
 
@@ -57,13 +58,15 @@ const identity = {
   source: 'provider-userinfo',
 };
 const credential = Buffer.from(
-  JSON.stringify({ fixtureAccount: 'gmail', version: 1, private: 'FIXTURE_ONLY_PRIVATE_NATIVE_BYTES' })
+  JSON.stringify({
+    fixtureAccount: 'gmail',
+    version: 1,
+    private: 'FIXTURE_ONLY_PRIVATE_NATIVE_BYTES',
+  })
 );
 const fingerprint = createHash('sha256').update(credential).digest('hex');
 const identityKey = createHash('sha256')
-  .update(
-    JSON.stringify(['antigravity', identity.email.trim().toLowerCase(), identity.subject])
-  )
+  .update(JSON.stringify(['antigravity', identity.email.trim().toLowerCase(), identity.subject]))
   .digest('hex');
 fs.mkdirSync(path.join(root, 'antigravity-profiles'), { recursive: true });
 fs.writeFileSync(
@@ -90,6 +93,26 @@ fs.writeFileSync(
   }),
   { mode: 0o600 }
 );
+// One saved Claude desktop profile, so the profiles read has a row whose Open field the owner stamps.
+fs.writeFileSync(
+  path.join(root, 'claude-desktop-profiles.json'),
+  JSON.stringify({
+    version: 1,
+    profiles: [
+      {
+        id: 'fixture-a',
+        email: 'user0@example.invalid',
+        mac: {
+          launcherName: 'Claude 0',
+          launcherPath: '/Applications/Claude 0.app',
+          profilePath: '/Users/fixture/Library/Application Support/Claude-0',
+          sshHost: 'mac',
+        },
+      },
+    ],
+  }),
+  { mode: 0o600 }
+);
 const instance = path.join(root, 'antigravity-instances/gmail/ubuntu');
 fs.mkdirSync(instance, { recursive: true });
 fs.writeFileSync(path.join(instance, `credential-${fingerprint}.bin`), credential, { mode: 0o600 });
@@ -103,6 +126,8 @@ process.env.AAC_ANTIGRAVITY_SCRIPTS ??= path.join(repo, 'scripts');
 // view switch (the same retained branch the shipping default-ready group reaches after a fed decline).
 process.env.AAC_RUST_HOME_VIEW = 'on';
 process.env.AAC_RUST_GROUP_HOME = 'off';
+// The public Open owner is bound: its progress rides the profiles read into Home.
+process.env.AAC_RUST_GROUP_CLAUDE_OPEN = 'on';
 
 const service = new RustService('on');
 const dashboard = {
@@ -140,6 +165,9 @@ try {
   app.get('/api/antigravity/owner', async (req: express.Request, res: express.Response) => {
     res.json(await runtimeInventory(req, res).catch(() => null));
   });
+  app.get('/api/claude/desktop-profiles', async (req: express.Request, res: express.Response) => {
+    res.json(await readClaudeDesktopProfiles(req, res).catch(() => null));
+  });
   server = await new Promise<http.Server>((resolve) => {
     const started = app.listen(0, '127.0.0.1', () => resolve(started));
   });
@@ -160,6 +188,16 @@ try {
   if (homeProfiles.length !== 1) failures.push(`Home: ${homeProfiles.length} Antigravity profiles`);
   else if (homeProfiles[0].id !== 'gmail') failures.push(`Home: ${homeProfiles[0].id}`);
 
+  // The Open owner answered: each id-bearing profile row carries its field (none running here).
+  const profiles = (await (await fetch(`${base}/api/claude/desktop-profiles`)).json()) as {
+    id?: string;
+    openOperation?: unknown;
+  }[];
+  if (profiles.length !== 1) failures.push(`profiles: ${profiles.length} rows`);
+  else if (!('openOperation' in profiles[0])) failures.push('profiles: the Open field is missing');
+  else if (profiles[0].openOperation !== null)
+    failures.push(`profiles: ${JSON.stringify(profiles[0].openOperation)}`);
+
   // The composed copy the profiles route answers must agree with Home's.
   const copy = await (await fetch(`${base}/api/antigravity/profiles`)).json();
   if (JSON.stringify(copy) !== JSON.stringify(body.antigravity))
@@ -169,7 +207,8 @@ try {
   await service.stop();
   const gone = await fetch(`${base}/api/views/home?platform=mac`);
   const goneBody = (await gone.json()) as { antigravity?: unknown };
-  if (goneBody.antigravity !== null) failures.push(`unavailable Home: ${JSON.stringify(goneBody.antigravity)}`);
+  if (goneBody.antigravity !== null)
+    failures.push(`unavailable Home: ${JSON.stringify(goneBody.antigravity)}`);
 } finally {
   if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
   process.env.CCS_DIR = ccs;
@@ -180,4 +219,6 @@ if (failures.length) {
   console.error('[FAIL] home-antigravity-owner: ' + failures.join('; '));
   process.exit(1);
 }
-console.log('[OK] home-antigravity-owner: the saved profile reaches Home and the profiles route; unavailable stays null.');
+console.log(
+  '[OK] home-antigravity-owner: the saved profile reaches Home and the profiles route; unavailable stays null.'
+);

@@ -86,6 +86,10 @@ class StandIn extends RustService {
   constructor() {
     super('on');
   }
+  /** The Open owner is bound (the group is Linux-only; these tests run on the front door's side). */
+  override get claudeOpenEnabled(): boolean {
+    return true;
+  }
   override feedBoot(scope: string): string | null {
     return scope === SCOPE ? this.boot : null;
   }
