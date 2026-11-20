@@ -135,7 +135,19 @@ pub struct Collector {
     pub absent_roots: HashSet<(String, PathBuf)>,
     pub store_incremental: bool,
     settled_paths: HashMap<(String, String), String>,
+    settled_slot: u64,
     pub settled: BTreeMap<String, Map<String, Value>>,
+}
+
+/// The owner and all readers use one ten-minute cadence.
+pub const SETTLED_CHECK_MS: u64 = 10 * 60 * 1000;
+
+pub fn settled_print(print: &Value, cutoff: i64) -> bool {
+    print["pathKey"].is_string()
+        && print["mtimeMs"].as_i64().is_some_and(|mtime| mtime < cutoff)
+        && print["newestUsageMs"].as_i64().is_some_and(|usage| usage < cutoff)
+        && print.get("readThrough").is_none()
+        && print["usageSkipped"] != true
 }
 
 /// Kinds whose reads resume where the deadline cut them (DESIGN 16.1): Codex, whose largest logs
@@ -157,11 +169,8 @@ impl Collector {
                     continue;
                 };
                 for (key, print) in prints {
-                    if let Some(path_key) = print["pathKey"].as_str()
-                        && print["mtimeMs"].as_i64().is_some_and(|mtime| mtime < cutoff)
-                        && print["newestUsageMs"].as_i64().is_some_and(|usage| usage < cutoff)
-                        && print.get("readThrough").is_none()
-                        && print["usageSkipped"] != true
+                    if settled_print(print, cutoff)
+                        && let Some(path_key) = print["pathKey"].as_str()
                     {
                         settled_paths.insert((kind.clone(), path_key.to_owned()), key.clone());
                     }
@@ -172,6 +181,10 @@ impl Collector {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+        let settled_slot = prior
+            .get("_store")
+            .and_then(|settings| settings["settledSlot"].as_u64())
+            .unwrap_or(now_ms as u64 / SETTLED_CHECK_MS);
         Collector {
             min_date_ms,
             deadline: Instant::now() + std::time::Duration::from_secs_f64(budget_seconds.max(0.0)),
@@ -217,6 +230,7 @@ impl Collector {
             absent_roots: HashSet::new(),
             store_incremental,
             settled_paths,
+            settled_slot,
             settled: BTreeMap::new(),
         }
     }
@@ -249,14 +263,20 @@ impl Collector {
         if self.messages_wanted || self.settled_paths.is_empty() {
             return false;
         }
-        let Some(key) = self.settled_paths.get(&(kind.to_owned(), util::filekey(kind, path))) else {
+        let lookup = (kind.to_owned(), util::filekey(kind, path));
+        let Some(key) = self.settled_paths.get(&lookup) else {
             return false;
         };
         let Some(mut print) = self.prior_print(kind, key).cloned() else {
             return false;
         };
+        if print["settledCheckedSlot"].as_u64() != Some(self.settled_slot) && !settled_metadata_matches(path, &print) {
+            self.settled_paths.remove(&lookup);
+            return false;
+        }
         if let Some(print) = print.as_object_mut() {
             print.remove("readFrom");
+            print.insert("settledCheckedSlot".into(), self.settled_slot.into());
         }
         let mtime = print["mtimeMs"].as_i64().unwrap_or(0);
         self.settled
@@ -889,6 +909,17 @@ impl Collector {
             cost,
         });
     }
+}
+
+fn settled_metadata_matches(path: &Path, print: &Value) -> bool {
+    let Ok(metadata) = crate::fsx::metadata(path) else {
+        return false;
+    };
+    metadata.is_file()
+        && print["size"].as_u64() == Some(metadata.len())
+        && print["mtimeMs"].as_i64() == Some(util::mtime_ms(&metadata))
+        && crate::fsx::metadata_identity(path, &metadata)
+            .is_some_and(|(device, inode)| print["fileIdentity"].as_str() == Some(&format!("{device:x}:{inode:x}")))
 }
 
 /// A compressed log's decoded size when its first frame header states it (Codex's do); for a plain

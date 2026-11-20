@@ -255,11 +255,16 @@ recovered.
 | Manifest with watermark; intents for every destructive step; folder fsync on create, rename and unlink | mirrored |
 | Projector checkpoints `{segment_generation, segment_name, byte_offset, last_sequence_id, last_event_id, survivor_prefix_sha256, projector_schema_version}` committed with the projection | mirrored |
 | Store version admission, `blocked_newer_store`, no downgrade in place | mirrored |
-| Storage value registry | mirrored as `crates/aac-store/registry.json`: one row per table and event type with key shape, value schema, version, producer, consumers, retention and authority class (all AAC tables are `derived_rebuildable`) |
+| Storage value registry | mirrored as `crates/aac-store/registry.json`: one row per table and event type with key shape, value schema, version, producer, consumers, retention and authority class |
 | Uncompressed frames in the first profile | changed: whole sealed segments are compressed (frames inside unchanged) |
 | One app-global seglog plus successor-generation compaction for retention | changed: two logs by retention class; expiry deletes whole sealed segments |
-| Canonical non-rebuildable redb families, mandatory backup snapshots before mutation | left out: every AAC table is rebuildable from the logs |
+| Canonical non-rebuildable redb families, mandatory backup snapshots before mutation | changed: redb snapshots retain Analytics recovery copies and scanner state |
 | Tantivy, JSONL mirror, blob store, regex index | left out: no search need; the share export is the human-readable copy |
+
+The `analytics_cache` table holds scanner checkpoints and verified byte copies of retired
+Analytics caches. A redb snapshot retains these copies. A rebuild from the event logs restores the
+projected usage. To recover the original archived files or saved offsets after a quarantine, use
+the previous redb or restore a backup that includes redb.
 | Project scopes, legal holds, deletion lifecycle, fallback roots and divergence commands, the I/O class taxonomy | left out: one machine, one owner, one root under `getCcsDir()` |
 | `AppendReceipt` custody (SP-286) | left out: acknowledgement is the durable append itself |
 

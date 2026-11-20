@@ -196,6 +196,12 @@ fn backfill_sources(
         });
     }
     for (key, digest) in staged {
+        if engine
+            .get_meta(&format!("ts:backfill:{digest}"))
+            .is_ok_and(|receipt| receipt.is_some())
+        {
+            continue;
+        }
         let Ok(Some(bytes)) = aac_store::analytics_cache::archived(engine, key) else {
             unreadable += 1;
             continue;
@@ -252,9 +258,7 @@ fn quota_pass(
     {
         let (sources, unreadable) = backfill_sources(engine, ccs_dir, &staged);
         let providers = sampler::providers_of(&merged);
-        if sampler::backfill(engine, &sources, &providers, now, unreadable)
-            .is_ok_and(|receipt| receipt.rejected == 0)
-        {
+        if sampler::backfill(engine, &sources, &providers, now, unreadable).is_ok() {
             state.backfilled = true;
             state.archives = staged;
         }
@@ -509,10 +513,18 @@ async fn activity_pass(
                 .as_ref(),
         );
         let settled_before = activity::settled_before(engine, host).unwrap_or_default();
-        let batches = scan_state::requests(args, &kinds, &cache.fingerprints, &settled_before);
+        let batches = scan_state::requests(args, &kinds, &cache.fingerprints, &settled_before, now);
         let mut scanned = false;
         let start_state = states.len();
         for (batch, args) in batches {
+            if args.is_null() {
+                for kind in batch {
+                    states.push(json!({
+                        "tool": kind, "host": host, "state": "unreadable", "cause": "source_limit",
+                    }));
+                }
+                continue;
+            }
             let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
             let answer = scan_host(agents, computer, &args, SCAN_DEADLINE_MS, &call_id).await;
             match answer {
@@ -520,6 +532,8 @@ async fn activity_pass(
                     scanned = true;
                     for kind in &batch {
                         let (mut state, mut cause) = scan_state(&answer, kind);
+                        let packed =
+                            args["fingerprints"]["_store"]["settledPacked"][kind].is_string();
                         if overflow.contains(kind.as_str())
                             || experiments.is_some_and(|snapshot| snapshot.limited(kind))
                         {
@@ -534,7 +548,8 @@ async fn activity_pass(
                             (state, cause) = ("scanning", None);
                         }
                         let complete = matches!(state, "ok" | "no_usage");
-                        if !cache.apply(kind, &answer, complete, cutoff) && complete {
+                        let compatible = !packed || answer["kinds"][kind]["settledPacked"] == true;
+                        if !cache.apply(kind, &answer, complete && compatible, cutoff) && complete {
                             (state, cause) = ("scanning", None);
                         }
                         let kind_rows: Vec<Value> = cache

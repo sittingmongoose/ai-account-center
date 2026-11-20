@@ -23,7 +23,11 @@ fn rollout(turns: u64, input: u64) -> String {
 }
 
 fn scan(home: &Path, last: Option<&Value>, settle: i64) -> Value {
-    let mut prints = json!({"_store":{"settledBefore":{"codex":settle}}});
+    scan_at_slot(home, last, settle, 1)
+}
+
+fn scan_at_slot(home: &Path, last: Option<&Value>, settle: i64, slot: u64) -> Value {
+    let mut prints = json!({"_store":{"settledBefore":{"codex":settle},"settledSlot":slot}});
     if let Some(last) = last {
         prints["codex"] = last["kinds"]["codex"]["fingerprints"].clone();
     }
@@ -85,14 +89,14 @@ fn grown_log_reads_only_the_suffix_and_replacements_read_from_zero() {
 }
 
 #[test]
-fn a_settled_log_is_confirmed_without_reopening_its_path() {
+fn a_settled_log_is_checked_again_on_the_next_cadence() {
     let home = tempfile::tempdir().unwrap();
     let path = fixture(home.path());
     check_settled(home.path(), &path);
 }
 
 #[test]
-fn a_settled_log_in_a_t3_home_is_confirmed_without_reopening_its_path() {
+fn a_settled_log_in_a_t3_home_is_checked_again_on_the_next_cadence() {
     let home = tempfile::tempdir().unwrap();
     let t3_home = home.path().join(".codex-t3/fixture");
     let path = fixture(&t3_home);
@@ -112,12 +116,25 @@ fn check_settled(home: &Path, path: &Path) {
         .unwrap();
     let first = scan(home, None, 0);
     assert_eq!(first["rows"][0]["i"], 100);
+    let cutoff = AT + 3_600_000;
+    let checked = scan(home, Some(&first), cutoff);
+    assert_eq!(checked["rows"], json!([]));
+    assert_eq!(print(&checked)["settledCheckedSlot"], 1);
 
     let live = path.with_extension("saved");
     fs::rename(path, live).unwrap();
-    fs::write(path, b"This must not be opened as a log.").unwrap();
-    let settled = scan(home, Some(&first), AT + 3_600_000);
+    fs::write(path, rollout(1, 300)).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_millis(AT as u64))
+        .unwrap();
+    let settled = scan(home, Some(&checked), cutoff);
     assert_eq!(settled["rows"], json!([]));
     assert_eq!(settled["kinds"]["codex"]["readFailures"], Value::Null);
-    assert_eq!(print(&settled), print(&first));
+    assert_eq!(print(&settled), print(&checked));
+    let replaced = scan_at_slot(home, Some(&settled), cutoff, 2);
+    assert_eq!(replaced["rows"][0]["i"], 300);
+    assert!(print(&replaced).get("readFrom").is_none());
 }

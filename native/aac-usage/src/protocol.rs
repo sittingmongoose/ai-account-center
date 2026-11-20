@@ -6,6 +6,7 @@ use crate::collector::Collector;
 use crate::discover::{self, Env};
 use crate::read;
 use crate::util;
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,6 +25,7 @@ pub const KINDS: [&str; 8] = [
     "devin",
 ];
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SETTLED_BYTES: usize = 64 * 1024 * 1024;
 const EXTRA_ROOTS_MAX: usize = 16;
 const EXTRA_ZCODE_DBS_MAX: usize = 2048;
 const EXPERIMENT_ROOTS_MAX: usize = 256;
@@ -44,6 +46,22 @@ pub struct Request {
     /// Tests only, never read from a request: cut the scan after this many log lines, so a resumed
     /// read is tested at fixed points instead of wall-clock ones.
     pub line_budget: Option<u64>,
+}
+
+/// Retain the full checkpoint for settled files even when active fingerprints must be trimmed.
+/// A file that changes on revalidation still has its hashes and its append cursor.
+pub fn pack_settled(prints: &Map<String, Value>) -> Option<String> {
+    let bytes = serde_json::to_vec(prints).ok()?;
+    if bytes.len() > MAX_SETTLED_BYTES {
+        return None;
+    }
+    Some(STANDARD_NO_PAD.encode(zstd::bulk::compress(&bytes, 1).ok()?))
+}
+
+fn unpack_settled(encoded: &str) -> Option<Map<String, Value>> {
+    let bytes = STANDARD_NO_PAD.decode(encoded).ok()?;
+    let json = zstd::bulk::decompress(&bytes, MAX_SETTLED_BYTES).ok()?;
+    serde_json::from_slice(&json).ok()
 }
 
 fn valid_extra_root(value: &Value) -> bool {
@@ -111,11 +129,25 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
         // zcodeRecords is the dashboard computer's experiment mode, never sent to this scanner.
         return Err("request.zcodeRecords is not supported by this reader".into());
     }
-    let fingerprints = match request.get("fingerprints") {
+    let mut fingerprints = match request.get("fingerprints") {
         None => Map::new(),
         Some(Value::Object(map)) => map.clone(),
         _ => return Err("request.fingerprints must be an object".into()),
     };
+    for kind in &ordered {
+        if let Some(encoded) = fingerprints
+            .get("_store")
+            .and_then(|settings| settings["settledPacked"][kind].as_str())
+        {
+            let decoded = unpack_settled(encoded).ok_or("invalid packed settled fingerprints")?;
+            let entry = fingerprints
+                .entry(kind.clone())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or("invalid fingerprints for packed kind")?;
+            entry.extend(decoded);
+        }
+    }
     let extra_roots = match request.get("extraRoots") {
         None => Map::new(),
         Some(Value::Object(map)) => map.clone(),
@@ -454,12 +486,24 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     let mut kinds = Map::new();
     for kind in &request.kinds {
         let mut prints = collector.settled.remove(kind).unwrap_or_default();
+        let packed = request
+            .fingerprints
+            .get("_store")
+            .is_some_and(|settings| settings["settledPacked"][kind].is_string());
+        if packed {
+            for print in prints.values_mut() {
+                *print = json!({"settledCheckedSlot":print["settledCheckedSlot"], "settledConfirmed":true});
+            }
+        }
         if let Some(fresh) = collector.fresh.get(kind) {
             prints.extend(fresh.iter().map(|(k, p)| (k.clone(), p.to_json())));
         }
         let mut entry = Map::new();
         entry.insert("state".into(), states.get(kind).cloned().unwrap_or(json!("pending")));
         entry.insert("fingerprints".into(), Value::Object(prints));
+        if packed {
+            entry.insert("settledPacked".into(), json!(true));
+        }
         if partials.contains(kind) {
             entry.insert("partial".into(), json!(true));
         }

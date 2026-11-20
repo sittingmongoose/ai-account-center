@@ -51,6 +51,7 @@
     {"name": "act_day_closed", "key": "day u32", "value": "()", "owner": "activity", "authority": "derived_rebuildable", "notes": "days whose cells are final in the ledger"},
     {"name": "act_scan", "key": "computer u32 | tool u32 | at ms u64", "value": "msgpack ReadRow", "owner": "activity", "authority": "derived_rebuildable", "query": "scan-state history"},
     {"name": "act_live", "key": "computer text | 0 | tool text", "value": "msgpack ReadRow", "owner": "activity", "authority": "volatile_live", "notes": "minute-precision last read, written on every ingest without a log event; after a rebuild act_source.read answers at hour precision until the next read"},
+    {"name": "analytics_cache", "key": "UTF-8 state key, legacy path, or blob/<legacy path>/<sha256>", "value": "scanner and discovery JSON, UTF-8 digest, or archived file bytes", "owner": "activity", "authority": "redb_authoritative", "notes": "snapshot-backed scanner checkpoints and verified recovery copies; event replay only restores projected usage, not this table"},
     {"name": "act_backfill", "key": "computer u32 | tool u32", "value": "msgpack BackfillRow", "owner": "activity", "authority": "derived_rebuildable", "query": "backfill in progress"}
   ]
 }

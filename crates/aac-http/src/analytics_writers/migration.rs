@@ -4,8 +4,9 @@ use aac_files::read::{Ancestors, Read, ReadPolicy};
 use aac_store::engine::Engine;
 use aac_store::error::{Error, Result};
 use aac_store::{activity, analytics_cache, collect, contract, legacy, report, sampler};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,47 @@ const MARKER: &str = "analytics_files_migrated_v2";
 pub(super) const QUOTA: &str = "legacy/account-analytics/quota-history-v1.json";
 const MAX_FILE: u64 = 256 * 1024 * 1024;
 const BATCH_BYTES: usize = 8 * 1024 * 1024;
+const FAILURES: &str = "analytics_migration_failures";
+const RETRY_MS: i64 = 120_000;
+const MAX_RETRY_MS: i64 = 3_600_000;
+
+#[derive(PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Failure {
+    reason: String,
+    digest: Option<String>,
+    attempts: u8,
+    retry_at_ms: i64,
+}
+
+#[derive(Default, PartialEq, Deserialize, Serialize)]
+struct Failures(BTreeMap<String, Failure>);
+
+impl Failures {
+    fn waiting(&self, key: &str, now: i64) -> bool {
+        self.0.get(key).is_some_and(|entry| now < entry.retry_at_ms)
+    }
+
+    fn record(&mut self, key: &str, digest: Option<&str>, error: &Error, now: i64) {
+        let attempts = self
+            .0
+            .get(key)
+            .filter(|old| old.digest.as_deref() == digest)
+            .map_or(1, |old| old.attempts.saturating_add(1));
+        let delay = (RETRY_MS << (attempts - 1).min(5)).min(MAX_RETRY_MS);
+        let retry_at_ms = now.saturating_add(delay);
+        tracing::warn!(file = key, reason = %error, retry_at_ms, "Analytics migration source retained");
+        self.0.insert(
+            key.to_owned(),
+            Failure {
+                reason: error.to_string(),
+                digest: digest.map(str::to_owned),
+                attempts,
+                retry_at_ms,
+            },
+        );
+    }
+}
 
 fn files_under(
     root: &Path,
@@ -91,6 +133,7 @@ fn read(root: &Path, file: &Path) -> Result<Option<Vec<u8>>> {
     match aac_files::read::read(file, &policy) {
         Read::Bytes(bytes, _) => Ok(Some(bytes)),
         Read::Absent => Ok(None),
+        Read::TooLarge => Err(Error::new("source_limit", "Analytics file exceeds 256 MiB")),
         other => Err(Error::new(
             "io",
             format!("Analytics migration read: {other:?}"),
@@ -262,11 +305,30 @@ impl Migration<'_> {
         super::history::commit_report(self.store, value)
     }
 
-    fn ready(&self, key: &str, digest: &str, bytes: Option<&[u8]>, epoch: &str) -> bool {
+    fn ready(
+        &self,
+        key: &str,
+        digest: &str,
+        bytes: Option<&[u8]>,
+        epoch: &str,
+        failures: &mut Failures,
+    ) -> bool {
         match self.project(key, digest, bytes, epoch) {
-            Ok(ready) => ready,
+            Ok(ready) => {
+                failures.0.remove(key);
+                ready
+            }
             Err(error) => {
-                tracing::warn!(code = error.code, "Analytics source import incomplete");
+                let reason = match projection(key) {
+                    Projection::Codex if error.code == "unsupported" => {
+                        "unsupported Codex cache version"
+                    }
+                    Projection::Codex if error.code == "invalid" => {
+                        "invalid Codex cache or no recoverable records"
+                    }
+                    _ => "Analytics projection could not be committed",
+                };
+                failures.record(key, Some(digest), &Error::new(error.code, reason), self.now);
                 false
             }
         }
@@ -278,6 +340,7 @@ impl Migration<'_> {
         batch: &[(String, Vec<u8>)],
         epoch: &str,
         before_remove: &mut impl FnMut() -> Result<()>,
+        failures: &mut Failures,
     ) -> Result<bool> {
         let mut complete = true;
         analytics_cache::archive(self.store, batch)?;
@@ -285,7 +348,13 @@ impl Migration<'_> {
             if analytics_cache::archived(self.store, key)?.as_deref() != Some(bytes) {
                 return Err(Error::new("io", "Analytics migration verification failed"));
             }
-            if !self.ready(key, &aac_core::sha256_hex(bytes), Some(bytes), epoch) {
+            if !self.ready(
+                key,
+                &aac_core::sha256_hex(bytes),
+                Some(bytes),
+                epoch,
+                failures,
+            ) {
                 complete = false;
                 continue;
             }
@@ -308,28 +377,47 @@ impl Migration<'_> {
         if self.store.get_meta(MARKER)?.as_deref() == Some(&epoch) {
             return Ok(true);
         }
+        let previous = self.store.get_meta(FAILURES)?;
+        let mut failures: Failures = previous
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or_default();
         let mut complete = true;
         let mut batch = Vec::new();
         let mut pending = Vec::new();
         let mut size = 0;
+        let mut seen = HashSet::new();
         for path in candidates(self.root)? {
-            let Some(bytes) = read(self.root, &path)? else {
+            let relative = path.strip_prefix(self.root)?;
+            let key = format!("legacy/{}", relative.to_string_lossy().replace('\\', "/"));
+            seen.insert(key.clone());
+            if failures.waiting(&key, self.now) {
+                complete = false;
                 continue;
+            }
+            let bytes = match read(self.root, &path) {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => continue,
+                Err(error) => {
+                    failures.record(&key, None, &error, self.now);
+                    complete = false;
+                    continue;
+                }
             };
             if size + bytes.len() > BATCH_BYTES && !batch.is_empty() {
-                complete &= self.flush(&pending, &batch, &epoch, &mut before_remove)?;
+                complete &=
+                    self.flush(&pending, &batch, &epoch, &mut before_remove, &mut failures)?;
                 batch.clear();
                 pending.clear();
                 size = 0;
             }
-            let relative = path.strip_prefix(self.root)?;
-            let key = format!("legacy/{}", relative.to_string_lossy().replace('\\', "/"));
             size += bytes.len();
             batch.push((key, bytes));
             pending.push(path);
         }
         if !batch.is_empty() {
-            complete &= self.flush(&pending, &batch, &epoch, &mut before_remove)?;
+            complete &= self.flush(&pending, &batch, &epoch, &mut before_remove, &mut failures)?;
         }
         // Recover copies staged by the earlier migration, and replay after a projection rebuild.
         for prefix in [
@@ -339,8 +427,17 @@ impl Migration<'_> {
             "legacy/cache/account-activity-v1/analytics-activity-snapshot-v1.json",
         ] {
             for (key, digest) in analytics_cache::archived_index(self.store, prefix)? {
-                complete &= self.ready(&key, &digest, None, &epoch);
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                complete &= !failures.waiting(&key, self.now)
+                    && self.ready(&key, &digest, None, &epoch, &mut failures);
             }
+        }
+        failures.0.retain(|key, _| seen.contains(key));
+        let receipt = serde_json::to_string(&failures)?;
+        if previous.as_deref() != Some(&receipt) && (previous.is_some() || !failures.0.is_empty()) {
+            self.store.set_meta(FAILURES, &receipt)?;
         }
         if complete {
             self.store.set_meta(MARKER, &epoch)?;
@@ -491,6 +588,133 @@ mod tests {
                 .expect("staged quota bytes")
                 .as_deref(),
             Some(&body[..])
+        );
+    }
+
+    #[test]
+    fn analytics_migration_backs_off_heavy_failures_and_continues_other_files() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let dir = root.join("store");
+        let open = || aac_store::ops::open_engine(&dir.to_string_lossy(), None, None).unwrap();
+        let codex = root.join("cache/codex-native-usage-v1.json");
+        let quota = root.join("account-analytics/quota-history-v1.json");
+        let cursor = root.join("cache/cursor-quota-v1.json");
+        fs::create_dir_all(codex.parent().unwrap()).unwrap();
+        fs::create_dir_all(quota.parent().unwrap()).unwrap();
+        fs::write(&codex, b"{\"version\":2,\"files\":{}}").unwrap();
+        fs::write(&cursor, b"{}").unwrap();
+        fs::File::create(&quota)
+            .unwrap()
+            .set_len(MAX_FILE + 1)
+            .unwrap();
+        let store = open();
+        let start = fixture(&store, root).now;
+        assert!(!fixture(&store, root).run().unwrap());
+        assert!(codex.is_file() && quota.is_file() && !cursor.exists());
+        store.close().unwrap();
+        drop(store);
+        let store = open();
+        let health = || {
+            aac_store::ops::call(&store, "status", "{}").unwrap()
+            ["storageHealth"]["analyticsMigrationFailures"].clone()
+        };
+        let codex_key = "legacy/cache/codex-native-usage-v1.json";
+        let first = health();
+        assert!(first[QUOTA]["reason"].as_str().unwrap().contains("256 MiB"));
+        assert!(
+            first[codex_key]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("unsupported")
+        );
+        assert!(
+            !Migration {
+                now: start + 1,
+                ..fixture(&store, root)
+            }
+            .run()
+            .unwrap()
+        );
+        assert_eq!(health(), first);
+        for attempts in 2..=7 {
+            let at = health()[codex_key]["retryAtMs"]
+                .as_i64()
+                .unwrap()
+                .max(health()[QUOTA]["retryAtMs"].as_i64().unwrap());
+            assert!(
+                !Migration {
+                    now: at,
+                    ..fixture(&store, root)
+                }
+                .run()
+                .unwrap()
+            );
+            let state = health();
+            assert_eq!(state[codex_key]["attempts"], attempts);
+            assert_eq!(state[QUOTA]["attempts"], attempts);
+            if attempts >= 6 {
+                assert_eq!(state[codex_key]["retryAtMs"], at + MAX_RETRY_MS);
+            }
+        }
+        assert!(codex.is_file() && quota.is_file());
+    }
+
+    #[test]
+    fn analytics_migration_retires_quota_after_recording_valid_rows_and_named_rejects() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let store =
+            aac_store::ops::open_engine(&root.join("store").to_string_lossy(), None, None).unwrap();
+        let mut record = json!({
+            "identity":"a".repeat(64), "accountId":"claude:fixture",
+            "sampledAt":"2026-11-15T08:40:00.000Z","observedAt":"2026-11-15T08:40:00.000Z",
+            "platform":"mac","status":"ok","source":"cli",
+            "windows":[{"key":"five_hour","label":"5-hour limit","kind":"rate_limit","windowMinutes":300,"usedPercent":30}]
+        });
+        let valid = record.clone();
+        record["identity"] = json!("b".repeat(64));
+        let records = vec![valid, record];
+        let body = json!({"records":records}).to_string();
+        let quota = root.join("account-analytics/quota-history-v1.json");
+        fs::create_dir_all(quota.parent().unwrap()).unwrap();
+        fs::write(&quota, &body).unwrap();
+        let migration = fixture(&store, root);
+        assert!(!migration.run().unwrap());
+        let digest = aac_core::sha256_hex(body.as_bytes());
+        let source = sampler::BackfillSource {
+            label: "quota-history-v1.json".into(),
+            sha256: digest.clone(),
+            records,
+        };
+        let providers = [("b".repeat(64), String::new())].into_iter().collect();
+        let report = sampler::backfill(
+            &store,
+            std::slice::from_ref(&source),
+            &providers,
+            migration.now,
+            0,
+        )
+        .unwrap();
+        assert_eq!((report.sampled, report.rejected), (1, 1));
+        assert!(migration.run().unwrap());
+        assert!(!quota.exists());
+        assert_eq!(
+            analytics_cache::archived(&store, QUOTA).unwrap().unwrap(),
+            body.as_bytes()
+        );
+        let replay = sampler::backfill(&store, &[source], &providers, migration.now, 0).unwrap();
+        assert_eq!((replay.files_already_imported, replay.records), (1, 0));
+        let receipt = store
+            .get_meta(&format!("ts:backfill:{digest}"))
+            .unwrap()
+            .unwrap();
+        let receipt: Value = serde_json::from_str(&receipt).unwrap();
+        assert_eq!(receipt["rejects"][0]["index"], 1);
+        let status = aac_store::ops::call(&store, "status", "{}").unwrap();
+        assert_eq!(
+            status["storageHealth"]["quotaBackfillRejections"][digest]["count"],
+            1
         );
     }
 

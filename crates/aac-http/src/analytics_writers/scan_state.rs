@@ -13,8 +13,10 @@ pub(super) fn requests(
     kinds: &[String],
     fingerprints: &Map<String, Value>,
     settled: &HashMap<String, u64>,
+    now: i64,
 ) -> Vec<(Vec<String>, Value)> {
-    let settings = json!({ "settledBefore": settled });
+    let slot = now.max(0) as u64 / aac_usage::collector::SETTLED_CHECK_MS;
+    let settings = json!({ "settledBefore": settled, "settledSlot": slot });
     args["fingerprints"] = json!(fingerprints);
     args["fingerprints"]["_store"] = settings.clone();
     if args.to_string().len() <= REQUEST_BYTES {
@@ -29,7 +31,20 @@ pub(super) fn requests(
             one["kinds"] = json!([kind]);
             let mut selected = Map::new();
             if let Some(prints) = fingerprints.get(kind).and_then(Value::as_object) {
-                let mut files: Vec<_> = prints.iter().collect();
+                let cutoff = settled.get(kind).copied().unwrap_or(0) as i64;
+                let (settled, mut files): (Vec<_>, Vec<_>) = prints
+                    .iter()
+                    .partition(|(_, print)| aac_usage::collector::settled_print(print, cutoff));
+                if !settled.is_empty() {
+                    let settled = settled
+                        .into_iter()
+                        .map(|(key, print)| (key.clone(), print.clone()))
+                        .collect();
+                    let Some(packed) = aac_usage::protocol::pack_settled(&settled) else {
+                        return (vec![kind.clone()], Value::Null);
+                    };
+                    one["fingerprints"]["_store"]["settledPacked"][kind] = json!(packed);
+                }
                 // Carry unfinished cursors first. Other files can be re-read to recover any
                 // fingerprint omitted to fit the existing scanner frame.
                 files.sort_by_key(|(_, print)| {
@@ -49,6 +64,9 @@ pub(super) fn requests(
                 }
             }
             one["fingerprints"][kind] = Value::Object(selected);
+            if one.to_string().len() > REQUEST_BYTES {
+                return (vec![kind.clone()], Value::Null);
+            }
             (vec![kind.clone()], one)
         })
         .collect()
@@ -135,6 +153,18 @@ impl Cache {
         let mut prints = Map::new();
         for (key, print) in fresh {
             let old = prior.get(key);
+            if print["settledConfirmed"] == true {
+                if let Some(mut saved) = old.and_then(Value::as_object).cloned() {
+                    saved.insert(
+                        "settledCheckedSlot".into(),
+                        print["settledCheckedSlot"].clone(),
+                    );
+                    prints.insert(key.clone(), Value::Object(saved));
+                } else {
+                    complete = false;
+                }
+                continue;
+            }
             if let Some(from) = print["readFrom"].as_u64() {
                 let matches = old.is_some_and(|old| {
                     (old["readThrough"].as_u64() == Some(from) && same_file(old, print))
@@ -330,6 +360,53 @@ mod tests {
     }
 
     #[test]
+    fn analytics_split_request_keeps_settled_fingerprints_and_cached_usage() {
+        let kinds = ["codex".to_owned(), "claude".to_owned()];
+        let print = json!({
+            "pathKey":"settled-path", "size":100, "mtimeMs":1, "newestUsageMs":1,
+            "fileIdentity":"9:1", "head":"first", "tail":"last", "appendState":{"model":"fixture"},
+        });
+        let fingerprints: Map<String, Value> = serde_json::from_value(json!({
+            "codex":{"settled":print,"too-large-active":{"extra":"a".repeat(REQUEST_BYTES)}},
+        }))
+        .unwrap();
+        let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
+        let batches = requests(
+            args,
+            &kinds,
+            &fingerprints,
+            &[("codex".into(), 2)].into_iter().collect(),
+            600_000,
+        );
+        assert_eq!(batches.len(), 2);
+        let args = &batches[0].1;
+        assert_eq!(args["fingerprints"]["codex"], json!({}));
+        let request = aac_usage::protocol::parse_request(args.to_string().as_bytes()).unwrap();
+        assert_eq!(request.fingerprints["codex"]["settled"], print);
+
+        let mut cache = Cache {
+            fingerprints,
+            rows: vec![
+                json!({"k":"codex","f":"settled","m":"fixture","h":"2026-11-03 03:00","i":100}),
+            ],
+            ..Cache::default()
+        };
+        let confirmed = json!({"kinds":{"codex":{"state":"ok","settledPacked":true,
+            "fingerprints":{"settled":{"settledConfirmed":true,"settledCheckedSlot":1}}
+        }}});
+        assert!(cache.apply("codex", &confirmed, true, 0));
+        assert_eq!(cache.rows[0]["i"], 100);
+        assert_eq!(
+            cache.fingerprints["codex"]["settled"]["appendState"],
+            print["appendState"]
+        );
+        assert_eq!(
+            cache.fingerprints["codex"]["settled"]["settledCheckedSlot"],
+            1
+        );
+    }
+
+    #[test]
     fn analytics_deadline_slices_reach_rollout_tail_with_full_read_totals() {
         let home = tempfile::tempdir().expect("fixture home");
         let store_dir = home.path().join("store");
@@ -368,9 +445,10 @@ mod tests {
         let kinds = ["codex".to_owned()];
         let scan = |cache: &Cache, line_budget: Option<u64>| {
             let args = super::super::scan_request(&kinds, 0, json!({}), false, None);
-            let [(batch, request)] = requests(args, &kinds, &cache.fingerprints, &HashMap::new())
-                .try_into()
-                .expect("one scanner request");
+            let [(batch, request)] =
+                requests(args, &kinds, &cache.fingerprints, &HashMap::new(), 0)
+                    .try_into()
+                    .expect("one scanner request");
             let mut request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
                 .expect("parse writer request");
             request.line_budget = line_budget;

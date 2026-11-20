@@ -170,7 +170,7 @@ impl Job {
             );
             request["deadlineMs"] = Value::from(TRANSPORT_MS - 5_000);
             let batches =
-                scan_state::requests(request, &kinds, &cache.fingerprints, &HashMap::new());
+                scan_state::requests(request, &kinds, &cache.fingerprints, &HashMap::new(), now);
             let Some((_, request)) = batches.into_iter().next() else {
                 return;
             };
@@ -278,7 +278,7 @@ mod tests {
         let scan = |cutoff, cache: &scan_state::Cache, budget| {
             let request = super::super::scan_request(&kinds, cutoff, json!({}), false, None);
             let (_, request) =
-                scan_state::requests(request, &kinds, &cache.fingerprints, &HashMap::new())
+                scan_state::requests(request, &kinds, &cache.fingerprints, &HashMap::new(), now)
                     .into_iter()
                     .next()
                     .expect("historical scanner request");

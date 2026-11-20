@@ -16,6 +16,7 @@ name = "aac-usage-scan"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 rusqlite = { version = "0.37", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: costs parse to the exact double the server reads.

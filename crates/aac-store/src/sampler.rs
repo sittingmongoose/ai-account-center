@@ -15,12 +15,13 @@ use crate::observe::{
 use crate::usage::{self, Sampled};
 use aac_num::ecma::parse_instant;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// `MAX_ACCOUNTS_PER_SAMPLE`: one tick reads at most this many accounts.
 pub const MAX_ACCOUNTS_PER_SAMPLE: usize = 64;
 /// The backfill's record batch (`usage-backfill.ts` `BATCH`).
 const BATCH: usize = 2000;
+pub(crate) const REJECTIONS: &str = "ts:backfill_rejections";
 
 /// `Date.parse(account.sampledAt ?? account.fetchedAt ?? '')`: null falls back, empty does not.
 fn sampled_ms(account: &Value) -> Option<i64> {
@@ -143,7 +144,8 @@ pub fn backfill(
         ..Default::default()
     };
     let mut pending: Vec<Sampled> = Vec::new();
-    let mut imported: Vec<(&BackfillSource, usize)> = Vec::new();
+    let mut imported = Vec::new();
+    let mut rejections = BTreeMap::<String, Value>::new();
     for source in sources {
         report.files += 1;
         let marker = format!("ts:backfill:{}", source.sha256);
@@ -151,22 +153,38 @@ pub fn backfill(
             report.files_already_imported += 1;
             continue;
         }
-        let mut valid = Vec::new();
-        for record in &source.records {
-            match decode_observation(record) {
-                Some(decoded) => valid.push(decoded),
-                None => report.records_skipped += 1,
+        let mut decoded_count = 0;
+        let mut rejects = Vec::new();
+        for (index, record) in source.records.iter().enumerate() {
+            let Some(decoded) = decode_observation(record) else {
+                report.records_skipped += 1;
+                rejects.push(json!({"index":index,"reason":"record shape"}));
+                continue;
+            };
+            let provider = provider_for(&decoded, providers);
+            let import_ref = format!("{}#{}", source.label, decoded_count);
+            decoded_count += 1;
+            let Some(observation) = observation_from_record(&decoded, &provider, &import_ref) else {
+                report.records_skipped += 1;
+                rejects.push(json!({"index":index,"reason":"record timestamp"}));
+                continue;
+            };
+            if let Err(error) = observation.validate() {
+                report.rejected += 1;
+                rejects.push(json!({"index":index,"reason":error.message}));
+            } else {
+                pending.push(observation);
             }
         }
-        for (index, decoded) in valid.iter().enumerate() {
-            let provider = provider_for(decoded, providers);
-            let import_ref = format!("{}#{}", source.label, index);
-            match observation_from_record(decoded, &provider, &import_ref) {
-                Some(observation) => pending.push(observation),
-                None => report.records_skipped += 1,
-            }
+        if !rejects.is_empty() {
+            rejections.insert(
+                source.sha256.clone(),
+                json!({"file":source.label,"count":rejects.len()}),
+            );
         }
-        imported.push((source, valid.len()));
+        // Keep the source index and reason, without making the rejected reading a measurement.
+        let value = json!({ "file": source.label, "records": decoded_count, "at": now, "rejects": rejects });
+        imported.push((marker, value));
     }
     // Oldest first across every file, so archive and main file interleave correctly; an overlap
     // between them is skipped by the store as a duplicate sample.
@@ -177,13 +195,22 @@ pub fn backfill(
         report.sampled += result.sampled as u64;
         report.seen += result.seen as u64;
         report.duplicates += result.skipped as u64;
-        report.rejected += result.rejected as u64;
-    }
-    if report.rejected == 0 {
-        for (source, count) in &imported {
-            let value = json!({ "file": source.label, "records": count, "at": now }).to_string();
-            engine.set_meta(&format!("ts:backfill:{}", source.sha256), &value)?;
+        if result.rejected != 0 {
+            return Err(crate::error::Error::new("invalid", "Validated quota reading refused"));
         }
+    }
+    if !rejections.is_empty() {
+        let mut prior: BTreeMap<String, Value> = engine
+            .get_meta(REJECTIONS)?
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or_default();
+        prior.extend(rejections);
+        engine.set_meta(REJECTIONS, &serde_json::to_string(&prior)?)?;
+    }
+    for (marker, receipt) in &imported {
+        engine.set_meta(marker, &receipt.to_string())?;
     }
     if !imported.is_empty() {
         engine.set_meta("ts:backfill_report", &serde_json::to_string(&report)?)?;

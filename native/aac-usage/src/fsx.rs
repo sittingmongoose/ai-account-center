@@ -460,6 +460,20 @@ pub fn identity(path: &Path) -> Option<(u64, u64)> {
     }
 }
 
+/// An existing stat supplies the inode on Unix. Windows uses an attribute-only handle for the
+/// file index, which ordinary Rust metadata doesn't expose.
+pub fn metadata_identity(_path: &Path, _metadata: &fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((_metadata.dev(), _metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        windows_identity(_path)
+    }
+}
+
 #[cfg(windows)]
 fn windows_identity(path: &Path) -> Option<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
