@@ -1,0 +1,205 @@
+{
+  "crates/aac-agent/src/claude_host/mac.rs": {
+    "reason": "The fixed Claude Desktop agent builds app launcher bundles and reads or moves Claude profile directories under the admitted local root.",
+    "uses": [
+      "fs::read:454f95e8dbe8c9a3e105584ba1308f850da1cf90370ae1ed5c225c9616497d0d",
+      "fs::rename:6d574455f509d67605cc838887bbbdb2c2b09d9629a705c7c6d51bb772074ce9",
+      "fs::rename:835574fb39f7af7c9c3e7a056e10f6f877cd849b7834abb8e16175aca505ef83",
+      "fs::rename:bb02b1fc8bfcda7b3c885bb7328ae7e0af3d3fce974ecace07fd63002d1a0b51",
+      "fs::write:1ac4a83eec5e6b6abab7b048f4e303f0885f4841bb8ef00af9001789b339837f",
+      "fs::write:d2e174a5c5c7ba40ff5f8013e770d510e742ad17d91e4aaa626ae6f4cd338da3"
+    ]
+  },
+  "crates/aac-http/src/account_usage/coordinator.rs": {
+    "reason": "The collection input preflight inspects provider installations and their tool-owned state, separately from account records and credentials.",
+    "uses": [
+      "persist:45ef28cbcb78d1cf855fa589a145b072b8c1660084839c29b7a53c2cb95a65f0",
+      "persist:45ef28cbcb78d1cf855fa589a145b072b8c1660084839c29b7a53c2cb95a65f0",
+      "persist:f6cad27a0fd815892dd7bcdc2afca63558fe1e95dc896923284a0d56474658c6"
+    ]
+  },
+  "crates/aac-http/src/antigravity_host.rs": {
+    "reason": "The Antigravity host hashes the selected executable before it accepts the reviewed installation.",
+    "uses": [
+      "File::open:666e07a448d352c5ef31b5e956e0712399b8372affe44d619079bdc736bf274f"
+    ]
+  },
+  "crates/aac-http/src/antigravity_quota.rs": {
+    "reason": "The existing Antigravity collector publishes a scoped cooldown sidecar using the previous cache layout.",
+    "uses": [
+      "fs::rename:e44e8c795705ae5829d84c107836cc5e33cc510e7262de4bdbc233a14d898fe0",
+      "fs::write:f90307178165e290942d886b59f230577a2197cc479a97e5c4661e5738c209c7"
+    ]
+  },
+  "crates/aac-http/src/claude_open/fsrules.rs": {
+    "reason": "Claude Open checks and publishes its held-history marker under the marker protocol, including descriptor ownership, size and link checks.",
+    "uses": [
+      "O_NOFOLLOW:62d1840f1e69725d7d26a97d54fa77c9a4aa57d1c58e232c096867554b3c7717",
+      "O_NOFOLLOW:a8508556c9bec5b821e012205d18e9e1a5cb0e94f3e652bd13685c0e41d490f7",
+      "O_NOFOLLOW:f8cd5a2dc8311594135d92f3d1c76b92b4eec16b77ed56bc6f6d7fe82e5c7f94",
+      "OpenOptions:5dfaf7ec07bc8184e048c9a0def94741075458e3bfc06f89934c3cb553397a07",
+      "OpenOptions:5dfaf7ec07bc8184e048c9a0def94741075458e3bfc06f89934c3cb553397a07",
+      "OpenOptions:8af8d6875a8d28d91bdb29437ad369956444939b22ef64986bc83581507f3563",
+      "OpenOptions:e6d65134ba46b91b325e5b696fd73d8771790bc306aa1b972f12acc31655c19e",
+      "custom_flags:62d1840f1e69725d7d26a97d54fa77c9a4aa57d1c58e232c096867554b3c7717",
+      "custom_flags:a8508556c9bec5b821e012205d18e9e1a5cb0e94f3e652bd13685c0e41d490f7",
+      "custom_flags:f8cd5a2dc8311594135d92f3d1c76b92b4eec16b77ed56bc6f6d7fe82e5c7f94",
+      "fs::read_to_string:4da59e10ed500b97ecb8caadfcc1225e37633338e3fdfde4a59fce34bf5da7c1"
+    ]
+  },
+  "crates/aac-http/src/claude_open/manifest.rs": {
+    "reason": "Claude Open reads the existing launcher and the history-copy policy using its protocol-specific file admission.",
+    "uses": [
+      "fs::read:363d53fc1b7b201a7db0f6168f8a7e97e07cf9027e866a3e98e8cd7c33394aec",
+      "fs::read:ce07fb4dd998943681b03a6168c584f7918fe8f2d60604449d1ab9560facb0ca"
+    ]
+  },
+  "crates/aac-http/src/claude_open/markers.rs": {
+    "reason": "Claude Open handles the existing pending history marker and refuses unproved marker state during recovery.",
+    "uses": [
+      "File::open:0408afca30fda5916766172e9f946405b77e248709ce52745d297be6832616a4"
+    ]
+  },
+  "crates/aac-http/src/claude_open/open.rs": {
+    "reason": "Claude Open preserves the existing local diagnostics and the supervised launcher protocol.",
+    "uses": [
+      "fs::read:be6183089ed4436ee8a3cef560dd44358e6af9af7407b287adaeca4ad55252de"
+    ]
+  },
+  "crates/aac-http/src/claude_open/operations.rs": {
+    "reason": "The Open operation journal preserves the existing job and observation format during a dashboard restart.",
+    "uses": [
+      "File::open:9017099359a43f33fb003af96c9fb73a59aaaaa45c34b43c9c6e40e63926661d"
+    ]
+  },
+  "crates/aac-http/src/claude_open/remote.rs": {
+    "reason": "The history bridge checks the packaged helper source before passing it to the fixed transport.",
+    "uses": [
+      "fs::read:128e987d162144e5e91c824e84e116b894a738f38de54ef14e6a3ea122f01ed6"
+    ]
+  },
+  "crates/aac-http/src/cli/admin.rs": {
+    "reason": "The native admin CLI ports hub and snapshot configuration and the deployed packaged Cursor reader.",
+    "uses": [
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "fs::read:63dbf4ac7560e0305c670cf93889fc18d4a2d151f99bdc0437d24a43470cf483",
+      "fs::read:9b85ddb988184c8dc046f5af43598ed3e2ab89657e87234f798c5312acffb879",
+      "fs::read_to_string:48f6e09cc91e18ff9dd9ad462783a8f5742205b99b827d40f1c4f0ab8f2f4465",
+      "fs::rename:b0c02fbbbc3351a813bceff7dad724a3dc8d35b090392d21aafd3d32025f4a00"
+    ]
+  },
+  "crates/aac-http/src/cli/antigravity.rs": {
+    "reason": "The native Antigravity CLI owns its installation pin, profile locks and temporary sign-in home.",
+    "uses": [
+      "File::open:db7f2a3acef157b4b0ef6db72a467048861f32b3ae61a0a61adcb71c90bf1288",
+      "O_NOFOLLOW:d45c4e52b0ee8f1fa4702da45454c9f1314ddedc2d8db92a83ca10a75c630c2f",
+      "O_NOFOLLOW:f19e06cadc5456cf803d2ab6b576a5e33e13e9912e88d82eaea5d0add04adfce",
+      "OpenOptions:12380944888a5d002f10ce4e65dd87efd91771d9429f0df7aff0b57b2a46517f",
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "OpenOptions:85d62e57929530ccb17422316cebb41d7e2a64261638406b4ca0e514d24c615b",
+      "custom_flags:d45c4e52b0ee8f1fa4702da45454c9f1314ddedc2d8db92a83ca10a75c630c2f",
+      "custom_flags:f19e06cadc5456cf803d2ab6b576a5e33e13e9912e88d82eaea5d0add04adfce",
+      "fs::read:20aad536c484c868dc1a145278b044b11d874f61050a542876d613e36fe62202",
+      "fs::read_to_string:5d1a784e651910d5ce98306e247c20b22946a3e2ec95fefbda30c9b308f41df7",
+      "fs::read_to_string:e7448a0f3e48864e2806784715db53b64cd60cd2ef9e0a645d17ab833e31e09f",
+      "fs::rename:68006bd6360f6b155210ecb1a9bee89c2f730458b81a7fdb505e124b90d64e5a"
+    ]
+  },
+  "crates/aac-http/src/cli/bar.rs": {
+    "reason": "The native bar CLI stages and replaces installer artifacts and local tray installation records.",
+    "uses": [
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "fs::read_to_string:be01272703a102391f0aadab31e2150552c1adfa321d40ea0d18c11b537e67b5",
+      "fs::rename:0ba2c7f977987e3094fb00f8c5635c4278729357f799a8b5d09c792b29daa783",
+      "fs::rename:bfafaaccdab251851533963ed9372396da1f3f840b372c9ab9e95c7633846671",
+      "fs::rename:ce1696ceeffc5d71d546c1d1e44c2202d8567fd1148803a127c357a12266d210"
+    ]
+  },
+  "crates/aac-http/src/cli/codex_auth.rs": {
+    "reason": "The native Codex CLI handles Codex-owned auth files under its activation lease and preserves rollback state.",
+    "uses": [
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "fs::read:0c985f65ff02b30e40f88f8a1a5e17a7664233388a34c73b5bc549869e171d89",
+      "fs::read_to_string:724605287e6b43eb93eb1de98374a926cc7ecf73a47ce0ea8c4bf0f050af5f0a",
+      "fs::read_to_string:99688f75cbb461fb49fa37308c1f7dfb769fbb1c92dca10addaaeeb2bf91aba7",
+      "fs::read_to_string:bbab759040999d7081d71682ebb0ba4dc3a349054f3b9d1dad4b0c6a0a125f3b",
+      "fs::read_to_string:ec337b7f6dc4d8da6c0cefac89e86efa26e8caaba92a22e65506450cdf34eadc",
+      "fs::rename:690098107332227eb9453eb6a7ad58fab9376f68b322440519791346fc5eb484",
+      "fs::rename:863315dd2c509c157004fd757a43fc8c6ce4e8dd9e783e0a703761dd767df0f4",
+      "fs::rename:cc5c9e6bb5ac18e17b321da2ce34b6366e9466d91d4663b37f9c968e219000f3"
+    ]
+  },
+  "crates/aac-http/src/cli/config_write.rs": {
+    "reason": "The native config migration keeps source YAML, temporary replacement and backup sequencing together.",
+    "uses": [
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "fs::read:e373ea29fee5c13e3f4e8cc605d4e124e5b331a066ee0ebce9b3cb0053202624",
+      "fs::read_to_string:fa12a9087611696bc64c0a404f3811750bbef80e64df4e426bc3a42c415ba5a8",
+      "fs::read_to_string:feeec35c5b3516c9181f85f99675acd8dc5f03eb023657f8edb2aa1fdd52b4d9",
+      "fs::rename:3f3bcd2a5bfc4b26393721af7512dbfb81d218561190c1175af57427fa30169b"
+    ]
+  },
+  "crates/aac-http/src/cli/native_app_paths.rs": {
+    "reason": "The native application locator reads the chosen installation candidate metadata.",
+    "uses": [
+      "fs::read:90b197d15d837eec7d5810ee996d74179ab0a3ace34bb609f5b7dbb2ace2a0d6"
+    ]
+  },
+  "crates/aac-http/src/public_auth/owner_host.rs": {
+    "reason": "The embedded Unix owner publishes its boot-specific private service descriptor for adoption by the listener.",
+    "uses": [
+      "OpenOptions:1fe162af1ed0f38b79fff37f5f2e759c8976d661e8d3b100524e2d0d1ac0ea50",
+      "fs::rename:520fd379438f1115fae4dea06f52a07da00bc91112724d5350bab6e297caabe5"
+    ]
+  },
+  "crates/aac-http/src/status_owned.rs": {
+    "reason": "Status initializes the shared report schemas from files shipped in the dashboard package.",
+    "uses": [
+      "fs::read_to_string:d453833b2ff3fb4bd6c11135628146b676ef64d3a6c3a09d4af143edb332beb2"
+    ]
+  },
+  "crates/aac-http/src/status_produce.rs": {
+    "reason": "Status reads kernel-owned procfs metrics through the same system probes as the predecessor.",
+    "uses": [
+      "fs::read_to_string:0f5a467bfe2634d4e8d4da8d1ccb63573a84dd77fd88eb0c913b657120c0663d"
+    ]
+  },
+  "crates/aac-status/src/answer_delivery.rs": {
+    "reason": "The answer delivery protocol publishes shared messages atomically through its dedicated writer.",
+    "uses": [
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "fs::rename:551ffd4b88392727ce34c0b32964331bc34c2e06f73016540625f68bbe5acdf9"
+    ]
+  },
+  "crates/aac-status/src/answers_engine.rs": {
+    "reason": "The Status answer owner uses the existing signed answer journal, key and writer lease.",
+    "uses": [
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "fs::read:4a164168167b4014467cad83e9cf8acaeb0c4f43e8254bcdd3f701de98b47640",
+      "fs::read:4a164168167b4014467cad83e9cf8acaeb0c4f43e8254bcdd3f701de98b47640",
+      "fs::read_to_string:7d36df1bbf80156721df6ff84cb04b7cf21b736bc85059550bdd5a2b99dee358"
+    ]
+  },
+  "crates/aac-status/src/writer_lock.rs": {
+    "reason": "Status uses the existing cross-host writer lock and checks kernel process identity for reclaim.",
+    "uses": [
+      "OpenOptions:2ac83a0d88e8e9c6a3576bc07749a483478bd7c85469be9220337e0cfc4a215d",
+      "OpenOptions:82b985ad858502e0c0973a353cfad7d6d1649128545c4b3210a4d2ce70d208bb",
+      "fs::read:b1a8744d4d7f289364f46a86beee60be5b66d1555e678dfb03760b8ba0bd28bf",
+      "fs::read_to_string:bbfad8769224a6f5f43ba6c2a7ae5e5fba0c8d1d99e6340ab20bc56d2aaaf9e8",
+      "fs::read_to_string:bf32f6073c451688070242777835b879c39cc4d4f0ed7be3eeae29a44ea561d9",
+      "fs::read_to_string:f798bcdcdc6e1446938335b04e4ec5b08ed75abfaa4cbc054f3a74ffe4f5a822"
+    ]
+  },
+  "crates/aac-views/src/pricing/models_dev.rs": {
+    "reason": "The Models.dev pricing cache preserves its existing on-disk fallback and update format.",
+    "uses": [
+      "fs::read_to_string:149a220e63c62a9b3cd2dbc154195ba871b844d894ee75d5ee1a897c5725d10d",
+      "fs::write:6d8b37f4b81bc101b8e80fc1d4929e01f3282ec5681853b964ab5d86f1d4f5aa"
+    ]
+  }
+}

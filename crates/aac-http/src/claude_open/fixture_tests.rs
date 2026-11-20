@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 //! G13 Open orchestrator fixtures: the route flow, coalescing, the managed copy through the
 //! fixed-helper boundary, the durable hold, the launcher fallbacks and the cleanup totals,
 //! all over a fake remote and disposable 0700 roots. No real app, host or provider is touched.

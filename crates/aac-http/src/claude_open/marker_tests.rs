@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 //! G13 marker protocol fixtures: the port of `tests/unit/claude-history/pending-marker.test.cjs`.
 //! Every case runs on a disposable 0700 temp root; no real profile, app or credential is touched.
 use super::markers::{
@@ -8,7 +10,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-const PROFILE: &str = "gmail";
+const PROFILE: &str = super::sync::PROFILES[0];
 
 struct Root(PathBuf);
 impl Root {

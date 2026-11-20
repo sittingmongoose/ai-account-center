@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 //! G13 socket-level dispatch: the internal Open and cleanup routes over a real private
 //! Unix socket — the unbound handoff, admission, the bound owner's refusals and totals, and
 //! the GET profiles progress field. The L5 transport is deliberately unconfigured, so the

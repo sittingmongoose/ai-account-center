@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 //! G16b gate: the service's owned run ingest (`scoreboard_owned::ingest_request`) builds the same
 //! `runsRecord` request and the same pass problems as the TS ingest (`RunsStore.pass`) from the
 //! same `runsScan` output, for every pass in `tests/spec/runs-ingest-vectors.json` (made by the

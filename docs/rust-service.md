@@ -830,8 +830,11 @@ private-file registry. Set the same `CCS_SESSION_SECRET` in both processes if
 the installation overrides the file secret. Stop the TS server before starting
 Rust on the same private root. Rust refuses the TS session-owner marker.
 Use separate private roots while comparing the legacy server and the Rust
-listener. The packaged compatibility sidecar starts behind the Rust listener
-for the routes and callbacks that still need TypeScript.
+listener. The packaged compatibility sidecar still starts behind the Rust listener.
+The public cut allowlist is empty. Native owners serve Accounts and Re-check,
+Status and Scoreboard, Home, the history store and Analytics on both platforms.
+On Windows a compatibility client can read the single hosted Store through its
+authenticated private channel, including when native collection is disabled.
 
 To integrate the other public routes, supply the composed public router to
 `DashboardAuth::protect`. Handlers read `DashboardAccess` from the request

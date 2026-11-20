@@ -12,8 +12,9 @@ Analytics, explicit app-update jobs and native Mac/Windows bars. It does not
 switch accounts: account switching (Codex activation and auto-switch,
 Antigravity activation and auto-switch) was removed on 2026-11-14, because the
 agents pick their own accounts. Rust owns the public dashboard listener and CLI. The cut removes
-the TypeScript public server. Its private sidecar supplies the remaining compatibility routes and
-jobs during the transition. The remote Codex update runtime and build tooling retain Node.
+the TypeScript public server. The packaged private sidecar still supports compatibility boots.
+Rust serves the public routes and owns collection, Status, the history Store and Analytics.
+The remote Codex update runtime and build tooling retain Node.
 The web UI is Leptos **0.9** compiled to WebAssembly. Native bars remain Swift and WPF.
 
 The primary command is `ai-account-center dashboard`; `ccs config` is compatible.

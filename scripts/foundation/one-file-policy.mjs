@@ -4,14 +4,18 @@
 // OpenOptions, File::open, File::create, fs::read, fs::read_to_string, fs::write, fs::rename or
 // tempfile persist (`fs::read` follows links and blocks on a FIFO swapped in after a check).
 // Readers use aac_files::read, writers aac_files::OwnedStore. Test modules, tests/ and build
-// scripts are not scanned. Each allowlisted file carries its reason, and an entry that no longer
-// matches anything fails the gate, so the list cannot rot. `--self-test` proves the scan catches
-// a planted copy.
+// scripts are not scanned. The pre-cut allowlist and the exact counts of operations carried over
+// by the cut have reasons and must stay current. The self-test proves the scan catches a planted
+// copy, including an extra instance of an explicitly admitted operation.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const CUT_RECEIPT = JSON.parse(
+  readFileSync(new URL('./one-file-cut-receipt.json', import.meta.url), 'utf8')
+);
 
 export const PATTERNS = [
   ['O_NOFOLLOW', /\bO_NOFOLLOW\b/],
@@ -133,6 +137,7 @@ export const ALLOWLIST = [
 ];
 
 const OWNER = 'crates/aac-files/src/';
+const TEST_ONLY = /^\s*#\[cfg\((?:test|all\((?:test\s*,.*|.*?,\s*test)\))\)\]\s*$/;
 
 /** Rust source with every `#[cfg(test)]` module body blanked (line count kept). */
 export function withoutTests(source) {
@@ -145,7 +150,7 @@ export function withoutTests(source) {
     return at;
   });
   for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*#\[cfg\(test\)\]\s*$/.test(lines[i])) continue;
+    if (!TEST_ONLY.test(lines[i])) continue;
     let j = i + 1;
     while (j < lines.length && /^\s*(#\[|$)/.test(lines[j])) j++;
     if (j >= lines.length || !/^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{/.test(lines[j])) continue;
@@ -195,11 +200,14 @@ function matching(source, open) {
 }
 
 /** Every gated use in `files` (`[[relative, source], ...]`), and the allowlist entries used. */
-export function scan(files, allowlist = ALLOWLIST) {
+export function scan(files, allowlist = ALLOWLIST, cutReceipt = {}) {
   const violations = [];
   const used = new Set();
+  const outstanding = new Map(
+    Object.entries(cutReceipt).map(([file, { uses }]) => [file, [...uses]])
+  );
   for (const [relative, source] of files) {
-    if (relative.startsWith(OWNER)) continue;
+    if (relative.startsWith(OWNER) || /^#!\[cfg\(test\)\]\r?\n/.test(source)) continue;
     const lines = withoutTests(source).split('\n');
     lines.forEach((line, index) => {
       const code = line.replace(/\/\/.*$/, '');
@@ -208,13 +216,24 @@ export function scan(files, allowlist = ALLOWLIST) {
         const entry = allowlist.find((e) =>
           e.path.endsWith('/') ? relative.startsWith(e.path) : relative === e.path
         );
-        if (entry) used.add(entry.path);
+        if (entry) {
+          used.add(entry.path);
+          continue;
+        }
+        const remaining = outstanding.get(relative);
+        const use = name + ':' + createHash('sha256').update(code.trim()).digest('hex');
+        const admitted = remaining?.indexOf(use) ?? -1;
+        if (admitted >= 0) remaining.splice(admitted, 1);
         else violations.push(`${relative}:${index + 1}: ${name}`);
       }
     });
   }
   const stale = allowlist.filter((e) => !used.has(e.path)).map((e) => e.path);
-  const unexplained = allowlist.filter((e) => (e.reason ?? '').trim().length < 40).map((e) => e.path);
+  for (const [file, remaining] of outstanding) {
+    if (remaining.length) stale.push(`${file} (${remaining.length} cut receipts)`);
+  }
+  const unexplained = [...allowlist, ...Object.entries(cutReceipt).map(([path, e]) => ({ path, ...e }))]
+    .filter((e) => (e.reason ?? '').trim().length < 40).map((e) => e.path);
   return { violations, stale, unexplained };
 }
 
@@ -261,7 +280,7 @@ function selfTest() {
     // A byte raw string ending in a backslash must not swallow the module's closing brace.
     [
       'crates/x/src/h.rs',
-      'fn ok() {}\n#[cfg(test)]\nmod tests {\n    fn t() { let b = br"\\"; let s = "}"; }\n}\nfn after() { fs::read(p); }\n',
+      'fn ok() {}\n#[cfg(all(test, unix))]\nmod tests {\n    fn t() { fs::write(p, br"\\"); let s = "}"; }\n}\nfn after() { fs::read(p); }\n',
     ],
   ];
   const { violations } = scan(planted, []);
@@ -280,18 +299,29 @@ function selfTest() {
     throw new Error(`self-test: ${JSON.stringify(violations)}`);
   const stale = scan(planted, [{ path: 'crates/x/src/zz.rs', reason: 'x'.repeat(40) }]).stale;
   if (stale.length !== 1) throw new Error('self-test: a stale allowlist entry was not reported');
+  const [file, operation] = planted[0];
+  const receipt = {
+    [file]: {
+      reason: 'Only the original operation is admitted by this receipt.',
+      uses: ['File::open:' + createHash('sha256').update(operation.trim()).digest('hex')],
+    },
+  };
+  if (scan([[file, operation.repeat(2)]], [], receipt).violations.length !== 1)
+    throw new Error('self-test: a new use matched a spent cut receipt');
+  if (scan([[file, '']], [], receipt).stale.length !== 1)
+    throw new Error('self-test: a stale cut receipt was not reported');
   console.log('one-file-policy self-test: the scan catches every planted copy');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   selfTest();
-  const { violations, stale, unexplained } = scan(rustSources());
+  const { violations, stale, unexplained } = scan(rustSources(), ALLOWLIST, CUT_RECEIPT);
   for (const v of violations) console.error(`one-file-policy: ${v} (use aac_files)`);
   for (const s of stale) console.error(`one-file-policy: stale allowlist entry ${s}`);
   for (const u of unexplained)
     console.error(`one-file-policy: allowlist entry without a reason ${u}`);
   if (violations.length || stale.length || unexplained.length) process.exit(1);
   console.log(
-    `one-file-policy: no file mechanics outside aac-files (${ALLOWLIST.length} allowlisted)`
+    `one-file-policy: no new file mechanics outside aac-files (${ALLOWLIST.length} allowlisted, ${Object.keys(CUT_RECEIPT).length} cut files pinned)`
   );
 }
