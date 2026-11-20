@@ -127,6 +127,12 @@ def main():
             assert "AAC_APP_UPDATE_STATE_DIR" not in os.environ
         start = request["args"]["action"]
         if start == "prepare-update":
+            if host == "jared-windows" and (ROOT / "old-windows-agent").exists():
+                trace(host, "legacy-refusal", True)
+                print(json.dumps({"type":"failure","protocol":1,"id":request["id"],
+                                  "failure":{"cause":"refused","reason":None,
+                                             "detail":"invalid apps action","retry":{"kind":"never"},"at":None}}))
+                sys.exit(1)
             print(json.dumps({"type":"progress","protocol":1,"id":request["id"],
                               "data":{"event":"admission"}}), flush=True)
             grant = sys.stdin.buffer.readline()

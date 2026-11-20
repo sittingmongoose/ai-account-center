@@ -222,6 +222,46 @@ async fn service_fixture_child() {
             .count(),
         12
     );
+    fs::remove_file(root.join("hold")).expect("stop holding capable hosts");
+    fs::write(root.join("old-windows-agent"), "fixture").expect("select old agent refusal");
+    assert_eq!(owner.start().await.status, 202);
+    let done = until(&owner, |job| job["state"] == "failed").await;
+    let results = done["results"]
+        .as_array()
+        .expect("complete mixed-version rows");
+    let windows = results
+        .iter()
+        .filter(|row| row["platform"] == "windows")
+        .collect::<Vec<_>>();
+    assert_eq!(windows.len(), 12);
+    for row in windows {
+        assert_eq!(
+            row["message"],
+            "This computer's AAC agent needs an update before Update apps can run here."
+        );
+        assert_eq!(row["status"], "failed");
+        assert_eq!(row["updateAttempted"], false);
+    }
+    assert!(
+        results
+            .iter()
+            .any(|row| row["platform"] == "alexis" && row["status"] == "updated")
+    );
+    let windows_trace = trace(&root, "jared-windows");
+    assert_eq!(
+        windows_trace
+            .iter()
+            .filter(|row| row["stage"] == "legacy-refusal")
+            .count(),
+        1
+    );
+    assert_eq!(
+        windows_trace
+            .iter()
+            .filter(|row| row["stage"] == "update")
+            .count(),
+        2
+    );
 }
 
 fn trace(root: &Path, host: &str) -> Vec<Value> {

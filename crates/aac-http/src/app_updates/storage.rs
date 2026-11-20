@@ -249,7 +249,7 @@ fn current(observed: &presence::Observed) -> bool {
     {
         return false;
     }
-    process_alive(pid)
+    !aac_files::process::is_dead(pid as u32)
 }
 
 #[cfg(unix)]
@@ -262,22 +262,9 @@ fn identity(pid: u32) -> Option<String> {
     (!boot.is_empty()).then(|| format!("{boot}:{start}"))
 }
 
-/// Windows has no `/proc`; the marker's own pid is the only one this service can prove, and a
-/// marker left by a crashed process is reclaimed by the exclusive claim that follows.
+/// The non-Unix boot records no start-time identity. The platform process probe still checks
+/// whether the marker's PID is alive before a replacement.
 #[cfg(not(unix))]
 fn identity(_pid: u32) -> Option<String> {
     None
-}
-
-#[cfg(not(unix))]
-fn process_alive(pid: i32) -> bool {
-    pid == std::process::id() as i32
-}
-
-#[cfg(unix)]
-#[allow(unsafe_code)]
-fn process_alive(pid: i32) -> bool {
-    // Signal zero probes the exact positive pid without delivering a signal.
-    let status = unsafe { libc::kill(pid, 0) };
-    status == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
