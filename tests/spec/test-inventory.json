@@ -898,7 +898,8 @@
       "file": "crates/aac-http/tests/native_public_collection.rs",
       "kind": "HTTP",
       "evidence": [
-        "HTTP"
+        "HTTP",
+        "helper"
       ]
     },
     {
