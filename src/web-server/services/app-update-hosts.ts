@@ -39,13 +39,56 @@ export function antigravityReviewedArgument(releaseFile = defaultNativeReleaseFi
     .join(',');
 }
 
+/** A T3 server version the follow-up may name (app_update_t3.VERSION); anything else is "any". */
+const FOLLOW_UP_T3_VERSION = /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
+
+/**
+ * The Antigravity ACP check a Linux computer's run deferred to its T3 restart: the T3 server
+ * version that must answer, or "any" for whichever T3 runs.
+ */
+export interface AcpFollowUp {
+  t3Version: string;
+}
+
 export async function appUpdateInvocation(
   platform: UpdatePlatform,
   reviewed = antigravityReviewedArgument(),
-  stateDirectory = path.join(getCcsDir(), 'app-updates')
+  stateDirectory = path.join(getCcsDir(), 'app-updates'),
+  followUp?: AcpFollowUp
 ): Promise<{ binary: string; args: string[] }> {
   const local = path.resolve(__dirname, '../../../scripts/app-updates/app_updates.py');
   const review = /^[0-9A-Za-z_.,-]{1,4096}$/.test(reviewed) ? reviewed : '';
+  if (followUp) {
+    // Only Linux computers restart T3 after their run; Mac and Windows reopen it within the run.
+    if (HOST_OS[platform] !== 'linux')
+      throw new BinaryError('The Antigravity ACP follow-up runs only on Linux computers.');
+    const version =
+      followUp.t3Version.length <= 64 && FOLLOW_UP_T3_VERSION.test(followUp.t3Version)
+        ? followUp.t3Version
+        : 'any';
+    if (platform === 'ubuntu')
+      return {
+        binary: '/usr/bin/python3',
+        args: [
+          local,
+          '--apply',
+          '--platform',
+          'ubuntu',
+          '--state-dir',
+          path.resolve(stateDirectory),
+          '--acp-after-t3-restart',
+          version,
+        ],
+      };
+    const command = `AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform ${helperPlatform(platform)} --acp-after-t3-restart '${version}'`;
+    return {
+      binary: 'ssh',
+      args: await sshArgv(APP_UPDATE_SSH_HOSTS[platform as RemotePlatform], command, {
+        interval: 10,
+        countMax: 2,
+      }),
+    };
+  }
   if (platform === 'ubuntu')
     return {
       binary: '/usr/bin/python3',
@@ -95,6 +138,8 @@ export async function appUpdateInvocation(
 export interface HostRunControl {
   /** Resolved directory holding this dashboard's job and exclusive lock. */
   stateDirectory?: string;
+  /** Set for the Antigravity ACP check after a Linux computer's deferred T3 restart. */
+  followUp?: AcpFollowUp;
   /** One parsed progress line ({"event": "app"|"result", ...}) from the helper. */
   onEvent(event: Record<string, unknown>): void;
   /** Registers how to forward a cancel to the running helper. */
@@ -109,7 +154,12 @@ export interface HostRunControl {
  * stdin stays open so a "cancel" line can reach the helper (over ssh too).
  */
 export async function runHost(platform: UpdatePlatform, control?: HostRunControl): Promise<string> {
-  const command = await appUpdateInvocation(platform, undefined, control?.stateDirectory);
+  const command = await appUpdateInvocation(
+    platform,
+    undefined,
+    control?.stateDirectory,
+    control?.followUp
+  );
   return runHelperProcess(
     command.binary,
     command.args,

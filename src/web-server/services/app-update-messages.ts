@@ -128,7 +128,7 @@ export const MESSAGES = {
   t3_not_ready:
     "T3's server did not answer in time (it may still be starting or upgrading its database), so nothing was installed. Run Update apps again once T3 is open.",
   t3_restart_pending:
-    'T3 was updated in this run and its server restarts after the job, so Antigravity ACP is checked against the new T3 on the next Update apps.',
+    "T3 was updated in this run and its server restarts after this computer's other updates; Update apps then checks Antigravity ACP against the new T3 by itself.",
   t3_issuer_protection_failed:
     'T3 session issuer could not be protected against helper termination. No install started. Check the local T3 installation and process permissions.',
   t3_install_state_unknown: 'Install state unknown, check T3.',
@@ -193,6 +193,10 @@ export const LEGACY_MESSAGES: Partial<Record<MessageCode, readonly string[]>> = 
   ],
   t3_session_issue_unknown: [
     'No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.',
+  ],
+  // Before the job finished the deferred check itself (2026-11-20).
+  t3_restart_pending: [
+    'T3 was updated in this run and its server restarts after the job, so Antigravity ACP is checked against the new T3 on the next Update apps.',
   ],
 };
 

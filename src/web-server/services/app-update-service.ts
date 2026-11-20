@@ -61,6 +61,11 @@ export type { HostRunControl } from './app-update-hosts';
  * result reads "Timed out" instead of the job waiting forever.
  */
 const HOST_DEADLINE_MS = 33 * 60 * 1000;
+/**
+ * Bound for the Antigravity ACP check after a Linux computer's deferred T3 restart: the helper
+ * waits up to 20 minutes for the new T3 to answer, then installs within 15.
+ */
+const ACP_FOLLOW_UP_MS = 37 * 60 * 1000;
 /** The expanded saved job: 60 rows, each with its diagnostics (never installer output: owner decision U13). */
 const MAX_SAVED_JOB = 512 * 1024;
 
@@ -82,6 +87,8 @@ export interface AppUpdateDependencies {
   persist?: boolean;
   /** Hard bound for one computer's run; tests shorten it. */
   hostDeadlineMs?: number;
+  /** Hard bound for one Antigravity ACP follow-up after a Linux T3 restart; tests shorten it. */
+  followUpDeadlineMs?: number;
 }
 
 function waitingHosts(): Record<UpdatePlatform, AppUpdateHostProgress> {
@@ -340,6 +347,81 @@ export class AppUpdateService {
       this.cancelHandlers.delete(platform);
       this.hostDone(job, platform);
     }
+    await this.followUpAntigravityAcp(job, platform);
+  }
+
+  /**
+   * A Linux computer restarts T3 only after its part of the job reads done (the detached restart
+   * worker's gate), so its run could only defer the Antigravity ACP check (t3_restart_pending).
+   * The job then runs that check itself: the helper waits for the new T3 to answer and installs
+   * through it with the usual guards. Its row replaces the deferred one, so no row is left
+   * waiting for another Update apps.
+   */
+  private async followUpAntigravityAcp(job: AppUpdateJob, platform: UpdatePlatform): Promise<void> {
+    const appId = 'antigravity-acp';
+    const index = job.results.findIndex(
+      (row) =>
+        row.platform === platform &&
+        row.appId === appId &&
+        row.message === MESSAGES.t3_restart_pending
+    );
+    if (index < 0) return;
+    if (job.cancelRequested) {
+      job.results[index] = skipped(platform, appId);
+      this.trySave();
+      return;
+    }
+    const t3 = job.results.find((row) => row.platform === platform && row.appId === 't3-code');
+    // The server this run installed must answer; without its version, whichever T3 runs.
+    const t3Version = t3?.status === 'updated' && t3.version ? t3.version : 'any';
+    let abort: (() => void) | undefined;
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error('Antigravity ACP follow-up timed out.'));
+      }, this.deps.followUpDeadlineMs ?? ACP_FOLLOW_UP_MS);
+      timer.unref?.();
+    });
+    deadline.catch(() => {});
+    const control: HostRunControl = {
+      stateDirectory: this.directory,
+      followUp: { t3Version },
+      // The row arrives in the final document; the host already reads done.
+      onEvent: () => {},
+      setCancel: (handler) => {
+        this.cancelHandlers.set(platform, handler);
+        if (job.cancelRequested) handler();
+      },
+      setAbort: (handler) => {
+        abort = handler;
+      },
+    };
+    let row: AppUpdateResult;
+    try {
+      const output = await Promise.race([this.deps.runHost(platform, control), deadline]);
+      row =
+        normalizeAppUpdateResults(output, platform).find((value) => value.appId === appId) ??
+        failure(platform, appId, 'helper_invalid');
+    } catch (error) {
+      if (timedOut) {
+        try {
+          abort?.();
+        } catch {
+          /* The process may already be gone. */
+        }
+      }
+      row =
+        error instanceof HelperExecutionError && error.code === 'helper_invalid'
+          ? failure(platform, appId, 'helper_invalid')
+          : unknown(platform, appId, timedOut ? 'host_timeout' : 'host_unknown');
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.cancelHandlers.delete(platform);
+    }
+    job.results[index] = row;
+    this.trySave();
   }
 
   private hostDone(job: AppUpdateJob, platform: UpdatePlatform): void {
