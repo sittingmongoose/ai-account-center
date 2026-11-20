@@ -665,9 +665,17 @@ mod tests {
     fn analytics_local_scan_request_carries_experiment_folders() {
         let home = tempfile::tempdir().expect("fixture home");
         let ccs = tempfile::tempdir().expect("fixture CCS_HOME");
-        let root = home
-            .path()
-            .join("PM-Experiments/exp-1/retained-usage/run-1/codex");
+        let root = home.path().join(
+            [
+                "PM-Experiments",
+                "exp-1",
+                "retained-usage",
+                "run-1",
+                "codex",
+            ]
+            .iter()
+            .collect::<PathBuf>(),
+        );
         std::fs::create_dir_all(&root).expect("experiment folder");
         std::fs::write(
             root.join("rollout-fixture.jsonl"),
