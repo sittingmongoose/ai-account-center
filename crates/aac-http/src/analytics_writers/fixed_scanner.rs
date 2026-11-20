@@ -125,13 +125,31 @@ mod tests {
         let home = tempfile::tempdir().expect("fixture home");
         let body = b"#!/bin/sh\nexec cat\n";
         let hash = super::super::sha256_hex(body);
-        let mut manifest = serde_json::json!({
-            "name": "aac-usage-scan", "protocol": aac_usage::protocol::PROTOCOL,
-            "targets": {"x86_64-unknown-linux-gnu": {"sha256": hash}},
+        let identity = aac_usage::protocol::version_json();
+        assert_eq!(identity["target"], LINUX_TARGET);
+        let manifest = serde_json::json!({
+            "name": identity["name"],
+            "version": identity["version"],
+            "protocol": identity["protocol"],
+            "targets": { (LINUX_TARGET): {
+                "file": format!("{LINUX_TARGET}/{NAME}"),
+                "sha256": hash,
+                "size": body.len(),
+            }},
         });
         let argv = linux_launch(&manifest).expect("fixed command");
-        manifest["targets"]["x86_64-unknown-linux-gnu"]["sha256"] = serde_json::json!("invalid");
-        assert!(linux_launch(&manifest).is_none());
+        let mut invalid = manifest.clone();
+        invalid["protocol"] = serde_json::json!(2);
+        assert!(
+            linux_launch(&invalid).is_none(),
+            "the scan reply version is not the handshake"
+        );
+        let mut invalid = manifest.clone();
+        invalid["targets"][LINUX_TARGET]["sha256"] = serde_json::json!("invalid");
+        assert!(linux_launch(&invalid).is_none());
+        let mut invalid = manifest;
+        invalid["targets"] = serde_json::json!({});
+        assert!(linux_launch(&invalid).is_none());
         let directory = home.path().join(".cache/ai-account-center/bin");
         fs::create_dir_all(&directory).expect("scanner cache");
         let scanner = directory.join(format!("aac-usage-scan-{}", &hash[..12]));

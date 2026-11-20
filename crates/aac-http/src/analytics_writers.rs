@@ -345,7 +345,14 @@ fn scan_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>
     }
 }
 
-fn scan_source_state(kind: &str, host: &str, now: i64, state: &str, cause: Option<&str>) -> Value {
+fn scan_source_state(
+    answer: &Value,
+    kind: &str,
+    host: &str,
+    now: i64,
+    state: &str,
+    cause: Option<&str>,
+) -> Value {
     use aac_store::contract::{Counts, Freshness, MAX_FILE_COUNT};
 
     let discovery = &answer["discovery"]["kinds"][kind];

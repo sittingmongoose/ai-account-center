@@ -235,6 +235,66 @@ mod tests {
     }
 
     #[test]
+    fn analytics_claude_scanner_mirror_counts_one_aggregate_event() {
+        let now = aac_store::engine::now_ms() as i64;
+        // The real reader emits only an hourly row for a message without a session ID.
+        let event = json!({
+            "type": "assistant",
+            "timestamp": aac_store::usage::iso(now - 3_600_000),
+            "message": {
+                "id":"same-assistant-message", "model":"claude-opus-4-5",
+                "usage":{"input_tokens":70,"output_tokens":30}
+            }
+        });
+        let scan = |host, state_index, directory| {
+            let home = tempfile::tempdir().expect("scanner fixture home");
+            let project = home.path().join(".claude/projects").join(directory);
+            std::fs::create_dir_all(&project).expect("project directory");
+            std::fs::write(project.join("same-log.jsonl"), format!("{event}\n"))
+                .expect("assistant message");
+            let request = json!({"kinds":["claude"], "minDateMs":now - 86_400_000, "cwd":false});
+            let request = aac_usage::protocol::parse_request(request.to_string().as_bytes())
+                .expect("scanner request");
+            let answer = aac_usage::protocol::scan(
+                &request,
+                home.path(),
+                &aac_usage::discover::Env::default(),
+            );
+            let rows = answer["rows"].as_array().expect("scanner rows").clone();
+            assert_eq!(rows.len(), 1, "{host}: {answer}");
+            assert_eq!(answer["srows"], json!([]));
+            Part {
+                host,
+                state_index,
+                rows,
+                sessions: vec![],
+                fingerprints: answer["kinds"]["claude"]["fingerprints"].clone(),
+            }
+        };
+        let mut parts = [
+            scan("odroid", 0, "ssh-12345678-1234-1234-1234-123456789abc"),
+            scan("nas1", 1, "original-project"),
+        ];
+        let name = |part: &Part<'_>| {
+            let (name, mirror) =
+                row_identity(&part.rows[0], &part.fingerprints).expect("scanner fingerprint");
+            (name.to_owned(), mirror)
+        };
+        let (mirror_name, mirror) = name(&parts[0]);
+        let (original_name, original_is_mirror) = name(&parts[1]);
+        assert_eq!(mirror_name, original_name);
+        assert!(mirror);
+        assert!(!original_is_mirror);
+        let mut states = [state("odroid", "ok"), state("nas1", "ok")];
+        select(&mut parts, &mut states, &Owners::new());
+        let rows: Vec<&Value> = parts.iter().flat_map(|part| &part.rows).collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["i"], 70);
+        assert_eq!(rows[0]["o"], 30);
+        assert_eq!(rows[0]["n"], 1);
+    }
+
+    #[test]
     fn analytics_claude_mirror_keeps_the_saved_owner_until_a_complete_read() {
         let mut states = [state("nas1", "ok"), state("mac", "ok")];
         let mut parts = [part("nas1", 0, true, 0), part("mac", 1, true, 0)];
