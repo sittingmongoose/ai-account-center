@@ -731,9 +731,10 @@ describe('consolidated account dashboard', () => {
       const row = result.accounts.find((account) => account.id === 'claude:fake-one');
       expect(row?.signInNeeded).toEqual(['windows']);
       expect(row?.status).toBe('needs_sign_in');
-      // The prompt names Claude Desktop: the Claude Code sign-in health is a separate login.
-      expect(row?.message).toContain('Claude Desktop needs a sign-in on Windows.');
-      expect(row?.message).toContain('Claude Code sign-ins are checked separately.');
+      // No login reads the account, so the prompt names the control that signs in.
+      expect(row?.message).toBe(
+        "No working Claude sign-in for this account on Windows. To sign in, use Open on Windows in Details: it opens this account's Claude Desktop, which shows its sign-in window."
+      );
       expect(row?.capabilities.claudePlatforms).toEqual(['mac', 'windows']);
     });
 
@@ -766,7 +767,9 @@ describe('consolidated account dashboard', () => {
       expect(row?.signInNeeded).toEqual(['mac', 'windows']);
       expect(row?.status).toBe('cached');
       expect(row?.windows.length).toBeGreaterThan(0);
-      expect(row?.message).toContain('Claude Desktop needs a sign-in on Mac and Windows.');
+      expect(row?.message).toContain(
+        'No working Claude sign-in for this account on Mac and Windows. To sign in, use Open on Mac or Open on Windows in Details'
+      );
     });
 
     it('treats an unreachable computer as unknown, never as needing a sign-in', async () => {

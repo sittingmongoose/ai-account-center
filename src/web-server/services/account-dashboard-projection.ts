@@ -310,11 +310,14 @@ export function withClaudeSignIn(
     };
   }
   const live = account.status === 'ok';
-  // The sign-in a computer is missing is this account's Claude Desktop profile there. AAC's sign-in health
-  // tracks Claude Code logins, which can be fine at the same time, so the note names which login it means.
+  // No verified login reads this account (no Claude Code login covers it), so the note names the exact control
+  // that signs in: Open on <computer> launches this account's Claude Desktop profile, which shows its sign-in.
+  const controls = platforms
+    .map((platform) => `Open on ${platform === 'mac' ? 'Mac' : 'Windows'}`)
+    .join(' or ');
   const message = live
     ? account.message
-    : `Claude Desktop needs a sign-in on ${hosts}. Open shows its sign-in window. Claude Code sign-ins are checked separately.`;
+    : `No working Claude sign-in for this account on ${hosts}. To sign in, use ${controls} in Details: it opens this account's Claude Desktop, which shows its sign-in window.`;
   return {
     ...rest,
     signInNeeded: platforms,

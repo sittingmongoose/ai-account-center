@@ -501,7 +501,9 @@ describe('account dashboard shared usage failover integration', () => {
     const row = (await service.get('mac')).accounts[0];
     expect(row.signInNeeded).toEqual(['mac', 'windows']);
     expect(row.status).toBe('cached');
-    expect(row.message).toContain('Claude Desktop needs a sign-in on Mac and Windows');
+    expect(row.message).toContain(
+      'No working Claude sign-in for this account on Mac and Windows. To sign in, use Open on Mac or Open on Windows in Details'
+    );
     expect(row.sampledAt).toBe(SAMPLE);
     expect(row.windows[0].usedPercent).toBe(0);
     expect(row.capabilities.claudePlatforms).toEqual(['mac', 'windows']);
