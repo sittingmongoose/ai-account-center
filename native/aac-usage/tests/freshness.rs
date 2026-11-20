@@ -124,22 +124,25 @@ fn current_cli_chat_location_is_discovered_without_inventing_usage() {
 }
 
 #[test]
-fn sdk_activity_newer_than_measured_usage_is_stale_even_when_read_succeeded() {
+fn a_fresh_store_file_without_a_new_run_stays_at_its_measured_usage() {
     let home = tempfile::tempdir().unwrap();
     store(home.path());
     let answer = scan(home.path(), None);
     assert_eq!(answer["rows"][0]["i"], 100);
     let freshness = &answer["discovery"]["kinds"]["cursor"]["freshness"];
-    assert_eq!(freshness["state"], "stale");
-    assert_eq!(freshness["newestDataMs"], 1_794_430_860_000u64);
-    assert!(freshness["newestActivityMs"].as_i64().unwrap() > freshness["newestDataMs"].as_i64().unwrap());
+    assert_eq!(freshness["state"], "current");
+    assert_eq!(
+        freshness,
+        &json!({"state":"current","newestDataMs":1_794_430_860_000u64,
+        "newestActivityMs":1_794_430_860_000u64,"activityComplete":true})
+    );
     let again = scan(home.path(), Some(&answer));
     assert!(again["rows"].as_array().unwrap().is_empty());
     assert_eq!(again["discovery"]["kinds"]["cursor"]["freshness"], *freshness);
 }
 
 #[test]
-fn cli_activity_keeps_an_older_sdk_source_from_claiming_current_coverage() {
+fn cli_chats_without_usage_leave_an_older_sdk_source_current() {
     let home = tempfile::tempdir().unwrap();
     store(home.path());
     let cli = home.path().join("config/cursor/chats/project/chat/store.db");
@@ -149,7 +152,11 @@ fn cli_activity_keeps_an_older_sdk_source_from_claiming_current_coverage() {
         .execute_batch("CREATE TABLE blobs (id TEXT, data BLOB); CREATE TABLE meta (key TEXT, value TEXT);")
         .unwrap();
     let answer = scan(home.path(), None);
-    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "current");
+    assert_eq!(
+        answer["discovery"]["kinds"]["cursor"]["freshness"]["newestActivityMs"],
+        answer["discovery"]["kinds"]["cursor"]["freshness"]["newestDataMs"]
+    );
     assert_eq!(answer["discovery"]["kinds"]["cursor"]["unmeasuredFiles"], 1);
     assert_eq!(answer["rows"].as_array().unwrap().len(), 1);
 }
@@ -221,7 +228,7 @@ fn quiet_sdk(home: &Path) {
 
 #[cfg(unix)]
 #[test]
-fn activity_depth_cap_is_unverified_with_a_shallow_and_known_stale_control() {
+fn chat_store_depth_cap_is_unverified_and_a_listed_store_is_counted() {
     let home = tempfile::tempdir().unwrap();
     let h = home.path();
     quiet_sdk(h);
@@ -229,6 +236,7 @@ fn activity_depth_cap_is_unverified_with_a_shallow_and_known_stale_control() {
         scan(h, None)["discovery"]["kinds"]["cursor"]["freshness"]["state"],
         "current"
     );
+    // A store deeper than the bounded listing can reach leaves current coverage unverified.
     let root = h.join("config/cursor/chats");
     let deep = root.join("0/1/2/3/4/5/6/7/8/store.db");
     fs::create_dir_all(deep.parent().unwrap()).unwrap();
@@ -240,22 +248,24 @@ fn activity_depth_cap_is_unverified_with_a_shallow_and_known_stale_control() {
         answer["discovery"]["kinds"]["cursor"]["freshness"]["activityComplete"],
         false
     );
+    // A second store the cap cannot reach either keeps the same verdict, never a stale claim.
     let visible = root.join("visible/store.db");
     fs::create_dir_all(visible.parent().unwrap()).unwrap();
     fs::copy(&deep, &visible).unwrap();
     modified(&visible, 1794434460000);
     let known = scan(h, None);
-    assert_eq!(known["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert_eq!(known["discovery"]["kinds"]["cursor"]["freshness"]["state"], "unknown");
     assert_eq!(
         known["discovery"]["kinds"]["cursor"]["freshness"]["activityComplete"],
         false
     );
     fs::remove_file(&visible).unwrap();
+    // Within the bound the same token-less store is counted, and the source stays current.
     let shallow = deep.parent().unwrap().parent().unwrap().join("store.db");
     fs::rename(&deep, &shallow).unwrap();
     fs::remove_dir(deep.parent().unwrap()).unwrap();
     let answer = scan(h, None);
-    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "current");
     assert_eq!(
         answer["discovery"]["kinds"]["cursor"]["freshness"]["activityComplete"],
         true
@@ -302,7 +312,7 @@ fn bytes(field: u64, value: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn omp_and_antigravity_stale_clocks_survive_unchanged_reads() {
+fn omp_and_antigravity_files_are_dated_by_their_usage_entries() {
     for tool in ["omp", "antigravity"] {
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
@@ -348,9 +358,9 @@ fn omp_and_antigravity_stale_clocks_survive_unchanged_reads() {
         let first = protocol::scan(&ask(json!({})), h, &env);
         assert_eq!(first["rows"][0]["i"], 100, "{tool}");
         let freshness = &first["discovery"]["kinds"][tool]["freshness"];
-        assert_eq!(freshness["state"], "stale", "{tool}");
+        assert_eq!(freshness["state"], "current", "{tool}");
         assert_eq!(freshness["newestDataMs"], 1794430860000u64, "{tool}");
-        assert!(freshness["newestActivityMs"].as_i64().unwrap() > 1794430860000);
+        assert_eq!(freshness["newestActivityMs"], 1794430860000u64, "{tool}");
         let again = protocol::scan(&ask(json!({tool:first["kinds"][tool]["fingerprints"]})), h, &env);
         assert!(again["rows"].as_array().unwrap().is_empty(), "{tool}");
         assert_eq!(again["discovery"]["kinds"][tool]["freshness"], *freshness, "{tool}");
@@ -359,7 +369,7 @@ fn omp_and_antigravity_stale_clocks_survive_unchanged_reads() {
 
 #[cfg(unix)]
 #[test]
-fn t3_only_activity_keeps_quiet_sdk_usage_stale() {
+fn t3_thread_records_never_date_activity() {
     let home = tempfile::tempdir().unwrap();
     quiet_sdk(home.path());
     let db = home.path().join(".t3/userdata/statev2.sqlite");
@@ -369,10 +379,10 @@ fn t3_only_activity_keeps_quiet_sdk_usage_stale() {
         INSERT INTO orchestration_v2_projection_provider_threads VALUES ('cursor', 'fixture-instance', '2026-11-15T23:00:00Z');"
     ).unwrap();
     let answer = scan(home.path(), None);
-    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "current");
     assert_eq!(
         answer["discovery"]["kinds"]["cursor"]["freshness"]["newestActivityMs"],
-        1794783600000u64
+        1794430860000u64
     );
     assert_eq!(
         answer["discovery"]["kinds"]["cursor"]["freshness"]["newestDataMs"],
@@ -405,5 +415,9 @@ fn native_default_cli_root_is_unmeasured_and_discovered_without_xdg_overrides() 
     let answer = protocol::scan(&request, home.path(), &Env::from([("PATH".into(), String::new())]));
     assert_eq!(answer["discovery"]["kinds"]["cursor"]["unmeasuredFiles"], 1);
     assert!(answer["rows"].as_array().unwrap().is_empty());
-    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    // A chat store holds no numeric usage: no data and no activity date, never a stale claim.
+    assert_eq!(
+        answer["discovery"]["kinds"]["cursor"]["freshness"],
+        json!({"state":"unknown","newestDataMs":null,"newestActivityMs":null,"activityComplete":true})
+    );
 }

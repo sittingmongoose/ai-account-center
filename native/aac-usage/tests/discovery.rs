@@ -80,7 +80,7 @@ fn origins(answer: &Value, kind: &str) -> Vec<(String, u64)> {
 }
 
 #[test]
-fn credential_and_settings_refreshes_leave_usage_freshness_at_the_log() {
+fn installs_refreshes_and_logs_without_usage_never_move_freshness() {
     use std::io::Write;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -136,7 +136,8 @@ fn credential_and_settings_refreshes_leave_usage_freshness_at_the_log() {
             "{kind}",
         );
 
-        // A changed session log may contain newer activity without a new measured usage row.
+        // A log grown or created without a usage entry, however new its file time, is not
+        // activity: only entries that carry usage date a source.
         fs::OpenOptions::new()
             .append(true)
             .open(&log)
@@ -148,7 +149,7 @@ fn credential_and_settings_refreshes_leave_usage_freshness_at_the_log() {
         let grown = scan();
         assert_eq!(
             grown["discovery"]["kinds"][kind]["freshness"],
-            json!({"state":"stale","newestDataMs":at,"newestActivityMs":grown_at,"activityComplete":true}),
+            json!({"state":"current","newestDataMs":at,"newestActivityMs":at,"activityComplete":true}),
             "{kind}",
         );
 
@@ -158,11 +159,21 @@ fn credential_and_settings_refreshes_leave_usage_freshness_at_the_log() {
         set_mtime(&new, new_at);
         let added = scan();
         assert_eq!(events(&added, kind), 1, "{kind}");
-        assert_eq!(
-            added["discovery"]["kinds"][kind]["freshness"],
-            json!({"state":"stale","newestDataMs":at,"newestActivityMs":new_at,"activityComplete":true}),
-            "{kind}",
-        );
+        if kind == "codex" {
+            // A Codex log without a session header is named, never counted: its usage read is
+            // incomplete, so coverage is unverified rather than current. Its date is still usage.
+            assert_eq!(
+                added["discovery"]["kinds"][kind]["freshness"],
+                json!({"state":"unknown","newestDataMs":at,"newestActivityMs":at,"activityComplete":false}),
+                "{kind}",
+            );
+        } else {
+            assert_eq!(
+                added["discovery"]["kinds"][kind]["freshness"],
+                json!({"state":"current","newestDataMs":at,"newestActivityMs":at,"activityComplete":true}),
+                "{kind}",
+            );
+        }
     }
 }
 

@@ -64,13 +64,17 @@ def run(binary, helper):
         cursor = [r for r in first["rows"] if r["k"] == "cursor"]
         assert len(cursor) == 1 and [cursor[0][k] for k in ("i", "o", "cr", "cw")] == [100, 50, 800, 100]
         assert cursor[0]["c"] == 0, "No SDK cost was recorded"
+        # Only usage-bearing entries date a source: the token-less CLI store and the OMP file's
+        # newer write time never make either source stale.
         found = first["discovery"]["kinds"]["cursor"]
-        assert found["freshness"]["state"] == "stale"
+        assert found["freshness"]["state"] == "current"
         assert found["freshness"]["newestDataMs"] == 1794430860000
+        assert found["freshness"]["newestActivityMs"] == 1794430860000
         assert found["unmeasuredFiles"] == 1
         omp_freshness = first["discovery"]["kinds"]["omp"]["freshness"]
-        assert omp_freshness["state"] == "stale"
+        assert omp_freshness["state"] == "current"
         assert omp_freshness["newestDataMs"] == 1794430860000
+        assert omp_freshness["newestActivityMs"] == 1794430860000
         assert sum(r["i"] for r in first["rows"] if r["k"] == "zcode") == 320
         assert "walUnread" not in first["kinds"]["zcode"]
         prints = {k: v["fingerprints"] for k, v in first["kinds"].items()}
@@ -101,10 +105,10 @@ def run(binary, helper):
         deep.rename(shallow)
         deep.parent.rmdir()
         check = request([binary], ["cursor"])["discovery"]["kinds"]["cursor"]["freshness"]
-        assert check["state"] == "stale" and check["activityComplete"] is True, check
-        assert check["newestDataMs"] == old * 1000 and check["newestActivityMs"] == (old + 3600) * 1000
+        assert check["state"] == "current" and check["activityComplete"] is True, check
+        assert check["newestDataMs"] == old * 1000 and check["newestActivityMs"] == old * 1000, check
         print(json.dumps({"result": "PASS", "os": sys.platform,
-                          "checks": ["sdk tokens", "cli unmeasured", "stale dates", "OMP unchanged clocks", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity", "deep unverified/shallow stale"]}))
+                          "checks": ["sdk tokens", "cli unmeasured", "usage-only activity", "OMP unchanged clocks", "unchanged replay", "zcode committed WAL", "DB/WAL bytes unchanged", "remote-helper parity", "deep unverified/shallow current"]}))
 
 
 if __name__ == "__main__":

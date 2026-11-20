@@ -566,10 +566,13 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                     .into_iter()
                     .chain(retained)
                     .max();
+                // Activity follows usage: a retained clock is usage evidence too, so the activity
+                // date never falls behind the data date.
                 let activity = discovered["freshness"]["newestActivityMs"].as_i64();
                 if retained.is_some() {
                     let complete = discovered["freshness"]["activityComplete"] == true;
-                    discovered["freshness"] = discover::freshness(data, activity, collector.min_date_ms, complete);
+                    discovered["freshness"] =
+                        discover::freshness(data, data.or(activity), collector.min_date_ms, complete);
                 }
             }
             discovery_kinds.insert(kind.clone(), discovered);

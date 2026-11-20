@@ -23,12 +23,20 @@ computer as well as remote computers. Each local collector remains active until
 the scanner completes that tool's first read; binary failure or excess roots
 returns ownership to the collector. This preserves totals during takeover.
 
-A completed read is distinct from current usage coverage. The scanner retains
-per-file measured event clocks and compares them with independent log/WAL,
-installation and T3 projection activity. Activity more than one five-minute scan
-cycle newer than measured data produces a `stale` source with both dates.
-Activity is not converted into tokens or cost. An incomplete activity check is
-unverified. Old fingerprints are read once to establish their measured clocks.
+A completed read is distinct from current usage coverage. Activity is dated only
+by entries that carry usage: the newest measured event clock across the kind's
+files. A log file, SQLite database or Cursor chat store written or touched
+without a usage entry, a tool install or update, a login/token rewrite and a T3
+provider-thread record are installation or metadata signals, never activity
+dates, so they never make a source look stale. A source with no measured usage
+reports no activity date honestly (no usage, not stale). Activity more than one
+five-minute scan cycle newer than measured data still produces a `stale` source
+with both dates when a caller supplies such evidence; the native scanner itself
+keeps both clocks at the newest usage event. Activity is not converted into
+tokens or cost. Coverage completeness comes from the usage read itself: a
+partial read, unreadable logs or folders, and a bounded Cursor chat listing
+leave current coverage unverified. Old fingerprints are read once to establish
+their measured clocks.
 
 Cursor SDK run stores remain under `.cursor/projects/*/sdk-agent-store/*/index.db`
 on all operating systems. Current CLI chat roots include `.cursor/chats`,
