@@ -838,11 +838,11 @@ pub(crate) async fn run_public_at(
     if let Some(host) = &owner_host {
         host.stop_public().await;
     }
-    if let Some(host) = &owner_host {
-        host.stop().await;
-    }
     if let Some(worker) = worker {
         worker.stop().await;
+    }
+    if let Some(host) = &owner_host {
+        host.stop().await;
     }
     auth.flush();
     if result.is_ok() && worker_lost.load(std::sync::atomic::Ordering::Relaxed) {

@@ -26,8 +26,14 @@ function serviceDown(): Error {
 
 /** Windows worker clients attach to the dashboard's in-process store. The dashboard owns close. */
 export class DashboardStoreHandle implements NativeStoreHandle {
+  private closed = false;
+
   async call(method: string, args: string): Promise<string> {
-    if (method === 'close') return '{"closed":true}';
+    if (method === 'close') {
+      this.closed = true;
+      return '{"closed":true}';
+    }
+    if (this.closed) throw new RustStoreError('closed: the store client is stopping');
     if (!/^[A-Za-z0-9]{1,32}$/.test(method))
       throw new RustStoreError('invalid: unknown store method');
     const route = method === 'open' ? 'status' : method;

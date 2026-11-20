@@ -136,6 +136,9 @@ impl OwnerHost {
         #[cfg(not(unix))]
         {
             let mut held = self.local.lock().await;
+            if self.local_stop.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
             if let Some(owners) = held.as_ref() {
                 return Some(owners.clone());
             }
@@ -788,5 +791,7 @@ mod windows_tests {
             !root.join("store").exists(),
             "the switch off creates no store folder"
         );
+        host.stop().await;
+        assert!(host.local().await.is_none());
     }
 }
