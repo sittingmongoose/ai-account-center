@@ -110,6 +110,8 @@ export const MESSAGES = {
     "T3's Antigravity ACP activation kept changing. Update apps could not verify a stable newest runtime; run it again.",
   antigravity_acp_staged:
     'An earlier update staged Antigravity ACP. Run Update apps again with T3 running so T3 can install and activate its pin.',
+  // Legacy: written by Update all's former account-isolation check (removed 2026-11-20 when T3 began keeping each
+  // Antigravity sign-in in its own instance); kept so job rows recorded before that still read as updated.
   antigravity_acp_qualified: 'Updated Antigravity ACP; account isolation verified.',
   antigravity_acp_isolation_unverified:
     'Updated Antigravity ACP; account isolation is not verified yet.',

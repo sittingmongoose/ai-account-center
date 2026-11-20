@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 112 |
 | Sync fs occurrences (runtime hotpaths) | 531 |
 | Sync fs files affected (runtime hotpaths) | 62 |
-| Legacy shim markers | 209 |
-| Legacy shim files affected | 62 |
+| Legacy shim markers | 211 |
+| Legacy shim files affected | 64 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -58,7 +58,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | files with createLogger | 44/462 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
-| files > 600 LOC | 28 |
+| files > 600 LOC | 27 |
 
 ### Top Hotpath console.error/warn Files
 
