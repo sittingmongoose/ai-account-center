@@ -898,13 +898,6 @@
     ]
   },
   {
-    "word": "degraded",
-    "cause": null,
-    "sources": [
-      "src/web-server/routes/store-routes.ts:state"
-    ]
-  },
-  {
     "word": "deleting",
     "cause": null,
     "sources": [
@@ -2142,8 +2135,6 @@
       "src/store/native-loader.ts:StoreUnavailableReason",
       "src/store/native-loader.ts:reason",
       "src/web-server/index.ts:opened.reason",
-      "src/web-server/routes/store-routes.ts:aacStoreState().reason",
-      "src/web-server/routes/store-routes.ts:reason",
       "src/web-server/scoreboard/catalog.ts:state",
       "src/web-server/scoreboard/runs-store.ts:state",
       "src/web-server/scoreboard/runs-types.ts:state",
@@ -3516,7 +3507,6 @@
     "word": "ready",
     "cause": null,
     "sources": [
-      "src/web-server/routes/store-routes.ts:state",
       "src/web-server/rust-service-supervisor.ts:state",
       "src/web-server/services/account-dashboard-state.ts:state",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
@@ -4883,6 +4873,7 @@
     "cause": null,
     "sources": [
       "src/antigravity/ubuntu-runtime-bridge.ts:typeof value.restartState",
+      "src/store/store-host-client.ts:typeof failure?.error",
       "src/web-server/rust-profile-input.ts:typeof value.state",
       "src/web-server/services/additional-account-service.ts:museTransientFailure",
       "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
@@ -5324,7 +5315,6 @@
       "src/web-server/agent-usage/agent-usage-snapshot.ts:state",
       "src/web-server/routes/account-visibility-routes.ts:body.state",
       "src/web-server/routes/account-visibility-routes.ts:state",
-      "src/web-server/routes/store-routes.ts:state",
       "src/web-server/rust-service-values.ts:status",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/account-analytics-activity.ts:status",

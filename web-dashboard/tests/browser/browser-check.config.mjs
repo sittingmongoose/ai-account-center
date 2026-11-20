@@ -21,11 +21,7 @@ export default (ctx) => {
 		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
 	}
 	if (ctx.fleet) throw new Error('--host: the dashboard listens on 127.0.0.1 and setup is loopback-only, so a browser on another machine can\'t use it. Run from a checkout on that machine.');
-	// D7 switch: `--set rustHome=1` runs the server with the Rust service and its Home view on (AAC_RUST_SERVICE=on,
-	// AAC_RUST_HOME_VIEW=on) and the binary in dist/native/aac-http, or `--set rustBinary=<path>`. Off by default, and
-	// then explicitly off, so a shell variable cannot turn it on unseen.
-	// R1: `--set rustHomeFed=1` (with rustHome) also turns the Home group on (AAC_RUST_GROUP_HOME=on): the server's own
-	// GET /api/views/home is answered from fed generations. Off by default, and then explicitly off.
+	// rustHome runs the native public route without a worker and enables the independent fixture renderer.
 	// R2: `--set rustStatusFed=1` runs the server with the Rust service on and the Status group on
 	// (AAC_RUST_GROUP_STATUS=on): the server's own GET /api/status is answered from fed generations. Off by default, and
 	// then explicitly off.
@@ -81,7 +77,7 @@ export default (ctx) => {
 				const { writeScoreboardFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'scoreboard-fixture.mjs')).href);
 				writeScoreboardFixture(reports);
 			}
-			// D7 (`--set rustHome=1`): the kit's own Rust service builds Home from the data checks stub in the page
+			// With rustHome, the kit's own Rust service builds Home from the data checks stub in the page
 			// (rust-home-builder.mjs); the server under test never sees that data.
 			if (rustHome) builder = await startRustBuilder(rustBinary, root);
 			return { home, reports, port: +ctx.args.port || (await ctx.freePort()) };

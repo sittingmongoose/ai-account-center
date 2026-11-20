@@ -11,8 +11,7 @@
 //!   readers run once; no group copies a collector, a cache or a journal.
 //!
 //! A group registers with [`OwnerHost::request`] (and its own admission/encoding), never with a
-//! second copy of an owner. `AAC_RUST_CUT_NATIVE_ROUTES=off` makes the host absent, so the cut's
-//! shipped worker keeps answering.
+//! second copy of an owner. The public cut always uses this host for its native store.
 
 #[cfg(unix)]
 use super::service_link::ServiceLink;
@@ -322,8 +321,6 @@ impl OwnerHost {
         {
             let _ = self.link().await;
         }
-        #[cfg(not(unix))]
-        let _ = self.local().await;
     }
 
     /// Stop the service this boot started, if any (a running one belongs to its own supervisor).
@@ -349,7 +346,7 @@ impl OwnerHost {
 
     /// The boot the supervisor resolves for a plain cut: the store under `<ccs>/store` and the
     /// owned readers on the share roots. The readers resolve their own defaults when no root is
-    /// named (the worker's rule); only an explicit `AAC_RUST_STORE=off` skips this boot.
+    /// named (the worker's rule).
     #[cfg(unix)]
     fn boot_config(&self) -> Option<Json> {
         let reports = std::env::var("AAC_AGENT_REPORTS_DIR").ok();

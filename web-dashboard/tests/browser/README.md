@@ -77,10 +77,9 @@ polling. It uses only synthetic status responses and media.
 viewport and combined probe dimensions. For those edge regressions, add `--set rawProbe=1` to exercise the
 computed-padding seam. Each edge must update safe properties and content clearance without a viewport event.
 
-**Home built by Rust (D7, opt-in).** `--set rustHome=1` starts the server with `AAC_RUST_SERVICE=on` and
-`AAC_RUST_HOME_VIEW=on` and the binary in `dist/native/aac-http` (`--set rustBinary=<path>` for another; build it on
-a build host). Without it both are explicitly off. Stubbed Home data never reaches the server, so the kit runs an
-aac-http of its own (`rust-home-builder.mjs`): `t.app.stub` then offers the server view on the dashboard answer and
+**Home built by Rust.** The cut launcher serves Home natively. `--set rustHome=1` starts that launcher with
+the worker disabled and enables the kit's Rust renderer for fixture data. The kit runs
+`dist/native/aac-http` (`--set rustBinary=<path>` for another build) so `t.app.stub` can offer the server view on the dashboard answer and
 answers `/api/views/home` with the Rust view of the stubbed data, from the first read. The envelope is the real
 front door's (`homeReadInput`, run under Bun by `tests/spec/views/home/envelope.ts`, so `bun` must be on PATH).
 `t.app.rustHome()` and the run folder's `rust-home.json` count what it built and refused. `checks/home-server-view.check.mjs` covers the
@@ -88,9 +87,8 @@ switch, the real front-door wiring, and the fixture Home drawn from Rust against
 DOM and pixels). The device fixture proxy takes `AAC_FIXTURE_RUST_HOME=<aac-http>` for the same, and then serves
 `/__d7/home-spec`, which runs the Home spec in the device's own browser.
 
-**Home fed (R1, opt-in).** `--set rustHomeFed=1` implies `rustHome=1` and also starts the server with
-`AAC_RUST_GROUP_HOME=on`, so the server's own `GET /api/views/home` (the real-wiring check) is answered from fed
-generations; stubbed Home data still goes through the kit's own builder. Without it the group is explicitly off.
+`--set rustHomeFed=1` is an alias for `rustHome=1`. Use `--set cut=1` for the native shipping
+launcher with its worker and the default Home fixtures.
 
 **Status fed (R2, opt-in).** `--set rustStatusFed=1` starts the server with `AAC_RUST_SERVICE=on` and
 `AAC_RUST_GROUP_STATUS=on` and the binary in `dist/native/aac-http` (`--set rustBinary=<path>` for another), so the

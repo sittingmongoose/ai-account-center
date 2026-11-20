@@ -1,5 +1,5 @@
 //! The history store's public reads at the service: `GET /api/usage/history`, `/api/usage/at`
-//! and `/api/usage/burn` (`src/web-server/routes/store-routes.ts`). The guard and the HTTP
+//! and `/api/usage/burn`. The guard and the HTTP
 //! encoding stay the public front door's; this module owns the query contract, the store calls
 //! and the exact JSON the route writes.
 //!

@@ -44,7 +44,6 @@ pub(super) struct Home {
     collection: lifecycle_host::Routes,
     feeds: Feeds,
     producer: HomeProducer,
-    antigravity: Option<crate::antigravity_host::Host>,
 }
 
 impl Home {
@@ -54,7 +53,6 @@ impl Home {
         open: Arc<ClaudeOpen>,
         collection: lifecycle_host::Routes,
     ) -> Self {
-        let antigravity = crate::antigravity_host::Host::from_root(&root);
         Self {
             host: Arc::downgrade(host),
             root,
@@ -62,7 +60,6 @@ impl Home {
             collection,
             feeds: Feeds::new(),
             producer: HomeProducer::default(),
-            antigravity,
         }
     }
 
@@ -176,13 +173,14 @@ impl Home {
         // parse-and-insert keeps the per-response pass and the key order.
         let dashboard = offered_views(dashboard);
         let dashboard_bytes = aac_views::js_json::write(&dashboard);
-        // No installed runtime is the route's empty Ubuntu inventory, exactly as the TS reader
-        // answers without a runtime to ask.
-        let antigravity = self
-            .antigravity
-            .as_ref()
-            .map(|host| host.inventory(now))
-            .unwrap_or_else(|| json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []}));
+        // The profile owner distinguishes an absent runtime from a failed inventory read.
+        let root = self.root.clone();
+        let antigravity =
+            tokio::task::spawn_blocking(move || crate::profile_reads::antigravity_inventory(&root))
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(Value::Null);
         let inputs = Inputs {
             platform: platform.into(),
             secure,
@@ -336,14 +334,10 @@ fn legacy(dashboard: &[u8], inputs: &Inputs, root: &std::path::Path) -> Option<V
         Err(_) => return None,
     };
     let profiles_text = aac_views::js_json::write(&profiles);
-    let envelope = match crate::home_producer::antigravity_envelope(&inputs.antigravity) {
-        Ok(envelope) => envelope,
-        Err(_) => return None,
-    };
-    let antigravity = match fed::prepare_antigravity(&envelope) {
-        Ok(antigravity) => antigravity,
-        Err(_) => return None,
-    };
+    let antigravity = crate::home_producer::antigravity_envelope(&inputs.antigravity)
+        .ok()
+        .and_then(|envelope| fed::prepare_antigravity(&envelope).ok())
+        .unwrap_or(Value::Null);
     let antigravity_text = aac_views::js_json::write(&antigravity);
     let mut out =
         Vec::with_capacity(dashboard.len() + profiles_text.len() + antigravity_text.len() + 96);
@@ -360,4 +354,26 @@ fn legacy(dashboard: &[u8], inputs: &Inputs, root: &std::path::Path) -> Option<V
 fn set_no_store(mut reply: Reply) -> Reply {
     set_header(&mut reply, "cache-control", "no-store");
     reply
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unavailable_antigravity_inventory_stays_null() {
+        let root = tempfile::tempdir().expect("temporary profile root");
+        let inputs = Inputs {
+            platform: "mac".into(),
+            secure: true,
+            dashboard: json!({}),
+            opens: json!([]),
+            antigravity: Value::Null,
+        };
+        let body = legacy(b"{}", &inputs, root.path()).expect("the other data is still readable");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).expect("JSON response"),
+            json!({"schemaVersion": 1, "dashboard": {}, "profiles": [], "antigravity": null, "view": null})
+        );
+    }
 }

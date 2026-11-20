@@ -589,7 +589,10 @@ try {
 if (recordNative) {
   const expected = selectedRoutes.reduce(
     (total, [, route]) =>
-      total + (nativeGroupRow(route.method, route.path) ? route.roles.length : 0),
+      total +
+      (nativeGroupRow(route.method, route.path) || nativeStoreHomeRow(route.method, route.path)
+        ? route.roles.length
+        : 0),
     0
   );
   assert(expected > 0, 'select a group with native recorder rows');

@@ -349,16 +349,16 @@ the real TS fallback transport with a fake runner, and the labelled fallback wit
 artifact. The Mac host-program spec tests (`claude-host-transport.test.ts`) and the loader
 trampoline case in `app-launcher.test.ts` need `/bin/sh` and run on POSIX only.
 
-## R1: Home, fed
+## Native Store, Usage and Home
 
-`home-read-parity.mjs` (run by `run.mjs` after the lifecycle) answers `GET /api/views/home` through the
-built front door and the Nas1-built service twice for every Home case: today's handler (D7, the Home
-group off) and the fed path (the group on), on the same reads. Every fed answer must be today's bytes
-(or, where only the fed path built a view, equal up to the view); every fed decline is answered by
-today's handler. Then the 304, a push during a request (`stale`), a service killed mid-feed and an Open
-in progress, on the real binary. With `--ts-only` (off mode) it checks that nothing is fed by default.
-The view itself is gated by `crates/aac-views/tests/home_spec.rs`, which runs every case and fuzz seed
-through the fed path too (equal or declined).
+Run `node tests/spec/run.mjs --cut-rust-only --route-group=store-usage-home` with
+`AAC_M6_TARGET_CLI` naming the native dashboard launcher. The group replays five routes across
+the five caller roles. `tests/unit/store/store-native-routes.test.ts` exercises HEAD, browser
+origin and device scope, validation, disabled-store replies and conditional requests on the
+public listener. The historical store-usage test also reads its populated burn series over
+that listener. Home browser checks cover the live route and compare the Rust view, DOM and
+pixels with the browser's own rendering. `crates/aac-views/tests/home_spec.rs` covers the view
+corpus and fuzz seeds.
 
 ## R2: Status, fed
 
