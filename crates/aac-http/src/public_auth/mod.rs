@@ -1197,16 +1197,16 @@ fn authorize(state: &mut AuthRuntime, facts: Facts, ws: bool) -> Decision {
         if !origin_allowed(&req.headers) {
             return Decision::Reply(ws_refusal(403));
         }
-        let browser_epoch = if config.enabled {
+        let browser_session = if config.enabled {
             if bearer(&req.headers).is_some() {
                 return Decision::Reply(ws_refusal(403));
             }
-            let Some((_, session)) =
+            let Some((id, session)) =
                 session.filter(|(_, session)| trusted && session.current(epoch))
             else {
                 return Decision::Reply(ws_refusal(401));
             };
-            Some(session.epoch)
+            Some(state.sessions.watch(&id, session.epoch))
         } else {
             if !req.connection.peer.is_loopback() {
                 return Decision::Reply(ws_refusal(403));
@@ -1214,7 +1214,7 @@ fn authorize(state: &mut AuthRuntime, facts: Facts, ws: bool) -> Decision {
             None
         };
         return Decision::Upgrade(websocket::Client {
-            epoch: browser_epoch,
+            session: browser_session,
             peer: facts.peer,
             headers: req.headers,
             secure_at_upgrade: req.connection.secure,
@@ -1796,6 +1796,163 @@ mod tests {
         };
         assert_eq!(u16::from(frame.code), 4001);
         assert_eq!(frame.reason, "Signed out");
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    type SessionSocket = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    async fn session_socket(addr: SocketAddr, cookie: &str, auth: &DashboardAuth) -> SessionSocket {
+        let mut upgrade = format!("ws://{addr}/ws").into_client_request().unwrap();
+        upgrade
+            .headers_mut()
+            .insert("cookie", HeaderValue::from_str(cookie).unwrap());
+        let (mut socket, _) = connect_async(upgrade).await.unwrap();
+        auth.events().publish(DashboardEvent::StatusChanged {});
+        assert_eq!(
+            socket_message(&mut socket).await,
+            Message::Text(r#"{"type":"status-changed"}"#.into())
+        );
+        socket
+    }
+
+    async fn socket_message(socket: &mut SessionSocket) -> Message {
+        tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("expected a WebSocket message within two seconds")
+            .unwrap()
+            .unwrap()
+    }
+
+    fn expect_signed_out(message: Message) {
+        let Message::Close(Some(frame)) = message else {
+            panic!("expected sign-out close, received another message");
+        };
+        assert_eq!(u16::from(frame.code), 4001);
+        assert_eq!(frame.reason, "Signed out");
+    }
+
+    fn verification_event() -> DashboardEvent {
+        serde_json::from_value(json!({
+            "type": "signin-job",
+            "job": {
+                "id": "job_0123456789abcdef", "provider": "codex", "kind": "device-code",
+                "mode": "add", "accountId": null, "profileName": null, "platform": "ubuntu",
+                "state": "waiting", "result": null, "error": null,
+                "verification": {"url": "https://example.test/verify", "userCode": "fixture-code", "expiresAt": null},
+                "startedAt": "start", "updatedAt": "update", "expiresAt": "expiry"
+            }
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn websocket_never_sends_a_later_verification_code_to_the_signed_out_session() {
+        let (_home, auth, addr, handle) = server().await;
+        let cookie = login(addr).await;
+        let active = login(addr).await;
+        let mut active_socket = session_socket(addr, &active, &auth).await;
+        let mut signed_out = session_socket(addr, &cookie, &auth).await;
+        socket_message(&mut active_socket).await;
+        let logout = request(
+            addr,
+            "/api/auth/logout",
+            "POST",
+            &format!(
+                "Content-Type: application/json\r\nOrigin: http://{addr}\r\nCookie: {cookie}\r\n"
+            ),
+            "{}",
+        )
+        .await;
+        assert_eq!(logout.lines().next(), Some("HTTP/1.1 200 OK"));
+        auth.events().publish(verification_event());
+        let Message::Text(text) = socket_message(&mut active_socket).await else {
+            panic!("the active session did not receive the sign-in event");
+        };
+        let event: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(event["job"]["verification"]["userCode"], "fixture-code");
+        let message = socket_message(&mut signed_out).await;
+        assert!(
+            !matches!(&message, Message::Text(text) if text.contains("fixture-code")),
+            "signed-out socket received the later verification code"
+        );
+        expect_signed_out(message);
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn websocket_signals_logout_and_replacement_only_to_the_affected_session() {
+        let (_home, auth, addr, handle) = server().await;
+        let other = login(addr).await;
+        let mut other_socket = session_socket(addr, &other, &auth).await;
+        for route in ["logout", "login"] {
+            let cookie = login(addr).await;
+            let mut expired_socket = session_socket(addr, &cookie, &auth).await;
+            let action = request(
+                addr,
+                &format!("/api/auth/{route}"),
+                "POST",
+                &format!(
+                    "Content-Type: application/json\r\nOrigin: http://{addr}\r\nCookie: {cookie}\r\n"
+                ),
+                if route == "login" {
+                    r#"{"username":"fixture-admin","password":"fixture-password"}"#
+                } else {
+                    "{}"
+                },
+            )
+            .await;
+            assert_eq!(action.lines().next(), Some("HTTP/1.1 200 OK"), "{route}");
+            // A per-session change must wake this socket without an event or a periodic tick.
+            expect_signed_out(socket_message(&mut expired_socket).await);
+        }
+        auth.events().publish(DashboardEvent::StatusChanged {});
+        // Opening the two sockets above also sent two status events to the unaffected session.
+        for _ in 0..3 {
+            assert_eq!(
+                socket_message(&mut other_socket).await,
+                Message::Text(r#"{"type":"status-changed"}"#.into())
+            );
+        }
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn websocket_checks_idle_expiry_before_delivery_and_on_the_periodic_tick() {
+        let (_home, auth, addr, handle) = server().await;
+        for periodic in [false, true] {
+            let cookie = login(addr).await;
+            let mut socket = session_socket(addr, &cookie, &auth).await;
+            {
+                let mut runtime = auth.0.runtime.lock().unwrap();
+                let connection = runtime.load_config().unwrap().network.connection(
+                    &HeaderMap::new(),
+                    addr.ip(),
+                    false,
+                );
+                let at = now();
+                let (id, mut session) = runtime.sessions.read(&cookie, &connection, at).unwrap();
+                let AuthRuntime {
+                    sessions, files, ..
+                } = &mut *runtime;
+                // Move the record's last HTTP use into the past without deleting it or
+                // changing the epoch. The socket itself never rolls the idle deadline.
+                sessions.touch(files, &id, &mut session, at - 366 * DAY, DAY);
+                assert!(sessions.read(&cookie, &connection, at).is_none());
+            }
+            if periodic {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(31)).await;
+                tokio::time::resume();
+            } else {
+                auth.events().publish(DashboardEvent::StatusChanged {});
+            }
+            expect_signed_out(socket_message(&mut socket).await);
+        }
         handle.abort();
         let _ = handle.await;
     }

@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::watch;
 
 pub(super) const DAY: i64 = 86_400_000;
 pub(super) const DAYS: [i64; 5] = [1, 7, 30, 90, 365];
@@ -520,8 +521,16 @@ struct Stored {
     expires: i64,
 }
 
+#[derive(Clone)]
+pub(super) struct SessionWatch {
+    pub(super) key: String,
+    pub(super) epoch: i64,
+    pub(super) invalidated: watch::Receiver<()>,
+}
+
 pub(super) struct Sessions {
     records: BTreeMap<String, Stored>,
+    watchers: BTreeMap<String, watch::Sender<()>>,
     secret: String,
     last_save: i64,
 }
@@ -543,6 +552,7 @@ impl Sessions {
         }
         Self {
             records,
+            watchers: BTreeMap::new(),
             secret,
             last_save: now(),
         }
@@ -568,17 +578,38 @@ impl Sessions {
         if !same(&STANDARD_NO_PAD.encode(mac(&self.secret, id).ok()?), &proof) {
             return None;
         }
-        let record = self
-            .records
-            .get(&sha(id))
-            .filter(|record| record.expires > at)?;
+        let session = self.read_record(&sha(id), connection, at)?;
+        Some((id.to_owned(), session))
+    }
+
+    pub(super) fn read_record(
+        &self,
+        key: &str,
+        connection: &Connection,
+        at: i64,
+    ) -> Option<Session> {
+        let record = self.records.get(key).filter(|record| record.expires > at)?;
         let session: Session = serde_json::from_str(&record.data).ok()?;
         if session.authenticated
             && !connection.credential_allowed(session.signed_in_over.as_deref())
         {
             return None;
         }
-        Some((id.to_owned(), session))
+        Some(session)
+    }
+
+    pub(super) fn watch(&mut self, id: &str, epoch: i64) -> SessionWatch {
+        let key = sha(id);
+        let invalidated = self
+            .watchers
+            .entry(key.clone())
+            .or_insert_with(|| watch::channel(()).0)
+            .subscribe();
+        SessionWatch {
+            key,
+            epoch,
+            invalidated,
+        }
     }
 
     fn save(
@@ -598,6 +629,10 @@ impl Sessions {
             .into_iter()
             .map(|record| (record.key.clone(), record))
             .collect();
+        // Dropping a sender wakes only the sockets for a removed record.
+        // Keep their subscriptions until the new session map is durable.
+        self.watchers
+            .retain(|key, sender| self.records.contains_key(key) && sender.receiver_count() > 0);
         self.last_save = at;
         Ok(())
     }
