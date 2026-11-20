@@ -507,6 +507,58 @@ describe('account dashboard shared usage failover integration', () => {
     expect(row.capabilities.claudePlatforms).toEqual(['mac', 'windows']);
   });
 
+  it('a Claude Code login for the account turns Mac and Windows Desktop sign-outs into a quiet note', async () => {
+    const service = new AccountDashboardService(
+      deps({
+        getClaudeMacSignIn: async () => 'signed-out',
+        failover: {
+          peek: (_, template) => template,
+          collect: async (_, template) => ({
+            ...quota(template),
+            message: null,
+            claudeDesktopSignedOut: ['windows'],
+          }),
+          recover: async (_, template) => template,
+          claudeLoginCovers: () => true,
+        },
+      })
+    );
+    const row = (await service.get('mac')).accounts[0];
+    expect(row.signInNeeded).toBeUndefined();
+    expect(row.claudeDesktopSignedOut).toEqual(['mac', 'windows']);
+    expect(row.status).toBe('ok');
+    expect(row.message).toBe(
+      'Claude Desktop is signed out on Mac and Windows. AAC reads this account through its Claude Code login, so no sign-in is needed.'
+    );
+  });
+
+  it('a covered row keeps its own message and a signed-in Desktop adds no note', async () => {
+    for (const [mac, signedOut, message, expected] of [
+      ['signed-out', [], 'Usage refresh is rate limited.', 'Usage refresh is rate limited.'],
+      ['signed-in', [], null, null],
+    ] as const) {
+      const service = new AccountDashboardService(
+        deps({
+          getClaudeMacSignIn: async () => mac,
+          failover: {
+            peek: (_, template) => template,
+            collect: async (_, template) => ({
+              ...quota(template),
+              message,
+              ...(signedOut.length ? { claudeDesktopSignedOut: [...signedOut] } : {}),
+            }),
+            recover: async (_, template) => template,
+            claudeLoginCovers: () => true,
+          },
+        })
+      );
+      const row = (await service.get('mac')).accounts[0];
+      expect(row.signInNeeded).toBeUndefined();
+      expect(row.message).toBe(expected);
+      expect(row.claudeDesktopSignedOut).toEqual(mac === 'signed-out' ? ['mac'] : undefined);
+    }
+  });
+
   it('keeps cached quota visible while an asynchronous shared refresh is still pending', async () => {
     let resolve!: (row: DashboardAccount) => void;
     let template!: DashboardAccount;

@@ -276,20 +276,39 @@ export function claudeSignInHosts(platforms: Iterable<ClaudeDashboardPlatform>):
  * Carry the per-computer sign-in state onto a Claude row. Readings already on
  * the row stay (as before, cached); only the wording says why they are not
  * live. A row with no readings at all reads as "Sign-in needed".
+ *
+ * `covered`: another verified login for the same account (its Claude Code
+ * login) reads it, so a signed-out Claude Desktop profile is not needed. Those
+ * computers move to `claudeDesktopSignedOut` with a quiet note, never a prompt.
  */
 export function withClaudeSignIn(
   account: DashboardAccount,
-  needed: ReadonlySet<ClaudeDashboardPlatform> | undefined
+  needed: ReadonlySet<ClaudeDashboardPlatform> | undefined,
+  covered = false
 ): DashboardAccount {
   const rest: DashboardAccount = { ...account };
   delete rest.signInNeeded;
+  delete rest.claudeDesktopSignedOut;
+  const all = new Set<ClaudeDashboardPlatform>([
+    ...(needed ?? []),
+    ...(covered ? (account.claudeDesktopSignedOut ?? []) : []),
+  ]);
   const platforms = (['mac', 'windows'] as const).filter(
-    (platform) => needed?.has(platform) && account.capabilities.claudePlatforms.includes(platform)
+    (platform) => all.has(platform) && account.capabilities.claudePlatforms.includes(platform)
   );
   if (account.provider !== 'claude' || platforms.length === 0) {
-    return 'signInNeeded' in account ? rest : account;
+    return 'signInNeeded' in account || 'claudeDesktopSignedOut' in account ? rest : account;
   }
   const hosts = claudeSignInHosts(platforms);
+  if (covered) {
+    return {
+      ...rest,
+      claudeDesktopSignedOut: platforms,
+      message:
+        account.message ||
+        `Claude Desktop is signed out on ${hosts}. AAC reads this account through its Claude Code login, so no sign-in is needed.`,
+    };
+  }
   const live = account.status === 'ok';
   // The sign-in a computer is missing is this account's Claude Desktop profile there. AAC's sign-in health
   // tracks Claude Code logins, which can be fine at the same time, so the note names which login it means.
