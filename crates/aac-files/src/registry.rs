@@ -393,23 +393,36 @@ mod tests {
         );
     }
 
+    /// HTTP route groups plus the native owners the registry uses (`public-auth`, `lifecycle`).
+    fn owner_groups(route_groups: BTreeSet<&str>) -> BTreeSet<String> {
+        let mut groups: BTreeSet<String> = route_groups.into_iter().map(str::to_owned).collect();
+        groups.insert("public-auth".to_owned());
+        groups.insert("lifecycle".to_owned());
+        groups
+    }
+
     #[test]
-    fn every_moves_with_group_is_a_route_group() {
+    fn every_moves_with_group_is_a_route_or_native_owner_group() {
         let routes: serde_json::Value =
             serde_json::from_str(include_str!("../../../config/rust-service-routes.json")).unwrap();
-        let groups: BTreeSet<_> = routes
-            .as_array()
+        let groups = owner_groups(
+            routes
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|r| r["group"].as_str())
+                .collect(),
+        );
+        let lifecycle: Vec<_> = rows()
             .unwrap()
             .iter()
-            .filter_map(|r| r["group"].as_str())
+            .filter(|row| row.moves_with.as_deref() == Some("lifecycle"))
+            .map(|row| row.id.as_str())
             .collect();
+        assert_eq!(lifecycle, ["opencode-wallet-source"]);
         for row in rows().unwrap() {
             if let Some(group) = &row.moves_with {
-                assert!(
-                    groups.contains(group.as_str()) || group == "public-auth",
-                    "{}",
-                    row.id
-                );
+                assert!(groups.contains(group.as_str()), "{}", row.id);
             }
         }
     }

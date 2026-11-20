@@ -12,6 +12,7 @@ use crate::answer_signing::{AnswerKey, canonical_json, sign_document, verify_sig
 use serde_json::{Map, Value as Json, json};
 use std::{
     collections::{BTreeSet, HashSet},
+    ffi::{OsStr, OsString},
     fs,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
@@ -479,16 +480,34 @@ pub struct RingResult {
     pub detail: String,
 }
 
+/// How the doorbell starts pm-mail: a program plus an argument array (never a cmd.exe string).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PmMailLaunch {
+    /// The trusted executable (`python` on the Windows wrapper layout, else the helper itself).
+    pub program: PathBuf,
+    /// Arguments after the program, including the script path on the Windows layout.
+    pub args: Vec<OsString>,
+}
+
 /// `findExecutable('pm-mail', ['/mnt/Cursor/Inbox/pm-mail'])` over `PATH` (plus the fallbacks).
-pub fn find_pm_mail(path: Option<&std::ffi::OsStr>) -> PathBuf {
-    let mut candidates: Vec<PathBuf> = path
-        .map(|p| std::env::split_paths(p).map(|dir| dir.join("pm-mail")).collect())
-        .unwrap_or_default();
+pub fn find_pm_mail(path: Option<&OsStr>) -> PathBuf {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = path {
+        for dir in std::env::split_paths(path) {
+            candidates.push(dir.join("pm-mail.cmd"));
+            candidates.push(dir.join("pm-mail"));
+        }
+    }
+    candidates.push(PathBuf::from("/mnt/Cursor/Inbox/pm-mail.cmd"));
     candidates.push(PathBuf::from("/mnt/Cursor/Inbox/pm-mail"));
     candidates
         .into_iter()
-        .find(|candidate| executable(candidate))
+        .find(|candidate| helper_present(candidate))
         .unwrap_or_else(|| PathBuf::from("pm-mail"))
+}
+
+fn helper_present(path: &Path) -> bool {
+    windows_wrapper_script(path).is_some() || executable(path)
 }
 
 fn executable(path: &Path) -> bool {
@@ -503,6 +522,69 @@ fn executable(path: &Path) -> bool {
     }
 }
 
+/// The extensionless script next to `pm-mail.cmd` in the distributed Windows wrapper layout.
+pub fn windows_wrapper_script(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    let (script, cmd) = if name.eq_ignore_ascii_case("pm-mail.cmd") {
+        (path.with_extension(""), path.to_path_buf())
+    } else if name.eq_ignore_ascii_case("pm-mail") {
+        (path.to_path_buf(), path.with_extension("cmd"))
+    } else {
+        return None;
+    };
+    if !script.is_file() || !cmd.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        if executable(&script) {
+            return None;
+        }
+    }
+    Some(script)
+}
+
+fn trusted_python() -> Option<PathBuf> {
+    #[cfg(windows)]
+    const NAMES: &[&str] = &["python.exe", "python3.exe", "py.exe"];
+    #[cfg(not(windows))]
+    const NAMES: &[&str] = &["python3", "python"];
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        for name in NAMES {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the supported helper: Windows uses the trusted interpreter, the script, and an argv.
+pub fn pm_mail_launch(bin: &Path, to: &str, subject: &str) -> Option<PmMailLaunch> {
+    let mut args = vec![
+        OsString::from("--as"),
+        OsString::from(DOORBELL_SENDER),
+        OsString::from("send"),
+        OsString::from(to),
+        OsString::from(subject),
+    ];
+    if let Some(script) = windows_wrapper_script(bin) {
+        let python = trusted_python()?;
+        let mut windows = vec![OsString::from(script)];
+        windows.append(&mut args);
+        return Some(PmMailLaunch {
+            program: python,
+            args: windows,
+        });
+    }
+    Some(PmMailLaunch {
+        program: bin.to_path_buf(),
+        args,
+    })
+}
+
 /// `pmMailDoorbell`: `pm-mail --as aac-answers send <to> <subject>` with the body on stdin, a
 /// timeout and a 64 KiB output bound; the session and thread bindings never reach the child.
 pub fn pm_mail_ring(bin: &Path, to: &str, subject: &str, body: &str, timeout: Duration) -> RingResult {
@@ -510,9 +592,12 @@ pub fn pm_mail_ring(bin: &Path, to: &str, subject: &str, body: &str, timeout: Du
         ok: false,
         detail: detail.to_owned(),
     };
-    let mut command = Command::new(bin);
+    let Some(launch) = pm_mail_launch(bin, to, subject) else {
+        return failure("pm-mail is not installed here.");
+    };
+    let mut command = Command::new(&launch.program);
     command
-        .args(["--as", DOORBELL_SENDER, "send", to, subject])
+        .args(&launch.args)
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("T3CODE_THREAD_ID")
         .stdin(Stdio::piped())

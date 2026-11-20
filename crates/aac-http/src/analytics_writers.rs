@@ -380,6 +380,28 @@ fn scan_source_state(
     source
 }
 
+fn presence_state(answer: &Value, kind: &str) -> Option<(&'static str, Option<&'static str>)> {
+    let tool = answer.get("discovery")?.get("tools")?.get(kind)?;
+    if tool.get("installed") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    match tool.get("cause").and_then(Value::as_str) {
+        Some("no_local_usage_records") => Some(("no_reader", Some("no_local_usage_records"))),
+        Some("no_reader_yet") => Some(("no_reader", Some("no_reader_yet"))),
+        _ => Some(("installed_no_logs", None)),
+    }
+}
+
+fn source_state(answer: &Value, kind: &str) -> (&'static str, Option<&'static str>) {
+    let (state, cause) = scan_state(answer, kind);
+    if matches!(state, "not_installed")
+        && let Some(presence) = presence_state(answer, kind)
+    {
+        return presence;
+    }
+    (state, cause)
+}
+
 fn scan_request(
     kinds: &[String],
     cutoff: i64,
@@ -394,6 +416,7 @@ fn scan_request(
         "extraRoots": extra,
         "cwd": cwd,
         "deadlineMs": SCAN_DEADLINE_MS,
+        "presence": true,
     });
     if let Some(roots) = experiment_roots.filter(|roots| !roots.is_empty()) {
         request["experimentRoots"] = json!(roots);
@@ -438,6 +461,7 @@ async fn activity_pass(
     };
     let computers = agents.usage_hosts().await;
     if computers.is_empty() {
+        let _pass = live.pass();
         state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = now;
         return;
     }
@@ -531,7 +555,7 @@ async fn activity_pass(
                         .filter(|r| r["k"].as_str() == Some(kind.as_str()))
                         .cloned()
                         .collect();
-                    let (mut state, mut cause) = scan_state(&answer, kind);
+                    let (mut state, mut cause) = source_state(&answer, kind);
                     if overflow.contains(kind.as_str())
                         || experiments.is_some_and(|snapshot| snapshot.limited(kind))
                     {
@@ -837,6 +861,7 @@ mod tests {
         let request = scan_request(&kinds, 0, json!({}), false, Some(&roots));
         assert_eq!(request["experimentRoots"], json!({"codex": [root]}));
         assert_eq!(request["cwd"], false);
+        assert_eq!(request["presence"], true);
         let native_scan = |request: &Value| {
             let args = aac_usage::protocol::parse_request(request.to_string().as_bytes())
                 .expect("native scanner request");
@@ -965,6 +990,44 @@ mod tests {
             .expect("failure disclosure");
         assert!(detail.contains("its logs were found but could not be read"));
         assert!(detail.contains("no numeric usage"));
+    }
+
+    #[test]
+    fn an_installed_cursor_cli_with_chats_is_not_uninstalled() {
+        let home = tempfile::tempdir().expect("fixture home");
+        let chat = home.path().join(".cursor/chats/x/store.db");
+        std::fs::create_dir_all(chat.parent().expect("chat folder")).expect("chat folder");
+        std::fs::write(&chat, "").expect("chat store");
+        let env = aac_usage::discover::Env::from([
+            (
+                "HOME".to_string(),
+                home.path().to_string_lossy().into_owned(),
+            ),
+            ("PATH".to_string(), String::new()),
+        ]);
+        let request = scan_request(
+            &["cursor".to_owned()],
+            1_790_000_000_000,
+            json!({}),
+            false,
+            None,
+        );
+        let answer = aac_usage::protocol::scan(
+            &aac_usage::protocol::parse_request(request.to_string().as_bytes())
+                .expect("native scanner request"),
+            home.path(),
+            &env,
+        );
+        assert_eq!(answer["kinds"]["cursor"]["state"], "not_installed");
+        assert_eq!(
+            answer["discovery"]["tools"]["cursor"]["cause"],
+            "no_local_usage_records"
+        );
+        assert_eq!(
+            source_state(&answer, "cursor"),
+            ("no_reader", Some("no_local_usage_records"))
+        );
+        assert_eq!(scan_state(&answer, "cursor"), ("not_installed", None));
     }
 
     #[test]
