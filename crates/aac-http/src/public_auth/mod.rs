@@ -541,7 +541,7 @@ pub(crate) async fn run_public_at(
             compose::Backend::from_env(address)?,
         )
     };
-    let hub = HubCache::default();
+    let hub = HubCache::for_collection(!cut || native_collection);
     let composed = backend.is_some();
     let owner_host =
         (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));

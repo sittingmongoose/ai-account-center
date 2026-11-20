@@ -275,7 +275,6 @@ await stub('src/web-server/scoreboard/scoreboard-service.ts', {
   startScoreboardService: noop,
   getScoreboardService: () => ({ view: async () => fixture.scoreboardView }),
 });
-await stub('src/web-server/agent-usage/agent-usage-snapshot.ts', { startAgentUsageSnapshot: stop });
 await stub('src/antigravity/production-runtime.ts', {
   getInstalledAntigravityRuntimeFactory: () => null,
 });

@@ -163,6 +163,24 @@ impl SignInHealth {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn signin_health_cache_uses_the_earlier_of_crossed_expiry_and_ttl() {
+    let mut health = SignInHealth {
+        since: 1_000,
+        expires: 31_000,
+        machines: Map::from_iter([(
+            "ubuntu".into(),
+            json!([{"state": "ok", "accessExpiresAt": "1970-01-01T00:00:02.000Z"}]),
+        )]),
+    };
+    assert!(health.current(1_999));
+    assert!(!health.current(2_000));
+    health.since = 2_001;
+    assert!(health.current(30_999));
+    assert!(!health.current(31_000));
+}
+
 struct PublicSampling {
     signins: ClaudeSignInRenewalReader,
     server: Value,
@@ -955,7 +973,7 @@ pub(super) fn no_store(mut reply: Reply) -> Reply {
     reply
 }
 
-fn collection_unavailable() -> Reply {
+pub(super) fn collection_unavailable() -> Reply {
     super::error(
         503,
         "collection_unavailable",

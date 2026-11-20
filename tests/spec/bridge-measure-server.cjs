@@ -156,7 +156,6 @@ if (!owners) {
   stub('web-server/status/status-service.js', { startStatusService: () => noop });
   stub('web-server/scoreboard/scoreboard-service.js', { startScoreboardService: noop });
 }
-stub('web-server/agent-usage/agent-usage-snapshot.js', { startAgentUsageSnapshot: () => noop });
 stub('antigravity/production-runtime.js', { getInstalledAntigravityRuntimeFactory: () => null });
 stub('store/store-service.js', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),

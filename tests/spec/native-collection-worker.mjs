@@ -1,6 +1,7 @@
 // The real shipping worker and launcher, with its provider boundaries replaced by fixtures.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -25,6 +26,7 @@ const log = [];
 let front;
 const write = (target, value) => writeFile(target, JSON.stringify(value), { mode: 0o600 });
 const id = 'zai:acct:0123abcd';
+const hubKey = 'aacu_' + 'f'.repeat(43);
 const credentials = { username: 'fixture-owner', password: 'fixture-only-password' };
 const readJson = async (target) => JSON.parse(await readFile(target, 'utf8'));
 async function until(action) {
@@ -79,6 +81,15 @@ try {
   if (snapshot) {
     await write(path.join(root, 'agent-usage-snapshot.json'), { version: 1, directory: share });
     await write(path.join(root, 'account-refresh-settings.json'), { refreshIntervalSeconds: 30 });
+  }
+  if (disabled) {
+    const auth = path.join(root, 'auth');
+    await mkdir(auth, { mode: 0o700 });
+    await write(path.join(auth, 'usage-hub-key.json'), {
+      version: 1,
+      keySha256: createHash('sha256').update(hubKey).digest('hex'),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
   }
   await registry('Before');
   await writeFile(calls, '');
@@ -192,7 +203,12 @@ try {
     assert.equal((await recheck('[]')).status, 400);
     assert.equal((await recheck('{}', { cookie, 'content-type': 'application/json' })).status, 403);
     assert.equal(await readFile(calls, 'utf8'), '');
-    console.log('Disabled collection: 6 HTTP checks passed with the worker present.');
+    const hub = await send('/v0/management/auth-files', {
+      headers: { 'x-management-key': hubKey },
+    });
+    assert.equal(hub.status, 503);
+    assert.deepEqual(await hub.json(), unavailable);
+    console.log('Disabled collection: 7 HTTP checks passed with the worker present.');
   } else if (snapshot) {
     const file = path.join(share, 'usage.json');
     const native = await send('/api/accounts/dashboard', { headers: { cookie } });

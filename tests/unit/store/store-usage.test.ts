@@ -29,7 +29,7 @@ import {
 } from '../../../src/web-server/services/account-analytics-history';
 import { usageHistory } from '../../../src/web-server/agent-usage/agent-usage-history';
 import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
-import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-files';
 import { createUsageRouter } from '../../../src/web-server/routes/store-routes';
 import { handleStoreCommand } from '../../../src/commands/store-command';
 import type {

@@ -97,7 +97,7 @@ pub struct Boot {
     /// The private service owns lifecycle when it already owns the collection generation.
     #[serde(default)]
     pub native_lifecycle: bool,
-    /// The private collection producer triggers the existing G18 writer.
+    /// Legacy boot field retained for compatibility with the previous supervisor.
     #[serde(default)]
     pub native_usage_snapshot: bool,
 }
@@ -2035,7 +2035,7 @@ async fn serve_inner(
     }
     let cancel = aac_transport::CancellationToken::new();
     let lifecycle_owner = state.0.lifecycle.clone();
-    let share = state.0.boot.native_usage_snapshot.then(|| {
+    let share = lifecycle_owner.as_ref().map(|_| {
         (
             Arc::clone(&state.0.usage),
             aac_renewal::claude::ClaudeSignInRenewalReader::new(

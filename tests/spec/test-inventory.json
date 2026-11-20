@@ -717,6 +717,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/native_owners.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_codex.rs",
       "kind": "safety",
       "evidence": [

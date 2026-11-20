@@ -45,22 +45,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// `os.hostname` for the failed-collection row: the Linux proc file, else the environment.
 fn hostname() -> String {
-    if let Ok(bytes) = aac_files::read_bounded(Path::new("/proc/sys/kernel/hostname"), 256)
-        && let Ok(text) = String::from_utf8(bytes)
-    {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_owned();
-        }
-    }
-    std::env::var(if cfg!(windows) {
-        "COMPUTERNAME"
-    } else {
-        "HOSTNAME"
-    })
-    .unwrap_or_else(|_| "unknown".to_owned())
+    aac_files::process::hostname().unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn span(value: &Value) -> LongBurnSpan {

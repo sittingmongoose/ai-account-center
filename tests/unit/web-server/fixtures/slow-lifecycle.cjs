@@ -34,9 +34,6 @@ require(path.join(repo, 'dist/web-server/status/status-service')).startStatusSer
 require(path.join(repo, 'dist/web-server/scoreboard/scoreboard-service')).startScoreboardService =
   () => {};
 require(
-  path.join(repo, 'dist/web-server/agent-usage/agent-usage-snapshot')
-).startAgentUsageSnapshot = () => () => {};
-require(
   path.join(repo, 'dist/web-server/services/account-lifecycle-runtime')
 ).startAccountLifecycleMaintenance = () => {};
 global.fetch = () => Promise.reject(new Error('fixture refuses outbound fetch'));

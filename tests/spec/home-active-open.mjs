@@ -177,19 +177,6 @@ try {
         return Response.json(generation);
       };
     }
-    // Exercise the real snapshot writer without running remote sign-in probes.
-    Bun.plugin({ name: 'fixture-sign-in', setup(build) {
-      build.onLoad({ filter: /signin-health-service\\.ts$/ }, async ({path}) => {
-        const original = await Bun.file(path).text();
-        return {
-          loader: 'ts',
-          contents: original.replace(
-            'return collectedSignInHealth().then((health) => withRenewal(health, readRenewal));',
-            'return Promise.resolve({machines:{},errors:{},fetchedAt:new Date().toISOString()});'
-          ),
-        };
-      });
-    } });
     await import(${JSON.stringify(module('sidecar.ts'))});
   `
   );
