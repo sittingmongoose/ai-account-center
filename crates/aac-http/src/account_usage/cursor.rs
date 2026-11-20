@@ -1,5 +1,5 @@
 //! Local Cursor account reader and its ten-minute saved observation.
-use super::provider_caches::cursor_account;
+use super::provider_caches::{CURSOR_ACCOUNT_FILE, cursor_account};
 use aac_config::{ComputerConfig, OperatingSystem, TransportConfig};
 use aac_core::{ComputerId, UtcMs, sha256_hex};
 use aac_files::{
@@ -222,14 +222,16 @@ impl Reader {
         };
         let value = Arc::new(project(&current, previous.as_ref(), now)?);
         let save = value.clone();
-        let _ = tokio::task::spawn_blocking(move || save_read(store, &save)).await;
+        let _ = tokio::task::spawn_blocking(move || save_read(&root, store, &save)).await;
         *memory = Some((Instant::now(), value.clone()));
         Ok(value)
     }
 }
 
-fn save_read(store: OwnedStore, value: &Value) {
-    if let Ok(bytes) = serde_json::to_vec(value) {
+fn save_read(root: &Path, store: OwnedStore, value: &Value) {
+    if let Ok(bytes) = serde_json::to_vec(value)
+        && crate::analytics_storage::write(root, CURSOR_ACCOUNT_FILE, &bytes).is_none()
+    {
         let _ = store.write_private_cache(&bytes);
     }
 }

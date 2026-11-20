@@ -361,7 +361,7 @@ pub fn fingerprint(path: &Path) -> Option<Print> {
     Some(Print::plain(size, mtime_ms(&meta), head, tail))
 }
 
-pub(crate) fn read_up_to(handle: &mut fs::File, buffer: &mut [u8]) -> std::io::Result<usize> {
+fn read_up_to(handle: &mut fs::File, buffer: &mut [u8]) -> std::io::Result<usize> {
     let mut total = 0;
     while total < buffer.len() {
         let read = handle.read(&mut buffer[total..])?;

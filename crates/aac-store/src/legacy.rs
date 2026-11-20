@@ -204,14 +204,32 @@ pub fn import_codex_v1(engine: &Engine, file: &Path, computer: &str) -> Result<J
         fail!("invalid", "the cache is not a regular file of a readable size");
     }
     let (sha, _) = crate::fsx::sha256_file(file)?;
+    import_codex(engine, &sha, computer, || {
+        Ok(std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(file)?))
+    })
+}
+
+/// Project the already verified redb archive with the same parser as the legacy file import.
+pub fn import_codex_v1_bytes(engine: &Engine, bytes: &[u8], computer: &str) -> Result<Json> {
+    import_codex(engine, &aac_core::sha256_hex(bytes), computer, || Ok(bytes))
+}
+
+fn import_codex<R: std::io::Read>(
+    engine: &Engine,
+    sha: &str,
+    computer: &str,
+    reader: impl FnOnce() -> Result<R>,
+) -> Result<Json> {
+    if !contract::ident_ok(computer) {
+        fail!("invalid", "computer is a lower-case identifier");
+    }
     let marker = format!("ts:activity_import_codex_v1:{}", &sha[..32]);
     if engine.get_meta(&marker)?.is_some() {
         return Ok(json!({ "imported": false, "reason": "already imported" }));
     }
     let mut fold = Fold::default();
     {
-        let reader = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(file)?);
-        let mut de = serde_json::Deserializer::from_reader(reader);
+        let mut de = serde_json::Deserializer::from_reader(reader()?);
         TopSeed(&mut fold)
             .deserialize(&mut de)
             .map_err(|e| Error::new("invalid", format!("the cache could not be read: {e}")))?;

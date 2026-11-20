@@ -2046,6 +2046,28 @@ pub struct SourcesQuery {
     pub to_ms: u64,
 }
 
+/// The same hour boundary the live projector uses when replacing activity.
+pub fn settled_before(engine: &Engine, computer: &str) -> Result<HashMap<String, u64>> {
+    engine.with_db(|db| {
+        let txn = db.begin_read()?;
+        let dict = txn.open_table(ACT_DICT)?;
+        let mut names = Names::new(&dict);
+        let sources = txn.open_table(ACT_SOURCE)?;
+        let mut result = HashMap::new();
+        for entry in sources.iter()? {
+            let (key, value) = entry?;
+            if names.get(K_COMPUTER, db::be_u32(key.value(), 0))? != computer {
+                continue;
+            }
+            let row: SourceRow = db::unpack(value.value())?;
+            if let Some(hour) = row.settle_h {
+                result.insert(names.get(K_TOOL, db::be_u32(key.value(), 4))?, hour as u64 * HOUR_MS);
+            }
+        }
+        Ok(result)
+    })
+}
+
 /// Per computer and tool: stored span, last read (live and logged), state, backfill, and covered
 /// spans; per computer: oldest and newest stored hour, last read and the gaps in the range (hours
 /// after its history starts that no complete read of any of its tools covered).

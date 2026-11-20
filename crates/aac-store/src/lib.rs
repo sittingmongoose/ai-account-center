@@ -6,6 +6,7 @@
 #![allow(clippy::type_complexity)]
 
 pub mod activity;
+pub mod analytics_cache;
 pub mod capture;
 pub mod collect;
 pub mod contract;

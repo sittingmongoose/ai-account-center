@@ -68,6 +68,7 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
         txn.open_table(def)?;
     }
     crate::activity::create_tables(txn)?;
+    txn.open_table(crate::analytics_cache::TABLE)?;
     // Agent-report runs (Scoreboard v2): the runs projector's own tables.
     crate::runs::create_tables(txn)?;
     Ok(())

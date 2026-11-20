@@ -263,10 +263,7 @@ impl Collector {
             .entry(kind.to_owned())
             .or_default()
             .insert(key.clone(), print);
-        let count = self
-            .root_counts
-            .entry((kind.to_owned(), util::realpath(root)))
-            .or_default();
+        let count = self.root_counts.entry((kind.to_owned(), root.to_owned())).or_default();
         count.0 += 1;
         count.1 = count.1.max(mtime);
         true

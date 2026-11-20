@@ -1,6 +1,7 @@
 //! The write boundary for dashboard-scope quota observations and remote snapshots.
 use crate::account_usage::provider_caches::{
-    CURSOR_QUOTA, WALLET_ACCOUNT, cursor_quota_matches, wallet_pointer, wallet_source,
+    CURSOR_QUOTA, CURSOR_QUOTA_FILE, WALLET_ACCOUNT, cursor_quota_matches, wallet_pointer,
+    wallet_source,
 };
 use aac_core::{Cause, Failure, sha256_hex};
 use aac_files::registry::{self, Owners};
@@ -76,6 +77,14 @@ pub(crate) fn write(
         let clear = key == "no-key" && value == serde_json::json!({"clear":true});
         if !clear && !cursor_quota_matches(&value, &format!("sha256:{key}")) {
             return Err(refused());
+        }
+        let contents = if clear { b"null" } else { bytes };
+        if let Some(saved) = crate::analytics_storage::write(root, CURSOR_QUOTA_FILE, contents) {
+            return if saved {
+                Ok(())
+            } else {
+                Err(Failure::new(Cause::Busy, "Analytics store unavailable"))
+            };
         }
         let store = owners.claim(registry::rows()?, CURSOR_QUOTA, root, None)?;
         return if clear {

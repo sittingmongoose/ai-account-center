@@ -24,6 +24,8 @@ use std::time::Duration;
 mod experiment_roots;
 mod experiment_signatures;
 mod fixed_scanner;
+mod migration;
+mod scan_state;
 
 /// The job's tick: the activity background's every-15s cadence; each writer checks its own deadline.
 const TICK_MS: u64 = 15_000;
@@ -50,6 +52,7 @@ struct WriterState {
     scanning_since: Option<i64>,
     generation: u64,
     experiments: Option<Arc<experiment_roots::Snapshot>>,
+    codex_import_checked: bool,
 }
 
 #[derive(Default)]
@@ -150,7 +153,10 @@ fn read_archive_file(root: &Path, file: &Path) -> Option<Vec<u8>> {
 }
 
 /// The backfill sources the host reads: the archive files plus the main history file.
-fn backfill_sources(ccs_dir: &Path) -> (Vec<BackfillSource>, u64) {
+fn backfill_sources(
+    engine: &aac_store::engine::Engine,
+    ccs_dir: &Path,
+) -> (Vec<BackfillSource>, u64) {
     let base = ccs_dir.join("account-analytics");
     let archive = base.join("archive");
     let mut files = Vec::new();
@@ -188,8 +194,12 @@ fn backfill_sources(ccs_dir: &Path) -> (Vec<BackfillSource>, u64) {
         });
     }
     let main = base.join("quota-history-v1.json");
-    if main.symlink_metadata().is_ok() {
-        match read_archive_file(ccs_dir, &main) {
+    let retired = aac_store::analytics_cache::archived(
+        engine,
+        "legacy/account-analytics/quota-history-v1.json",
+    );
+    if main.symlink_metadata().is_ok() || !matches!(&retired, Ok(None)) {
+        match read_archive_file(ccs_dir, &main).or_else(|| retired.ok().flatten()) {
             Some(bytes) => {
                 let (records, parsed) = std::str::from_utf8(&bytes)
                     .map(sampler::records_from_text)
@@ -234,7 +244,7 @@ fn quota_pass(
         return;
     }
     if !state.backfilled {
-        let (sources, unreadable) = backfill_sources(ccs_dir);
+        let (sources, unreadable) = backfill_sources(engine, ccs_dir);
         let providers = sampler::providers_of(&merged);
         if sampler::backfill(engine, &sources, &providers, now, unreadable).is_ok() {
             state.backfilled = true;
@@ -391,18 +401,42 @@ async fn activity_pass(
 ) {
     // Claim a generation under the lock, then release it for the scans: a std mutex guard must
     // not cross an await (the job's future stays Send). A newer pass supersedes this one.
-    let (generation, experiments) = {
+    let (generation, experiments, check_codex) = {
         let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
         if !activity_due(&guard, now, quota_interval_ms(refresh_seconds(ccs_dir))) {
             return;
         }
         guard.generation += 1;
-        (guard.generation, guard.experiments.clone())
+        (
+            guard.generation,
+            guard.experiments.clone(),
+            !guard.codex_import_checked,
+        )
     };
     let computers = agents.usage_hosts().await;
     if computers.is_empty() {
         state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = now;
         return;
+    }
+    if check_codex && let Some(local) = computers.iter().find(|host| host.alias.is_none()) {
+        let result =
+            aac_store::analytics_cache::archived(engine, "legacy/cache/codex-native-usage-v1.json")
+                .and_then(|bytes| {
+                    bytes.map_or(Ok(()), |bytes| {
+                        aac_store::legacy::import_codex_v1_bytes(engine, &bytes, &local.id)
+                            .map(|_| ())
+                    })
+                });
+        state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .codex_import_checked = true;
+        if let Err(error) = result {
+            tracing::warn!(
+                code = error.code,
+                "Legacy Codex rows are available in the archive but could not be projected"
+            );
+        }
     }
     let cutoff = now - 31 * DAY;
     // The read reports `refreshing` while this pass runs (the TS activity service's pending pass).
@@ -428,6 +462,18 @@ async fn activity_pass(
         .collect::<Vec<_>>();
     for computer in &computers {
         let host = computer.id.as_str();
+        let mut cache = match scan_state::Cache::load(engine, host) {
+            Ok(cache) => cache,
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code,
+                    "Stored Analytics scanner state could not be loaded"
+                );
+                states.extend(failed_scan_states(host, &kinds, false));
+                continue;
+            }
+        };
+        import_remote_rows(engine, &cache, host, &kinds, now, &pricing);
         let (mut extra_roots, mut overflow, generic) = extra_roots(preferences.as_ref(), host);
         let local = computer.alias.is_none();
         let experiments = experiments.as_deref().filter(|_| local);
@@ -437,7 +483,7 @@ async fn activity_pass(
         if generic {
             states.push(json!({ "tool": "jsonl", "host": host, "state": "no_reader" }));
         }
-        let args = scan_request(
+        let mut args = scan_request(
             &kinds,
             cutoff,
             extra_roots,
@@ -446,79 +492,115 @@ async fn activity_pass(
                 .map(experiment_roots::Snapshot::scanner_roots)
                 .as_ref(),
         );
-        let call_id = format!("g14-activity-{generation}-{host}");
-        let mut answer = if computer.agent_available {
-            agents
-                .scan_usage(
-                    computer.platform,
-                    computer.alias.as_deref(),
-                    &args,
-                    SCAN_DEADLINE_MS,
-                    SCAN_MAX_BYTES,
-                    &call_id,
-                )
-                .await
+        let settled_before = activity::settled_before(engine, host).unwrap_or_default();
+        args["fingerprints"] = json!(cache.fingerprints);
+        args["fingerprints"]["_store"] = json!({ "settledBefore": settled_before });
+        let mut batches = Vec::new();
+        if args.to_string().len() <= 8 * 1024 * 1024 {
+            batches.push((kinds.clone(), args));
         } else {
-            Err(aac_core::Cause::AgentMissing)
-        };
-        if matches!(
-            answer,
-            Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
-        ) {
-            answer = fixed_scanner::scan(agents, computer, &args, SCAN_DEADLINE_MS, SCAN_MAX_BYTES)
-                .await;
-        }
-        match answer {
-            Ok(answer) if valid_scan_answer(&answer, &kinds) => {
-                let rows = answer["rows"].as_array().cloned().unwrap_or_default();
-                let srows = answer["srows"].as_array().cloned().unwrap_or_default();
-                for kind in &kinds {
-                    let kind_rows: Vec<Value> = rows
-                        .iter()
-                        .filter(|r| r["k"].as_str() == Some(kind.as_str()))
-                        .cloned()
-                        .collect();
-                    let kind_srows: Vec<Value> = srows
-                        .iter()
-                        .filter(|r| r["k"].as_str() == Some(kind.as_str()))
-                        .cloned()
-                        .collect();
-                    let worker = collect::worker_from_scan(
-                        &kind_rows,
-                        &kind_srows,
-                        kind,
-                        host,
-                        now,
-                        &pricing,
-                    );
-                    remote.push(json!({ "tool": kind, "host": host, "data": worker }));
-                    let (mut state, mut cause) = scan_state(&answer, kind);
-                    if overflow.contains(kind.as_str())
-                        || experiments.is_some_and(|snapshot| snapshot.limited(kind))
-                    {
-                        (state, cause) = ("unreadable", Some("source_limit"));
-                    } else if matches!(state, "ok" | "not_installed" | "no_usage")
-                        && local
-                        && experiments.map_or_else(
-                            || experiment_roots::tracks(kind),
-                            |snapshot| snapshot.discovering(kind),
-                        )
-                    {
-                        (state, cause) = ("scanning", None);
-                    }
-                    states.push(json!({
-                        "tool": kind,
-                        "host": host,
-                        "state": state,
-                        "cause": cause,
-                        "lastScanAt": aac_num::ecma::to_iso_string(now).unwrap_or_default(),
-                    }));
+            let fingerprints = std::mem::take(&mut args["fingerprints"]);
+            for kind in &kinds {
+                let mut one = args.clone();
+                one["kinds"] = json!([kind]);
+                one["fingerprints"] = json!({
+                    (kind): fingerprints[kind],
+                    "_store": fingerprints["_store"],
+                });
+                if one.to_string().len() > 8 * 1024 * 1024
+                    && let Some(map) = one["fingerprints"].as_object_mut()
+                {
+                    map.remove(kind);
                 }
+                batches.push((vec![kind.clone()], one));
             }
-            Err(aac_core::Cause::AgentMissing) => {
-                states.extend(failed_scan_states(host, &kinds, true))
+        }
+        for (batch, args) in batches {
+            let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
+            let mut answer = if computer.agent_available {
+                agents
+                    .scan_usage(
+                        computer.platform,
+                        computer.alias.as_deref(),
+                        &args,
+                        SCAN_DEADLINE_MS,
+                        SCAN_MAX_BYTES,
+                        &call_id,
+                    )
+                    .await
+            } else {
+                Err(aac_core::Cause::AgentMissing)
+            };
+            if matches!(
+                answer,
+                Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
+            ) {
+                answer =
+                    fixed_scanner::scan(agents, computer, &args, SCAN_DEADLINE_MS, SCAN_MAX_BYTES)
+                        .await;
             }
-            _ => states.extend(failed_scan_states(host, &kinds, false)),
+            match answer {
+                Ok(answer) if valid_scan_answer(&answer, &batch) => {
+                    for kind in &batch {
+                        let (mut state, mut cause) = scan_state(&answer, kind);
+                        if overflow.contains(kind.as_str())
+                            || experiments.is_some_and(|snapshot| snapshot.limited(kind))
+                        {
+                            (state, cause) = ("unreadable", Some("source_limit"));
+                        } else if matches!(state, "ok" | "not_installed" | "no_usage")
+                            && local
+                            && experiments.map_or_else(
+                                || experiment_roots::tracks(kind),
+                                |snapshot| snapshot.discovering(kind),
+                            )
+                        {
+                            (state, cause) = ("scanning", None);
+                        }
+                        let complete = matches!(state, "ok" | "no_usage");
+                        if !cache.apply(kind, &answer, complete, cutoff) && complete {
+                            (state, cause) = ("scanning", None);
+                        }
+                        let kind_rows: Vec<Value> = cache
+                            .rows
+                            .iter()
+                            .filter(|r| r["k"].as_str() == Some(kind.as_str()))
+                            .cloned()
+                            .collect();
+                        let kind_srows: Vec<Value> = cache
+                            .srows
+                            .iter()
+                            .filter(|r| r["k"].as_str() == Some(kind.as_str()))
+                            .cloned()
+                            .collect();
+                        let worker = collect::worker_from_scan(
+                            &kind_rows,
+                            &kind_srows,
+                            kind,
+                            host,
+                            now,
+                            &pricing,
+                        );
+                        remote.push(json!({ "tool": kind, "host": host, "data": worker }));
+                        states.push(json!({
+                            "tool": kind,
+                            "host": host,
+                            "state": state,
+                            "cause": cause,
+                            "lastScanAt": aac_num::ecma::to_iso_string(now).unwrap_or_default(),
+                        }));
+                    }
+                }
+                Err(aac_core::Cause::AgentMissing) => {
+                    states.extend(failed_scan_states(host, &batch, true))
+                }
+                _ => states.extend(failed_scan_states(host, &batch, false)),
+            }
+        }
+        if let Err(error) = cache.save(engine, host) {
+            tracing::warn!(
+                code = error.code,
+                "Analytics scanner state could not be saved"
+            );
         }
     }
     // Shape and ingest under the lock; a superseding generation drops this pass's writes.
@@ -568,6 +650,56 @@ async fn activity_pass(
     }
 }
 
+/// Seed history even when a host has no agent. Import reports only add or raise measured cells.
+fn import_remote_rows(
+    engine: &aac_store::engine::Engine,
+    cache: &scan_state::Cache,
+    host: &str,
+    kinds: &[String],
+    now: i64,
+    pricing: &dyn Pricing,
+) {
+    let marker = format!("analytics_remote_imported_v1:{host}");
+    let Ok(None) = engine.get_meta(&marker) else {
+        return;
+    };
+    for kind in kinds {
+        let rows: Vec<_> = cache
+            .rows
+            .iter()
+            .filter(|r| r["k"] == *kind)
+            .cloned()
+            .collect();
+        let srows: Vec<_> = cache
+            .srows
+            .iter()
+            .filter(|r| r["k"] == *kind)
+            .cloned()
+            .collect();
+        if rows.is_empty() && srows.is_empty() {
+            continue;
+        }
+        let worker = collect::worker_from_scan(&rows, &srows, kind, host, now, pricing);
+        let report = report::rows_report(&report::RowsReportArgs {
+            computer: host,
+            tool: kind,
+            data: &[worker],
+            kind: "import",
+            read_at: 0,
+            complete: false,
+            cause: Some("retired_cache"),
+            now,
+        });
+        let Ok(typed) = report::contract_reports(&[report]) else {
+            return;
+        };
+        if !activity::ingest(engine, &typed).is_ok_and(|result| result.refused.is_empty()) {
+            return;
+        }
+    }
+    let _ = engine.set_meta(&marker, "1");
+}
+
 /// The refresh interval the front door's account-refresh settings name (seconds), default 60.
 fn refresh_seconds(ccs_dir: &Path) -> i64 {
     crate::registered::file(ccs_dir, "account-refresh-settings")
@@ -593,6 +725,22 @@ pub(crate) async fn analytics_jobs(
     stop: Arc<AtomicBool>,
 ) {
     tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(engine) = store.analytics_engine() {
+            let root = ccs_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(error) = migration::run(&engine, &root) {
+                    tracing::warn!(code = error.code, "Analytics file migration incomplete");
+                }
+            })
+            .await;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+    }
     let quota = async {
         let state = Arc::new(Mutex::new(QuotaState::default()));
         let dashboard = Arc::new(dashboard);
@@ -616,9 +764,16 @@ pub(crate) async fn analytics_jobs(
     let state = Mutex::new(WriterState::default());
     let activity = async {
         let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&ccs_dir));
+        let mut folders_cleared = false;
         while !stop.load(Ordering::Acquire) {
             if let Some(engine) = store.analytics_engine() {
                 let now = aac_store::engine::now_ms() as i64;
+                if crate::analytics_route::capture_cwd(&ccs_dir) {
+                    folders_cleared = false;
+                } else if !folders_cleared {
+                    folders_cleared =
+                        aac_store::analytics_cache::clear_remote_folders(&engine).is_ok();
+                }
                 if live.take_refresh() {
                     state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = 0;
                 }
@@ -634,11 +789,12 @@ pub(crate) async fn analytics_jobs(
         let mut next = 0;
         while !stop.load(Ordering::Acquire) {
             let now = aac_store::engine::now_ms() as i64;
-            if now >= next && store.analytics_engine().is_some() {
-                let root = ccs_dir.clone();
+            if now >= next
+                && let Some(engine) = store.analytics_engine()
+            {
                 let home = home.clone();
                 if let Ok(snapshot) = tokio::task::spawn_blocking(move || {
-                    experiment_roots::run_slice(&root, &home, now)
+                    experiment_roots::run_slice(&engine, &home, now)
                 })
                 .await
                 {
@@ -686,7 +842,10 @@ mod tests {
             ),
         )
         .expect("fixture rollout");
-        let snapshot = experiment_roots::run_slice(ccs.path(), home.path(), 1);
+        let store =
+            aac_store::ops::open_engine(&ccs.path().join("store").to_string_lossy(), None, None)
+                .unwrap();
+        let snapshot = experiment_roots::run_slice(&store, home.path(), 1);
         let roots = snapshot.scanner_roots();
         let kinds = aac_providers::scanner_kinds()
             .map(str::to_owned)

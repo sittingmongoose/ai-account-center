@@ -293,6 +293,7 @@ pub fn walk_files(
 ) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+    let counted_root = util::realpath(root);
     let mut visited_dirs = 0usize;
     let mut visited_entries = 0usize;
     while let Some((directory, depth)) = pending.pop() {
@@ -314,7 +315,7 @@ pub fn walk_files(
                 continue;
             }
             let path = directory.join(&name);
-            if accept(&name) && collector.skip_settled(kind, root, &path) {
+            if accept(&name) && collector.skip_settled(kind, &counted_root, &path) {
                 continue;
             }
             // Never follow a directory link just to classify it (FIX-ROUND-BIG 9).
