@@ -24,6 +24,7 @@ use std::time::Duration;
 mod experiment_roots;
 mod experiment_signatures;
 mod fixed_scanner;
+mod history;
 mod migration;
 mod scan_state;
 
@@ -52,12 +53,12 @@ struct WriterState {
     scanning_since: Option<i64>,
     generation: u64,
     experiments: Option<Arc<experiment_roots::Snapshot>>,
-    codex_import_checked: bool,
 }
 
 #[derive(Default)]
 struct QuotaState {
     backfilled: bool,
+    archives: Vec<(String, String)>,
     last_quota_ms: i64,
 }
 
@@ -156,6 +157,7 @@ fn read_archive_file(root: &Path, file: &Path) -> Option<Vec<u8>> {
 fn backfill_sources(
     engine: &aac_store::engine::Engine,
     ccs_dir: &Path,
+    staged: &[(String, String)],
 ) -> (Vec<BackfillSource>, u64) {
     let base = ccs_dir.join("account-analytics");
     let archive = base.join("archive");
@@ -193,30 +195,32 @@ fn backfill_sources(
             records,
         });
     }
-    let main = base.join("quota-history-v1.json");
-    let retired = aac_store::analytics_cache::archived(
-        engine,
-        "legacy/account-analytics/quota-history-v1.json",
-    );
-    if main.symlink_metadata().is_ok() || !matches!(&retired, Ok(None)) {
-        match read_archive_file(ccs_dir, &main).or_else(|| retired.ok().flatten()) {
-            Some(bytes) => {
-                let (records, parsed) = std::str::from_utf8(&bytes)
-                    .map(sampler::records_from_text)
-                    .unwrap_or_default();
-                if parsed {
-                    sources.push(BackfillSource {
-                        label: "quota-history-v1.json".to_string(),
-                        sha256: sha256_hex(&bytes),
-                        records,
-                    });
-                } else {
-                    unreadable += 1;
-                }
-            }
-            None => unreadable += 1,
+    for (key, digest) in staged {
+        let Ok(Some(bytes)) = aac_store::analytics_cache::archived(engine, key) else {
+            unreadable += 1;
+            continue;
+        };
+        if sha256_hex(&bytes) != *digest {
+            unreadable += 1;
+            continue;
+        }
+        let (records, parsed) = std::str::from_utf8(&bytes)
+            .map(sampler::records_from_text)
+            .unwrap_or_default();
+        if parsed {
+            sources.push(BackfillSource {
+                label: key
+                    .trim_start_matches("legacy/account-analytics/")
+                    .to_owned(),
+                sha256: digest.clone(),
+                records,
+            });
+        } else if key == migration::QUOTA {
+            unreadable += 1;
         }
     }
+    let mut seen = HashSet::new();
+    sources.retain(|source| seen.insert(source.sha256.clone()));
     (sources, unreadable)
 }
 
@@ -243,11 +247,16 @@ fn quota_pass(
     if merged.is_empty() {
         return;
     }
-    if !state.backfilled {
-        let (sources, unreadable) = backfill_sources(engine, ccs_dir);
+    if let Ok(staged) = aac_store::analytics_cache::archived_index(engine, migration::QUOTA)
+        && (!state.backfilled || staged != state.archives)
+    {
+        let (sources, unreadable) = backfill_sources(engine, ccs_dir, &staged);
         let providers = sampler::providers_of(&merged);
-        if sampler::backfill(engine, &sources, &providers, now, unreadable).is_ok() {
+        if sampler::backfill(engine, &sources, &providers, now, unreadable)
+            .is_ok_and(|receipt| receipt.rejected == 0)
+        {
             state.backfilled = true;
+            state.archives = staged;
         }
     }
     if sampler::record_sample(engine, &merged, now).is_ok() {
@@ -374,6 +383,37 @@ fn scan_request(
     request
 }
 
+async fn scan_host(
+    agents: &Arc<crate::agent_transport::Agents>,
+    host: &crate::agent_transport::UsageHost,
+    args: &Value,
+    timeout_ms: u64,
+    call_id: &str,
+) -> Result<Value, aac_core::Cause> {
+    let answer = if host.agent_available {
+        agents
+            .scan_usage(
+                host.platform,
+                host.alias.as_deref(),
+                args,
+                timeout_ms,
+                SCAN_MAX_BYTES,
+                call_id,
+            )
+            .await
+    } else {
+        Err(aac_core::Cause::AgentMissing)
+    };
+    if matches!(
+        answer,
+        Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
+    ) {
+        fixed_scanner::scan(agents, host, args, timeout_ms, SCAN_MAX_BYTES).await
+    } else {
+        answer
+    }
+}
+
 fn failed_scan_states(host: &str, kinds: &[String], agent_missing: bool) -> Vec<Value> {
     kinds
         .iter()
@@ -401,42 +441,18 @@ async fn activity_pass(
 ) {
     // Claim a generation under the lock, then release it for the scans: a std mutex guard must
     // not cross an await (the job's future stays Send). A newer pass supersedes this one.
-    let (generation, experiments, check_codex) = {
+    let (generation, experiments) = {
         let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
         if !activity_due(&guard, now, quota_interval_ms(refresh_seconds(ccs_dir))) {
             return;
         }
         guard.generation += 1;
-        (
-            guard.generation,
-            guard.experiments.clone(),
-            !guard.codex_import_checked,
-        )
+        (guard.generation, guard.experiments.clone())
     };
     let computers = agents.usage_hosts().await;
     if computers.is_empty() {
         state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = now;
         return;
-    }
-    if check_codex && let Some(local) = computers.iter().find(|host| host.alias.is_none()) {
-        let result =
-            aac_store::analytics_cache::archived(engine, "legacy/cache/codex-native-usage-v1.json")
-                .and_then(|bytes| {
-                    bytes.map_or(Ok(()), |bytes| {
-                        aac_store::legacy::import_codex_v1_bytes(engine, &bytes, &local.id)
-                            .map(|_| ())
-                    })
-                });
-        state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .codex_import_checked = true;
-        if let Err(error) = result {
-            tracing::warn!(
-                code = error.code,
-                "Legacy Codex rows are available in the archive but could not be projected"
-            );
-        }
     }
     let cutoff = now - 31 * DAY;
     // The read reports `refreshing` while this pass runs (the TS activity service's pending pass).
@@ -474,7 +490,6 @@ async fn activity_pass(
                 continue;
             }
         };
-        import_remote_rows(engine, &cache, host, &kinds, now, &pricing);
         let (mut extra_roots, mut overflow, generic) = extra_roots(preferences.as_ref(), host);
         let local = computer.alias.is_none();
         let experiments = experiments.as_deref().filter(|_| local);
@@ -499,28 +514,7 @@ async fn activity_pass(
         let start_state = states.len();
         for (batch, args) in batches {
             let call_id = format!("g14-activity-{generation}-{host}-{}", batch[0]);
-            let mut answer = if computer.agent_available {
-                agents
-                    .scan_usage(
-                        computer.platform,
-                        computer.alias.as_deref(),
-                        &args,
-                        SCAN_DEADLINE_MS,
-                        SCAN_MAX_BYTES,
-                        &call_id,
-                    )
-                    .await
-            } else {
-                Err(aac_core::Cause::AgentMissing)
-            };
-            if matches!(
-                answer,
-                Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
-            ) {
-                answer =
-                    fixed_scanner::scan(agents, computer, &args, SCAN_DEADLINE_MS, SCAN_MAX_BYTES)
-                        .await;
-            }
+            let answer = scan_host(agents, computer, &args, SCAN_DEADLINE_MS, &call_id).await;
             match answer {
                 Ok(answer) if valid_scan_answer(&answer, &batch) => {
                     scanned = true;
@@ -652,56 +646,6 @@ async fn activity_pass(
     }
 }
 
-/// Seed history even when a host has no agent. Import reports only add or raise measured cells.
-fn import_remote_rows(
-    engine: &aac_store::engine::Engine,
-    cache: &scan_state::Cache,
-    host: &str,
-    kinds: &[String],
-    now: i64,
-    pricing: &dyn Pricing,
-) {
-    let marker = format!("analytics_remote_imported_v1:{host}");
-    let Ok(None) = engine.get_meta(&marker) else {
-        return;
-    };
-    for kind in kinds {
-        let rows: Vec<_> = cache
-            .rows
-            .iter()
-            .filter(|r| r["k"] == *kind)
-            .cloned()
-            .collect();
-        let srows: Vec<_> = cache
-            .srows
-            .iter()
-            .filter(|r| r["k"] == *kind)
-            .cloned()
-            .collect();
-        if rows.is_empty() && srows.is_empty() {
-            continue;
-        }
-        let worker = collect::worker_from_scan(&rows, &srows, kind, host, now, pricing);
-        let report = report::rows_report(&report::RowsReportArgs {
-            computer: host,
-            tool: kind,
-            data: &[worker],
-            kind: "import",
-            read_at: 0,
-            complete: false,
-            cause: Some("retired_cache"),
-            now,
-        });
-        let Ok(typed) = report::contract_reports(&[report]) else {
-            return;
-        };
-        if !activity::ingest(engine, &typed).is_ok_and(|result| result.refused.is_empty()) {
-            return;
-        }
-    }
-    let _ = engine.set_meta(&marker, "1");
-}
-
 /// The refresh interval the front door's account-refresh settings name (seconds), default 60.
 fn refresh_seconds(ccs_dir: &Path) -> i64 {
     crate::registered::file(ccs_dir, "account-refresh-settings")
@@ -717,6 +661,42 @@ fn refresh_seconds(ccs_dir: &Path) -> i64 {
         .unwrap_or(60)
 }
 
+async fn migrate_files(
+    engine: Arc<aac_store::engine::Engine>,
+    agents: &crate::agent_transport::Agents,
+    root: &Path,
+) -> bool {
+    let local = agents
+        .usage_hosts()
+        .await
+        .into_iter()
+        .find(|host| host.alias.is_none())
+        .map(|host| host.id)
+        .or_else(|| {
+            aac_files::process::hostname()
+                .map(|host| crate::reset_source_route::local_computer(&host))
+        });
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let migration = migration::Migration {
+            store: &engine,
+            root: &root,
+            local: local.as_deref(),
+            now: aac_store::engine::now_ms() as i64,
+            pricing: ResolverPricing::new(&root),
+        };
+        match migration.run() {
+            Ok(done) => done,
+            Err(error) => {
+                tracing::warn!(code = error.code, "Analytics file migration incomplete");
+                false
+            }
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// The hosted store's writer jobs consume the existing collection generation and agent pool.
 pub(crate) async fn analytics_jobs(
     store: Arc<StoreHost>,
@@ -727,22 +707,29 @@ pub(crate) async fn analytics_jobs(
     stop: Arc<AtomicBool>,
 ) {
     tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
-    loop {
+    let mut migrated = loop {
         if stop.load(Ordering::Acquire) {
             return;
         }
         if let Some(engine) = store.analytics_engine() {
-            let root = ccs_dir.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(error) = migration::run(&engine, &root) {
-                    tracing::warn!(code = error.code, "Analytics file migration incomplete");
-                }
-            })
-            .await;
-            break;
+            break migrate_files(engine, &agents, &ccs_dir).await;
         }
         tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
-    }
+    };
+    let migration = async {
+        let mut retry = aac_store::engine::now_ms() + 120_000;
+        while !migrated && !stop.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+            let now = aac_store::engine::now_ms();
+            if now >= retry
+                && !stop.load(Ordering::Acquire)
+                && let Some(engine) = store.analytics_engine()
+            {
+                migrated = migrate_files(engine, &agents, &ccs_dir).await;
+                retry = now + 120_000;
+            }
+        }
+    };
     let quota = async {
         let state = Arc::new(Mutex::new(QuotaState::default()));
         let dashboard = Arc::new(dashboard);
@@ -767,6 +754,7 @@ pub(crate) async fn analytics_jobs(
     let activity = async {
         let models_dev = Arc::new(crate::models_dev::ModelsDevRefresh::new(&ccs_dir));
         let mut folders_cleared = false;
+        let mut history = history::Job::default();
         while !stop.load(Ordering::Acquire) {
             if let Some(engine) = store.analytics_engine() {
                 let now = aac_store::engine::now_ms() as i64;
@@ -780,6 +768,22 @@ pub(crate) async fn analytics_jobs(
                     state.lock().unwrap_or_else(|p| p.into_inner()).fetched_at = 0;
                 }
                 activity_pass(&engine, &agents, &state, &ccs_dir, &models_dev, &live, now).await;
+                if !stop.load(Ordering::Acquire) {
+                    let experiments = state
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .experiments
+                        .clone();
+                    history
+                        .run(
+                            &engine,
+                            &agents,
+                            &ccs_dir,
+                            experiments.as_deref(),
+                            aac_store::engine::now_ms() as i64,
+                        )
+                        .await;
+                }
             }
             tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
         }
@@ -812,7 +816,7 @@ pub(crate) async fn analytics_jobs(
             tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
         }
     };
-    tokio::join!(quota, discovery, activity);
+    tokio::join!(quota, discovery, activity, migration);
 }
 
 #[cfg(test)]

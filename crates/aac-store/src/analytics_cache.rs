@@ -23,6 +23,16 @@ pub fn put(engine: &Engine, key: &str, bytes: &[u8]) -> Result<()> {
     })
 }
 
+/// Drop a consumed scanner checkpoint after its completion receipt commits.
+pub fn remove(engine: &Engine, key: &str) -> Result<()> {
+    engine.with_db(|db| {
+        let txn = engine::begin(db)?;
+        txn.open_table(TABLE)?.remove(key)?;
+        txn.commit()?;
+        Ok(())
+    })
+}
+
 /// A new value at a retired path keeps its own copy if migration was interrupted and the
 /// old application wrote the file again. The path index and its bytes commit together.
 pub fn archive(engine: &Engine, files: &[(String, Vec<u8>)]) -> Result<()> {
@@ -60,6 +70,23 @@ pub fn archived(engine: &Engine, path: &str) -> Result<Option<Vec<u8>>> {
             crate::fail!("io", "Analytics archive hash mismatch");
         }
         Ok(Some(bytes.value().to_vec()))
+    })
+}
+
+/// The indexed legacy paths already staged by migration.
+pub fn archived_index(engine: &Engine, prefix: &str) -> Result<Vec<(String, String)>> {
+    engine.with_db(|db| {
+        let txn = db.begin_read()?;
+        let table = txn.open_table(TABLE)?;
+        let mut paths = Vec::new();
+        for entry in table.range(prefix..)? {
+            let (path, digest) = entry?;
+            if !path.value().starts_with(prefix) {
+                break;
+            }
+            paths.push((path.value().to_owned(), std::str::from_utf8(digest.value())?.to_owned()));
+        }
+        Ok(paths)
     })
 }
 

@@ -179,9 +179,11 @@ pub fn backfill(
         report.duplicates += result.skipped as u64;
         report.rejected += result.rejected as u64;
     }
-    for (source, count) in &imported {
-        let value = json!({ "file": source.label, "records": count, "at": now }).to_string();
-        engine.set_meta(&format!("ts:backfill:{}", source.sha256), &value)?;
+    if report.rejected == 0 {
+        for (source, count) in &imported {
+            let value = json!({ "file": source.label, "records": count, "at": now }).to_string();
+            engine.set_meta(&format!("ts:backfill:{}", source.sha256), &value)?;
+        }
     }
     if !imported.is_empty() {
         engine.set_meta("ts:backfill_report", &serde_json::to_string(&report)?)?;

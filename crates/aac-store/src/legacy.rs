@@ -214,6 +214,25 @@ pub fn import_codex_v1_bytes(engine: &Engine, bytes: &[u8], computer: &str) -> R
     import_codex(engine, &aac_core::sha256_hex(bytes), computer, || Ok(bytes))
 }
 
+fn codex_marker(engine: &Engine, sha: &str) -> Result<String> {
+    if sha.len() != 64 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        fail!("invalid", "invalid Codex cache digest");
+    }
+    let prefix = &sha[..32];
+    let epoch = activity::recovery_epoch(engine)?;
+    Ok(if epoch == 0 {
+        // The former writer used this receipt. Keep deduplication on an intact projection.
+        format!("ts:activity_import_codex_v1:{prefix}")
+    } else {
+        format!("ts:activity_import_codex_v1:{prefix}:{epoch}")
+    })
+}
+
+/// Whether the current activity projection has committed the given cache's import.
+pub fn codex_v1_verified(engine: &Engine, sha: &str) -> Result<bool> {
+    Ok(engine.get_meta(&codex_marker(engine, sha)?)?.is_some())
+}
+
 fn import_codex<R: std::io::Read>(
     engine: &Engine,
     sha: &str,
@@ -223,7 +242,7 @@ fn import_codex<R: std::io::Read>(
     if !contract::ident_ok(computer) {
         fail!("invalid", "computer is a lower-case identifier");
     }
-    let marker = format!("ts:activity_import_codex_v1:{}", &sha[..32]);
+    let marker = codex_marker(engine, sha)?;
     if engine.get_meta(&marker)?.is_some() {
         return Ok(json!({ "imported": false, "reason": "already imported" }));
     }
@@ -238,9 +257,16 @@ fn import_codex<R: std::io::Read>(
     if fold.version != Some(1) {
         fail!("unsupported", "only version 1 of the Codex cache is known");
     }
+    if fold.cells.is_empty() && fold.skipped > 0 {
+        fail!("invalid", "the Codex cache has no recoverable records");
+    }
     let iso = |ms: u64| crate::usage::iso(ms as i64);
-    let newest = fold.cells.keys().map(|k| k.0).max().unwrap_or(0);
-    let read_at = iso((newest + 1) * HOUR_MS);
+    let read_at = iso(fold
+        .cells
+        .keys()
+        .map(|k| (k.0 + 1) * HOUR_MS)
+        .max()
+        .unwrap_or_else(crate::engine::now_ms));
     let mut reports = Vec::new();
     let mut cells = Vec::new();
     for ((hour, session, model), t) in &fold.cells {

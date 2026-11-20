@@ -654,6 +654,16 @@ fn closed_through<T: ReadableTable<&'static [u8], ()>>(table: &T) -> Result<Opti
 
 pub struct ActivityProjector;
 
+const RECOVERY_EPOCH: &str = "activity_recovery_epoch";
+
+/// Recovery receipts must be renewed after rebuilding the activity projection.
+pub fn recovery_epoch(engine: &Engine) -> Result<u64> {
+    Ok(engine
+        .get_meta(RECOVERY_EPOCH)?
+        .and_then(|epoch| epoch.parse().ok())
+        .unwrap_or(0))
+}
+
 impl Projector for ActivityProjector {
     fn name(&self) -> &'static str {
         "activity"
@@ -696,6 +706,10 @@ impl Projector for ActivityProjector {
         Ok(Vec::new())
     }
     fn reset(&self, txn: &WriteTransaction) -> Result<()> {
+        let epoch: u64 = db::get_meta(txn, RECOVERY_EPOCH)?
+            .and_then(|epoch| epoch.parse().ok())
+            .unwrap_or(0);
+        db::set_meta(txn, RECOVERY_EPOCH, &epoch.saturating_add(1).to_string())?;
         for def in [
             ACT_DICT,
             ACT_HOUR,
