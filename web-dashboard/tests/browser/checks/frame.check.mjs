@@ -62,9 +62,13 @@ const railPose = () => {
 		const range = document.createRange();
 		range.selectNodeContents(n);
 		// A Range rect is the font's box (20 px tall for a 16 px line), which reaches above both the CSS line box
-		// and the painted glyphs; clip it to the inline element's own box, the line the page actually lays out.
-		const inline = n.parentElement.getBoundingClientRect();
-		for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) texts.push({ x: Math.max(r.x, inline.x), y: Math.max(r.y, inline.y), r: Math.min(r.right, inline.right), text: n.textContent.trim().slice(0, 24) });
+		// and the painted glyphs. Trim only that half-leading from the top, from the computed line height; never
+		// clip to the parent's box, so text that spills sideways out of its element into a corner still counts.
+		const lh = parseFloat(getComputedStyle(n.parentElement).lineHeight);
+		for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) {
+			const trim = lh > 0 && r.height > lh ? (r.height - lh) / 2 : 0;
+			texts.push({ x: r.x, y: r.y + trim, r: r.right, text: n.textContent.trim().slice(0, 24) });
+		}
 	}
 	return {
 		chrome: document.documentElement.dataset.chrome, side: document.documentElement.dataset.railSide || '', w: innerWidth, h: innerHeight,
