@@ -947,7 +947,12 @@ fn fed_view(reply: &ServiceReply, if_none_match: Option<&str>) -> Reply {
 }
 
 /// A fed view whose bytes and ETag a local owner wrote.
-fn fed_bytes(body: Vec<u8>, etag: &str, view: &str, if_none_match: Option<&str>) -> Reply {
+pub(super) fn fed_bytes(
+    body: Vec<u8>,
+    etag: &str,
+    view: &str,
+    if_none_match: Option<&str>,
+) -> Reply {
     if !matches!(view, "status@1" | "scoreboard@1" | "home@3" | "dashboard@1")
         || !etag.starts_with("W/\"")
         || !etag.ends_with('"')

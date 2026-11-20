@@ -11,7 +11,9 @@ import { startRustBuilder } from './rust-home-builder.mjs';
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
-	const cut = !!ctx.args.cut && ctx.args.cut !== '0';
+	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
+	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
+	const cut = rustHome || (!!ctx.args.cut && ctx.args.cut !== '0');
 	const cli = cut
 		? path.join(root, 'dist', 'native', process.platform === 'win32' ? 'ai-account-center.exe' : 'ai-account-center')
 		: path.join(root, 'dist', 'ccs.js');
@@ -27,8 +29,6 @@ export default (ctx) => {
 	// R2: `--set rustStatusFed=1` runs the server with the Rust service on and the Status group on
 	// (AAC_RUST_GROUP_STATUS=on): the server's own GET /api/status is answered from fed generations. Off by default, and
 	// then explicitly off.
-	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
-	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
 	// R4: `--set rustOwned=1` implies rustStatusFed and also turns the store host and the Scoreboard group on
 	// (AAC_RUST_STORE=on, AAC_RUST_GROUP_SCOREBOARD=on): the Rust service reads the kit's fixture reports folder itself
 	// (owned Status readers, runs ingest, readers-check rows in that temporary folder) and answers both routes. Off by
@@ -96,10 +96,10 @@ export default (ctx) => {
 				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),
 				...(cut ? {
 					CCS_DIR: path.join(s.home, '.ccs'), AAC_AGENT_VERBS: 'off', AAC_AGENT_TRANSPORT: 'off',
-					AAC_STORE_SHARE_BACKUP_DIR: 'off', SSH_AUTH_SOCK: ''
-				} : { ...(rustHome
-					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
-					: { AAC_RUST_SERVICE: rustStatusFed ? 'on' : 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off', ...(rustStatusFed ? { AAC_RUST_SERVICE_BINARY: rustBinary } : {}) }),
+					AAC_STORE_SHARE_BACKUP_DIR: 'off', SSH_AUTH_SOCK: '',
+					...(rustHome ? { AAC_TS_SIDECAR: 'off' } : {})
+				} : { AAC_RUST_SERVICE: rustStatusFed ? 'on' : 'off',
+				...(rustStatusFed ? { AAC_RUST_SERVICE_BINARY: rustBinary } : {}),
 				AAC_RUST_GROUP_STATUS: rustStatusFed ? 'on' : 'off',
 				AAC_RUST_STORE: rustOwned ? 'on' : 'off',
 				AAC_RUST_GROUP_SCOREBOARD: rustOwned ? 'on' : 'off' }) }

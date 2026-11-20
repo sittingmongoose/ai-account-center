@@ -170,14 +170,6 @@ for (const [program, args] of [
   ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE)
     ? [['node', ['tests/spec/dashboard-read-parity.mjs']]]
     : []),
-  // R1: Home fed against today's handler, end to end on the real binary, under Node.
-  [
-    'node',
-    [
-      'tests/spec/home-read-parity.mjs',
-      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
-    ],
-  ],
   // R2: Status fed against today's handler, end to end on the real binary and the real owner, under Node; and
   // the Status fuzz (TS, the envelope read and the fed path) on a short run (the full run: 4 seeds x 400).
   [

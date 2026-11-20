@@ -662,19 +662,12 @@ pub(crate) async fn run_public_at(
     } else {
         (None, None)
     };
-    // The worker's retained Home handler has no Open tracker of its own in this composition: the
-    // front door's public owner rides each `/api/views/home` forward (see `compose::Backend`).
-    if let (Some(backend), Some(profiles)) = (&backend, &profiles) {
-        let open = profiles.open_owner();
-        backend.attach_open(Arc::new(move || open.open_pairs()));
-    }
     let mut api = Router::new();
     if let Some(host) = &owner_host {
         if enabled && let Some(settings) = &native_settings {
             host.register("settings", settings.router(Router::new()));
         }
-        if enabled
-            && cut
+        if cut
             && native_collection
             && groups.is_some_and(|groups| groups.home)
             && let Some(profiles) = &profiles

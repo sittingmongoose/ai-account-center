@@ -38,7 +38,7 @@ import {
 import { sendRustView } from '../rust-view-reply';
 import { MACHINE_IDS, MACHINE_LABELS } from '../services/dashboard-hosts';
 import { serverZoneFacts } from '../views/home-zone';
-import { BootFeeds, ensure, type Generation } from '../views/home-feed';
+import { BootFeeds, ensure, type Generation } from '../views/feed-publication';
 import type { StatusInputs } from './status-view';
 
 const ROUTE = '/api/status';

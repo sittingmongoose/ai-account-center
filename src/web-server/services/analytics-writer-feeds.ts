@@ -10,7 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { RustService } from '../rust-service';
-import { BootFeeds, ensure } from '../views/home-feed';
+import { BootFeeds, ensure } from '../views/feed-publication';
 import { getCcsDir } from '../../utils/config-manager';
 import { rustAnalyticsWritersOn } from '../rust-service-groups';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';

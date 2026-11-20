@@ -31,8 +31,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
-/// The page's context header, as `home-feed.ts` names it.
-const CONTEXT_HEADER: &str = "x-aac-home-context";
+use crate::home_fed::CONTEXT_HEADER;
 /// The one sentence every unreadable dashboard read answers.
 const UNREADABLE: &str = "Account usage could not be read safely.";
 const INVALID_QUERY: &str = "Select a valid desktop platform and refresh value.";
@@ -138,15 +137,14 @@ impl Home {
         let Some((platform, refresh)) = query(&request) else {
             return super::plain(400, INVALID_QUERY);
         };
-        let head = request.method() == Method::HEAD;
         // The page's context is passed through as the front door wrote it; the fed answer decodes
         // and validates it, and an unreadable one leaves the answer without a view.
         let page = header(request.headers(), CONTEXT_HEADER).map(str::to_owned);
-        let reply = self
-            .read(access, platform, refresh, page.as_deref())
+        let validators = header(request.headers(), "if-none-match");
+        self.read(access, platform, refresh, page.as_deref(), validators)
             .await
-            .unwrap_or_else(|| set_no_store(super::plain(500, UNREADABLE)));
-        truncate(reply, head)
+            .map(set_no_store)
+            .unwrap_or_else(|| set_no_store(super::plain(500, UNREADABLE)))
     }
 
     /// The answer: the producer's three generations, the fed view, or the legacy shape with no view.
@@ -157,6 +155,7 @@ impl Home {
         platform: &'static str,
         refresh: bool,
         page: Option<&str>,
+        validators: Option<&str>,
     ) -> Option<Reply> {
         let secure = access.secure_transport;
         let host = self.host.upgrade()?;
@@ -183,20 +182,13 @@ impl Home {
             platform: platform.into(),
             secure,
             dashboard,
-            opens: Value::Array(
-                self.open
-                    .operations()
-                    .for_scope(&self.root.to_string_lossy())
-                    .into_iter()
-                    .map(|(id, operation)| json!([id, operation.to_json()]))
-                    .collect(),
-            ),
+            opens: self.open.open_pairs(),
             antigravity,
         };
         let produced = self.producer.produce(&self.feeds, &inputs).ok();
         if let Some(produced) = produced
             && let Some(feed) = feed_header(platform, secure, now, &updated, &produced)
-            && let Some(answer) = self.fed(&feed, page).await
+            && let Some(answer) = self.fed(&feed, page, validators).await
         {
             return Some(answer);
         }
@@ -232,10 +224,11 @@ impl Home {
         Some((dashboard, updated))
     }
 
-    async fn fed(&self, feed: &str, page: Option<&str>) -> Option<Reply> {
+    async fn fed(&self, feed: &str, page: Option<&str>, validators: Option<&str>) -> Option<Reply> {
         let feeds = self.feeds.clone();
         let root = self.root.clone();
         let feed = feed.to_owned();
+        let has_context = page.is_some();
         let page = page.map(str::to_owned);
         let answer = tokio::task::spawn_blocking(move || {
             crate::home_fed::answer(&feeds, &root, &feed, page.as_deref())
@@ -243,11 +236,18 @@ impl Home {
         .await
         .ok()?
         .ok()?;
-        // The service's own reply carries the `home@3` view and the ETag identity; Home answers
-        // JSON with the same no-store the TS route set.
-        let mut reply = super::json_bytes(200, answer.bytes);
-        set_header(&mut reply, "cache-control", "no-store");
-        Some(reply)
+        if !has_context {
+            return Some(super::json_bytes(200, answer.bytes));
+        }
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(&answer.identity).into();
+        let etag = format!("W/\"{}\"", crate::view_reply::hex_digest(&digest));
+        Some(super::native_group::fed_bytes(
+            answer.bytes,
+            &etag,
+            "home@3",
+            validators,
+        ))
     }
 }
 
@@ -354,12 +354,5 @@ fn legacy(dashboard: &[u8], inputs: &Inputs, root: &std::path::Path) -> Option<V
 
 fn set_no_store(mut reply: Reply) -> Reply {
     set_header(&mut reply, "cache-control", "no-store");
-    reply
-}
-
-fn truncate(mut reply: Reply, head: bool) -> Reply {
-    if head {
-        *reply.body_mut() = axum::body::Body::empty();
-    }
     reply
 }

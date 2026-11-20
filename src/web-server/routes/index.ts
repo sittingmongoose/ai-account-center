@@ -30,7 +30,6 @@ import accountAnalyticsRoutes from './account-analytics-routes';
 import accountVisibilityRoutes from './account-visibility-routes';
 import accountLifecycleRoutes, { createAccountLifecycleRouter } from './account-lifecycle-routes';
 import authRoutes from './auth-routes';
-import homeViewRoutes from './home-view-routes';
 import barRoutes from './bar-routes';
 import { storeRoutes, usageRoutes } from './store-routes';
 import scoreboardRoutes from './scoreboard-routes';
@@ -104,7 +103,6 @@ if (process.env.AAC_CUT_PUBLIC_LIFECYCLE !== '1') {
   apiRoutes.use('/accounts', createAccountLifecycleRouter({ recheckOnly: true }));
 }
 apiRoutes.use('/auth', authRoutes);
-apiRoutes.use('/views', homeViewRoutes);
 apiRoutes.use('/bar', barRoutes);
 // The history store (docs/store.md 8.1): read-only, sessions and paired devices.
 apiRoutes.use('/store', storeRoutes);
