@@ -140,7 +140,6 @@ for (const [program, args] of [
   ],
   ...[
     'read-view-parity',
-    'read-http-parity',
     'account-read-parity',
     'home-number-admission',
   ].map((name) => [
@@ -162,14 +161,6 @@ for (const [program, args] of [
   ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE)
     ? [['node', ['tests/spec/dashboard-read-parity.mjs']]]
     : []),
-  // R1: Home fed against today's handler, end to end on the real binary, under Node.
-  [
-    'node',
-    [
-      'tests/spec/home-read-parity.mjs',
-      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
-    ],
-  ],
   // R3: the store host's exit gate (both handles, kill drills, fallback, restore), under Node.
   [
     'node',

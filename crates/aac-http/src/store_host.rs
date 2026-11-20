@@ -11,21 +11,15 @@
 use aac_store::engine::Engine;
 use aac_store::ops::{self, Slot};
 use aac_views::decline::Decline;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex, mpsc};
-
-pub(crate) async fn jobs(host: Arc<StoreHost>, stop: Arc<std::sync::atomic::AtomicBool>) {
-    use std::{sync::atomic::Ordering, time::Duration};
-    tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
-    while !stop.load(Ordering::Acquire) {
-        let pass = Arc::clone(&host);
-        let _ =
-            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
-        tokio::time::sleep(Duration::from_millis(MAINTAIN_EVERY_MS)).await;
-    }
-}
+use std::sync::{
+    Arc, Condvar, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
+use std::time::Duration;
 
 /// Store calls in flight at most (L1's store pool size). Unlike the read pools, a full pool
 /// queues: the NAPI binding queues on libuv's pool too, and a producer must not lose a
@@ -38,8 +32,8 @@ const MINUTE_MS: u64 = 60_000;
 const DAY_MS: u64 = 86_400_000;
 /// TS's maintenance cadence (`store-service.ts`): first pass minutes after start, then
 /// every 15 minutes; backup daily; verify, compaction and the redb snapshot weekly.
-pub(crate) const FIRST_PASS_MS: u64 = 3 * MINUTE_MS;
-pub(crate) const MAINTAIN_EVERY_MS: u64 = 15 * MINUTE_MS;
+const FIRST_PASS_MS: u64 = 3 * MINUTE_MS;
+const MAINTAIN_EVERY_MS: u64 = 15 * MINUTE_MS;
 const BACKUP_EVERY_MS: u64 = DAY_MS;
 const REDB_BACKUP_EVERY_MS: u64 = 7 * DAY_MS;
 const VERIFY_EVERY_MS: u64 = 7 * DAY_MS;
@@ -47,7 +41,7 @@ const VERIFY_EVERY_MS: u64 = 7 * DAY_MS;
 /// The boot's store config, resolved once by TS at start: the open arguments it would have
 /// given the NAPI module, plus the backup job's share inputs. Absent in the boot JSON, the
 /// store stays in the TS process exactly as before.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreBoot {
     /// The Node module's compiled identity: checked before opening or migrating any files.
@@ -75,6 +69,34 @@ pub struct StoreBoot {
 }
 
 impl StoreBoot {
+    /// Use the existing store settings when the public listener hosts the engine itself.
+    pub(crate) fn for_public(root: &std::path::Path) -> Option<Self> {
+        if std::env::var("AAC_RUST_STORE").as_deref() == Ok("off") || disabled() {
+            return None;
+        }
+        let positive = |name| {
+            let value = std::env::var(name).ok()?.trim().parse::<f64>().ok()?;
+            (value.is_finite() && value > 0.0).then_some(value.round() as u64)
+        };
+        let share = std::env::var("AAC_STORE_SHARE_BACKUP_DIR").unwrap_or_default();
+        let share = share.trim();
+        let share_backup_off = share.eq_ignore_ascii_case("off");
+        Some(Self {
+            binding_identity: aac_store::build_identity(),
+            dir: root.join("store"),
+            retention_days: 0,
+            cache_bytes: positive("AAC_STORE_CACHE_MB")
+                .and_then(|mb| usize::try_from(mb).ok()?.checked_mul(1024 * 1024)),
+            activity_retention_days: positive("AAC_ANALYTICS_RETENTION_DAYS"),
+            snapshot_directory: crate::registered::snapshot_settings(root)
+                .map(|settings| settings.directory.into()),
+            share_backup_dir: (!share.is_empty() && !share_backup_off)
+                .then(|| std::path::absolute(share).ok())
+                .flatten(),
+            share_backup_off,
+        })
+    }
+
     fn open_args(&self) -> String {
         let mut args = json!({
             "dir": self.dir.to_string_lossy(),
@@ -113,6 +135,11 @@ impl StoreBoot {
         }
         Some(project.join("store-backups").join(instance_id))
     }
+}
+
+/// The explicit store feature switch, independently of its host.
+pub(crate) fn disabled() -> bool {
+    std::env::var("AAC_STORE").is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"))
 }
 
 /// The job loop's record, readable through the `hostJobs` method (never in `status`, whose
@@ -405,9 +432,26 @@ impl StoreHost {
     /// `/api/store/status` from the Engine in process (R3): the writer's own `status`,
     /// admitted by the same shape check the snapshot path uses. No engine, no answer.
     pub(crate) fn status_value(&self) -> Result<Value, Decline> {
-        let engine = self.engine().ok_or(Decline::Unsupported)?;
+        self.wait_ready();
+        let Some(engine) = self.engine() else {
+            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let error = state.boot_error.as_deref().ok_or(Decline::Unsupported)?;
+            let reason = error.split_once(": ").map_or("unknown", |(code, _)| code);
+            return Ok(json!({"state": "unavailable", "reason": reason}));
+        };
         let status = ops::call(&engine, "status", "{}").map_err(|_| Decline::Internal)?;
         aac_store::read_status::from_writer(&status).ok_or(Decline::Unsupported)
+    }
+
+    /// Run the same periodic maintenance and backups for either transport.
+    pub(crate) async fn jobs(self: Arc<Self>, stop: Arc<AtomicBool>) {
+        tokio::time::sleep(Duration::from_millis(FIRST_PASS_MS)).await;
+        while !stop.load(Ordering::Acquire) {
+            let host = Arc::clone(&self);
+            let _ = tokio::task::spawn_blocking(move || host.job_pass(aac_store::engine::now_ms()))
+                .await;
+            tokio::time::sleep(Duration::from_millis(MAINTAIN_EVERY_MS)).await;
+        }
     }
 
     /// One maintenance pass, TS's loop body with its intervals and meta keys: maintain

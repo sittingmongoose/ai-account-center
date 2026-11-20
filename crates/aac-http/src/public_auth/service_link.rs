@@ -153,6 +153,12 @@ impl ServiceLink {
             super::lifecycle_host::ENDPOINT | super::lifecycle_host::COLLECTION_ENDPOINT
         ) {
             Duration::from_secs(150)
+        } else if matches!(
+            uri.split_once('?').map_or(uri, |(path, _)| path),
+            "/api/usage/history" | "/api/usage/at" | "/api/usage/burn"
+        ) {
+            // These reads can wait on the store's queue. Keep the old worker hop's limit.
+            Duration::from_secs(45)
         } else {
             DEADLINE
         };

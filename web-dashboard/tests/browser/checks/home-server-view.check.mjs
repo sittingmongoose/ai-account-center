@@ -1,6 +1,5 @@
-// D7: Home built by the Rust server (GET /api/views/home, aac-views::home) against the page's own view-model.mjs, in
-// this browser. Run with the switch off (default) and on (`--set rustHome=1`, the binary in dist/native/aac-http; R1:
-// add `--set rustHomeFed=1` and the real route is answered from fed generations):
+// The native Home route and the browser's view-model.mjs render the same inputs.
+// Use `--set rustHome=1` for the worker-free route and the separate fixture renderer.
 //   - switch: off, the dashboard offers nothing and the route is the unknown-endpoint 404; on, it is offered and the
 //     real front door answers it with a view the real Rust service built.
 //   - real wiring (on): a reload of a page that was offered the view reads only /api/views/home; the view is drawn,
@@ -13,7 +12,8 @@ import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 const NOW = Math.floor(Date.now() / 60_000) * 60_000;
 
 /** The config derives rustHome from rustHomeFed; the checks read the same implication, not the raw arg. */
-const rustHomeOn = (t) => !!(t.args.rustHome || t.args.rustHomeFed);
+const rustHomeOn = (t) => [t.args.rustHome, t.args.rustHomeFed, t.args.cut].some((value) => !!value && value !== '0');
+const fixtureBuilderOn = (t) => [t.args.rustHome, t.args.rustHomeFed].some((value) => !!value && value !== '0');
 
 /** The next answer of GET /api/views/home, with the context header the page sent. */
 function nextHomeView(t) {
@@ -96,8 +96,7 @@ export const tests = {
 		await t.page.reload();
 		const r = await reply;
 		await t.check('the real route answers 200 with a Rust view', r.status === 200 && r.body?.view?.version === 3, `${r.status} view=${JSON.stringify(r.body?.view)?.slice(0, 120)}`, { hard: true });
-		// R1 (`--set rustHomeFed=1`): the fed path answered (its revalidated-view ETag), not D7's handler (Express's).
-		if (t.args.rustHomeFed) await t.check('the fed path answered (its SHA-256 ETag)', /^W\/"[a-f0-9]{64}"$/.test(r.etag ?? ''), String(r.etag));
+		await t.check('the native view has a SHA-256 ETag', /^W\/"[a-f0-9]{64}"$/.test(r.etag ?? ''), String(r.etag));
 		const js = await jsView(t, r.body, r.context);
 		await t.check('this browser\'s view-model.mjs builds the same JSON', js === JSON.stringify(r.body.view), firstDifference(js, JSON.stringify(r.body.view)));
 		await t.until('Home is drawn', () => !!document.querySelector('.route:not([hidden]) .home'), null, { timeout: 30000, hard: true });
@@ -105,12 +104,14 @@ export const tests = {
 	},
 
 	async 'home server view: fixture, desktop and phone'(t) {
-		if (!rustHomeOn(t)) { await t.check('switch off: the kit builds no server view (run with --set rustHome=1 or rustHomeFed=1)', true); return; }
+		if (!fixtureBuilderOn(t)) { await t.check('the fixture builder runs with --set rustHome=1', true); return; }
 		for (const [label, size] of [['desktop 1440', { width: 1440, height: 900, mobile: false }], ['phone 390', { width: 390, height: 844, mobile: true }]]) {
 			const r = await homeIn(t, { ...size, offer: true });
 			await t.check(`${label}: the kit's Rust service built the view`, r?.status === 200 && r.body?.view?.version === 3, JSON.stringify(t.app.rustHome()), { hard: true });
 			const js = await jsView(t, r.body, r.context);
 			await t.check(`${label}: this browser's view-model.mjs builds the same JSON`, js === JSON.stringify(r.body.view), firstDifference(js, JSON.stringify(r.body.view)));
+			const gravity = r.body.view.sections.find((section) => section.id === 'antigravity');
+			await t.equal(`${label}: Home renders only the T3 quota pools`, gravity.columns.map((column) => column.key), ['cli-gemini-5h', 'cli-gemini-weekly', 'cli-3p-5h', 'cli-3p-weekly']);
 			const rustDom = await homeDom(t);
 			const rustPixels = await t.page.screenshot({ fullPage: true });
 			await t.shot(`rust-${label.replace(' ', '-')}`, `Home drawn from the Rust view (${label}, fixture data)`);

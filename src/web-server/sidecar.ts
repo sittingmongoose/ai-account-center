@@ -3,12 +3,10 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { ConfigError } from '../errors/error-types';
-import { loadNativeStore } from '../store/native-loader';
 import { getCcsDir } from '../utils/config-manager';
 import { hubRows, publishHubCache, type RenderedHubRows } from './compose-server';
 import { startServer } from './index';
 import { rustGroupOn } from './rust-service-groups';
-import { registerRustStoreConnection, setRustStoreHosted } from './rust-service-transport';
 import type { ClaudeDashboardPlatform } from './services/account-dashboard-types';
 import { setupGracefulShutdown } from './shutdown';
 
@@ -26,29 +24,6 @@ async function main(): Promise<void> {
     throw new ConfigError('Invalid dashboard sidecar boot');
   const ccs = getCcsDir();
   await mkdir(ccs, { recursive: true, mode: 0o700 });
-  // Windows has one store engine in the Rust listener. The worker uses the same
-  // bounded store protocol on the private per-boot loopback channel.
-  const storeFeed = process.env.AAC_CUT_STORE_FEED;
-  if (process.platform === 'win32' && storeFeed) {
-    const port = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(storeFeed)?.[1];
-    if (!port || Number(port) < 1 || Number(port) > 65535)
-      throw new ConfigError('Invalid dashboard store feed');
-    setRustStoreHosted(ccs, true);
-    let build: { commit: string; storeSchema: number } | undefined;
-    try {
-      const identity = loadNativeStore().module?.buildIdentity?.();
-      if (identity) build = JSON.parse(identity);
-    } catch {
-      // The hosted handle checks identity before it opens.
-    }
-    registerRustStoreConnection(
-      ccs,
-      { socketPath: `tcp:127.0.0.1:${port}`, secret: proof, bootId: proof.slice(0, 24), build },
-      new Set(),
-      {},
-      true
-    );
-  }
   const directory = process.env.AAC_CUT_HUB_DIRECTORY;
   if (!directory || !path.isAbsolute(directory))
     throw new ConfigError('Invalid dashboard sidecar cache directory');

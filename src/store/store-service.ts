@@ -19,7 +19,7 @@ import {
   rustStoreAttached,
   rustStoreHosted,
 } from '../web-server/rust-service-transport';
-import { SocketStoreHandle } from './store-host-client';
+import { DashboardStoreHandle, SocketStoreHandle } from './store-host-client';
 import type { StoreObservation } from './usage-observations';
 import type {
   ActivityRange,
@@ -403,6 +403,21 @@ export function openAacStore(
     // R3: with the store hosted, this process never opens it through NAPI (design 1.3).
     // Test doubles (`options.load`) and other roots keep the in-process open below.
     const root = options.ccsDir ?? getCcsDir();
+    const cut = env.AAC_RUST_CUT_WORKER === '1' && env.AAC_CUT_PUBLIC_OWNERS === '1';
+    if (!options.load && cut && process.platform === 'win32') {
+      if (root !== getCcsDir()) return openFailed(new Error('lock_held: the store root differs'));
+      const handle = new DashboardStoreHandle();
+      try {
+        await handle.call('open', openArgs);
+        state = { store: new AacStore(handle, directory), reason: null, hosted: true };
+      } catch (error) {
+        if (storeErrorCode(error) === 'service_down') {
+          // The dashboard may still be starting. Resolve the host on every call.
+          state = { store: new AacStore(handle, directory), reason: null, hosted: true };
+        } else return openFailed(error);
+      }
+      return state;
+    }
     if (!options.load && rustStoreHosted(root)) {
       if (rustStoreAttached(root)) {
         // Another front door owns the service and its store, as a second NAPI open read.
@@ -412,6 +427,7 @@ export function openAacStore(
       const handle = new SocketStoreHandle(root, {
         env,
         load: options.hostLoad,
+        fallback: !cut,
         onFallback: () => {
           fellBack = true;
           if (state.store) state = { ...state, hosted: false };
@@ -447,6 +463,10 @@ export function openAacStore(
           return openFailed(error);
         }
       }
+      return state;
+    }
+    if (!options.load && cut) {
+      state = { store: null, reason: 'disabled' };
       return state;
     }
     const loaded = (options.load ?? (() => loadNativeStore({ env })))();

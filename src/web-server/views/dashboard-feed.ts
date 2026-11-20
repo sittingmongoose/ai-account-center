@@ -3,13 +3,8 @@ import type { Request, Response } from 'express';
 import { publishCollectionFeed } from '../rust-service-transport';
 import type { RustService } from '../rust-service';
 import type { AccountDashboard } from '../services/account-dashboard-types';
-import {
-  dashboardPublication,
-  ensureDashboardFeed,
-  feedsOf,
-  nextGeneration,
-  passFaithful,
-} from './home-feed';
+import { dashboardPublication, ensureDashboardFeed, passFaithful } from './dashboard-publication';
+import { feedsOf, nextGeneration } from './feed-publication';
 
 const ROUTE = '/api/accounts/dashboard';
 

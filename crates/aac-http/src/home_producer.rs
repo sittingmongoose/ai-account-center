@@ -1,9 +1,6 @@
-//! G17: the Home feed producer, in Rust. The production work `views/home-feed.ts` (`answerHomeFed`) does today
-//! — the dashboard's change-key text, its facts (the `localeCompare` ranks of `homeSortWords` and the
-//! `Date.parse` epochs of `resetEpochs`), the Antigravity ISO-only envelope, the Opens text, and the per-source
-//! change keys and generations — computed here instead of in TypeScript. Lane I's collection feeds it in
-//! process once it owns the dashboard read (G2); `PUT /internal/home-inputs` is the transitional socket form,
-//! and the TS push path stays available until the cut.
+//! G17: Home's feed producer. It prepares dashboard sort and reset facts, the Antigravity
+//! inventory envelope, and the Open progress from the dashboard's native owners. The
+//! private `PUT /internal/home-inputs` entry still serves the parity fixtures.
 //!
 //! Every output is the very text the TS producer writes (`JSON.stringify`), or a named decline:
 //! - sort words: printable ASCII only (`aac_num::intl::ascii_compare`, proven against Node's `localeCompare`);

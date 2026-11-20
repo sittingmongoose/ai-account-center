@@ -1,23 +1,10 @@
-/**
- * R1 (Home, fed): the front door's zone check. On the fed path Rust writes every clock and day word from the page's
- * own zone offsets (`HomeContext.zone`), so no server word crosses per request. What D7's envelope still gave is a
- * guard: the server engine's words had to agree with the page's offsets, so a page whose facts disagree with its
- * zone (or an engine whose zone data differs) never got a view drawn in another zone. This keeps that guard as a
- * fact computed once per zone and day: the offsets this engine finds for the page's zone over the page's own window
- * (view-model.mjs `homeZoneFacts`, the same algorithm and constants) must be exactly the page's, or the request
- * declines `zone` and the original handler answers.
- */
-import type { HomeContext, HomeZone } from './home-context';
+/** Display-zone offsets for the retained Status feed. */
+import type { HomeZone } from './home-context';
 
 const ZONE_DAY = 86_400_000;
 const ZONE_STEP = 6 * 3_600_000;
-/** view-model.mjs `HOME_ZONE_DAYS`; tests/unit/web-server/home-feed.test.ts binds the two. */
+/** Matches view-model.mjs `HOME_ZONE_DAYS`. */
 export const HOME_ZONE_DAYS = { past: 120, future: 400 } as const;
-/** Zone-days kept (oldest first out). */
-const KEEP = 32;
-
-const known = new Map<string, string | null>();
-
 /** view-model.mjs `homeZoneFacts(timeZone, now)` with this engine's `Intl`, or null when it cannot read the zone. */
 export function serverZoneFacts(timeZone: string, now: number): HomeZone | null {
   let parts: Intl.DateTimeFormat;
@@ -69,26 +56,4 @@ export function serverZoneFacts(timeZone: string, now: number): HomeZone | null 
     t = hi * 1000;
   }
   return { from, to, offsets };
-}
-
-/** True when the page's zone facts are exactly the ones this engine computes for its zone and day (cached). */
-export function homeZoneAgrees(ctx: HomeContext): boolean {
-  const key = `${ctx.timeZone}|${Math.floor(ctx.now / ZONE_DAY)}`;
-  let facts = known.get(key);
-  if (facts === undefined) {
-    let computed: HomeZone | null = null;
-    try {
-      computed = serverZoneFacts(ctx.timeZone, ctx.now);
-    } catch {
-      computed = null;
-    }
-    facts = computed ? JSON.stringify(computed) : null;
-    known.set(key, facts);
-    while (known.size > KEEP) {
-      const oldest = known.keys().next().value;
-      if (oldest === undefined) break;
-      known.delete(oldest);
-    }
-  }
-  return facts !== null && facts === JSON.stringify(ctx.zone);
 }

@@ -12,7 +12,9 @@ import { startRustBuilder } from './rust-home-builder.mjs';
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
 	const rustOwned = !!ctx.args.rustOwned && ctx.args.rustOwned !== '0';
-	const cut = rustOwned || (!!ctx.args.cut && ctx.args.cut !== '0');
+	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
+	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
+	const cut = rustHome || rustOwned || (!!ctx.args.cut && ctx.args.cut !== '0');
 	const cli = cut
 		? path.join(root, 'dist', 'native', process.platform === 'win32' ? 'ai-account-center.exe' : 'ai-account-center')
 		: path.join(root, 'dist', 'ccs.js');
@@ -20,13 +22,6 @@ export default (ctx) => {
 		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
 	}
 	if (ctx.fleet) throw new Error('--host: the dashboard listens on 127.0.0.1 and setup is loopback-only, so a browser on another machine can\'t use it. Run from a checkout on that machine.');
-	// D7 switch: `--set rustHome=1` runs the server with the Rust service and its Home view on (AAC_RUST_SERVICE=on,
-	// AAC_RUST_HOME_VIEW=on) and the binary in dist/native/aac-http, or `--set rustBinary=<path>`. Off by default, and
-	// then explicitly off, so a shell variable cannot turn it on unseen.
-	// R1: `--set rustHomeFed=1` (with rustHome) also turns the Home group on (AAC_RUST_GROUP_HOME=on): the server's own
-	// GET /api/views/home is answered from fed generations. Off by default, and then explicitly off.
-	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
-	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
 	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
 	if (rustHome && !fs.existsSync(rustBinary)) throw new Error(`rustHome: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
 	let builder = null;
@@ -73,7 +68,7 @@ export default (ctx) => {
 				const { writeScoreboardFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'scoreboard-fixture.mjs')).href);
 				writeScoreboardFixture(reports);
 			}
-			// D7 (`--set rustHome=1`): the kit's own Rust service builds Home from the data checks stub in the page
+			// With rustHome, the kit's own Rust service builds Home from the data checks stub in the page
 			// (rust-home-builder.mjs); the server under test never sees that data.
 			if (rustHome) builder = await startRustBuilder(rustBinary, root);
 			return { home, reports, port: +ctx.args.port || (await ctx.freePort()) };
@@ -92,7 +87,7 @@ export default (ctx) => {
 					...(rustOwned ? {
 						AAC_TS_SIDECAR: 'off', AAC_RUST_CUT_NATIVE_ROUTES: 'off',
 						AAC_RUST_GROUP_COLLECTION: 'off', AAC_RUST_GROUP_RENEWAL: 'off'
-					} : {})
+					} : rustHome ? { AAC_TS_SIDECAR: 'off' } : {})
 				} : { ...(rustHome
 					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
 					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off' }),

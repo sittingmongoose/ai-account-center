@@ -32,15 +32,7 @@ const replacements = {
   },
   '/store/store-service.js': {
     openAacStore: async () => ({ store: null, reason: 'disabled' }),
-    getAacStore: () => ({
-      status: async () => fixture.storeStatus,
-      seriesPoints: async () => fixture.seriesPoints,
-      seriesList: async () => [],
-      usageAt: async () => fixture.usageAt,
-      burnLong: async () => [],
-      periods: async () => [],
-    }),
-    aacStoreState: () => ({ state: 'unavailable', reason: 'disabled' }),
+    getAacStore: () => null,
   },
 };
 

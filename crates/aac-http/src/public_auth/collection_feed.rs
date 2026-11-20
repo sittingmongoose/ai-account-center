@@ -23,7 +23,7 @@ struct Source {
     #[cfg(unix)]
     adopted: Arc<OnceLock<super::service_link::ServiceLink>>,
     #[cfg(windows)]
-    store_host: Option<Arc<super::owner_host::OwnerHost>>,
+    store: Arc<OnceLock<std::sync::Weak<super::owner_host::OwnerHost>>>,
 }
 
 pub(super) struct CollectionFeed {
@@ -33,10 +33,7 @@ pub(super) struct CollectionFeed {
 }
 
 impl CollectionFeed {
-    pub(super) async fn start(
-        proof: &str,
-        #[cfg(windows)] store_host: Option<Arc<super::owner_host::OwnerHost>>,
-    ) -> io::Result<Self> {
+    pub(super) async fn start(proof: &str) -> io::Result<Self> {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
         let source = Source {
@@ -45,13 +42,13 @@ impl CollectionFeed {
             #[cfg(unix)]
             adopted: Arc::default(),
             #[cfg(windows)]
-            store_host,
+            store: Arc::default(),
         };
         let router = Router::new().route("/dashboard", get(dashboard));
         #[cfg(windows)]
         let router = router
             .route("/sample", get(sample))
-            .route("/internal/store/{method}", axum::routing::post(store));
+            .route("/store/{method}", axum::routing::post(store_call));
         let router = router.with_state(source.clone());
         let task = tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
@@ -75,64 +72,11 @@ impl CollectionFeed {
     pub(super) fn set_adopted(&self, link: super::service_link::ServiceLink) {
         let _ = self.source.adopted.set(link);
     }
-}
 
-/// The retained worker's store adapter shares the Windows listener's existing Engine.
-#[cfg(windows)]
-async fn store(
-    State(source): State<Source>,
-    axum::extract::Path(method): axum::extract::Path<String>,
-    request: axum::extract::Request,
-) -> Response {
-    use axum::{Json, body::to_bytes};
-    use serde_json::json;
-    let allowed = request
-        .headers()
-        .get("x-aac-boot-secret")
-        .is_some_and(|proof| bool::from(source.proof.as_bytes().ct_eq(proof.as_bytes())));
-    if !allowed {
-        return StatusCode::UNAUTHORIZED.into_response();
+    #[cfg(windows)]
+    pub(super) fn set_store(&self, host: &Arc<super::owner_host::OwnerHost>) {
+        let _ = self.source.store.set(Arc::downgrade(host));
     }
-    let error = |message: &str| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":message})),
-        )
-            .into_response()
-    };
-    let Some(host) = &source.store_host else {
-        return error("service_down: the store host is not available");
-    };
-    let mut response = if method == "close" {
-        // Close this client's handle. The front door closes the shared Engine on shutdown.
-        Json(json!({"closed":true})).into_response()
-    } else {
-        let args = to_bytes(request.into_body(), crate::store_host::STORE_INPUT_CAP)
-            .await
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok());
-        match (
-            args,
-            host.local().await.and_then(|owner| owner.store.clone()),
-        ) {
-            (Some(args), Some(store))
-                if method.len() <= 32 && method.bytes().all(|b| b.is_ascii_alphanumeric()) =>
-            {
-                match store.call(method, args).await {
-                    Ok(text) => (
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        text,
-                    )
-                        .into_response(),
-                    Err(reason) => error(&reason),
-                }
-            }
-            (_, None) => error("service_down: the store host is not available"),
-            _ => error("invalid: invalid store method or body"),
-        }
-    };
-    super::set_header(&mut response, "x-aac-service-boot", &source.proof[..24]);
-    response
 }
 
 impl Drop for CollectionFeed {
@@ -153,6 +97,61 @@ fn authorized(source: &Source, headers: &HeaderMap) -> bool {
     headers
         .get("x-aac-collection-proof")
         .is_some_and(|proof| bool::from(source.proof.as_bytes().ct_eq(proof.as_bytes())))
+}
+
+/// The remaining Analytics and Status consumers use the public boot's store on Windows.
+/// The public router never mounts this private endpoint.
+#[cfg(windows)]
+async fn store_call(
+    State(source): State<Source>,
+    axum::extract::Path(method): axum::extract::Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    if !authorized(&source, request.headers()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let error = |message: &str| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({ "error": message })),
+        )
+            .into_response()
+    };
+    if method.is_empty()
+        || method.len() > 32
+        || !method.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || matches!(
+            method.as_str(),
+            "open" | "close" | "restore" | "maintain" | "backup"
+        )
+    {
+        return error("invalid: unknown worker store method");
+    }
+    let Ok(bytes) =
+        axum::body::to_bytes(request.into_body(), crate::store_host::STORE_INPUT_CAP).await
+    else {
+        return error("invalid: store request too large");
+    };
+    let Ok(args) = String::from_utf8(bytes.to_vec()) else {
+        return error("invalid: store request is not text");
+    };
+    let Some(host) = source.store.get().and_then(std::sync::Weak::upgrade) else {
+        return error("service_down: the store host is starting");
+    };
+    let Some(owners) = host.local().await else {
+        return error("service_down: the store host is unavailable");
+    };
+    let Some(store) = &owners.store else {
+        return error("disabled: the store host is disabled");
+    };
+    match store.call(method, args).await {
+        Ok(text) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            text,
+        )
+            .into_response(),
+        Err(reason) => error(&reason),
+    }
 }
 
 async fn dashboard(

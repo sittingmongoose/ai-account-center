@@ -1,4 +1,4 @@
-import type { Router } from 'express';
+import type { Router, Response } from 'express';
 import { createApiRouter } from './api-router';
 import { getCcsDir } from '../../utils/config-manager';
 import { authKind } from '../middleware/request-auth';
@@ -9,12 +9,22 @@ import {
   type AccountDashboardRequestContext,
 } from '../services/account-dashboard-service';
 import { isSecureTransport } from '../middleware/secure-transport';
-import { dashboardCollectionService, withOfferedViews } from '../views/offered-views';
+import { privateFileOwners } from '../../shared/private-files';
+import { RustService } from '../rust-service';
 import { answerDashboardFed } from '../views/dashboard-feed';
 import type {
   AccountDashboard,
   ClaudeDashboardPlatform,
 } from '../services/account-dashboard-types';
+
+function dashboardCollectionService(res: Response): RustService | null {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService &&
+    service.mode === 'on' &&
+    privateFileOwners()['account-usage-observations'] === 'rust-service'
+    ? service
+    : null;
+}
 
 export interface AccountDashboardRouterDeps {
   readDashboard?: typeof readAccountDashboardForHome;
@@ -60,7 +70,7 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
             `?platform=${platform}&refresh=${refresh}`
           );
           if (result && typeof result !== 'string') {
-            const dashboard = withOfferedViews(JSON.parse(result.bytes.toString('utf8')), res);
+            const dashboard = JSON.parse(result.bytes.toString('utf8'));
             if (typeof res.locals.onRustDashboard === 'function')
               res.locals.onRustDashboard(platform, dashboard);
             res.json(dashboard);
@@ -72,7 +82,7 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
           refresh === 'true',
           context
         );
-        const dashboard = withOfferedViews(read.dashboard, res);
+        const dashboard = read.dashboard;
         if (
           await answerDashboardFed(req, res, service, {
             platform,
@@ -87,10 +97,7 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
         return;
       }
       res.json(
-        withOfferedViews(
-          await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', context),
-          res
-        )
+        await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', context)
       );
     } catch {
       res.status(500).json({ error: 'Account usage could not be read safely.' });

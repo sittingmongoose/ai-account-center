@@ -947,7 +947,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -961,7 +961,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -975,7 +975,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -989,7 +989,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/native_group.rs",
     "writes": false,
     "milestone": "M3"
   },
@@ -1003,7 +1003,7 @@
       "bar",
       "hub"
     ],
-    "handlerFile": "src/web-server/routes/home-view-routes.ts",
+    "handlerFile": "crates/aac-http/src/public_auth/home_group.rs",
     "writes": false,
     "milestone": "M3"
   },

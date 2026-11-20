@@ -9,8 +9,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import express from 'express';
-import type { Server } from 'http';
+import { haveNativeStoreServer, startNativeStoreServer } from '../../support/native-store-server';
 import { nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import { buildRollupExports } from '../../../src/store/usage-exports';
@@ -30,7 +29,6 @@ import {
 import { usageHistory } from '../../../src/web-server/agent-usage/agent-usage-history';
 import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
 import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
-import { createUsageRouter } from '../../../src/web-server/routes/store-routes';
 import { handleStoreCommand } from '../../../src/commands/store-command';
 import type {
   AccountDashboard,
@@ -453,72 +451,76 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     }
   }, LARGE_FIXTURE_TIMEOUT_MS);
 
-  it('the burn route finds every series, however many hourly points they hold', async () => {
-    const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
-    const store = await openStore(path.join(dir, 'store'));
-    const end = START + 90 * 24 * HOUR;
-    let server: Server | null = null;
-    try {
-      // Keep 23,760 hourly points across 11 series to cross the 20,000-point cap.
-      // Usage changes daily. Hourly sightings between changes still produce rollups
-      // without projecting a changed quota reading every hour.
-      const [first] = accountsAt(START);
-      for (let account = 0; account < 11; account++) {
-        const observations = [];
-        for (let t = START; t < end; t += HOUR) {
-          const used = Math.floor((t - START) / (24 * HOUR));
-          const observation = storeObservationFromAccount(
-            {
-              ...first,
-              id: `codex:burn${account}`,
-              label: `burn${account}`,
-              fetchedAt: new Date(t).toISOString(),
-              sampledAt: new Date(t).toISOString(),
-              windows: [{ ...first.windows[0], usedPercent: used, remainingPercent: 100 - used }],
-            } as DashboardAccount,
-            t,
-            90 * 24 * HOUR
-          );
-          if (observation) observations.push(observation);
+  it(
+    'the burn route finds every series, however many hourly points they hold',
+    async () => {
+      const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
+      const store = await openStore(path.join(dir, 'store'));
+      const end = (Math.floor(Date.now() / HOUR) + 1) * HOUR;
+      const start = end - 90 * 24 * HOUR;
+      let server: Awaited<ReturnType<typeof startNativeStoreServer>> | undefined;
+      try {
+        // Keep 23,760 hourly points across 11 series to cross the 20,000-point cap.
+        // Usage changes daily. Hourly sightings between changes still produce rollups
+        // without projecting a changed quota reading every hour.
+        const [first] = accountsAt(START);
+        for (let account = 0; account < 11; account++) {
+          const observations = [];
+          for (let t = start; t < end; t += HOUR) {
+            const used = Math.floor((t - start) / (24 * HOUR));
+            const observation = storeObservationFromAccount(
+              {
+                ...first,
+                id: `codex:burn${account}`,
+                label: `burn${account}`,
+                fetchedAt: new Date(t).toISOString(),
+                sampledAt: new Date(t).toISOString(),
+                windows: [{ ...first.windows[0], usedPercent: used, remainingPercent: 100 - used }],
+              } as DashboardAccount,
+              t,
+              90 * 24 * HOUR
+            );
+            if (observation) observations.push(observation);
+          }
+          await store.record(observations as never);
         }
-        await store.record(observations as never);
+        const capped = await store.seriesPoints({
+          fromMs: start,
+          toMs: end - 1,
+          resolution: 'hour',
+        });
+        expect(capped.truncated).toBe(true);
+        expect(capped.series.length).toBeLessThan(11);
+        const exports = await buildRollupExports(store, [], [], end - 1);
+        expect(exports.hourly.series).toHaveLength(11);
+        expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(23_760);
+        expect(exports.hourly.series.every((s) => s.points.length === 2160)).toBe(true);
+        if (!haveNativeStoreServer) {
+          console.warn('[SKIP] burn HTTP replay requires a built native dashboard launcher');
+          return;
+        }
+        await store.close();
+        server = await startNativeStoreServer(dir);
+        const response = await server.send('/api/usage/burn?span=90d', {
+          headers: { cookie: server.cookie },
+        });
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          series: Array<{ accountId: string; spans: Array<{ span: string; consumed: number }> }>;
+        };
+        expect(body.series.map((s) => s.accountId).sort()).toEqual(
+          Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
+        );
+        for (const series of body.series) {
+          expect(series.spans).toEqual([expect.objectContaining({ span: '90d', consumed: 89 })]);
+        }
+      } finally {
+        await server?.stop();
+        await store.close();
       }
-      const capped = await store.seriesPoints({ fromMs: START, toMs: end - 1, resolution: 'hour' });
-      expect(capped.truncated).toBe(true);
-      expect(capped.series.length).toBeLessThan(11);
-      const exports = await buildRollupExports(store, [], [], end - 1);
-      expect(exports.hourly.series).toHaveLength(11);
-      expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(23_760);
-      expect(exports.hourly.series.every((s) => s.points.length === 2160)).toBe(true);
-      const app = express();
-      app.use((req, _res, next) => {
-        Object.assign(req, { auth: { kind: 'device' } });
-        next();
-      });
-      app.use('/api/usage', createUsageRouter({ store: () => store, now: () => end }));
-      const listening = await new Promise<Server>((resolve) => {
-        const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
-      });
-      server = listening;
-      const address = listening.address();
-      if (!address || typeof address === 'string') throw new Error('No test listener');
-      const response = await fetch(`http://127.0.0.1:${address.port}/api/usage/burn?span=90d`);
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        series: Array<{ accountId: string; spans: Array<{ span: string; consumed: number }> }>;
-      };
-      expect(body.series.map((s) => s.accountId).sort()).toEqual(
-        Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
-      );
-      for (const series of body.series) {
-        expect(series.spans).toEqual([expect.objectContaining({ span: '90d', consumed: 89 })]);
-      }
-    } finally {
-      const open = server as Server | null;
-      if (open) await new Promise<void>((resolve) => open.close(() => resolve()));
-      await store.close();
-    }
-  }, LARGE_FIXTURE_TIMEOUT_MS);
+    },
+    LARGE_FIXTURE_TIMEOUT_MS
+  );
 
   it('later CLI checks continue to report known segment corruption', async () => {
     const home = fs.mkdtempSync(path.join(sandbox, 'check-corruption-'));

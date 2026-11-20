@@ -1261,20 +1261,23 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             if !valid {
                 return decline(handler, Decline::Shape);
             }
-            let Some(host) = shared.store.clone() else {
+            let Some(host) = shared
+                .store
+                .as_ref()
+                .filter(|host| host.analytics_engine().is_some())
+            else {
                 return decline(row.handler, Decline::Unsupported);
             };
             let answer = match handler {
                 Handler::UsageHistory => {
-                    crate::usage_routes::history(&host, raw.as_deref(), aac_store::engine::now_ms())
+                    crate::usage_routes::history(host, raw.as_deref(), aac_store::engine::now_ms())
                         .await
                 }
                 Handler::UsageAt => {
-                    crate::usage_routes::at(&host, raw.as_deref(), aac_store::engine::now_ms())
-                        .await
+                    crate::usage_routes::at(host, raw.as_deref(), aac_store::engine::now_ms()).await
                 }
                 _ => {
-                    crate::usage_routes::burn(&host, raw.as_deref(), aac_store::engine::now_ms())
+                    crate::usage_routes::burn(host, raw.as_deref(), aac_store::engine::now_ms())
                         .await
                 }
             };
@@ -1975,7 +1978,7 @@ async fn serve_inner(
         tokio::task::spawn_blocking(move || opener.open_at_boot());
         let jobs = Arc::clone(host);
         let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(crate::store_host::jobs(jobs, stop));
+        tokio::spawn(jobs.jobs(stop));
         // G14: the quota sampler and activity scheduler run when the front door feeds them on.
         let writers_host = Arc::clone(host);
         let writers_stop = Arc::clone(&jobs_stop);
@@ -2116,9 +2119,6 @@ async fn serve_inner(
     served
 }
 
-/// R3: the store jobs loop â€” the first pass minutes after start, then every 15 minutes,
-/// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
-/// when the service ends.
 #[cfg(test)]
 mod dto_tests {
     use super::*;

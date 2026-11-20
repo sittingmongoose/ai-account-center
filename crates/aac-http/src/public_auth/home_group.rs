@@ -31,8 +31,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
-/// The page's context header, as `home-feed.ts` names it.
-const CONTEXT_HEADER: &str = "x-aac-home-context";
+use crate::home_fed::CONTEXT_HEADER;
 /// The one sentence every unreadable dashboard read answers.
 const UNREADABLE: &str = "Account usage could not be read safely.";
 const INVALID_QUERY: &str = "Select a valid desktop platform and refresh value.";
@@ -45,7 +44,6 @@ pub(super) struct Home {
     collection: lifecycle_host::Routes,
     feeds: Feeds,
     producer: HomeProducer,
-    antigravity: Option<crate::antigravity_host::Host>,
 }
 
 impl Home {
@@ -55,7 +53,6 @@ impl Home {
         open: Arc<ClaudeOpen>,
         collection: lifecycle_host::Routes,
     ) -> Self {
-        let antigravity = crate::antigravity_host::Host::from_root(&root);
         Self {
             host: Arc::downgrade(host),
             root,
@@ -63,7 +60,6 @@ impl Home {
             collection,
             feeds: Feeds::new(),
             producer: HomeProducer::default(),
-            antigravity,
         }
     }
 
@@ -119,6 +115,9 @@ fn query(request: &Request) -> Option<(&'static str, bool)> {
 
 impl Home {
     async fn get(&self, access: &DashboardAccess, request: Request) -> Reply {
+        if request.method() == Method::OPTIONS {
+            return super::lifecycle::options("GET, HEAD", "9");
+        }
         match access.principal {
             DashboardPrincipal::Anonymous => {
                 return super::error(401, "auth_required", "Authentication required");
@@ -138,15 +137,16 @@ impl Home {
         let Some((platform, refresh)) = query(&request) else {
             return super::plain(400, INVALID_QUERY);
         };
-        let head = request.method() == Method::HEAD;
         // The page's context is passed through as the front door wrote it; the fed answer decodes
         // and validates it, and an unreadable one leaves the answer without a view.
         let page = header(request.headers(), CONTEXT_HEADER).map(str::to_owned);
+        let validators = header(request.headers(), "if-none-match");
         let reply = self
-            .read(access, platform, refresh, page.as_deref())
+            .read(access, platform, refresh, page.as_deref(), validators)
             .await
+            .map(set_no_store)
             .unwrap_or_else(|| set_no_store(super::plain(500, UNREADABLE)));
-        truncate(reply, head)
+        super::revalidate_json(reply, request.headers())
     }
 
     /// The answer: the producer's three generations, the fed view, or the legacy shape with no view.
@@ -157,6 +157,7 @@ impl Home {
         platform: &'static str,
         refresh: bool,
         page: Option<&str>,
+        validators: Option<&str>,
     ) -> Option<Reply> {
         let secure = access.secure_transport;
         let host = self.host.upgrade()?;
@@ -172,31 +173,25 @@ impl Home {
         // parse-and-insert keeps the per-response pass and the key order.
         let dashboard = offered_views(dashboard);
         let dashboard_bytes = aac_views::js_json::write(&dashboard);
-        // No installed runtime is the route's empty Ubuntu inventory, exactly as the TS reader
-        // answers without a runtime to ask.
-        let antigravity = self
-            .antigravity
-            .as_ref()
-            .map(|host| host.inventory(now))
-            .unwrap_or_else(|| json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []}));
+        // The profile owner distinguishes an absent runtime from a failed inventory read.
+        let root = self.root.clone();
+        let antigravity =
+            tokio::task::spawn_blocking(move || crate::profile_reads::antigravity_inventory(&root))
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(Value::Null);
         let inputs = Inputs {
             platform: platform.into(),
             secure,
             dashboard,
-            opens: Value::Array(
-                self.open
-                    .operations()
-                    .for_scope(&self.root.to_string_lossy())
-                    .into_iter()
-                    .map(|(id, operation)| json!([id, operation.to_json()]))
-                    .collect(),
-            ),
+            opens: self.open.open_pairs(),
             antigravity,
         };
         let produced = self.producer.produce(&self.feeds, &inputs).ok();
         if let Some(produced) = produced
             && let Some(feed) = feed_header(platform, secure, now, &updated, &produced)
-            && let Some(answer) = self.fed(&feed, page).await
+            && let Some(answer) = self.fed(&feed, page, validators).await
         {
             return Some(answer);
         }
@@ -232,10 +227,11 @@ impl Home {
         Some((dashboard, updated))
     }
 
-    async fn fed(&self, feed: &str, page: Option<&str>) -> Option<Reply> {
+    async fn fed(&self, feed: &str, page: Option<&str>, validators: Option<&str>) -> Option<Reply> {
         let feeds = self.feeds.clone();
         let root = self.root.clone();
         let feed = feed.to_owned();
+        let has_context = page.is_some();
         let page = page.map(str::to_owned);
         let answer = tokio::task::spawn_blocking(move || {
             crate::home_fed::answer(&feeds, &root, &feed, page.as_deref())
@@ -243,11 +239,18 @@ impl Home {
         .await
         .ok()?
         .ok()?;
-        // The service's own reply carries the `home@3` view and the ETag identity; Home answers
-        // JSON with the same no-store the TS route set.
-        let mut reply = super::json_bytes(200, answer.bytes);
-        set_header(&mut reply, "cache-control", "no-store");
-        Some(reply)
+        if !has_context {
+            return Some(super::json_bytes(200, answer.bytes));
+        }
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(&answer.identity).into();
+        let etag = format!("W/\"{}\"", crate::view_reply::hex_digest(&digest));
+        Some(super::native_group::fed_bytes(
+            answer.bytes,
+            &etag,
+            "home@3",
+            validators,
+        ))
     }
 }
 
@@ -331,14 +334,10 @@ fn legacy(dashboard: &[u8], inputs: &Inputs, root: &std::path::Path) -> Option<V
         Err(_) => return None,
     };
     let profiles_text = aac_views::js_json::write(&profiles);
-    let envelope = match crate::home_producer::antigravity_envelope(&inputs.antigravity) {
-        Ok(envelope) => envelope,
-        Err(_) => return None,
-    };
-    let antigravity = match fed::prepare_antigravity(&envelope) {
-        Ok(antigravity) => antigravity,
-        Err(_) => return None,
-    };
+    let antigravity = crate::home_producer::antigravity_envelope(&inputs.antigravity)
+        .ok()
+        .and_then(|envelope| fed::prepare_antigravity(&envelope).ok())
+        .unwrap_or(Value::Null);
     let antigravity_text = aac_views::js_json::write(&antigravity);
     let mut out =
         Vec::with_capacity(dashboard.len() + profiles_text.len() + antigravity_text.len() + 96);
@@ -357,9 +356,24 @@ fn set_no_store(mut reply: Reply) -> Reply {
     reply
 }
 
-fn truncate(mut reply: Reply, head: bool) -> Reply {
-    if head {
-        *reply.body_mut() = axum::body::Body::empty();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unavailable_antigravity_inventory_stays_null() {
+        let root = tempfile::tempdir().expect("temporary profile root");
+        let inputs = Inputs {
+            platform: "mac".into(),
+            secure: true,
+            dashboard: json!({}),
+            opens: json!([]),
+            antigravity: Value::Null,
+        };
+        let body = legacy(b"{}", &inputs, root.path()).expect("the other data is still readable");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).expect("JSON response"),
+            json!({"schemaVersion": 1, "dashboard": {}, "profiles": [], "antigravity": null, "view": null})
+        );
     }
-    reply
 }

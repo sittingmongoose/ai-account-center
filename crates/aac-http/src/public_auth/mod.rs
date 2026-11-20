@@ -537,17 +537,8 @@ pub(crate) async fn run_public_at(
         }
         groups
     });
-    #[cfg(windows)]
-    let windows_host = (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), false));
     let mut worker = if cut {
-        sidecar::Sidecar::start(
-            &root,
-            address,
-            native_collection,
-            #[cfg(windows)]
-            windows_host.clone(),
-        )
-        .await?
+        sidecar::Sidecar::start(&root, address, native_collection).await?
     } else {
         None
     };
@@ -564,11 +555,8 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    #[cfg(not(windows))]
     let owner_host =
         (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
-    #[cfg(windows)]
-    let owner_host = windows_host;
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
         let worker_directory = snapshot
@@ -584,6 +572,10 @@ pub(crate) async fn run_public_at(
         .as_ref()
         .and_then(|worker| worker.collection.as_ref())
     {
+        #[cfg(windows)]
+        if let Some(host) = &owner_host {
+            feed.set_store(host);
+        }
         #[cfg(unix)]
         if let Some(link) = adopted.clone() {
             feed.set_adopted(link);
@@ -673,19 +665,12 @@ pub(crate) async fn run_public_at(
     } else {
         (None, None)
     };
-    // The worker's retained Home handler has no Open tracker of its own in this composition: the
-    // front door's public owner rides each `/api/views/home` forward (see `compose::Backend`).
-    if let (Some(backend), Some(profiles)) = (&backend, &profiles) {
-        let open = profiles.open_owner();
-        backend.attach_open(Arc::new(move || open.open_pairs()));
-    }
     let mut api = Router::new();
     if let Some(host) = &owner_host {
         if enabled && let Some(settings) = &native_settings {
             host.register("settings", settings.router(Router::new()));
         }
-        if enabled
-            && cut
+        if cut
             && native_collection
             && groups.is_some_and(|groups| groups.home)
             && let Some(profiles) = &profiles
@@ -863,15 +848,11 @@ pub(crate) async fn run_public_at(
     if let Some(host) = &owner_host {
         host.stop_public().await;
     }
-    if let Some(host) = &owner_host {
-        host.stop().await;
-    }
-    #[cfg(unix)]
-    if let Some(host) = &owner_host {
-        host.stop().await;
-    }
     if let Some(worker) = worker {
         worker.stop().await;
+    }
+    if let Some(host) = &owner_host {
+        host.stop().await;
     }
     auth.flush();
     if result.is_ok() && worker_lost.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1059,6 +1040,21 @@ fn empty(status: u16) -> Reply {
     StatusCode::from_u16(status)
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
         .into_response()
+}
+
+/// Preserve the conditional GET/HEAD behavior of an Express JSON response.
+fn revalidate_json(mut reply: Reply, headers: &HeaderMap) -> Reply {
+    if reply.status().is_success()
+        && header(reply.headers(), "etag").is_some_and(|etag| static_ui::fresh(headers, etag, None))
+    {
+        *reply.status_mut() = StatusCode::NOT_MODIFIED;
+        reply.headers_mut().remove(axum::http::header::CONTENT_TYPE);
+        reply
+            .headers_mut()
+            .remove(axum::http::header::CONTENT_LENGTH);
+        *reply.body_mut() = Body::empty();
+    }
+    reply
 }
 
 pub(crate) fn plain(status: u16, message: &str) -> Reply {

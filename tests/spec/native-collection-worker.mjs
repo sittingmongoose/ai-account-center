@@ -162,7 +162,7 @@ try {
         CCS_CODEX_PATH: path.join(base, 'no-codex'),
         AAC_AGENT_TRANSPORT: 'off',
         AAC_AGENT_VERBS: 'off',
-        AAC_RUST_STORE: 'off',
+        AAC_RUST_STORE: snapshot ? 'on' : 'off',
         AAC_RUST_CUT_NATIVE_ROUTES: 'off',
         AAC_RUST_HOME_VIEW: 'off',
         AAC_RUST_GROUP_HOME: 'on',
@@ -209,13 +209,21 @@ try {
     await registry('After');
     const second = await sample('After');
     assert(Date.parse(second.generatedAt) > Date.parse(first.generatedAt));
-    const history = await readJson(path.join(root, 'account-analytics', 'quota-history-v1.json'));
+    const storeResponse = await send('/api/store/status', { headers: { cookie } });
+    assert.equal(storeResponse.status, 200);
+    assert.equal((await storeResponse.json()).state, 'ready');
+    const historyResponse = await send(
+      `/api/usage/history?account=${encodeURIComponent(id)}&resolution=raw`,
+      { headers: { cookie } }
+    );
+    assert.equal(historyResponse.status, 200);
+    const history = await historyResponse.json();
+    const used = history.columns.indexOf('usedPercent');
+    assert(used >= 0, 'the raw history includes used percent');
     assert.deepEqual(
-      history.records
-        .filter((row) => row.accountId === id)
-        .map((row) => row.windows[0].usedPercent),
+      history.series.flatMap((series) => series.points.map((point) => point[used])),
       [20, 35],
-      'both native generations must be recorded in local quota history'
+      'both samples written by the worker must reach the native store'
     );
     assert(await readJson(path.join(share, 'history.json')));
     assert.equal(

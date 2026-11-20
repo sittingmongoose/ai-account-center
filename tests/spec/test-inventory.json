@@ -696,6 +696,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/home_group.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/lifecycle.rs",
       "kind": "safety",
       "evidence": [
@@ -3344,11 +3351,10 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/store/store-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "file": "tests/unit/store/store-native-routes.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/store/store-usage-account-id.test.ts",
@@ -3359,10 +3365,9 @@
     },
     {
       "file": "tests/unit/store/store-usage.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/targets/ccsd-alias-integration.test.ts",
@@ -4204,21 +4209,6 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/web-server/home-feed.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/home-view-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "table"
-      ]
     },
     {
       "file": "tests/unit/web-server/hung-disk-deadlines.test.ts",

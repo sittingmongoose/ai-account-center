@@ -270,15 +270,7 @@ await stub('src/antigravity/production-runtime.ts', {
 });
 await stub('src/store/store-service.ts', {
   openAacStore: async () => ({ store: null, reason: 'disabled' }),
-  getAacStore: () => ({
-    status: async () => fixture.storeStatus,
-    seriesPoints: async () => fixture.seriesPoints,
-    seriesList: async () => [],
-    usageAt: async () => fixture.usageAt,
-    burnLong: async () => [],
-    periods: async () => [],
-  }),
-  aacStoreState: () => ({ state: 'unavailable', reason: 'disabled' }),
+  getAacStore: () => null,
 });
 // Capture actual router registrations, including computed paths and regexes.
 const routerModule = await import('../../src/web-server/routes/api-router');
@@ -457,6 +449,11 @@ const MOVED_TO_RUST = new Set([
   'POST /api/claude/history-snapshots/cleanup',
   'GET /api/codex/profiles',
   'GET /api/codex/profiles/quotas',
+  'GET /api/store/status',
+  'GET /api/usage/at',
+  'GET /api/usage/burn',
+  'GET /api/usage/history',
+  'GET /api/views/home',
 ]);
 {
   const key = (row: any) => `${row.method} ${row.path}`;
@@ -738,6 +735,7 @@ try {
     path.join(root, 'config/rust-service-routes.json'),
     path.join(root, 'crates/aac-http/src/public_auth/reset_routes.rs'),
     path.join(root, 'crates/aac-http/src/public_auth/native_group.rs'),
+    path.join(root, 'crates/aac-http/src/public_auth/home_group.rs'),
     path.join(root, 'tests/fixtures/reset-adapter/reset-claim-routes.ts'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))
@@ -932,8 +930,7 @@ try {
       'must serve health/settings/diag, visibility, preferences and registry through the private service'
     );
   if (!composed && rustMode === 'shadow') {
-    // The three M0 store-status stubs explicitly fall back. The six session/bar account reads (visibility, preferences, registry) are
-    // compared; the Analytics stub stops at its query check before any Rust composition.
+    // The six account session/bar reads are compared. Analytics stops at its query check.
     // Profiles now replay at the native public listener. The legacy recorder never sends
     // private requests for those routes.
     for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)

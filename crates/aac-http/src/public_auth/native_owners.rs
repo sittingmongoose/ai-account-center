@@ -260,7 +260,7 @@ impl NativeOwners {
                 build.len() == 40 && build.bytes().all(|byte| byte.is_ascii_hexdigit())
             });
             let mut server = json!({"version":env!("AAC_VERSION"),"commit":commit});
-            if groups.home && worker_directory.is_some() {
+            if groups.home {
                 server["views"] = json!(["home"]);
             }
             let collection = Arc::new(Collection::default());

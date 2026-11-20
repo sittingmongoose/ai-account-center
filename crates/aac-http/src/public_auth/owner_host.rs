@@ -138,30 +138,20 @@ impl OwnerHost {
         #[cfg(not(unix))]
         {
             let mut held = self.local.lock().await;
+            if self.local_stop.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
             if let Some(owners) = held.as_ref() {
                 return Some(owners.clone());
             }
             let ccs = self.root.canonicalize().ok()?;
-            // The explicit switch is the user's: with it off, no store is opened here either.
-            let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off")
-                || std::env::var("AAC_STORE")
-                    .is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"));
             let (reports, registry_dir) = share_roots(
                 std::env::var("AAC_AGENT_REPORTS_DIR").ok().as_deref(),
                 std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok().as_deref(),
             );
             let config = crate::owners::Config {
                 ccs_dir: ccs.clone(),
-                store: (!store_off).then(|| crate::store_host::StoreBoot {
-                    binding_identity: aac_store::build_identity(),
-                    dir: ccs.join("store"),
-                    retention_days: 0,
-                    cache_bytes: None,
-                    activity_retention_days: None,
-                    snapshot_directory: None,
-                    share_backup_dir: None,
-                    share_backup_off: true,
-                }),
+                store: crate::store_host::StoreBoot::for_public(&ccs),
                 owned: Some(crate::owners::OwnedBoot {
                     reports_root: reports.clone(),
                     registry_dir,
@@ -178,10 +168,9 @@ impl OwnerHost {
             if let Some(store) = owners.store.clone() {
                 let opener = store.clone();
                 let _ = tokio::task::spawn_blocking(move || opener.open_at_boot()).await;
-                let stop = self.local_stop.clone();
-                tokio::spawn(crate::store_host::jobs(store, stop));
-                crate::status_owned::initialize_reports(reports).await;
+                tokio::spawn(store.jobs(self.local_stop.clone()));
             }
+            crate::status_owned::initialize_reports(reports).await;
             if let Some(owner) = &owners.scoreboard_owned {
                 // The first request sees a catalog and runs from the same prepared generation.
                 owner.seed().await;
@@ -410,7 +399,7 @@ impl OwnerHost {
 
     /// The boot the supervisor resolves for a plain cut: the store under `<ccs>/store` and the
     /// owned readers on the share roots. The readers resolve their own defaults when no root is
-    /// named (the worker's rule); only an explicit `AAC_RUST_STORE=off` skips this boot.
+    /// named (the worker's rule).
     #[cfg(unix)]
     fn boot_config(&self) -> Option<Json> {
         let reports = std::env::var("AAC_AGENT_REPORTS_DIR").ok();
@@ -427,6 +416,7 @@ impl OwnerHost {
         }
         let (reports_root, registry_dir) = share_roots(reports, registry);
         let ccs = self.root.canonicalize().ok()?;
+        let store = crate::store_host::StoreBoot::for_public(&ccs);
         let boot_id = random_hex::<12>()?;
         let secret = random_hex::<32>()?;
         let socket = socket_layout(&ccs, &boot_id)?;
@@ -435,14 +425,7 @@ impl OwnerHost {
             "socketPath": socket,
             "secret": secret,
             "bootId": boot_id,
-            "store": {
-                "dir": ccs.join("store"),
-                "retentionDays": 0,
-                "bindingIdentity": aac_store::build_identity(),
-                "snapshotDirectory": null,
-                "shareBackupDir": null,
-                "shareBackupOff": true,
-            },
+            "store": store,
             "owned": {
                 "reportsRoot": reports_root.to_string_lossy(),
                 "registryDir": registry_dir.to_string_lossy(),
@@ -887,5 +870,7 @@ mod windows_tests {
             !root.join("store").exists(),
             "the switch off creates no store folder"
         );
+        host.stop().await;
+        assert!(host.local().await.is_none());
     }
 }
