@@ -91,7 +91,7 @@ fn kind(provider: &str, g: &Grant) -> Option<(&'static str, &'static str)> {
         ("claude", "full") => Some(("Full reset", "Refills your 5-hour and weekly allowances.")),
         ("claude", "fable") => Some((
             "Fable reset",
-            "Refills Fable and gives back its weekly usage; it does not reset your whole week.",
+            "Refills the Fable limit and restores the portion of your weekly allowance used by Fable.",
         )),
         ("codex", "banked") => Some(("Banked reset", "Refills the eligible Codex usage windows.")),
         _ => None,
@@ -135,7 +135,19 @@ fn blocked(s: &Snapshot, g: &Grant, now: i64) -> Option<&'static str> {
             "grant-unavailable"
         });
     }
-    if g.clears.is_empty() || g.clears.iter().any(|k| !s.windows.contains_key(k)) {
+    let permits_unobserved = s.identity.provider == "claude" && matches!(g.kind.as_str(), "full" | "fable");
+    if s.identity.provider == "claude"
+        && (permits_unobserved || g.kind == "weekly")
+        && s.windows.get("seven_day") == Some(&0.0)
+    {
+        return Some("no-weekly-usage");
+    }
+    let missing_required_window = if permits_unobserved {
+        !s.windows.contains_key("seven_day")
+    } else {
+        g.clears.iter().any(|k| !s.windows.contains_key(k))
+    };
+    if g.clears.is_empty() || missing_required_window {
         return Some("refill-windows-unconfirmed");
     }
     None
@@ -148,17 +160,22 @@ fn public(s: &Snapshot, g: &Grant, key: &str, now: i64) -> Value {
     let words = if known { None } else { g.words.as_deref() };
     json!({"grantKey":key,"kind":if known{g.kind.as_str()}else{"unknown"},"label":label,"refillsText":text,"providerWords":words,"resetsLeft":g.left,"expiresAtMs":g.expires_at_ms,"claimable":blocked(s,g,now).is_none(),"claimBlockedReason":blocked(s,g,now)})
 }
+/// Fable also returns usage to the overall weekly allowance even when it's absent from `clears`.
+fn verification_keys(g: &Grant) -> impl Iterator<Item = &str> {
+    let weekly_giveback = (g.kind == "fable" && !g.clears.iter().any(|k| k == "seven_day")).then_some("seven_day");
+    g.clears.iter().map(String::as_str).chain(weekly_giveback)
+}
+
 /// How much of each limit the grant targets is used in this read: the same read its confirmation is bound to.
 fn usage(s: &Snapshot, g: &Grant) -> Vec<Value> {
-    g.clears
-        .iter()
+    verification_keys(g)
         .filter_map(|k| s.windows.get(k).map(|v| json!({"id":k,"usedPercent":v})))
         .collect()
 }
 fn fingerprint(s: &Snapshot, g: &Grant) -> Result<String> {
     // Binds what decides spend safety: the identity, the exact grant (id, kind, the window keys it refills, count,
-    // expiry, availability), the executor and the saved-source binding. Sample timestamp and live usage percentages
-    // are deliberately excluded: they are display-only, so ordinary use while the dialog is open cannot refuse.
+    // expiry, availability), the executor and the saved-source binding. The fresh eligibility check handles
+    // usage requirements separately, so ordinary usage changes do not invalidate an eligible confirmation.
     Ok(hash(&encode(&(
         s.identity.clone(),
         g.clone(),
@@ -852,35 +869,40 @@ impl Store {
         // The target windows' usage in the read the claim was reserved on, just before the send. It is history,
         // never current usage; usage may have moved since the confirmation was shown.
         let before: Value = serde_json::from_str(&before).unwrap_or(Value::Null);
-        let sent_usage: Vec<Value> = grant
-            .clears
-            .iter()
+        let sent_usage: Vec<Value> = verification_keys(&grant)
             .filter_map(|k| before["windows"][k].as_f64().map(|v| json!({"id":k,"usedPercent":v})))
             .collect();
         // A Codex claim is confirmed by the credit alone, so its receipt names only the limits that fell.
         let fell_only = details["provider"] == "codex";
+        let mut unobserved = Vec::new();
         let windows: Vec<Value> = if stored == "claimed" {
-            grant
-                .clears
-                .iter()
+            verification_keys(&grant)
                 .filter_map(|k| {
-                    let after = details["afterWindows"][k].as_f64()?;
-                    if fell_only
-                        && !details["beforeWindows"][k]
-                            .as_f64()
-                            .is_some_and(|before| after < before)
-                    {
-                        return None;
+                    match (
+                        details["beforeWindows"][k].as_f64(),
+                        details["afterWindows"][k].as_f64(),
+                    ) {
+                        (Some(before), Some(after)) if !fell_only || after < before => {
+                            Some(json!({"id":k,"usedPercent":after}))
+                        }
+                        (None, _) | (_, None)
+                            if details["provider"] == "claude" && matches!(grant.kind.as_str(), "full" | "fable") =>
+                        {
+                            unobserved.push(k);
+                            None
+                        }
+                        _ => None,
                     }
-                    Some(json!({"id":k,"usedPercent":after}))
                 })
                 .collect()
         } else {
             vec![]
         };
-        Ok(
-            json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows,"sentUsage":sent_usage}),
-        )
+        let mut receipt = json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows,"sentUsage":sent_usage});
+        if !unobserved.is_empty() {
+            receipt["unobservedWindows"] = json!(unobserved);
+        }
+        Ok(receipt)
     }
     fn committed_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
         let canonical: String = sql(tx.query_row(
@@ -1164,6 +1186,21 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64, provider_sai
         // only when OpenAI itself answered `reset` or `alreadyRedeemed` for this attempt.
         let redeeming = new.left == g.left && !new.usable;
         return spent || (provider_said_spent && redeeming);
+    }
+    if before.identity.provider == "claude" && matches!(g.kind.as_str(), "full" | "fable") {
+        let readings = |key: &str| before.windows.get(key).zip(after.windows.get(key));
+        if !spent || !readings("seven_day").is_some_and(|(b, a)| a < b) {
+            return false;
+        }
+        if g.kind == "fable" {
+            // Scoped Fable and overall weekly percentages describe different allowances.
+            return readings("seven_day_overage_included").is_none_or(|(b, a)| a < b);
+        }
+        // A limit absent from either read cannot supply refill evidence. Already-empty limits can stay empty.
+        return g
+            .clears
+            .iter()
+            .all(|key| readings(key).is_none_or(|(b, a)| a < b || *b == 0.0 && *a == 0.0));
     }
     spent
         && !g.clears.is_empty()
