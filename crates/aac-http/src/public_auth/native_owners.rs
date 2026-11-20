@@ -535,7 +535,10 @@ impl NativeOwners {
         if let Some(id) = recheck::route(request.method(), path).map(str::to_owned) {
             let reply = match self.usage.as_ref().filter(|_| self.writes) {
                 Some(usage) => usage.recheck(&access, &id, request).await,
-                None => unavailable(),
+                None => match recheck::input(&access, &id, request).await {
+                    Ok(_) => collection_unavailable(),
+                    Err(reply) => reply,
+                },
             };
             return no_store(reply);
         }
@@ -552,7 +555,10 @@ impl NativeOwners {
             return no_store(super::plain(401, "Authentication required"));
         }
         let Some(usage) = &self.usage else {
-            return unavailable();
+            return match crate::dashboard_fed::selection(&uri) {
+                Some(_) => collection_unavailable(),
+                None => crate::dashboard_fed::invalid_selection(),
+            };
         };
         let cache = usage.cache.clone();
         let secure = access.secure_transport;
@@ -898,6 +904,14 @@ async fn object_body(request: Request, limit: usize) -> Option<Map<String, Value
 pub(super) fn no_store(mut reply: Reply) -> Reply {
     super::set_header(&mut reply, "cache-control", "no-store");
     reply
+}
+
+fn collection_unavailable() -> Reply {
+    super::error(
+        503,
+        "collection_unavailable",
+        "Account usage collection is unavailable.",
+    )
 }
 
 fn unavailable() -> Reply {

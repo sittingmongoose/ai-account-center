@@ -150,7 +150,6 @@ pub(super) struct Backend {
     address: SocketAddr,
     proof: HeaderValue,
     slots: Arc<Semaphore>,
-    pub(super) collection_fallback: bool,
     /// Set once the boot's profile owner exists: the live Open pairs this front door forwards to
     /// the worker's retained Home handler (the worker has no service lease in this composition).
     open_pairs: Arc<Mutex<Option<OpenPairs>>>,
@@ -174,14 +173,10 @@ impl Backend {
         let proof = secret
             .and_then(|value| value.into_string().ok())
             .ok_or_else(invalid)?;
-        Self::new(address, &proof, false).map(Some)
+        Self::new(address, &proof).map(Some)
     }
 
-    pub(super) fn new(
-        address: SocketAddr,
-        proof: &str,
-        collection_fallback: bool,
-    ) -> io::Result<Self> {
+    pub(super) fn new(address: SocketAddr, proof: &str) -> io::Result<Self> {
         if !address.ip().is_loopback() || address.port() == 0 || !super::storage::is_hex(proof, 64)
         {
             return Err(io::Error::other("invalid composition backend"));
@@ -192,7 +187,6 @@ impl Backend {
             address,
             proof,
             slots: Arc::new(Semaphore::new(32)),
-            collection_fallback,
             open_pairs: Arc::new(Mutex::new(None)),
         })
     }

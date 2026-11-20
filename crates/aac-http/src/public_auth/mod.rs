@@ -349,15 +349,7 @@ impl DashboardAuth {
                     return reply;
                 }
             }
-            let worker_collection = backend.as_ref().is_some_and(|worker| {
-                worker.collection_fallback
-                    && native_owners::NativeOwners::owns_collection(
-                        request.method(),
-                        request.uri().path(),
-                    )
-            });
             if let Some(native) = &native_owners
-                && !worker_collection
                 && native.owns(request.method(), request.uri().path().trim_end_matches('/'))
             {
                 return native.handle(request).await;
@@ -383,10 +375,7 @@ impl DashboardAuth {
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
             {
-                if !cut
-                    || worker_collection
-                    || compose::cut_route(request.method(), request.uri().path())
-                {
+                if !cut || compose::cut_route(request.method(), request.uri().path()) {
                     return backend.forward(request).await;
                 }
                 return plain(404, "API endpoint was not found.");
@@ -527,7 +516,6 @@ pub(crate) async fn run_public_at(
     #[cfg(not(unix))]
     let has_external = false;
     // A live adopted producer keeps its lease and serves this boot's reads.
-    // The collection switch can select the worker once that owner is gone.
     let native_collection = has_external || groups.is_some_and(|groups| groups.collection);
     #[cfg(unix)]
     let adopted_quotas = adopted.clone();

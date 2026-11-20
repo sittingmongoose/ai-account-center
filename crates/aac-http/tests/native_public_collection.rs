@@ -613,13 +613,13 @@ else:
 }
 
 #[tokio::test]
-async fn collection_off_routes_only_accounts_and_recheck_to_the_worker() {
+async fn collection_off_answers_accounts_and_recheck_without_the_worker() {
     for env_override in [false, true] {
-        worker_serves_disabled_collection(env_override).await;
+        rust_answers_disabled_collection(env_override).await;
     }
 }
 
-async fn worker_serves_disabled_collection(env_override: bool) {
+async fn rust_answers_disabled_collection(env_override: bool) {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().canonicalize().unwrap();
     let password = "fixture-public-password";
@@ -642,7 +642,7 @@ async fn worker_serves_disabled_collection(env_override: bool) {
                 const context = JSON.parse(Buffer.from(req.headers['x-aac-compose-access'], 'base64url'));
                 if (req.headers['x-aac-compose-proof'] !== proof ||
                     context.principal.kind !== 'session' ||
-                    process.env.AAC_CUT_WORKER_COLLECTION !== '1') {
+                    process.env.AAC_CUT_WORKER_COLLECTION === '1') {
                     res.writeHead(403).end();
                     return;
                 }
@@ -691,8 +691,8 @@ async fn worker_serves_disabled_collection(env_override: bool) {
     .unwrap();
 
     assert!(
-        aac_files::OwnedStore::claim_collection(&root).is_err(),
-        "a native sampler must wait for the worker's collection lease"
+        aac_files::OwnedStore::claim_collection(&root).is_ok(),
+        "disabled collection leaves the lease unclaimed"
     );
     let client = Client::builder()
         .no_proxy()
@@ -736,14 +736,22 @@ async fn worker_serves_disabled_collection(env_override: bool) {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{method} {path}");
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{method} {path}"
+        );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         if method == reqwest::Method::HEAD {
             assert!(response.bytes().await.unwrap().is_empty());
         } else {
             let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
             assert_eq!(
                 body,
-                json!({"from":"worker","method":method.as_str(),"path":path})
+                json!({
+                    "error":"Account usage collection is unavailable.",
+                    "code":"collection_unavailable"
+                })
             );
         }
     }
