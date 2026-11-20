@@ -828,6 +828,7 @@ async fn scoreboard_facts(
                 .collect()
         })
         .unwrap_or_default();
+    let share_only = input.get("shareOnly").and_then(Json::as_bool) == Some(true);
     let data = json!({
         "now": now,
         "timeZone": time_zone,
@@ -843,11 +844,19 @@ async fn scoreboard_facts(
                 "to": Json::Null,
                 "source": "all",
                 "taskType": Json::Null,
-                "available": true,
+                "available": !share_only,
                 "taskTypes": task_types,
             },
-            "identity": input.get("identity").cloned().unwrap_or(Json::Null),
-            "history": {"store": "on", "runs": Json::Null, "importing": false},
+            "identity": if share_only {
+                Json::Null
+            } else {
+                input.get("identity").cloned().unwrap_or(Json::Null)
+            },
+            "history": {
+                "store": if share_only { "off" } else { "on" },
+                "runs": Json::Null,
+                "importing": false
+            },
         },
     });
     let offsets = crate::zone_facts::server_zone_facts(time_zone, i64::try_from(now).ok()?)?;
@@ -936,11 +945,16 @@ async fn scoreboard(
     };
     // The service may ingest or rescan between the facts fetch and the answer; its `stale`
     // decline means fresh facts, exactly as today's handler refetches on the next request.
-    // A cold boot's first seed can take a moment: retry briefly, then answer honestly.
+    // A cold boot's first seed, or a store that is off or lock-held while the share scan
+    // starts, can take a moment: retry briefly, then answer honestly.
     for attempt in 0..6 {
         let Some((generation, catalog_hash, held)) =
             scoreboard_facts(routes, local.as_deref(), &time_zone, now).await
         else {
+            if attempt < 5 {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                continue;
+            }
             return decline_because("facts");
         };
         let feed = json!({
