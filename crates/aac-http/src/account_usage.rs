@@ -55,6 +55,8 @@ pub struct AccountUsageCache {
     refresh: Arc<tokio::sync::Notify>,
     last_refresh: Arc<std::sync::atomic::AtomicU64>,
     published: Arc<tokio::sync::Notify>,
+    #[cfg(windows)]
+    completed_sample: Arc<std::sync::RwLock<Option<axum::body::Bytes>>>,
 }
 
 impl Default for AccountUsageCache {
@@ -64,6 +66,8 @@ impl Default for AccountUsageCache {
             refresh: Arc::default(),
             last_refresh: Arc::default(),
             published: Arc::default(),
+            #[cfg(windows)]
+            completed_sample: Arc::default(),
         }
     }
 }
@@ -238,6 +242,27 @@ impl AccountUsageCache {
                 Some(json!({ "platform": desktop.word(), "dashboard": dashboard }))
             })
             .collect()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn publish_completed_sample(&self, timestamp: &str, sampled_at: i64) {
+        let Ok(accounts) = self.merged_accounts(timestamp, sampled_at) else {
+            return;
+        };
+        let Ok(bytes) = serde_json::to_vec(&json!({"sampledAt":sampled_at,"accounts":accounts}))
+        else {
+            return;
+        };
+        if bytes.len() <= 4 * 1024 * 1024
+            && let Ok(mut held) = self.completed_sample.write()
+        {
+            *held = Some(bytes.into());
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn completed_sample(&self) -> Option<axum::body::Bytes> {
+        self.completed_sample.read().ok()?.clone()
     }
 
     /// Choose the same unique accounts as the TS sampler: available wins, then the newer

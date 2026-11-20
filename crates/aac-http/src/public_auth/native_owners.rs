@@ -160,6 +160,8 @@ struct PublicSampling {
     analytics_writers: bool,
     #[cfg(unix)]
     usage_snapshot: bool,
+    #[cfg(windows)]
+    worker_snapshot: bool,
 }
 
 fn lifecycle_facts() -> crate::account_usage::dashboard::Lifecycle {
@@ -289,6 +291,8 @@ impl NativeOwners {
                 analytics_writers: groups.analytics_writers,
                 #[cfg(unix)]
                 usage_snapshot: groups.usage_snapshot,
+                #[cfg(windows)]
+                worker_snapshot: worker_directory.is_some(),
             };
             let sampler = usage.clone();
             jobs.sampling = Some(tokio::spawn(async move {
@@ -666,7 +670,14 @@ impl Usage {
                             )
                             .await;
                         }
-                        #[cfg(not(unix))]
+                        #[cfg(windows)]
+                        if sampling.worker_snapshot {
+                            let now = super::now();
+                            if let Some(timestamp) = super::storage::iso(now) {
+                                cache.publish_completed_sample(&timestamp, now);
+                            }
+                        }
+                        #[cfg(not(any(unix, windows)))]
                         let _ = (&sampling, &cache);
                         // G18: the native sample triggers the share writer itself: the store's
                         // history, long burn and rollups are added by the service, and the

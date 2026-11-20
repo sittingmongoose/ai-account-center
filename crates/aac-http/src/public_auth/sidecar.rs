@@ -1,5 +1,5 @@
 //! A private compatibility worker supervised by the native dashboard.
-use super::{DashboardEvents, compose::Backend, storage};
+use super::{DashboardEvents, collection_feed::CollectionFeed, compose::Backend, storage};
 use serde::Deserialize;
 use std::{
     io,
@@ -19,6 +19,7 @@ pub(super) struct Sidecar {
     output: Option<BufReader<ChildStdout>>,
     pub backend: Backend,
     pub cache: PathBuf,
+    pub collection: Option<CollectionFeed>,
     _cache_directory: tempfile::TempDir,
     #[cfg(unix)]
     _collection_lease: Option<aac_files::OwnedStore>,
@@ -64,6 +65,11 @@ impl Sidecar {
             .then(|| aac_files::OwnedStore::claim_collection(root).map_err(io::Error::other))
             .transpose()?;
         let proof = storage::hex(&storage::random::<32>().map_err(|_| invalid())?);
+        let collection = if native_collection {
+            Some(CollectionFeed::start(&proof).await?)
+        } else {
+            None
+        };
         let mut cache_builder = tempfile::Builder::new();
         cache_builder.prefix("aac-sidecar-");
         #[cfg(unix)]
@@ -105,6 +111,14 @@ impl Sidecar {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true)
+            .env(
+                "AAC_CUT_COLLECTION_FEED",
+                collection
+                    .as_ref()
+                    .map(CollectionFeed::address)
+                    .unwrap_or_default(),
+            )
+            .env("AAC_CUT_COLLECTION_PROOF", &proof)
             .spawn()?;
         let mut input = child.stdin.take().ok_or_else(invalid)?;
         input.write_all(format!("{proof}\n").as_bytes()).await?;
@@ -138,6 +152,7 @@ impl Sidecar {
             output: Some(output),
             backend: Backend::new(address, &proof, worker_collection)?,
             cache,
+            collection,
             _cache_directory: cache_directory,
             #[cfg(unix)]
             _collection_lease: collection_lease,

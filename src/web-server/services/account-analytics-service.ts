@@ -1,3 +1,4 @@
+import { readNativeCollection, workerReadsNative } from '../native-collection-feed';
 import { broadcastDashboardEvent } from '../dashboard-events';
 import { privateFileOwners } from '../../shared/private-files';
 import { publishSampledDashboard } from '../views/dashboard-feed';
@@ -877,34 +878,31 @@ export class AccountAnalyticsService {
             )
               unique.set(identity, account);
           }
-      const accounts = [...unique.values()];
-      const state = await this.record(accounts, scope);
-      broadcastDashboardEvent({ type: 'analytics-changed' });
-      if (sampleListeners.size > 0) {
-        const sampledAt = (this.deps.now ?? Date.now)();
-        const history = state.usageStore
-          ? await this.historyFor(
-              state,
-              sampledAt - SNAPSHOT_HISTORY_MS,
-              sampledAt,
-              sampledAt,
-              null
-            )
-          : state.data;
-        const longBurn = state.usageStore
-          ? await longBurnFor(state.usageStore, accounts, sampledAt).catch(() => undefined)
-          : undefined;
-        notifySample({
-          accounts,
-          history: state.available ? history : null,
-          sampledAt,
-          ...(longBurn ? { longBurn } : {}),
-        });
-      }
+      await this.recordSample([...unique.values()], (this.deps.now ?? Date.now)());
     })().finally(() => {
       this.pendingSample = null;
     });
     return this.pendingSample;
+  }
+
+  async recordSample(accounts: DashboardAccount[], sampledAt: number): Promise<void> {
+    const scope = (this.deps.scope ?? getCcsDir)();
+    const state = await this.record(accounts, scope);
+    broadcastDashboardEvent({ type: 'analytics-changed' });
+    if (sampleListeners.size > 0) {
+      const history = state.usageStore
+        ? await this.historyFor(state, sampledAt - SNAPSHOT_HISTORY_MS, sampledAt, sampledAt, null)
+        : state.data;
+      const longBurn = state.usageStore
+        ? await longBurnFor(state.usageStore, accounts, sampledAt).catch(() => undefined)
+        : undefined;
+      notifySample({
+        accounts,
+        history: state.available ? history : null,
+        sampledAt,
+        ...(longBurn ? { longBurn } : {}),
+      });
+    }
   }
 
   private schedule(generation: number): void {
@@ -991,6 +989,44 @@ export function getAccountAnalytics(
 ): Promise<AccountAnalytics> {
   return singleton().get(query, composer, owned);
 }
+let stopNativeSamples: (() => void) | undefined;
+
+function startNativeSamples(): () => void {
+  const stopped = new AbortController();
+  let last = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  async function next(): Promise<void> {
+    try {
+      const sample = (await readNativeCollection('/sample', stopped.signal)) as {
+        sampledAt?: number;
+        accounts?: DashboardAccount[];
+      };
+      if (
+        !stopped.signal.aborted &&
+        typeof sample.sampledAt === 'number' &&
+        Number.isSafeInteger(sample.sampledAt) &&
+        sample.sampledAt > last &&
+        Array.isArray(sample.accounts)
+      ) {
+        await singleton().recordSample(sample.accounts, sample.sampledAt);
+        last = sample.sampledAt;
+      }
+    } catch {
+      // No sample is available during cold start. Only the native owner can produce one.
+    } finally {
+      if (!stopped.signal.aborted) {
+        timer = setTimeout(() => void next(), 2500);
+        timer.unref();
+      }
+    }
+  }
+  void next();
+  return () => {
+    stopped.abort();
+    clearTimeout(timer);
+  };
+}
+
 export function startAccountAnalyticsSampling(
   rustService?: RustService,
   nativeCollection = false
@@ -1001,11 +1037,16 @@ export function startAccountAnalyticsSampling(
     startAnalyticsWriterFeeds(rustService, nativeCollection);
     return;
   }
-  if (!nativeCollection) singleton().start();
+  if (!nativeCollection && !workerReadsNative()) singleton().start();
+  if (process.platform === 'win32' && nativeCollection && workerReadsNative()) {
+    stopNativeSamples ??= startNativeSamples();
+  }
   // Usage history is collected in the background too, so it grows while no page is open.
   startAccountAnalyticsActivityBackground();
 }
 export function stopAccountAnalyticsSampling(): void {
+  stopNativeSamples?.();
+  stopNativeSamples = undefined;
   stopAnalyticsWriterFeeds();
   stopAccountAnalyticsActivityBackground();
   service?.stop();

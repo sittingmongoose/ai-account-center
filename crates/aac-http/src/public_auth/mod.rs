@@ -4,6 +4,7 @@
 #![allow(clippy::result_large_err)]
 mod analytics_routes;
 mod app_updates_owner;
+mod collection_feed;
 mod compose;
 mod dashboard_events;
 mod devices;
@@ -567,6 +568,18 @@ pub(crate) async fn run_public_at(
     } else {
         None
     };
+    if let Some(feed) = worker
+        .as_ref()
+        .and_then(|worker| worker.collection.as_ref())
+    {
+        #[cfg(unix)]
+        if let Some(link) = adopted.clone() {
+            feed.set_adopted(link);
+        }
+        if let Some(cache) = native.as_ref().and_then(|owner| owner.profile_inputs().1) {
+            feed.set_local(cache);
+        }
+    }
     // The settings group registers its own routes when the owner host is on; without the host
     // the `edges` fallback answers them, so the shipped worker keeps its cutover switch.
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
