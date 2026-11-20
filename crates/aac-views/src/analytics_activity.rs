@@ -285,10 +285,30 @@ fn route_provider(route: Option<&str>) -> Option<&'static str> {
         .map(|(_, provider)| *provider)
 }
 
-/// `usageProviderFor`: the tool's own provider, else the route, else the model's prefix, else other.
+/// True when a usage row is Kimi Code (OMP logs only). Keep in sync with
+/// `aac_store::collect::is_kimi_code_usage` and the OMP scanner retag.
+fn is_kimi_code_usage(model: Option<&str>, route: Option<&str>) -> bool {
+    let route = route.unwrap_or("").trim().to_ascii_lowercase();
+    let route = route.strip_prefix("builtin:").unwrap_or(&route);
+    if matches!(route, "kimi-code" | "kimi") {
+        return true;
+    }
+    let model = model.unwrap_or("").trim().to_ascii_lowercase();
+    let name = model.rsplit('/').next().unwrap_or(&model);
+    name == "k3"
+        || name == "kimi-k3"
+        || name == "kimi-for-coding"
+        || name == "kimi-code"
+        || name.starts_with("kimi-")
+}
+
+/// `usageProviderFor`: the tool's own provider, else Kimi Code, else the route, else the model's prefix, else other.
 fn usage_provider_for(tool: &str, route: Option<&str>, model: Option<&str>) -> &'static str {
     if let Some((_, own)) = TOOL_PROVIDERS.iter().find(|(name, _)| *name == tool) {
         return own;
+    }
+    if is_kimi_code_usage(model, route) {
+        return "kimi-code";
     }
     if let Some(route) = route.filter(|r| !r.trim().is_empty()) {
         return route_provider(Some(route)).unwrap_or("other");
@@ -2781,5 +2801,33 @@ mod tests {
                 "{host}"
             );
         }
+    }
+
+    #[test]
+    fn kimi_code_rows_from_omp_logs_are_kimi_code_not_other() {
+        assert_eq!(
+            usage_provider_for("omp", Some("kimi-code"), Some("kimi-k3")),
+            "kimi-code"
+        );
+        assert_eq!(
+            usage_provider_for("omp", Some("moonshotai"), Some("kimi-k3")),
+            "kimi-code"
+        );
+        assert_eq!(
+            usage_provider_for("omp", Some("kimi"), Some("k3")),
+            "kimi-code"
+        );
+        assert_eq!(
+            usage_provider_for("omp", Some("moonshotai"), Some("kimi-for-coding")),
+            "kimi-code"
+        );
+        assert_eq!(
+            usage_provider_for("omp", Some("alibaba"), Some("qwen3-max")),
+            "other"
+        );
+        assert_eq!(
+            usage_provider_for("omp", Some("moonshotai"), Some("moonshot-v1-8k")),
+            "other"
+        );
     }
 }

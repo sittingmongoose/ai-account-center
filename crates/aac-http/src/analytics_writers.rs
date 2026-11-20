@@ -364,6 +364,89 @@ fn scan_request(
     request
 }
 
+async fn scan_host_answer(
+    agents: &Arc<crate::agent_transport::Agents>,
+    computer: &crate::agent_transport::UsageHost,
+    args: &Value,
+    call_id: &str,
+) -> Result<Value, aac_core::Cause> {
+    let mut answer = if computer.agent_available {
+        agents
+            .scan_usage(
+                computer.platform,
+                computer.alias.as_deref(),
+                args,
+                SCAN_DEADLINE_MS,
+                SCAN_MAX_BYTES,
+                call_id,
+            )
+            .await
+    } else {
+        Err(aac_core::Cause::AgentMissing)
+    };
+    if matches!(
+        answer,
+        Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
+    ) {
+        answer =
+            fixed_scanner::scan(agents, computer, args, SCAN_DEADLINE_MS, SCAN_MAX_BYTES).await;
+    }
+    answer
+}
+
+/// One-time Kimi Code history from OMP logs older than the live 31-day window.
+/// A failed scan is not stamped, so the next pass retries. No quota polling.
+#[allow(clippy::too_many_arguments)]
+async fn kimi_history_pass(
+    engine: &aac_store::engine::Engine,
+    agents: &Arc<crate::agent_transport::Agents>,
+    computers: &[crate::agent_transport::UsageHost],
+    ccs_dir: &Path,
+    experiments: Option<&Arc<experiment_roots::Snapshot>>,
+    preferences: Option<&Value>,
+    pricing: &ResolverPricing,
+    generation: u64,
+    now: i64,
+) {
+    let omp_kinds = vec!["omp".to_string()];
+    let cutoff = aac_store::contract::EARLIEST_MS as i64;
+    for computer in computers {
+        let host = computer.id.as_str();
+        match aac_store::kimi_history::already_done(engine, host) {
+            Ok(false) => {}
+            _ => continue,
+        }
+        let (mut extra_roots, mut overflow, _generic) = extra_roots(preferences, host);
+        let local = computer.alias.is_none();
+        let experiments = experiments.filter(|_| local);
+        if let Some(experiments) = experiments {
+            experiments.add_zcode_paths(&mut extra_roots, &mut overflow);
+        }
+        let args = scan_request(
+            &omp_kinds,
+            cutoff,
+            extra_roots,
+            crate::analytics_route::capture_cwd(ccs_dir),
+            experiments
+                .map(|snapshot| snapshot.scanner_roots())
+                .as_ref(),
+        );
+        let call_id = format!("g14-kimi-history-{generation}-{host}");
+        match scan_host_answer(agents, computer, &args, &call_id).await {
+            Ok(answer)
+                if valid_scan_answer(&answer, &omp_kinds)
+                    && aac_store::kimi_history::ingest_kimi_from_omp_scan(
+                        engine, host, &answer, now, pricing,
+                    )
+                    .is_ok() =>
+            {
+                let _ = aac_store::kimi_history::mark_done(engine, host, now);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn failed_scan_states(host: &str, kinds: &[String], agent_missing: bool) -> Vec<Value> {
     kinds
         .iter()
@@ -447,27 +530,7 @@ async fn activity_pass(
                 .as_ref(),
         );
         let call_id = format!("g14-activity-{generation}-{host}");
-        let mut answer = if computer.agent_available {
-            agents
-                .scan_usage(
-                    computer.platform,
-                    computer.alias.as_deref(),
-                    &args,
-                    SCAN_DEADLINE_MS,
-                    SCAN_MAX_BYTES,
-                    &call_id,
-                )
-                .await
-        } else {
-            Err(aac_core::Cause::AgentMissing)
-        };
-        if matches!(
-            answer,
-            Err(aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch)
-        ) {
-            answer = fixed_scanner::scan(agents, computer, &args, SCAN_DEADLINE_MS, SCAN_MAX_BYTES)
-                .await;
-        }
+        let answer = scan_host_answer(agents, computer, &args, &call_id).await;
         match answer {
             Ok(answer) if valid_scan_answer(&answer, &kinds) => {
                 let rows = answer["rows"].as_array().cloned().unwrap_or_default();
@@ -522,50 +585,65 @@ async fn activity_pass(
         }
     }
     // Shape and ingest under the lock; a superseding generation drops this pass's writes.
-    let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
-    if generation != guard.generation {
-        return;
-    }
-    let local: HashMap<String, Vec<Value>> = HashMap::new();
-    let local_complete: HashSet<String> = HashSet::new();
-    let scanner_owned: HashSet<String> = kinds.into_iter().collect();
-    let args = ReportArgs {
-        local: &local,
-        remote: &remote,
-        states: &states,
-        window_from_ms: cutoff,
-        now,
-        local_complete: &local_complete,
-        scanner_owned: &scanner_owned,
-    };
-    let reports = report::build_activity_reports(&args);
-    let (trimmed, remember) = guard.ingestor.trim(&reports);
-    if let Ok(typed) = report::contract_reports(&trimmed)
-        && !typed.is_empty()
+    // The std mutex guard must not live across the history scan await.
     {
-        match activity::ingest(engine, &typed) {
-            Ok(result) => {
-                let refused: HashSet<usize> = result
-                    .refused
-                    .iter()
-                    .filter_map(|r| r["index"].as_u64().map(|i| i as usize))
-                    .collect();
-                guard.ingestor.accept(remember, &refused);
+        let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
+        if generation != guard.generation {
+            return;
+        }
+        let local: HashMap<String, Vec<Value>> = HashMap::new();
+        let local_complete: HashSet<String> = HashSet::new();
+        let scanner_owned: HashSet<String> = kinds.into_iter().collect();
+        let args = ReportArgs {
+            local: &local,
+            remote: &remote,
+            states: &states,
+            window_from_ms: cutoff,
+            now,
+            local_complete: &local_complete,
+            scanner_owned: &scanner_owned,
+        };
+        let reports = report::build_activity_reports(&args);
+        let (trimmed, remember) = guard.ingestor.trim(&reports);
+        if let Ok(typed) = report::contract_reports(&trimmed)
+            && !typed.is_empty()
+        {
+            match activity::ingest(engine, &typed) {
+                Ok(result) => {
+                    let refused: HashSet<usize> = result
+                        .refused
+                        .iter()
+                        .filter_map(|r| r["index"].as_u64().map(|i| i as usize))
+                        .collect();
+                    guard.ingestor.accept(remember, &refused);
+                }
+                Err(_) => guard.ingestor.forget(&remember),
             }
-            Err(_) => guard.ingestor.forget(&remember),
+        }
+        guard.states = states;
+        guard.fetched_at = now;
+        if guard
+            .states
+            .iter()
+            .any(|source| source["state"] == "scanning")
+        {
+            guard.scanning_since.get_or_insert(now);
+        } else {
+            guard.scanning_since = None;
         }
     }
-    guard.states = states;
-    guard.fetched_at = now;
-    if guard
-        .states
-        .iter()
-        .any(|source| source["state"] == "scanning")
-    {
-        guard.scanning_since.get_or_insert(now);
-    } else {
-        guard.scanning_since = None;
-    }
+    kimi_history_pass(
+        engine,
+        agents,
+        &computers,
+        ccs_dir,
+        experiments.as_ref(),
+        preferences.as_ref(),
+        &pricing,
+        generation,
+        now,
+    )
+    .await;
 }
 
 /// The refresh interval the front door's account-refresh settings name (seconds), default 60.
