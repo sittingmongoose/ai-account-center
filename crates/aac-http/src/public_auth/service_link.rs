@@ -43,7 +43,7 @@ struct CollectionEndpoint {
     native_lifecycle: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct ServiceLink {
     socket: PathBuf,
     secret: String,
@@ -220,14 +220,14 @@ impl ServiceLink {
         request: Request<Body>,
     ) -> Option<(
         axum::http::Response<hyper::body::Incoming>,
-        tokio::task::JoinHandle<()>,
+        tokio_util::task::AbortOnDropHandle<()>,
     )> {
         let stream = UnixStream::connect(&self.socket).await.ok()?;
         let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.ok()?;
         // The connection future drives the reply body.
-        let drive = tokio::spawn(async move {
+        let drive = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             let _ = connection.await;
-        });
+        }));
         if let Ok(reply) = sender.send_request(request).await
             && reply
                 .headers()

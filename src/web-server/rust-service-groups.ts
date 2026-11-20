@@ -90,8 +90,7 @@ export function rustComposeSelected(env: NodeJS.ProcessEnv = process.env): boole
 export function rustOwnedStatusOn(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
     process.platform !== 'win32' &&
-    (env.AAC_RUST_CUT_WORKER === '1' || rustGroupOn('status', env)) &&
-    rustStoreSwitchOn(env)
+    (env.AAC_RUST_CUT_WORKER === '1' || (rustGroupOn('status', env) && rustStoreSwitchOn(env)))
   );
 }
 
@@ -103,8 +102,7 @@ export function rustOwnedStatusOn(env: NodeJS.ProcessEnv = process.env): boolean
 export function rustOwnedScoreboardOn(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
     process.platform !== 'win32' &&
-    (env.AAC_RUST_CUT_WORKER === '1' || rustGroupOn('scoreboard', env)) &&
-    rustStoreSwitchOn(env)
+    (env.AAC_RUST_CUT_WORKER === '1' || (rustGroupOn('scoreboard', env) && rustStoreSwitchOn(env)))
   );
 }
 

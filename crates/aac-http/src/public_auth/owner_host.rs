@@ -22,6 +22,8 @@ use axum::http::HeaderMap;
 use serde_json::Value as Json;
 #[cfg(unix)]
 use serde_json::json;
+#[cfg(unix)]
+use std::time::Duration;
 use std::{
     path::{Path, PathBuf},
     sync::Mutex,
@@ -234,6 +236,15 @@ impl OwnerHost {
         &self,
         cache: &crate::account_usage::AccountUsageCache,
     ) {
+        // The full historical replay exercises the account collector separately
+        // while its Status golden represents a page with no account sample.
+        #[cfg(feature = "parity-fixtures")]
+        if std::env::var("AAC_RUST_CUT_FIXTURE_NO_STATUS_USAGE").as_deref() == Ok("1") {
+            return;
+        }
+        if crate::store_host::disabled_for_public(&self.root) {
+            return;
+        }
         let usage = self
             .usage_samples
             .lock()
@@ -282,43 +293,45 @@ impl OwnerHost {
     }
 
     #[cfg(unix)]
-    fn cached(&self) -> Option<ServiceLink> {
-        self.link.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    fn published_link(&self) -> Option<ServiceLink> {
+        let mut held = self.link.lock().unwrap_or_else(|p| p.into_inner());
+        if held.is_none() {
+            *held = ServiceLink::load(&self.root);
+        }
+        held.clone()
     }
 
     #[cfg(unix)]
-    fn remember(&self, link: ServiceLink) -> ServiceLink {
-        *self.link.lock().unwrap_or_else(|p| p.into_inner()) = Some(link.clone());
-        link
+    fn forget_link(&self, failed: &ServiceLink) {
+        let mut held = self.link.lock().unwrap_or_else(|p| p.into_inner());
+        if held.as_ref() == Some(failed) {
+            *held = None;
+        }
     }
 
     /// The service's endpoint: a running one's descriptor, else the in-process service this
     /// host starts for a worker-less boot. Windows has no private service yet: no link there.
     #[cfg(unix)]
     async fn link(&self) -> Option<ServiceLink> {
-        if let Some(link) = self.cached() {
+        if let Some(link) = self.published_link() {
             return Some(link);
-        }
-        if let Some(link) = ServiceLink::load(&self.root) {
-            return Some(self.remember(link));
         }
         if !self.embed {
             // A supervisor-owned service may still be starting (the public listener binds
             // first). Wait briefly for its descriptor instead of declining the first request.
             for _ in 0..100 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if let Some(link) = ServiceLink::load(&self.root) {
-                    return Some(self.remember(link));
+                if let Some(link) = self.published_link() {
+                    return Some(link);
                 }
             }
             return None;
         }
         let mut embedded = self.embedded.lock().await;
-        if embedded.is_none() {
+        if embedded.as_ref().is_none_or(|boot| boot.task.is_finished()) {
             *embedded = self.start_embedded().await;
         }
-        let link = ServiceLink::load(&self.root)?;
-        Some(self.remember(link))
+        self.published_link()
     }
 
     /// Whether a private service (running or started here) answers this boot.
@@ -349,7 +362,7 @@ impl OwnerHost {
             let link = self.link().await?;
             let reply = link.request(method, uri, principal, headers, body).await;
             if reply.is_none() {
-                *self.link.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                self.forget_link(&link);
             }
             reply
         }
@@ -360,15 +373,32 @@ impl OwnerHost {
         }
     }
 
+    #[cfg(unix)]
+    async fn status_event_link(&self) -> Option<ServiceLink> {
+        if self.embed {
+            self.link().await
+        } else {
+            self.published_link()
+        }
+    }
+
     /// Forward the Status producer's hints without another producer or a worker subscriber.
     pub(super) async fn status_events(&self, events: DashboardEvents) {
         #[cfg(unix)]
-        loop {
-            if let Some(link) = self.link().await {
-                link.follow_status(&events).await;
-                *self.link.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        {
+            let mut delay = Duration::from_secs(1);
+            loop {
+                let started = tokio::time::Instant::now();
+                if let Some(link) = self.status_event_link().await {
+                    link.follow_status(&events).await;
+                    self.forget_link(&link);
+                }
+                if started.elapsed() >= Duration::from_secs(30) {
+                    delay = Duration::from_secs(1);
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(30));
             }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
         #[cfg(not(unix))]
         if let Some(owner) = self.local().await {
@@ -603,6 +633,21 @@ pub(super) fn write_descriptor(
 mod tests {
     #![allow(unsafe_code, clippy::unwrap_used)]
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn status_event_lookup_returns_promptly_when_no_service_publishes() {
+        let root = tempfile::tempdir().unwrap();
+        let host = OwnerHost::new(root.path().to_path_buf(), false);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            host.status_event_link(),
+        )
+        .await;
+        assert!(
+            matches!(result, Ok(None)),
+            "the event loop must own the retry cadence"
+        );
+    }
     use serde_json::Value;
 
     /// The descriptor round-trips through the same checks the link applies.
@@ -844,6 +889,61 @@ mod tests {
 mod windows_tests {
     #![allow(unsafe_code)]
     use super::*;
+
+    #[tokio::test]
+    async fn the_windows_owner_preserves_store_cache_retention_and_share_backup() {
+        const FIXTURE: &str = "AAC_TEST_WINDOWS_STORE_ROOT";
+        if let Some(root) = std::env::var_os(FIXTURE).map(PathBuf::from) {
+            let host = OwnerHost::new(root.clone(), true);
+            let owners = host.local().await.expect("Windows owners");
+            let store = owners.store.as_ref().expect("Windows store");
+            let boot = store.boot_for_test();
+            assert_eq!(boot.cache_bytes, Some(48 * 1024 * 1024));
+            assert_eq!(boot.activity_retention_days, Some(400));
+            assert_eq!(
+                boot.snapshot_directory.as_deref(),
+                Some(root.join("snapshot").as_path())
+            );
+            assert!(!boot.share_backup_off);
+            store.job_pass(aac_store::engine::now_ms());
+            let backup = root.join("share/ai-account-center/store-backups");
+            assert!(
+                backup.read_dir().unwrap().next().is_some(),
+                "a backup reached the fixture share"
+            );
+            host.stop().await;
+            return;
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        std::fs::create_dir_all(root.join("share/ai-account-center")).unwrap();
+        std::fs::create_dir(root.join("snapshot")).unwrap();
+        std::fs::write(
+            root.join("agent-usage-snapshot.json"),
+            serde_json::json!({"version": 1, "directory": root.join("snapshot")}).to_string(),
+        )
+        .unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "public_auth::owner_host::windows_tests::the_windows_owner_preserves_store_cache_retention_and_share_backup", "--nocapture"])
+            .env(FIXTURE, root)
+            .env("CCS_HOME", root)
+            .env("AAC_AGENT_REPORTS_DIR", root.join("reports"))
+            .env("AAC_PM_MAIL_REGISTRY_DIR", root.join("registry"))
+            .env("AAC_T3_STATE_DB", root.join("pins.sqlite"))
+            .env("AAC_STATUS_DOORBELL", "off")
+            .env("AAC_STORE_CACHE_MB", "48")
+            .env("AAC_ANALYTICS_RETENTION_DAYS", "400")
+            .env_remove("AAC_STORE")
+            .env_remove("AAC_RUST_STORE")
+            .env_remove("AAC_STORE_SHARE_BACKUP_DIR")
+            .output().unwrap();
+        assert!(
+            child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+    }
 
     #[tokio::test]
     async fn the_local_owner_opens_no_store_with_the_switch_off() {

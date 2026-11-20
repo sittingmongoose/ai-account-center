@@ -71,7 +71,7 @@ pub struct StoreBoot {
 impl StoreBoot {
     /// Use the existing store settings when the public listener hosts the engine itself.
     pub(crate) fn for_public(root: &std::path::Path) -> Option<Self> {
-        if std::env::var("AAC_RUST_STORE").as_deref() == Ok("off") || disabled() {
+        if disabled_for_public(root) {
             return None;
         }
         let positive = |name| {
@@ -142,6 +142,28 @@ pub(crate) fn disabled() -> bool {
     std::env::var("AAC_STORE").is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"))
 }
 
+pub(crate) fn disabled_for_public(root: &std::path::Path) -> bool {
+    if disabled() {
+        return true;
+    }
+    if let Ok(value) = std::env::var("AAC_RUST_STORE") {
+        return value != "on";
+    }
+    use aac_files::read::{Ancestors, Read, ReadPolicy, read};
+    let policy = ReadPolicy::capped(4 * 1024 * 1024).ancestors(Ancestors::NoLinkBelow(root));
+    let Read::Bytes(bytes, _) = read(&root.join("config.yaml"), &policy) else {
+        return false;
+    };
+    std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|text| aac_config::split_active(text).ok())
+        .is_some_and(|(config, _)| {
+            config["rustService"]
+                .get("store")
+                .is_some_and(|value| value != "on")
+        })
+}
+
 /// The job loop's record, readable through the `hostJobs` method (never in `status`, whose
 /// shape the goldens pin).
 #[derive(Default)]
@@ -188,6 +210,11 @@ fn meta_ms(status: &Value, key: &str) -> i64 {
 }
 
 impl StoreHost {
+    #[cfg(all(test, windows))]
+    pub(crate) fn boot_for_test(&self) -> &StoreBoot {
+        &self.boot
+    }
+
     pub(crate) fn new(boot: StoreBoot) -> Arc<Self> {
         let (sender, receiver) = mpsc::channel();
         let host = Arc::new(Self {

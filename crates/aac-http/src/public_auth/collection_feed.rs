@@ -234,3 +234,39 @@ async fn sample(State(source): State<Source>, headers: HeaderMap) -> Response {
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn worker_store_channel_refuses_engine_lifecycle_methods() {
+        let proof = "fixture-collection-proof";
+        let feed = CollectionFeed::start(proof).await.unwrap();
+        let client = reqwest::Client::new();
+        let send = |path: &str, supplied: &str| {
+            client
+                .post(format!("{}{path}", feed.address()))
+                .header("x-aac-collection-proof", supplied)
+                .body("{}")
+                .send()
+        };
+        assert_eq!(send("/store/status", "wrong").await.unwrap().status(), 401);
+        assert_eq!(
+            send("/internal/store/status", proof)
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+        for action in ["open", "close", "restore", "maintain", "backup"] {
+            let reply = send(&format!("/store/{action}"), proof).await.unwrap();
+            assert_eq!(reply.status(), 500, "{action}");
+            assert_eq!(
+                reply.text().await.unwrap(),
+                r#"{"error":"invalid: unknown worker store method"}"#,
+                "{action}"
+            );
+        }
+    }
+}

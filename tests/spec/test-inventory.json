@@ -682,6 +682,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/collection_feed.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/compose.rs",
       "kind": "safety",
       "evidence": [
@@ -4626,6 +4633,12 @@
         "HTTP",
         "helper"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/status/status-store-off.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/status/status-view-strip.test.ts",

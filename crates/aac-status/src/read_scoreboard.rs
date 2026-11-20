@@ -524,6 +524,13 @@ fn runs_source_of(input: &V, docs: &[&V], unscored: usize, index: &Index, now: i
     let runs = &input["runs"];
     let at = ctx.epoch(&runs["scannedAt"]);
     let base = source_base("scoreboard-runs", "Agent runs", at, now, ctx);
+    if runs["state"] == "disabled" {
+        return Some(source_finish(
+            base,
+            "missing",
+            "The run history store is disabled.".into(),
+        ));
+    }
     let Some(at) = at else {
         return Some(source_finish(base, "missing", "Waiting for the first scan.".into()));
     };

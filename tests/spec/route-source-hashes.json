@@ -1,7 +1,7 @@
 {
   "config/rust-service-routes.json": "ab0c25df28c751507c25b849379b102d52c31d33179565d60adf25cb6de10b23",
   "crates/aac-http/src/public_auth/home_group.rs": "710e8a69954931eaaaa7b1b53f397a6674f2887d099a8bea5ab5770cb8dbb515",
-  "crates/aac-http/src/public_auth/native_group.rs": "f03fa532dd48820aa9ddb936d9464ff3a1f56e97182e6d19d4bab71073105e9e",
+  "crates/aac-http/src/public_auth/native_group.rs": "b40118fe8e7afef74d0721eb44abc935e75ba94ef2e4dd386367673d083b04b9",
   "crates/aac-http/src/public_auth/reset_routes.rs": "6619b9425511e29f8b47fa30384ea627099774a29bb4432d40c864bde4e7cc0e",
   "src/web-server/compose-request.ts": "b48b41b7f36c47236965168743dde68b39e8161e2f6508416f951b1d264c92f4",
   "src/web-server/compose-server.ts": "88495222e3f5f674f679305bce85e2fe70b482d30675ed78ca53a9027d9f8d97",
@@ -26,7 +26,7 @@
   "src/web-server/routes/revalidated-view.ts": "58d7382a0314411bb4e6b5cb079b0a8c73de2d9026521679b270e98b21b7923a",
   "src/web-server/rust-service-health.ts": "05a67c876dea55b6f9a17e9d9132d9b954f02ec748a3334ce42798a030d21c39",
   "src/web-server/rust-service-lifecycle.ts": "5b97994b00720a26addac7ffba0f7ca151eea92c2ab3db7433e9d5bee5c7aaed",
-  "src/web-server/rust-service-supervisor.ts": "6ce2f0a1ccdc99c3f7aa409f9c4eb516b13e400a7fcf43be1b198a217613a091",
+  "src/web-server/rust-service-supervisor.ts": "b01f1debf58282d769816aaee1554cde69e7395f7744f4566a0bdf4612640bbe",
   "src/web-server/rust-service-transport.ts": "80a190f2e9a60a9d66e65bd3ae349ca03b96d578ddf0d635109a792e1afdad6d",
   "src/web-server/rust-service.ts": "86ee5babf2b1d3be80772e7ea28fcc22147d39e1741ae46ec86afef3e6305e30",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa",

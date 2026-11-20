@@ -162,10 +162,13 @@ if (mode !== 'fixture') {
     // account home directly, so point it there rather than at the developer's own logins.
     HOME: root,
     USERPROFILE: root,
+    APPDATA: path.join(root, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(root, 'AppData', 'Local'),
     CODEX_HOME: path.join(root, '.codex'),
     CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
     AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
     AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+    AAC_T3_STATE_DB: path.join(root, 'fixture-pins.sqlite'),
     ...(group === undefined || group === 'app-updates'
       ? { AAC_RUST_CUT_APP_UPDATES_FIXTURE: '1' }
       : {}),
@@ -179,6 +182,8 @@ if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')
     AAC_RUST_GROUP_COLLECTION: 'on',
     AAC_AGENT_VERBS: 'off',
     AAC_AGENT_TRANSPORT: 'off',
+    AAC_STATUS_DOORBELL: 'off',
+    AAC_STORE_SHARE_BACKUP_DIR: 'off',
   });
 }
 
@@ -394,7 +399,9 @@ try {
   }
   if (group === undefined && mode === 'cut-rust-only') {
     environment.AAC_RUST_GROUP_HOME = 'on';
-    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    // Use the same unmounted Status reports fixture as the scoped replay. The
+    // collection rows exercise their own samples elsewhere in this full run.
+    environment.AAC_RUST_CUT_FIXTURE_NO_STATUS_USAGE = '1';
     await fs.mkdir(path.join(root, 'registry'), { recursive: true });
   }
   if (group === 'store') {
@@ -429,7 +436,16 @@ try {
       AAC_AGENT_VERBS: 'off',
     });
   }
-  let rust = await startRustFixture(binary, root, environment, false, mode);
+  const boot = () =>
+    startRustFixture(
+      binary,
+      root,
+      environment,
+      false,
+      mode,
+      process.platform === 'win32' && mode === 'cut-rust-only' && group === undefined
+    );
+  let rust = await boot();
   try {
     let windowsPreflightReason: string | undefined;
     if (registryOutput !== undefined) {
@@ -488,11 +504,29 @@ try {
           served = endpoint;
           // The route inventory stores the pattern; capture supplies this query explicitly.
           if (/accounts\/(dashboard|analytics)$/.test(endpoint)) endpoint += '?fixture=invalid';
-          const response = await send(rust.url, endpoint, {
+          const requestOptions = {
             method: request.method === 'ALL' ? 'POST' : request.method,
             headers,
             body: request.body === undefined ? undefined : JSON.stringify(request.body),
-          });
+          };
+          let response = await send(rust.url, endpoint, requestOptions);
+          // The recorded Nas1 bar row contains the first completed machine and pin sample.
+          // Wait for that generation and then compare the entire response as usual.
+          const pinned = (expectedBody as { pinned?: { machineProblems?: unknown[] } } | null)
+            ?.pinned;
+          if (nativeRoute === '/api/status' && pinned?.machineProblems && response.status === 200) {
+            const deadline = Date.now() + 6000;
+            while (
+              (await response.clone().json()).pinned?.unavailable ===
+                'the pinned threads have not been read yet' &&
+              Date.now() < deadline
+            ) {
+              await response.arrayBuffer();
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              response = await send(rust.url, endpoint, requestOptions);
+              if (response.status !== 200) break;
+            }
+          }
           status = response.status;
           const text = await response.text();
           try {
@@ -582,7 +616,7 @@ try {
       // spend the 5-attempt budget, so restart here with the same persisted fixture state.
       if (name === 'POST /api/auth/login') {
         await rust.stop();
-        rust = await startRustFixture(binary, root, environment, false, mode);
+        rust = await boot();
       }
     }
   } finally {

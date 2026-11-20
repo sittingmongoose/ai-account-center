@@ -283,8 +283,8 @@ fn store_json(value: &Json) -> Reply {
     no_store(super::json_bytes(200, aac_views::js_json::write(value)))
 }
 
-fn unavailable_status() -> Reply {
-    let reason = if crate::store_host::disabled() {
+fn unavailable_status(root: &Path) -> Reply {
+    let reason = if crate::store_host::disabled_for_public(root) {
         "disabled"
     } else {
         "missing"
@@ -409,30 +409,31 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
 /// `GET /api/store/status`: the hosted store's writer status, or the fallback's honest
 /// "unavailable" (never an invented one).
 async fn store_status(routes: &Routes, access: &DashboardAccess) -> Reply {
+    let unavailable = || unavailable_status(routes.root());
     if crate::store_host::disabled() {
-        return unavailable_status();
+        return unavailable();
     }
     if let Some(owners) = routes.local().await {
         let Some(store) = owners.store.clone() else {
-            return unavailable_status();
+            return unavailable();
         };
         return match tokio::task::spawn_blocking(move || store.status_value()).await {
             Ok(Ok(value)) => store_json(&value),
-            Ok(Err(Decline::Unsupported)) => unavailable_status(),
+            Ok(Err(Decline::Unsupported)) => unavailable(),
             _ => store_failed(),
         };
     }
     let Some(principal) = access.service_principal() else {
-        return unavailable_status();
+        return unavailable();
     };
     if !routes.hosted().await {
-        return unavailable_status();
+        return unavailable();
     }
     match routes
         .request("GET", "/api/store/status", &principal, &[], None)
         .await
     {
-        Some(reply) if declined(&reply) => unavailable_status(),
+        Some(reply) if declined(&reply) => unavailable(),
         Some(reply) if reply.status == 200 => match json_of(&reply) {
             Some(value)
                 if matches!(

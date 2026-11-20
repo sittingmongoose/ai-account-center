@@ -119,7 +119,7 @@
   "src/web-server/rust-profile-input.ts": "fbf86a556328253533567783ae69d5a8913b745689317a06f6b35f9b764c7968",
   "src/web-server/rust-service-health.ts": "05a67c876dea55b6f9a17e9d9132d9b954f02ec748a3334ce42798a030d21c39",
   "src/web-server/rust-service-lifecycle.ts": "5b97994b00720a26addac7ffba0f7ca151eea92c2ab3db7433e9d5bee5c7aaed",
-  "src/web-server/rust-service-supervisor.ts": "6ce2f0a1ccdc99c3f7aa409f9c4eb516b13e400a7fcf43be1b198a217613a091",
+  "src/web-server/rust-service-supervisor.ts": "b01f1debf58282d769816aaee1554cde69e7395f7744f4566a0bdf4612640bbe",
   "src/web-server/rust-service-transport.ts": "80a190f2e9a60a9d66e65bd3ae349ca03b96d578ddf0d635109a792e1afdad6d",
   "src/web-server/rust-service-values.ts": "e2b6b35a076bfd8e8340c69060bab3932110bb01bc5ff61e2660f8692cf77018",
   "src/web-server/rust-service.ts": "86ee5babf2b1d3be80772e7ea28fcc22147d39e1741ae46ec86afef3e6305e30",

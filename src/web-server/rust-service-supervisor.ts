@@ -251,13 +251,15 @@ export class RustSupervisor {
       if (this.stopped) return;
       this.storeBoot.snapshotDirectory = snapshotDirectory;
     }
-    // R4: the owned readers run under the store host; resolve their share roots once.
-    if (this.storeBoot && (rustOwnedStatusOn() || rustOwnedScoreboardOn())) {
+    // The cut's share readers and answer journal also run with history storage off.
+    const status = rustOwnedStatusOn();
+    const scoreboard = rustOwnedScoreboardOn();
+    if (status || scoreboard) {
       this.ownedBoot = {
         reportsRoot: agentReportsRoot(),
         registryDir: pmMailRegistryDir(),
-        status: rustOwnedStatusOn(),
-        scoreboard: rustOwnedScoreboardOn(),
+        status,
+        scoreboard,
       };
     }
     this.minuteTimer = setInterval(() => this.logMinute(), 60_000);

@@ -256,7 +256,7 @@ struct CachedView {
 
 pub(crate) struct ScoreboardOwned {
     root: PathBuf,
-    store: Arc<StoreHost>,
+    store: Option<Arc<StoreHost>>,
     feeds: Feeds,
     catalog: Mutex<CatalogReader>,
     catalog_state: Mutex<Json>,
@@ -290,7 +290,7 @@ pub(crate) struct ScoreboardOwned {
 impl ScoreboardOwned {
     pub(crate) fn new(
         root: PathBuf,
-        store: Arc<StoreHost>,
+        store: Option<Arc<StoreHost>>,
         feeds: Feeds,
         check: Arc<Mutex<ReadersCheckWriter>>,
         owners: Owners,
@@ -418,11 +418,13 @@ impl ScoreboardOwned {
     /// one secret policy between scan and record exactly as the TypeScript shuttle does,
     /// and the store records what passes.
     pub(crate) async fn ingest_pass(&self, force_full: bool) {
+        let Some(store) = &self.store else {
+            return;
+        };
         let now = now_ms();
         let full =
             force_full || now.saturating_sub(self.last_full_at.load(Ordering::Relaxed)) >= FULL_MS;
-        let scan = match self
-            .store
+        let scan = match store
             .call(
                 "runsScan".to_string(),
                 json!({"root": self.root.to_string_lossy(), "full": full}).to_string(),
@@ -443,8 +445,7 @@ impl ScoreboardOwned {
             ingest_request(&scan, now, &mut safe_paths)
         };
         self.store_epoch.fetch_add(1, Ordering::SeqCst);
-        let record = self
-            .store
+        let record = store
             .call("runsRecord".to_string(), request.record.to_string())
             .await;
         self.store_epoch.fetch_add(1, Ordering::SeqCst);
@@ -500,6 +501,11 @@ impl ScoreboardOwned {
         if let Some(held) = held {
             return Ok(held);
         }
+        if self.store.is_none() {
+            let held = Arc::new(HeldRuns::new(key, Vec::new(), Vec::new(), None));
+            *self.held_runs.lock().unwrap_or_else(|p| p.into_inner()) = Some(held.clone());
+            return Ok(held);
+        }
         // One unfiltered read of the snapshot, with the rows' cursors and the receipts.
         let full = self
             .read_store(
@@ -533,6 +539,7 @@ impl ScoreboardOwned {
 
     /// The store's paged read of one query (see [`Self::read`] for the held snapshot).
     async fn read_store(&self, query: &Json, clock: Option<u64>) -> Result<CompletedRead, Decline> {
+        let store = self.store.as_ref().ok_or(Decline::Unsupported)?;
         let signature = json!([
             query["fromMs"],
             query["toMs"],
@@ -552,8 +559,7 @@ impl ScoreboardOwned {
         loop {
             let mut args = query.clone();
             args["after"] = after.clone();
-            let text = self
-                .store
+            let text = store
                 .call("runsQuery".to_string(), args.to_string())
                 .await
                 .map_err(|_| Decline::Internal)?;
@@ -654,6 +660,7 @@ impl ScoreboardOwned {
         }
         let call = |method: &'static str| async move {
             self.store
+                .as_ref()?
                 .call(method.to_string(), "{}".to_string())
                 .await
                 .ok()
@@ -740,7 +747,9 @@ impl ScoreboardOwned {
             .collect();
         // Built by moving the rows in (`json!` would serialize, a deep copy of every row).
         let writers = writers.len();
-        let state = if pass.state.is_empty() {
+        let state = if self.store.is_none() {
+            "disabled"
+        } else if pass.state.is_empty() {
             "ok"
         } else {
             pass.state.as_str()
@@ -755,7 +764,10 @@ impl ScoreboardOwned {
             },
         );
         out.insert("state".to_string(), json!(state));
-        out.insert("scannedAt".to_string(), json!(clock));
+        out.insert(
+            "scannedAt".to_string(),
+            json!(self.store.as_ref().map(|_| clock)),
+        );
         out.insert("runs".to_string(), Json::Array(runs));
         out.insert("writers".to_string(), json!(writers));
         out.insert(
@@ -1084,7 +1096,11 @@ impl ScoreboardOwned {
                     "taskTypes": task_types,
                 },
                 "identity": identity,
-                "history": {"store": "on", "runs": status_runs, "importing": importing},
+                "history": {
+                    "store": if self.store.is_some() { "on" } else { "off" },
+                    "runs": status_runs,
+                    "importing": importing,
+                },
                 "native": true,
             }),
         );
@@ -1138,13 +1154,7 @@ impl ScoreboardOwned {
             .unwrap_or_else(|p| p.into_inner())
             .clone();
         let docs = self.normalized_docs(&runs, &catalog);
-        let identity: Json = self
-            .store
-            .call("runsIdentity".to_string(), "{}".to_string())
-            .await
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or(Json::Null);
+        let identity = self.store_facts().await.identity.clone();
         let seed_failures = self
             .seed_failures
             .lock()

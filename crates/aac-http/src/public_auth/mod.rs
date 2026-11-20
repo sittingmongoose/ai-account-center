@@ -814,6 +814,15 @@ pub(crate) async fn run_public_at(
             })
         });
     let signal_task = tokio::spawn(async move {
+        #[cfg(all(windows, feature = "parity-fixtures"))]
+        if std::env::var("AAC_RUST_CUT_FIXTURE_STOP_STDIN").as_deref() == Ok("1") {
+            // The M0 harness restarts the process to reset auth rate limits. Windows
+            // child.kill() terminates it without giving the store a chance to seal.
+            let _ = tokio::io::copy(&mut tokio::io::stdin(), &mut tokio::io::sink()).await;
+        } else {
+            shutdown_signal().await;
+        }
+        #[cfg(not(all(windows, feature = "parity-fixtures")))]
         shutdown_signal().await;
         signal.graceful_shutdown(Some(Duration::from_secs(3)));
     });

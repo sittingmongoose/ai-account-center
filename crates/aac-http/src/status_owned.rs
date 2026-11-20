@@ -68,7 +68,7 @@ pub(crate) struct StatusOwned {
     /// Accepted report revisions, by `[kind, writer, objectId]` text (the DB deduplicates
     /// across restarts; this map only skips the calls).
     accepted: Mutex<IndexMap<String, String>>,
-    store: Arc<StoreHost>,
+    store: Option<Arc<StoreHost>>,
     feeds: Feeds,
     owners: Owners,
     flushing: Arc<AtomicBool>,
@@ -86,7 +86,7 @@ impl StatusOwned {
     pub(crate) fn new(
         reports_root: PathBuf,
         registry_dir: PathBuf,
-        store: Arc<StoreHost>,
+        store: Option<Arc<StoreHost>>,
         feeds: Feeds,
         owners: Owners,
         check: Arc<Mutex<ReadersCheckWriter>>,
@@ -281,6 +281,9 @@ impl StatusOwned {
     /// accepted revisions this server has not acknowledged yet, in batches of four; a policy
     /// refusal retries the batch's rows one by one, a storage outage stops the pass.
     async fn capture(&self, reports: &AgentReportsState, docs: &StatusDocsState) {
+        let Some(store) = &self.store else {
+            return;
+        };
         let mut input: Vec<(String, String, Json, i64, u64, String)> = Vec::new(); // kind, writer, doc, writtenAtMs, firstSeenAt, sha
         for row in &reports.threads {
             input.push((
@@ -405,7 +408,7 @@ impl StatusOwned {
                 .collect();
             index += 4;
             let args = Json::Array(batch.clone()).to_string();
-            match self.store.call("captureReports".to_string(), args).await {
+            match store.call("captureReports".to_string(), args).await {
                 Ok(_) => acknowledge(&self.accepted, &batch_keys, &batch_shas),
                 Err(error) => {
                     if error_code(&error) != "invalid" {
@@ -416,8 +419,7 @@ impl StatusOwned {
                     }
                     for (row, key) in batch.iter().zip(&batch_keys) {
                         let sha = row["sourceSha256"].as_str().unwrap_or_default().to_string();
-                        if self
-                            .store
+                        if store
                             .call(
                                 "captureReports".to_string(),
                                 Json::Array(vec![row.clone()]).to_string(),

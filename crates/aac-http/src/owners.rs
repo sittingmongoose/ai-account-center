@@ -23,7 +23,7 @@ use std::{
 };
 
 /// R4: which owners this boot runs, and the share roots they read. The supervisor resolves the
-/// roots and the group switches once at start; the store host must be on for either owner.
+/// roots and the group switches once at start.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OwnedBoot {
@@ -31,9 +31,9 @@ pub struct OwnedBoot {
     pub reports_root: PathBuf,
     /// The pm-mail registry folder (`AAC_PM_MAIL_REGISTRY_DIR`, else the shared inbox).
     pub registry_dir: PathBuf,
-    /// The owned Status readers (the status group on, under the store host).
+    /// The owned Status readers.
     pub status: bool,
-    /// The owned Scoreboard (the scoreboard group on, under the store host).
+    /// The owned Scoreboard.
     pub scoreboard: bool,
 }
 
@@ -103,18 +103,18 @@ impl Owners {
         ));
         let check_flushing = Arc::new(AtomicBool::new(false));
         // G16b: the answer store moves with the owned Status group.
-        let answers_owned = match (&config.owned, &store) {
-            (Some(owned), Some(_)) if owned.status => Some(AnswersOwned::new(
+        let answers_owned = match &config.owned {
+            Some(owned) if owned.status => Some(AnswersOwned::new(
                 config.ccs_dir.clone(),
                 owned.reports_root.clone(),
             )),
             _ => None,
         };
-        let status_owned = match (&config.owned, &store) {
-            (Some(owned), Some(host)) if owned.status => Some(StatusOwned::new(
+        let status_owned = match &config.owned {
+            Some(owned) if owned.status => Some(StatusOwned::new(
                 owned.reports_root.clone(),
                 owned.registry_dir.clone(),
-                Arc::clone(host),
+                store.clone(),
                 feeds.clone(),
                 registry.clone(),
                 Arc::clone(&check),
@@ -130,10 +130,10 @@ impl Owners {
             }
             _ => None,
         };
-        let scoreboard_owned = match (&config.owned, &store) {
-            (Some(owned), Some(host)) if owned.scoreboard => Some(ScoreboardOwned::new(
+        let scoreboard_owned = match &config.owned {
+            Some(owned) if owned.scoreboard => Some(ScoreboardOwned::new(
                 owned.reports_root.clone(),
-                Arc::clone(host),
+                store.clone(),
                 scoreboard_feeds,
                 Arc::clone(&check),
                 registry.clone(),

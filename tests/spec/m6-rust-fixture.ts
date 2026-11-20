@@ -28,12 +28,13 @@ async function ready(child: ChildProcess, timeoutMs: number): Promise<string> {
   }
 }
 
-async function stop(child: ChildProcess): Promise<void> {
+async function stop(child: ChildProcess, gracefulStdin = false): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, 'exit');
   const deadline = setTimeout(() => child.kill('SIGKILL'), 5_000);
   try {
-    child.kill();
+    if (gracefulStdin) child.stdin?.end();
+    else child.kill();
     await exited;
   } finally {
     clearTimeout(deadline);
@@ -45,7 +46,8 @@ export async function startRustFixture(
   root: string,
   env: NodeJS.ProcessEnv,
   eventPipe = false,
-  mode: 'fixture' | 'cut' | 'cut-rust-only' = 'fixture'
+  mode: 'fixture' | 'cut' | 'cut-rust-only' = 'fixture',
+  gracefulStdin = false
 ) {
   const args = ['--public'];
   const cut = mode !== 'fixture';
@@ -76,9 +78,10 @@ export async function startRustFixture(
       CCS_DIR: root,
       AAC_RUST_PUBLIC_LISTEN: '127.0.0.1:0',
       AAC_RUST_PUBLIC_EVENT_STDIN: eventPipe ? '1' : '0',
+      ...(gracefulStdin ? { AAC_RUST_CUT_FIXTURE_STOP_STDIN: '1' } : {}),
       AAC_TS_SIDECAR: mode === 'cut-rust-only' ? 'off' : env.AAC_TS_SIDECAR,
     },
-    stdio: [eventPipe ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    stdio: [eventPipe || gracefulStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
   const audit: string[] = [];
@@ -87,7 +90,7 @@ export async function startRustFixture(
   });
   try {
     const url = await ready(child, cut ? 22_000 : 10_000);
-    return { url, audit, pipe: child.stdin, stop: () => stop(child) };
+    return { url, audit, pipe: child.stdin, stop: () => stop(child, gracefulStdin) };
   } catch (error) {
     await stop(child);
     throw new Error(audit.join('').trim() || String(error), { cause: error });

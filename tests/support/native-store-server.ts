@@ -16,11 +16,16 @@ export const haveNativeStoreServer = existsSync(binary);
 
 const credentials = { username: 'fixture-admin', password: 'fixture-password-only' };
 
-export async function startNativeStoreServer(root: string, store = 'on') {
+export async function startNativeStoreServer(
+  root: string,
+  store = 'on',
+  options: { rustStore?: 'off'; configStore?: 'off'; worker?: string } = {}
+) {
   await writeFile(
     path.join(root, 'config.yaml'),
     JSON.stringify({
       version: 10,
+      ...(options.configStore ? { rustService: { store: options.configStore } } : {}),
       dashboard_auth: {
         enabled: true,
         username: credentials.username,
@@ -39,17 +44,33 @@ export async function startNativeStoreServer(root: string, store = 'on') {
       HOME: root,
       USERPROFILE: root,
       AAC_STORE: store,
+      ...(options.rustStore ? { AAC_RUST_STORE: options.rustStore } : {}),
       AAC_STORE_SHARE_BACKUP_DIR: 'off',
       AAC_RUST_GROUP_COLLECTION: 'off',
       AAC_RUST_GROUP_APP_UPDATES: 'off',
-      AAC_RUST_GROUP_STATUS: 'off',
-      AAC_RUST_GROUP_SCOREBOARD: 'off',
+      AAC_RUST_GROUP_RENEWAL: 'off',
+      AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+      AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+      AAC_T3_STATE_DB: path.join(root, 'pins.sqlite'),
       AAC_AGENT_TRANSPORT: 'off',
       AAC_AGENT_VERBS: 'off',
       AAC_STATUS_DOORBELL: 'off',
+      ...(options.worker
+        ? {
+            AAC_TS_SIDECAR: options.worker,
+            NODE_OPTIONS:
+              '--require=' +
+              JSON.stringify(
+                path
+                  .resolve(__dirname, '../spec/m6-cut-worker-fixture.cjs')
+                  .split(path.sep)
+                  .join('/')
+              ),
+          }
+        : {}),
     },
     false,
-    'cut-rust-only'
+    options.worker ? 'cut' : 'cut-rust-only'
   );
   const send = (route: string, options: RequestInit = {}) =>
     fetch(server.url + route, {

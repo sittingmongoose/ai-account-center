@@ -259,12 +259,9 @@ impl Boot {
         {
             return Err(failure());
         }
-        // R4: the owned readers read absolute share roots, and only under the store host
-        // (the runs tables and the report captures go through its single-writer lock).
+        // The share readers run independently of the optional history store.
         if let Some(owned) = &self.owned
-            && (!owned.reports_root.is_absolute()
-                || !owned.registry_dir.is_absolute()
-                || ((owned.status || owned.scoreboard) && self.store.is_none()))
+            && (!owned.reports_root.is_absolute() || !owned.registry_dir.is_absolute())
         {
             return Err(failure());
         }
@@ -2057,7 +2054,8 @@ async fn serve_inner(
                     },
                     |cache| {
                         (native.published)(&cache);
-                        if let Some(produce) = &status_produce
+                        if store.is_some()
+                            && let Some(produce) = &status_produce
                             && let Some(usage) = samples
                                 .lock()
                                 .unwrap_or_else(|poison| poison.into_inner())
