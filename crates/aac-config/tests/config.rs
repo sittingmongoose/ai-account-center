@@ -383,3 +383,45 @@ fn round2_top_level_key_form_table_matches_the_supported_contract() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn dashboard_security_refuses_yaml_merges_and_keeps_literal_settings() {
+    let ordinary = "dashboard_auth: {enabled: true, username: <<, '<<': literal, session_lifetime_days: 14}\n\
+                    dashboard_network: {trusted_networks: ['192.0.2.0/24']}\n";
+    let (active, _) = split_active(ordinary).unwrap();
+    assert_eq!(
+        active["dashboard_auth"],
+        json!({"enabled":true,"username":"<<","<<":"literal","session_lifetime_days":14})
+    );
+    assert_eq!(
+        active["dashboard_network"]["trusted_networks"],
+        json!(["192.0.2.0/24"])
+    );
+
+    for yaml in [
+        "defaults: &defaults {enabled: true}\ndashboard_auth:\n  <<: *defaults\n",
+        "dashboard_auth: {<<: {enabled: true}}\n",
+        "dashboard_auth: {<<:{enabled: true}}\n",
+        "dashboard_auth: {!!merge '<<': {enabled: true}}\n",
+        "dashboard_auth: {!<tag:yaml.org,2002:merge> '<<': {enabled: true}}\n",
+        "%TAG !m! tag:yaml.org,2002:mer\n---\ndashboard_auth: {!m!ge '<<': {enabled: true}}\n",
+        "dashboard_auth: {? &key <<: {enabled: true}}\n",
+        "dashboard_auth: {<<: {<<: {enabled: true}}}\n",
+        "dashboard_tls: {https_listener: {<<: {enabled: true}}}\n",
+    ] {
+        let error = split_active(yaml).expect_err("security merge must refuse the config");
+        assert_eq!(error.cause, Cause::Damaged);
+    }
+}
+
+#[test]
+fn dashboard_security_refuses_yaml_aliases_in_auth_and_trusted_networks() {
+    for yaml in [
+        "defaults: &defaults {enabled: true}\ndashboard_auth: *defaults\n",
+        "days: &days 14\ndashboard_auth: {session_lifetime_days: *days}\n",
+        "lan: &lan '192.0.2.0/24'\ndashboard_network: {trusted_networks: [*lan]}\n",
+    ] {
+        let error = split_active(yaml).expect_err("security alias must refuse the config");
+        assert_eq!(error.cause, Cause::Damaged);
+    }
+}
