@@ -506,3 +506,124 @@ fn the_binary_prints_no_key_token_or_account_id() {
         assert!(!text.contains(secret), "{secret} was printed");
     }
 }
+
+/// The binary with a fresh key store, against `base`: (the `read` answer for WINDOW, the calls seen).
+fn read_with_fake<F>(answer: F) -> (Value, Vec<Seen>)
+where
+    F: Fn(&str, &Value) -> Reply + Send + 'static,
+{
+    let ccs = tempfile::tempdir().unwrap();
+    let (base, seen) = fake(answer);
+    let run = |args: &[&str], input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_aac-cursor-account"))
+            .args(args)
+            .args(["--ccs-dir", ccs.path().to_str().unwrap()])
+            .env("AAC_CURSOR_API_BASE", &base)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()
+    };
+    assert_eq!(run(&["key", "put"], &format!("{KEY}\n"))["ok"], true);
+    let read = run(
+        &["read"],
+        &json!({"sinceMs": WINDOW.0, "untilMs": WINDOW.1}).to_string(),
+    );
+    let calls = seen.lock().unwrap().clone();
+    (read, calls)
+}
+
+/// The plan answer as Cursor gave it on 2026-11-20 (field names recorded; values synthetic).
+fn recorded_plan(total: f64) -> String {
+    json!({"billingCycleStart": "1793500000000", "billingCycleEnd": "1796100000000",
+           "planUsage": {"totalPercentUsed": total, "autoPercentUsed": total / 2.0,
+                         "remainingBonus": "0", "bonusTooltip": "synthetic"},
+           "spendLimitUsage": {"limitType": "synthetic"}, "displayMessage": "synthetic",
+           "displayThreshold": 50, "enabled": true, "autoBucketModels": [],
+           "autoModelSelectedDisplayMessage": "synthetic", "namedModelSelectedDisplayMessage": "synthetic"})
+    .to_string()
+}
+
+const EVENTS: &str = "/aiserver.v1.DashboardService/GetFilteredUsageEvents";
+const PLAN: &str = "/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+
+#[test]
+fn an_empty_events_answer_while_the_plan_shows_use_is_not_visible_never_no_usage() {
+    // The 2026-11-20 read: HTTP 200 with `{}` (2 bytes) for the events, the plan at 49% used.
+    let (read, calls) = read_with_fake(|path, _| {
+        if let Some(answer) = exchange_ok(path) {
+            return answer;
+        }
+        match path {
+            EVENTS => (200, vec![], "{}".to_string()),
+            PLAN => (200, vec![], recorded_plan(49.36)),
+            _ => (404, vec![], "{}".to_string()),
+        }
+    });
+    assert_eq!(read["state"], "unavailable", "{read}");
+    assert_eq!(read["cause"], "events_not_visible");
+    assert_eq!(read["key"]["last4"], "REAL");
+    assert!(read.get("events").is_none() && read.get("rows").is_none(), "{read}");
+    assert_eq!(calls.iter().filter(|c| c.path == PLAN).count(), 1);
+    let text = read.to_string();
+    for secret in [KEY, SUB, token().as_str()] {
+        assert!(!text.contains(secret), "{secret} was printed");
+    }
+}
+
+#[test]
+fn an_empty_events_answer_while_the_plan_is_unused_is_no_usage() {
+    let (read, _) = read_with_fake(|path, _| {
+        if let Some(answer) = exchange_ok(path) {
+            return answer;
+        }
+        match path {
+            EVENTS => (200, vec![], "{}".to_string()),
+            PLAN => (200, vec![], recorded_plan(0.0)),
+            _ => (404, vec![], "{}".to_string()),
+        }
+    });
+    assert_eq!(read["state"], "read", "{read}");
+    assert_eq!(read["events"], 0);
+    assert_eq!(read["unmeasured"], 0);
+}
+
+#[test]
+fn an_empty_events_answer_stands_when_the_plan_cannot_be_read() {
+    let (read, _) = read_with_fake(|path, _| {
+        if let Some(answer) = exchange_ok(path) {
+            return answer;
+        }
+        match path {
+            EVENTS => (200, vec![], "{}".to_string()),
+            _ => (503, vec![], "{}".to_string()),
+        }
+    });
+    assert_eq!(read["state"], "read", "{read}");
+    assert_eq!(read["events"], 0);
+}
+
+#[test]
+fn a_read_with_events_never_asks_the_plan() {
+    let (read, calls) = read_with_fake(|path, _| {
+        if let Some(answer) = exchange_ok(path) {
+            return answer;
+        }
+        match path {
+            EVENTS => (
+                200,
+                vec![],
+                json!({"totalUsageEventsCount": 1, "usageEventsDisplay": [event(0, "grok-4.7", Some(1.0))]})
+                    .to_string(),
+            ),
+            PLAN => (200, vec![], recorded_plan(49.36)),
+            _ => (404, vec![], "{}".to_string()),
+        }
+    });
+    assert_eq!(read["state"], "read", "{read}");
+    assert_eq!(read["events"], 1);
+    assert!(calls.iter().all(|c| c.path != PLAN));
+}
