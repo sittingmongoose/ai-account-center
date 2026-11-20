@@ -99,9 +99,9 @@ process.env.CCS_DIR = root;
 process.env.HOME = home;
 // The packaged scripts, or the repo's (the binary may live in a target directory).
 process.env.AAC_ANTIGRAVITY_SCRIPTS ??= path.join(repo, 'scripts');
-// The shipping switches: Home offered by the default-ready group, the fed answer declined by the
-// native side, so the retained TS adapter answers.
-delete process.env.AAC_RUST_HOME_VIEW;
+// The retained TS adapter answers: the fed group is off, and the route is offered through the
+// view switch (the same retained branch the shipping default-ready group reaches after a fed decline).
+process.env.AAC_RUST_HOME_VIEW = 'on';
 process.env.AAC_RUST_GROUP_HOME = 'off';
 
 const service = new RustService('on');
