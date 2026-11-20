@@ -232,7 +232,7 @@ describe('judgement and sample cards', () => {
       timeZone: 'UTC',
       reports: reader.snapshot(),
       registry: empty,
-      machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty },
+      machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty, odroid: empty },
       browsers: empty,
       simlock: empty,
       usage: null,

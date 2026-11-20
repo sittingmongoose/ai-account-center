@@ -7,13 +7,13 @@ Accounts & Settings entry, window focus and a 30-second idle poll discover jobs
 started in another tab; active jobs poll every 3 seconds. Completion toasts
 report updated, failed, unknown and held counts once per observed job, and never
 claim apps updated when none changed or the job failed.
-The server invokes only Ubuntu locally and the fixed Mac, Windows and Nas1
-SSH aliases (`APP_UPDATE_SSH_HOSTS`); callers cannot supply hosts, commands, app IDs, paths or download URLs.
-Nas1 is a second Ubuntu computer reached as `nas1-agent` (see [Nas1](#nas1-the-fourth-computer)).
+The server invokes only Ubuntu locally and the fixed Mac, Windows, Nas1, Alexis PC
+and Odroid SSH aliases (`APP_UPDATE_SSH_HOSTS`); callers cannot supply hosts, commands, app IDs, paths or download URLs.
+Nas1 is a second Ubuntu computer reached as `nas1-agent`, and Odroid a third reached as `odroid` (see [Nas1](#nas1-the-fourth-computer)).
 
 ## Every computer at once, and never stuck
 
-Ubuntu, Mac, Windows, Nas1 and Alexis PC run **at the same time**; each computer runs up to
+Ubuntu, Mac, Windows, Nas1, Alexis PC and Odroid run **at the same time**; each computer runs up to
 four independent app updates together. Shared npm, apt and MSIX installers are
 serialized, as are Codex CLI/Desktop runtime operations. ZCode finishes before
 its adapters; Codex CLI finishes before Codex Desktop, which goes last when an
@@ -21,7 +21,7 @@ installer needs serial work. T3 waits for every other app to finish, except
 Antigravity ACP, which T3 installs and which therefore runs after T3 (see
 [Cursor CLI and T3 Antigravity ACP](#cursor-cli-and-t3-antigravity-acp)). The job ends when
 the slowest computer finishes, so a busy or unreachable host never holds the
-others back. Five computers x twelve apps give 60 result rows. Per-computer
+others back. Six computers x twelve apps give 72 result rows. Per-computer
 progress is live: the helper prints one JSON line per event
 (`{"event":"app","appId":...,"phase":"checking"|"updating"}` and
 `{"event":"result","result":{...}}`) when the dashboard sets
@@ -485,7 +485,7 @@ installers. Before that, read-only `--inventory --platform <host>` should show
 twelve rows, full T3 nightly versions, Windows Muse's native manager/version, ZCode's
 version and the adapters' `parts`; Codex CLI or Claude Code also lists `strays` when
 another copy sits beside its managed install.
-After an authorized click, confirm 60 result rows and simultaneous host progress.
+After an authorized click, confirm 72 result rows and simultaneous host progress.
 When T3 updates, verify Mac/Windows bundle versions and port 3773 health, then
 wait until the completed job's scheduled Ubuntu restart has finished; inspect
 `t3 service status`, the detached unit journal, port 3773 and that
@@ -1174,8 +1174,10 @@ unchanged. T3 download refusals use `update_failed`, an existing result code.
 
 Nas1 is a second Ubuntu computer reached over the fixed alias `nas1-agent`
 (label "Nas1"). Its rows are filed under their own computer, so one run returns
-5 computers x 12 apps = 60 result rows, with Nas1's progress beside the other
-three. It follows the Ubuntu rows of this guide except where noted here.
+6 computers x 12 apps = 72 result rows, with Nas1's progress beside the other
+five. Odroid is a third Ubuntu computer (`odroid`) and follows the same rows
+with `--platform ubuntu`; like Nas1 it builds nothing and runs no dashboard.
+It follows the Ubuntu rows of this guide except where noted here.
 
 - **Command.** `ssh nas1-agent` runs
   `AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform ubuntu`
@@ -1234,13 +1236,14 @@ async job coalescing, cross-process persistence/locks, queued Codex idle waits,
 proxy reconnect coordination and retry markers. Real package replacement and real
 app restarts are intentionally exercised only after the user clicks the button.
 
-## Computer registry and Alexis PC
+## Computer registry
 
 The single package-owned table is `web-dashboard/public/computers.json`. Its rows drive
 update hosts and SSH aliases, OS-specific helper commands, Status machine IDs and pins,
 Analytics remote readers, usage failover and labels in the web UI and `aac-usage`.
 This is shipped code; callers cannot supply a host, command or helper path.
 Alexis PC (`alexis`) uses `alexis-windows`; every helper runs with `--platform windows`.
+Odroid (`odroid`) uses `odroid`; every helper runs with `--platform ubuntu`.
 Claude desktop profile launchers and the native WPF bar remain the owner's `windows` computer.
 
 To add the next Ubuntu server:
@@ -1255,12 +1258,12 @@ Stored account sources keep `platform: "ubuntu"` for every Linux host and
 Older packages therefore still parse new account manifests and registries. The new
 package accepts old files. Saved update jobs predating a computer mark its absent
 progress as done rather than inventing a run; their saved expected row count is kept.
-The synthetic sixth-computer regression adds no real host to the shipped table.
+The synthetic extra-computer regression adds no real host to the shipped table.
 
 
 ### Saved-job rollback view
 
-New jobs expect 60 rows (five computers times twelve apps). The expanded job
+New jobs expect 72 rows (six computers times twelve apps). The expanded job
 retains all rows, host progress and the saved `expectedResults`. The digest-bound
 `dashboard-job.json` rollback view freezes the original ten app IDs and four
 storage hosts: at most 40 rows, never new app IDs in results or `currentApp`, and

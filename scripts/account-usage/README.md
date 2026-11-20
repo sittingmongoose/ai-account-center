@@ -63,7 +63,7 @@ but another computer has only the CLI sign-in. The private grant is
 CCS home, beside the account's existing `<source fingerprint>.json` observation.
 It has `version: 1`, the same `key` fingerprint, the primary `identity`, and a
 `peers` array of `{host, identity}` entries. Hosts are the fixed `ubuntu`, `mac`,
-`windows`, `nas1`, or `alexis` computers; peer identities must be exact
+`windows`, `nas1`, `alexis` or `odroid` computers; peer identities must be exact
 `muse-native-credential` fingerprints from the packaged helper's inventory.
 Create this owner-only file only after the user explicitly associates those
 existing native sign-ins with that subscription and live collection verifies
@@ -256,7 +256,8 @@ helper uses — nothing is installed on remote disks.
 
 Computer identity comes from `web-dashboard/public/computers.json`; helper `--platform`
 values remain OS kinds. Alexis sources persist as `platform: "windows"` plus
-`sshHost: "alexis-windows"`, just as Nas1 persists as Ubuntu plus its alias. Python
+`sshHost: "alexis-windows"`, just as Nas1 persists as Ubuntu plus its alias and
+Odroid as `platform: "ubuntu"` plus `sshHost: "odroid"`. Python
 `PLATFORMS`/`HOST_LABELS` validate OS protocols, not the computer inventory. Claude
 history/profile helpers still cover the owner's own Mac/Windows desktop profiles.
 

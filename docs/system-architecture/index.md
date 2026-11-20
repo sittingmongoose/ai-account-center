@@ -19,7 +19,7 @@ is `ai-account-center dashboard`, with `ccs config` compatibility.
 
 ## Computers
 
-AI Account Center reaches five computers. Hosts and aliases are fixed in
+AI Account Center reaches six computers. Hosts and aliases are fixed in
 source; there is no configurable host list.
 
 | Computer | How it is reached | What AI Account Center does there |
@@ -29,14 +29,16 @@ source; there is no configurable host list.
 | Windows | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native tray |
 | Nas1 | Fixed SSH alias `nas1-agent` | App updates, Analytics scan and verified usage fallback |
 | Alexis PC | Fixed SSH alias `alexis-windows` | Windows app updates, Status, Analytics scan and verified usage sources; no owner desktop profile or native-bar management |
+| Odroid | Fixed SSH alias `odroid` | App updates, Status, Analytics scan and verified usage sources; no dashboard, account state or builds |
 
-Nas1 is a second Ubuntu computer. Its fixed helpers run with `--platform
-ubuntu`, and the dashboard files their results under their own computer, Nas1.
-Nas1 runs no dashboard and holds no AAC-managed account state: AI Account Center is not
-installed there, and no account switching, Codex or Antigravity activation,
-key storage, sign-in or Claude desktop flow targets it (those APIs take host
-types that exclude it). The dashboard computer runs exactly these fixed
-commands on Nas1, each built only from fixed strings:
+Nas1 and Odroid are extra Ubuntu computers. Their fixed helpers run with
+`--platform ubuntu`, and the dashboard files their results under their own
+computer. Neither runs a dashboard or holds AAC-managed account state: AI Account
+Center is not installed there, and no account switching, Codex or Antigravity
+activation, key storage, sign-in or Claude desktop flow targets them (those APIs
+take host types that exclude them; Odroid also builds nothing). The dashboard
+computer runs exactly these fixed commands on each of them, each built only from
+fixed strings:
 
 1. A `sha256sum` hash query of the update helpers in `~/.ccs/app-updates`.
 2. A `tar` extract of the update helpers into that folder, only when a
@@ -135,8 +137,8 @@ under the provider that served the call (a logged 0 is "not logged"); logged
 and unlogged events never share a compact row. Muse and zcode input exclude
 cache reads. A resumed OMP session copied into a second root counts once. A
 remote scan that does not answer keeps the last remote aggregates in the
-totals. `activity.sources` lists each tool and host (Ubuntu, Mac, Windows and
-Nas1) as `ok`, `cached`, `unavailable` or `not_installed`, each measured by that
+totals. `activity.sources` lists each tool and host (Ubuntu, Mac, Windows, Nas1, Alexis PC
+and Odroid) as `ok`, `cached`, `unavailable` or `not_installed`, each measured by that
 host's own scan; only Cursor is a fixed "no local usage log" entry, being the
 one tool that keeps no local usage log on any host. Antigravity is read by the
 same packaged helper on every host, the VM included ([reader](../../src/web-server/usage/antigravity-native-usage-collector.ts)):
@@ -153,7 +155,7 @@ writer overlapped is dropped and done again on the next scan.
 auto-switch) was removed on 2026-11-14.
 [App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
 jobs triggered explicitly, never from startup or routine polling. One job covers
-the five computers above (50 result rows: five computers x ten apps); each
+the six computers above (72 result rows: six computers x twelve apps); each
 computer updates its own apps while the others run in parallel.
 
 The dashboard response lists every supported provider in `providers[]` (labels,

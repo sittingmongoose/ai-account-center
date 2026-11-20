@@ -49,7 +49,7 @@ unmounted share can't grow a local folder.
 ## Writing rule (every file)
 
 - **One writer per folder.** `writer` = `<machine>.<pm-mail name>`, such as `vm.tools-lead`. Machine is `vm`, `mac`,
-  `windows` or `nas1`. Lowercase `[a-z0-9.-]`, 64 characters at most, no `--` (it separates a writer from a card or
+  `windows`, `nas1`, `alexis` or `odroid`. Lowercase `[a-z0-9.-]`, 64 characters at most, no `--` (it separates a writer from a card or
   run id). A T3 thread with no pm-mail name writes as `<machine>.t3-<first 8 hex of sha256(T3 thread id)>`.
 - **Whole files only.** Write `.<name>.tmp-<random>` in the same folder, flush, close, then rename it over the
   target. Never append, never edit in place.

@@ -24,13 +24,13 @@ authenticated dashboard. Retired runtime bins provide guidance rather than
 profile dispatch. Existing stored profile names, session aliases, provider IDs,
 native messaging identities and `CCS_*` environment names remain compatible.
 
-Five computers are fixed in source: the Ubuntu computer that runs the dashboard
-and the Mac, Windows, Nas1 and Alexis PC reached over fixed SSH aliases. The single
-package-owned table is `web-dashboard/public/computers.json`. Nas1 is a second
-Ubuntu computer (its helpers run with `--platform ubuntu`) that takes part in
-app updates (50 result rows across the five computers) and the Analytics scan
-only. It runs no dashboard and holds no account state, and a quota source runs
-there only when saved as `platform: "ubuntu"` plus the Nas1 `sshHost`. The
+Six computers are fixed in source: the Ubuntu computer that runs the dashboard
+and the Mac, Windows, Nas1, Alexis PC and Odroid reached over fixed SSH aliases. The single
+package-owned table is `web-dashboard/public/computers.json`. Nas1 and Odroid are extra
+Ubuntu computers (their helpers run with `--platform ubuntu`) that take part in
+app updates (72 result rows across the six computers), Status and the Analytics scan
+only. They run no dashboard and hold no account state, and a quota source runs
+there only when saved as `platform: "ubuntu"` plus that computer's `sshHost`. The
 [computers table](system-architecture/index.md#computers) lists what runs where
 and names the alias.
 

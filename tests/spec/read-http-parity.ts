@@ -176,7 +176,7 @@ if (worker < 0) {
     timeZone: 'UTC',
     reports: reader.snapshot(),
     registry: none(),
-    machines: { vm: none(), mac: none(), windows: none(), nas1: none(), alexis: none() },
+    machines: { vm: none(), mac: none(), windows: none(), nas1: none(), alexis: none(), odroid: none() },
     browsers: none(),
     simlock: none(),
     usage: null,
