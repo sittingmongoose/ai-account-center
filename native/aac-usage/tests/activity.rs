@@ -327,14 +327,18 @@ fn cursor_chats_without_token_counts_never_date_activity() {
 
 // ---- Medium 1: a usage-shaped append the reader cannot decode ------------------------------
 
+/// OMP's real field order: role, content, model, usage. A tear usually lands inside `content`,
+/// before any `"usage"` text exists.
 fn torn_omp_event(at: i64) -> String {
-    // A normal assistant usage event whose final braces were never written.
     format!(
         "{{\"type\":\"message\",\"timestamp\":{at},\"message\":{{\"role\":\"assistant\",\
-         \"model\":\"fixture-model\",\"usage\":{{\"input\":220,\"output\":30,\
-         \"cacheRead\":0,\"cacheWrite\":0"
+         \"content\":[{{\"type\":\"text\",\"text\":\"a long answer cut mid-wri"
     )
 }
+
+/// The rest of `torn_omp_event`: closes the text, names the model and carries the usage.
+const TORN_OMP_REST: &str = "ting\"}],\"model\":\"fixture-model\",\
+    \"usage\":{\"input\":220,\"output\":30,\"cacheRead\":0,\"cacheWrite\":0}}}";
 
 #[test]
 fn an_unreadable_omp_usage_append_is_unknown_and_retained() {
@@ -376,7 +380,8 @@ fn an_unreadable_omp_usage_append_is_unknown_and_retained() {
 
     // Completing the record at the same bytes verifies the usage and clears the flag.
     let mut text = fs::read_to_string(&log).unwrap();
-    text.push_str("}}}\n");
+    text.push_str(TORN_OMP_REST);
+    text.push('\n');
     fs::write(&log, text).unwrap();
     let repaired = scan(h, &["omp"], Some(&again));
     assert_eq!(clock(&repaired, "omp"), current(at2));
@@ -567,4 +572,107 @@ fn an_untimed_antigravity_step_is_counted_without_a_usage_date() {
             .sum::<u64>(),
         100
     );
+}
+
+#[test]
+fn an_omp_tear_inside_content_and_a_joined_record_are_both_accounted_for() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let at1 = (now_ms() - 6 * HOUR) / 1000 * 1000;
+    let at2 = (now_ms() - 4 * HOUR) / 1000 * 1000;
+    let at3 = (now_ms() - 2 * HOUR) / 1000 * 1000;
+    let log = h.join(".omp/agent/sessions/2026-11-20T10-00-00_fixture.jsonl");
+    let mut bytes = omp_event(at1, true).into_bytes();
+    // A tear lands inside `content`, before any `"usage"` text exists, and splits a multi-byte
+    // character (`U+1F600`): the line is not valid UTF-8.
+    bytes.extend_from_slice(
+        format!(
+            "{{\"type\":\"message\",\"timestamp\":{at2},\"message\":{{\"role\":\"assistant\",\
+             \"content\":[{{\"type\":\"text\",\"text\":\"an emoji "
+        )
+        .as_bytes(),
+    );
+    bytes.extend_from_slice(&[0xF0, 0x9F]);
+    // The writer continued on the same line: a whole usage record follows the torn bytes.
+    bytes.extend_from_slice(
+        json!({"type":"message","timestamp":at3,
+               "message":{"role":"assistant","model":"fixture-model",
+                          "usage":{"input":330,"output":40,"cacheRead":0,"cacheWrite":0}}})
+        .to_string()
+        .as_bytes(),
+    );
+    bytes.push(b'\n');
+    write(&log, ""); // create the session folder
+    fs::write(&log, bytes).unwrap();
+
+    let first = scan(h, &["omp"], None);
+    assert_eq!(clock(&first, "omp"), ("unknown".into(), Some(at3), Some(at3), false));
+    assert_eq!(first["kinds"]["omp"]["unreadUsage"], true);
+    assert_eq!(
+        first["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["i"].as_u64().unwrap())
+            .sum::<u64>(),
+        430
+    );
+
+    // The evidence and the joined record both survive an unchanged rescan.
+    let again = scan(h, &["omp"], Some(&first));
+    assert_eq!(clock(&again, "omp"), ("unknown".into(), Some(at3), Some(at3), false));
+    assert_eq!(again["kinds"]["omp"]["unreadUsage"], true);
+    assert!(again["rows"].as_array().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_estimated_antigravity_date_is_disclosed_across_unchanged_rescans() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let db = h.join(".gemini/antigravity/conversations/fixture.db");
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let connection = Connection::open(&db).unwrap();
+    connection
+        .execute_batch("CREATE TABLE steps (idx INTEGER, metadata BLOB)")
+        .unwrap();
+    // One timed step (a logged event date) and one untimed step (only the file time).
+    let timed = [
+        field_bytes(24, &field_bytes(12, b"claude-opus-4-6")),
+        field_bytes(8, &field_number(1, 1_794_430_860)),
+        field_bytes(9, &[field_number(2, 100), field_number(3, 20)].concat()),
+        field_bytes(11, b"call-timed"),
+    ]
+    .concat();
+    let untimed = [
+        field_bytes(24, &field_bytes(12, b"claude-opus-4-6")),
+        field_bytes(9, &[field_number(2, 220), field_number(3, 30)].concat()),
+        field_bytes(11, b"call-untimed"),
+    ]
+    .concat();
+    connection.execute("INSERT INTO steps VALUES (1, ?1)", [timed]).unwrap();
+    connection
+        .execute("INSERT INTO steps VALUES (2, ?1)", [untimed])
+        .unwrap();
+    drop(connection);
+    let timed_at = 1_794_430_860_000i64;
+
+    let first = scan(h, &["antigravity"], None);
+    assert_eq!(
+        first["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["i"].as_u64().unwrap())
+            .sum::<u64>(),
+        320
+    );
+    assert_eq!(clock(&first, "antigravity"), current(timed_at));
+    assert_eq!(first["kinds"]["antigravity"]["estimatedClock"], true);
+
+    // The note persists while the database is unchanged: the flag is on the store print.
+    let again = scan(h, &["antigravity"], Some(&first));
+    assert_eq!(clock(&again, "antigravity"), current(timed_at));
+    assert_eq!(again["kinds"]["antigravity"]["estimatedClock"], true);
+    assert!(again["rows"].as_array().unwrap().is_empty());
 }

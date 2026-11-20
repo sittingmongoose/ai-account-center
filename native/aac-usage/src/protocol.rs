@@ -503,8 +503,14 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             entry.insert("partial".into(), json!(true));
             entry.insert("unreadUsage".into(), json!(true));
         }
-        // Numbers dated only by a file-time estimate: counted, with no measured event date.
-        if collector.estimated_clocks.contains(kind) {
+        // Numbers dated only by a file-time estimate: counted, with no measured event date. The
+        // disclosure is carried on the file's print so it survives unchanged rescans.
+        if collector.estimated_clocks.contains(kind)
+            || collector
+                .fresh
+                .get(kind)
+                .is_some_and(|prints| prints.values().any(|p| p.estimated_clock == Some(true)))
+        {
             entry.insert("estimatedClock".into(), json!(true));
         }
         if let Some(count) = collector.unreadable_records.get(kind).filter(|n| **n > 0) {

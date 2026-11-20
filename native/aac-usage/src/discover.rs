@@ -969,9 +969,14 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     if unread_usage {
         discovered["unreadUsage"] = Value::Bool(true);
     }
-    if collector.estimated_clocks.contains(kind) {
+    if collector.estimated_clocks.contains(kind)
+        || collector
+            .fresh
+            .get(kind)
+            .is_some_and(|prints| prints.values().any(|p| p.estimated_clock == Some(true)))
+    {
         // Disclosed: the numbers are counted, their date is a file-time estimate and never a
-        // measured usage event.
+        // measured usage event. The flag on the file's print keeps it across unchanged rescans.
         discovered["estimatedClock"] = Value::Bool(true);
     }
     discovered

@@ -423,16 +423,50 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
             line_box.cwd = Some(cwd.to_string());
         }
     }
-    // A usage-shaped record: a message envelope that names a usage object. One that cannot be
-    // decoded (a torn append) or that the reader cannot interpret is named on the file, so its
-    // tokens are not silently dropped while the source claims current coverage.
-    if !line.contains("\"type\"") || !line.contains("\"message\"") || !line.contains("\"usage\"") {
+    if !line.contains("\"type\"") || !line.contains("\"message\"") {
         return;
     }
-    let Ok(record) = serde_json::from_str::<Value>(line) else {
-        collector.note_unread_usage(kind, filekey);
-        return;
+    // OMP writes role and content before usage, so a torn record usually breaks inside content and
+    // holds no `"usage"` text. Classify on the envelope that comes first, and count a whole record
+    // the writer joined onto the torn line.
+    let record = match serde_json::from_str::<Value>(line) {
+        Ok(record) => record,
+        Err(_) => {
+            if is_assistant_envelope(line) {
+                collector.note_unread_usage(kind, filekey);
+            }
+            let Some(joined) = joined_record(line) else {
+                return;
+            };
+            joined
+        }
     };
+    parse_record(&record, collector, kind, filekey, line_box);
+}
+
+/// The envelope OMP writes first: `"type":"message"` and `"role":"assistant"`, whatever the
+/// whitespace. It precedes `content`, so it survives a tear inside the text.
+fn is_assistant_envelope(line: &str) -> bool {
+    let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("\"type\":\"message\"") && compact.contains("\"role\":\"assistant\"")
+}
+
+/// A complete JSON record after a torn prefix on the same line, if the writer left one.
+fn joined_record(line: &str) -> Option<Value> {
+    for (index, _) in line.match_indices("{\"type\"") {
+        if index == 0 {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<Value>(&line[index..])
+            && record.is_object()
+        {
+            return Some(record);
+        }
+    }
+    None
+}
+
+fn parse_record(record: &Value, collector: &mut Collector, kind: &str, filekey: &str, line_box: &mut LineBox) {
     if record.get("type").and_then(Value::as_str) != Some("message") {
         return;
     }

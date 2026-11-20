@@ -186,6 +186,8 @@ export interface AnalyticsRemoteFingerprint {
   walUnread?: boolean;
   /** A usage-shaped record this file holds could not be decoded; its tokens are not counted. */
   unreadUsage?: boolean;
+  /** This file's numbers include a date estimated from its file time, never a logged event. */
+  estimatedClock?: boolean;
 }
 
 /** Codex's carry-over for a resumed read; no identifier (the session travels as a digest). */
@@ -851,7 +853,8 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
     (print.decodedSize === undefined || nonNegative(print.decodedSize)) &&
     (print.unreadableRecords === undefined || nonNegative(print.unreadableRecords)) &&
     (print.walUnread === undefined || typeof print.walUnread === 'boolean') &&
-    (print.unreadUsage === undefined || typeof print.unreadUsage === 'boolean')
+    (print.unreadUsage === undefined || typeof print.unreadUsage === 'boolean') &&
+    (print.estimatedClock === undefined || typeof print.estimatedClock === 'boolean')
   );
 }
 

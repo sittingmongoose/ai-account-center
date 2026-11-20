@@ -131,6 +131,9 @@ pub struct Collector {
     pub verified_clocks: BTreeMap<(String, String), i64>,
     /// Kinds whose newest number was dated by a file-time estimate at least once this scan.
     pub estimated_clocks: HashSet<String>,
+    /// Files holding at least one number dated by a file-time estimate this scan: the disclosure
+    /// travels on their prints and survives an unchanged rescan.
+    pub estimated_files: BTreeSet<(String, String)>,
     /// Usage-shaped records a reader could not decode: (kind, filekey). Carried on the print.
     pub unread_usage: BTreeSet<(String, String)>,
     /// A discovery bound that left roots unlooked-at, per kind: (what was read, how many were
@@ -197,6 +200,7 @@ impl Collector {
             search_limits: HashMap::new(),
             verified_clocks: BTreeMap::new(),
             estimated_clocks: HashSet::new(),
+            estimated_files: BTreeSet::new(),
             unread_usage: BTreeSet::new(),
             unanswered_mounts: 0,
             absent_roots: HashSet::new(),
@@ -446,6 +450,12 @@ impl Collector {
             if prior.get("unreadUsage").and_then(Value::as_bool) == Some(true) {
                 pending.unread_usage = Some(true);
             }
+            if prior.get("estimatedClock").and_then(Value::as_bool) == Some(true) {
+                pending.estimated_clock = Some(true);
+            }
+        }
+        if self.estimated_files.iter().any(|(k, f)| k == kind && f == key) {
+            pending.estimated_clock = Some(true);
         }
         if pending.usage_skipped == Some(true) || pending.unread_usage == Some(true) {
             self.usage_partial.insert(kind.to_string());
@@ -682,6 +692,7 @@ impl Collector {
             *entry = (*entry).max(span.1);
         } else {
             self.estimated_clocks.insert(kind.to_string());
+            self.estimated_files.insert((kind.to_string(), filekey.to_string()));
         }
         let key = (
             kind.to_string(),
@@ -728,6 +739,7 @@ impl Collector {
     /// Drop every row and session row of one file (a failed or discarded read).
     pub fn drop_file_rows(&mut self, keys: &HashSet<String>) {
         self.verified_clocks.retain(|(_, filekey), _| !keys.contains(filekey));
+        self.estimated_files.retain(|(_, filekey)| !keys.contains(filekey));
         let rows: Vec<Row> = self.row_list.drain(..).filter(|r| !keys.contains(&r.filekey)).collect();
         let srows: Vec<SessionRow> = self
             .srow_list
