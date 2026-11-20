@@ -429,6 +429,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/analytics_live.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/analytics_route.rs",
       "kind": "internal",
       "evidence": [],
@@ -436,6 +442,12 @@
     },
     {
       "file": "crates/aac-http/src/analytics_writers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/analytics_writers/analytics_jsonl.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -853,6 +865,12 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/scoreboard_owned.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/signin_callbacks.rs",
       "kind": "helper",
       "evidence": [
@@ -1254,9 +1272,10 @@
     },
     {
       "file": "crates/aac-status/src/answer_delivery.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "crates/aac-status/src/answers_engine.rs",
@@ -1858,6 +1877,12 @@
     },
     {
       "file": "native/aac-cursor-account/tests/cursor_account.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-cursor-account/tests/plan_visibility.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
