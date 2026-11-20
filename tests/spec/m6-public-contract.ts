@@ -36,6 +36,7 @@ const routes = JSON.parse(await fs.readFile(path.join(spec, 'routes.json'), 'utf
   roles: string[];
 }[];
 const groups = {
+  'status-home': /^\w+ \/api\/(status(?:\/|$)|store\/status$|usage\/[^/]+$)/,
   resets: /^\w+ \/api\/accounts\/[^/]+\/reset-claims(?:\/|$)/,
   'store-usage-home': /^\w+ \/api\/(store\/status|usage\/[^/]+|views\/home)$/,
   status: /^\w+ \/api\/(status(?:\/|$)|scoreboard$)/,
@@ -68,7 +69,14 @@ if (registryOutput !== undefined) {
 }
 const selectedRoutes = [...routes.entries()].filter(([, route]) => {
   if (group === undefined) return true;
-  assert.equal(mode, 'cut-rust-only', 'A worker-removal group requires --cut-rust-only.');
+  assert.equal(
+    mode,
+    process.argv.some((arg) => arg.startsWith('--record-native=')) &&
+      process.env.AAC_RECORD_RUST_ONLY !== '1'
+      ? 'cut'
+      : 'cut-rust-only',
+    'A worker-removal group replays worker-less, or records through the shipped cut.'
+  );
   assert(Object.hasOwn(groups, group), `Unknown worker-removal group ${group}.`);
   return groups[group as keyof typeof groups].test(route.method + ' ' + route.path);
 });
@@ -89,6 +97,27 @@ const overrides: Record<string, Contract> =
         )
       )
     : {};
+// The native owner rows share the platform contract with the earlier composition rows.
+// Select them only when this boot enables the native owner.
+const nativeGroupRow = (method: string, route: string) =>
+  (method === 'POST' && route === '/api/status/answers') ||
+  (method === 'GET' &&
+    (route === '/api/status' ||
+      route.startsWith('/api/status/') ||
+      route === '/api/store/status' ||
+      route.startsWith('/api/usage/') ||
+      route === '/api/scoreboard' ||
+      ((mode === 'cut-rust-only' || group === 'store-usage-home') && route === '/api/views/home')));
+const recordNative = process.argv
+  .find((arg) => arg.startsWith('--record-native='))
+  ?.slice('--record-native='.length);
+assert.notEqual(recordNative, '', '--record-native needs an output path');
+if (recordNative) {
+  assert.equal(mode, process.env.AAC_RECORD_RUST_ONLY === '1' ? 'cut-rust-only' : 'cut');
+}
+const recordedNative: Record<string, Contract> = {};
+let nativeRecordingDeclines = 0;
+
 const lifecycleOverrides: Record<string, Contract> =
   mode !== 'fixture' && process.platform === 'win32' && registryOutput === undefined
     ? JSON.parse(
@@ -144,7 +173,8 @@ if (mode !== 'fixture') {
 }
 if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')) {
   Object.assign(environment, {
-    AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+    AAC_RUST_CUT_NATIVE_ROUTES:
+      mode === 'cut-rust-only' ? 'on' : (environment.AAC_RUST_CUT_NATIVE_ROUTES ?? 'off'),
     AAC_RUST_GROUP_APP_UPDATES: 'on',
     AAC_RUST_GROUP_COLLECTION: 'on',
     AAC_AGENT_VERBS: 'off',
@@ -152,10 +182,37 @@ if (mode === 'cut-rust-only' || (mode === 'cut' && process.platform !== 'win32')
   });
 }
 
-function normalize(value: unknown, key = ''): unknown {
+function normalize(value: unknown, key = '', nativeRoute?: string): unknown {
   if (value === undefined) return value;
   if (key === 'etag') return '<etag>';
   if (key === 'x-ccs-bar-token') return '<bar-proof>';
+  // Apply live-field normalization only when the native Status fixture is selected.
+  if (nativeRoute) {
+    if (
+      nativeRoute === '/api/views/home' &&
+      key === 'commit' &&
+      typeof value === 'string' &&
+      /^[0-9a-f]{8}$/.test(value)
+    )
+      return '<build-commit>';
+    if (
+      ((nativeRoute === '/api/store/status' && key === 'lastSequence') ||
+        (nativeRoute === '/api/status' && key === 'asOfMs')) &&
+      typeof value === 'number' &&
+      Number.isSafeInteger(value) &&
+      value >= 0
+    )
+      return key === 'lastSequence' ? '<checkpoint-sequence>' : '<pin-time>';
+    if (key === 'openedAt' || key === 'logs' || key === 'meta') return null;
+    if (key === 'redbBytes' || key === 'redbStats') return null;
+    if (key === 'instanceId' || key === 'integrity' || key === 'capture' || key === 'storageHealth')
+      return null;
+    if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
+    if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof value === 'number')
+      return '<elapsed-seconds>';
+    if (key === 'cpu' || key === 'memory' || key === 'gpuPct') return null;
+    if (key === 'disk' || key === 'warnings') return [];
+  }
   if (key === 'retry-after' || key === 'retryAfterSeconds') {
     const seconds = Number(value);
     assert(Number.isInteger(seconds) && seconds >= 1 && seconds <= 900);
@@ -172,13 +229,17 @@ function normalize(value: unknown, key = ''): unknown {
       .replace(/dev_[0-9a-f]{16}/g, '<device-id>')
       .replace(/aacd_[A-Za-z0-9_-]{43}/g, '<device-token>')
       .replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\b/g, '<timestamp>');
+    if (nativeRoute)
+      text = text
+        .replace(/\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g, '<clock>')
+        .replace(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g, '<day>');
     if (path.sep === '\\' && text.startsWith('<fixture-home>')) text = text.replaceAll('\\', '/');
     return text;
   }
-  if (Array.isArray(value)) return value.map((entry) => normalize(entry));
+  if (Array.isArray(value)) return value.map((entry) => normalize(entry, '', nativeRoute));
   if (value && typeof value === 'object')
     return Object.fromEntries(
-      Object.entries(value).map(([field, child]) => [field, normalize(child, field)])
+      Object.entries(value).map(([field, child]) => [field, normalize(child, field, nativeRoute)])
     );
   return value;
 }
@@ -292,6 +353,43 @@ try {
     }),
     { mode: 0o600 }
   );
+  if (recordNative) {
+    Object.assign(environment, {
+      AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+      AAC_RUST_STORE: 'on',
+      AAC_RUST_GROUP_STATUS: 'on',
+      AAC_RUST_GROUP_SCOREBOARD: 'on',
+      AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+      AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+    });
+    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
+  if (group === 'status-home' || group === 'status' || group === 'store-usage-home') {
+    for (const key of Object.keys(environment))
+      if (key.startsWith('AAC_RUST_') || key.startsWith('AAC_STORE')) delete environment[key];
+    Object.assign(environment, {
+      AAC_RUST_CUT_NATIVE_ROUTES: 'on',
+      AAC_AGENT_REPORTS_DIR: path.join(root, 'reports'),
+      AAC_PM_MAIL_REGISTRY_DIR: path.join(root, 'registry'),
+      AAC_AGENT_VERBS: 'off',
+      AAC_AGENT_TRANSPORT: 'off',
+    });
+    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
+  if (group === 'store-usage-home') {
+    // Use the same local collection generation in the recording and replay.
+    Object.assign(environment, {
+      AAC_RUST_GROUP_HOME: 'on',
+      AAC_TS_SIDECAR: 'off',
+    });
+  }
+  if (group === undefined && mode === 'cut-rust-only') {
+    environment.AAC_RUST_GROUP_HOME = 'on';
+    await fs.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.mkdir(path.join(root, 'registry'), { recursive: true });
+  }
   if (group === 'resets') {
     Object.assign(environment, {
       CCS_HOME: root,
@@ -323,12 +421,22 @@ try {
           windowsPreflightReason !== undefined &&
           name === 'GET /api/accounts/registry' &&
           (role === 'session' || role === 'bar');
+        const mine = nativeGroupRow(route.method, route.path);
+        const statusContract =
+          mine && environment.AAC_RUST_CUT_NATIVE_ROUTES === 'on'
+            ? overrides['native/contract/' + fixture]
+            : undefined;
+        const nativeRoute = statusContract === undefined ? undefined : route.path;
         const contract: Contract =
           (ownsLifecycle ? lifecycleOverrides['contract/' + fixture] : undefined) ??
+          statusContract ??
           (composedGolden || ownsReset ? overrides['contract/' + fixture] : undefined) ??
           JSON.parse(await fs.readFile(path.join(spec, 'contract', fixture), 'utf8'));
         const { request } = contract;
         const expected = recordRegistryRow ? structuredClone(contract.response) : contract.response;
+        const expectedBody = nativeRoute
+          ? normalize(expected.body, '', nativeRoute)
+          : expected.body;
         if (recordRegistryRow) {
           const registry = expected.body as {
             providers: { id: string; signIn: { unavailableReason: string } }[];
@@ -342,6 +450,7 @@ try {
         let status: number;
         let body: unknown;
         let selected: Record<string, string> | undefined;
+        let served = request.path;
         if (request.method === 'UPGRADE') {
           status = await upgrade(rust.url, headers);
         } else {
@@ -349,6 +458,7 @@ try {
             .replace('/{*splat}', '/')
             .replace(/:[A-Za-z]+/g, 'fixture-missing');
           if (endpoint.includes('/@regex')) endpoint = '/api/status/files/fixture/missing.txt';
+          served = endpoint;
           // The route inventory stores the pattern; capture supplies this query explicitly.
           if (/accounts\/(dashboard|analytics)$/.test(endpoint)) endpoint += '?fixture=invalid';
           const response = await send(rust.url, endpoint, {
@@ -365,6 +475,7 @@ try {
           }
           if (status === 503 && (body as { code?: string } | null)?.code === 'route_unavailable') {
             counts.decline++;
+            if (recordNative && mine) nativeRecordingDeclines++;
             if (owns(route.path)) owned.failed++;
             if (ownsReset) resets.failed++;
             declined.add(name);
@@ -376,6 +487,23 @@ try {
               return value === null ? [] : [[key, value]];
             })
           );
+          if (recordNative && mine) {
+            recordedNative['contract/' + fixture] = {
+              request: {
+                method: request.method === 'ALL' ? 'POST' : request.method,
+                path: served,
+                role,
+                ...(request.body === undefined ? {} : { body: request.body }),
+              },
+              response: {
+                status,
+                headers: normalize(selected),
+                body: normalize(body, '', route.path),
+              },
+            } as Contract;
+            counts.match++;
+            continue;
+          }
           const proof = selected['x-ccs-bar-token'];
           if (proof) {
             const token = (await fs.readFile(path.join(root, 'bar', '.auth-token'), 'utf8')).trim();
@@ -385,9 +513,9 @@ try {
         const actual =
           request.method === 'UPGRADE'
             ? { status }
-            : normalize({ status, headers: selected, body });
+            : { status, headers: normalize(selected), body: normalize(body, '', nativeRoute) };
         try {
-          assert.deepEqual(actual, expected);
+          assert.deepEqual(actual, nativeRoute ? { ...expected, body: expectedBody } : expected);
           if (recordRegistryRow)
             registryRecords['contract/' + fixture] = {
               request,
@@ -399,7 +527,7 @@ try {
         } catch {
           const fields = [
             status !== expected.status ? `status ${status}/${expected.status}` : '',
-            isDeepStrictEqual(normalize(body), expected.body) ? '' : 'body',
+            isDeepStrictEqual(normalize(body, '', nativeRoute), expectedBody) ? '' : 'body',
             ...expectedHeaders.filter(
               (key) =>
                 normalize(selected?.[key], key) !== expected.headers?.[key] &&
@@ -413,8 +541,8 @@ try {
                 fixture +
                 ' ' +
                 JSON.stringify({
-                  actual: normalize(body),
-                  expected: expected.body,
+                  actual: normalize(body, '', nativeRoute),
+                  expected: expectedBody,
                 })
             );
           }
@@ -431,10 +559,30 @@ try {
       }
     }
   } finally {
+    if (process.env.AAC_M6_SHOW_AUDIT === '1' && rust.audit.length)
+      console.log('listener stderr:\n' + rust.audit.join(''));
     await rust.stop();
   }
 } finally {
   await fs.rm(root, { recursive: true, force: true });
+}
+if (recordNative) {
+  const expected = selectedRoutes.reduce(
+    (total, [, route]) =>
+      total + (nativeGroupRow(route.method, route.path) ? route.roles.length : 0),
+    0
+  );
+  assert(expected > 0, 'select a group with native recorder rows');
+  assert.equal(
+    Object.keys(recordedNative).length + nativeRecordingDeclines,
+    expected,
+    'account for every selected native row'
+  );
+  const output = path.resolve(spec, recordNative);
+  await fs.writeFile(output, JSON.stringify(recordedNative, null, 2) + '\n');
+  console.log(
+    `Recorded ${Object.keys(recordedNative).length} native rows, ${nativeRecordingDeclines} explicit declines, into ${output}`
+  );
 }
 console.log(
   `Rust public M0: ${counts.match} matching replies, ${counts.decline} explicit declines across ${declined.size} routes, ${counts.different} differences.`
@@ -448,7 +596,7 @@ console.log('M0 declines: ' + [...declined].join(', '));
 if (different.length) console.log('M0 differences:\n' + different.join('\n'));
 assert.equal(owned.failed, 0, 'M6-owned M0 contract');
 assert.equal(resets.failed, 0, 'Rust reset M0 contract');
-if (group !== undefined || process.argv.includes('--require-complete'))
+if (!recordNative && (group !== undefined || process.argv.includes('--require-complete')))
   assert.equal(counts.decline + counts.different, 0, 'Rust M0 cutover gate');
 if (registryOutput !== undefined) {
   assert.equal(Object.keys(registryRecords).length, 2, 'record both registry roles');

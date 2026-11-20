@@ -9,7 +9,6 @@ mod analytics_live;
 mod analytics_route;
 #[cfg(unix)]
 mod analytics_writers;
-#[cfg(unix)]
 mod answers_owned;
 pub mod antigravity_host;
 pub mod antigravity_probes;
@@ -29,9 +28,7 @@ mod collection_cache;
 mod dashboard_fed;
 pub mod dashboard_observations;
 mod feed;
-#[cfg(unix)]
 mod home_fed;
-#[cfg(unix)]
 mod home_producer;
 mod identity;
 mod json_object;
@@ -45,10 +42,11 @@ pub mod lifecycle_signin;
 mod limits;
 /// Cross-platform: the models.dev fetch job G14's scheduling will run from the service.
 pub mod models_dev;
+/// The public owners one boot runs: the private service and the public host share them.
+mod owners;
 mod preferences_write;
 mod profile_reads;
 pub mod public_auth;
-#[cfg(unix)]
 mod read_files;
 #[cfg(unix)]
 mod read_routes;
@@ -57,26 +55,25 @@ mod reset_claims;
 mod reset_source_route;
 #[cfg(all(unix, test))]
 mod runs_ingest_gate;
-#[cfg(unix)]
 mod scoreboard_owned;
 pub mod signin_callbacks;
 mod signins;
+mod status_answers_route;
 mod status_cache;
 mod status_fed;
-#[cfg(unix)]
 mod status_owned;
-#[cfg(unix)]
 mod status_produce;
-#[cfg(unix)]
 mod status_run;
 mod store_host;
 mod table;
 #[cfg(unix)]
 mod unix;
+mod usage_routes;
 #[cfg(unix)]
 mod usage_snapshot;
 pub mod view_reply;
 mod visibility_write;
+mod zone_facts;
 pub use identity::PROTOCOL;
 #[cfg(unix)]
 pub use unix::{

@@ -686,6 +686,13 @@
       ]
     },
     {
+      "file": "crates/aac-http/src/public_auth/native_group.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-http/src/public_auth/native_owners/lifecycle_codex.rs",
       "kind": "safety",
       "evidence": [
@@ -810,6 +817,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/status_answers_route.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/status_cache.rs",
       "kind": "internal",
       "evidence": [],
@@ -846,7 +859,19 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/usage_routes.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/view_reply.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/zone_facts.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

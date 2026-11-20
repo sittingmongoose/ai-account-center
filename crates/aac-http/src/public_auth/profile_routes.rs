@@ -109,6 +109,10 @@ impl Profiles {
         self
     }
 
+    pub(super) fn open_owner(&self) -> Arc<ClaudeOpen> {
+        Arc::clone(&self.open)
+    }
+
     #[cfg(unix)]
     pub(super) fn with_adopted_quotas(
         mut self,
