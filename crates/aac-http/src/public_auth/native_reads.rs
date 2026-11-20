@@ -1,58 +1,10 @@
 //! The cut's authenticated access to the remaining store host.
-use super::storage;
-use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
-use axum::{body::Body, extract::Request};
-use hyper::client::conn::http1;
-use hyper_util::rt::TokioIo;
-use serde::Deserialize;
+use super::{service_link::ServiceLink, storage};
 use serde_json::json;
-use std::{
-    os::unix::fs::{FileTypeExt, MetadataExt},
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use tokio::net::UnixStream;
+use std::path::PathBuf;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CollectionEndpoint {
-    ccs_dir: PathBuf,
-    socket_path: PathBuf,
-    secret: String,
-    boot_id: String,
-}
-
-impl CollectionEndpoint {
-    fn load(root: &Path) -> Option<Self> {
-        let root = root.canonicalize().ok()?;
-        let policy = ReadPolicy::capped(8192)
-            .ancestors(Ancestors::NoLinkBelow(&root))
-            .mode(Mode::Private)
-            .owner(Owner::Mine);
-        let Read::Bytes(bytes, _) = aac_files::read::read(&root.join("run/aac-http.json"), &policy)
-        else {
-            return None;
-        };
-        let endpoint: Self = serde_json::from_slice(&bytes).ok()?;
-        let parent = endpoint.socket_path.parent()?;
-        let parent_mode = std::fs::symlink_metadata(parent).ok()?;
-        let metadata = std::fs::symlink_metadata(&endpoint.socket_path).ok()?;
-        let uid = std::fs::metadata(&root).ok()?.uid();
-        (endpoint.ccs_dir == root
-            && endpoint.socket_path.is_absolute()
-            && endpoint.socket_path.file_name()?.to_str()? == "http.sock"
-            && parent.file_name()?.to_str()? == format!("aac-http-{}", endpoint.boot_id)
-            && storage::is_hex(&endpoint.secret, 64)
-            && storage::is_hex(&endpoint.boot_id, 24)
-            && parent_mode.is_dir()
-            && parent_mode.uid() == uid
-            && parent_mode.mode() & 0o777 == 0o700
-            && metadata.file_type().is_socket()
-            && metadata.uid() == uid
-            && metadata.mode() & 0o777 == 0o600)
-            .then_some(endpoint)
-    }
-}
+/// The front door's service principal word (`VerifiedPrincipal::valid`).
+const SERVICE: &str = r#"{"kind":"session","id":"front-door","role":"service"}"#;
 
 /// Forward a completed native generation to the existing store owner. The G14
 /// sampler consumes its regular feed and keeps its history import order.
@@ -65,25 +17,28 @@ pub(super) async fn publish_usage(
     let Some(timestamp) = storage::iso(now) else {
         return;
     };
-    let endpoint = tokio::task::spawn_blocking(move || CollectionEndpoint::load(&root))
+    let link = tokio::task::spawn_blocking(move || ServiceLink::load(&root))
         .await
         .ok()
         .flatten();
-    let Some(endpoint) = endpoint else {
+    let Some(link) = link else {
         return;
     };
     if analytics_writers {
         // The writers' own switch: with the retained worker this repeats its feed; once the
         // worker is gone this is the only producer, so sampling still starts.
-        endpoint
-            .send(
+        let enable = json!({
+            "generation": "native",
+            "data": { "enabled": true },
+            "facts": {},
+        });
+        let _ = link
+            .request(
                 "PUT",
                 "/internal/feed/analytics-writers",
-                json!({
-                    "generation": "native",
-                    "data": { "enabled": true },
-                    "facts": {},
-                }),
+                SERVICE,
+                &[("content-type", "application/json")],
+                Some(enable.to_string().as_bytes()),
             )
             .await;
         let Some(generation) = cache.generation(crate::account_usage::Desktop::Mac, false) else {
@@ -96,70 +51,46 @@ pub(super) async fn publish_usage(
             "data": { "dashboards":dashboards },
             "facts": {},
         });
-        endpoint
-            .send("PUT", "/internal/feed/analytics-dashboard", body)
+        let _ = link
+            .request(
+                "PUT",
+                "/internal/feed/analytics-dashboard",
+                SERVICE,
+                &[("content-type", "application/json")],
+                Some(body.to_string().as_bytes()),
+            )
             .await;
     } else if let Ok(observations) = cache.store_observations(&timestamp, now, i64::MIN)
         && !observations.is_empty()
     {
-        endpoint
-            .send(
+        let body = json!({"observations": observations});
+        let _ = link
+            .request(
                 "POST",
                 "/internal/store/record",
-                json!({"observations":observations}),
+                SERVICE,
+                &[("content-type", "application/json")],
+                Some(body.to_string().as_bytes()),
             )
             .await;
     }
 }
-
 /// One pushed usage sample: the service's share writer takes it on its own blocking task.
 pub(super) async fn usage_sample(root: PathBuf, payload: serde_json::Value) -> bool {
-    let endpoint = tokio::task::spawn_blocking(move || CollectionEndpoint::load(&root))
+    let link = tokio::task::spawn_blocking(move || ServiceLink::load(&root))
         .await
         .ok()
         .flatten();
-    match endpoint {
-        Some(endpoint) => {
-            endpoint
-                .send("POST", "/internal/usage-snapshot/sample", payload)
-                .await
-        }
-        None => false,
-    }
-}
-
-impl CollectionEndpoint {
-    async fn send(&self, method: &str, uri: &str, value: serde_json::Value) -> bool {
-        let Ok(request) = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header("host", "localhost")
-            .header("x-aac-boot-secret", &self.secret)
-            .header(
-                "x-aac-principal",
-                r#"{"kind":"session","id":"front-door","role":"service"}"#,
-            )
-            .header("content-type", "application/json")
-            .body(Body::from(value.to_string()))
-        else {
-            return false;
-        };
-        tokio::time::timeout(Duration::from_secs(3), async {
-            let stream = UnixStream::connect(&self.socket_path).await.ok()?;
-            let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.ok()?;
-            let reply = tokio::select! {
-                biased;
-                reply = sender.send_request(request) => reply.ok()?,
-                _ = connection => return None,
-            };
-            Some(
-                reply.headers().get("x-aac-service-boot")?.to_str().ok()? == self.boot_id
-                    && reply.status().is_success(),
-            )
-        })
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(false)
-    }
+    let Some(link) = link else {
+        return false;
+    };
+    link.request(
+        "POST",
+        "/internal/usage-snapshot/sample",
+        SERVICE,
+        &[("content-type", "application/json")],
+        Some(payload.to_string().as_bytes()),
+    )
+    .await
+    .is_some_and(|reply| (200..300).contains(&reply.status))
 }

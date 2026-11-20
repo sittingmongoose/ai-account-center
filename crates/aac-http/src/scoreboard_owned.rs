@@ -385,6 +385,13 @@ impl ScoreboardOwned {
             catalog::state_json(&catalog.snapshot());
     }
 
+    #[cfg(not(unix))]
+    pub(crate) async fn prepare_local(self: &Arc<Self>) {
+        let catalog = self.clone();
+        let _ = tokio::task::spawn_blocking(move || catalog.catalog_pass(now_ms())).await;
+        self.ingest_pass(false).await;
+    }
+
     pub(crate) fn generation(&self) -> (u64, String) {
         let pass = self.pass.lock().unwrap_or_else(|p| p.into_inner());
         (pass.generation, pass.catalog_hash.clone())
@@ -873,6 +880,13 @@ impl ScoreboardOwned {
         made
     }
 
+    pub(crate) fn publish_facts(&self, body: &[u8]) -> Result<Json, Decline> {
+        if body.len() > 4 * 1024 * 1024 {
+            return Err(Decline::Shape);
+        }
+        self.feeds.put("scoreboard-facts", body)
+    }
+
     /// The owned answer: the final bytes and ETag, or a named decline.
     pub(crate) async fn answer(&self, feed: &str) -> Result<(Vec<u8>, String), Decline> {
         let feed: Feed = crate::json_object::from_slice(
@@ -1256,8 +1270,11 @@ pub(crate) fn ingest_request(
 pub(crate) async fn ingest_jobs(
     owner: Arc<ScoreboardOwned>,
     stop: Arc<std::sync::atomic::AtomicBool>,
+    initial_pass: bool,
 ) {
-    owner.ingest_pass(false).await;
+    if initial_pass {
+        owner.ingest_pass(false).await;
+    }
     loop {
         if stop.load(Ordering::Acquire) {
             return;
@@ -1280,8 +1297,11 @@ pub(crate) async fn ingest_jobs(
 pub(crate) async fn catalog_jobs(
     owner: Arc<ScoreboardOwned>,
     stop: Arc<std::sync::atomic::AtomicBool>,
+    initial_pass: bool,
 ) {
-    owner.catalog_pass(now_ms());
+    if initial_pass {
+        owner.catalog_pass(now_ms());
+    }
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(30_000)).await;
         if stop.load(Ordering::Acquire) {

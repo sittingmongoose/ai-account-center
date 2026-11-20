@@ -632,6 +632,20 @@ impl Produce {
         crate::status_fed::answer(&self.feeds, &header)
     }
 
+    /// `GET /api/status/answers`: the page's answer history from the owned feed (newest first,
+    /// at most `limit`). A dirty feed is scanned here first, as a Status read would.
+    pub(crate) fn answers_view(&self, limit: usize) -> Json {
+        let mut inner = self.lock();
+        if inner.answers_dirty {
+            self.refresh_answers(&mut inner);
+        }
+        crate::status_answers_route::history_json(
+            &inner.answers.answers,
+            &inner.answers.sends,
+            limit,
+        )
+    }
+
     /// The producers' hint: one `status-changed` per window, once anything changed.
     fn hint(&self) {
         let now = now_ms();

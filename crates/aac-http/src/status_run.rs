@@ -59,7 +59,8 @@ pub(crate) fn find_executable(name: &str) -> PathBuf {
         .find(|(key, _)| key == "PATH")
         .map(|(_, value)| value)
         .unwrap_or_default();
-    for dir in path.split(':').filter(|dir| !dir.is_empty()) {
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    for dir in path.split(separator).filter(|dir| !dir.is_empty()) {
         let candidate = Path::new(dir).join(name);
         if is_executable(&candidate) {
             return candidate;
@@ -69,10 +70,27 @@ pub(crate) fn find_executable(name: &str) -> PathBuf {
 }
 
 fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows resolves an executable by its extension (PATHEXT), not by a mode bit.
+        let name = path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
+            && extensions.split(';').any(|extension| {
+                !extension.is_empty() && name.ends_with(&extension.to_ascii_lowercase())
+            })
+    }
 }
 
 /// One read-only command with a deadline and an output cap.

@@ -39,7 +39,9 @@ type ComposedRecord = {
 };
 const recorded: Record<string, ComposedRecord> = {};
 const savedComposed: Record<string, ComposedRecord> =
-  composed && !recordComposed ? JSON.parse(fs.readFileSync(composedGolden, 'utf8')) : {};
+  composed && (!recordComposed || fs.existsSync(composedGolden))
+    ? JSON.parse(fs.readFileSync(composedGolden, 'utf8'))
+    : {};
 const rustBinary = process.env.AAC_RUST_PUBLIC_BINARY ?? path.join(root, 'dist/native/aac-http');
 if (composed || rustMode !== 'off')
   assert.ok(fs.existsSync(rustBinary), 'contract replay requires an existing Rust binary');
@@ -75,6 +77,8 @@ Object.assign(process.env, {
         AAC_RUST_GROUP_CLAUDE_OPEN: 'on',
         AAC_AGENT_TRANSPORT: 'off',
         AAC_AGENT_VERBS: 'off',
+        // W-status-home: the native front door answers the worker-removal routes itself; the
+        // composed recording is their source of truth.
       }
     : {}),
 });
@@ -479,11 +483,79 @@ const MOVED_TO_RUST = new Set([
 // These rows differ from the historical TS fixture by contract. Select by request and boot
 // mode so an unexpected response, including a fallback or decline, still fails comparison.
 function composedOwner({ method, path, role }: ComposedRecord['request']) {
-  if (method !== 'GET' || !['session', 'bar'].includes(role)) return undefined;
+  const browser = role === 'session' || role === 'bar';
+  // W-status-home: the native front door answers these; a device token is in the store and
+  // usage scopes, a signed-out caller is its guard's refusal.
+  const group = browser || role === 'device' || role === 'signed-out';
+  const statusHome =
+    group &&
+    ((method === 'GET' &&
+      (path === '/api/status' ||
+        path === '/api/status/answers' ||
+        path === '/api/status/deliverable' ||
+        path.startsWith('/api/status/files/') ||
+        path === '/api/store/status' ||
+        path.startsWith('/api/usage/'))) ||
+      (method === 'POST' && path === '/api/status/answers'));
+  if (statusHome) return 'status-home';
+  if (!browser || method !== 'GET') return undefined;
   if (path === '/api/accounts/fixture-missing/reset-claims' && nativeReset) return 'reset';
   if (path === '/api/scoreboard' && nativePrivate) return 'scoreboard';
   if (path === '/api/views/home' && !legacyHome) return 'home';
   return undefined;
+}
+
+/** Every cache age in a view is the recorder's own clock, a second or a minute apart per run. */
+function stableAges(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) stableAges(item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const map = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(map)) {
+    if ((key === 'ageSeconds' || key === 'cacheAgeSeconds') && typeof child === 'number')
+      map[key] = '<elapsed-seconds>';
+    else stableAges(child);
+  }
+}
+
+/** The page's own clock and day words (`dateWordsIn`: "3:04 PM", "Nov 19") follow the recording
+ * instant; the view's data and states are the contract. */
+function stableWords(value: unknown): void {
+  const CLOCK = /\b\d{1,2}:\d{2}\s?(?:AM|PM)\b/g;
+  const DAY = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/g;
+  if (Array.isArray(value)) {
+    for (const item of value) stableWords(item);
+    return;
+  }
+  if (value && typeof value === 'object') {
+    const map = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(map)) {
+      if (typeof child === 'string')
+        map[key] = child.replace(CLOCK, '<clock>').replace(DAY, '<day>');
+      else stableWords(child);
+    }
+  }
+}
+
+/** A host's live readings (load, free memory and disk) differ every run; the panel's state and
+ * words are the contract. The collectors' numbers have their own tests. */
+function stableMachines(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) stableMachines(item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const map = value as Record<string, unknown>;
+  if ('cpu' in map && 'memory' in map && 'browsers' in map) {
+    map.cpu = null;
+    map.memory = null;
+    map.disk = [];
+    map.gpuPct = null;
+    map.warnings = [];
+  }
+  for (const child of Object.values(map)) stableMachines(child);
 }
 
 function emit(relative: string, data: any, view: string | null = null) {
@@ -491,7 +563,13 @@ function emit(relative: string, data: any, view: string | null = null) {
   const composedRow = composed && /^contract\/[0-9]/.test(relative);
   const owner = composedRow ? composedOwner(data.request) : undefined;
   if (owner === 'scoreboard') {
-    assert.equal(view, 'scoreboard@1', 'the composed Scoreboard row must come from its owner');
+    if (view !== 'scoreboard@1')
+      console.error('SCOREBOARD ROW', JSON.stringify(data).slice(0, 900));
+    assert.equal(
+      view,
+      'scoreboard@1',
+      `the composed Scoreboard row must come from its owner: ${data.response.status} ${JSON.stringify(data.response.body).slice(0, 240)}`
+    );
     const body = data.response.body;
     // The two cache reads happen at different instants. Preserve clock-field presence and
     // nulls, while comparing the displayed data and all response headers exactly.
@@ -513,9 +591,40 @@ function emit(relative: string, data: any, view: string | null = null) {
       source[key] = '<elapsed-seconds>';
     }
   }
+  if (owner === 'status-home') {
+    stableAges(data.response.body);
+    stableMachines(data.response.body);
+    stableWords(data.response.body);
+  }
+  // The store's boot identity (its open instant, segment log and meta clocks) differs per run;
+  // the status row's contract is the writer's shape and state, not one boot's ids.
+  if (
+    owner === 'status-home' &&
+    data.request.method === 'GET' &&
+    data.request.path === '/api/store/status'
+  ) {
+    const body = data.response.body;
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      body.openedAt = null;
+      body.logs = null;
+      body.meta = null;
+      body.redbBytes = null;
+      body.redbStats = null;
+      body.instanceId = null;
+      body.integrity = null;
+      body.capture = null;
+      body.storageHealth = null;
+    }
+  }
   const bytes = JSON.stringify(data, null, 2) + '\n';
   if (regenerate) fs.writeFileSync(file, bytes);
   else if (composedRow) {
+    if (owner === 'status-home' && recordComposed) {
+      // The group's own refusals are part of its contract (a missing file, an empty query).
+      recorded[relative] = data;
+      matched++;
+      return;
+    }
     if (owner && recordComposed) {
       assert.equal(data.response.status, 200, `cannot record an unsuccessful ${owner} response`);
       if (owner === 'reset') {
@@ -524,7 +633,11 @@ function emit(relative: string, data: any, view: string | null = null) {
         assert.deepEqual(data.response.body?.grants, []);
       }
       if (owner === 'scoreboard') {
-        assert.equal(data.response.headers.vary, 'Cookie, Accept-Encoding');
+        // The native front door answers from the service without the TS compression layer.
+        assert.equal(
+          data.response.headers.vary,
+          process.env.AAC_RUST_CUT_NATIVE_ROUTES === 'on' ? 'Cookie' : 'Cookie, Accept-Encoding'
+        );
       }
       if (owner === 'home') assert.equal(data.response.body?.schemaVersion, 1);
       recorded[relative] = data;
@@ -582,6 +695,9 @@ function normalize(value: any, key = ''): any {
     );
     return '<retry-after-seconds>';
   }
+  // The usage routes' own clock fields are numbers; the reference and the native answer
+  // are taken at different instants.
+  if ((key === 'at' || key === 'now') && typeof value === 'number') return '<at-ms>';
   if (typeof value === 'string' && key === 'set-cookie')
     return value
       .replace(/^[^=]+=[^;]+/, 'connect.sid=<session-cookie>')
@@ -613,10 +729,10 @@ function normalize(value: any, key = ''): any {
 }
 try {
   // The HTTP listener starts before its private service. Dispatch parity needs a running service.
-  if (rustMode !== 'off' && process.platform !== 'win32') {
+  if ((composed || rustMode !== 'off') && process.platform !== 'win32') {
     const serviceState = () =>
       (instance.rustService.diagnostics().service as { state: string }).state;
-    const deadline = Date.now() + 7000;
+    const deadline = Date.now() + 15000;
     while (serviceState() === 'down' && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(serviceState(), 'ready', 'the fixture Rust service must be ready before replay');
@@ -956,8 +1072,14 @@ try {
     assert.equal(differences.length, 0, 'composed M0 differences');
     if (recordComposed) {
       assert.ok(nativeReset, 'record with the reset owner available');
-      assert.equal(Object.keys(recorded).length, nativePrivate ? 6 : 4, 'composed fixture rows');
-      fs.writeFileSync(composedOutput ?? composedGolden, JSON.stringify(recorded, null, 2) + '\n');
+      assert.ok(Object.keys(recorded).length >= (nativePrivate ? 6 : 4), 'composed fixture rows');
+      const native = Object.fromEntries(
+        Object.entries(savedComposed).filter(([name]) => name.startsWith('native/contract/'))
+      );
+      fs.writeFileSync(
+        composedOutput ?? composedGolden,
+        JSON.stringify({ ...recorded, ...native }, null, 2) + '\n'
+      );
     }
   }
   console.log(

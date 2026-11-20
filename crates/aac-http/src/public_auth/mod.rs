@@ -7,16 +7,15 @@ mod app_updates_owner;
 mod compose;
 mod dashboard_events;
 mod devices;
+mod home_group;
 mod hub;
 mod lifecycle;
 pub(crate) mod lifecycle_host;
+mod native_group;
 pub(crate) mod native_owners;
 #[cfg(unix)]
 mod native_reads;
 mod native_settings;
-// Merged before its first registering group: the host is exercised by the groups that land
-// on top of it (W-status-home first), so its API is not dead in the composed cut.
-#[allow(dead_code)]
 mod owner_host;
 mod policy;
 mod profile_routes;
@@ -95,6 +94,20 @@ pub struct DashboardAccess {
 }
 
 impl DashboardAccess {
+    /// The admitted principal this request carries to the private route table.
+    pub(crate) fn service_principal(&self) -> Option<String> {
+        match &self.principal {
+            DashboardPrincipal::Browser { .. } => self
+                .session_id
+                .as_ref()
+                .map(|id| json!({"kind": "session", "id": id, "role": "admin"}).to_string()),
+            DashboardPrincipal::Device { id, .. } => {
+                Some(json!({"kind": "device", "id": id, "role": "device"}).to_string())
+            }
+            DashboardPrincipal::Anonymous => None,
+        }
+    }
+
     #[cfg(all(test, unix))]
     pub(super) fn test_browser() -> Self {
         Self {
@@ -254,7 +267,8 @@ impl DashboardAuth {
         ui_root: Option<PathBuf>,
     ) -> Router {
         self.edges(
-            downstream, cache, ui_root, None, false, None, None, None, None, None, None, None, None,
+            downstream, cache, ui_root, None, false, None, None, None, None, None, None, None,
+            None, None,
         )
     }
 
@@ -277,6 +291,7 @@ impl DashboardAuth {
         analytics_hop: Option<analytics_routes::Hop>,
         profiles: Option<profile_routes::Profiles>,
         app_updates: Option<app_updates_owner::Owner>,
+        native_group: Option<Arc<native_group::Routes>>,
     ) -> Router {
         let cut = cut_root.is_some();
         let hub = hub::Hub::new(self.0.clone(), cache, snapshot, cut);
@@ -355,6 +370,14 @@ impl DashboardAuth {
                 && app_updates_owner::Owner::owns(request.method(), request.uri().path())
             {
                 return app_updates.handle(request).await;
+            }
+            if let Some(group) = &native_group
+                && group.owns(request.method(), request.uri().path().trim_end_matches('/'))
+            {
+                let Some(access) = request.extensions().get::<DashboardAccess>().cloned() else {
+                    return service_error();
+                };
+                return native_group::handle(group.as_ref(), &access, request).await;
             }
             if let Some(backend) = backend
                 && api_path(&request.uri().path().to_ascii_lowercase())
@@ -548,6 +571,10 @@ pub(crate) async fn run_public_at(
     // the `edges` fallback answers them, so the shipped worker keeps its cutover switch.
     let native_settings = cut.then(|| native_settings::Settings::new(root.clone(), auth.events()));
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
+    let group_routes = owner_host
+        .as_ref()
+        .filter(|_| enabled)
+        .map(|host| Arc::new(native_group::Routes::new(host.clone())));
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
         let routes = lifecycle_host::Routes::new(host);
         #[cfg(unix)]
@@ -627,6 +654,21 @@ pub(crate) async fn run_public_at(
         if enabled && let Some(settings) = &native_settings {
             host.register("settings", settings.router(Router::new()));
         }
+        if enabled
+            && cut
+            && native_collection
+            && groups.is_some_and(|groups| groups.home)
+            && let Some(profiles) = &profiles
+            && let Some(collection) = &lifecycle_routes
+        {
+            let home = Arc::new(home_group::Home::new(
+                host,
+                root.clone(),
+                profiles.open_owner(),
+                collection.clone(),
+            ));
+            host.register("home", home.router(Router::new()));
+        }
         api = host.mount(api);
     }
     if cut || !composed {
@@ -652,6 +694,7 @@ pub(crate) async fn run_public_at(
         analytics_hop,
         profiles,
         app_updates,
+        group_routes,
     );
     let router = auth
         .protect(reset_routes::mount(
@@ -1537,6 +1580,7 @@ mod tests {
                 hop,
                 None,
                 None,
+                None,
             )
         } else {
             Router::new().fallback(|| async { decline() })
@@ -1918,6 +1962,7 @@ mod tests {
             Some(root.clone()),
             None,
             Some(settings),
+            None,
             None,
             None,
             None,

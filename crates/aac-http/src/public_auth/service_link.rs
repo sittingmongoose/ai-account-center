@@ -10,11 +10,12 @@
 //! 32 random bytes, and a socket in a private folder. All of them are checked here; a missing
 //! or moved endpoint is no answer (the caller decides the route's own 503).
 
+pub(super) use super::owner_host::ServiceReply;
 use super::storage;
 use crate::identity;
 use aac_files::read::{Ancestors, Mode, Owner, Read, ReadPolicy};
 use axum::body::{Body, to_bytes};
-use axum::http::{HeaderMap, Request};
+use axum::http::Request;
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
@@ -40,13 +41,6 @@ struct CollectionEndpoint {
     boot_id: String,
     #[serde(default)]
     native_lifecycle: bool,
-}
-
-/// One service reply, as it crossed the socket.
-pub(super) struct ServiceReply {
-    pub status: u16,
-    pub headers: HeaderMap,
-    pub body: Vec<u8>,
 }
 
 #[derive(Clone)]
