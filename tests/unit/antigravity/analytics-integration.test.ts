@@ -5,6 +5,7 @@ import {
   appendAccountAnalyticsSnapshot,
   type AccountAnalyticsHistoryData,
 } from '../../../src/web-server/services/account-analytics-history';
+import { accountSeries } from '../../../src/web-server/services/account-analytics-compose';
 import { AccountAnalyticsService } from '../../../src/web-server/services/account-analytics-service';
 import type {
   AccountDashboard,
@@ -184,6 +185,25 @@ describe('Antigravity distinct quota history', () => {
     expect(party.accounts.map((row) => row.id)).toEqual(['antigravity:profile:party']);
     expect(party.activity.status).toBe('unavailable');
     expect(activityCalls).toBe(2);
+  });
+
+  it('orders T3 and app weeklies first and leaves pre-T3 observations missing', () => {
+    const app = { ...window(), label: 'Gemini weekly, in the Antigravity app' };
+    const cli = {
+      ...window(OTHER_POOL),
+      key: 'cli-gemini-weekly',
+      label: 'Gemini weekly, in T3 (Antigravity CLI)',
+      usedPercent: 34,
+      remainingPercent: 66,
+    };
+    const other = { ...window(), key: 'cli-gemini-5h' };
+    const current = { ...account('gmail'), windows: [other, app, cli] };
+    const history = appendAccountAnalyticsSnapshot(null, [{ ...current, windows: [app] }], NOW);
+    const series = accountSeries(current, history, NOW - 3_600_000, NOW, 10, { hidden: false });
+    expect(series.windows.map((row) => row.key)).toEqual([cli.key, app.key, other.key]);
+    expect(series.windows[0].usedPercent).toBe(34);
+    expect(series.windows[0].points.map((point) => point.usedPercent)).toEqual([null]);
+    expect(series.windows[1].points.map((point) => point.usedPercent)).toEqual([15.25]);
   });
 
   it('keeps changed group history without attaching its old reading to the new current pool', async () => {

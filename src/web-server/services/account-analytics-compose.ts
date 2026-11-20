@@ -107,6 +107,12 @@ function point(
   };
 }
 
+function antigravitySeriesOrder(key: string): number {
+  if (key === 'cli-gemini-weekly') return 0;
+  if (key === 'gemini-weekly') return 1;
+  return 2;
+}
+
 export function accountSeries(
   account: DashboardAccount,
   history: AccountAnalyticsHistoryData | null,
@@ -131,13 +137,17 @@ export function accountSeries(
   const preferredWindows = new Map(currentWindows);
   for (const [key, window] of [...windows.entries()].reverse())
     if (!preferredWindows.has(key)) preferredWindows.set(key, window);
+  const entries = [...preferredWindows.entries()];
+  if (account.provider === 'antigravity') {
+    entries.sort(([, a], [, b]) => antigravitySeriesOrder(a.key) - antigravitySeriesOrder(b.key));
+  }
   return {
     ...account,
     hidden: registry.hidden,
     firstSampleAt: records[0]?.sampledAt ?? null,
     lastSampleAt: records[records.length - 1]?.sampledAt ?? null,
     sampleCount: records.length,
-    windows: [...preferredWindows.entries()].slice(0, 256).map(([identityKey, window]) => {
+    windows: entries.slice(0, 256).map(([identityKey, window]) => {
       const buckets = new Map<number, AccountAnalyticsPoint>();
       for (const record of records) {
         const matching = record.windows.find(

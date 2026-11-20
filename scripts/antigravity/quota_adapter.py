@@ -59,9 +59,13 @@ def collect_snapshot(profile: SavedProfile, deps: QuotaDependencies) -> dict:
         # The existing normalizer's bounded DTO is the only output. Never
         # derive model pool IDs or entitlement from display names/percentages.
         windows = []
-        allowed = {'key','label','usedPercent','remainingPercent','resetAt','windowMinutes','used','limit','unit','kind','remaining','expiresAt','unlimited','enabled','poolId','poolIdSource','poolLabel','modelIds'}
+        allowed = {'key','label','usedPercent','remainingPercent','resetAt','windowMinutes','used','limit','unit','kind','remaining','expiresAt','unlimited','enabled','poolId','poolIdSource','poolLabel','modelIds','status'}
         for window in data['windows'][:64]:
-            if isinstance(window, dict): windows.append({k:v for k,v in window.items() if k in allowed})
+            if isinstance(window, dict):
+                window = {k:v for k,v in window.items() if k in allowed}
+                # Only a failed quota service's marker passes; any other status is not this DTO's.
+                if window.get('status') != 'unavailable': window.pop('status', None)
+                windows.append(window)
         stamp = deps.now().astimezone(dt.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
         base.update(status='fresh', email=identity.email, plan=data.get('plan'),
                     fetchedAt=stamp, sampledAt=stamp, windows=windows, pools=data.get('pools', []))
@@ -118,32 +122,24 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
         }, form=True)
     def quota(access, email):
         headers = {'Authorization': 'Bearer ' + access, 'User-Agent': desktop.AGY_USER_AGENT}
-        load = helpers.request_json(desktop.AGY_BASE + 'loadCodeAssist', headers,
-            {'metadata': {'ideType': 'ANTIGRAVITY', 'platform': 'PLATFORM_UNSPECIFIED', 'pluginType': 'GEMINI'}})
+        load = desktop.antigravity_load(helpers.request_json, headers)
         project = load.get('cloudaicompanionProject')
         if isinstance(project, dict): project = project.get('id') or project.get('projectId')
         project = helpers.safe_text(project)
         if project is None:
             raise AuthError('Antigravity did not return a usable quota project.')
         plan, reported = desktop.antigravity_reported_plan(load)
-        summary = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuotaSummary', headers, {'project': project})
-        windows = desktop.normalize_antigravity(summary)
-        pools = structural_pools(desktop.agy_groups(summary), windows)
-        throttled = None
-        # The optional per-model read runs only when the summary carries no
-        # Gemini group and the worker budget still fits its socket timeout; a
-        # slow or unneeded optional endpoint can never cost the summary sample.
-        if (not desktop.antigravity_summary_has_gemini(windows)
-                and (clock() - budget_started).total_seconds() <= desktop.AGY_OPTIONAL_BUDGET_SECONDS):
-            try:
-                per_model = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuota', headers, {'project': project})
-            except helpers.UsageError as error:
-                per_model = None
-                retry = getattr(error, 'retry_after', None)
-                if isinstance(retry, int) and 0 < retry <= 86400:
-                    throttled = retry
-            else:
-                windows += desktop.normalize_antigravity_gemini(per_model, windows)
+        windows, pools, throttled = [], [], None
+        # Both services (T3's CLI first, then the app) against the worker's one deadline: both
+        # required summaries first, optional per-model reads after them only while they still fit,
+        # so the worker always has time to publish what is complete before its 25 s cutoff.
+        for service in desktop.antigravity_services(
+                helpers.request_json, headers, project, lambda: (clock() - budget_started).total_seconds()):
+            if service['status'] == 'ok':
+                pools += structural_pools(service['groups'], service['windows'], service['service'])
+            windows += desktop.antigravity_service_label(service['windows'], service['service'])
+            if service['retryAfter'] is not None and throttled is None:
+                throttled = service['retryAfter']
         windows += desktop.normalize_antigravity_credits(load)
         result = {'email': email, 'plan': plan, 'windows': windows, 'pools': pools,
                   **({'reportedPlan': reported} if reported else {})}
@@ -153,7 +149,7 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
     return QuotaDependencies(userinfo, refresh, quota, clock)
 
 
-def structural_pools(groups: list, windows: list) -> list:
+def structural_pools(groups: list, windows: list, service: str = 'app') -> list:
     """Preserve actual group membership without guessing from model labels.
 
     IDs derive from sorted exact provider bucket IDs. Public display includes
@@ -174,7 +170,10 @@ def structural_pools(groups: list, windows: list) -> list:
         if (len(ids) != len(buckets) or not ids or len(ids) > 32
                 or any(not isinstance(k, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', k) for k in ids)):
             continue
-        digest = hashlib.sha256(json.dumps(sorted(ids), separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+        # The app's pool IDs keep their historical derivation; the CLI's separate counters
+        # get their own IDs, so the two services' pools are never merged.
+        members = sorted(ids) if service == 'app' else [service] + sorted(ids)
+        digest = hashlib.sha256(json.dumps(members, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
         pool_id = 'bucket-group:' + digest
         selected = [lookup[k] for k in ids if k in lookup]
         # Display normalization omits malformed optional flags. Validate the

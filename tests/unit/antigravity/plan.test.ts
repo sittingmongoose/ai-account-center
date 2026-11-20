@@ -137,6 +137,27 @@ describe('Antigravity plan table dated 2026-11-19', () => {
     expect(models('pro')?.summary).toContain('Gemini 4 Argon has its own weekly limit');
   });
 
+  it('says Gemini 4 Neon draws from the Gemini pool and that T3 and the app have separate limits (2026-11-19)', () => {
+    const models = (plan: string) => antigravityPlanDisplay(plan, BEFORE).antigravityPlan;
+    for (const plan of ['pro', 'ultra', 'ultra-5x', 'ultra-20x'])
+      expect(models(plan)?.summary).toMatch(/Gemini 4 Neon (and Hydrogen count|counts) against it/);
+    for (const plan of [
+      'free',
+      'plus',
+      'pro-trial',
+      'pro',
+      'ultra',
+      'ultra-5x',
+      'ultra-20x',
+      'Google Workspace',
+    ])
+      expect(models(plan)?.summary).toEndWith(
+        'T3 (the Antigravity CLI) and the Antigravity app have separate limits.'
+      );
+    for (const plan of ['enterprise-standard', 'enterprise-payg', 'code-assist-standard'])
+      expect(models(plan)?.summary ?? '').not.toContain('separate limits');
+  });
+
   it('drops Claude 4.6 and GPT-OSS-120B at the end of Nov 30, by the sample time', () => {
     for (const plan of ['free', 'plus', 'pro-trial', 'Google Workspace']) {
       const after = antigravityPlanDisplay(plan, AFTER).antigravityPlan;

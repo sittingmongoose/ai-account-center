@@ -25,15 +25,26 @@ from desktop_helpers import (
 
 MUSE_URL = "https://api.meta.ai/muse-code/key"
 AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
+# Google keeps two separate sets of Antigravity quota counters per account. The Antigravity
+# app reads and spends the production service above. The Antigravity CLI (1.5.x, the runtime
+# T3 runs) uses the daily service below by default (only CLOUD_CODE_URL changes it) and spends
+# that service's counters: on 2026-11-19 a ~25M-token Gemini 4 Neon run in T3 used 29.68% of
+# the daily Gemini 5-hour window while production stayed at 0%. Both are read; the CLI's come
+# first (what T3 spends), keyed "cli-<bucket>". They are separate limits: never added together.
+AGY_CLI_BASE = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+AGY_CLI_KEY_PREFIX = "cli-"
+AGY_WHERE = {"cli": "In T3 (Antigravity CLI)", "app": "In the Antigravity app"}
+AGY_SERVICES = (("cli", AGY_CLI_BASE), ("app", AGY_BASE))
 # The quota summary gates its Gemini (and Argon) groups on the client version
 # in the User-Agent: 1.0.0-era clients stopped receiving them on 2026-10-22,
 # while current Antigravity client versions still do. One constant, so a future
 # version bump is a single change; the per-model retrieveUserQuota fallback in
 # normalize_antigravity_gemini covers any window the summary then omits.
 # Re-checked 2026-11-13: this string and the Antigravity 1.5.8 client's get the
-# same groups and buckets. 1.5.x clients call the daily-cloudcode-pa host, whose
-# summary matches this one; only its per-model read also lists the Gemini 4
-# Hydrogen models, inside the Gemini Models windows (no bucket of their own).
+# same groups and buckets. 1.5.x clients call the daily-cloudcode-pa host: same
+# groups, but its own counters (see AGY_CLI_BASE), and its per-model read also
+# lists Gemini 4 Hydrogen and Neon inside the Gemini Models windows (no bucket
+# of their own).
 AGY_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=linux; arch=amd64)"
 # The transport's deadline spans the whole collector process. This budget
 # starts when the module is imported, so credential reads and every quota
@@ -598,13 +609,115 @@ def fetch_antigravity(credential, result, home=None, budget_started=None):
         fetch_antigravity_quota(refresh_antigravity(credential, home), result, budget)
 
 
+def antigravity_load(request, headers):
+    """loadCodeAssist from the app's service, else the CLI's (same account, same project)."""
+    body = {"metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}}
+    try:
+        return request(AGY_BASE + "loadCodeAssist", headers, body)
+    except UsageError as error:
+        if error.status == "needs_sign_in":
+            raise
+        return request(AGY_CLI_BASE + "loadCodeAssist", headers, body)
+
+
+def antigravity_service_label(windows, service):
+    """One service's windows, labelled by where their quota is spent. The CLI's keys get the
+    cli- prefix so both services' buckets coexist; the app's keep their historical keys."""
+    for window in windows:  # in place, so pool records holding these windows follow
+        if service == "cli":
+            window["key"] = AGY_CLI_KEY_PREFIX + window["key"]
+        window["label"] = (window.get("label") or "Antigravity") + " \u00b7 " + AGY_WHERE[service]
+    return windows
+
+
+# One deadline for the whole read, so a slow optional request can never cost a required one or
+# the publish. The first required summary is always made (nothing is complete yet); every later
+# request starts only while it can still finish (8 s socket) inside 22 of the worker's 25 s,
+# leaving the rest to publish what is complete. Optional reads keep their historical 13 s gate
+# and run only after both required summaries.
+AGY_REQUIRED_BUDGET_SECONDS = 14
+
+
+def antigravity_rate_limited(error):
+    return getattr(error, "status", None) == "rate_limited" or getattr(error, "failure_code", None) == "rate_limited"
+
+
+def antigravity_retry_after(error):
+    for name in ("retry_after_seconds", "retry_after"):
+        value = getattr(error, name, None)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= 86400:
+            return value
+    return None
+
+
+def antigravity_unavailable_windows(windows):
+    """A failed service's per-service result: the pools the other service reported this read, with no
+    numbers and status "unavailable", so Home keeps their columns and Details names them unavailable."""
+    return [{"key": w["key"], "label": w["label"], "usedPercent": None, "remainingPercent": None, "resetAt": None,
+             "windowMinutes": w.get("windowMinutes"), "used": None, "limit": None, "unit": None,
+             "kind": w.get("kind") or "rate_limit", "status": "unavailable"}
+            for w in windows if isinstance(w, dict) and w.get("kind", "rate_limit") == "rate_limit"]
+
+
+def antigravity_services(request, headers, project, elapsed=lambda: 0.0, per_model=True):
+    """Both quota services, the CLI's first, as per-service results:
+    {"service", "status": "ok" | "unavailable" | "rate_limited", "groups", "windows", "retryAfter", "error"}.
+
+    Phase 1 reads both required summaries; phase 2 the optional per-model reads, only while they fit.
+    A throttle on the first service stops at once (the account-wide hold: the next request is not made)
+    and raises; a throttle on the second keeps the first service's verified reading and reports the
+    second as rate_limited with its retry interval. A sign-in refusal on one service while the other
+    answers is that service's unavailability; refused on every service it raises needs_sign_in. A failed
+    service's result carries the answered service's pools as unavailable windows (unlabelled).
+    """
+    results, failures = [], []
+    for index, (service, base) in enumerate(AGY_SERVICES):
+        result = {"service": service, "base": base, "status": "unavailable", "groups": [], "windows": [],
+                  "retryAfter": None, "error": None}
+        results.append(result)
+        if index > 0 and elapsed() > AGY_REQUIRED_BUDGET_SECONDS:
+            continue  # no time left to finish this request and still publish what the first one read
+        try:
+            summary = request(base + "retrieveUserQuotaSummary", headers, {"project": project})
+        except UsageError as error:
+            result["error"] = error
+            failures.append(error)
+            if antigravity_rate_limited(error):
+                if not any(r["status"] == "ok" for r in results):
+                    raise
+                result.update(status="rate_limited", retryAfter=antigravity_retry_after(error))
+                break  # honour the hold: no further request after a throttle
+            continue
+        result.update(status="ok", groups=agy_groups(summary), windows=normalize_antigravity(summary))
+    answered = [r for r in results if r["status"] == "ok"]
+    if not answered:
+        if failures and all(getattr(error, "status", None) == "needs_sign_in" for error in failures):
+            raise failures[0]
+        raise failures[-1] if failures else UsageError(
+            "unavailable", "There was no time left to read Antigravity's quota.")
+    known = [dict(w) for w in answered[0]["windows"]]
+    for result in results:
+        if result["status"] != "ok":
+            result["windows"] = antigravity_unavailable_windows(known)
+    if per_model:
+        for result in answered:
+            if antigravity_summary_has_gemini(result["windows"]) or elapsed() > AGY_OPTIONAL_BUDGET_SECONDS:
+                continue
+            per_model_reply = None
+            try:
+                per_model_reply = request(result["base"] + "retrieveUserQuota", headers, {"project": project})
+            except UsageError as error:
+                result["retryAfter"] = result["retryAfter"] or antigravity_retry_after(error)
+            result["windows"] += normalize_antigravity_gemini(per_model_reply, result["windows"])
+    return results
+
+
 def fetch_antigravity_quota(credential, result, budget_started=None):
     # The control plane selects Antigravity quota/project behavior by native
     # client User-Agent. A generic UA returns Gemini eligibility tiers instead.
     started = budget_started if budget_started is not None else time.monotonic()
     headers = {"Authorization": "Bearer " + credential.access, "User-Agent": AGY_USER_AGENT}
-    load = request_json(AGY_BASE + "loadCodeAssist", headers,
-                        {"metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
+    load = antigravity_load(request_json, headers)
     project = load.get("cloudaicompanionProject")
     if isinstance(project, dict):
         project = project.get("id") or project.get("projectId")
@@ -614,22 +727,14 @@ def fetch_antigravity_quota(credential, result, budget_started=None):
     result["plan"], reported = antigravity_reported_plan(load)
     if reported:
         result["reportedPlan"] = reported
-    payload = request_json(AGY_BASE + "retrieveUserQuotaSummary", headers, {"project": project})
-    windows = normalize_antigravity(payload)
-    per_model = None
-    # The optional per-model read runs only when the summary carries no Gemini
-    # group, and only while the transport's remaining deadline still fits it:
-    # each call may hold its socket for 8 of the transport's 25 seconds.
-    if not antigravity_summary_has_gemini(windows) and time.monotonic() - started <= AGY_OPTIONAL_BUDGET_SECONDS:
-        try:
-            per_model = request_json(AGY_BASE + "retrieveUserQuota", headers, {"project": project})
-        except UsageError as error:
-            # The optional read stays optional, but a provider throttle must not be:
-            # surface its cooldown so refreshes stop retrying the endpoint early.
-            retry_after = getattr(error, "retry_after", None)
-            if retry_after is not None and retry_after > 0 and "retryAfterSeconds" not in result:
-                result["retryAfterSeconds"] = retry_after
-    windows += normalize_antigravity_gemini(per_model, windows)
+    windows = []
+    # One deadline for the whole collector process (each call may hold its socket for 8 of 25 s).
+    for service in antigravity_services(request_json, headers, project, lambda: time.monotonic() - started):
+        windows += antigravity_service_label(service["windows"], service["service"])
+        # A throttle, on a summary or the optional read, is never dropped: its cooldown travels
+        # with the published sample so refreshes stop retrying before the deadline.
+        if service["retryAfter"] is not None and "retryAfterSeconds" not in result:
+            result["retryAfterSeconds"] = service["retryAfter"]
     result["windows"] = windows + normalize_antigravity_credits(load)
 
 

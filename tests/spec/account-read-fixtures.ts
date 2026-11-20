@@ -1063,8 +1063,29 @@ export function analyticsTable(): Array<{
     rangeInput: AccountAnalyticsRangeInput;
     compose: AccountAnalyticsComposeInput;
   }> = [];
-  const accounts = dashboardAccounts();
-  const history = historyData(accounts);
+  const accounts = dashboardAccounts().map((a) =>
+    a.provider === 'antigravity'
+      ? {
+          ...a,
+          status: 'ok' as const,
+          windows: [
+            window({ key: 'gemini-weekly', label: 'Gemini weekly, in the Antigravity app' }),
+            window({
+              key: 'cli-gemini-weekly',
+              label: 'Gemini weekly, in T3 (Antigravity CLI)',
+              usedPercent: 34,
+              remainingPercent: 66,
+            }),
+          ],
+        }
+      : a
+  );
+  // The deployment adds a current CLI window to a range with only app history.
+  const history = historyData(
+    accounts.map((a) =>
+      a.provider === 'antigravity' ? { ...a, windows: a.windows.slice(0, 1) } : a
+    )
+  );
   const presets = ['24h', '7d', '30d', '90d', 'all'] as const;
   for (let i = 0; i < 60; i++) {
     const preset = presets[i % presets.length];

@@ -318,7 +318,7 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
         class: 'pro',
         quotaPolicy: 'five-hour-weekly',
         summary:
-          'Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own.',
+          'Refreshes every 5 hours up to a weekly limit. Gemini models share one limit that costlier models use up faster (Gemini 4 Neon and Hydrogen count against it); Gemini 4 Argon has its own weekly limit; Claude and GPT models have their own. T3 (the Antigravity CLI) and the Antigravity app have separate limits.',
         models: [
           'Gemini 4 Neon',
           'Gemini 4 Argon',

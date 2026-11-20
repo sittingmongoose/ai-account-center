@@ -577,6 +577,19 @@ class CursorDispatcherContractTests(unittest.TestCase):
         self.assertNotIn("retryAfterSeconds", result)
 
 
+class UnavailableQuotaServiceWindowTests(unittest.TestCase):
+    """A failed Antigravity quota service travels as unavailable pools with no numbers (M3)."""
+
+    def test_an_unavailable_pool_survives_the_public_window_and_never_carries_numbers(self):
+        window = {"key": "cli-gemini-5h", "label": "Gemini Models · 5-hour · In T3 (Antigravity CLI)",
+                  "usedPercent": None, "remainingPercent": None, "resetAt": None, "windowMinutes": 300,
+                  "used": None, "limit": None, "unit": None, "kind": "rate_limit", "status": "unavailable"}
+        public = usage._window(window)
+        self.assertEqual((public["key"], public["status"], public["usedPercent"]), ("cli-gemini-5h", "unavailable", None))
+        self.assertIsNone(usage._window({**window, "usedPercent": 0}))  # an unavailable pool is never a zero
+        self.assertIsNone(usage._window({**window, "status": None}))  # and without the marker it is no reading
+
+
 class CommandTests(unittest.TestCase):
     def invoke(self, request):
         result = subprocess.run([sys.executable, "-B", str(HELPERS / "failover_usage.py")], input=request,

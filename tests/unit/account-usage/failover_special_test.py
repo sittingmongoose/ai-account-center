@@ -48,6 +48,7 @@ def quota(credential, sample):
                                                    reset="2099-01-01T00:00:00Z")]
 
 
+@patch("desktop_usage.AGY_SERVICES", (("app", "https://cloudcode-pa.googleapis.com/v1internal:"),))  # legacy single-service fixtures
 class SpecialFailoverTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="aac-special-failover-")
@@ -314,6 +315,53 @@ class SpecialFailoverTests(unittest.TestCase):
         self.assertEqual(request.call_count, 3)
         self.assertNotIn("private-project", json.dumps(result))
 
+    def both_services(self, replies):
+        """special.collect is what the dashboard refresh's failover transport runs on a host; both
+        quota services this time (the class pins the legacy single-service order)."""
+        self.native_file()
+        candidate = special.inventory("antigravity", self.home, "ubuntu")[0]
+        calls = []
+
+        def request(url, headers=None, body=None, form=False):
+            calls.append(url)
+            reply = replies[url]
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+        services = (("cli", special.desktop.AGY_CLI_BASE), ("app", special.desktop.AGY_BASE))
+        with patch.object(special.desktop, "AGY_SERVICES", services), \
+                patch.object(special.HttpClient, "request_json", side_effect=request):
+            return special.collect(candidate, self.home, "ubuntu"), calls
+
+    def two_service_replies(self, cli_summary, app_summary):
+        summary = {"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.9, "resetTime": "2026-11-26T22:06:23Z"}]}]}
+        return {special.USERINFO_URL: {"email": EMAIL, "id": SUBJECT, "verified_email": True},
+                special.desktop.AGY_BASE + "loadCodeAssist": {"cloudaicompanionProject": "private-project"},
+                special.desktop.AGY_CLI_BASE + "retrieveUserQuotaSummary": summary if cli_summary is None else cli_summary,
+                special.desktop.AGY_BASE + "retrieveUserQuotaSummary": summary if app_summary is None else app_summary}
+
+    def test_a_daily_host_429_reaches_the_failover_hold_and_the_app_host_is_never_asked(self):
+        # M1: the typed throttle and its Retry-After reach the account-wide hold; no further request.
+        result, calls = self.both_services(self.two_service_replies(special.RateLimited(321), AssertionError("held")))
+        self.assertEqual(result, {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 321})
+        self.assertNotIn(special.desktop.AGY_BASE + "retrieveUserQuotaSummary", calls)
+
+    def test_an_app_host_429_after_the_daily_host_answered_still_reaches_the_failover_hold(self):
+        # This collector's contract drops the partial reading on a quota throttle and keeps its Retry-After.
+        result, calls = self.both_services(self.two_service_replies(None, special.RateLimited(654)))
+        self.assertEqual(result, {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 654})
+        self.assertNotIn("private-project", json.dumps(result))
+        self.assertEqual(calls[-1], special.desktop.AGY_BASE + "retrieveUserQuotaSummary")
+
+    def test_a_403_on_one_host_publishes_the_other_with_the_failed_pools_unavailable(self):
+        refused = special.helpers.UsageError("needs_sign_in", "The saved account could not authenticate.")
+        result, _ = self.both_services(self.two_service_replies(refused, None))
+        windows = result["sample"]["windows"]
+        self.assertEqual([w["key"] for w in windows], ["cli-gemini-weekly", "gemini-weekly"])
+        self.assertEqual((windows[0]["status"], windows[0]["usedPercent"]), ("unavailable", None))
+        self.assertAlmostEqual(windows[1]["usedPercent"], 10, places=2)
+
     def wallet_fixture(self):
         workspace = "wrk_fixture"
         cookies = [{"name": "auth", "value": "PRIVATE-WALLET-COOKIE", "domain": "opencode.ai", "path": "/",
@@ -505,6 +553,40 @@ class HttpClientTests(unittest.TestCase):
                 special.HttpClient.request_json("https://unrelated.example.test")
         opener.open.assert_called_once()
 
+
+
+class TwoServiceQuotaTests(unittest.TestCase):
+    """The failover path (what Home uses) reads both Antigravity quota services, T3's CLI first."""
+
+    def summary(self, five, weekly):
+        return {"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": weekly, "resetTime": "2026-11-26T22:06:23Z"},
+            {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": five, "resetTime": "2026-11-20T03:06:23Z"}]}]}
+
+    def test_both_services_are_read_and_labelled_and_the_transport_allows_only_their_urls(self):
+        app, cli = special.desktop.AGY_BASE, special.desktop.AGY_CLI_BASE
+        replies = {app + "loadCodeAssist": {"cloudaicompanionProject": "invented-project"},
+                   cli + "retrieveUserQuotaSummary": self.summary(0.7032202, 0.9152058),
+                   app + "retrieveUserQuotaSummary": self.summary(1, 0.9991121)}
+        calls = []
+
+        def request(url, headers=None, body=None, form=False):
+            calls.append(url)
+            return replies[url]
+        sample = {}
+        with patch.object(special.HttpClient, "request_json", side_effect=request):
+            special._quota(special.helpers.Credential("fixture-access"), sample)
+        self.assertEqual(calls, [app + "loadCodeAssist", cli + "retrieveUserQuotaSummary", app + "retrieveUserQuotaSummary"])
+        self.assertEqual([w["key"] for w in sample["windows"]], ["cli-gemini-weekly", "cli-gemini-5h", "gemini-weekly", "gemini-5h"])
+        self.assertAlmostEqual(sample["windows"][1]["usedPercent"], 29.68, places=2)
+        self.assertTrue(sample["windows"][0]["label"].endswith("In T3 (Antigravity CLI)"))
+        self.assertTrue(sample["windows"][2]["label"].endswith("In the Antigravity app"))
+        opener = Mock()
+        opener.open.return_value = io.BytesIO(b"{}")
+        with patch.object(special.urllib.request, "build_opener", return_value=opener):
+            special.HttpClient.request_json(cli + "retrieveUserQuotaSummary", {}, {})
+            with self.assertRaises(special.helpers.UsageError):
+                special.HttpClient.request_json(cli + "retrieveUserQuota", {}, {})
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,7 +82,19 @@ export function poolWindow(value: unknown): AntigravityPoolWindow | null {
   const remaining = nonnegative(value.remaining);
   const resetAt = timestamp(value.resetAt);
   const expiresAt = timestamp(value.expiresAt);
+  const numberless =
+    usedPercent === null &&
+    remainingPercent === null &&
+    used === null &&
+    limit === null &&
+    remaining === null &&
+    resetAt === null &&
+    expiresAt === null;
+  // A pool whose quota service (T3's CLI or the app) failed this read: kept, with no numbers.
+  const unavailable = value.status === 'unavailable';
+  if (unavailable && !numberless) return null;
   if (
+    !unavailable &&
     usedPercent === null &&
     remainingPercent === null &&
     used === null &&
@@ -131,6 +143,7 @@ export function poolWindow(value: unknown): AntigravityPoolWindow | null {
       ? { poolLabel: displayText(value.poolLabel, 80) as string }
       : {}),
     ...(modelIds.length ? { modelIds } : {}),
+    ...(unavailable ? { status: 'unavailable' as const } : {}),
   };
 }
 

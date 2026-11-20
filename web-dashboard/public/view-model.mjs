@@ -11,6 +11,7 @@ import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
   antigravityView,
   antigravityColumns,
+  antigravityServiceFacts,
   antigravityWindowLabel,
   antigravityMissingWindow,
   antigravityNoQuota,
@@ -329,10 +330,14 @@ export function shortWindowLabel(provider, w) {
   // space, not +: crowded table heads wrap between the words, never mid-word
   return (
     {
-      'gemini-5h': 'Gemini 5hr',
-      'gemini-weekly': 'Gemini wk',
-      '3p-5h': 'Claude GPT 5hr',
-      '3p-weekly': 'Claude GPT wk',
+      'cli-gemini-5h': 'T3 Gemini 5hr',
+      'cli-gemini-weekly': 'T3 Gemini wk',
+      'cli-3p-5h': 'T3 Claude GPT 5hr',
+      'cli-3p-weekly': 'T3 Claude GPT wk',
+      'gemini-5h': 'App Gemini 5hr',
+      'gemini-weekly': 'App Gemini wk',
+      '3p-5h': 'App Claude GPT 5hr',
+      '3p-weekly': 'App Claude GPT wk',
     }[w?.key] || windowLabel(provider, w)
   );
 }
@@ -1136,6 +1141,7 @@ export function detailsViewModel(data, id, ctx = {}) {
   const facts = [
     ...antigravityPlanFacts(account),
     { label: 'Status', value: statusWord(account), mono: false },
+    ...antigravityServiceFacts(account),
     {
       label: 'Sampled',
       value: validDate(account.sampledAt)

@@ -67,7 +67,7 @@ function ms(value: string | null | undefined): number | null {
 /** One whitelisted window in the store's shape. */
 export function storeWindow(window: DashboardAccountWindow): StoreWindowObservation | null {
   const safe = analyticsWindow(window);
-  if (!safe) return null;
+  if (!safe || safe.status === 'unavailable') return null; // a failed quota service is no observation
   return {
     identity: analyticsWindowIdentity(safe),
     key: safe.key,

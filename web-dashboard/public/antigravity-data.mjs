@@ -1,12 +1,19 @@
 import { timeLabel } from './accounts-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 
+// Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for the
+// Antigravity app. T3's come first: they are what T3 spends. The two are never added together.
 const ANTIGRAVITY_COLUMNS = [
-  { key: 'gemini-5h', label: 'Gemini 5-hour' },
-  { key: 'gemini-weekly', label: 'Gemini weekly' },
-  { key: '3p-5h', label: 'Claude and GPT 5-hour' },
-  { key: '3p-weekly', label: 'Claude and GPT weekly' },
+  { key: 'cli-gemini-5h', label: 'Gemini 5-hour, in T3 (Antigravity CLI)' },
+  { key: 'cli-gemini-weekly', label: 'Gemini weekly, in T3 (Antigravity CLI)' },
+  { key: 'cli-3p-5h', label: 'Claude and GPT 5-hour, in T3 (Antigravity CLI)' },
+  { key: 'cli-3p-weekly', label: 'Claude and GPT weekly, in T3 (Antigravity CLI)' },
+  { key: 'gemini-5h', label: 'Gemini 5-hour, in the Antigravity app' },
+  { key: 'gemini-weekly', label: 'Gemini weekly, in the Antigravity app' },
+  { key: '3p-5h', label: 'Claude and GPT 5-hour, in the Antigravity app' },
+  { key: '3p-weekly', label: 'Claude and GPT weekly, in the Antigravity app' },
 ];
+const antigravityService = key => (typeof key === 'string' && key.startsWith('cli-') ? 'cli' : 'app');
 export function antigravityWindowLabel(window) {
   return window?.key === 'google-ai-credits' ? 'AI credits (overage)'
     : ANTIGRAVITY_COLUMNS.find(column => column.key === window?.key)?.label || window?.label || 'Usage';
@@ -17,25 +24,44 @@ export function antigravityColumns(accounts) {
     .filter(window => !['balance', 'spend', 'extra_usage'].includes(window.kind) && window.unlimited !== true);
   const canonical = windows.some(window => ANTIGRAVITY_COLUMNS.some(column => column.key === window.key));
   const columns = canonical ? ANTIGRAVITY_COLUMNS.map(column => ({ ...column })) : [];
-  for (const window of windows)
-    if (!columns.some(column => column.key === window.key)) columns.push({ key: window.key, label: antigravityWindowLabel(window) });
+  // Extra pools (such as each service's Gemini 4 Argon): T3's first, then the app's, each in the
+  // order the accounts report them, so a pair never shows app-first.
+  for (const service of ['cli', 'app'])
+    for (const window of windows)
+      if (antigravityService(window.key) === service && !columns.some(column => column.key === window.key))
+        columns.push({ key: window.key, label: antigravityWindowLabel(window) });
   return columns;
 }
 export function antigravityMissingWindow(account, key) {
   const plan = account?.antigravityPlan;
-  if (['3p-5h', '3p-weekly'].includes(key) && plan?.thirdPartyModels === false) return 'Not on plan';
-  if (['gemini-5h', '3p-5h'].includes(key) && plan?.quotaPolicy === 'weekly') return 'Weekly only';
+  if (['3p-5h', '3p-weekly', 'cli-3p-5h', 'cli-3p-weekly'].includes(key) && plan?.thirdPartyModels === false) return 'Not on plan';
+  if (['gemini-5h', '3p-5h', 'cli-gemini-5h', 'cli-3p-5h'].includes(key) && plan?.quotaPolicy === 'weekly') return 'Weekly only';
   // An extra pool column (such as Gemini 4 Argon) comes from another account. When this
-  // account's own live reading arrived without it, Google reported no such quota here: that
-  // is not a failed reading, so it is never called unavailable (and never shown as zero). A
-  // cached reading is the last good one after a failed refresh, so it stays unavailable.
-  if (!ANTIGRAVITY_COLUMNS.some(column => column.key === key) && antigravityHasLiveReading(account)) return 'Not reported';
+  // account's own live reading of the same service (T3's CLI or the app) arrived without it,
+  // Google reported no such quota there: that is not a failed reading, so it is never called
+  // unavailable (and never shown as zero). A service that did not answer, or a cached reading
+  // (the last good one after a failed refresh), stays unavailable.
+  if (!ANTIGRAVITY_COLUMNS.some(column => column.key === key) && antigravityHasLiveReading(account, antigravityService(key))) return 'Not reported';
   return 'Unavailable';
 }
-function antigravityHasLiveReading(account) {
+function antigravityHasLiveReading(account, service) {
   return account?.status === 'ok'
     && visibleUsageWindows('antigravity', account.windows)
-      .some(window => window.kind !== 'balance' && window.status !== 'cached' && window.cached !== true);
+      .some(window => window.kind !== 'balance' && window.status !== 'cached' && window.cached !== true
+        && window.status !== 'unavailable' && antigravityService(window.key) === service);
+}
+const SERVICE_NAMES = { cli: 'T3 (Antigravity CLI)', app: 'The Antigravity app' };
+/** Details: a quota service that failed this read (its pools arrive as `unavailable` windows) is named,
+ *  so a Live account never hides it; the other service's readings stay as they are. */
+export function antigravityServiceFacts(account) {
+  if (account?.provider !== 'antigravity' || !Array.isArray(account.windows)) return [];
+  return ['cli', 'app']
+    .filter(service => account.windows.some(window => window?.status === 'unavailable' && antigravityService(window.key) === service))
+    .map(service => ({
+      label: 'Notice',
+      value: `${SERVICE_NAMES[service]} quota could not be read this time; its pools show Unavailable. The other readings are live.`,
+      mono: false,
+    }));
 }
 export function antigravityNoQuota(account) {
   return account?.provider === 'antigravity' && account.antigravityPlan?.quotaPolicy === 'none'

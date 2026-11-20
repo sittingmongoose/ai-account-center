@@ -51,6 +51,55 @@ test('quota history: one row per account by identity, the main window never Fabl
   assert.equal(codex.rows[0].sev, 2);
 });
 
+const antigravityId = 'antigravity:profile:fixture';
+const appWeekly = win('gemini-weekly', 'Gemini weekly', 12);
+const cliWeekly = win('cli-gemini-weekly', 'Gemini weekly', 34);
+const agyAccount = windows => account(antigravityId, 'antigravity', 'agy@example.test', windows);
+
+function antigravityQuota(current, history) {
+  const payload = {
+    range: { from: iso(now - 7 * H), to: iso(now) },
+    history: { oldestSampleAt: iso(now - 7 * H) },
+    accounts: [agyAccount(history)],
+  };
+  return quotaView(payload, { now, dashboard: { accounts: [agyAccount(current)] }, open: new Set([antigravityId]) });
+}
+
+test('Antigravity charts T3 Gemini weekly first and the app Gemini weekly second', () => {
+  const view = antigravityQuota([appWeekly, win('cli-gemini-5h', 'Gemini 5-hour', 50), cliWeekly], [
+    { ...appWeekly, points: [point(now - H, 11)] },
+    { ...cliWeekly, points: [point(now - H, 0), point(now - H / 2, 31)] },
+  ]);
+  const row = view.groups[0].rows[0];
+  assert.equal(row.valueText, '34');
+  assert.equal(row.points, 2);
+  const chart = view.focus[0];
+  assert.deepEqual(chart.legend.filter(l => l.kind === 'series').slice(0, 2).map(l => l.name), [
+    'Gemini weekly, in T3 (Antigravity CLI)',
+    'Gemini weekly, in the Antigravity app',
+  ]);
+  assert.deepEqual(chart.stops.find(s => !s.proj).rows.slice(0, 2).map(r => r.value), ['0%', '11%']);
+});
+
+test('Antigravity names missing T3 history even when the app and a live T3 reading are available', () => {
+  for (const current of [[appWeekly, cliWeekly], [appWeekly]]) {
+    const view = antigravityQuota(current, [
+      { ...appWeekly, points: [point(now - H, 11)] },
+      { ...cliWeekly, points: [point(now - 8 * H, 23), point(now - H, null, { status: 'unavailable' })] },
+    ]);
+    const row = view.groups[0].rows[0];
+    assert.equal(row.na, 'No T3 Gemini weekly history in this range');
+    assert.equal(row.hasValue, current.includes(cliWeekly));
+    assert.equal(row.points, 0);
+    assert.equal(row.calmLine, '');
+    const chart = view.focus[0];
+    assert.match(chart.foot, /No T3 Gemini weekly history in this range/);
+    const history = chart.stops.find(s => !s.proj);
+    assert.deepEqual(history.rows.map(r => r.value), ['no reading', '11%']);
+    assert.equal(chart.shapes.find(s => s.stroke === 'series' && s.shade === 0).d, '');
+  }
+});
+
 test('sparklines are the window\'s own steps: gaps stay gaps and a reset starts a fresh run', () => {
   const row = quotaView(analytics, { now, dashboard }).groups.find(g => g.provider === 'codex').rows.find(r => r.id === 'codex:b');
   assert.equal(row.points, 4);

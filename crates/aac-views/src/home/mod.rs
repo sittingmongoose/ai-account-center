@@ -832,10 +832,16 @@ fn antigravity_section(
     } else {
         Vec::new()
     };
-    for w in &flat {
-        let key = w.key().unwrap_or("");
-        if !cols.iter().any(|(k, _)| k == key) {
-            cols.push((key.into(), windows::antigravity_window_label(w)));
+    // Extra pools (such as each service's Gemini 4 Argon): T3's first, then the app's, each in the
+    // order the accounts report them, so a pair never shows app-first.
+    for service in ["cli", "app"] {
+        for w in &flat {
+            let key = w.key().unwrap_or("");
+            if windows::antigravity_service(Some(key)) == service
+                && !cols.iter().any(|(k, _)| k == key)
+            {
+                cols.push((key.into(), windows::antigravity_window_label(w)));
+            }
         }
     }
     let mut columns = Vec::new();

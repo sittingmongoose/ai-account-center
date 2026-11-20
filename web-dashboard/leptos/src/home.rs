@@ -223,7 +223,9 @@ fn Section(id: String, index: usize, vm: Memo<Option<DashboardView>>) -> impl In
             <SectionHead sec=sec/>
             {move || empty().map(|text| view! { <p class="hempty">{text}</p> })}
             <Show when=move || !sec.with(|s| s.rows.is_empty())>
-                <div class=move || format!("htable cols-{}", cols.get().min(6)) style=style>
+                // More than six windows (Antigravity's two quota services) never becomes a table: it stays
+                // stacked with each cell named, so ten columns never overflow the section.
+                <div class=move || match cols.get() { n if n > 6 => "htable cols-many".to_string(), n => format!("htable cols-{n}") } style=style>
                     <div class="hhead" aria-hidden="true">
                         <span class="cap">"Account"</span>
                         {move || sec.with(|s| s.columns.iter().map(|c| {
