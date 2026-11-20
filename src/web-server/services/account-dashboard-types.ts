@@ -111,6 +111,14 @@ export interface DashboardAccount {
    * computer is unknown, never "needed"). Order: mac, then windows.
    */
   signInNeeded?: ClaudeDashboardPlatform[];
+  /**
+   * Claude only: computers whose Claude Desktop profile is signed out while
+   * another verified login for the same account (normally its Claude Code
+   * login) still reads it. AAC does not need that Desktop sign-in, so this is
+   * a quiet note, never "Sign-in needed". Never present with the same
+   * computer in signInNeeded. Order: mac, then windows.
+   */
+  claudeDesktopSignedOut?: ClaudeDashboardPlatform[];
   message: string | null;
   fetchedAt: string | null;
   sampledAt: string | null;

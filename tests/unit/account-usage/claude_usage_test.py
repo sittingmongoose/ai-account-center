@@ -29,6 +29,20 @@ EMAIL = "fixture-profile@example.com"
 OTHER_EMAIL = "other-profile@example.com"
 
 
+_CODE_HOME = tempfile.TemporaryDirectory()
+_CODE_HOME_PATCH = mock.patch.object(usage, "_code_home", return_value=Path(_CODE_HOME.name))
+
+
+def setUpModule():
+    # Claude Code logins are looked up under this empty folder, never the real home.
+    _CODE_HOME_PATCH.start()
+
+
+def tearDownModule():
+    _CODE_HOME_PATCH.stop()
+    _CODE_HOME.cleanup()
+
+
 def key(account=ACCOUNT, client=CLIENT, org=ORG, host="https://api.anthropic.com", scopes="user:inference user:profile"):
     return "acct:{}|{}:{}:{}:{}".format(account, client, org, host, scopes)
 
@@ -1992,8 +2006,8 @@ class ResetWebInventoryTests(unittest.TestCase):
             clears=["seven_day_overage_included"], gives_back_weekly=True)
         result = usage.reset_host(self.request)
         self.assertNotIn("unavailable", result)
-        self.assertEqual("seven_day_overage_included" in result["windows"], case["claimable"])
-        if case["claimable"]:
+        self.assertEqual("seven_day_overage_included" in result["windows"], case["hasFableReading"])
+        if case["hasFableReading"]:
             self.assertEqual(result["windows"]["seven_day_overage_included"], 37)
 
     def test_astra_exact_model_control(self):
@@ -2272,6 +2286,189 @@ class ResetCaptureTests(unittest.TestCase):
                 "host": "windows:fixture", "action": "read", "expectedSavedBinding": usage.reset_login_binding(*old)})
         self.assertTrue(result.get("unavailable"))
         client.assert_not_called()
+
+
+class ResetCodeLoginTests(unittest.TestCase):
+    """A signed-out Claude Desktop profile gives way to a Claude Code login for the same account."""
+
+    CODE_TOKEN = "fixture-private-code-token"
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.home, ignore_errors=True))
+        self.write_code_login("acct")
+        self.desktop = usage.UsageUnavailable("needs_sign_in")
+        self.request = {"profile": "fixture", "expectedEmail": EMAIL, "host": "windows:fixture", "action": "read"}
+        for patcher in (mock.patch.object(usage.sys, "platform", "win32"),
+                        mock.patch.object(usage, "_code_home", return_value=self.home),
+                        mock.patch.object(usage, "resolve_profile_path", return_value=Path("fixture-profile")),
+                        mock.patch.object(usage, "decrypt_cache", side_effect=self.decrypt),
+                        mock.patch.object(usage, "verified_web_client", side_effect=usage.UsageUnavailable())):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def decrypt(self, root):
+        if isinstance(self.desktop, Exception):
+            raise self.desktop
+        return self.desktop
+
+    def write_code_login(self, name, email=EMAIL, account=ACCOUNT, org=ORG, token=None, expires=None,
+                         scopes=("user:inference", "user:profile")):
+        root = self.home / ".claude-t3" / name
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".claude.json").write_text(json.dumps({"oauthAccount": {
+            "accountUuid": account, "organizationUuid": org, "emailAddress": email}}))
+        (root / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": token or self.CODE_TOKEN, "refreshToken": "fixture-private-code-refresh",
+            "expiresAt": expires if expires is not None else (time.time() + 3600) * 1000,
+            "scopes": list(scopes)}}))
+        return root
+
+    def payload(self):
+        return {"seven_day": {"utilization": 100}, "cedar_ember": {
+            "eligible": True, "grants": [{"id": "code_grant", "resets_left": 1, "resets_total": 1,
+                                          "paused": False, "usable_now": True, "clears": ["seven_day"]}]}}
+
+    def client(self, *responses):
+        fake = FakeClient(*responses)
+        fake.opener = mock.Mock()
+        return fake
+
+    def test_capture_names_the_code_login_without_a_provider_call(self):
+        with mock.patch.object(usage, "Client") as client:
+            result = usage.reset_host(dict(self.request, action="capture"))
+        client.assert_not_called()
+        self.assertEqual((result["account"], result["organization"]), (ACCOUNT, ORG))
+        self.assertEqual(set(result), {"account", "organization", "savedLoginBinding", "observedAtMs"})
+        self.assertNotIn(self.CODE_TOKEN, json.dumps(result))
+
+    def test_read_goes_through_the_code_login_and_checks_the_live_account(self):
+        capture = usage.reset_host(dict(self.request, action="capture"))
+        fake = self.client(profile(), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            result = usage.reset_host(dict(self.request, expectedSavedBinding=capture["savedLoginBinding"],
+                                           expectedSavedOrganization=ORG))
+        self.assertEqual([call[1] for call in fake.calls], [self.CODE_TOKEN, self.CODE_TOKEN])
+        self.assertEqual(fake.calls[1][0], "/api/oauth/usage?cedar_ember=1")
+        self.assertEqual(result["identity"], {"provider": "claude", "account": ACCOUNT, "organization": ORG,
+                                              "profile": "fixture", "host": "windows:fixture"})
+        self.assertEqual(result["savedLoginBinding"], capture["savedLoginBinding"])
+        self.assertEqual(result["raw"]["grants"][0]["id"], "code_grant")
+        self.assertNotIn(self.CODE_TOKEN, json.dumps(result))
+
+    def test_a_signed_out_desktop_with_tokens_rejected_also_falls_back(self):
+        self.desktop = (ACCOUNT, cache())
+        desktop_token_rejected = usage.UsageUnavailable("needs_sign_in")
+        fake = self.client(desktop_token_rejected, profile(), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            result = usage.reset_host(self.request)
+        self.assertEqual([call[1] for call in fake.calls], [TOKEN, self.CODE_TOKEN, self.CODE_TOKEN])
+        self.assertEqual(result["raw"]["grants"][0]["id"], "code_grant")
+
+    def test_working_desktop_stays_first(self):
+        self.desktop = (ACCOUNT, cache())
+        fake = self.client(profile(), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            result = usage.reset_host(self.request)
+        self.assertEqual([call[1] for call in fake.calls], [TOKEN, TOKEN])
+        self.assertEqual(result["identity"]["account"], ACCOUNT)
+
+    def test_desktop_signed_in_to_another_account_gives_way_to_the_code_login(self):
+        self.desktop = (OTHER, cache(key(account=OTHER)))
+        capture = usage.reset_host(dict(self.request, action="capture"))
+        self.assertEqual(capture["account"], ACCOUNT)
+        fake = self.client(profile(), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            result = usage.reset_host(self.request)
+        self.assertEqual([call[1] for call in fake.calls], [self.CODE_TOKEN, self.CODE_TOKEN])
+        self.assertEqual(result["identity"]["account"], ACCOUNT)
+
+    def test_other_email_expired_or_profile_less_code_logins_are_never_used(self):
+        __import__("shutil").rmtree(self.home / ".claude-t3")
+        self.write_code_login("other", email=OTHER_EMAIL)
+        self.write_code_login("expired", expires=(time.time() - 60) * 1000)
+        self.write_code_login("inference", scopes=("user:inference",))
+        self.assertEqual(usage.code_reset_logins(EMAIL), [])
+        with mock.patch.object(usage, "Client") as client:
+            self.assertEqual(usage.reset_host(self.request), {"unavailable": True, "reason": "signed-out"})
+        client.assert_not_called()
+
+    def test_live_profile_for_another_account_is_refused_before_usage(self):
+        for live in (profile(account={"uuid": OTHER, "email": EMAIL}),
+                     profile(account={"uuid": ACCOUNT, "email": OTHER_EMAIL}),
+                     profile(organization={"uuid": OTHER})):
+            with self.subTest(live=live["account"]["email"]):
+                fake = self.client(live)
+                with mock.patch.object(usage, "Client", return_value=fake):
+                    result = usage.reset_host(self.request)
+                self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+                self.assertEqual(len(fake.calls), 1)
+
+    def test_rejected_code_token_reads_as_signed_out(self):
+        fake = self.client(usage.UsageUnavailable("needs_sign_in"))
+        with mock.patch.object(usage, "Client", return_value=fake):
+            self.assertEqual(usage.reset_host(self.request), {"unavailable": True, "reason": "signed-out"})
+
+    def test_code_login_changed_after_capture_is_refused_before_provider_io(self):
+        capture = usage.reset_host(dict(self.request, action="capture"))
+        self.write_code_login("acct", token="fixture-private-rotated-token")
+        with mock.patch.object(usage, "Client") as client:
+            result = usage.reset_host(dict(self.request, expectedSavedBinding=capture["savedLoginBinding"]))
+        self.assertEqual(result, {"unavailable": True})
+        client.assert_not_called()
+
+    def test_claim_through_the_code_login_sends_only_the_exact_bound_write(self):
+        fake = self.client(profile(), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            read = usage.reset_host(self.request)
+        write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"],
+                 "method": "claude.reset_rate_limits",
+                 "body": {"program": "cedar_ember", "grant_id": "code_grant", "request_id": "a" * 64}}
+        sent = []
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, limit): return b'{"result":"reset"}'
+
+        for mutation in ("identity", "binding", "grant"):
+            bad = json.loads(json.dumps(write))
+            if mutation == "identity": bad["identity"]["account"] = OTHER
+            elif mutation == "binding": bad["sourceBinding"] = "b" * 64
+            else: bad["body"]["grant_id"] = "other_grant"
+            fake = self.client(profile(), self.payload())
+            fake.opener.open.side_effect = lambda req, **kwargs: (sent.append(req) or Response())
+            with mock.patch.object(usage, "Client", return_value=fake):
+                self.assertNotEqual(usage.reset_host(dict(self.request, action="claim", write=bad)).get("outcome"), "reset")
+        self.assertEqual(sent, [])
+        fake = self.client(profile(), self.payload())
+        fake.opener.open.side_effect = lambda req, **kwargs: (sent.append(req) or Response())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            self.assertEqual(usage.reset_host(dict(self.request, action="claim", write=write)), {"outcome": "reset"})
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].get_header("Authorization"), "Bearer " + self.CODE_TOKEN)
+        self.assertTrue(sent[0].full_url.endswith("/" + ORG + "/reset_rate_limits"))
+
+    def test_code_login_rotated_during_claim_is_not_sent(self):
+        fake = self.client(profile(), self.payload())
+        with mock.patch.object(usage, "Client", return_value=fake):
+            read = usage.reset_host(self.request)
+        write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"],
+                 "method": "claude.reset_rate_limits",
+                 "body": {"program": "cedar_ember", "grant_id": "code_grant", "request_id": "a" * 64}}
+
+        class Rotating(FakeClient):
+            def get(inner, route, token):
+                value = FakeClient.get(inner, route, token)
+                if route.startswith("/api/oauth/usage"):
+                    self.write_code_login("acct", token="fixture-private-rotated-token")
+                return value
+
+        fake = Rotating(profile(), self.payload())
+        fake.opener = mock.Mock()
+        with mock.patch.object(usage, "Client", return_value=fake):
+            self.assertEqual(usage.reset_host(dict(self.request, action="claim", write=write)), {"outcome": "not-sent"})
+        fake.opener.open.assert_not_called()
 
 
 if __name__ == "__main__":

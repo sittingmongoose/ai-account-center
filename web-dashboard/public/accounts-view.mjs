@@ -207,12 +207,12 @@ function rowActions(provider, account, homeRow, ctx) {
       const needs = Array.isArray(account.signInNeeded) ? account.signInNeeded : [];
       const open = (target, label, platform) => {
         const can = target === 'mac' ? !!homeRow?.canMac : !!homeRow?.canWindows;
-        // Sign-in needed on this computer: Open stays allowed (it shows Claude's sign-in window) and says so first.
+        // Claude Desktop needs a sign-in on this computer: Open stays allowed (it shows its sign-in window) and says so first.
         const signIn = can && needs.includes(target);
         return action({ act: 'launch', value: `${profile}:${target}`, label, platform, enabled: LIVE.openClaude && can && !!profile, probe: `open-${target}:${account.id}`,
           ...(signIn ? { style: 'accent-line' } : {}),
           tip: !can ? `Open on ${label} is not set up for this profile`
-            : signIn ? `Sign-in needed on ${label}. Open shows the Claude sign-in window for ${text(account.email) || 'this profile'}; sign in once on that computer.`
+            : signIn ? `Claude Desktop needs a sign-in on ${label}. Open shows the Claude Desktop sign-in window for ${text(account.email) || 'this profile'}; sign in once on that computer. Claude Code sign-ins are checked separately.`
               : `Open ${text(account.email) || 'this profile'} in its own Claude profile on ${label}, to use it or sign in again` });
       };
       const protectedProfile = claudeDefaultProfile(meta) || reg?.removeRefusal === 'account_protected' || reg?.removeRefusal === 'account_default';

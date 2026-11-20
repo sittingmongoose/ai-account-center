@@ -133,7 +133,10 @@ export interface AccountDashboardDeps {
   refreshIntervalSeconds?: () => number;
   serverInfo?: () => DashboardServerInfo | undefined;
   /** Display-only usage failover; injected legacy collectors keep their offline fixture path. */
-  failover?: Pick<UsageFailoverService, 'collect' | 'recover' | 'peek'> | null;
+  failover?:
+    | (Pick<UsageFailoverService, 'collect' | 'recover' | 'peek'> &
+        Partial<Pick<UsageFailoverService, 'claudeLoginCovers'>>)
+    | null;
 }
 
 /** R1: the dashboard answer before its per-response pass, and that pass's clock. */
@@ -255,7 +258,11 @@ export class AccountDashboardService {
           : null;
         const signIn = new Set(row.signInNeeded ?? []);
         if (macState === 'signed-out') signIn.add('mac');
-        accounts[index] = withClaudeSignIn(row, signIn);
+        // A Claude Code login for this account reads it: Desktop sign-ins are then not needed.
+        const covered =
+          row.claudeDesktopSignedOut !== undefined ||
+          failover.claudeLoginCovers?.(targets[index]) === true;
+        accounts[index] = withClaudeSignIn(row, signIn, covered);
         publish([...accounts]);
       })
     );

@@ -9,6 +9,10 @@ memory (same user, read-only, identity re-verified) and fall back to the legacy
 same-user DPAPI session capsule, verified again against this native account
 and organization before any balance request. Credential values are never
 persisted or emitted.
+Resets read through the Desktop profile first. When it is signed out (or signed
+in to another account), they read through an unexpired Claude Code login on the
+same computer whose saved email is the account's, after the live profile names
+the same account, organization and email. AAC never refreshes either login.
 """
 
 import argparse
@@ -1307,8 +1311,8 @@ def reset_login_binding(account, cache):
     return hashlib.sha256(json.dumps([account, cache], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def capture_reset_login(request):
-    """Read saved credentials only; no OAuth/provider call belongs in the Store capture section."""
+def _desktop_reset_login(request):
+    """The Desktop profile's saved login, read without any provider call."""
     profile_id = request["profile"]
     if (sys.platform != "win32" or not valid_profile_id(profile_id)
             or resolve_expected_email(request["expectedEmail"]) is None):
@@ -1320,8 +1324,149 @@ def capture_reset_login(request):
         raise UsageUnavailable()
     if resolve_profile_path(profile_id, request.get("profileDir"), None, request.get("isDefault") is True) != root:
         raise UsageUnavailable()
-    return {"account": account, "organization": candidates[0][1][2], "savedLoginBinding": reset_login_binding(account, cache),
+    return {"account": account, "organization": candidates[0][1][2], "binding": reset_login_binding(account, cache)}
+
+
+MAX_CODE_LOGIN_ROOTS = 32
+
+
+def _code_home():
+    return Path.home()
+
+
+def _regular_file(path):
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+            and not getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024))
+
+
+def _code_login_roots(home):
+    """Claude Code config folders on this computer, in a fixed order: the default
+    ~/.claude, saved ~/.ccs/instances homes, then T3's ~/.claude-t3 account
+    folders. A folder name selects nothing; the saved email and the live
+    profile prove which account a login is."""
+    roots = [home / ".claude"]
+    for base in (home / ".ccs" / "instances", home / ".claude-t3"):
+        try:
+            with os.scandir(base) as entries:
+                names = sorted(entry.name for _, entry in zip(range(256), entries)
+                               if entry.is_dir(follow_symlinks=False) and SAFE_PROFILE_ID.fullmatch(entry.name))
+        except OSError:
+            continue
+        roots.extend(base / name for name in names)
+    return roots[:MAX_CODE_LOGIN_ROOTS]
+
+
+def code_reset_logins(expected_email, home=None):
+    """Unexpired Claude Code OAuth logins on this computer whose saved account
+    email is the expected one. Read only: AAC never refreshes or writes them."""
+    expected = resolve_expected_email(expected_email)
+    if sys.platform != "win32" or expected is None:
+        return []
+    home = Path(home) if home is not None else _code_home()
+    found = []
+    now = time.time() * 1000
+    for root in _code_login_roots(home):
+        metadata = home / ".claude.json" if root == home / ".claude" else root / ".claude.json"
+        credentials = root / ".credentials.json"
+        if not _regular_file(metadata) or not _regular_file(credentials):
+            continue
+        try:
+            saved = read_json(metadata).get("oauthAccount")
+            oauth = read_json(credentials).get("claudeAiOauth")
+        except UsageUnavailable:
+            continue
+        if not isinstance(saved, dict) or not isinstance(oauth, dict):
+            continue
+        account, organization = saved.get("accountUuid"), saved.get("organizationUuid")
+        address, token = saved.get("emailAddress"), oauth.get("accessToken")
+        expires, scopes = number(oauth.get("expiresAt")), oauth.get("scopes")
+        if (not isinstance(address, str) or address.strip().lower() != expected.strip().lower()
+                or not isinstance(account, str) or re.fullmatch(UUID, account) is None
+                or not isinstance(organization, str) or re.fullmatch(UUID, organization) is None
+                or not isinstance(token, str) or not token or len(token) > 32768
+                or any(ord(char) < 32 for char in token)
+                or expires is None or expires <= now + 30000
+                or not isinstance(scopes, list) or "user:profile" not in scopes):
+            continue
+        found.append({"root": root, "account": account, "organization": organization, "token": token,
+                      "binding": reset_login_binding(account, {"claude-code": [str(root), organization, oauth]})})
+    return found
+
+
+def reset_logins(request, codes):
+    """Which saved login a reset goes through, without any provider call.
+
+    The Desktop profile stays first while it holds an eligible sign-in for the
+    same account a Claude Code login names (or when there is no Code login). A
+    signed-out Desktop profile, or one signed in to a different account, gives
+    way to the first Claude Code login for this email. The saved binding covers
+    every login the read may use, so a change to either between capture and
+    claim is refused like any other changed login.
+    """
+    try:
+        desktop = _desktop_reset_login(request)
+    except UsageUnavailable:
+        desktop = None
+    if desktop is not None and (not codes or any(c["account"] == desktop["account"] for c in codes)):
+        chosen = desktop
+    elif codes:
+        chosen = codes[0]
+    else:
+        raise UsageUnavailable()
+    if desktop is not None and (desktop["account"], desktop["organization"]) != (chosen["account"], chosen["organization"]):
+        desktop = None
+    code = next((c for c in codes if (c["account"], c["organization"]) == (chosen["account"], chosen["organization"])), None)
+    if desktop is not None and code is not None:
+        binding = hashlib.sha256(json.dumps(["claude-reset-login-v2", desktop["binding"], code["binding"]],
+                                            separators=(",", ":")).encode()).hexdigest()
+    else:
+        binding = (desktop or code)["binding"]
+    return {"account": chosen["account"], "organization": chosen["organization"], "binding": binding,
+            "desktop": desktop, "code": code}
+
+
+def capture_reset_login(request):
+    """Read saved credentials only; no OAuth/provider call belongs in the Store capture section."""
+    codes = code_reset_logins(request.get("expectedEmail"))
+    login = reset_logins(request, codes) if codes else _desktop_reset_login(request)
+    return {"account": login["account"], "organization": login["organization"], "savedLoginBinding": login["binding"],
             "observedAtMs": int(time.time() * 1000)}
+
+
+def collect_code_reset(login, expected_email, private_reset_sink, verify_saved):
+    """Reset inventory through a Claude Code login: the live profile must name
+    the same account, organization and email before usage is read."""
+    expected = resolve_expected_email(expected_email)
+    try:
+        if expected is None:
+            raise UsageUnavailable()
+        client = Client()
+        verify_saved()
+        profile = client.get("/api/oauth/profile", login["token"])
+        account, organization = profile.get("account"), profile.get("organization")
+        if (not isinstance(account, dict) or not isinstance(organization, dict)
+                or not isinstance(account.get("email"), str)
+                or account["email"].strip().lower() != expected.strip().lower()
+                or account.get("uuid") != login["account"] or organization.get("uuid") != login["organization"]):
+            return {"status": "unavailable", "resetReason": "identity-unconfirmed"}
+        verify_saved()
+        observed = int(time.time() * 1000)
+        usage = client.get("/api/oauth/usage?cedar_ember=1", login["token"])
+        verify_saved()
+        private_reset_sink({"account": login["account"], "organization": login["organization"], "usage": usage,
+                            "token": login["token"], "verifyRoot": verify_saved, "verifyLogin": verify_saved,
+                            "observedAtMs": observed, "versionDirs": [_code_home() / ".local" / "share" / "claude" / "versions"]})
+        return {"status": "ok"}
+    except UsageUnavailable as error:
+        if error.status == "rate_limited":
+            return {"status": "error", "failureCode": "rate_limited"}
+        return {"status": error.status if error.status == "needs_sign_in" else "unavailable"}
+    except Exception:
+        return {"status": "unavailable"}
 
 
 def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False, private_reset_sink=None, expected_saved_binding=None, expected_saved_organization=None):
@@ -1580,10 +1725,41 @@ def _reset_host(request, dispatch):
         if request.get("action") == "capture":
             return capture_reset_login(request)
         captured = []
-        result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
-                         profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
-                         private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
-                         expected_saved_organization=request.get("expectedSavedOrganization"))
+        codes = code_reset_logins(request.get("expectedEmail"))
+        if not codes:
+            result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
+                             profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
+                             private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
+                             expected_saved_organization=request.get("expectedSavedOrganization"))
+        else:
+            # A Claude Code login for this email exists: the Desktop profile
+            # stays first, and a signed-out Desktop gives way to it.
+            login = reset_logins(request, codes)
+            if ((request.get("expectedSavedBinding") is not None and request["expectedSavedBinding"] != login["binding"])
+                    or (request.get("expectedSavedOrganization") is not None
+                        and request["expectedSavedOrganization"] != login["organization"])):
+                return {"unavailable": True}
+
+            def verify_saved():
+                if reset_logins(request, code_reset_logins(request.get("expectedEmail")))["binding"] != login["binding"]:
+                    raise UsageUnavailable()
+
+            result = {"status": "needs_sign_in"}
+            if login["desktop"] is not None:
+                result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
+                                 profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
+                                 private_reset_sink=captured.append, expected_saved_binding=login["desktop"]["binding"],
+                                 expected_saved_organization=login["organization"])
+            if result.get("status") == "needs_sign_in" and not captured and login["code"] is not None:
+                result = collect_code_reset(login["code"], request["expectedEmail"], captured.append, verify_saved)
+            if len(captured) == 1:
+                inner = captured[0]["verifyLogin"]
+
+                def verify_all():
+                    inner()
+                    verify_saved()
+
+                captured[0].update(verifyLogin=verify_all, savedLoginBinding=login["binding"])
         if result.get("status") != "ok" or len(captured) != 1:
             if result.get("resetReason") == "identity-unconfirmed":
                 return {"unavailable": True, "reason": "identity-unconfirmed"}
@@ -1628,7 +1804,7 @@ def _reset_host(request, dispatch):
         if (not isinstance(token, str) or not token or len(token) > 32768
                 or any(ord(char) < 32 for char in token)):
             return {"outcome": "unavailable"}
-        user_agent = claude_claim_user_agent(claude_version_dirs(resolve_profile_path(
+        user_agent = claude_claim_user_agent(private.get("versionDirs") or claude_version_dirs(resolve_profile_path(
             profile_id, request.get("profileDir"), None, request.get("isDefault") is True)))
         private["verifyRoot"]()
         private["verifyLogin"]()

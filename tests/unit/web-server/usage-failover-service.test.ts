@@ -2006,6 +2006,150 @@ describe('identity-bound usage source failover', () => {
     expect(row.signInNeeded).toBeUndefined();
   });
 
+  describe('a signed-out Claude Desktop profile with a Claude Code login for the same account', () => {
+    const CLAUDE_ID = { kind: 'claude-account-org-v1', key: 'c'.repeat(64) };
+    const desktop = candidate({
+      locator: '6'.repeat(64),
+      selectors: ['claude-desktop-profile:personal'],
+      identity: CLAUDE_ID,
+    });
+    const code = candidate({ locator: '5'.repeat(64), selectors: ['t3'], identity: CLAUDE_ID });
+    function setup(
+      h: Awaited<ReturnType<typeof harness>>,
+      windows: () => { candidates: UsageCandidate[]; signedOut: boolean },
+      rejected = new Set<string>()
+    ) {
+      const target: UsageFailoverTarget = {
+        ...h.target,
+        provider: 'claude',
+        accountId: 'claude:personal',
+        expectedEmail: 'same@example.test',
+        primarySources: [{ ...WINDOWS, selector: 'claude-desktop-profile:personal' }],
+      };
+      h.inventories.set('mac', []);
+      const transport = async (
+        host: UsageHost,
+        request: UsageHelperRequest
+      ): Promise<UsageHelperResponse> => {
+        if (host.host === 'windows' && request.action === 'inventory') {
+          const state = windows();
+          return {
+            version: 1,
+            action: 'inventory',
+            candidates: structuredClone(state.candidates),
+            ...(state.signedOut
+              ? { signInNeededSelectors: ['claude-desktop-profile:personal'] }
+              : {}),
+          };
+        }
+        if (request.action === 'collect' && rejected.has(request.candidate.locator)) {
+          h.calls.push({ host: host.host, request });
+          return {
+            version: 1,
+            action: 'collect',
+            candidate: structuredClone(request.candidate),
+            sample: null,
+            failureCode: 'needs_sign_in',
+          };
+        }
+        return h.deps.transport(host, request);
+      };
+      const deps = { ...h.deps, transport };
+      const claude = { ...template(), provider: 'claude' as const, id: target.accountId };
+      return { target, deps, claude, service: new UsageFailoverService(deps) };
+    }
+
+    it('reads through the Code login and keeps the Desktop sign-out a quiet note', async () => {
+      const h = await harness();
+      let state = { candidates: [desktop, code], signedOut: false };
+      const { target, deps, claude, service } = setup(h, () => state);
+      expect((await service.collect(target, claude)).signInNeeded).toBeUndefined();
+      h.advance(10 * 60_000);
+      state = { candidates: [code], signedOut: true };
+      const row = await service.collect(target, claude);
+      expect(row.status).toBe('ok');
+      expect(row.source).toBe('Verified quota on Windows (fallback)');
+      expect(row.signInNeeded).toBeUndefined();
+      expect(row.claudeDesktopSignedOut).toEqual(['windows']);
+      expect(service.claudeLoginCovers(target)).toBe(true);
+      const restarted = new UsageFailoverService(deps).peek(target, claude);
+      expect(restarted.signInNeeded).toBeUndefined();
+      expect(restarted.claudeDesktopSignedOut).toEqual(['windows']);
+    });
+
+    it('an expired Desktop token that is rejected also gives way to the Code login', async () => {
+      const h = await harness();
+      const state = { candidates: [desktop, code], signedOut: false };
+      const { target, claude, service } = setup(h, () => state, new Set([desktop.locator]));
+      const first = await service.collect(target, claude);
+      // No identity was ever verified through Desktop, so the email-matched Code login is adopted.
+      expect(first.signInNeeded).toBeUndefined();
+      h.advance(10 * 60_000);
+      const row = await service.collect(target, claude);
+      expect(row.status).toBe('ok');
+      expect(row.signInNeeded).toBeUndefined();
+      expect(row.claudeDesktopSignedOut).toEqual(['windows']);
+      expect(h.collected().at(-1)?.request).toMatchObject({ candidate: { locator: code.locator } });
+    });
+
+    it('adopts the one Code login whose email is the account email when no identity is known', async () => {
+      const h = await harness();
+      const { target, claude, service } = setup(h, () => ({
+        candidates: [code],
+        signedOut: true,
+      }));
+      const row = await service.collect(target, claude);
+      expect(row.status).toBe('ok');
+      expect(row.signInNeeded).toBeUndefined();
+      expect(row.claudeDesktopSignedOut).toEqual(['windows']);
+      expect(h.collected()).toHaveLength(1);
+      expect(h.collected()[0].request).toMatchObject({ candidate: { locator: code.locator } });
+    });
+
+    it('two accounts for one email, or a Code login for another email, adopt nothing and keep the prompt', async () => {
+      for (const peers of [
+        [
+          code,
+          candidate({
+            locator: '7'.repeat(64),
+            selectors: ['t3'],
+            identity: { ...CLAUDE_ID, key: 'd'.repeat(64) },
+          }),
+        ],
+        [candidate({ ...code, email: 'other@example.test' })],
+      ]) {
+        const h = await harness();
+        const { target, claude, service } = setup(h, () => ({
+          candidates: peers,
+          signedOut: true,
+        }));
+        const row = await service.collect(target, claude);
+        expect(row.signInNeeded).toEqual(['windows']);
+        expect(row.claudeDesktopSignedOut).toBeUndefined();
+        expect(row.windows).toEqual([]);
+        expect(service.claudeLoginCovers(target)).toBe(false);
+        expect(h.collected()).toHaveLength(0);
+      }
+    });
+
+    it('a rejected Code login brings the prompt back', async () => {
+      const h = await harness();
+      const rejected = new Set<string>();
+      const { target, claude, service } = setup(
+        h,
+        () => ({ candidates: [code], signedOut: true }),
+        rejected
+      );
+      expect((await service.collect(target, claude)).claudeDesktopSignedOut).toEqual(['windows']);
+      h.advance(10 * 60_000);
+      rejected.add(code.locator);
+      const row = await service.collect(target, claude);
+      expect(row.signInNeeded).toEqual(['windows']);
+      expect(row.claudeDesktopSignedOut).toBeUndefined();
+      expect(service.claudeLoginCovers(target)).toBe(false);
+    });
+  });
+
   it('retains temporarily unavailable Claude extras and strips their private metadata from output', async () => {
     const h = await harness();
     const target = { ...h.target, provider: 'claude' as const, accountId: 'claude:personal' };

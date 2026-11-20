@@ -321,6 +321,224 @@ fn fresh_verification_requires_exact_decrement_and_refill() {
     }
 }
 #[test]
+fn claude_full_reset_confirms_on_pro_without_a_fable_limit() {
+    let (_d, mut s) = open();
+    let mut before = snapshot("claude");
+    before.grants[1].kind = "full".into();
+    before.grants[1].clears = ["five_hour", "seven_day", "seven_day_overage_included"]
+        .map(String::from)
+        .to_vec();
+    before.windows.insert("five_hour".into(), 11.0);
+    before.windows.insert("seven_day".into(), 2.0);
+    let listed = s.read_inventory("route-account", &before, NOW, &entropy(12)).unwrap();
+    assert_eq!(listed["grants"][1]["claimable"], true);
+    let (_, attempt) = begin(&mut s, &before);
+    let mut after = before.clone();
+    after.grants[1].left = 0;
+    after.windows.insert("five_hour".into(), 0.0);
+    after.windows.insert("seven_day".into(), 0.0);
+    let result = s
+        .read_finish("route-account", &attempt, Outcome::Reset, Some(&after), NOW, None)
+        .unwrap();
+    assert_eq!(result["outcome"], "claimed");
+    assert_eq!(result["unobservedWindows"], json!(["seven_day_overage_included"]));
+    assert_eq!(
+        result["windows"],
+        json!([
+            {"id":"five_hour","usedPercent":0.0},
+            {"id":"seven_day","usedPercent":0.0}
+        ])
+    );
+}
+
+#[test]
+fn claude_full_reset_checks_observed_refills_and_names_missing_readings() {
+    for (session_after, expected) in [
+        (Some(5.0), "claimed"),
+        (Some(11.0), "claimed-unconfirmed"),
+        (None, "claimed"),
+    ] {
+        let (_d, mut s) = open();
+        let mut before = snapshot("claude");
+        before.grants[1].kind = "full".into();
+        before.grants[1].clears = vec!["five_hour".into(), "seven_day".into()];
+        before.windows.insert("five_hour".into(), 11.0);
+        let (_, attempt) = begin(&mut s, &before);
+        let mut after = before.clone();
+        after.grants[1].left = 0;
+        after.windows.insert("seven_day".into(), 0.0);
+        after.windows.remove("five_hour");
+        if let Some(session_after) = session_after {
+            after.windows.insert("five_hour".into(), session_after);
+        }
+        let result = s
+            .read_finish("route-account", &attempt, Outcome::Reset, Some(&after), NOW, None)
+            .unwrap();
+        assert_eq!(result["outcome"], expected, "{session_after:?}");
+        if session_after.is_none() {
+            assert_eq!(result["unobservedWindows"], json!(["five_hour"]));
+        }
+    }
+}
+
+#[test]
+fn claude_fable_reset_confirms_with_nonzero_weekly_usage() {
+    let (_d, mut s) = open();
+    let mut before = snapshot("claude");
+    let raw = json!({"eligible":true,"grants":[{"id":"grant_b","type":"fable",
+        "resets_left":1,"paused":false,"usable_now":true,"clears":["seven_day_overage_included"]}]});
+    before.grants[1] = aac_status::reset_inventory::claude(&raw, &[None]).unwrap().remove(0);
+    assert_eq!(before.grants[1].kind, "fable");
+    before.windows.insert("seven_day_overage_included".into(), 50.0);
+    let (_, attempt) = begin(&mut s, &before);
+    let mut after = before.clone();
+    after.grants[1].left = 0;
+    after.windows.insert("seven_day_overage_included".into(), 0.0);
+    after.windows.insert("seven_day".into(), 75.0);
+    let result = s
+        .read_finish("route-account", &attempt, Outcome::Reset, Some(&after), NOW, None)
+        .unwrap();
+    assert_eq!(result["outcome"], "claimed");
+    assert!(
+        result["windows"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"id":"seven_day","usedPercent":75.0}))
+    );
+}
+
+#[test]
+fn claude_fable_reset_names_the_scope_when_either_read_omits_it() {
+    let fable = "seven_day_overage_included";
+    for (had_fable, has_fable) in [(true, false), (false, true), (false, false)] {
+        let (_d, mut s) = open();
+        let mut before = snapshot("claude");
+        before.grants[1].kind = "fable".into();
+        before.grants[1].clears = vec![fable.into()];
+        if had_fable {
+            before.windows.insert(fable.into(), 50.0);
+        }
+        let listed = s.read_inventory("route-account", &before, NOW, &entropy(12)).unwrap();
+        assert_eq!(listed["grants"][1]["claimable"], true);
+        let (_, attempt) = begin(&mut s, &before);
+        let mut after = before.clone();
+        after.grants[1].left = 0;
+        after.windows.remove(fable);
+        if has_fable {
+            after.windows.insert(fable.into(), 0.0);
+        }
+        after.windows.insert("seven_day".into(), 75.0);
+        let result = s
+            .read_finish("route-account", &attempt, Outcome::Reset, Some(&after), NOW, None)
+            .unwrap();
+        assert_eq!(result["outcome"], "claimed", "Fable present {had_fable}/{has_fable}");
+        assert_eq!(result["windows"], json!([{"id":"seven_day","usedPercent":75.0}]));
+        assert_eq!(result["unobservedWindows"], json!([fable]));
+        assert_eq!(result["pending"], false);
+    }
+}
+
+fn claude_weekly_reset(kind: &str) -> Snapshot {
+    let mut snap = snapshot("claude");
+    snap.grants[1].kind = kind.into();
+    if kind == "fable" {
+        let fable = "seven_day_overage_included";
+        snap.grants[1].clears = vec![fable.into()];
+        snap.windows.insert(fable.into(), 20.0);
+    } else if kind == "full" {
+        snap.grants[1].clears.push("five_hour".into());
+        snap.windows.insert("five_hour".into(), 20.0);
+    }
+    snap
+}
+
+#[test]
+fn claude_empty_weekly_blocks_listing_and_preparation() {
+    for kind in ["full", "fable", "weekly"] {
+        let (_d, mut s) = open();
+        let mut snap = claude_weekly_reset(kind);
+        snap.windows.insert("seven_day".into(), 0.0);
+        let listed = s.read_inventory("route-account", &snap, NOW, &entropy(12)).unwrap();
+        let row = &listed["grants"][1];
+        assert_eq!(row["claimable"], false, "{kind}");
+        assert_eq!(row["claimBlockedReason"], "no-weekly-usage");
+        assert_eq!(
+            s.prepare(
+                "route-account",
+                row["grantKey"].as_str().unwrap(),
+                &caller(),
+                &snap,
+                NOW,
+                &entropy(2)
+            )
+            .unwrap_err(),
+            "no-weekly-usage"
+        );
+    }
+}
+
+#[test]
+fn claude_weekly_rollover_rejects_the_spend_before_reservation() {
+    for kind in ["full", "fable", "weekly"] {
+        let (_d, mut s) = open();
+        let mut snap = claude_weekly_reset(kind);
+        let key = inventory(&mut s, &snap);
+        let token = prepare(&mut s, &key, &snap);
+        snap.windows.insert("seven_day".into(), 0.0);
+        snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
+        let result = s.begin("route-account", &key, &caller(), &token, &snap, NOW, &entropy(3));
+        assert_eq!(result.unwrap_err(), "no-weekly-usage", "{kind}");
+        assert!(s.pending("route-account", NOW).unwrap()["attemptKey"].is_null());
+        assert!(
+            s.history("route-account")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["event"] != "attempt")
+        );
+    }
+}
+
+#[test]
+fn claude_missing_or_flat_weekly_keeps_the_claim_locked() {
+    for (kind, weekly) in [("full", Some(100.0)), ("fable", Some(100.0)), ("fable", None)] {
+        let (_d, mut s) = open();
+        let before = claude_weekly_reset(kind);
+        let (_, attempt) = begin(&mut s, &before);
+        let mut after = before.clone();
+        after.grants[1].left = 0;
+        after.windows.insert("five_hour".into(), 0.0);
+        after.windows.remove("seven_day_overage_included");
+        after.windows.remove("seven_day");
+        if let Some(weekly) = weekly {
+            after.windows.insert("seven_day".into(), weekly);
+        }
+        let result = s
+            .read_finish("route-account", &attempt, Outcome::Reset, Some(&after), NOW, None)
+            .unwrap();
+        assert_eq!(result["outcome"], "claimed-unconfirmed", "{kind} {weekly:?}");
+        assert_eq!(result["pending"], true);
+        assert_eq!(s.pending("route-account", NOW).unwrap()["attemptKey"], attempt);
+    }
+}
+
+#[test]
+fn claude_fable_reset_stays_pending_when_the_reported_scope_does_not_fall() {
+    let (_d, mut s) = open();
+    let before = claude_weekly_reset("fable");
+    let (_, attempt) = begin(&mut s, &before);
+    let mut after = before.clone();
+    after.grants[1].left = 0;
+    after.windows.insert("seven_day".into(), 75.0);
+    let result = s
+        .read_finish("route-account", &attempt, Outcome::Reset, Some(&after), NOW, None)
+        .unwrap();
+    assert_eq!(result["outcome"], "claimed-unconfirmed");
+    assert_eq!(result["pending"], true);
+}
+
+#[test]
 fn a_codex_credit_gone_after_openai_said_reset_confirms_and_unlocks() {
     // OpenAI removes a redeemed Codex credit from its list. With OpenAI's own `reset` on record, a newer read
     // of the same identity without the credit settles the attempt; without it, the lock stays.
@@ -688,6 +906,7 @@ fn full_reset_can_confirm_when_an_unused_window_stays_zero() {
     let (_d, mut s) = open();
     let mut snap = snapshot("claude");
     snap.windows.insert("five_hour".into(), 0.0);
+    snap.grants[1].kind = "full".into();
     snap.grants[1].clears.push("five_hour".into());
     let (_, a) = begin(&mut s, &snap);
     let mut after = snap.clone();

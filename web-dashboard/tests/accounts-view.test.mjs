@@ -2376,7 +2376,8 @@ test('Claude rows say "Sign-in needed on Windows" before Open, and Open stays al
   assert.equal(mac.style, 'default');
   assert.equal(windows.enabled, true);
   assert.equal(windows.style, 'accent-line');
-  assert.match(windows.tip, /^Sign-in needed on Windows\. Open shows the Claude sign-in window/);
+  assert.match(windows.tip, /^Claude Desktop needs a sign-in on Windows\. Open shows the Claude Desktop sign-in window/);
+  assert.match(windows.tip, /Claude Code sign-ins are checked separately\.$/);
   assert.equal(view({ status: 'needs_sign_in', windows: [], signInNeeded: ['mac', 'windows'] }).status, 'Sign-in needed on Mac and Windows');
   // Without the field (an older server, or every computer signed in) nothing changes.
   const plain = view({});
