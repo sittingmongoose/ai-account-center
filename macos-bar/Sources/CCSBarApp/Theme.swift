@@ -20,17 +20,17 @@ enum TrayMetrics {
   static let antigravityIdentityColumn: CGFloat = 158
   static let columnGap: CGFloat = 13
   static let antigravityColumnGap: CGFloat = 8
-  /// Codex and Antigravity share one fixed action slot, trailing-anchored: the Activate capsule
-  /// (97.5 pt) plus a little room, so every slot ends on the same line in every section.
-  static let switchSlot: CGFloat = 100
-  /// Claude's Open pair: two 28 pt buttons with an 8 pt gap, trailing-anchored like the switch slot.
+  /// Codex and Antigravity share one fixed action slot, trailing-anchored (the Active mark or Finish setup), so
+  /// every slot ends on the same line in every section.
+  static let actionSlot: CGFloat = 100
+  /// Claude's Open pair: two 28 pt buttons with an 8 pt gap, trailing-anchored like the action slot.
   static let claudeSlot: CGFloat = 64
   static let openButton: CGFloat = 28
   static let openPairGap: CGFloat = 8
-  /// The Activate capsule's label inset: the 18 pt check plus its 6 pt gap, so "Active" lines up.
+  /// The Active mark: an 18 pt check, then "Active" after a 6 pt gap.
   static let check: CGFloat = 18
   static let checkGap: CGFloat = 6
-  static var activateInset: CGFloat { check + checkGap }
+  static var activeLabelInset: CGFloat { check + checkGap }
   static let rowLeading: CGFloat = 8
   static let rowTrailing: CGFloat = 6
   /// The disclosure chevron's reserved trailing column inside every account and provider row, so the

@@ -2,7 +2,7 @@
 
 The macOS menu bar app in [AI Account Center](https://github.com/sittingmongoose/ai-account-center), renamed from the CCS Bar accounts edition. Its packaging originated in
 [CCS Bar](https://github.com/kaitranntt/ccs/tree/main/macos-bar); upstream credit, license and compatibility identifiers are preserved. The panel is 760 points wide
-and follows the AI Account Center tray design shared with the Windows tray: the same order, data rules and active-account indicator.
+and follows the AI Account Center tray design shared with the Windows tray: the same order, data rules and Active mark.
 
 The menu-bar panel is one macOS 27 Liquid Glass surface: a regular `NSGlassEffectView` (20 pt corners) under
 the status item, with content on translucent platters and glass controls (SwiftUI `glassEffect`,
@@ -28,24 +28,35 @@ its threshold notch) was removed on 2026-11-14: the tray reads usage and opens C
   tick, so a window flips when its reset passes while the panel is open.
 - **Claude Fable** has its own column for Max plans only, read from the provider's `seven_day_fable` window; a Max
   account without one shows "Not reported yet", and Pro accounts have no Fable cell.
-- **Active account (Selected row).** In Codex and Antigravity the row of the live login sits on one accent-tinted
-  platter that glides to the new row when the active login changes (ease-out, no overshoot). Its action slot shows a
-  filled check, "Active" and "on Ubuntu" with no button chrome, lined up with the slot's capsule position (the
-  capsule's label inset is the check plus its gap). `--check-native-tooltips` measures this alignment.
-- **Antigravity plan display.** When the dashboard reports the pool windows, the section shows four columns
-  in this order: Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly. The dashboard's optional
+- **Active mark (Selected row).** In Codex and Antigravity the row of the live login, as the dashboard marks it, sits
+  on one accent-tinted platter that glides to the new row when the dashboard reports another live login (ease-out, no
+  overshoot). Its action slot shows a filled check, "Active" and "on Ubuntu" with no button chrome, at the slot's
+  leading edge, "Active" the check plus its gap after it. `--check-native-tooltips` measures this alignment. Nothing
+  else is left of switching: no Activate, auto-switch, "Active account not reported yet" header or "Not reported as
+  active" slot.
+- **Antigravity: T3's quota only.** Google keeps two Antigravity quota services. The dashboard sends the one the
+  Antigravity CLI in T3 spends as `cli-<bucket>` windows ("... · In T3 (Antigravity CLI)") and the Antigravity app's
+  under the old keys ("... · In the Antigravity app"). The tray shows T3's only (owner decision, 2026-11-20): the
+  section header says "In T3 (Antigravity CLI)" ("In T3 (CLI)" beside a single account), and the app's numbers appear
+  nowhere in the tray, Details and the menu bar included; they are in the dashboard's Details. The two services are
+  never added together. A T3 service that failed this read (its pools arrive `unavailable` with no numbers) reads
+  Unavailable, never 0 and never the app's number, and Details says T3's quota could not be read. An older dashboard
+  that sends only the app's pools reads Unavailable in all four columns, and Details says it does not report T3's
+  quota. The account-wide AI credits row stays in Details.
+- **Antigravity plan display.** The section always shows T3's four columns in this order: Gemini 5-hour, Gemini
+  weekly, Claude/GPT 5-hour, Claude/GPT weekly, then one more T3 pool the columns don't name (such as Gemini 4 Argon,
+  captioned "Argon weekly"). "Not reported" for that extra pool comes only from a live reading of T3's own service.
+  The dashboard's optional
   `antigravityPlan` object (class, quotaPolicy, summary, models, thirdPartyModels, creditsOverage) drives the
   honest gaps: a weekly-only plan's 5-hour cell reads "Weekly only", a plan without Claude/GPT models reads
   "Not on plan" for that pool, and a plan with no Antigravity entitlement and no readings shows one line,
   "No Antigravity quota on this plan", instead of meters. Details adds the plan's summary sentence, a
   "Models:" line, the family-sharing note on paid Pro and Ultra plans, and labels the credits row
-  "AI credits (overage)" with the hint for the plan's overage setting. Details lists the four windows
+  "AI credits (overage)" with the hint for the plan's overage setting. Details lists T3's windows
   in the row's order, each titled by its full pool name with the period as a subtitle, so a long pool
-  name never truncates. Without the object the section renders
-  as before (plus the fourth column).
+  name never truncates. Without the object the section renders the same columns with plain Unavailable gaps.
 - **Antigravity "Finish setup".** An Antigravity account that still needs its supervised login shows "Finish setup",
-  which opens the dashboard. A lone Antigravity account with no active login reported reads "Not reported"; with two
-  or more, the section header says "Active account not reported yet".
+  which opens the dashboard. Any other Antigravity row's slot is the Active mark or empty.
 - **Hidden providers and accounts.** The tray follows the dashboard's "Show in tray" switch, which is independent of
   "Show on dashboard": a provider with `providers[].trayVisible: false` (or listed in `settings.trayHiddenProviders`) is
   left out of the panel, a missing field means visible, and a provider hidden only on the dashboard stays in the tray.
@@ -56,7 +67,8 @@ its threshold notch) was removed on 2026-11-14: the tray reads usage and opens C
   overage cap above 100 %). Widths and numbers ease out and never pass the reading.
   Reported usage above 100 % stays in the text; only the bar is capped. A reset label never truncates: when value
   and reset share a tight cell the clock glyph drops first, then the countdown's largest unit ("6d", "5h", "47m")
-  stands alone; the tooltip keeps the full reset.
+  stands alone, and in a cell too narrow even for that (a two-decimal reading in a fifth Antigravity column) the
+  reset leaves the cell rather than widen the panel; the tooltip keeps the full reset.
 - **Motion.** The first open of a session staggers the blocks in and sweeps every meter from zero while the numbers
   count up; later opens animate only readings that changed since the panel last closed. The menu-bar percentage rolls
   to its new value, Refresh spins while it works, the gear turns as Settings slides in, and the active check draws in
@@ -129,7 +141,8 @@ connects to the existing dashboard.
 
 ```sh
 swift build -c release
-swift run ccs-bar-check                                  # offline core and contract checks
+swift build                                              # debug: ccs-bar-check runs the view checks from it
+swift run ccs-bar-check                                  # offline core and contract checks, then --check-review-r2
 export AAC_ASSETS_DIR="$PWD/Resources/Assets"            # unbundled runs read artwork from the source tree
 .build/release/CCSBar --check-native-tooltips Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --check-native-packs Tests/Fixtures/tray-concept-preview.json /tmp/packs.png
@@ -151,6 +164,12 @@ python3 Scripts/migration_check.py
   are never the row, and the Selected-row alignment within 0.5 pt at its expected x, with every slot's content fitting
   the slot. It also checks the disclosure chevron's reserved trailing column lies fully inside every account and
   provider row's own frame — the frame the hover highlight and the active row's platter cover.
+- `--check-review-r2` (run by `ccs-bar-check`) renders the real panel and Details offscreen and reads them back with
+  text recognition. Its Antigravity part uses `Tests/Fixtures/antigravity-cli-services.json` (one account with both
+  services live, the app's windows listed first; one whose T3 service failed; one from an app-only dashboard): T3's
+  readings show, no app number renders anywhere, the failed and app-only accounts read Unavailable with their Details
+  notices, and with no account or one account reported active no switch control, auto-switch fact or active-account
+  prompt renders, while the dashboard's Active mark stays.
 - `--check-meter-geometry` checks every rendered meter against its own track's laid-out width: the fill is the reading
   within 0.5 pt, ticks sit at 25/50/75, and no meter draws a notch.
 - `--check-hover-occlusion` checks which hover tag actually presents under the pointer, with the real panel hosted
@@ -194,7 +213,7 @@ python3 Scripts/migration_check.py
 
 ### Rename compatibility
 
-`~/Applications/CCS Bar.app` becomes a relative symlink to `AI Account Center.app`, so existing launch paths continue to resolve. The app retains its executable name `CCSBar`, bundle identifier and launch-agent label `party.sittingmongoose.ccs.accounts-bar`, and private configuration directory `~/.ccs/bar`. The launch-agent program path moves to the new canonical app path. No provider identity, authenticated dashboard setting, API route or native-host identifier is renamed. Existing connection data, account selection, threshold and refresh cadence stay unchanged. The original MIT license is bundled in the app and linked to upstream attribution in About.
+`~/Applications/CCS Bar.app` becomes a relative symlink to `AI Account Center.app`, so existing launch paths continue to resolve. The app retains its executable name `CCSBar`, bundle identifier and launch-agent label `party.sittingmongoose.ccs.accounts-bar`, and private configuration directory `~/.ccs/bar`. The launch-agent program path moves to the new canonical app path. No provider identity, authenticated dashboard setting, API route or native-host identifier is renamed. Existing connection data, account selection and refresh cadence stay unchanged. The original MIT license is bundled in the app and linked to upstream attribution in About.
 
 `python3 Scripts/migration_check.py` exercises migration, repeat install, alias safety and rollback using temporary fixture apps; it makes no live app or account changes.
 

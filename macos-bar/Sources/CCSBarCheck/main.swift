@@ -663,7 +663,8 @@ private func checkVisibleUsageWindows() throws {
   ]))
   try expect(usedUp.visibleWindows.map(\.key) == ["reset-packs-5h"],
     "A Z.ai reset-pack roll-up whose packs were all used stays visible; one with no packs at all hides")
-  for provider in ["claude", "cursor", "muse", "antigravity", "kimi-code", "opencode-go"] {
+  // Antigravity has its own rule (T3's CLI meters only, checked in checkAntigravityCLIOnly), so it is left out here.
+  for provider in ["claude", "cursor", "muse", "kimi-code", "opencode-go"] {
     let untouched = try decodeAccount(accountObject(provider, provider, common, plan: "Pro"))
     try expect(untouched.visibleWindows.map(\.key) == rawKeys && untouched.windows.count == common.count,
       "Codex, Qwen, and Z.ai presentation rules must not filter other providers with similarly named windows")
@@ -1042,9 +1043,9 @@ private func checkTrayPresentation() throws {
       window("five_hour", "5h", ["usedPercent": 40.5]), window("seven_day", "week", ["usedPercent": 9]),
     ], active: true, email: "codex-2@example.invalid"),
     account("agy-a", "antigravity", plan: "Google AI Pro", windows: [
-      window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0.0886, "windowMinutes": 10080]),
-      window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 0, "windowMinutes": 300]),
-      window("3p-weekly", "Claude and GPT models · Weekly", ["remainingPercent": 82, "windowMinutes": 10080]),
+      window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0.0886, "windowMinutes": 10080]),
+      window("cli-gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 0, "windowMinutes": 300]),
+      window("cli-3p-weekly", "Claude and GPT models · Weekly", ["remainingPercent": 82, "windowMinutes": 10080]),
     ], active: true, email: "antigravity-1@example.invalid"),
     account("cursor-a", "cursor", plan: "pro", windows: [
       window("plan-reported", "Included usage", ["usedPercent": 1.4461]),
@@ -1065,7 +1066,8 @@ private func checkTrayPresentation() throws {
   try expect(MenuBarReading.make(dashboard: dashboard, provider: MenuBarReading.nothingProvider, mode: .remaining) == nil,
     "Nothing must show no percentage")
   try expect(TrayColumns.antigravity(dashboard.accounts.filter { $0.provider == "antigravity" }).map(\.key)
-    == ["gemini-5h", "gemini-weekly", "3p-weekly"], "Antigravity columns must follow the reported buckets in concept order")
+    == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"],
+    "Antigravity shows T3's four columns in concept order; an unreported pool is a muted cell, not a missing column")
   let cursor = dashboard.accounts.first { $0.provider == "cursor" }!
   try expect(cursor.glanceMeters.map(\.key) == ["plan-reported"]
     && TrayColumns.shortLabel(provider: "cursor", cursor.glanceMeters[0]) == "Included",
@@ -1187,33 +1189,37 @@ private func checkAntigravityPlanDisplay() throws {
   // Column order: the four pool windows in panel order, however the account lists them, with the spec's
   // exact tray captions; unknown extra windows fall back to the generic path.
   let scrambled = try account("agy-full", windows: [
-    window("3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 1]),
-    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 2]),
-    window("3p-5h", "Claude and GPT models · 5-hour", ["usedPercent": 3]),
-    window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 4]),
+    window("cli-3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 1]),
+    window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 2]),
+    window("cli-3p-5h", "Claude and GPT models · 5-hour", ["usedPercent": 3]),
+    window("cli-gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 4]),
   ])
   let columns = TrayColumns.antigravity([scrambled])
-  try expect(columns.map(\.key) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"],
+  try expect(columns.map(\.key) == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"],
     "Antigravity columns must be Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly, in that order")
   try expect(columns.map(\.label) == ["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"],
     "Tray captions use the spec's exact short forms")
   let windowsByKey = Dictionary(uniqueKeysWithValues: scrambled.windows.map { ($0.key, $0) })
-  for (key, caption) in [("gemini-5h", "Gemini 5-hour"), ("gemini-weekly", "Gemini weekly"),
-    ("3p-5h", "Claude/GPT 5-hour"), ("3p-weekly", "Claude/GPT weekly")] {
+  for (key, caption) in [("cli-gemini-5h", "Gemini 5-hour"), ("cli-gemini-weekly", "Gemini weekly"),
+    ("cli-3p-5h", "Claude/GPT 5-hour"), ("cli-3p-weekly", "Claude/GPT weekly")] {
     try expect(TrayColumns.shortLabel(provider: "antigravity", windowsByKey[key]!) == caption,
       "The \(key) cell caption must be \(caption)")
   }
-  let extra = try account("agy-extra", windows: [window("gemini-flash-8h", "Flash 8h", ["usedPercent": 1, "windowMinutes": 480])])
-  try expect(TrayColumns.antigravity([extra]).map(\.key) == ["gemini-flash-8h"],
-    "An account reporting none of the four pools keeps its own meters, nothing guessed")
+  let extra = try account("agy-extra", windows: [window("cli-gemini-flash-8h", "Flash 8h", ["usedPercent": 1, "windowMinutes": 480])])
+  try expect(TrayColumns.antigravity([extra]).map(\.key) == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly", "cli-gemini-flash-8h"]
+    && TrayColumns.antigravity([extra]).last?.label == "Flash 8h",
+    "An extra T3 pool follows T3's four columns under its own label, nothing guessed")
+  let unknownApp = try account("agy-unknown-app", windows: [window("gemini-flash-8h", "Flash 8h", ["usedPercent": 1, "windowMinutes": 480])])
+  try expect(TrayColumns.antigravity([unknownApp]).map(\.key) == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"],
+    "A pool outside T3's service is never a tray column")
 
   // Details: the meters read in the row's order, however the account lists them, and a pool label
   // splits into the full pool name (title) and the period (subtitle) so the name never truncates.
   // Every provider but Antigravity keeps its reported order.
   try expect(TrayColumns.detailsMeterOrder(provider: "antigravity", scrambled.visibleWindows).map(\.key)
-    == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"],
+    == ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"],
     "Antigravity details list the pools in the row's order")
-  try expect(TrayColumns.detailsMeterOrder(provider: "antigravity", extra.visibleWindows).map(\.key) == ["gemini-flash-8h"]
+  try expect(TrayColumns.detailsMeterOrder(provider: "antigravity", extra.visibleWindows).map(\.key) == ["cli-gemini-flash-8h"]
     && TrayColumns.detailsMeterOrder(provider: "claude", scrambled.visibleWindows).map(\.key)
       == scrambled.visibleWindows.map(\.key),
     "Unknown extra windows and other providers keep the reported order")
@@ -1228,49 +1234,49 @@ private func checkAntigravityPlanDisplay() throws {
 
   // Missing cells: an honest muted reason from the plan facts, never a fake 0%.
   let weekly = try account("agy-weekly", plan: plan("free", "weekly", thirdParty: true))
-  try expect(weekly.antigravityMissingCell("gemini-5h") == .weeklyOnly && weekly.antigravityMissingCell("3p-5h") == .weeklyOnly
-    && weekly.antigravityMissingCell("gemini-weekly") == .unavailable,
+  try expect(weekly.antigravityMissingCell("cli-gemini-5h") == .weeklyOnly && weekly.antigravityMissingCell("cli-3p-5h") == .weeklyOnly
+    && weekly.antigravityMissingCell("cli-gemini-weekly") == .unavailable,
     "A weekly-only plan's 5-hour cells read Weekly only")
   let geminiOnly = try account("agy-gemini", plan: plan("enterprise-standard", "pooled-7d", thirdParty: false))
-  try expect(geminiOnly.antigravityMissingCell("3p-5h") == .notOnPlan
-    && geminiOnly.antigravityMissingCell("3p-weekly") == .notOnPlan
-    && geminiOnly.antigravityMissingCell("gemini-5h") == .unavailable,
+  try expect(geminiOnly.antigravityMissingCell("cli-3p-5h") == .notOnPlan
+    && geminiOnly.antigravityMissingCell("cli-3p-weekly") == .notOnPlan
+    && geminiOnly.antigravityMissingCell("cli-gemini-5h") == .unavailable,
     "A plan with no Claude/GPT models reads Not on plan for both of that pool's cells")
   let weeklyGeminiOnly = try account("agy-both", plan: plan("free", "weekly", thirdParty: false))
-  try expect(weeklyGeminiOnly.antigravityMissingCell("3p-5h") == .notOnPlan,
+  try expect(weeklyGeminiOnly.antigravityMissingCell("cli-3p-5h") == .notOnPlan,
     "Not on plan beats Weekly only: a weekly Claude/GPT window does not exist either")
   let noPlanAccount = try account("agy-noplan")
-  try expect(noPlanAccount.antigravityMissingCell("gemini-5h") == .unavailable
-    && pro.antigravityMissingCell("3p-weekly") == .unavailable,
+  try expect(noPlanAccount.antigravityMissingCell("cli-gemini-5h") == .unavailable
+    && pro.antigravityMissingCell("cli-3p-weekly") == .unavailable,
     "Without a plan fact that explains the gap, the cell keeps the unavailable treatment")
   // An extra pool another account reports (Gemini 4 Argon on Pro, 2026-11-13) reads Not reported on a
   // free-tier account whose own reading has no such bucket; with no reading at all it stays unavailable.
   let argonFree = try account("agy-argon-free", windows: [
-    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
-    window("3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+    window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+    window("cli-3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
   ], plan: plan("free", "weekly", thirdParty: false), status: "ok")
   let argonPro = try account("agy-argon-pro", windows: [
-    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 1, "windowMinutes": 10080]),
-    window("gemini-argon-wtu-weekly", "Gemini 4 Argon · Weekly", ["usedPercent": 1, "windowMinutes": 10080]),
+    window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 1, "windowMinutes": 10080]),
+    window("cli-gemini-argon-wtu-weekly", "Gemini 4 Argon · Weekly", ["usedPercent": 1, "windowMinutes": 10080]),
   ], plan: plan("pro", "five-hour-weekly", thirdParty: true), status: "ok")
-  try expect(TrayColumns.antigravity([argonPro, argonFree]).map(\.key).contains("gemini-argon-wtu-weekly"),
+  try expect(TrayColumns.antigravity([argonPro, argonFree]).map(\.key).contains("cli-gemini-argon-wtu-weekly"),
     "The Argon pool gets its own column")
-  try expect(argonFree.antigravityMissingCell("gemini-argon-wtu-weekly") == .notReported
-    && argonFree.antigravityMissingCell("gemini-5h") == .weeklyOnly
-    && argonFree.antigravityMissingCell("3p-5h") == .notOnPlan,
+  try expect(argonFree.antigravityMissingCell("cli-gemini-argon-wtu-weekly") == .notReported
+    && argonFree.antigravityMissingCell("cli-gemini-5h") == .weeklyOnly
+    && argonFree.antigravityMissingCell("cli-3p-5h") == .notOnPlan,
     "A pool another account reports reads Not reported; the four columns keep their plan wording")
   let argonNoReading = try account("agy-argon-none", plan: plan("free", "weekly", thirdParty: false), status: "ok")
   let argonFailed = try account("agy-argon-failed", windows: [
-    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+    window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
   ], plan: plan("free", "weekly", thirdParty: false), status: "error")
   // A cached reading is the last good one after a failed refresh: it can't say Google reports no such pool.
   let argonCached = try account("agy-argon-cached", windows: [
-    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
-    window("3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+    window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+    window("cli-3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
   ], plan: plan("free", "weekly", thirdParty: false), status: "cached")
-  try expect(argonNoReading.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable
-    && argonFailed.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable
-    && argonCached.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable,
+  try expect(argonNoReading.antigravityMissingCell("cli-gemini-argon-wtu-weekly") == .unavailable
+    && argonFailed.antigravityMissingCell("cli-gemini-argon-wtu-weekly") == .unavailable
+    && argonCached.antigravityMissingCell("cli-gemini-argon-wtu-weekly") == .unavailable,
     "Without a live reading (none, failed or cached) the extra pool stays unavailable, never Not reported")
   try expect(AntigravityMissingCell.notReported.text == "Not reported"
     && AntigravityMissingCell.notReported.help == "Google reports no such quota for this account.",
@@ -1282,7 +1288,7 @@ private func checkAntigravityPlanDisplay() throws {
   // The no-quota row line: quotaPolicy none with nothing reported, and only then.
   let workspace = try account("agy-ws3", windows: [], plan: plan("workspace", "none"))
   try expect(workspace.antigravityNoQuota, "A no-quota plan with no windows shows the one-line row")
-  let workspaceReporting = try account("agy-ws4", windows: [window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 3])],
+  let workspaceReporting = try account("agy-ws4", windows: [window("cli-gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 3])],
     plan: plan("workspace", "none"))
   let claudeNoQuota = try account("claude-x", "claude", windows: [], plan: plan("workspace", "none"))
   try expect(!workspaceReporting.antigravityNoQuota && !pro.antigravityNoQuota && !claudeNoQuota.antigravityNoQuota,
@@ -1951,10 +1957,10 @@ private func checkMenuBarSelection() throws {
         window("seven_day", "Weekly usage", ["usedPercent": 78]),
       ]),
       account("agy-a", "antigravity", email: "agy-a@example.invalid", windows: [
-        window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 5, "windowMinutes": 300]),
+        window("cli-gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 5, "windowMinutes": 300]),
       ], active: agyActive == "agy-a"),
       account("agy-b", "antigravity", email: "agy-b@example.invalid", windows: [
-        window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 60, "windowMinutes": 300]),
+        window("cli-gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 60, "windowMinutes": 300]),
       ], active: agyActive == "agy-b"),
       account("cursor-a", "cursor", email: "cursor-a@example.invalid", windows: [
         window("seven_day", "Weekly", ["usedPercent": 25, "windowMinutes": 10080]),
@@ -3389,6 +3395,119 @@ private func checkReviewR2() async throws {
   try expect(process.terminationStatus == 0, "Native view and view-model regression checks")
 }
 
+/// T3's Antigravity CLI quota only (2026-11-20). Google keeps two Antigravity quota services; the dashboard sends T3's
+/// as `cli-<bucket>` and the Antigravity app's under the old keys. The tray shows T3's alone: the app's numbers live
+/// in the dashboard's Details only. A failed CLI service reads Unavailable, never 0 and never the app's number; the
+/// services are never added together; an older dashboard that sends only the app's pools reads Unavailable.
+private func checkAntigravityCLIOnly() throws {
+  let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().appendingPathComponent("Tests/Fixtures/antigravity-cli-services.json")
+  let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: Data(contentsOf: fixture))
+  // "Now" is the fixture's capture time, so its readings are not from before their resets.
+  let saved = TrayFormat.referenceNow
+  defer { TrayFormat.referenceNow = saved }
+  TrayFormat.referenceNow = AccountFormatting.date(dashboard.updatedAt)
+  func only(_ id: String, active: Bool = true) throws -> (AccountDashboard, DashboardAccount) {
+    var object = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as! [String: Any]
+    object["accounts"] = (object["accounts"] as! [[String: Any]]).filter { $0["id"] as? String == id }
+      .map { account in var account = account; account["isActive"] = active; return account }
+    let single = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+    return (single, single.accounts[0])
+  }
+  let cliKeys = ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"]
+  let appNumbers: Set<Double> = [11.11, 0.09, 22.22, 37.83, 44.44, 55.55, 66.66, 77.77, 88.88, 99.99, 51.51, 61.61, 71.71, 81.81, 91.91]
+  /// What a row's cell shows for a column: the reading of the window with that key, or nil (a muted cell).
+  func shown(_ account: DashboardAccount, _ key: String) -> Double? {
+    account.visibleWindows.first { $0.key == key }?.meterUsedPercent
+  }
+  func trayNumbers(_ account: DashboardAccount, _ columns: [(key: String, label: String)]) -> [Double] {
+    columns.compactMap { shown(account, $0.key) }
+      + TrayColumns.detailsMeterOrder(provider: "antigravity", account.visibleWindows.filter(\.isMeter)).compactMap(\.meterUsedPercent)
+  }
+  let agy = dashboard.accounts.filter { $0.provider == "antigravity" }
+  let columns = TrayColumns.antigravity(agy)
+  // Each scenario reports on its own, so a red run names every one that fails.
+  var failed: [String] = []
+  func scenario(_ name: String, _ body: () throws -> Void) {
+    do { try body() } catch { failed.append("\(name): \(error)") }
+  }
+
+  // CLI-only rows: T3's four pools in panel order (and T3's extra Argon pool), whatever order they arrive in.
+  scenario("CLI-only rows") {
+    try expect(columns.map(\.key) == cliKeys + ["cli-gemini-argon-wtu-weekly"],
+      "The Antigravity columns are T3's CLI pools only, in panel order, with T3's Argon pool after them")
+    try expect(Array(columns.prefix(4)).map(\.label) == ["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"],
+      "T3's four columns keep the short captions")
+    let (bothDashboard, both) = try only("antigravity:t3-both")
+    try expect(cliKeys.map { shown(both, $0) } == [29.68, 8.48, 3.5, 6.25] && shown(both, "cli-gemini-argon-wtu-weekly") == 12.5,
+      "Each T3 cell shows T3's own reading, never the app's and never a sum")
+    try expect(!both.visibleWindows.contains { $0.isMeter && !$0.key.hasPrefix("cli-") }
+      && both.visibleWindows.contains { $0.key == "google-ai-credits" },
+      "No app pool is a tray window (Details included); the account-wide credits row stays")
+    try expect(TrayColumns.detailsMeterOrder(provider: "antigravity", both.visibleWindows.filter(\.isMeter)).map(\.key)
+      == cliKeys + ["cli-gemini-argon-wtu-weekly"], "Details lists T3's pools in the row's order")
+    let firstDetails = both.visibleWindows.first { $0.key == "cli-gemini-5h" }.map { TrayColumns.fullLabel(provider: "antigravity", $0) }
+    try expect(firstDetails == "Gemini Models · 5-hour" && TrayColumns.labelParts(firstDetails ?? "")?.subtitle == "5-hour",
+      "Details titles T3's pools without the service suffix, so the period subtitle stays whole")
+    try expect(both.fiveHourWindow?.key == "cli-gemini-5h" && both.weeklyWindow?.key == "cli-gemini-weekly"
+      && both.antigravityHeadlineWindow?.key == "cli-gemini-5h", "The headline windows are T3's")
+    let bothReading = MenuBarReading.make(dashboard: bothDashboard, provider: "antigravity", mode: .used)
+    try expect(bothReading?.value == 29.68 && bothReading?.detail == "Antigravity · agy-both@example.com · 5-hour used",
+      "The menu bar shows T3's Gemini 5-hour reading")
+  }
+
+  // CLI unavailable: T3's service failed, so its pools arrive with no numbers; the app's numbers are live.
+  scenario("CLI unavailable") {
+    let (downDashboard, down) = try only("antigravity:t3-down")
+    let downColumns = TrayColumns.antigravity([down])
+    try expect(downColumns.map(\.key) == cliKeys + ["cli-gemini-argon-wtu-weekly"],
+      "A failed T3 service keeps T3's columns")
+    try expect(trayNumbers(down, downColumns).isEmpty,
+      "A failed T3 service shows no number in the row or in Details: not 0 and not the app's")
+    try expect(downColumns.allSatisfy { column in
+        shown(down, column.key) == nil && (down.visibleWindows.contains { $0.key == column.key }
+          || down.antigravityMissingCell(column.key) == .unavailable)
+      }, "Every T3 cell of a failed service reads Unavailable")
+    try expect(MenuBarReading.make(dashboard: downDashboard, provider: "antigravity", mode: .used) == nil
+      && down.antigravityHeadlineWindow?.meterUsedPercent == nil, "The menu bar shows the icon alone, never the app's number")
+    try expect(down.antigravityMissingCell("cli-gemini-argon-wtu-weekly") == .unavailable,
+      "Without a live T3 reading an extra T3 pool never reads Not reported (the app's live reading does not count)")
+  }
+
+  // An older dashboard that sends only the app's pools (no cli- keys): Unavailable, not the app's numbers as T3's.
+  scenario("app-only older dashboard") {
+    let (oldDashboard, old) = try only("antigravity:app-only")
+    let oldColumns = TrayColumns.antigravity([old])
+    try expect(oldColumns.map(\.key) == cliKeys, "An app-only dashboard still shows T3's four columns")
+    try expect(oldColumns.allSatisfy { shown(old, $0.key) == nil && old.antigravityMissingCell($0.key) == .unavailable },
+      "Each of them reads Unavailable")
+    try expect(trayNumbers(old, oldColumns).isEmpty && old.antigravityHeadlineWindow == nil && old.fiveHourWindow == nil
+      && MenuBarReading.make(dashboard: oldDashboard, provider: "antigravity", mode: .remaining) == nil,
+      "No app number reaches the row, Details or the menu bar")
+    try expect(!agy.flatMap { trayNumbers($0, columns) }.contains(where: appNumbers.contains),
+      "No app number appears anywhere in the tray")
+    try expect(old.antigravityMissingCell("cli-gemini-argon-wtu-weekly") == .unavailable,
+      "An app-only dashboard's live app reading never makes a T3 pool read Not reported")
+  }
+
+  // The plan wording carries to T3's keys: Weekly only and Not on plan.
+  scenario("plan wording on T3's columns") {
+    var weekly = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as! [String: Any]
+    weekly["accounts"] = (weekly["accounts"] as! [[String: Any]]).filter { $0["id"] as? String == "antigravity:app-only" }
+      .map { account in
+        var account = account
+        account["antigravityPlan"] = ["class": "free", "quotaPolicy": "weekly", "summary": "Weekly.", "models": [],
+          "thirdPartyModels": false, "creditsOverage": false]
+        return account
+      }
+    let free = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: weekly)).accounts[0]
+    try expect(free.antigravityMissingCell("cli-gemini-5h") == .weeklyOnly && free.antigravityMissingCell("cli-3p-weekly") == .notOnPlan
+      && free.antigravityMissingCell("cli-gemini-weekly") == .unavailable,
+      "Weekly only and Not on plan apply to T3's columns")
+  }
+  if !failed.isEmpty { throw CheckFailure(description: failed.joined(separator: "; ")) }
+}
+
 if CommandLine.arguments.contains("--check-live") {
   // Opt-in deployment check is read-only. It never refreshes usage, launches a
   // desktop, or changes any setting.
@@ -3431,6 +3550,8 @@ do {
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
   try checkAntigravityPlanDisplay()
   print("PASS Antigravity plan decoding, four-column order, muted missing cells, no-quota line, and credits hint")
+  try checkAntigravityCLIOnly()
+  print("PASS Antigravity CLI only: T3's pools alone, a failed T3 service and an app-only dashboard read Unavailable, never summed")
   try checkMenuBarSelection()
   print("PASS menu-bar provider, account, window and value selection with pending hiding the number")
   try await checkConnectionChange()

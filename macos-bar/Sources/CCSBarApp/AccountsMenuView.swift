@@ -358,24 +358,22 @@ struct AccountsMenuView: View {
     let layout = SectionLayout.make(provider, accounts: accounts)
     let activeID = accounts.first(where: \.isActive)?.id
     // The header and its rows share one platter. The value animation sits outside the platter, as it did
-    // when it held only the rows; the header keeps its own unanimated update when the active account
-    // changes, as when it sat above the platter.
+    // when it held only the rows; the header does not depend on the live login.
     return VStack(alignment: .leading, spacing: 2) {
       SectionHeader(model: model, layout: layout, accounts: accounts)
-        .animation(nil, value: activeID)
       VStack(spacing: 0) {
         ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
           if index > 0 {
-            let besideActive = layout.switchable && (account.isActive || accounts[index - 1].isActive)
+            let besideActive = layout.marksLiveLogin && (account.isActive || accounts[index - 1].isActive)
             withPalette { palette in
               Rectangle().fill(palette.separator).frame(height: 0.5).padding(.leading, 42).padding(.trailing, 8)
                 .opacity(besideActive ? 0 : 1)
             }
           }
-          AccountRow(model: model, account: account, layout: layout, sectionAccounts: accounts, open: open,
+          AccountRow(model: model, account: account, layout: layout, open: open,
             block: 1 + index, maxDetailHeight: detailHeight)
             .background {
-              if layout.switchable && account.isActive {
+              if layout.marksLiveLogin && account.isActive {
                 ActivePlatter().matchedGeometryEffect(id: "active-\(provider)", in: platters)
               }
             }
@@ -451,7 +449,8 @@ struct AccountsMenuView: View {
 }
 
 /// The selected-row platter: a soft accent fill over a faint lift, a hairline accent outline and a 27-style
-/// specular top line. Content, not glass. One per switchable section; it glides between rows.
+/// specular top line. Content, not glass. One per Codex or Antigravity section, under the live login; it glides
+/// between rows when the dashboard reports another live login.
 struct ActivePlatter: View {
   @Environment(\.colorScheme) private var scheme
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency

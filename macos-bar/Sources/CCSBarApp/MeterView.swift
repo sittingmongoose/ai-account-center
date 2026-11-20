@@ -162,7 +162,9 @@ struct MeterView: View {
       CountingPercent(value: shown ?? target, decimals: TrayFormat.decimals(target), size: size)
         .foregroundStyle(palette.valueText(severity))
     } else {
+      // A muted cell in a fifth Antigravity column is narrow: the word shrinks a little rather than truncate.
       Text(pendingReset == nil ? unavailableText : "Pending").font(.system(size: 12, weight: .medium)).foregroundStyle(palette.label3).lineLimit(1)
+        .minimumScaleFactor(0.8)
     }
   }
 
@@ -260,10 +262,13 @@ struct ResetLabel: View {
         let short = Text(TrayFormat.shortestReset(iso) ?? text)
           .font(.system(size: 11.5, weight: soon ? .medium : .regular)).monospacedDigit().lineLimit(1)
         let clock = Image(systemName: "clock").font(.system(size: 10.5, weight: .medium))
+        // Longest first. When even the largest unit cannot fit beside the reading (a two-decimal reading in a fifth
+        // Antigravity column), the reset leaves the cell rather than widen the panel; its tooltip and the meter's keep it.
         ViewThatFits(in: .horizontal) {
           HStack(spacing: 4) { clock; label }.fixedSize()
           label.fixedSize()
           short.fixedSize()
+          Color.clear.frame(width: 0, height: 0)
         }
         .foregroundStyle(soon ? palette.label : palette.label2)
         .trayHelp(TrayFormat.longReset(iso))

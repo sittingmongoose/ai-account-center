@@ -208,7 +208,8 @@ extension DashboardAccount {
   }
 
   /// Antigravity's headline window for the menu bar and the compact row, by the spec's pool
-  /// order (Gemini before Claude/GPT) instead of the reported order. The provider moved its
+  /// order (Gemini before Claude/GPT) instead of the reported order. Only T3's CLI pools are
+  /// tray windows (`visibleWindows`), so the app's numbers never stand in for T3's. The provider moved its
   /// Gemini windows to the end of the sample when the per-model read began deriving them,
   /// and a first-5h-meter pick silently switched the menu bar to another pool's number.
   private func poolWindow(fiveHour: Bool) -> AccountQuotaWindow? {
@@ -249,42 +250,43 @@ extension DashboardAccount {
 }
 
 public enum TrayColumns {
-  /// The Antigravity pool windows, in panel order (ANTIGRAVITY-SPEC display rules): the Gemini pool's
-  /// 5-hour and weekly windows, then the Claude/GPT pool's. Keys stay exactly as the provider reports them.
-  public static let antigravityKeys = ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"]
+  /// Google keeps two Antigravity quota services. The dashboard sends the one the Antigravity CLI in T3 spends as
+  /// `cli-<bucket>` ("... · In T3 (Antigravity CLI)") and the Antigravity app's under the old keys. The tray shows
+  /// T3's only (owner decision, 2026-11-20); the app's numbers are in the dashboard's Details.
+  public static let antigravityCLIPrefix = "cli-"
 
-  /// The concept's four Antigravity columns when the dashboard reports those buckets, then any
-  /// pool the columns don't name yet (a new Antigravity pool reports under its own key) in
-  /// reported order, so a reported meter never vanishes from the panel; otherwise the first
-  /// account's own meters, so nothing is guessed from labels.
+  /// True for a window of T3's Antigravity CLI quota service.
+  public static func isAntigravityCLI(_ key: String) -> Bool { key.hasPrefix(antigravityCLIPrefix) }
+
+  /// T3's Antigravity pool windows, in panel order (ANTIGRAVITY-SPEC display rules): the Gemini pool's
+  /// 5-hour and weekly windows, then the Claude/GPT pool's. Keys stay exactly as the dashboard sends them.
+  public static let antigravityKeys = ["cli-gemini-5h", "cli-gemini-weekly", "cli-3p-5h", "cli-3p-weekly"]
+
+  /// T3's four columns, always (a pool T3's service did not report reads as a muted cell, and an older dashboard
+  /// that sends only the app's pools reads Unavailable, never the app's numbers), then one more T3 pool the
+  /// columns don't name (such as Gemini 4 Argon) in reported order, so a reported T3 meter never vanishes.
   public static func antigravity(_ accounts: [DashboardAccount]) -> [(key: String, label: String)] {
-    var columns = antigravityKeys
-      .filter { key in accounts.contains { $0.visibleWindows.contains { $0.key == key } } }
-      .map { (key: $0, label: antigravityLabel($0)) }
-    if !columns.isEmpty {
-      let known = Set(antigravityKeys)
-      for account in accounts {
-        for window in account.visibleWindows where window.isMeter && !known.contains(window.key) {
-          // Same cap as the Windows panel: the spec's four columns plus one
-          // extra pool keep the shared panel width readable.
-          guard columns.count < 5, !columns.contains(where: { $0.key == window.key }) else { continue }
-          columns.append((key: window.key, label: shortLabel(provider: "antigravity", window)))
-        }
+    var columns = antigravityKeys.map { (key: $0, label: antigravityLabel($0)) }
+    let known = Set(antigravityKeys)
+    for account in accounts {
+      for window in account.visibleWindows where window.isMeter && isAntigravityCLI(window.key) && !known.contains(window.key) {
+        // Same cap as the Windows panel: the spec's four columns plus one
+        // extra pool keep the shared panel width readable.
+        guard columns.count < 5, !columns.contains(where: { $0.key == window.key }) else { continue }
+        columns.append((key: window.key, label: shortLabel(provider: "antigravity", window)))
       }
-      return columns
     }
-    guard let first = accounts.first(where: { !$0.glanceMeters.isEmpty }) else { return [] }
-    return first.glanceMeters.map { (key: $0.key, label: shortLabel(provider: "antigravity", $0)) }
+    return columns
   }
 
-  /// The exact tray caption for a reported Antigravity pool window (the spec's short forms; tooltips and
-  /// Details keep the provider's full pool names).
+  /// The exact tray caption for one of T3's four pool columns (the spec's short forms; tooltips and Details keep the
+  /// dashboard's full pool names).
   public static func antigravityLabel(_ key: String) -> String {
     switch key {
-    case "gemini-5h": return "Gemini 5-hour"
-    case "gemini-weekly": return "Gemini weekly"
-    case "3p-5h": return "Claude/GPT 5-hour"
-    case "3p-weekly": return "Claude/GPT weekly"
+    case "cli-gemini-5h": return "Gemini 5-hour"
+    case "cli-gemini-weekly": return "Gemini weekly"
+    case "cli-3p-5h": return "Claude/GPT 5-hour"
+    case "cli-3p-weekly": return "Claude/GPT weekly"
     default: return key
     }
   }
@@ -297,8 +299,16 @@ public enum TrayColumns {
     if window.isWeeklyScoped { return window.scopedModelLabel }
     if provider == "codex" { return ["week": "Weekly", "5h": "5-hour"][window.label] ?? window.label }
     if provider == "claude" { return ["Five-hour usage": "5-hour usage"][window.label] ?? window.label }
+    if provider == "antigravity", isAntigravityCLI(window.key), window.label.hasSuffix(antigravityCLIWhere) {
+      // Every Antigravity window in the tray is T3's (the header says so), so Details drops the service suffix and
+      // the period subtitle stays whole; the meter's tooltip keeps the dashboard's full label.
+      return String(window.label.dropLast(antigravityCLIWhere.count))
+    }
     return window.label.isEmpty ? "Usage" : window.label
   }
+
+  /// The suffix the dashboard puts on each of T3's Antigravity window labels.
+  public static let antigravityCLIWhere = " · In T3 (Antigravity CLI)"
 
   /// Details meter order: the Antigravity pools in the row's order (Gemini 5-hour, Gemini weekly,
   /// Claude/GPT 5-hour, Claude/GPT weekly), unknown extra windows after in reported order. Every other
@@ -333,9 +343,15 @@ public enum TrayColumns {
     let periodLabel: String? = [.fiveHour: "5-hour", .week: "Weekly", .month: "Monthly"][window.period]
     switch provider {
     case "antigravity":
-      // The four reported pool windows get the spec's exact tray captions; unknown extra windows fall
-      // back to the generic path rather than claiming a pool from a key prefix.
+      // T3's four pool windows get the spec's exact tray captions. An extra T3 pool ("Gemini 4 Argon · Weekly ·
+      // In T3 (Antigravity CLI)") reads as the last word of its pool name and its period ("Argon weekly"), short
+      // enough for a fifth column; Details keeps the full name. Anything else falls back to the generic path rather
+      // than claiming a pool from a key prefix.
       if antigravityKeys.contains(window.key) { return antigravityLabel(window.key) }
+      if isAntigravityCLI(window.key), let pool = labelParts(window.label)?.title.split(separator: " ").last,
+        let periodLabel {
+        return "\(pool) \(periodLabel.lowercased())"
+      }
       return periodLabel ?? window.label
     case "cursor":
       return ["plan-reported": "Included", "autoPercentUsed": "Cursor models", "apiPercentUsed": "Other models"][window.key] ?? window.label
@@ -400,22 +416,45 @@ extension DashboardAccount {
   /// first: on a plan with no third-party models at all, "Not on plan" is the honest reason for both of
   /// that pool's cells, where "Weekly only" would imply a weekly window exists.
   public func antigravityMissingCell(_ columnKey: String) -> AntigravityMissingCell {
-    // Only a live reading can say Google reports no such pool: a cached one is the last good reading
-    // after a failed refresh, possibly from before the pool existed.
-    if !TrayColumns.antigravityKeys.contains(columnKey), status == "ok",
-      visibleWindows.contains(where: { $0.isMeter }) {
+    // Only a live reading of T3's own service can say Google reports no such pool there: a cached one is the last
+    // good reading after a failed refresh, possibly from before the pool existed, a failed service's pools arrive
+    // `unavailable`, and the app's live reading says nothing about T3's.
+    if !TrayColumns.antigravityKeys.contains(columnKey), status == "ok", antigravityCLILive {
       return .notReported
     }
     guard let plan = antigravityPlan else { return .unavailable }
-    if ["3p-5h", "3p-weekly"].contains(columnKey), plan.thirdPartyModels == false { return .notOnPlan }
-    if ["gemini-5h", "3p-5h"].contains(columnKey), plan.weeklyOnly { return .weeklyOnly }
+    if ["cli-3p-5h", "cli-3p-weekly"].contains(columnKey), plan.thirdPartyModels == false { return .notOnPlan }
+    if ["cli-gemini-5h", "cli-3p-5h"].contains(columnKey), plan.weeklyOnly { return .weeklyOnly }
     return .unavailable
   }
 
-  /// The no-quota row line (ANTIGRAVITY-SPEC): `quotaPolicy == "none"` and nothing reported, shown as one
-  /// line instead of meters, like the needs-sign-in line.
+  /// T3's Antigravity CLI service answered this read: a live (not cached, not unavailable) T3 meter.
+  public var antigravityCLILive: Bool {
+    visibleWindows.contains { window in
+      window.isMeter && TrayColumns.isAntigravityCLI(window.key) && !["unavailable", "cached"].contains(window.status ?? "")
+    }
+  }
+
+  /// Details: why this account shows no T3 numbers, when that is the case. A failed T3 service is named (its pools read
+  /// Unavailable); a dashboard that sends only the app's pools (one from before 2026-11-20) is said not to report
+  /// T3's quota. Nil for a live T3 reading, another provider, a pending sign-in or a plan with no quota.
+  public var antigravityCLINotice: String? {
+    guard provider == "antigravity", status != "needs_sign_in", !antigravityNoQuota else { return nil }
+    let cli = windows.filter { $0.isMeter && TrayColumns.isAntigravityCLI($0.key) }
+    if cli.contains(where: { $0.status == "unavailable" }) && !antigravityCLILive {
+      return "T3 (Antigravity CLI) quota could not be read this time, so its pools show Unavailable."
+    }
+    if cli.isEmpty && windows.contains(where: { $0.isMeter }) {
+      return "This dashboard does not report T3 (Antigravity CLI) quota yet, so its pools show Unavailable. "
+        + "The Antigravity app's quota is in the dashboard's Details."
+    }
+    return nil
+  }
+
+  /// The no-quota row line (ANTIGRAVITY-SPEC): `quotaPolicy == "none"` and nothing reported by either service (the
+  /// dashboard's own rule, on the raw windows), shown as one line instead of meters, like the needs-sign-in line.
   public var antigravityNoQuota: Bool {
-    provider == "antigravity" && antigravityPlan?.noQuota == true && visibleWindows.isEmpty
+    provider == "antigravity" && antigravityPlan?.noQuota == true && windows.isEmpty
   }
 
   /// The hint under the Antigravity credits row in Details, from the plan's overage fact. Nil without the

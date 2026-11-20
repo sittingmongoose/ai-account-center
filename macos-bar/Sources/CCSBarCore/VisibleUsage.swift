@@ -42,6 +42,10 @@ extension DashboardAccount {
         if Self.normalized(window.key).contains("chatpass")
           || Self.normalized(window.label).contains("chatpass") { return false }
         if Self.isProPlan(plan), Self.isFiveHour(window), !Self.hasUsageValue(window) { return false }
+      case "antigravity":
+        // T3's Antigravity CLI quota only: the app's pools (keys without `cli-`) belong to the dashboard's
+        // Details (owner decision, 2026-11-20). Amounts such as the AI credits row are account-wide and stay.
+        if window.isMeter && !TrayColumns.isAntigravityCLI(window.key) { return false }
       case "qwen":
         let key = Self.normalized(window.key)
         if key == "plansubscription" || key == "subscription"

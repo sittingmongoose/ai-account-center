@@ -7,8 +7,8 @@ struct OpenContext {
   var from: [String: Double] = [:]
   var firstOpen = false
   var animate = true
-  /// The active account per switchable provider when the panel opened, so the check draws in only
-  /// after a switch made while it is open.
+  /// The live login per provider (Codex, Antigravity) when the panel opened, so the check draws in only
+  /// when the dashboard reports a different live login while the panel is open.
   var activeAtOpen: [String: String] = [:]
 
   func motion(_ key: String, block: Int) -> MeterMotion {
@@ -24,9 +24,9 @@ struct SectionLayout {
   let columns: [(key: String, label: String)]
   var identity: CGFloat { provider == "antigravity" ? TrayMetrics.antigravityIdentityColumn : TrayMetrics.identityColumn }
   var gap: CGFloat { provider == "antigravity" ? TrayMetrics.antigravityColumnGap : TrayMetrics.columnGap }
-  var slot: CGFloat { provider == "claude" ? TrayMetrics.claudeSlot : TrayMetrics.switchSlot }
-  /// Codex and Antigravity report which saved account is the live login; Claude does not.
-  var switchable: Bool { provider != "claude" }
+  var slot: CGFloat { provider == "claude" ? TrayMetrics.claudeSlot : TrayMetrics.actionSlot }
+  /// Codex and Antigravity report which saved account is the live login (the dashboard's Active mark); Claude does not.
+  var marksLiveLogin: Bool { provider != "claude" }
 
   static func make(_ provider: String, accounts: [DashboardAccount]) -> SectionLayout {
     switch provider {
@@ -46,7 +46,6 @@ struct AccountRow: View {
   @ObservedObject var model: AccountsViewModel
   let account: DashboardAccount
   let layout: SectionLayout
-  let sectionAccounts: [DashboardAccount]
   let open: OpenContext
   let block: Int
   var maxDetailHeight: CGFloat = 520
@@ -54,7 +53,7 @@ struct AccountRow: View {
   @State private var showDetails = false
   @Environment(\.trayPreviewHover) private var previewHover
 
-  private var isActive: Bool { layout.switchable && account.isActive }
+  private var isActive: Bool { layout.marksLiveLogin && account.isActive }
   /// Hover from the pointer, or the row a still render is asked to show hovered.
   private var rowHovered: Bool { hovered || previewHover == account.id }
 
@@ -198,7 +197,7 @@ struct AccountRow: View {
     case "claude":
       ClaudeOpenPair(model: model, account: account)
     case "codex":
-      // The live ~/.codex login on Ubuntu: a fact. Account switching was removed (2026-11-14).
+      // The live ~/.codex login on Ubuntu: a fact the dashboard marks Active too.
       if account.isActive {
         ActiveLabel(platform: account.provenance, draw: open.activeAtOpen["codex"] != nil && open.activeAtOpen["codex"] != account.id,
           probe: "slot|active-\(account.id)")
@@ -208,17 +207,15 @@ struct AccountRow: View {
     }
   }
 
+  /// The dashboard's own slot: the Active mark on the live login, or Finish setup for a login still signing in.
+  /// Nothing else: with switching gone (2026-11-14) no row asks for, or reports the lack of, an active account.
   @ViewBuilder private func antigravityAction(_ palette: TrayPalette) -> some View {
-    let anyActive = sectionAccounts.contains(where: \.isActive)
     if account.isActive {
       ActiveLabel(platform: account.provenance, draw: open.activeAtOpen["antigravity"] != nil && open.activeAtOpen["antigravity"] != account.id,
         probe: "slot|active-\(account.id)")
     } else if account.status == "needs_sign_in" {
-      ActivateButton(title: "Finish setup", compact: true, help: "Finish the supervised login in the dashboard's Accounts and Settings",
+      SlotButton(title: "Finish setup", help: "Finish the supervised login in the dashboard's Accounts and Settings",
         id: "finish-setup-\(account.id)") { model.openDashboard() }
-    } else if sectionAccounts.count < 2 && !anyActive {
-      // With two or more accounts the section header says "Active account not reported yet".
-      NotReportedLabel()
     }
   }
 }
@@ -276,8 +273,8 @@ struct ClaudeOpenPair: View {
   }
 }
 
-/// The section header: mark, name, count and (except Codex, whose selected row already shows it)
-/// the active account over the identity column, and the column captions over their meters.
+/// The section header: mark, name, count (Antigravity adds whose quota its columns are: T3's), and the column
+/// captions over their meters.
 struct SectionHeader: View {
   @ObservedObject var model: AccountsViewModel
   let layout: SectionLayout
@@ -285,14 +282,14 @@ struct SectionHeader: View {
 
   var body: some View {
     withPalette { palette in
-      // Several Antigravity accounts: the "<name> active" meta needs the whole first line, so the captions take a
-      // second line (the layout the auto-switch controls used before account switching was removed, 2026-11-14).
+      // Several Antigravity accounts: "In T3 (Antigravity CLI)" takes the whole first line and the captions a second;
+      // one account keeps one line with the short "In T3 (CLI)".
       let twoLine = layout.provider == "antigravity" && accounts.count > 1
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: layout.gap) {
           HStack(spacing: 8) {
             ProviderMark(provider: layout.provider, size: 16).frame(width: TrayMetrics.markColumn)
-            title(palette)
+            title(palette, long: twoLine)
           }
           .frame(width: twoLine ? nil : TrayMetrics.markColumn + layout.gap + layout.identity, alignment: .leading)
           if twoLine { Spacer(minLength: 8) } else { captions(palette) }
@@ -322,27 +319,14 @@ struct SectionHeader: View {
     Color.clear.frame(width: TrayMetrics.chevronColumn, height: 1)
   }
 
-  private func title(_ palette: TrayPalette) -> some View {
+  private func title(_ palette: TrayPalette, long: Bool) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 6) {
       Text(ProviderMark.name(layout.provider)).font(.system(size: 14, weight: .semibold)).foregroundStyle(palette.label)
       Text("\(accounts.count)").font(.system(size: 12)).monospacedDigit().foregroundStyle(palette.label2)
-      if layout.switchable { meta(palette) }
+      if layout.provider == "antigravity" {
+        // The tray shows the quota the Antigravity CLI in T3 spends; the app's is in the dashboard's Details.
+        Text(long ? "In T3 (Antigravity CLI)" : "In T3 (CLI)").font(.system(size: 12)).foregroundStyle(palette.label2)
+      }
     }.lineLimit(1)
-  }
-
-  @ViewBuilder private func meta(_ palette: TrayPalette) -> some View {
-    // Codex shows no header meta: it overlapped the 5-hour column and repeats the selected row.
-    if layout.provider == "codex" {
-      EmptyView()
-    } else if let active = accounts.first(where: \.isActive) {
-      let name = Text(verbatim: String(active.identity.split(separator: "@").first ?? Substring(active.identity)))
-        .fontWeight(.semibold).foregroundColor(palette.label)
-      Text("\(name) active")
-        .font(.system(size: 12)).foregroundStyle(palette.label2)
-        .transition(.opacity)
-        .id(active.id)
-    } else if accounts.count > 1 {
-      Text("Active account not reported yet").font(.system(size: 12)).foregroundStyle(palette.label2)
-    }
   }
 }

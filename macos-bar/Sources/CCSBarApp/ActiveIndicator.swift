@@ -11,8 +11,8 @@ struct CheckCircle: View {
 
   var body: some View {
     withPalette { palette in
-      // The disc fills its frame, so its visible left edge is the frame's: it lands exactly on the Activate
-      // capsule's left edge in the rows above and below (an inset disc sat 0.7 pt to the right).
+      // The disc fills its frame, so its visible left edge is the frame's: it lands exactly on the slot's leading
+      // edge (an inset disc sat 0.7 pt to the right).
       ZStack {
         Circle().fill(palette.accent)
         CheckShape().trim(from: 0, to: progress)
@@ -39,9 +39,8 @@ private struct CheckShape: Shape {
   }
 }
 
-/// The active row's action slot: the check, "Active" and "on Ubuntu", with no button chrome. It sits at
-/// the slot's leading edge, so the check lands on the Activate capsule's left edge and "Active" on the
-/// "Activate" label's x (the capsule's 24 pt label inset is the check plus its 6 pt gap).
+/// The live login's action slot, as the dashboard marks it: the check, "Active" and "on Ubuntu", with no button
+/// chrome, at the slot's leading edge; "Active" sits the check plus its 6 pt gap from that edge.
 struct ActiveLabel: View {
   let platform: String
   var draw = false
@@ -65,31 +64,9 @@ struct ActiveLabel: View {
   }
 }
 
-/// No account in the section is reported active.
-struct NotReportedLabel: View {
-  var body: some View {
-    withPalette { palette in
-      HStack(spacing: TrayMetrics.checkGap) {
-        Circle().strokeBorder(palette.label3, style: StrokeStyle(lineWidth: 1.2, dash: [2.2, 2.2]))
-          .frame(width: TrayMetrics.check, height: TrayMetrics.check)
-        VStack(alignment: .leading, spacing: 0) {
-          Text("Not reported").font(.system(size: 12.5, weight: .medium)).foregroundStyle(palette.label2)
-          Text("as active").font(.system(size: 11)).foregroundStyle(palette.label3)
-        }.lineLimit(1)
-      }
-      .fixedSize()
-      .hoverHelp("The dashboard has not reported which Antigravity account is active", id: "antigravity-not-reported")
-    }
-  }
-}
-
-/// A text-only glass capsule whose label sits 24 pt from each edge. The longer "Finish setup"
-/// label uses compact 12 pt insets so it still fits the 100 pt action slot.
-struct ActivateButton: View {
+/// A text-only glass capsule in the 100 pt action slot ("Finish setup"), with 12 pt label insets.
+struct SlotButton: View {
   let title: String
-  var busy = false
-  var enabled = true
-  var compact = false
   let help: String
   let id: String
   let action: () -> Void
@@ -97,20 +74,16 @@ struct ActivateButton: View {
   var body: some View {
     withPalette { palette in
       Button(action: action) {
-        HStack(spacing: 6) {
-          if busy { ProgressView().controlSize(.mini) }
-          Text(title).font(.system(size: 12.5, weight: .medium)).foregroundStyle(enabled ? palette.label : palette.label3)
-            .alignmentProbe("slot|\(id)|label")
-        }
-        .padding(.horizontal, busy || compact ? 12 : TrayMetrics.activateInset)
-        .frame(height: 26)
-        .contentShape(Capsule())
+        Text(title).font(.system(size: 12.5, weight: .medium)).foregroundStyle(palette.label)
+          .alignmentProbe("slot|\(id)|label")
+          .padding(.horizontal, 12)
+          .frame(height: 26)
+          .contentShape(Capsule())
       }
       .buttonStyle(.plain)
       .glassControl()
       .alignmentProbe("slot|\(id)|icon")
-      .disabled(!enabled || busy)
-      .hoverHelp(help, id: id, action: enabled ? action : nil)
+      .hoverHelp(help, id: id, action: action)
     }
   }
 }

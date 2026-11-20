@@ -68,6 +68,11 @@ struct AccountDetailsBody: View {
           }
           .accessibilityElement(children: .combine)
         }
+        if let notice = account.antigravityCLINotice {
+          // No T3 numbers: T3's service failed this read, or the dashboard predates T3's quota. The app's numbers
+          // are never shown in their place.
+          Text(notice).font(.system(size: 12)).foregroundStyle(palette.warnText).fixedSize(horizontal: false, vertical: true)
+        }
         if meters.isEmpty && amounts.isEmpty {
           Text("Usage unavailable").font(.system(size: 12)).foregroundStyle(palette.label3)
         }

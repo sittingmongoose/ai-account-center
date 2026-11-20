@@ -33,7 +33,7 @@
         },
         {
           "key": "extra_additional_1",
-          "label": "Chat pass \u00b7 weekly",
+          "label": "Chat pass · weekly",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": "2026-10-08T15:15:19.000Z",
@@ -108,7 +108,7 @@
         },
         {
           "key": "extra_additional_1",
-          "label": "Chat pass \u00b7 weekly",
+          "label": "Chat pass · weekly",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": "2026-10-08T15:15:19.000Z",
@@ -194,7 +194,7 @@
         },
         {
           "key": "extra_additional_2",
-          "label": "Chat pass \u00b7 weekly",
+          "label": "Chat pass · weekly",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": "2026-10-08T15:15:20.000Z",
@@ -206,7 +206,7 @@
         },
         {
           "key": "extra_additional_3",
-          "label": "Chat pass \u00b7 5 hours",
+          "label": "Chat pass · 5 hours",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": "2026-10-01T20:15:20.000Z",
@@ -718,8 +718,8 @@
       "isActive": false,
       "windows": [
         {
-          "key": "gemini-weekly",
-          "label": "Gemini Models \u00b7 Weekly",
+          "key": "cli-gemini-weekly",
+          "label": "Gemini Models · Weekly · In T3 (Antigravity CLI)",
           "usedPercent": 0.0886,
           "remainingPercent": 99.9114,
           "resetAt": "2026-10-02T21:11:24.000Z",
@@ -730,8 +730,8 @@
           "kind": "rate_limit"
         },
         {
-          "key": "gemini-5h",
-          "label": "Gemini Models \u00b7 5-hour",
+          "key": "cli-gemini-5h",
+          "label": "Gemini Models · 5-hour · In T3 (Antigravity CLI)",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": "2026-10-01T20:15:19.000Z",
@@ -742,8 +742,8 @@
           "kind": "rate_limit"
         },
         {
-          "key": "3p-weekly",
-          "label": "Claude and GPT models \u00b7 Weekly",
+          "key": "cli-3p-weekly",
+          "label": "Claude and GPT models · Weekly · In T3 (Antigravity CLI)",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": "2026-10-08T15:15:19.000Z",
@@ -754,10 +754,58 @@
           "kind": "rate_limit"
         },
         {
-          "key": "3p-5h",
-          "label": "Claude and GPT models \u00b7 5-hour",
+          "key": "cli-3p-5h",
+          "label": "Claude and GPT models · 5-hour · In T3 (Antigravity CLI)",
           "usedPercent": 0,
           "remainingPercent": 100,
+          "resetAt": "2026-10-01T20:15:19.000Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null,
+          "kind": "rate_limit"
+        },
+        {
+          "key": "gemini-weekly",
+          "label": "Gemini Models · Weekly · In the Antigravity app",
+          "usedPercent": 17.2586,
+          "remainingPercent": 82.7414,
+          "resetAt": "2026-10-02T21:11:24.000Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null,
+          "kind": "rate_limit"
+        },
+        {
+          "key": "gemini-5h",
+          "label": "Gemini Models · 5-hour · In the Antigravity app",
+          "usedPercent": 17.17,
+          "remainingPercent": 82.83,
+          "resetAt": "2026-10-01T20:15:19.000Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null,
+          "kind": "rate_limit"
+        },
+        {
+          "key": "3p-weekly",
+          "label": "Claude and GPT models · Weekly · In the Antigravity app",
+          "usedPercent": 17.17,
+          "remainingPercent": 82.83,
+          "resetAt": "2026-10-08T15:15:19.000Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null,
+          "kind": "rate_limit"
+        },
+        {
+          "key": "3p-5h",
+          "label": "Claude and GPT models · 5-hour · In the Antigravity app",
+          "usedPercent": 17.17,
+          "remainingPercent": 82.83,
           "resetAt": "2026-10-01T20:15:19.000Z",
           "windowMinutes": 300,
           "used": null,
@@ -1075,7 +1123,7 @@
       "windows": [
         {
           "key": "usage-1",
-          "label": "5 hours \u00b7 Tokens",
+          "label": "5 hours · Tokens",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": null,
@@ -1087,7 +1135,7 @@
         },
         {
           "key": "usage-2",
-          "label": "Weekly \u00b7 Tokens",
+          "label": "Weekly · Tokens",
           "usedPercent": 1,
           "remainingPercent": 99,
           "resetAt": "2026-10-05T16:51:52.000Z",
@@ -1099,7 +1147,7 @@
         },
         {
           "key": "usage-3",
-          "label": "Monthly \u00b7 Requests",
+          "label": "Monthly · Requests",
           "usedPercent": 0,
           "remainingPercent": 100,
           "resetAt": "2026-10-07T16:51:52.000Z",
