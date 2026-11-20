@@ -190,3 +190,19 @@ fn effective_and_rollback_journals_keep_their_own_bounds_and_recover() {
     assert!(recovered.hosts.is_none());
     assert_eq!(recovered.results.len(), 84);
 }
+
+#[test]
+fn saved_acp_deferral_restores_with_current_words() {
+    let host = hosts().find(|host| host.id == "ubuntu").expect("Ubuntu");
+    let old = "T3 was updated in this run and its server restarts after the job, so Antigravity ACP is checked against the new T3 on the next Update apps.";
+    let saved = json!({"platform":"ubuntu", "appId":"antigravity-acp",
+                       "status":"action_required", "message":old});
+    let row = rows::restore(host, "antigravity-acp", &saved);
+    assert_eq!(row["status"], "action_required");
+    assert!(
+        row["message"]
+            .as_str()
+            .expect("public words")
+            .contains("by itself")
+    );
+}

@@ -7,7 +7,8 @@ use crate::agent_transport::Selector;
 use crate::feed::Feeds;
 use crate::public_auth::{AppUpdateHostProgress, AppUpdateProgress, DashboardEvent};
 use aac_protocol::{
-    APP_UPDATE_ADMISSION, APP_UPDATE_ADMIT, APP_UPDATE_HOST_TIMEOUT_MS, Event, MAX_FRAME_BYTES,
+    ACP_FOLLOW_UP_HOST_TIMEOUT_MS, APP_UPDATE_ADMISSION, APP_UPDATE_ADMIT,
+    APP_UPDATE_HOST_TIMEOUT_MS, Event, MAX_FRAME_BYTES,
 };
 use aac_transport::{CallOptions, CancellationToken};
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,8 @@ use tokio::{
     task::JoinSet,
     time::Instant,
 };
+
+const ACP: &str = "antigravity-acp";
 
 #[derive(Clone, Copy)]
 struct Host {
@@ -223,6 +226,42 @@ impl Job {
         self.host_done(host);
     }
 
+    fn pending_acp(&self, host: Host) -> Option<usize> {
+        self.has(host, ACP)
+            .filter(|&index| host.os == "ubuntu" && rows::is_acp_deferred(&self.results[index]))
+    }
+
+    fn finish_acp(&mut self, host: Host, terminal: &HostCall) {
+        let Some(index) = self.pending_acp(host) else {
+            return;
+        };
+        self.results[index] = match terminal.event() {
+            Some(Event::Result { value, .. })
+                if terminal.admitted && value["fallback"] != "python" =>
+            {
+                value["results"]
+                    .as_array()
+                    .filter(|results| results.len() == 1)
+                    .and_then(|results| rows::normalize(host, ACP, &results[0]))
+                    .filter(|row| !rows::is_acp_deferred(row))
+                    .unwrap_or_else(|| rows::blank(host, ACP, "failed", "helper_invalid"))
+            }
+            _ if !terminal.admitted && self.cancel_requested => {
+                rows::blank(host, ACP, "skipped", "skipped_cancelled")
+            }
+            _ => rows::blank(
+                host,
+                ACP,
+                "unknown",
+                if terminal.timed_out() {
+                    "host_timeout"
+                } else {
+                    "host_unknown"
+                },
+            ),
+        };
+    }
+
     fn host_done(&mut self, host: Host) {
         if let Some(state) = self.owned_host(host) {
             *state = host_progress("done");
@@ -286,6 +325,28 @@ pub struct AppUpdateReply {
 
 fn reply(status: u16, body: Value) -> AppUpdateReply {
     AppUpdateReply { status, body }
+}
+
+struct HostCall {
+    admitted: bool,
+    terminal: Result<Vec<Event>, aac_core::Failure>,
+    until: Instant,
+}
+
+impl HostCall {
+    fn event(&self) -> Option<&Event> {
+        self.terminal.as_ref().ok()?.last()
+    }
+
+    fn timed_out(&self) -> bool {
+        Instant::now() >= self.until
+            || self
+                .terminal
+                .as_ref()
+                .is_err_and(|err| err.cause == aac_core::Cause::Timeout)
+            || matches!(self.event(), Some(Event::Failure { failure, .. })
+                if failure.cause == aac_core::Cause::Timeout)
+    }
 }
 
 struct Active {
@@ -500,48 +561,8 @@ impl AppUpdates {
             }
             job.refresh_active();
         }).await;
-        let (progress, mut events) = mpsc::channel(8);
-        let (admission, controls) = mpsc::channel(1);
-        let options = CallOptions::new(
-            Duration::from_millis(APP_UPDATE_HOST_TIMEOUT_MS),
-            MAX_FRAME_BYTES * 2,
-        );
-        let until = options.deadline;
-        let transport_cancel = options.cancel.clone();
-        let work = self.agents.app_call(
-            Selector::usage(host.os, host.alias),
-            format!("{id}-{}", host.id),
-            json!({"action":"prepare-update","platform":host.os,"jobId":id}),
-            options,
-            controls,
-            progress,
-        );
-        let signal = self.signal_cancel(host, &id, cancel.clone(), until);
-        tokio::pin!(work, signal);
-        let mut admitted = false;
-        let terminal = loop {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled(), if !admitted && !transport_cancel.is_cancelled() => {
-                    transport_cancel.cancel();
-                }
-                Some(Event::Progress { data, .. }) = events.recv() => {
-                    if data["event"] == APP_UPDATE_ADMISSION {
-                        // Serialize granting the connected host permission with the HTTP cancel
-                        // acknowledgement. Only a granted host needs job-bound cancellation.
-                        let _active = self.active.lock().await;
-                        if !admitted && !cancel.is_cancelled() {
-                            admitted = admission.try_send(format!("{APP_UPDATE_ADMIT}\n").into_bytes()).is_ok();
-                        }
-                    } else {
-                        self.change(|job| job.event(host, &data)).await;
-                    }
-                }
-                answer = &mut work => break answer,
-                _ = &mut signal, if admitted => {},
-            }
-        };
-        if !admitted && cancel.is_cancelled() {
+        let call = self.call_host(host, &id, &cancel, false).await;
+        if !call.admitted && cancel.is_cancelled() {
             self.change(|job| {
                 job.fill(host, "skipped", "skipped_cancelled");
                 job.host_done(host);
@@ -549,21 +570,14 @@ impl AppUpdates {
             .await;
             return;
         }
-        while let Ok(Event::Progress { data, .. }) = events.try_recv() {
-            self.change(|job| job.event(host, &data)).await;
-        }
-        if let Err(error) = &terminal {
+        if let Err(error) = &call.terminal {
             tracing::warn!(host=host.id,cause=?error.cause,"app update transport ended early");
         }
-        let event = terminal.as_ref().ok().and_then(|events| events.last());
-        let timed_out = Instant::now() >= until
-            || terminal
-                .as_ref()
-                .err()
-                .is_some_and(|err| err.cause == aac_core::Cause::Timeout);
-        let setup_message = if admitted {
+        let event = call.event();
+        let timed_out = call.timed_out();
+        let setup_message = if call.admitted {
             None
-        } else if terminal.as_ref().is_err_and(|error| {
+        } else if call.terminal.as_ref().is_err_and(|error| {
             matches!(
                 error.cause,
                 aac_core::Cause::AgentMissing | aac_core::Cause::AgentMismatch
@@ -580,15 +594,90 @@ impl AppUpdates {
         } else {
             None
         };
+        let mut follow_up = false;
         self.change(|job| {
             if let Some(message) = setup_message {
                 job.fill(host, "failed", message);
                 job.host_done(host);
             } else {
                 job.finish_host(host, event, timed_out);
+                follow_up = job.pending_acp(host).is_some();
             }
         })
         .await;
+        if follow_up {
+            // The saved host boundary releases the restart. The overall job
+            // stays active for cancellation and the one final ACP replacement.
+            let call = self.call_host(host, &id, &cancel, true).await;
+            self.change(|job| job.finish_acp(host, &call)).await;
+        }
+    }
+
+    async fn call_host(
+        &self,
+        host: Host,
+        id: &str,
+        cancel: &CancellationToken,
+        follow_up: bool,
+    ) -> HostCall {
+        let (progress, mut events) = mpsc::channel(8);
+        let (admission, controls) = mpsc::channel(1);
+        let options = CallOptions::new(
+            Duration::from_millis(if follow_up {
+                ACP_FOLLOW_UP_HOST_TIMEOUT_MS
+            } else {
+                APP_UPDATE_HOST_TIMEOUT_MS
+            }),
+            MAX_FRAME_BYTES * 2,
+        );
+        let until = options.deadline;
+        let transport_cancel = options.cancel.clone();
+        let work = self.agents.app_call(
+            Selector::usage(host.os, host.alias),
+            format!("{id}-{}{}", host.id, if follow_up { "-acp" } else { "" }),
+            json!({
+                "action": if follow_up { "prepare-acp-follow-up" } else { "prepare-update" },
+                "platform": host.os, "jobId": id,
+            }),
+            options,
+            controls,
+            progress,
+        );
+        let signal = self.signal_cancel(host, id, cancel.clone(), until);
+        tokio::pin!(work, signal);
+        let mut admitted = false;
+        let terminal = loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled(), if !admitted && !transport_cancel.is_cancelled() => {
+                    transport_cancel.cancel();
+                }
+                Some(Event::Progress { data, .. }) = events.recv() => {
+                    if data["event"] == APP_UPDATE_ADMISSION {
+                        // Serialize granting the connected host permission with the HTTP cancel
+                        // acknowledgement. Only a granted host needs job-bound cancellation.
+                        let _active = self.active.lock().await;
+                        if !admitted && !cancel.is_cancelled() {
+                            admitted = admission.try_send(format!("{APP_UPDATE_ADMIT}\n").into_bytes()).is_ok();
+                        }
+                    } else if !follow_up {
+                        self.change(|job| job.event(host, &data)).await;
+                    }
+                }
+                answer = &mut work => break answer,
+                _ = &mut signal, if admitted => {},
+            }
+        };
+        if !follow_up && (admitted || !cancel.is_cancelled()) {
+            while let Ok(Event::Progress { data, .. }) = events.try_recv() {
+                self.change(|job| job.event(host, &data)).await;
+            }
+        }
+        HostCall {
+            admitted,
+            terminal,
+            until,
+        }
     }
 
     async fn signal_cancel(&self, host: Host, id: &str, token: CancellationToken, until: Instant) {

@@ -56,6 +56,33 @@ def messages(host, request):
         emit("result", value={"cancelled": active})
         return
 
+    if action == "acp-follow-up":
+        assert os_name == "ubuntu" and (ROOT / "defer-acp").exists()
+        saved = json.loads((ROOT / "app-updates/dashboard-job-expanded.json").read_text())["job"]
+        machine = next(key for key, value in COMPUTERS.items()
+                       if (value.get("sshAlias") or "ubuntu") == host)
+        assert saved["hosts"][machine]["state"] == "done" and saved["state"] == "running"
+        marker.touch()
+        if (ROOT / "hold-acp").exists():
+            until = time.monotonic() + 8
+            while not flag.exists() and time.monotonic() < until:
+                time.sleep(0.01)
+        status, code = ("skipped", "skipped_cancelled") if flag.exists() else ("updated", "antigravity_acp_updated")
+        row = {"appId": "antigravity-acp", "platform": os_name, "status": status,
+               "messageCode": code, "previousVersion": "1.5.12", "version": "1.5.13",
+               "manager": "official-download", "updateAttempted": not flag.exists()}
+        if (ROOT / "invalid-acp").exists() and host == "ubuntu":
+            emit("result", value={"results": [row, row]})
+        elif (ROOT / "invalid-acp").exists() and host == "nas1-agent":
+            emit("failure", failure={"cause":"timeout","reason":None,
+                                     "detail":"PRIVATE_SENTINEL","retry":{"kind":"never"},"at":None})
+        elif (ROOT / "invalid-acp").exists() and host == "odroid":
+            sys.exit(1)
+        else:
+            emit("result", value={"results": [row]})
+        marker.unlink(missing_ok=True)
+        return
+
     marker.touch()
     emit("progress", data={"event": "app", "appId": "codex-desktop", "phase": "downloading"})
     if (ROOT / "hold").exists():
@@ -76,6 +103,8 @@ def messages(host, request):
         elif app == "t3-acp-adapters":
             status, code = "action_required", "in_use"
             extra = {"parts":[{"name":"muse-acp","version":"0.21.0","inUse":True}]}
+        elif (ROOT / "defer-acp").exists() and os_name == "ubuntu" and app == "antigravity-acp":
+            status, code = "action_required", "t3_restart_pending"
         elif flag.exists() and app == "t3-code":
             status, code = "skipped", "skipped_cancelled"
         row = {"appId":app,"platform":os_name,"status":status,"messageCode":code,**extra}
@@ -133,7 +162,7 @@ def main():
         else:
             assert "AAC_APP_UPDATE_STATE_DIR" not in os.environ
         start = request["args"]["action"]
-        if start == "prepare-update":
+        if start in ("prepare-update", "prepare-acp-follow-up"):
             if host == WINDOWS and (ROOT / "old-windows-agent").exists():
                 trace(host, "legacy-refusal", True)
                 print(json.dumps({"type":"failure","protocol":1,"id":request["id"],
@@ -146,7 +175,7 @@ def main():
             if not grant:
                 return
             assert json.loads(grant) == {"admit": True}, grant
-            start = request["args"]["action"] = "update"
+            start = request["args"]["action"] = start.removeprefix("prepare-")
         trace(host, start, True)
         messages(host, request)
         trace(host, start + "-end", True)

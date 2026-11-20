@@ -272,6 +272,8 @@ async fn service_fixture_child() {
             .count(),
         2
     );
+    acp_follow_up(&root, &owner).await;
+
     // Start a fresh boot with no Mac pin and a pinned Windows binary missing on the host.
     let mut catalog = serde_json::from_slice::<Value>(
         &fs::read(root.join("catalog.json")).expect("fixture catalog"),
@@ -331,6 +333,72 @@ async fn service_fixture_child() {
             .iter()
             .any(|row| row["platform"] == "alexis" && row["status"] == "updated")
     );
+}
+
+async fn acp_follow_up(root: &Path, owner: &std::sync::Arc<AppUpdates>) {
+    fs::remove_file(root.join("old-windows-agent")).expect("restore fixture agent");
+    fs::write(root.join("defer-acp"), "").expect("defer Linux ACP rows");
+    assert_eq!(owner.start().await.status, 202);
+    let done = until(owner, |job| job["state"] == "completed").await;
+    for (machine, alias) in hosts() {
+        let linux = matches!(machine, "ubuntu" | "nas1" | "odroid" | "1070ti");
+        let row = acp_row(&done, machine);
+        assert_eq!(
+            row["status"],
+            if linux { "updated" } else { "not_installed" }
+        );
+        assert_eq!(
+            trace(root, alias)
+                .iter()
+                .filter(|row| row["stage"] == "acp-follow-up")
+                .count(),
+            usize::from(linux)
+        );
+    }
+    assert_eq!(done["results"].as_array().expect("complete rows").len(), 84);
+
+    fs::write(root.join("invalid-acp"), "").expect("invalid follow-up fixtures");
+    assert_eq!(owner.start().await.status, 202);
+    let done = until(owner, |job| job["state"] == "failed").await;
+    assert_eq!(acp_row(&done, "ubuntu")["status"], "failed");
+    for host in ["nas1", "odroid"] {
+        assert_eq!(acp_row(&done, host)["status"], "unknown");
+    }
+    assert_ne!(
+        acp_row(&done, "nas1")["message"],
+        acp_row(&done, "odroid")["message"]
+    );
+    assert!(!done.to_string().contains("PRIVATE_SENTINEL"));
+    fs::remove_file(root.join("invalid-acp")).expect("restore valid fixture");
+
+    fs::write(root.join("hold-acp"), "").expect("hold follow-up until cancel");
+    assert_eq!(owner.start().await.status, 202);
+    until(owner, |job| {
+        job["state"] == "running"
+            && job["hosts"]["ubuntu"]["state"] == "done"
+            && trace(root, "ubuntu")
+                .iter()
+                .filter(|row| row["stage"] == "acp-follow-up")
+                .count()
+                == 3
+    })
+    .await;
+    assert_eq!(owner.cancel().await.status, 202);
+    let done = until(owner, |job| job["state"] == "completed").await;
+    assert_eq!(done["cancelRequested"], true);
+    for host in ["ubuntu", "nas1", "odroid", "1070ti"] {
+        assert_eq!(acp_row(&done, host)["status"], "skipped");
+    }
+    fs::remove_file(root.join("defer-acp")).expect("reset follow-up fixture");
+}
+
+fn acp_row<'a>(job: &'a Value, machine: &str) -> &'a Value {
+    job["results"]
+        .as_array()
+        .expect("job results")
+        .iter()
+        .find(|row| row["platform"] == machine && row["appId"] == "antigravity-acp")
+        .expect("host ACP row")
 }
 
 fn trace(root: &Path, host: &str) -> Vec<Value> {

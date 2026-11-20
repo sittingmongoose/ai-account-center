@@ -2638,6 +2638,13 @@
       ]
     },
     {
+      "file": "tests/unit/app-updates/app_update_acp_followup_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/app-updates/app_update_agent_worker_test.py",
       "kind": "helper",
       "evidence": [
@@ -2698,6 +2705,13 @@
     },
     {
       "file": "tests/unit/app-updates/app_update_t3_rpc_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_t3_self_update_test.py",
       "kind": "helper",
       "evidence": [
         "helper"

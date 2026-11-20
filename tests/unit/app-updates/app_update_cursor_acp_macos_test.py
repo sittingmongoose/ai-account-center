@@ -166,7 +166,9 @@ class AcpTests(Fixtures):
         record = {"releaseId": directory.name, "version": version}
         if native:
             names = (("executable", "agy.exe" if host == "windows" else "antigravity"),)
-            record["harness"] = None
+            # T3 0.1.10-0.1.11 wrote "harness": null; 0.1.12 (PR 39363) writes no harness key at all.
+            if getattr(self, "t3_shape", None) != "0.1.12":
+                record["harness"] = None
         else:
             names = (("executable", "agy_acp_server" + (".exe" if host == "windows" else ".par")),
                      ("harness", "localharness_external" + (".exe" if host == "windows" else "")))
@@ -175,6 +177,13 @@ class AcpTests(Fixtures):
             (directory / name).chmod(0o755)
             record[kind] = {"name": name, "bytes": 3}
         common.write_private_json(directory / acp.RECORD, record)
+        if getattr(self, "t3_shape", None) == "0.1.12":
+            # 0.1.12's layout: a read-only release folder, a 0400 record and 0555 executables.
+            (directory / acp.RECORD).chmod(0o400)
+            for _, name in names:
+                (directory / name).chmod(0o555)
+            directory.chmod(0o500)
+            self.addCleanup(directory.chmod, 0o700)
         return directory, record
 
     def runtime(self, host, version="1.4.5", native=False):
@@ -183,7 +192,7 @@ class AcpTests(Fixtures):
         return acp.detect_antigravity_acp(host), directory
 
     def fake_t3(self, install, phase="succeeded", offer="1.5.8", failure=None, installed=None, newest=None,
-                refresh=None, first_null=False, providers=None, install_on="agy-custom-id"):
+                refresh=None, first_null=False, providers=None, install_on="agy-custom-id", activate_late=False):
         import app_update_t3_rpc as rpc
         self.calls, self.auth, self.connections, self.ready = [], [], [], []
         self.failure = failure
@@ -262,10 +271,11 @@ class AcpTests(Fixtures):
                         raise TimeoutError(owner.TOKEN)
                     if failure == "denied":
                         raise common.UpdateFailure("t3_auth_failed", output=owner.TOKEN)
-                    if phase == "succeeded": activate()
+                    if phase == "succeeded" and not activate_late: activate()
                     yield {**idle, "operationId": "op", "phase": phase, "message": owner.TOKEN}
             def send(self, message): pass
 
+        self.activate = activate
         self.stack.enter_context(mock.patch.object(rpc, "wait_ready", create=True, side_effect=lambda host, deadline, expected=None, **kwargs: owner.ready.append((expected, kwargs.get("seconds")))))
         self.stack.enter_context(mock.patch.object(rpc, "discover", return_value=(["fake-t3"], self.root, "fake-origin")))
         self.stack.enter_context(mock.patch.object(rpc, "auth_command", side_effect=lambda cli, base, args, timeout=30: auth([*cli, "auth", "session", *args], timeout=timeout)))
@@ -345,6 +355,79 @@ class AcpTests(Fixtures):
         for change in ({"executable": {"name": "agy.exe", "bytes": 3}}, {"executable": {"name": "antigravity", "bytes": 4}}):
             common.write_private_json(directory / acp.RECORD, {**record, **change})
             self.assertEqual(acp.detect_antigravity_acp("ubuntu").probe, "failed")
+
+    # --- T3 0.1.12's record (Update all 2026-11-20, Mac and both Windows PCs) -----------------
+    # Captured read-only from jared-mac on 2026-11-20 after T3 0.1.12-nightly.20261120.4994 installed 1.5.13:
+    T3_0112_RECORD = {"releaseId": "d9825ebce6954df6b7841970fd7ef3d37acdfe628993f14c396ec73b20ed06bb",
+                      "version": "1.5.13", "executable": {"name": "antigravity", "bytes": 3}}
+
+    def test_detects_t3_0112s_native_record_that_has_no_harness_key(self):
+        self.t3_shape = "0.1.12"
+        for host, name in (("mac", "antigravity"), ("windows", "agy.exe"), ("ubuntu", "antigravity")):
+            with self.subTest(host=host), self.isolated():
+                shutil.rmtree(self.root / ".t3", ignore_errors=True)
+                found, directory = self.runtime(host, "1.5.13", native=True)
+                record = json.loads((directory / acp.RECORD).read_text())
+                self.assertNotIn("harness", record)
+                self.assertEqual(record["executable"]["name"], name)
+                self.assertEqual((found.version, found.probe, found.runtime_kind), ("1.5.13", None, "native"))
+                if host == "mac":
+                    self.assertEqual(set(record), set(self.T3_0112_RECORD))
+
+    def test_a_record_without_a_harness_key_must_still_name_the_native_cli(self):
+        # The old pair's executable with no harness is neither shape T3 writes: still unknown, never native.
+        self.t3_shape = "0.1.12"
+        found, directory = self.runtime("ubuntu", "1.5.13", native=True)
+        directory.chmod(0o700)
+        (directory / acp.RECORD).chmod(0o600)
+        (directory / "agy_acp_server.par").write_bytes(b"bin")
+        (directory / "agy_acp_server.par").chmod(0o755)
+        common.write_private_json(directory / acp.RECORD, {"releaseId": directory.name, "version": "1.4.5",
+                                                           "executable": {"name": "agy_acp_server.par", "bytes": 3}})
+        self.assertEqual(acp.detect_antigravity_acp("ubuntu").probe, "failed")
+
+    def test_an_install_t3_0112_writes_verifies_as_updated(self):
+        # The 2026-11-20 failure: T3 installed and activated 1.5.13 in about 5 s, AAC read the new record as
+        # the old pair and reported "did not verify at or above its pin" on the Mac and both Windows PCs.
+        for host in ("mac", "windows"):
+            with self.subTest(host=host), self.isolated():
+                shutil.rmtree(self.root / ".t3", ignore_errors=True)
+                self.t3_shape = None
+                install, _ = self.runtime(host, "1.5.12", native=True)
+                self.t3_shape = "0.1.12"
+                self.fake_t3(install, offer="1.5.13")
+                row = self.run_update(install)
+                self.assertEqual((row["status"], row["messageCode"], row["previousVersion"], row["version"]),
+                                 ("updated", "antigravity_acp_updated", "1.5.12", "1.5.13"))
+                self.assertEqual(self.started(), 1)
+                self.t3_shape = None
+
+    def test_verification_rereads_a_release_t3_publishes_just_after_it_reports_success(self):
+        # T3 0.1.12 publishes under its managed lock; a pointer that lands a moment late still verifies.
+        install, _ = self.runtime("windows", "1.5.12", native=True)
+        self.t3_shape = "0.1.12"
+        self.addCleanup(setattr, self, "t3_shape", None)
+        self.fake_t3(install, offer="1.5.13", activate_late=True)
+        pauses = []
+        def pause(seconds):
+            pauses.append(seconds)
+            if len(pauses) == 1:
+                self.activate()
+        with mock.patch.object(acp.time, "sleep", side_effect=pause):
+            row = self.run_update(install)
+        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.13"))
+        self.assertEqual(pauses, [acp.VERIFY_PAUSE_SECONDS])
+
+    def test_a_failed_verification_still_asks_t3_to_refresh_every_enabled_instance(self):
+        # T3 said it finished: its provider status must show what is on disk, not the version before.
+        install, _ = self.runtime("windows", "1.5.12", native=True)
+        self.fake_t3(install, offer="1.5.13", installed="1.5.12")
+        with mock.patch.object(acp.time, "sleep") as pause:
+            row = self.run_update(install)
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "t3_install_failed:verification"))
+        self.assertEqual(pause.call_count, acp.VERIFY_ATTEMPTS - 1)
+        self.assertEqual([payload["instanceId"] for method, payload in self.calls if method == "server.refreshProviders"],
+                         ["agy-custom-id", "agy-second-id"])
 
     # --- target and instance (lead fixes 1 and 2) ----------------------------------------------
     def test_installs_t3s_offer_on_an_enabled_instance_and_refreshes_every_enabled_one(self):
@@ -517,6 +600,17 @@ class AcpTests(Fixtures):
         row = self.run_update(install, t3_row)
         self.assertEqual(self.ready, [("0.1.10-nightly.20261113.4616", rpc.READY_SECONDS)])
         self.assertEqual(row["status"], "updated")
+
+    def test_the_follow_up_after_a_linux_restart_waits_for_the_new_server_by_version(self):
+        # The run's row was t3_restart_pending; the dashboard's follow-up names the T3 the run installed.
+        import app_update_t3_rpc as rpc
+        install, _ = self.runtime("ubuntu", "1.5.12", native=True)
+        self.fake_t3(install, offer="1.5.13")
+        with common.row_diagnostics() as record:
+            row = common.with_diagnostics(acp.update_antigravity_acp(install, expected_t3="0.1.12-nightly.20261120.4994"), record)
+        self.assertEqual(self.ready, [("0.1.12-nightly.20261120.4994", rpc.READY_SECONDS)])
+        self.assertEqual((row["status"], row["messageCode"], row["version"]), ("updated", "antigravity_acp_updated", "1.5.13"))
+        self.assertEqual(self.started(), 1)
 
     # --- session and operation safety (unchanged rules) ---------------------------------------
     def test_reconnected_subscription_checks_original_operation_and_never_restarts(self):

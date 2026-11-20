@@ -102,7 +102,7 @@
     "t3_session_reply_lost": "T3 issued an update session, but AAC did not get a usable reply, so no install started. AAC found that session and revoked it.",
     "t3_absent": "T3 Code is not installed, or has never run, on this computer; its Antigravity ACP runtime updates only through T3.",
     "t3_not_ready": "T3's server did not answer in time (it may still be starting or upgrading its database), so nothing was installed. Run Update apps again once T3 is open.",
-    "t3_restart_pending": "T3 was updated in this run and its server restarts after the job, so Antigravity ACP is checked against the new T3 on the next Update apps.",
+    "t3_restart_pending": "T3 was updated in this run and its server restarts after this computer's other updates; Update apps then checks Antigravity ACP against the new T3 by itself.",
     "t3_issuer_protection_failed": "T3 session issuer could not be protected against helper termination. No install started. Check the local T3 installation and process permissions.",
     "t3_install_state_unknown": "Install state unknown, check T3.",
     "t3_session_revoke_failed": "T3 session revocation could not be confirmed; the session expires within 15 minutes. Check T3.",
@@ -144,6 +144,9 @@
     ],
     "t3_session_issue_unknown": [
       "No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3."
+    ],
+    "t3_restart_pending": [
+      "T3 was updated in this run and its server restarts after the job, so Antigravity ACP is checked against the new T3 on the next Update apps."
     ]
   },
   "diagnosticCauses": [

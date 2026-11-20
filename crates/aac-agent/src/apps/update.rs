@@ -3,12 +3,13 @@ use super::{python::Python, *};
 use aac_files::{BackupClass, Class, OwnedStore, Registry, StoreSpec};
 use aac_protocol::{Event, Request};
 use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
+use std::{io::ErrorKind, sync::LazyLock, time::Duration};
 use tokio::{io::AsyncWrite, sync::mpsc, task::JoinSet, time::Instant};
 
 const MAX_JOURNAL: usize = 64 * 1024;
 const DESKTOP: &str = "codex-desktop";
-const TAILED: [&str; 2] = ["t3-code", "antigravity-acp"];
+const ACP: &str = "antigravity-acp";
+const TAILED: [&str; 2] = ["t3-code", ACP];
 const MAX_PARALLEL: usize = 4;
 const NEXT_VERSION: &str = "26.1113.36452.0";
 #[cfg(feature = "parity-fixtures")]
@@ -50,6 +51,9 @@ pub(crate) async fn run(
     match request.args["action"].as_str() {
         Some("update") => worker.update(request, out, platform, job).await,
         Some("cancel") => worker.cancel(platform, job),
+        Some("acp-follow-up") if platform == Platform::Ubuntu => {
+            worker.follow_up(job, request.deadline_ms).await
+        }
         _ => Err(refused()),
     }
 }
@@ -292,6 +296,51 @@ impl Worker {
         Ok(journal.payload(platform))
     }
 
+    async fn follow_up(&self, job: &str, deadline_ms: u64) -> Result<Value, Failure> {
+        let platform = Platform::Ubuntu;
+        // Claim only the journal. The detached restart needs the host lease and
+        // must continue to see the completed first pass while the helper waits.
+        let store = claim(&self.root, &self.name("journal.json"))?;
+        let Some(mut journal) = self.journal()?.filter(|journal| {
+            journal.job == job && journal.platform == platform.name() && journal.acp_pending()
+        }) else {
+            return Err(refused());
+        };
+        let row = if self.cancelled(job)? {
+            result(
+                platform,
+                ACP,
+                "skipped",
+                "skipped_cancelled",
+                None,
+                None,
+                None,
+            )
+        } else {
+            let version = follow_up_version(&journal.results["t3-code"]);
+            let budget = Duration::from_millis(deadline_ms.saturating_sub(12_000));
+            let outcome = match &self.installer {
+                Installer::Python(python) => {
+                    python
+                        .follow_up(&self.root, version, budget, || self.cancelled(job))
+                        .await
+                }
+                #[cfg(feature = "parity-fixtures")]
+                Installer::Fixture => return Err(refused()),
+            };
+            match outcome {
+                Ok(row) if row["messageCode"] != "t3_restart_pending" => row,
+                Err(failure) if failure.cause == Cause::Timeout => {
+                    result(platform, ACP, "unknown", "host_timeout", None, None, None)
+                }
+                _ => result(platform, ACP, "failed", "helper_invalid", None, None, None),
+            }
+        };
+        journal.finish(ACP, row.clone());
+        journal.save(&store)?;
+        Ok(json!({"results":[row]}))
+    }
+
     fn resources(&self, platform: Platform, app: &str) -> u8 {
         // Windows GUI work shares the pre-registered InteractiveToken task.
         // Its nonce and output file admit one request at a time.
@@ -425,13 +474,26 @@ impl Worker {
         let active = self.journal()?.is_some_and(|journal| {
             journal.job == job
                 && journal.platform == platform.name()
-                && journal.results.len() < APPS.len()
+                && (journal.results.len() < APPS.len() || journal.acp_pending())
         });
         if active {
             claim(&self.root, &self.name(&format!("cancel-{job}.json")))?.write(b"true")?;
         }
         Ok(json!({"cancelled": active}))
     }
+}
+
+fn follow_up_version(row: &Value) -> &str {
+    static NIGHTLY: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\A[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+\z")
+            .expect("T3 nightly version")
+    });
+    row["version"]
+        .as_str()
+        .filter(|version| {
+            row["status"] == "updated" && version.len() <= 64 && NIGHTLY.is_match(version)
+        })
+        .unwrap_or("any")
 }
 
 fn receipt(app: &str) -> String {
@@ -532,6 +594,16 @@ struct Journal {
 }
 
 impl Journal {
+    fn acp_pending(&self) -> bool {
+        self.platform == "ubuntu"
+            && self.running.is_empty()
+            && self.results.len() == APPS.len()
+            && APPS.iter().all(|app| self.results.contains_key(*app))
+            && self.results.get(ACP).is_some_and(|row| {
+                row["status"] == "action_required" && row["messageCode"] == "t3_restart_pending"
+            })
+    }
+
     fn save(&self, store: &OwnedStore) -> Result<(), Failure> {
         store.write(&serde_json::to_vec(self).map_err(|_| damaged())?)
     }

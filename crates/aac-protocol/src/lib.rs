@@ -40,6 +40,11 @@ pub const APP_UPDATE_DEADLINE_MS: u64 = 31 * 60_000;
 /// Time the dashboard may spend on connection, update and cleanup for one host.
 pub const APP_UPDATE_HOST_TIMEOUT_MS: u64 = 33 * 60_000;
 
+/// Time the Linux ACP follow-up may spend waiting for T3 and installing through it.
+pub const ACP_FOLLOW_UP_DEADLINE_MS: u64 = 36 * 60_000;
+/// Includes transport setup and cleanup around the ACP follow-up's helper budget.
+pub const ACP_FOLLOW_UP_HOST_TIMEOUT_MS: u64 = 37 * 60_000;
+
 /// The host progress event that requests permission to begin an app update.
 pub const APP_UPDATE_ADMISSION: &str = "admission";
 /// The one control line that grants a prepared app update.
@@ -47,10 +52,10 @@ pub const APP_UPDATE_ADMIT: &str = r#"{"admit":true}"#;
 
 /// Long-running app updates have their own bound. Other agent verbs keep the short bound.
 pub fn deadline_cap(verb: &str, args: &Value) -> u64 {
-    if verb == "apps" && matches!(args["action"].as_str(), Some("update" | "prepare-update")) {
-        APP_UPDATE_DEADLINE_MS
-    } else {
-        max_deadline_ms(verb)
+    match (verb, args["action"].as_str()) {
+        ("apps", Some("update" | "prepare-update")) => APP_UPDATE_DEADLINE_MS,
+        ("apps", Some("acp-follow-up" | "prepare-acp-follow-up")) => ACP_FOLLOW_UP_DEADLINE_MS,
+        _ => max_deadline_ms(verb),
     }
 }
 
