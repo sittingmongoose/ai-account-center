@@ -366,10 +366,11 @@ after each step.
 
 ### When the official CLI auto-updates past the reviewed pin
 
-An official update invalidates the pin on purpose: activation answers
-`unsupported-runtime-probe`, and status and the dashboard say
-`Antigravity updated to X; switching paused until reviewed` instead of failing.
-Releases follow the same review the 1.2.16, 1.3.0, 1.3.1, 1.3.2 and 1.3.5
+An official update invalidates the pin on purpose:
+`antigravity runtime refresh` reports
+`Antigravity updated to X; it does not match the reviewed runtime build`
+instead of failing. The dashboard has no switching-paused notice: account
+switching was removed. Releases follow the same review the 1.2.16, 1.3.0, 1.3.1, 1.3.2 and 1.3.5
 receipts record (`status/AGY-RELEASE-RECEIPT-1.2.16.md`, `status/AGY-RELEASE-RECEIPT-1.3.0.md`,
 `status/AGY-RELEASE-RECEIPT-1.3.1.md`, `status/AGY-RELEASE-RECEIPT-1.3.2.md`,
 `status/AGY-RELEASE-RECEIPT-1.3.5.md`): binary identity and ownership,

@@ -25,8 +25,6 @@ pub struct Bound {
 pub struct Native {
     /// Bound profiles.
     pub accounts: Vec<Bound>,
-    /// "Antigravity updated to 1.2.3; its runtime is paused until reviewed".
-    pub update_paused: Option<String>,
     /// Why the runtime service is not running.
     pub service_problem: Option<String>,
 }
@@ -69,24 +67,6 @@ fn minor(v: Option<&Value>) -> Option<&str> {
         !p.is_empty() && p.len() <= max && p.bytes().all(|c| c.is_ascii_digit())
     };
     (digits(a, 2) && digits(b, 3)).then_some(s)
-}
-
-/// `/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/`.
-fn native_version(s: &str) -> bool {
-    let (core, pre) = match s.split_once('-') {
-        Some((core, pre)) => (core, Some(pre)),
-        None => (s, None),
-    };
-    let parts: Vec<&str> = core.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()))
-        && pre.is_none_or(|p| {
-            !p.is_empty()
-                && p.bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'-')
-        })
 }
 
 /// antigravity-data.mjs `antigravityServiceProblem`.
@@ -245,20 +225,8 @@ pub fn native(cx: &super::Ctx, accounts: &[Value], inventory: Option<&Value>) ->
             note,
         });
     }
-    let paused = get(inventory, "nativeUpdatePaused");
-    let update_paused = truthy(paused).then(|| {
-        let version = match get(paused, "installedVersion") {
-            Some(Value::String(v)) if utf16_len(v) <= 128 && native_version(v) => Some(v.as_str()),
-            _ => None,
-        };
-        format!(
-            "Antigravity updated{}; its runtime is paused until reviewed",
-            version.map(|v| format!(" to {v}")).unwrap_or_default()
-        )
-    });
     Ok(Native {
         accounts: bound,
-        update_paused,
         service_problem: service_problem(inventory),
     })
 }

@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { nativeBinaryProblem } from './signin-sandbox';
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
@@ -75,35 +74,6 @@ export function readNativeRelease(releaseFile: string): NativeRelease {
   }
 }
 
-export interface NativeUpdatePaused {
-  installedVersion: string | null;
-}
-
-export interface NativeUpdateProbe {
-  home: string;
-  ccsDir: string;
-  releaseFile?: string;
-  /** Callers pass the owned-pin verifier; the probe owns no trust decision. */
-  pinMatches: (binary: string, sha256: string) => boolean;
-  readVersion?: () => Promise<string | null>;
-}
-
-interface CacheEntry {
-  key: string;
-  value: NativeUpdatePaused | null;
-}
-const pausedCache = new Map<string, CacheEntry>();
-const MAX_CACHE_ENTRIES = 8;
-
-function binaryStatKey(binary: string): string | null {
-  try {
-    const stat = fs.lstatSync(binary);
-    return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return null;
-  }
-}
-
 export function defaultNativeReleaseFile(): string {
   return path.resolve(__dirname, '../../scripts/antigravity/runtime/release.json');
 }
@@ -128,46 +98,6 @@ export async function readInstalledNativeVersion(
           ccsDirectory: path.resolve(ccsDir),
         }).version();
     return isNativeVersion(version) ? version : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Non-null exactly when an installed CLI matches no reviewed build: switching
- * is then paused until a new review. Both verdicts are cached by binary
- * identity, so polling never re-hashes an unchanged binary; never throws and
- * never fails closed into a 500.
- */
-export async function readNativeUpdatePaused(
-  probe: NativeUpdateProbe
-): Promise<NativeUpdatePaused | null> {
-  try {
-    const home = path.resolve(probe.home);
-    const ccsDir = path.resolve(probe.ccsDir);
-    const binary = path.join(home, '.local', 'bin', 'agy');
-    if (nativeBinaryProblem(home, process.getuid?.() ?? null)) return null;
-    const release = readNativeRelease(probe.releaseFile ?? defaultNativeReleaseFile());
-    if (!release.reviewed.length) return null;
-    const statKey = binaryStatKey(binary);
-    const setKey = release.reviewed.map((entry) => `${entry.version}:${entry.sha256}`).join(',');
-    const cacheKey = statKey ? `${statKey}|${setKey}` : null;
-    const cached = pausedCache.get(binary);
-    if (cached && cacheKey && cached.key === cacheKey) return cached.value;
-    let matched = false;
-    for (const entry of release.reviewed) {
-      if (probe.pinMatches(binary, entry.sha256)) {
-        matched = true;
-        break;
-      }
-    }
-    const value: NativeUpdatePaused | null = matched
-      ? null
-      : { installedVersion: await readInstalledNativeVersion(home, ccsDir, probe.readVersion) };
-    if (pausedCache.size >= MAX_CACHE_ENTRIES)
-      pausedCache.delete(pausedCache.keys().next().value as string);
-    pausedCache.set(binary, { key: cacheKey ?? '', value });
-    return value;
   } catch {
     return null;
   }

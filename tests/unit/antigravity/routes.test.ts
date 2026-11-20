@@ -218,22 +218,13 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
     expect(calls.inventory).toBe(1);
   });
 
-  test('inventory publishes the paused update state but scrubs a hostile version', async () => {
-    const value = inventory();
-    value.nativeUpdatePaused = {
-      installedVersion: '1.2.17',
-      privatePath: PRIVATE,
-    } as unknown as { installedVersion: string };
-    deps.getInventory = async () => value;
+  test('inventory never publishes a leftover paused-update marker', async () => {
+    const value = inventory() as Record<string, unknown>;
+    value.nativeUpdatePaused = { installedVersion: '1.2.17' };
+    deps.getInventory = async () => value as never;
     const response = await request('/profiles');
     expect(response.status).toBe(200);
-    expect(response.body.nativeUpdatePaused).toEqual({ installedVersion: '1.2.17' });
-    const hostile = inventory();
-    hostile.nativeUpdatePaused = { installedVersion: '1.2.17; id' };
-    deps.getInventory = async () => hostile;
-    const scrubbed = await request('/profiles');
-    expect(scrubbed.status).toBe(200);
-    expect(scrubbed.body.nativeUpdatePaused).toEqual({ installedVersion: null });
+    expect(response.body).not.toHaveProperty('nativeUpdatePaused');
   });
 
   test('inventory publishes a runtime service problem but scrubs hostile fields', async () => {

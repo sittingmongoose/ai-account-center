@@ -788,24 +788,6 @@ fn runtime_problem(value: Option<&Value>) -> Option<Value> {
     }))
 }
 
-/// `isNativeVersion`: `/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/`, at most 128 characters.
-fn native_version(text: &str) -> bool {
-    let (core, tail) = text
-        .split_once('-')
-        .map_or((text, None), |(c, t)| (c, Some(t)));
-    let parts: Vec<&str> = core.split('.').collect();
-    text.len() <= 128
-        && parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-        && tail.is_none_or(|t| {
-            !t.is_empty()
-                && t.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-        })
-}
-
 /// The public inventory from the runtime's inventory in the presentation envelope.
 pub fn inventory(envelope: Envelope) -> Admit<Value> {
     let ctx = Context::new(envelope.presentation);
@@ -817,16 +799,6 @@ pub fn inventory(envelope: Envelope) -> Admit<Value> {
     let mut out = Object::new();
     out.insert("schemaVersion".into(), json!(1));
     out.insert("hostId".into(), json!("ubuntu"));
-    let paused = input.get("nativeUpdatePaused");
-    if truthy(paused) {
-        let installed = paused
-            .and_then(Value::as_object)
-            .and_then(|p| p.get("installedVersion"));
-        out.insert(
-            "nativeUpdatePaused".into(),
-            json!({ "installedVersion": pattern_text(installed, native_version) }),
-        );
-    }
     if let Some(problem) = runtime_problem(input.get("runtimeServiceProblem")) {
         out.insert("runtimeServiceProblem".into(), problem);
     }
@@ -898,12 +870,6 @@ mod tests {
         ] {
             assert_eq!(timestamp_shape(text), shaped, "{text}");
         }
-        assert!(
-            native_version("1.2.3")
-                && native_version("10.0.0-rc.1_x")
-                && !native_version("1.2")
-                && !native_version("1.2.3-")
-        );
         assert!(minor("3.12") && !minor("3.") && !minor("123.1"));
     }
 
