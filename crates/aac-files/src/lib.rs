@@ -922,6 +922,22 @@ pub fn link_count(path: &Path) -> Option<u32> {
     }
 }
 
+/// The volume and file ID of a regular file that has more than one hard link.
+pub fn hard_link_identity(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(path).ok()?;
+        (meta.is_file() && meta.nlink() > 1).then_some((meta.dev(), meta.ino()))
+    }
+    #[cfg(windows)]
+    {
+        let opened = profile_writes::open_leaf(path, false).ok()?;
+        let (volume, file, links) = profile_writes::file_key(&opened).ok()?;
+        (links > 1).then_some((volume, file))
+    }
+}
+
 /// Whether a cache file has exactly one name. The TS cache reader refuses a hard link on
 /// every platform; Unix reads the count from `lstat`, Windows from one handle query.
 #[cfg(unix)]
