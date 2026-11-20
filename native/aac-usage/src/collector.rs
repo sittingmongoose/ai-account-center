@@ -126,6 +126,13 @@ pub struct Collector {
     pub root_failures: HashMap<(String, PathBuf), (&'static str, &'static str)>,
     /// Folders inside a root that exist but could not be listed, per kind (digests of their paths).
     pub unreadable_folders: HashMap<String, BTreeSet<String>>,
+    /// Newest usage event per (kind, filekey) dated by a logged event, never by a file time
+    /// (Antigravity's untimed step falls back to the database mtime: that is an estimate).
+    pub verified_clocks: BTreeMap<(String, String), i64>,
+    /// Kinds whose newest number was dated by a file-time estimate at least once this scan.
+    pub estimated_clocks: HashSet<String>,
+    /// Usage-shaped records a reader could not decode: (kind, filekey). Carried on the print.
+    pub unread_usage: BTreeSet<(String, String)>,
     /// A discovery bound that left roots unlooked-at, per kind: (what was read, how many were
     /// found, None when the search stopped before it could count them all). FIX-ROUND-BIG 6.
     pub search_limits: HashMap<String, (usize, Option<usize>)>,
@@ -188,6 +195,9 @@ impl Collector {
             root_failures: HashMap::new(),
             unreadable_folders: HashMap::new(),
             search_limits: HashMap::new(),
+            verified_clocks: BTreeMap::new(),
+            estimated_clocks: HashSet::new(),
+            unread_usage: BTreeSet::new(),
             unanswered_mounts: 0,
             absent_roots: HashSet::new(),
         }
@@ -429,11 +439,15 @@ impl Collector {
         };
         if let Some(prior) = self.prior_print(kind, key)
             && util::same_print(Some(prior), &pending)
-            && prior.get("usageSkipped").and_then(Value::as_bool) == Some(true)
         {
-            pending.usage_skipped = Some(true);
+            if prior.get("usageSkipped").and_then(Value::as_bool) == Some(true) {
+                pending.usage_skipped = Some(true);
+            }
+            if prior.get("unreadUsage").and_then(Value::as_bool) == Some(true) {
+                pending.unread_usage = Some(true);
+            }
         }
-        if pending.usage_skipped == Some(true) {
+        if pending.usage_skipped == Some(true) || pending.unread_usage == Some(true) {
             self.usage_partial.insert(kind.to_string());
         }
         self.fresh
@@ -590,6 +604,40 @@ impl Collector {
         );
     }
 
+    /// `sadd` for a date the reader had to estimate from the file's time: the session row still
+    /// carries the number, but the date never enters the measured freshness clock.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sadd_estimated(
+        &mut self,
+        kind: &str,
+        filekey: &str,
+        session: Option<&str>,
+        model: &str,
+        provider: Option<&str>,
+        epoch_ms: i64,
+        tokens: Tokens,
+        cost: f64,
+    ) {
+        self.sadd_range_clock(
+            kind,
+            filekey,
+            session,
+            model,
+            provider,
+            (epoch_ms, epoch_ms),
+            tokens,
+            cost,
+            1,
+            false,
+        );
+    }
+
+    /// A usage-shaped record the reader could not decode: its tokens are unmeasured until a later
+    /// scan reads it. The evidence travels on the file's print.
+    pub fn note_unread_usage(&mut self, kind: &str, filekey: &str) {
+        self.unread_usage.insert((kind.to_string(), filekey.to_string()));
+    }
+
     /// One session aggregate per session, model, route and logged-cost split. False when capped.
     #[allow(clippy::too_many_arguments)]
     pub fn sadd_range(
@@ -604,9 +652,37 @@ impl Collector {
         cost: f64,
         events: u64,
     ) -> bool {
+        self.sadd_range_clock(
+            kind, filekey, session, model, provider, span, tokens, cost, events, true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sadd_range_clock(
+        &mut self,
+        kind: &str,
+        filekey: &str,
+        session: Option<&str>,
+        model: &str,
+        provider: Option<&str>,
+        span: (i64, i64),
+        tokens: Tokens,
+        cost: f64,
+        events: u64,
+        verified: bool,
+    ) -> bool {
         let Some(session) = session.filter(|s| !s.is_empty()) else {
             return true;
         };
+        if verified {
+            let entry = self
+                .verified_clocks
+                .entry((kind.to_string(), filekey.to_string()))
+                .or_insert(span.1);
+            *entry = (*entry).max(span.1);
+        } else {
+            self.estimated_clocks.insert(kind.to_string());
+        }
         let key = (
             kind.to_string(),
             filekey.to_string(),
@@ -651,6 +727,7 @@ impl Collector {
 
     /// Drop every row and session row of one file (a failed or discarded read).
     pub fn drop_file_rows(&mut self, keys: &HashSet<String>) {
+        self.verified_clocks.retain(|(_, filekey), _| !keys.contains(filekey));
         let rows: Vec<Row> = self.row_list.drain(..).filter(|r| !keys.contains(&r.filekey)).collect();
         let srows: Vec<SessionRow> = self
             .srow_list

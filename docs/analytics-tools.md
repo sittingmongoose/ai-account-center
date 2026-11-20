@@ -33,10 +33,24 @@ reports no activity date honestly (no usage, not stale). Activity more than one
 five-minute scan cycle newer than measured data still produces a `stale` source
 with both dates when a caller supplies such evidence; the native scanner itself
 keeps both clocks at the newest usage event. Activity is not converted into
-tokens or cost. Coverage completeness comes from the usage read itself: a
-partial read, unreadable logs or folders, and a bounded Cursor chat listing
-leave current coverage unverified. Old fingerprints are read once to establish
-their measured clocks.
+tokens or cost. Coverage completeness comes from the usage read itself:
+
+- A partial read, unreadable logs or folders, or a bounded Cursor chat listing
+  leaves current coverage unverified.
+- A usage-shaped OMP record the reader cannot decode (a torn append, a usage
+  envelope with unusable numbers) flags that file's print; the measured date
+  stands, the source reports unverified coverage, and the flag is carried
+  through unchanged rescans and cleared by a verified read. Header-only probes
+  and ordinary metadata records stay clean.
+- A write-ahead log the SQLite open could not see (`walUnread`) makes every
+  reader that emits the flag unverified on that scan, not merely annotated. A
+  database whose last print said `walUnread` is read again even when its bytes
+  are unchanged, so a log that became readable is counted.
+- Antigravity's untimed step falls back to the database's file time for its
+  numeric aggregation only. That estimate never enters the measured freshness
+  clock; the numbers are counted and the missing event date is disclosed.
+
+Old fingerprints are read once to establish their measured clocks.
 
 Cursor SDK run stores remain under `.cursor/projects/*/sdk-agent-store/*/index.db`
 on all operating systems. Current CLI chat roots include `.cursor/chats`,

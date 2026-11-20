@@ -933,8 +933,14 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         .and_then(|prints| prints.values().filter_map(|p| p.newest_usage_ms).max());
     let activity = newest_data;
     // Coverage is the usage read's own completeness, not a file listing: a chat store the bounded
-    // Cursor listing cannot reach leaves its token-less file count, and current coverage, unverified.
-    let mut activity_limited = collector.usage_partial.contains(kind);
+    // Cursor listing cannot reach, a usage-shaped record the reader could not decode and a
+    // write-ahead log it could not see all leave current coverage unverified.
+    let unread_usage = collector
+        .fresh
+        .get(kind)
+        .is_some_and(|prints| prints.values().any(|p| p.unread_usage == Some(true)));
+    let wal_unread = collector.kind_wal_unread.contains(kind) || (kind == "zcode" && collector.wal_unread);
+    let mut activity_limited = collector.usage_partial.contains(kind) || unread_usage || wal_unread;
     let mut unmeasured_files = 0usize;
     if kind == "cursor" {
         let deadline = collector.deadline().min(Instant::now() + Duration::from_millis(750));
@@ -946,7 +952,7 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     }
     let signals = installed_signals(home, env, kind, instances);
     let coverage = freshness(newest_data, activity, collector.min_date_ms, !activity_limited);
-    json!({
+    let mut discovered = json!({
         "installed": !roots.is_empty() || !signals.is_empty(),
         "signals": signals,
         "freshness": coverage,
@@ -959,7 +965,16 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
             "filesFailed": collector.read_failures.get(kind).map_or(0, |s| s.len()),
             "newestMtime": newest.map(Value::from).unwrap_or(Value::Null),
         },
-    })
+    });
+    if unread_usage {
+        discovered["unreadUsage"] = Value::Bool(true);
+    }
+    if collector.estimated_clocks.contains(kind) {
+        // Disclosed: the numbers are counted, their date is a file-time estimate and never a
+        // measured usage event.
+        discovered["estimatedClock"] = Value::Bool(true);
+    }
+    discovered
 }
 
 pub const EXPERIMENT_MAX_DEPTH: usize = 4;
