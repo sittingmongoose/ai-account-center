@@ -355,6 +355,14 @@ test('the Cursor account line says each state; the account total is shown beside
   assert.match(cursorAccountLine({ ...base, state: 'key_rejected', last4: 'WXYZ', readAt: null }, now), /key ending WXYZ was rejected/);
   assert.match(cursorAccountLine({ ...base, state: 'unavailable', cause: 'timeout' }, now), /not read just now \(timeout\); showing its usage as read/);
   assert.match(cursorAccountLine({ ...base, state: 'unavailable', cause: 'network', readAt: null }, now), /nothing of it is counted/);
+  // The key reads the plan meter but its token sees no usage events (the 2026-11-20 read): never "no usage", and an
+  // earlier empty read is not offered as the account's usage.
+  for (const readAt of [at(1), null]) {
+    assert.equal(cursorAccountLine({ ...base, state: 'unavailable', cause: 'events_not_visible', readAt }, now), "Cursor account: the key reads the plan meter but not the usage events, so the account's per-request usage is not counted; the Cursor quota card shows the share of the plan used.");
+    // Review wave 82, Medium 2: an empty answer the plan meter could not confirm is never "no usage", and an earlier
+    // read is not offered as the account's usage.
+    assert.equal(cursorAccountLine({ ...base, state: 'unavailable', cause: 'events_unverified', readAt }, now), "Cursor account: Cursor returned no usage events, and the plan meter could not confirm that nothing was used in this range, so the account's usage is unverified and not counted.");
+  }
   assert.equal(cursorAccountLine(undefined, now), '');
   const inc = includedView(payload({ sources: SOURCES, cursorAccount: { ...base, state: 'no_key', readAt: null } }), now);
   assert.match(inc.line, /Cursor account: no key/);
