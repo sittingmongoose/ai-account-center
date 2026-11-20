@@ -54,6 +54,20 @@ Original authored tags, changelog entries and upstream credits remain historical
 records. Do not reassign them to the renamed product or restore their old publish
 targets as current tooling.
 
+## Remote Update apps rollout
+
+The Rust cut release gate checks each registered Mac and Windows host that
+participates in Update apps. For a host with a completed rollout, verify the
+staged agent against `config/agent-artifacts.json`. Record the artifact's version
+and SHA-256, the matching active catalog entry, and the supervised install
+evidence for that host. Verify that the installed agent answers the Update apps
+admission handshake.
+
+For each host whose rollout is incomplete, exercise Update apps against a
+missing or older agent fixture. The dashboard must show an actionable setup or
+upgrade row for that host, with no installer request sent. Keep the admission
+guard in place for every installer request.
+
 ## Dashboard rollback
 
 Stop the Rust dashboard and wait for its process to exit before starting the
