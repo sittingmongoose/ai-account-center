@@ -1,4 +1,10 @@
-import type { SignInCommand } from './signin-process';
+export interface SignInCommand {
+  file: string;
+  args: string[];
+  /** The complete environment; nothing else is inherited. */
+  env: Record<string, string>;
+  pty: boolean;
+}
 
 /**
  * The sign-in job's public shape, its fixed messages and errors, and the flow

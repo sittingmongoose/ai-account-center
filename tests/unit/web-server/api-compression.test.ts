@@ -407,7 +407,15 @@ describe('startServer: compression, session skip and the upgrade', () => {
     const page = await rawRequest(port, 'GET', '/');
     expect(page.headers['x-ccs-request-id']).toBeDefined();
 
-    const logged = getRecentLogEntries()
+    const entries =
+      process.env.AAC_M6_FIXTURE_REPORT === '1'
+        ? fs
+            .readFileSync(path.join(tempRoot, '.ccs', 'logs', 'current.jsonl'), 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line) as ReturnType<typeof getRecentLogEntries>[number])
+        : getRecentLogEntries();
+    const logged = entries
       .filter((entry) => entry.event === 'request.completed')
       .map((entry) => entry.context?.path)
       .filter((path) => path === '/view-model.mjs' || path === '/api/health');

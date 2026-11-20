@@ -1,6 +1,7 @@
 import { sendRevalidatedView } from './revalidated-view';
 import { composeWithRust, RustService } from '../rust-service';
 import { rustScoreboardInput, isRustScoreboardView } from '../rust-read-input';
+import { rustGroupOn } from '../rust-service-groups';
 import type { ScoreboardView } from '../scoreboard/scoreboard-view';
 import type { Request, Router } from 'express';
 import { createApiRouter } from './api-router';
@@ -13,6 +14,8 @@ import {
 } from '../scoreboard/scoreboard-service';
 import type { ScoreboardFilters } from '../scoreboard/scoreboard-view';
 import { isCalendarDate } from '../services/account-analytics-range';
+import { answerScoreboardOwned, scoreboardOwnedService } from '../scoreboard/scoreboard-feed';
+import { getCcsDir } from '../../utils/config-manager';
 
 /** The only query parameters `GET /api/scoreboard` takes. */
 const FILTER_KEYS = new Set(['from', 'to', 'source', 'taskType']);
@@ -68,10 +71,15 @@ export function createScoreboardRouter(
       sendError(res, 400, parsed.code, parsed.error);
       return;
     }
+    // R4 (`rustService.groups.scoreboard: on` under the store host): the service answers from
+    // its own catalog and runs store; on any decline today's handler answers from the same read.
+    const owned = scoreboardOwnedService(res);
+    if (owned && (await answerScoreboardOwned(req, res, owned, parsed.filters, getCcsDir())))
+      return;
     try {
       const bridge: unknown = res.locals.rustService;
       const composer =
-        bridge instanceof RustService && bridge.mode !== 'off'
+        bridge instanceof RustService && bridge.mode !== 'off' && rustGroupOn('scoreboard')
           ? {
               mode: bridge.mode,
               compose: (

@@ -1,0 +1,997 @@
+{
+  "version": 1,
+  "now": 1790856000000,
+  "cases": [
+    {
+      "name": "note-failed-dead",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "failed",
+          "reason": "dead"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "needs_sign_in",
+        "message": "OpenAI rejected this saved login. Use Sign in again to restore it.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-failed-identity",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "failed",
+          "reason": "identity_mismatch"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "needs_sign_in",
+        "message": "OpenAI answered for a different account, so nothing was saved. Use Sign in again to restore this login.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-needs-reauth-due",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": true,
+        "quotaStatus": "error",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [],
+        "renewal": {
+          "state": "due",
+          "reason": "due"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "needs_sign_in",
+        "message": "The saved login expired. AAC is renewing it automatically.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-needs-reauth-renewing",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": true,
+        "quotaStatus": "error",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [],
+        "renewal": {
+          "state": "renewing",
+          "reason": "renewing"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "needs_sign_in",
+        "message": "The saved login expired. AAC is renewing it automatically.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-needs-reauth-fresh-quiet",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": true,
+        "quotaStatus": "error",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [],
+        "renewal": {
+          "state": "ok",
+          "reason": "fresh"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "needs_sign_in",
+        "message": "This saved Codex login needs to be renewed.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-retry-within-48h",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "retrying",
+          "reason": "transient",
+          "accessExpiresAt": "2026-10-02T08:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": "OpenAI could not be reached or was busy. AAC will try again automatically. The saved login expires 2026-10-02 08:00 UTC.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-retry-past-expiry",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "retrying",
+          "reason": "transient",
+          "accessExpiresAt": "2026-09-30T00:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": "OpenAI could not be reached or was busy. AAC will try again automatically. The saved login expires 2026-09-30 00:00 UTC.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-retry-far-from-expiry",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "retrying",
+          "reason": "transient",
+          "accessExpiresAt": "2026-10-03T12:01:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": null,
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-stuck-shared-family",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "skipped",
+          "reason": "shared_family",
+          "accessExpiresAt": "2026-10-04T12:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": "Another Codex login on this machine is a copy of this saved login. Renewing one copy would sign the other out, so AAC leaves both alone. Sign in again on one of them to separate them.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-stuck-in-use",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "skipped",
+          "reason": "in_use",
+          "accessExpiresAt": "2026-10-04T12:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": "A running Codex app uses this saved profile folder directly and renews it itself.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "note-self-clearing-activation-busy",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "skipped",
+          "reason": "activation_busy",
+          "accessExpiresAt": "2026-10-02T12:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": null,
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "active-suppresses-note",
+      "input": {
+        "name": "gmail",
+        "active": true,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "failed",
+          "reason": "dead"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": null,
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": true,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "live-reason-suppresses-note",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "skipped",
+          "reason": "live",
+          "accessExpiresAt": "2026-10-02T12:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": null,
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "cached-row-keeps-note",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": true,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "retrying",
+          "reason": "transient",
+          "accessExpiresAt": "2026-10-02T08:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "cached",
+        "cacheReason": "read_failed",
+        "message": "OpenAI could not be reached or was busy. AAC will try again automatically. The saved login expires 2026-10-02 08:00 UTC.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "local-quota-source",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": null
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": null,
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "parked-no-login",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": false,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": null,
+        "plan": null,
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [],
+        "renewal": null
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": null,
+        "plan": null,
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "needs_sign_in",
+        "message": "This saved Codex login needs to be renewed.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "custom-active-home-shared",
+      "input": {
+        "name": "gmail",
+        "active": false,
+        "authValid": true,
+        "needsReauth": false,
+        "quotaStatus": "ok",
+        "cached": false,
+        "quotaSource": "network",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300
+          }
+        ],
+        "renewal": {
+          "state": "skipped",
+          "reason": "shared_family",
+          "accessExpiresAt": "2026-10-02T08:00:00.000Z"
+        }
+      },
+      "row": {
+        "id": "codex:gmail",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "label": "gmail",
+        "email": "gmail@example.com",
+        "plan": "pro",
+        "platform": "ubuntu",
+        "source": "Codex saved login on Ubuntu",
+        "status": "ok",
+        "message": "Another Codex login on this machine is a copy of this saved login. Renewing one copy would sign the other out, so AAC leaves both alone. Sign in again on one of them to separate them.",
+        "fetchedAt": "2026-10-01T11:55:00.000Z",
+        "sampledAt": "2026-10-01T11:55:00.000Z",
+        "isActive": false,
+        "windows": [
+          {
+            "key": "five_hour",
+            "label": "5h",
+            "usedPercent": 30,
+            "remainingPercent": 70,
+            "resetAt": "2026-10-01T15:00:00.000Z",
+            "windowMinutes": 300,
+            "used": null,
+            "limit": null,
+            "unit": null
+          }
+        ],
+        "capabilities": {
+          "codexProfile": "gmail",
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    }
+  ]
+}

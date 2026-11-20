@@ -145,7 +145,9 @@ describe('dashboard preferences', () => {
     expect(readDashboardPreferences(dir)).toEqual(saved);
     if (process.platform !== 'win32')
       expect(fs.statSync(path.join(dir, 'dashboard-preferences.json')).mode & 0o777).toBe(0o600);
-    expect(fs.readdirSync(dir)).toEqual(['dashboard-preferences.json']);
+    expect(fs.readdirSync(dir).filter((name) => !name.endsWith('.lock'))).toEqual([
+      'dashboard-preferences.json',
+    ]);
   });
 
   it('refuses zones that are not IANA names', () => {

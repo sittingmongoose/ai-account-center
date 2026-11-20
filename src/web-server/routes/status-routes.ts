@@ -21,7 +21,7 @@ import {
   type StepState,
 } from '../status/answers';
 import { openCardFile, parseByteRange, sendFileBytes } from '../status/status-files';
-import { answerStatusFed, statusFedService } from '../status/status-feed';
+import { answerStatusFed, answerStatusOwned, statusFedService } from '../status/status-feed';
 import { getCcsDir } from '../../utils/config-manager';
 
 /**
@@ -156,10 +156,32 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       typeof current.readRequestInputs === 'function'
         ? await current.readRequestInputs()
         : current.readInputs();
-    // R2 (`rustService.groups.status: on`): the same answer from fed generations; on any decline the handler
-    // below answers from this same read, as before.
+    // G16c (`rustService.groups.status: on`): the service's own producers answer, from the
+    // generations they build. A decline restarts this process's scanners and collectors (it
+    // stopped them for the service) and answers from a fresh local read.
     const fed = statusFedService(res);
-    if (fed && (await answerStatusFed(req, res, fed, input, getCcsDir()))) return;
+    if (fed) {
+      const owned = typeof current.producingOwned !== 'function' || current.producingOwned();
+      if (owned && (await answerStatusOwned(req, res, fed, input))) return;
+      if (owned) {
+        if (typeof current.handBackProducers === 'function') current.handBackProducers();
+      }
+      const local = current.readInputs();
+      // R2: the same answer from fed generations this side now produces.
+      if (await answerStatusFed(req, res, fed, local, getCcsDir())) return;
+      sendRevalidatedView(
+        res,
+        await composeWithRust(
+          req,
+          res,
+          '/api/status',
+          () => rustStatusInput(local),
+          () => buildStatusView(local),
+          isRustStatusView
+        )
+      );
+      return;
+    }
     sendRevalidatedView(
       res,
       await composeWithRust(
@@ -214,7 +236,7 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
     }
     let results: EntryResult[];
     try {
-      results = await service().answers.submitSet(
+      results = await service().submitAnswers(
         entries,
         answerDevice(req.headers['user-agent']),
         typeof body.sendId === 'string' ? body.sendId : null

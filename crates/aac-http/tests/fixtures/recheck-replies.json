@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "now": 1790942400000,
+  "cases": [
+    {
+      "name": "zai-cached-row",
+      "id": "zai:usage",
+      "reply": {
+        "account": {
+          "id": "zai:usage",
+          "provider": "zai",
+          "providerLabel": "Z.ai coding plan",
+          "label": "Z.ai",
+          "email": null,
+          "plan": null,
+          "platform": "ubuntu",
+          "source": "fixture",
+          "status": "cached",
+          "cacheReason": "read_failed",
+          "message": "The last successful reading is shown.",
+          "fetchedAt": "2026-10-02T11:55:00.000Z",
+          "sampledAt": "2026-10-02T11:55:00.000Z",
+          "isActive": false,
+          "windows": [],
+          "capabilities": {
+            "codexProfile": null,
+            "claudeProfileId": null,
+            "claudePlatforms": []
+          },
+          "lifecycle": {
+            "state": "ready",
+            "jobId": null
+          }
+        }
+      },
+      "stored": {
+        "id": "zai:usage",
+        "provider": "zai",
+        "providerLabel": "Z.ai coding plan",
+        "label": "Z.ai",
+        "email": null,
+        "plan": null,
+        "platform": "ubuntu",
+        "source": "fixture",
+        "status": "cached",
+        "cacheReason": "read_failed",
+        "message": "The last successful reading is shown.",
+        "fetchedAt": "2026-10-02T11:55:00.000Z",
+        "sampledAt": "2026-10-02T11:55:00.000Z",
+        "isActive": false,
+        "windows": [],
+        "capabilities": {
+          "codexProfile": null,
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "cursor-ok-row",
+      "id": "cursor:usage",
+      "reply": {
+        "account": {
+          "id": "cursor:usage",
+          "provider": "cursor",
+          "providerLabel": "Cursor",
+          "label": "Cursor",
+          "email": null,
+          "plan": null,
+          "platform": "ubuntu",
+          "source": "fixture",
+          "status": "ok",
+          "message": null,
+          "fetchedAt": "2026-10-02T11:55:00.000Z",
+          "sampledAt": "2026-10-02T11:55:00.000Z",
+          "isActive": false,
+          "windows": [],
+          "capabilities": {
+            "codexProfile": null,
+            "claudeProfileId": null,
+            "claudePlatforms": []
+          },
+          "lifecycle": {
+            "state": "ready",
+            "jobId": null
+          }
+        }
+      },
+      "stored": {
+        "id": "cursor:usage",
+        "provider": "cursor",
+        "providerLabel": "Cursor",
+        "label": "Cursor",
+        "email": null,
+        "plan": null,
+        "platform": "ubuntu",
+        "source": "fixture",
+        "status": "ok",
+        "message": null,
+        "fetchedAt": "2026-10-02T11:55:00.000Z",
+        "sampledAt": "2026-10-02T11:55:00.000Z",
+        "isActive": false,
+        "windows": [],
+        "capabilities": {
+          "codexProfile": null,
+          "claudeProfileId": null,
+          "claudePlatforms": []
+        }
+      }
+    },
+    {
+      "name": "unknown-account",
+      "id": "zai:acct:00000000",
+      "outcome": {
+        "status": 404,
+        "code": "unknown_account"
+      },
+      "stored": null
+    },
+    {
+      "name": "route-limit",
+      "id": "kimi-code:usage",
+      "outcome": {
+        "status": 429,
+        "code": "rate_limited",
+        "retryAfterSeconds": 10
+      }
+    }
+  ]
+}

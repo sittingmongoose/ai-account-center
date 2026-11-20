@@ -1876,6 +1876,9 @@ pub struct QueryArgs {
     /// Resume after this `[endedMs, r]` cursor.
     pub after: Option<(u64, u32)>,
     pub limit: Option<usize>,
+    /// R4: keep each row's `_cursor` (`[endedMs, r]`), so a reader holding the unfiltered rows
+    /// can apply the time bounds exactly as this query does.
+    pub include_cursors: Option<bool>,
 }
 
 fn opt_json<T: Into<Json>>(v: Option<T>) -> Json {
@@ -2063,7 +2066,9 @@ fn resolved_history(engine: &Engine) -> Result<std::sync::Arc<ResolvedHistory>> 
 /// when a commit lands between pages instead of mixing two snapshots (recheck L1).
 pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
     if let Some(mut page) = query_uncorrected(engine, args)? {
-        hide_cursors(&mut page);
+        if args.include_cursors != Some(true) {
+            hide_cursors(&mut page);
+        }
         return Ok(page);
     }
     let snapshot = resolved_history(engine)?;
@@ -2095,7 +2100,9 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
         }
         last = json!(cursor);
         let mut row = row.clone();
-        if let Some(obj) = row.as_object_mut() {
+        if args.include_cursors != Some(true)
+            && let Some(obj) = row.as_object_mut()
+        {
             obj.remove("_cursor");
         }
         out.push(row);

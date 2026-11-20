@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
-import type { AddressInfo } from 'net';
+import { createConnection, type AddressInfo } from 'node:net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -54,35 +54,40 @@ beforeEach(() => {
   });
 });
 
-class MockUpgradeSocket {
-  data = '';
-  destroyed = false;
-
-  write(chunk: string | Buffer): boolean {
-    this.data += chunk.toString();
-    return true;
-  }
-
-  destroy(): void {
-    this.destroyed = true;
-  }
-}
-
 function dispatchUpgrade(instance: Awaited<ReturnType<typeof startServer>>, url: string) {
-  const listener = instance.server.listeners('upgrade')[0] as (
-    request: unknown,
-    socket: MockUpgradeSocket,
-    head: Buffer
-  ) => void;
-  const socket = new MockUpgradeSocket();
-
-  listener({ url, headers: {}, socket: { remoteAddress: '127.0.0.1' } }, socket, Buffer.alloc(0));
-
-  return socket;
+  const { address, port } = instance.server.address() as AddressInfo;
+  return new Promise<{ data: string; destroyed: boolean }>((resolve, reject) => {
+    const socket = createConnection({ host: address, port });
+    let data = '';
+    socket.setEncoding('latin1');
+    socket.setTimeout(3000, () =>
+      socket.destroy(new Error('Server left the rejected upgrade open'))
+    );
+    socket.once('error', reject);
+    socket.once('connect', () => {
+      socket.write(
+        [
+          `GET ${url} HTTP/1.1`,
+          `Host: ${address.includes(':') ? `[${address}]` : address}:${port}`,
+          'Connection: Upgrade',
+          'Upgrade: websocket',
+          'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+          'Sec-WebSocket-Version: 13',
+          '',
+          '',
+        ].join('\r\n')
+      );
+    });
+    socket.on('data', (chunk) => {
+      data += chunk;
+    });
+    socket.once('close', () => resolve({ data, destroyed: socket.destroyed }));
+  });
 }
 
 afterEach(async () => {
-  expect(renewalStart).toHaveBeenCalledTimes(1);
+  // Saved-login renewal now belongs to the native service, including its stop path.
+  expect(renewalStart).not.toHaveBeenCalled();
   expect(analyticsStart).toHaveBeenCalledTimes(1);
   while (instances.length > 0) {
     const instance = instances.pop();
@@ -93,6 +98,7 @@ afterEach(async () => {
     instance.cleanup();
     await new Promise<void>((resolve) => instance.server.close(() => resolve()));
   }
+  expect(renewalStop).not.toHaveBeenCalled();
 
   mock.restore();
   for (const key of fixtureEnvKeys) {
@@ -148,14 +154,14 @@ describe('startServer host binding', () => {
     const response = await fetch(`${root}/dashboard.wasm`);
     expect(response.headers.get('content-type')).toBe('application/wasm');
     expect(Buffer.from(await response.arrayBuffer())).toEqual(wasm);
-    expect(dispatchUpgrade(instance, '/vite-hmr').destroyed).toBe(true);
+    expect((await dispatchUpgrade(instance, '/vite-hmr')).destroyed).toBe(true);
   });
 
   it('rejects unsupported production websocket upgrade paths', async () => {
     const instance = await startServer({ port: 0 });
     instances.push(instance);
 
-    const socket = dispatchUpgrade(instance, '/vite-hmr');
+    const socket = await dispatchUpgrade(instance, '/vite-hmr');
 
     expect(socket.data.startsWith('HTTP/1.1 404')).toBe(true);
     expect(socket.destroyed).toBe(true);
@@ -165,33 +171,10 @@ describe('startServer host binding', () => {
     const instance = await startServer({ port: 0 });
     instances.push(instance);
 
-    const socket = dispatchUpgrade(instance, 'http://[bad');
+    const socket = await dispatchUpgrade(instance, 'http://[bad');
 
     expect(socket.data.startsWith('HTTP/1.1 400')).toBe(true);
     expect(socket.destroyed).toBe(true);
-  });
-});
-
-describe('startServer saved Codex login renewal', () => {
-  it('starts renewal once the server listens and stops it with the server', async () => {
-    const instance = await startServer({ port: 0 });
-    instances.push(instance);
-
-    expect(renewalStart).toHaveBeenCalledTimes(1);
-    expect(renewalStop).not.toHaveBeenCalled();
-    instance.cleanup();
-    expect(renewalStop).toHaveBeenCalled();
-  });
-
-  it('keeps the server running when renewal cannot start', async () => {
-    renewalStart.mockImplementationOnce(() => {
-      throw new Error('renewal unavailable');
-    });
-
-    const instance = await startServer({ port: 0 });
-    instances.push(instance);
-
-    expect(instance.server.listening).toBe(true);
   });
 });
 

@@ -8,12 +8,17 @@ import { AgentReportsReader } from '../../../../src/web-server/status/agent-repo
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
 import { StatusService } from '../../../../src/web-server/status/status-service';
 import { PmMailRegistryReader } from '../../../../src/web-server/status/status-collectors';
+import { PinnedThreadsCollector } from '../../../../src/web-server/status/pinned-threads';
 import { openCardFile, parseByteRange } from '../../../../src/web-server/status/status-files';
 import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
+import { RustService } from '../../../../src/web-server/rust-service';
 import { cardDoc, NOW, tempDirs, writeCard } from './status-test-helpers';
 
 const dirs = tempDirs();
 let server: Server | undefined;
+let rust: RustService | undefined;
+const ccsEnv = process.env.CCS_DIR;
+const writesMode = process.env.AAC_SPEC_STATUS_ANSWER_WRITE_MODE;
 // The 401 path exists only with dashboard sign-in on; the sign-in-off answer has its own test.
 const authEnv = process.env.CCS_DASHBOARD_AUTH_ENABLED;
 beforeEach(() => {
@@ -22,7 +27,11 @@ beforeEach(() => {
 afterEach(async () => {
   if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
   server = undefined;
+  rust?.stop();
+  rust = undefined;
   dirs.cleanup();
+  if (ccsEnv === undefined) delete process.env.CCS_DIR;
+  else process.env.CCS_DIR = ccsEnv;
   if (authEnv === undefined) delete process.env.CCS_DASHBOARD_AUTH_ENABLED;
   else process.env.CCS_DASHBOARD_AUTH_ENABLED = authEnv;
 });
@@ -30,6 +39,12 @@ afterEach(async () => {
 async function start(options: { ringOk?: boolean } = {}) {
   const root = dirs.make('ccs-status-reports-');
   const store = path.join(dirs.make('ccs-status-store-'), 'status');
+  if (writesMode === 'on') {
+    process.env.CCS_DIR = path.dirname(store);
+    rust = new RustService('on');
+    await rust.start();
+    expect(rust.diagnostics().service).toMatchObject({ state: 'ready' });
+  }
   const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
   const rings: string[] = [];
   const answers = new StatusAnswers({
@@ -43,11 +58,18 @@ async function start(options: { ringOk?: boolean } = {}) {
         : { ok: true, detail: 'Rang.' };
     },
   });
+  const run = async () => ({ code: null, stdout: '', timedOut: false, missing: true });
   const service = new StatusService({
     reader,
     answers,
+    pinned: new PinnedThreadsCollector({
+      dbPath: null,
+      run,
+      reportsRoot: () => root,
+      readersCheck: null,
+    }),
     registryReader: new PmMailRegistryReader(() => path.join(root, 'none')),
-    run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+    run,
     readLocalMachine: async () => {
       throw new Error('not in tests');
     },
@@ -77,6 +99,16 @@ async function start(options: { ringOk?: boolean } = {}) {
 }
 
 const session = { 'x-test-session': 'true' };
+
+function refuseWrites(directory: string): () => void {
+  const open = fs.promises.open;
+  const spy = spyOn(fs.promises, 'open').mockImplementation(async (file, flags, mode) => {
+    if (flags === 'wx' && typeof file === 'string' && path.dirname(file) === directory)
+      throw Object.assign(new Error('Fixture write denied'), { code: 'EACCES' });
+    return open(file, flags, mode);
+  });
+  return () => spy.mockRestore();
+}
 
 describe('status routes', () => {
   for (const code of ['EIO', 'EACCES'])
@@ -142,10 +174,10 @@ describe('status routes', () => {
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
     const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
     await service.scanReports();
-    // Real permissions: answer files are written and rung, the batches folder refuses every summary.
+    // Answer files can be written and rung while the batches folder refuses summaries.
     const batches = path.join(root, 'v1', 'answers', 'batches');
     fs.mkdirSync(batches, { recursive: true });
-    fs.chmodSync(batches, 0o555);
+    const restoreWrites = refuseWrites(batches);
     try {
       const base_ = { choice: [], via: 'deck' as const };
       await service.answers.submitSet(
@@ -184,7 +216,7 @@ describe('status routes', () => {
       }
       expect(rings).toHaveLength(1);
     } finally {
-      fs.chmodSync(batches, 0o755);
+      restoreWrites();
     }
     await service.answers.retryPending();
     // Retries have stopped: it stays shown, never hidden.
@@ -242,10 +274,10 @@ describe('status routes', () => {
 
   it('shows a written response and an objection with failed share delivery while their summary is written', async () => {
     const { root, base, service, rings } = await start();
-    // Real permissions: the batches folder takes the summary, its parent refuses the signed note files.
+    // The batches folder accepts the summary while its parent refuses the signed note files.
     const answersDir = path.join(root, 'v1', 'answers');
     fs.mkdirSync(path.join(answersDir, 'batches'), { recursive: true });
-    fs.chmodSync(answersDir, 0o555);
+    const restoreWrites = refuseWrites(answersDir);
     try {
       await noteAndObjection(root, service);
       let seen = await noteDeliveries(base);
@@ -270,7 +302,7 @@ describe('status routes', () => {
       }
       expect(rings).toHaveLength(0);
     } finally {
-      fs.chmodSync(answersDir, 0o755);
+      restoreWrites();
     }
   });
 
@@ -472,6 +504,27 @@ describe('status routes', () => {
       400
     );
     expect((await post('/api/status/answers/batch', body)).status).toBe(404);
+    const sendId = '22222222-2222-4222-8222-222222222222';
+    const sha3 = writeCard(root, cardDoc('vm.lead', 'Q3'));
+    const repeated = { answers: [{ ...one, cardId: 'vm.lead--Q3', cardSha256: sha3 }], sendId };
+    const first = await post('/api/status/answers', repeated);
+    expect(first.status).toBe(200);
+    const recorded = await first.text();
+    expect(JSON.parse(recorded).results[0].outcome).toBe('recorded');
+    const appendCount = rust?.registeredWrites;
+    if (writesMode === 'on') expect(appendCount).toBeGreaterThan(0);
+    const replay = await post('/api/status/answers', repeated);
+    expect(replay.status).toBe(200);
+    expect(await replay.text()).toBe(recorded);
+    expect(rust?.registeredWrites).toBe(appendCount);
+
+    rust?.stop();
+    const sha4 = writeCard(root, cardDoc('vm.lead', 'Q4'));
+    const fallback = await post('/api/status/answers', {
+      answers: [{ ...one, cardId: 'vm.lead--Q4', cardSha256: sha4 }],
+    });
+    expect((await fallback.json()).results[0].outcome).toBe('recorded');
+    expect(rust?.registeredWrites).toBe(appendCount);
   });
 
   it('serves option images from the writer folder only, by content, at most 2 MB', async () => {

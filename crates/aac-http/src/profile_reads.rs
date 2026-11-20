@@ -40,11 +40,57 @@ pub(crate) fn compose_manifest(bytes: Option<&[u8]>) -> Option<Value> {
     }
 }
 
+/// The process's one installed Antigravity host (TS keeps the same module-wide runtime).
+fn antigravity_host(root: &Path) -> Option<&'static crate::antigravity_host::Host> {
+    static HOST: std::sync::OnceLock<Option<crate::antigravity_host::Host>> =
+        std::sync::OnceLock::new();
+    HOST.get_or_init(|| crate::antigravity_host::Host::from_root(root))
+        .as_ref()
+}
+
+fn now_ms() -> i64 {
+    aac_core::UtcMs::now()
+        .ok()
+        .and_then(|at| i64::try_from(at.get()).ok())
+        .unwrap_or(0)
+}
+
+/// The empty Ubuntu answers the reference runtime returns when it is not installed. The
+/// Antigravity runtime only exists on Linux; every other host answers these without a runtime.
+fn empty_inventory() -> Value {
+    json!({"schemaVersion": 1, "hostId": "ubuntu", "profiles": []})
+}
+
+fn empty_quotas(at: i64) -> Value {
+    crate::antigravity_quota::public_quotas(&[], at, at).unwrap_or(Value::Null)
+}
+
+/// The public listener's Antigravity inventory (the same installed host, one per process).
+pub(crate) fn antigravity_inventory(root: &Path) -> Option<Value> {
+    if !cfg!(target_os = "linux") || crate::antigravity_runtime::read_state(root).is_none() {
+        return Some(empty_inventory());
+    }
+    antigravity_host(root).map(|host| host.inventory(now_ms()))
+}
+
+/// The public listener's Antigravity quotas, with the route's own refresh selection.
+pub(crate) fn antigravity_quotas(root: &Path, refresh: bool, at: i64) -> Option<Value> {
+    if !cfg!(target_os = "linux") || crate::antigravity_runtime::read_state(root).is_none() {
+        return Some(empty_quotas(at));
+    }
+    antigravity_host(root).map(|host| host.quotas(refresh, at))
+}
+
 fn envelope(bytes: &[u8]) -> Option<Envelope> {
     crate::json_object::from_slice(bytes, &["data", "presentation"]).ok()
 }
 
-pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
+pub(crate) fn answer(
+    path: &str,
+    root: &Path,
+    bytes: &[u8],
+    cache: Option<&crate::account_usage::AccountUsageCache>,
+) -> Option<Value> {
     match path {
         "/api/claude/desktop-profiles" if bytes.is_empty() => desktop_profiles(root),
         "/api/claude/desktop-profiles/usage" => {
@@ -61,9 +107,97 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
             .ok()?;
             aac_views::codex_profiles::summary(&input).ok()
         }
+        // M3: an adopted collection answers the quota route from the generation it holds; the
+        // public route no longer has to wait for a local cache that the adoption switched off.
+        "/api/codex/profiles/quotas" if bytes.is_empty() => {
+            let at = now_ms();
+            let rows = crate::codex_quotas::rows_from_cache(cache?, at);
+            crate::codex_quotas::answer(root, rows, at)
+        }
         "/api/codex/profiles/quotas" => aac_views::codex_profiles::quotas(envelope(bytes)?).ok(),
+        // G6: the installed runtime answers with its own live proof, workers and probes once TS
+        // stops sending its input. A host that cannot resolve its trusted paths declines (TS).
+        "/api/antigravity/profiles" if bytes.is_empty() => {
+            antigravity_host(root).map(|host| host.inventory(now_ms()))
+        }
         "/api/antigravity/profiles" => aac_views::antigravity::inventory(envelope(bytes)?).ok(),
+        // G6: the quota read once TS stops sending its input, from the installed host's worker.
+        "/api/antigravity/profiles/quotas" if bytes.is_empty() => {
+            antigravity_host(root).map(|host| host.quotas(false, now_ms()))
+        }
         "/api/antigravity/profiles/quotas" => aac_views::antigravity::quotas(envelope(bytes)?).ok(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M3: an adopted private service holds the Accounts generation; an empty Codex quota read
+    /// composes the profile's measured windows from it instead of declining for a TS envelope.
+    #[test]
+    fn an_adopted_generation_answers_codex_profile_quotas() {
+        let directory = tempfile::tempdir().expect("temporary registry");
+        std::fs::write(
+            directory.path().join("codex-profiles.yaml"),
+            "version: '1.0'\ndefault: work\nprofiles:\n  work:\n    type: codex\n    created: '2026-10-01T00:00:00Z'\n    last_used: null\n",
+        )
+        .expect("write the registry");
+        use base64::Engine as _;
+        let encode = |value: serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
+        };
+        let token = format!(
+            "{}.{}.{}",
+            encode(json!({"alg": "none", "typ": "JWT"})),
+            encode(json!({"email": "work@example.com"})),
+            encode(json!("signature"))
+        );
+        let instance = directory.path().join("codex-instances/work");
+        std::fs::create_dir_all(&instance).expect("instance folder");
+        std::fs::write(
+            instance.join("auth.json"),
+            json!({"tokens": {"id_token": token, "account_id": null}}).to_string(),
+        )
+        .expect("saved login");
+        let iso = "2026-01-01T00:00:00.000Z";
+        let cache = crate::account_usage::AccountUsageCache::default();
+        cache
+            .publish(
+                crate::account_usage::Desktop::Mac,
+                false,
+                1,
+                json!({
+                    "schemaVersion": 1,
+                    "updatedAt": iso,
+                    "accounts": [{
+                        "id": "codex:work",
+                        "capabilities": {"codexProfile": "work"},
+                        "status": "ok",
+                        "fetchedAt": iso,
+                        "sampledAt": iso,
+                        "windows": [{
+                            "key": "five_hour",
+                            "label": "5-hour limit",
+                            "usedPercent": 24.0,
+                            "resetAt": iso
+                        }]
+                    }]
+                }),
+                json!({"order": {}, "epochs": {iso: 1_767_225_600_000_i64}}),
+            )
+            .expect("publish the generation");
+        let answer = answer(
+            "/api/codex/profiles/quotas",
+            directory.path(),
+            b"",
+            Some(&cache),
+        )
+        .expect("the adopted generation answers");
+        assert_eq!(answer["profiles"][0]["profileName"], "work");
+        assert_eq!(answer["profiles"][0]["status"], "available");
+        assert_eq!(answer["profiles"][0]["windows"][0]["key"], "five_hour");
+        assert_eq!(answer["profiles"][0]["windows"][0]["usedPercent"], 24.0);
     }
 }

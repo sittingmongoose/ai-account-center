@@ -1,3 +1,4 @@
+import { rustAnalyticsWritersOn, rustComposeSelected, rustGroupOn } from './rust-service-groups';
 /** Starts or attaches to one private Rust boot. No PID from disk is ever signalled. */
 import fs from 'fs';
 import net from 'net';
@@ -11,6 +12,7 @@ import {
   PUBLIC_HEALTH_PRINCIPAL,
   rustAgent,
   type RustConnection,
+  type RustRenewalBoot,
   type RustStoreBoot,
   type RustStoreBootInput,
 } from './rust-service-transport';
@@ -37,6 +39,14 @@ export interface RustBoot extends RustConnection {
   files: Readonly<Record<string, PrivateFileRole>>;
   /** R3: the store host's config this boot was started with; null keeps the store in TS. */
   store: RustStoreBoot | null;
+  /** R4: the owned readers' config this boot was started with; null keeps them in TS. */
+  owned: RustOwnedBoot | null;
+  /** G10: the renewal timer's homes this boot was started with; null keeps the timer in TS. */
+  renewal: RustRenewalBoot | null;
+  /** The same private service owns lifecycle and its collection generation. */
+  nativeLifecycle?: true;
+  /** The private collection producer also triggers the native usage publisher. */
+  nativeUsageSnapshot?: true;
 }
 
 /**
@@ -51,11 +61,34 @@ export function expectedStoreBoot(
   return input ? { dir: path.join(ccsDir, 'store'), ...input } : null;
 }
 
+/** R4: the owned Status readers and Scoreboard config (the service's `OwnedBoot`). */
+export interface RustOwnedBoot {
+  reportsRoot: string;
+  registryDir: string;
+  status: boolean;
+  scoreboard: boolean;
+}
+
+/** The same owned config in a stable spelling, for the attach check. */
+function ownedKey(owned: unknown): string {
+  return storeKey(owned);
+}
+
 /** The same store config in a stable spelling, for the attach check. */
 function storeKey(store: unknown): string {
   if (!store || typeof store !== 'object' || Array.isArray(store)) return '';
   return JSON.stringify(
     Object.entries(store as Record<string, unknown>).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0
+    )
+  );
+}
+
+/** The same renewal config in a stable spelling, for the attach check. */
+function renewalKey(renewal: unknown): string {
+  if (!renewal || typeof renewal !== 'object' || Array.isArray(renewal)) return '';
+  return JSON.stringify(
+    Object.entries(renewal as Record<string, unknown>).sort(([a], [b]) =>
       a < b ? -1 : a > b ? 1 : 0
     )
   );
@@ -277,7 +310,9 @@ async function readBoot(
   file: string,
   ccsDir: string,
   binary: string,
-  store: RustStoreBoot | null = null
+  store: RustStoreBoot | null = null,
+  owned: RustOwnedBoot | null = null,
+  renewal: RustRenewalBoot | null = null
 ): Promise<RustBoot | null> {
   try {
     const text = await privateDescriptor(file);
@@ -292,7 +327,11 @@ async function readBoot(
       // A boot started with other file owners is never attached (L2): one writer per file.
       ownersKey(boot.files) !== ownersKey(privateFileOwners()) ||
       // R3: likewise a boot hosting the store for another config (or none) is never attached.
-      storeKey(boot.store) !== storeKey(store)
+      storeKey(boot.store) !== storeKey(store) ||
+      // R4: likewise a boot running the owned readers for another config (or none).
+      ownedKey(boot.owned) !== ownedKey(owned) ||
+      // G10: likewise a boot running the renewal timer for another config (or none).
+      renewalKey(boot.renewal) !== renewalKey(renewal)
     )
       return null;
     const layout = socketLayout(ccsDir, boot.bootId);
@@ -309,6 +348,10 @@ async function readBoot(
       build: boot.build,
       files: boot.files,
       store: boot.store ?? null,
+      owned: boot.owned ?? null,
+      renewal: boot.renewal ?? null,
+      ...(boot.nativeLifecycle === true ? { nativeLifecycle: true } : {}),
+      ...(boot.nativeUsageSnapshot === true ? { nativeUsageSnapshot: true } : {}),
     };
   } catch {
     return null;
@@ -403,10 +446,20 @@ export async function acquireRustService(
   privateRoot: string,
   binaryPath: string,
   active: Set<http.ClientRequest>,
-  store?: RustStoreBootInput | null
+  store?: RustStoreBootInput | null,
+  renewal?: RustRenewalBoot | null
 ): Promise<RustLease | null> {
-  return (await acquireRustServiceDetailed(privateRoot, binaryPath, active, undefined, store))
-    .lease;
+  return (
+    await acquireRustServiceDetailed(
+      privateRoot,
+      binaryPath,
+      active,
+      undefined,
+      store,
+      undefined,
+      renewal
+    )
+  ).lease;
 }
 
 export async function acquireRustServiceDetailed(
@@ -414,16 +467,24 @@ export async function acquireRustServiceDetailed(
   binaryPath: string,
   active: Set<http.ClientRequest>,
   signal?: AbortSignal,
-  storeInput?: RustStoreBootInput | null
+  storeInput?: RustStoreBootInput | null,
+  ownedInput?: RustOwnedBoot | null,
+  renewalInput?: RustRenewalBoot | null
 ): Promise<AcquireResult> {
   if (acquiring >= FILESYSTEM_LIMIT)
     return { lease: null, failure: 'unhealthy', refusedAttach: false, swept: 0 };
   acquiring++;
   const budget = AbortSignal.timeout(5000);
   const stopped = signal ? AbortSignal.any([signal, budget]) : budget;
-  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput).finally(
-    () => acquiring--
-  );
+  const pending = acquireWithinBudget(
+    privateRoot,
+    binaryPath,
+    active,
+    stopped,
+    storeInput,
+    ownedInput,
+    renewalInput
+  ).finally(() => acquiring--);
   // Async filesystem work may finish late; every continuation checks the signal before adoption.
   return new Promise((resolve) => {
     const aborted = () =>
@@ -443,7 +504,9 @@ async function acquireWithinBudget(
   binaryPath: string,
   active: Set<http.ClientRequest>,
   signal: AbortSignal,
-  storeInput?: RustStoreBootInput | null
+  storeInput?: RustStoreBootInput | null,
+  ownedInput?: RustOwnedBoot | null,
+  renewalInput?: RustRenewalBoot | null
 ): Promise<AcquireResult> {
   const result: AcquireResult = { lease: null, failure: null, refusedAttach: false, swept: 0 };
   if (process.platform === 'win32') return { ...result, failure: 'platform' };
@@ -457,7 +520,9 @@ async function acquireWithinBudget(
   signal.throwIfAborted();
   const descriptor = path.join(run, 'aac-http.json');
   const store = expectedStoreBoot(ccsDir, storeInput);
-  const existing = await readBoot(descriptor, ccsDir, binary, store);
+  const owned = ownedInput ?? null;
+  const renewal = renewalInput ?? null;
+  const existing = await readBoot(descriptor, ccsDir, binary, store, owned, renewal);
   signal.throwIfAborted();
   if (existing) {
     const agent = rustAgent();
@@ -492,6 +557,15 @@ async function acquireWithinBudget(
   if (!layout) return { ...result, failure: 'socket_path' };
   const directory = layout.folders[layout.folders.length - 1];
   const agent = rustAgent();
+  const publicOwners = process.env.AAC_CUT_PUBLIC_OWNERS === '1';
+  const nativeCollection =
+    (!publicOwners || process.env.AAC_CUT_PRIVATE_LIFECYCLE === '1') &&
+    process.env.AAC_RUST_CUT_WORKER === '1' &&
+    rustGroupOn('collection');
+  const files = privateFileOwners();
+  const nativeLifecycle = nativeCollection && files['opencode-wallet-source'] === 'rust-service';
+  const nativeUsageSnapshot =
+    nativeLifecycle && rustGroupOn('usageSnapshot') && rustAnalyticsWritersOn();
   const boot: RustBoot = {
     ccsDir,
     binary,
@@ -500,8 +574,12 @@ async function acquireWithinBudget(
     bootId,
     // Filled from the service's own health reply once it answers.
     build: { commit: 'unknown', sha256, protocol: RUST_SERVICE_PROTOCOL, storeSchema: 0 },
-    files: privateFileOwners(),
+    files,
     store,
+    owned,
+    renewal,
+    ...(nativeLifecycle ? { nativeLifecycle: true } : {}),
+    ...(nativeUsageSnapshot ? { nativeUsageSnapshot: true } : {}),
     agent,
   };
   let child: ChildProcess | undefined;
@@ -575,11 +653,17 @@ async function acquireWithinBudget(
         }
       }
     });
-    child = spawn(binary, [], {
+    child = spawn(binary, nativeCollection ? ['--native-collection'] : [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
         // Windows already returned above; the default re-detects the platform in its own scope.
         ...rustServiceEnvironment(process.env, undefined, agentTransport() === 'on'),
+        AAC_RUST_NATIVE_APP_UPDATES:
+          !publicOwners && rustComposeSelected() && rustGroupOn('app-updates') ? '1' : '0',
+        AAC_RUST_CUT_WORKER: process.env.AAC_RUST_CUT_WORKER,
+        AAC_CUT_HUB_DIRECTORY: process.env.AAC_CUT_HUB_DIRECTORY,
+        AAC_CUT_OFFER_HOME: process.env.AAC_CUT_OFFER_HOME,
+        AAC_RUST_GROUP_CLAUDE_OPEN: rustGroupOn('claude-open') ? 'on' : 'off',
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, '../../config/agent-artifacts.json'),
         AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,
@@ -609,6 +693,10 @@ async function acquireWithinBudget(
         bootId,
         files: boot.files,
         store: boot.store,
+        owned: boot.owned,
+        renewal: boot.renewal,
+        nativeLifecycle: boot.nativeLifecycle,
+        nativeUsageSnapshot: boot.nativeUsageSnapshot,
       }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.

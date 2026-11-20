@@ -1,3 +1,6 @@
+import { runLifecycleEffects } from './lifecycle-effect-pipe';
+import type { DashboardAccount } from './account-dashboard-types';
+import { lifecyclePlan } from '../../shared/private-file-lease';
 import { LifecycleHttpError } from './account-lifecycle-accounts';
 import { ClaudeLifecycleError, isClaudeEmail } from './claude-account-lifecycle';
 import {
@@ -7,7 +10,8 @@ import {
   type LifecycleEnv,
   type LifecycleResult,
 } from './account-lifecycle-env';
-import { updateAccountRegistry } from './account-registry-v2';
+import { registrySource, updateAccountRegistry } from './account-registry-v2';
+import { editRegistry } from './account-lifecycle-transitions';
 import { SIGNIN_CODE_PATTERN } from './signin-jobs';
 import {
   entryView,
@@ -37,17 +41,12 @@ export async function relabel(
   const name = label(body.label);
   const account = await resolveIn(env, id);
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
-  const registry = await updateAccountRegistry(env.ccsDir(), (current) => {
+  const root = env.ccsDir();
+  const registry = await updateAccountRegistry(root, (current) => {
+    const edit = editRegistry(root, current, { kind: 'label', id, label: name });
     // Removed between the lookup and the write: nothing to label.
-    if (!current.accounts.some((entry) => entry.id === id)) {
-      throw new LifecycleHttpError(404, 'unknown_account');
-    }
-    return {
-      ...current,
-      accounts: current.accounts.map((entry) =>
-        entry.id === id ? { ...entry, label: name } : entry
-      ),
-    };
+    if ('refusal' in edit) throw new LifecycleHttpError(404, 'unknown_account');
+    return edit.registry;
   }).catch((error) => {
     throw error instanceof LifecycleHttpError ? error : new LifecycleHttpError(500, 'write_failed');
   });
@@ -69,12 +68,23 @@ export async function relabel(
 function checkRecheckLimit(env: LifecycleEnv, id: string): void {
   const now = env.now();
   // One limiter per CCS scope and account.
-  const key = `${env.ccsDir()}\0${id}`;
+  const root = env.ccsDir();
+  const key = `${root}\0${id}`;
   const last = lastRecheck.get(key);
-  if (last !== undefined && now - last < RECHECK_INTERVAL_MS) {
-    const retry = Math.max(1, Math.ceil((RECHECK_INTERVAL_MS - (now - last)) / 1000));
+  const decision = lifecyclePlan(root, {
+    operation: 'recheck',
+    now,
+    last: last ?? null,
+    interval: RECHECK_INTERVAL_MS,
+  });
+  const retry =
+    decision === undefined
+      ? last !== undefined && now - last < RECHECK_INTERVAL_MS
+        ? Math.max(1, Math.ceil((RECHECK_INTERVAL_MS - (now - last)) / 1000))
+        : null
+      : decision;
+  if (typeof retry === 'number' && Number.isSafeInteger(retry) && retry > 0)
     throw new LifecycleHttpError(429, 'rate_limited', { retryAfterSeconds: retry });
-  }
   lastRecheck.set(key, now);
   while (lastRecheck.size > 256) {
     const oldest = lastRecheck.keys().next().value;
@@ -87,21 +97,55 @@ function checkRecheckLimit(env: LifecycleEnv, id: string): void {
 export async function recheck(
   env: LifecycleEnv,
   id: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  native?: (id: string) => Promise<{ status: 200 | 404; body: unknown } | null>
 ): Promise<LifecycleResult> {
   const account = await resolveIn(env, id);
   if (account.kind === 'claude') return recheckClaude(env, account, body);
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
   keys(body, []);
   checkRecheckLimit(env, id);
-  const row = await env.refreshAdditional(id);
-  if (!row) throw new LifecycleHttpError(404, 'unknown_account');
-  env.replaceRow(row);
+  const reply = await native?.(account.id);
+  if (reply?.status === 404) throw new LifecycleHttpError(404, 'unknown_account');
+  if (reply) return { status: 200, body: reply.body as Record<string, unknown> };
+  const { entry } = account;
+  const reviewed = registrySource(entry);
+  if (account.mode === 'v1') delete reviewed.account;
+  const binding = JSON.stringify([entry.provider, entry.platform, entry.sshHost, entry.credential]);
+  const reading: { row: DashboardAccount | null } = { row: null };
+  const completed = await runLifecycleEffects(
+    env.ccsDir(),
+    ['--additional-recheck'],
+    ['collect', 'publish-if-current'] as const,
+    async (effect) => {
+      if (effect === 'collect') {
+        const row = await env.refreshAdditional(id, reviewed);
+        reading.row = row;
+        return row?.id === id && row.provider === entry.provider && row.platform === entry.platform;
+      }
+      const { row } = reading;
+      if (!row) return false;
+      const current = await resolveIn(env, id);
+      if (current.kind !== 'additional') return false;
+      const source = current.entry;
+      if (
+        JSON.stringify([source.provider, source.platform, source.sshHost, source.credential]) !==
+        binding
+      )
+        return false;
+      env.replaceRow(row);
+      return true;
+    },
+    async (perform) =>
+      (await perform('collect')) === true && (await perform('publish-if-current')) === true
+  );
+  const refreshed = reading.row;
+  if (!completed || !refreshed) throw new LifecycleHttpError(404, 'unknown_account');
   return {
     status: 200,
     body: {
       account: {
-        ...row,
+        ...refreshed,
         lifecycle: { state: 'ready', jobId: null },
       },
     },
@@ -164,17 +208,26 @@ export async function openApp(
   keys(body, ['platform']);
   if (body.platform !== 'mac' && body.platform !== 'windows') throw invalid();
   const account = await resolveIn(env, id);
-  if (
-    account.kind !== 'additional' ||
-    account.provider !== 'cursor' ||
-    body.platform !== 'mac' ||
-    account.entry.platform !== 'mac' ||
-    account.entry.sshHost === null
-  ) {
+  const additional = account.kind === 'additional';
+  const platform = additional ? account.entry.platform : null;
+  const host = additional ? account.entry.sshHost : null;
+  const reply = lifecyclePlan(env.ccsDir(), {
+    operation: 'open-cursor',
+    additional,
+    provider: account.provider,
+    requestPlatform: body.platform,
+    accountPlatform: platform,
+    hostConfigured: host !== null,
+  });
+  const allowed =
+    reply === undefined
+      ? additional && account.provider === 'cursor' && body.platform === 'mac' && platform === 'mac'
+      : reply === true;
+  if (!allowed || host === null) {
     throw new LifecycleHttpError(409, 'not_configured');
   }
   try {
-    await env.openCursor(account.entry.sshHost);
+    await env.openCursor(host);
   } catch {
     throw new LifecycleHttpError(502, 'host_unreachable', { host: 'mac' });
   }
@@ -182,12 +235,14 @@ export async function openApp(
 }
 
 /** GET /api/accounts/signin-jobs/:jobId */
-export function readJob(
+export async function readJob(
   env: LifecycleEnv,
   jobId: string,
   context: LifecycleContext
-): LifecycleResult {
-  const job = env.runner().get(jobId);
+): Promise<LifecycleResult> {
+  const current = env.runner().get(jobId);
+  const recovered = current?.provider === null ? await env.readSignInJournal?.(jobId) : undefined;
+  const job = recovered === undefined ? current : recovered;
   if (!job) throw new LifecycleHttpError(404, 'unknown_job');
   return { status: 200, body: job.provider === null ? job : jobBody(job, context) };
 }

@@ -1,8 +1,10 @@
 //! Small shared contracts: validated identifiers, honest readings and bounded, scrubbed failures.
 
+pub mod claude_purge;
 mod failure;
 mod ids;
 mod json;
+pub mod signin;
 mod wire;
 
 // Include the identical implementation used by aac_store::secret_policy. No store engine,

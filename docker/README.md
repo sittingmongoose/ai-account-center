@@ -47,15 +47,9 @@ Authentication settings can be passed using the existing
 stay unset so saved authentication is preserved. Keep these values out of
 committed Compose files and public logs.
 
-Configure authentication inside the container that owns its state:
-
-```bash
-docker compose -f docker/compose.yaml exec ccs ai-account-center dashboard auth setup
-```
-
-Running that command on the outer host configures the host's private directory,
-not the container volume. Dashboard cookie/session/origin checks also apply
-inside Docker.
+For a fresh container, supply its initial authentication through the private
+environment overrides above. The Rust service uses the container's own CCS
+state directory and enforces the same cookie, session and origin checks.
 
 ## Existing host accounts
 

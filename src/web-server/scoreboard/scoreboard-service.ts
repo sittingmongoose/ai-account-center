@@ -30,6 +30,7 @@ import { openStatusHandle } from '../../status-native/pinned';
 import type { NativeStatusHandle } from '../../status-native/native-loader';
 import { getAacStore, openAacStore, type AacStore } from '../../store/store-service';
 import { RUNS_MORE_MS, RUNS_PASS_MS, RunsStore, type RunsQuery } from './runs-store';
+import { rustOwnedScoreboardOn } from '../rust-service-groups';
 
 /** A read within this long of the last view gets that view. */
 export const SCOREBOARD_CACHE_MS = 60_000;
@@ -368,6 +369,9 @@ export function getScoreboardService(): ScoreboardService {
 /** At server start. Never throws and never holds the start up. */
 export function startScoreboardService(): void {
   const scoreboard = getScoreboardService();
+  // R4: with the scoreboard group and the store host on, the service seeds the catalog and
+  // ingests the runs itself; this side keeps the view builder for the fallback path only.
+  if (rustOwnedScoreboardOn()) return;
   void scoreboard.seed();
   // Runs are kept forever once the history store is open; without it the share is read on demand.
   void openAacStore()

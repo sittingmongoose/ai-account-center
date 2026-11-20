@@ -2,8 +2,10 @@
 import fs from 'fs';
 import { ConfigError } from '../../errors/error-types';
 import path from 'path';
-import { createHash, randomBytes } from 'crypto';
-import { requestRustAgent } from '../rust-service-transport';
+import { createHash, createHmac, randomBytes } from 'crypto';
+import { CollectionReadIndeterminate, requestRustAgent } from '../rust-service-transport';
+import type { UnifiedConfig } from '../../config/schemas/unified-config';
+import { privateFileOwners } from '../../shared/private-files';
 import transportPolicy from '../../../config/tables/agent-transport-policy.json';
 import { loadUnifiedConfig } from '../../config/unified-config-loader';
 import { createLogger } from '../../services/logging';
@@ -13,12 +15,14 @@ import { sshArgv, sshEnvironment, sshLaunch } from './ssh-policy';
 import type { UsageHost, UsageHelperRequest } from './usage-failover-contract';
 import manifest from '../../../config/agent-artifacts.json';
 import { PROVIDER_ROWS } from '../../shared/tables';
+import { CONFIRMATION_TTL_MS } from './account-confirmations';
 
 const logger = createLogger('agent-verbs');
 /** Independent transport switch. Invalid or absent values never start Rust transport. */
 export function agentTransport(): 'off' | 'on' {
   try {
-    return (process.env.AAC_AGENT_TRANSPORT ?? loadUnifiedConfig()?.agentTransport) === 'on'
+    const configured = process.env.AAC_AGENT_TRANSPORT ?? loadUnifiedConfig()?.agentTransport;
+    return (configured ?? (process.env.AAC_RUST_CUT_WORKER === '1' ? 'on' : 'off')) === 'on'
       ? 'on'
       : 'off';
   } catch {
@@ -26,7 +30,7 @@ export function agentTransport(): 'off' | 'on' {
   }
 }
 
-export type AgentVerbs = 'off' | 'on';
+export type AgentVerbs = 'off' | 'shadow' | 'on';
 export type AgentVerb =
   | 'inventory'
   | 'signin-expiry'
@@ -35,7 +39,10 @@ export type AgentVerb =
   | 't3-pins'
   | 'key-store'
   | 'claude-history'
-  | 'failover-inventory';
+  | 'failover-inventory'
+  | 'launch'
+  | 'claude-host'
+  | 'signin-session';
 export interface AgentArtifact {
   target: string;
   version: string;
@@ -47,7 +54,172 @@ export interface AgentArtifact {
 /** Invalid and absent settings stay off. The environment override supports isolated gates. */
 export function agentVerbs(): AgentVerbs {
   const value = process.env.AAC_AGENT_VERBS ?? loadUnifiedConfig()?.agentVerbs;
-  return value === 'on' ? 'on' : 'off';
+  if (process.env.AAC_RUST_CUT_WORKER === '1') return value === 'off' ? 'off' : 'on';
+  return value === 'on' || value === 'shadow' ? value : 'off';
+}
+
+/** Every verb the adapter can gate; the family map admits no other key. */
+const AGENT_VERBS: readonly AgentVerb[] = [
+  'inventory',
+  'signin-expiry',
+  'quota-read',
+  'scan-usage',
+  't3-pins',
+  'key-store',
+  'claude-history',
+  'failover-inventory',
+  'launch',
+  'claude-host',
+  'signin-session',
+];
+/** key-store and claude-history write on the computer: shadow would duplicate the write, so
+ * those two families treat shadow as off. The read-only families shadow safely. */
+const WRITE_VERBS: Partial<Record<AgentVerb, true>> = {
+  'key-store': true,
+  'claude-history': true,
+  launch: true,
+  'claude-host': true,
+  'signin-session': true,
+};
+const MODE_RANK: Record<AgentVerbs, number> = { off: 0, shadow: 1, on: 2 };
+
+/** Per-family modes under the scalar ceiling; an absent map keeps the ceiling for every verb.
+ * A present but invalid map stays empty (every family off), never the ceiling. An absent or
+ * unreadable config leaves the legacy scalar behavior intact.
+ * `AAC_AGENT_VERB_FAMILIES` (JSON) supports isolated gates. */
+export function agentVerbFamilies(): Partial<Record<AgentVerb, AgentVerbs>> | null {
+  const env = process.env.AAC_AGENT_VERB_FAMILIES;
+  let raw: unknown;
+  if (env !== undefined) {
+    try {
+      raw = JSON.parse(env);
+    } catch {
+      return {};
+    }
+  } else {
+    let config: UnifiedConfig | null;
+    try {
+      config = loadUnifiedConfig();
+    } catch {
+      return null;
+    }
+    raw = config?.agentVerbFamilies;
+  }
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const families: Partial<Record<AgentVerb, AgentVerbs>> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!AGENT_VERBS.includes(key as AgentVerb)) return {};
+    if (value !== 'off' && value !== 'shadow' && value !== 'on') return {};
+    families[key as AgentVerb] = value;
+  }
+  return families;
+}
+
+/** One verb's effective mode: the scalar ceiling caps its family setting; an unlisted family
+ * stays off while a map is present, so families turn on one at a time (DESIGN 4.5). */
+export function agentVerbMode(verb: AgentVerb): AgentVerbs {
+  const ceiling = agentVerbs();
+  if (ceiling === 'off') return 'off';
+  const families = agentVerbFamilies();
+  const cut = process.env.AAC_RUST_CUT_WORKER === '1';
+  const requested = families ? (families[verb] ?? (cut ? 'on' : 'off')) : ceiling;
+  if (cut) return requested === 'off' ? 'off' : 'on';
+  const mode = MODE_RANK[requested] <= MODE_RANK[ceiling] ? requested : ceiling;
+  return mode === 'shadow' && WRITE_VERBS[verb] ? 'off' : mode;
+}
+
+export type AgentShadowOutcome =
+  'equal' | 'different' | 'fallback' | 'error' | 'reference-failed' | 'reference-fallback';
+export interface AgentShadowReport {
+  verb: AgentVerb;
+  outcome: AgentShadowOutcome;
+  agentMs: number;
+  referenceMs: number;
+}
+
+/** The parity spec's only normalization: JSON object key order. Arrays keep their order. */
+function canonicalJson(value: unknown): string {
+  const sort = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(sort);
+    if (node && typeof node === 'object') {
+      const row = node as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(row).sort()) out[key] = sort(row[key]);
+      return out;
+    }
+    return node;
+  };
+  return JSON.stringify(sort(value));
+}
+
+function shadowEqual(agent: unknown, reference: unknown): boolean {
+  if (Buffer.isBuffer(agent) && Buffer.isBuffer(reference)) return agent.equals(reference);
+  if (typeof agent === 'string' && typeof reference === 'string') {
+    try {
+      return canonicalJson(JSON.parse(agent)) === canonicalJson(JSON.parse(reference));
+    } catch {
+      return agent === reference;
+    }
+  }
+  return canonicalJson(agent) === canonicalJson(reference);
+}
+
+/**
+ * Shadow (DESIGN 4.5): the reference answer is served as soon as it settles; the agent runs
+ * alongside and the comparison is logged in the background. Bodies never enter the log. A
+ * fallback or failed agent attempt is not a difference; a reference the agent cannot match
+ * (a python-fallback scan) is `reference-fallback`, also not a difference.
+ */
+export async function runAgentShadow<T>(
+  verb: AgentVerb,
+  agent: () => Promise<T | null>,
+  reference: () => Promise<T>,
+  onCompared?: (report: AgentShadowReport) => void,
+  comparable: (reference: T) => boolean = () => true
+): Promise<T> {
+  const agentStarted = Date.now();
+  const referenceStarted = Date.now();
+  const pending = Promise.resolve()
+    .then(() => agent())
+    .then(
+      (value) => ({ value, failed: false }),
+      () => ({ value: null as T | null, failed: true })
+    );
+  const settled = await Promise.resolve()
+    .then(() => reference())
+    .then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
+  const referenceMs = Date.now() - referenceStarted;
+  void pending
+    .then(({ value, failed }) => {
+      const agentMs = Date.now() - agentStarted;
+      const outcome: AgentShadowOutcome = !settled.ok
+        ? 'reference-failed'
+        : failed
+          ? 'error'
+          : value === null
+            ? 'fallback'
+            : !comparable(settled.value)
+              ? 'reference-fallback'
+              : shadowEqual(value, settled.value)
+                ? 'equal'
+                : 'different';
+      logger.info('agent.verbs.shadow', 'shadow comparison', {
+        verb,
+        outcome,
+        agentMs,
+        referenceMs,
+      });
+      onCompared?.({ verb, outcome, agentMs, referenceMs });
+    })
+    .catch(() => {
+      /* A failing comparison hook never changes the served answer. */
+    });
+  if (!settled.ok) throw settled.error;
+  return settled.value;
 }
 
 /** Keep the one-release fallback visible without publishing host names or private paths. */
@@ -58,8 +230,11 @@ export function pythonSignInFallback(): void {
 /** The service's single fallback boundary, shared by local and SSH collectors. */
 export async function collectSignInWithFallback(
   agent: () => Promise<string | null>,
-  python: () => Promise<string>
+  python: () => Promise<string>,
+  mode: AgentVerbs = agentVerbMode('signin-expiry'),
+  onCompared?: (report: AgentShadowReport) => void
 ): Promise<string> {
+  if (mode === 'shadow') return runAgentShadow('signin-expiry', agent, python, onCompared);
   try {
     const result = await agent();
     if (result !== null) return result;
@@ -70,12 +245,25 @@ export async function collectSignInWithFallback(
   return python();
 }
 
-function target(platform: UsageHost['platform']): string {
+/** The targets one platform admits, in preference order; mirrors the service's
+ * compatible_target (musl first on Linux, Apple Silicon first on the Mac). */
+function agentTargets(platform: UsageHost['platform']): readonly string[] {
   return platform === 'mac'
-    ? 'aarch64-apple-darwin'
+    ? ['aarch64-apple-darwin', 'x86_64-apple-darwin']
     : platform === 'windows'
-      ? 'x86_64-pc-windows-msvc'
-      : 'x86_64-unknown-linux-musl';
+      ? ['x86_64-pc-windows-msvc']
+      : ['x86_64-unknown-linux-musl', 'x86_64-unknown-linux-gnu'];
+}
+
+function findArtifact(
+  artifacts: readonly AgentArtifact[],
+  platform: UsageHost['platform']
+): AgentArtifact | undefined {
+  for (const target of agentTargets(platform)) {
+    const artifact = artifacts.find((a) => a.target === target);
+    if (artifact) return artifact;
+  }
+  return undefined;
 }
 
 export function agentLauncher(artifact: AgentArtifact, platform: UsageHost['platform']): string {
@@ -109,17 +297,19 @@ export interface AgentCallOptions {
   deadlineMs: number;
   timeoutMs?: number;
   maxBytes: number;
+  singleShot?: boolean;
 }
 
 /** Presence and pinned digest only; execution additionally verifies the version handshake. */
 export function localAgentReady(
   platform: UsageHost['platform'],
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
-  mode: AgentVerbs = agentVerbs()
+  mode: AgentVerbs = agentVerbMode('scan-usage')
 ): boolean {
-  if (mode !== 'on') return false;
-  if (agentTransport() === 'on') return artifacts.some((a) => a.target === target(platform));
-  const artifact = artifacts.find((a) => a.target === target(platform));
+  if (mode === 'off') return false;
+  if (agentTransport() === 'on')
+    return artifacts.some((a) => agentTargets(platform).includes(a.target));
+  const artifact = findArtifact(artifacts, platform);
   if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return false;
   try {
     const file = path.resolve(__dirname, '../../..', artifact.file);
@@ -134,6 +324,13 @@ export function localAgentReady(
   }
 }
 
+function serviceCollects(verb: AgentVerb): boolean {
+  return (
+    ['quota-read', 'signin-expiry', 'failover-inventory'].includes(verb) &&
+    privateFileOwners()['account-usage-observations'] === 'rust-service'
+  );
+}
+
 /** Every unavailable, unproven or failed agent delegates to the labelled Python helper. */
 export async function runAgentVerb(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
@@ -142,7 +339,7 @@ export async function runAgentVerb(
   options: AgentCallOptions
 ): Promise<string | null> {
   try {
-    const mode = options.mode ?? agentVerbs();
+    const mode = options.mode ?? agentVerbMode(verb);
     if (mode === 'off') return null;
     if ((options.transport ?? agentTransport()) === 'on') {
       const started = Date.now();
@@ -157,7 +354,9 @@ export async function runAgentVerb(
           maxBytes: options.maxBytes,
           callId: randomBytes(16).toString('hex'),
         },
-        options.onProgress
+        options.onProgress,
+        options.singleShot,
+        serviceCollects(verb)
       );
       if (result !== undefined) return result;
       logger.info('agent.transport.fallback', 'fallback: typescript transport', { verb });
@@ -170,7 +369,8 @@ export async function runAgentVerb(
       });
     }
     return runAgentVerbTsFallback(host, verb, verbArgs, options);
-  } catch {
+  } catch (error) {
+    if (options.singleShot || error instanceof CollectionReadIndeterminate) throw error;
     return null;
   }
 }
@@ -182,8 +382,9 @@ async function runAgentVerbTsFallback(
   verbArgs: Record<string, unknown>,
   options: AgentCallOptions
 ): Promise<string | null> {
+  let dispatched = false;
   try {
-    const mode = options.mode ?? agentVerbs();
+    const mode = options.mode ?? agentVerbMode(verb);
     const artifacts = options.artifacts ?? manifest.artifacts;
     // The default runner launches only the probed ssh, checked just before the spawn.
     const run =
@@ -191,7 +392,7 @@ async function runAgentVerbTsFallback(
       (async (file: string, args: string[], opts: Parameters<typeof runManagedCommand>[2]) =>
         runManagedCommand(await sshLaunch(file, args), args, opts));
     if (mode === 'off') return null;
-    const artifact = artifacts.find((a) => a.target === target(host.platform));
+    const artifact = findArtifact(artifacts, host.platform);
     if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return null;
     const id = verb;
     let executable = 'ssh';
@@ -237,17 +438,24 @@ async function runAgentVerbTsFallback(
         args: verbArgs,
       }) + '\n';
     if (Buffer.byteLength(input) > options.maxBytes) return null;
+    dispatched = true;
     const result = await run(executable, args, {
       timeoutMs: options.timeoutMs ?? options.deadlineMs + 5000,
       maxBytes: options.maxBytes,
       input,
       env: host.sshHost ? sshEnvironment() : { ...process.env },
     });
-    if (host.sshHost && result.code === 87) return null;
-    if (result.failed || result.code !== 0 || result.timedOut || result.missing) return null;
-    if (Buffer.byteLength(result.stdout) > options.maxBytes) return null;
+    if (result.missing || (host.sshHost && result.code === 87 && !result.timedOut)) return null;
+    if (
+      result.failed ||
+      result.code !== 0 ||
+      result.timedOut ||
+      Buffer.byteLength(result.stdout) > options.maxBytes
+    )
+      throw new ConfigError('Agent reply unavailable.');
     return reply(result.stdout, id);
-  } catch {
+  } catch (error) {
+    if (dispatched && options.singleShot) throw error;
     return null;
   }
 }
@@ -257,7 +465,7 @@ export async function runSignInAgent(
   host: UsageHost,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
   run: typeof runManagedCommand | undefined = undefined,
-  mode: AgentVerbs = agentVerbs()
+  mode: AgentVerbs = agentVerbMode('signin-expiry')
 ): Promise<string | null> {
   const result = await runAgentVerb(
     host,
@@ -296,7 +504,7 @@ export async function runQuotaAgent(
   args: Record<string, unknown>,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
   run: typeof runManagedCommand | undefined = undefined,
-  mode: AgentVerbs = agentVerbs()
+  mode: AgentVerbs = agentVerbMode('quota-read')
 ): Promise<string | null> {
   const value = await runAgentVerb(host, 'quota-read', args, {
     artifacts,
@@ -312,20 +520,27 @@ export async function runQuotaAgent(
     row.provider !== args.provider ||
     row.platform !== args.platform ||
     row.id !== (args.account ?? `plan-${args.provider}-${args.platform}`)
-  )
+  ) {
+    if (agentTransport() === 'on' && serviceCollects('quota-read'))
+      throw new CollectionReadIndeterminate();
     return null;
+  }
   logger.info('agent.verbs.result', 'Agent verb collected', { verb: 'quota-read' });
   return value;
 }
 
 export async function collectQuotaWithFallback(
   agent: () => Promise<string | null>,
-  python: () => Promise<string>
+  python: () => Promise<string>,
+  mode: AgentVerbs = agentVerbMode('quota-read'),
+  onCompared?: (report: AgentShadowReport) => void
 ): Promise<string> {
+  if (mode === 'shadow') return runAgentShadow('quota-read', agent, python, onCompared);
   try {
     const result = await agent();
     if (result !== null) return result;
-  } catch {
+  } catch (error) {
+    if (error instanceof CollectionReadIndeterminate) throw error;
     /* Python remains authoritative. */
   }
   logger.info('agent.verbs.fallback', 'fallback: python', { verb: 'quota-read' });
@@ -334,14 +549,26 @@ export async function collectQuotaWithFallback(
 
 /** New verbs keep their reference helper visible on every failure. */
 export async function collectAgentWithFallback<T>(
-  verb: 'inventory' | 't3-pins' | 'key-store' | 'claude-history' | 'failover-inventory',
+  verb:
+    | 'inventory'
+    | 't3-pins'
+    | 'key-store'
+    | 'claude-history'
+    | 'failover-inventory'
+    | 'launch'
+    | 'claude-host',
   agent: () => Promise<T | null>,
-  helper: () => Promise<T>
+  helper: () => Promise<T>,
+  mode: AgentVerbs = agentVerbMode(verb),
+  onCompared?: (report: AgentShadowReport) => void,
+  singleShot = false
 ): Promise<T> {
+  if (mode === 'shadow' && !singleShot) return runAgentShadow(verb, agent, helper, onCompared);
   try {
     const value = await agent();
     if (value !== null) return value;
-  } catch {
+  } catch (error) {
+    if (singleShot) throw error;
     /* The reference helper owns unqualified inputs and failed executions. */
   }
   logger.info(
@@ -350,10 +577,74 @@ export async function collectAgentWithFallback<T>(
       ? 'fallback: typescript probe'
       : verb === 't3-pins'
         ? 'fallback: sqlite3'
-        : 'fallback: python',
+        : verb === 'launch'
+          ? 'fallback: typescript launcher'
+          : verb === 'claude-host'
+            ? 'fallback: host bootstrap'
+            : 'fallback: python',
     { verb }
   );
   return helper();
+}
+
+/**
+ * M4b host steps keep the reference's small JSON answers; the ssh bootstrap stays the
+ * labelled fallback. The envelope binds the host family; the agent checks it against its
+ * own computer. Purge carries the permit `claudeHostPurgePermit` issues.
+ */
+export async function runClaudeHostAgent(
+  host: { platform: 'mac' | 'windows'; sshHost?: string },
+  args: Record<string, unknown>,
+  options: Partial<AgentCallOptions> = {}
+): Promise<Record<string, unknown> | null> {
+  const result = await runAgentVerb(
+    { platform: host.platform, sshHost: host.sshHost ?? null },
+    'claude-host',
+    { host: host.platform, ...args },
+    { deadlineMs: 60000, maxBytes: 65536, ...options }
+  );
+  if (result === null) return null;
+  const value: unknown = JSON.parse(result);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  switch (args.op) {
+    case 'create':
+      return typeof row.launcherName === 'string' && typeof row.profilePath === 'string'
+        ? row
+        : null;
+    case 'state':
+      return typeof row.running === 'boolean' ? row : null;
+    case 'session':
+      return typeof row.signedIn === 'boolean' ? row : null;
+    case 'trash':
+      return row.result === 'moved' || row.result === 'cross_volume' ? row : null;
+    case 'undo':
+    case 'restore':
+    case 'purge':
+    case 'open':
+      return row.ok === true ? row : null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * The TS-issued purge permit for the agent boundary: an HMAC-SHA256 over the host, the
+ * exact trash folder and the expiry, with the one shared policy key. The route's
+ * confirmation is consumed in the front door first; this binds the same decision for the
+ * agent, which refuses purge without it. Never logged.
+ */
+export function claudeHostPurgePermit(
+  host: 'mac' | 'windows',
+  trashName: string,
+  now: number = Date.now()
+): string {
+  const expiresMs = now + CONFIRMATION_TTL_MS;
+  const key = Buffer.from(transportPolicy.claudeHostPurgeKey, 'hex');
+  const mac = createHmac('sha256', key)
+    .update(`aac-claude-host-purge\0${host}\0${trashName}\0${expiresMs}`, 'utf8')
+    .digest('hex');
+  return `${expiresMs}.${mac}`;
 }
 
 /**
@@ -434,14 +725,49 @@ export async function runHistoryAgent(
   args: Record<string, unknown>,
   options: Partial<AgentCallOptions> = {}
 ): Promise<Buffer | null> {
-  if (!['collect', 'closed-check', 'protected-check'].includes(String(args.mode))) return null;
+  const cleanup = args.mode === 'snapshot-cleanup';
+  if (cleanup) {
+    // Windows keeps the existing helper until the native target can prove its
+    // directory and file identities. Every other operand comes from the route's
+    // bound profile resolution.
+    if (
+      host.platform !== 'mac' ||
+      args.platform !== 'mac' ||
+      typeof args.profileId !== 'string' ||
+      !args.policy ||
+      typeof args.policy !== 'object'
+    )
+      return null;
+    const artifacts = options.artifacts ?? manifest.artifacts;
+    if (!artifacts.some((artifact) => agentTargets(host.platform).includes(artifact.target)))
+      return null;
+  } else if (!['collect', 'closed-check', 'protected-check'].includes(String(args.mode))) {
+    return null;
+  }
   const result = await runAgentVerb(host, 'claude-history', args, {
     deadlineMs: 25000,
     maxBytes: 1024 * 1024,
     ...options,
+    singleShot: cleanup,
   });
   if (result === null) return null;
   const row = JSON.parse(result);
+  if (cleanup) {
+    if (
+      Object.keys(row).join(',') !== 'kept,deleted,skipped' ||
+      ![row.kept, row.deleted, row.skipped].every(
+        (items) =>
+          Array.isArray(items) &&
+          items.length <= 1024 &&
+          items.every(
+            (name) =>
+              typeof name === 'string' && /^\.history-index-snapshot-[a-f0-9]{32}$/.test(name)
+          )
+      )
+    )
+      throw new ConfigError('Snapshot cleanup reply unavailable.');
+    return Buffer.from(result);
+  }
   if (Array.isArray(row)) return null;
   if (args.mode === 'closed-check') {
     if (Object.keys(row).join(',') !== 'closed' || typeof row.closed !== 'boolean') return null;

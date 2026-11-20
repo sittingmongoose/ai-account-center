@@ -18,6 +18,8 @@ workspace = true
 aac-api.workspace = true
 aac-diag.workspace = true
 aac-files.workspace = true
+aac-log.workspace = true
+aac-num.workspace = true
 aac-core.workspace = true
 aac-config.workspace = true
 aac-protocol.workspace = true
@@ -26,16 +28,44 @@ aac-providers.workspace = true
 aac-views.workspace = true
 aac-store.workspace = true
 aac-status.workspace = true
+aac-renewal.workspace = true
+aac-snapshot.workspace = true
 base64 = "0.22"
+indexmap = "2.14.2"
 libc.workspace = true
 serde.workspace = true
-serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
+serde_yaml.workspace = true
+serde_json = { workspace = true, features = ["raw_value", "preserve_order", "float_roundtrip"] }
 tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
+# Model pricing (G15) and the CLI's local store API fallback.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 sha2.workspace = true
+sha1.workspace = true
+flate2 = "1"
 subtle = "2.6"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+bcrypt = "0.19"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz.workspace = true
+getrandom = "0.4"
+hmac = "0.13"
+httpdate = "1"
+if-addrs = "0.15"
+ipnet = "2"
+regex = { workspace = true, features = ["unicode-gencat"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+url = "2"
+tempfile.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+aac-renewal = { workspace = true, features = ["parity-fixtures"] }
+tokio-tungstenite = "0.29"
+
+[build-dependencies]
+serde_json.workspace = true

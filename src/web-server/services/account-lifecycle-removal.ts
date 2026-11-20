@@ -1,3 +1,5 @@
+import { runKeyWorkflow } from './account-key-workflow';
+import { editRegistry } from './account-lifecycle-transitions';
 import { CONFIRMATION_TOKEN_PATTERN, stateFingerprint } from './account-confirmations';
 import { isKeyProvider } from './account-key-store';
 import {
@@ -175,7 +177,8 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
       fingerprint: async () => reviewedEntry(entry),
       // In the provider's key queue, so a Replace key can never write the key back
       // after this deleted it (the queue also holds Add and the orphan-key sweep).
-      commit: () => serialized(keyQueue(entry.provider), () => removeAdditional(env, entry)),
+      commit: () =>
+        serialized(env.ccsDir(), keyQueue(entry.provider), () => removeAdditional(env, entry)),
     };
   }
   if (account.kind === 'antigravity' && env.antigravity) {
@@ -249,39 +252,10 @@ async function removeWallet(
   } catch {
     entry = null;
   }
-  let position = -1;
-  if (entry) {
-    const removed = entry;
-    await updateAccountRegistry(env.ccsDir(), (current) => {
-      position = current.accounts.findIndex((candidate) => candidate.id === id);
-      if (position < 0) throw new LifecycleHttpError(409, 'confirmation_stale');
-      return {
-        ...current,
-        accounts: current.accounts.filter((candidate) => candidate.id !== id),
-      };
-    }).catch((error) => {
-      throw error instanceof LifecycleHttpError
-        ? error
-        : new LifecycleHttpError(500, 'remove_failed');
-    });
-    try {
-      await deleteOpencodeWalletSource(env.ccsDir());
-    } catch {
-      await updateAccountRegistry(env.ccsDir(), (current) => {
-        if (current.accounts.some((candidate) => candidate.id === id)) return current;
-        const accounts = [...current.accounts];
-        accounts.splice(Math.min(position, accounts.length), 0, removed);
-        return { ...current, accounts };
-      }).catch(() => undefined);
-      throw new LifecycleHttpError(500, 'remove_failed');
-    }
-    return { trashId: null, purgeAfter: null };
-  }
-  try {
-    await deleteOpencodeWalletSource(env.ccsDir());
-  } catch {
-    throw new LifecycleHttpError(500, 'remove_failed');
-  }
+  const root = env.ccsDir();
+  await dropEntryAndCredential(root, entry, async () => {
+    await deleteOpencodeWalletSource(root);
+  });
   return { trashId: null, purgeAfter: null };
 }
 
@@ -314,33 +288,55 @@ async function removeAdditional(
   const keyed = credential.kind === 'aac-key' && isKeyProvider(entry.provider);
   const store = keyed ? env.keyStore({ platform: entry.platform, sshHost: entry.sshHost }) : null;
   if (keyed && !store) throw new LifecycleHttpError(500, 'remove_failed');
-  let position = -1;
-  await updateAccountRegistry(env.ccsDir(), (current) => {
-    position = current.accounts.findIndex((candidate) => candidate.id === entry.id);
-    if (position < 0) throw new LifecycleHttpError(409, 'confirmation_stale');
-    return {
-      ...current,
-      accounts: current.accounts.filter((candidate) => candidate.id !== entry.id),
-    };
-  }).catch((error) => {
-    throw error instanceof LifecycleHttpError
-      ? error
-      : new LifecycleHttpError(500, 'remove_failed');
-  });
-  if (store && credential.kind === 'aac-key' && isKeyProvider(entry.provider)) {
-    try {
+  await dropEntryAndCredential(env.ccsDir(), entry, async () => {
+    if (store && credential.kind === 'aac-key' && isKeyProvider(entry.provider))
       await store.delete(entry.provider, credential.keyId);
-    } catch {
-      await updateAccountRegistry(env.ccsDir(), (current) => {
-        if (current.accounts.some((candidate) => candidate.id === entry.id)) return current;
-        const accounts = [...current.accounts];
-        accounts.splice(Math.min(position, accounts.length), 0, entry);
-        return { ...current, accounts };
-      }).catch(() => undefined);
-      throw new LifecycleHttpError(500, 'remove_failed');
-    }
-  }
+  });
   return { trashId: null, purgeAfter: null };
+}
+
+/** Account removal settles the credential/source after unpublishing the reviewed entry. */
+async function dropEntryAndCredential(
+  root: string,
+  entry: RegistryAccount | null,
+  discard: () => Promise<void>
+): Promise<void> {
+  let position = -1;
+  await runKeyWorkflow(root, 'remove', async (effect) => {
+    switch (effect) {
+      case 'unpublish':
+        if (!entry) return;
+        await updateAccountRegistry(root, (current) => {
+          const stored = current.accounts.find((candidate) => candidate.id === entry.id);
+          if (!stored || reviewedEntry(stored) !== reviewedEntry(entry))
+            throw new LifecycleHttpError(409, 'confirmation_stale');
+          const edit = editRegistry(root, current, { kind: 'remove', id: entry.id });
+          if ('refusal' in edit || edit.position === null)
+            throw new LifecycleHttpError(409, 'confirmation_stale');
+          position = edit.position;
+          return edit.registry;
+        }).catch((error) => {
+          throw error instanceof LifecycleHttpError
+            ? error
+            : new LifecycleHttpError(500, 'remove_failed');
+        });
+        return;
+      case 'discard':
+        await discard().catch(() => {
+          throw new LifecycleHttpError(500, 'remove_failed');
+        });
+        return;
+      case 'publish':
+        if (!entry) return;
+        await updateAccountRegistry(root, (current) => {
+          const edit = editRegistry(root, current, { kind: 'restore', entry, index: position });
+          return 'refusal' in edit ? current : edit.registry;
+        });
+        return;
+      default:
+        throw new LifecycleHttpError(500, 'remove_failed');
+    }
+  });
 }
 
 function mapError(error: unknown): LifecycleHttpError {
@@ -401,7 +397,9 @@ export async function removeAccount(
     stateFingerprint: await plan.fingerprint(),
   };
   if (commitBody === null) {
-    const issued = env.confirmations().issue(binding);
+    const issued = context.approvals
+      ? await context.approvals.issue(binding)
+      : env.confirmations().issue(binding);
     return {
       status: 200,
       body: {
@@ -424,10 +422,17 @@ export async function removeAccount(
       throw new LifecycleHttpError(400, 'invalid_body');
     }
   }
-  if (!env.confirmations().consume(commitBody.token, binding)) {
+  if (
+    !(context.approvals
+      ? await context.approvals.consume(commitBody.token, binding)
+      : env.confirmations().consume(commitBody.token, binding))
+  ) {
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   await refused();
+  if (context.approvals && (await plan.fingerprint()) !== binding.stateFingerprint) {
+    throw new LifecycleHttpError(409, 'confirmation_stale');
+  }
   let outcome: { trashId: string | null; purgeAfter: string | null };
   try {
     outcome = await plan.commit();
@@ -482,7 +487,9 @@ export async function restoreTrash(
       status: 200,
       body: {
         confirmation: {
-          ...env.confirmations().issue(binding),
+          ...(context.approvals
+            ? await context.approvals.issue(binding)
+            : env.confirmations().issue(binding)),
           effects: [
             'Its Claude data moves back on Mac and Windows.',
             'Its launchers are created again.',
@@ -491,12 +498,19 @@ export async function restoreTrash(
       },
     };
   }
-  if (!env.confirmations().consume(token, binding)) {
+  if (
+    !(context.approvals
+      ? await context.approvals.consume(token, binding)
+      : env.confirmations().consume(token, binding))
+  ) {
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   let restored: { accountId: string };
   try {
-    restored = await claude.restore(trashId);
+    restored = await claude.restore(
+      trashId,
+      context.approvals ? binding.stateFingerprint : undefined
+    );
   } catch (error) {
     throw mapError(error);
   }
@@ -556,7 +570,9 @@ export async function purgeTrash(
       status: 200,
       body: {
         confirmation: {
-          ...env.confirmations().issue(binding),
+          ...(context.approvals
+            ? await context.approvals.issue(binding)
+            : env.confirmations().issue(binding)),
           effects: [
             'Its Claude data is deleted for good on Mac and Windows.',
             'This cannot be undone. Type DELETE to confirm.',
@@ -569,11 +585,15 @@ export async function purgeTrash(
   if (commit.confirm !== PURGE_TYPED_CONFIRMATION) {
     throw new LifecycleHttpError(400, 'invalid_body');
   }
-  if (!env.confirmations().consume(commit.token, binding)) {
+  if (
+    !(context.approvals
+      ? await context.approvals.consume(commit.token, binding)
+      : env.confirmations().consume(commit.token, binding))
+  ) {
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   try {
-    await claude.purgeOne(trashId);
+    await claude.purgeOne(trashId, context.approvals ? binding.stateFingerprint : undefined);
   } catch (error) {
     throw mapError(error);
   }

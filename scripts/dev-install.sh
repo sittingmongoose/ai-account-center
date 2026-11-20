@@ -47,6 +47,8 @@ fi
 node scripts/deploy-lineage.js preflight
 
 echo "[i] Building AI Account Center and the pinned Leptos dashboard..."
+bun run store:build
+bun run status:build
 bun run build:all
 if [ "$SKIP_VALIDATE" = false ]; then
   bun run validate
@@ -59,10 +61,12 @@ node scripts/deploy-lineage.js check
 # The build above is complete; do not invoke prepack a second time.
 # npm's JSON lists every packed file (about 290 KB), past Linux's 128 KB limit for
 # one argument, so node reads it from a file instead of argv.
-PACK_RESULT=$(mktemp)
-trap 'rm -f "$PACK_RESULT"' EXIT
-npm pack --ignore-scripts --json > "$PACK_RESULT"
+PACK_OUTPUT=$(mktemp -d "${TMPDIR:-/tmp}/aac-package-XXXXXXXX")
+PACK_RESULT="$PACK_OUTPUT/pack.json"
+node scripts/stage-dashboard-package.js "$PACK_OUTPUT/stage"
+(cd "$PACK_OUTPUT/stage" && npm pack --ignore-scripts --json --pack-destination "$PACK_OUTPUT") > "$PACK_RESULT"
 TARBALL=$(node -e 'const p=JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); if(p.length!==1 || !p[0].filename.endsWith(".tgz")) process.exit(1); process.stdout.write(p[0].filename)' "$PACK_RESULT")
+TARBALL="$PACK_OUTPUT/$TARBALL"
 if [ ! -f "$TARBALL" ]; then
   echo "[X] Local package tarball was not created." >&2
   exit 1
@@ -70,12 +74,12 @@ fi
 
 echo "[i] Installing the local $PACKAGE_NAME package with $PKG_MANAGER..."
 if [ "$PKG_MANAGER" = bun ]; then
-  bun add -g "file:$(pwd)/$TARBALL"
+  bun add -g "file:$TARBALL"
 else
-  npm install -g ${NPM_PREFIX_ARGS[@]+"${NPM_PREFIX_ARGS[@]}"} "./$TARBALL"
+  npm install -g ${NPM_PREFIX_ARGS[@]+"${NPM_PREFIX_ARGS[@]}"} "$TARBALL"
 fi
 
 # Keep this local package for reinstall/rollback; never touch private ~/.ccs state.
 echo "[OK] Local AI Account Center package installed."
-echo "[i] Package retained at $(pwd)/$TARBALL"
+echo "[i] Package retained at $TARBALL"
 echo "Open with: ai-account-center dashboard"

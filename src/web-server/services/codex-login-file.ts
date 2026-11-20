@@ -1,5 +1,8 @@
 import { constants } from 'fs';
 import fs from 'fs/promises';
+import { createHash } from 'crypto';
+import { getCcsDir } from '../../utils/config-manager';
+import { signInCallback } from '../../shared/private-file-lease';
 import {
   decodeCodexActivationIdentity,
   matchesCodexActivationIdentity,
@@ -23,15 +26,17 @@ export interface CodexLoginIdentity {
   binding: CodexActivationIdentity | null;
 }
 
-/** Parsed JSON of a regular, size-limited file that is not a link; throws otherwise. */
-async function readAuthFile(authPath: string): Promise<unknown> {
+/** Bytes of a regular, size-limited file that is not a link; throws otherwise. */
+async function readAuthFile(authPath: string): Promise<Buffer> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     const noFollow = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW;
     handle = await fs.open(authPath, constants.O_RDONLY | noFollow);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > MAX_AUTH_BYTES) throw new ConfigError('Not a login file.');
-    return JSON.parse(await handle.readFile('utf8')) as unknown;
+    const bytes = await handle.readFile();
+    if (bytes.length > MAX_AUTH_BYTES) throw new ConfigError('Not a login file.');
+    return bytes;
   } finally {
     await handle?.close().catch(() => undefined);
   }
@@ -48,7 +53,7 @@ interface AuthTokens {
 
 /** A complete Codex login: a structurally valid id token with an email, plus access and refresh tokens. */
 export async function readCodexLogin(authPath: string): Promise<CodexLoginIdentity | null> {
-  return readLogin(authPath, true);
+  return (await readLogin(authPath, true))?.identity ?? null;
 }
 
 /**
@@ -57,12 +62,32 @@ export async function readCodexLogin(authPath: string): Promise<CodexLoginIdenti
  * token cannot be read.
  */
 export async function readCodexLoginIdentity(authPath: string): Promise<CodexLoginIdentity | null> {
-  return readLogin(authPath, false);
+  return (await readLogin(authPath, false))?.identity ?? null;
 }
 
-async function readLogin(authPath: string, complete: boolean): Promise<CodexLoginIdentity | null> {
+export function readCodexLoginSnapshot(authPath: string) {
+  return readLogin(authPath, true);
+}
+
+async function readLogin(
+  authPath: string,
+  complete: boolean
+): Promise<{ identity: CodexLoginIdentity; bytes: Buffer } | null> {
   try {
-    const parsed = (await readAuthFile(authPath)) as AuthTokens | null;
+    const bytes = await readAuthFile(authPath);
+    const native = signInCallback(getCcsDir(), { action: 'codex-login', path: authPath, complete });
+    if (
+      native?.status === 'ok' &&
+      typeof native.sha256 === 'string' &&
+      native.identity &&
+      typeof native.identity === 'object'
+    ) {
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      if (digest === native.sha256) {
+        return { identity: native.identity as CodexLoginIdentity, bytes };
+      }
+    }
+    const parsed = JSON.parse(bytes.toString('utf8')) as AuthTokens | null;
     const token = parsed?.tokens?.id_token;
     if (typeof token !== 'string' || !hasStructurallyValidIdToken(token)) return null;
     const identity = decodeIdToken(token);
@@ -77,10 +102,13 @@ async function readLogin(authPath: string, complete: boolean): Promise<CodexLogi
       return null;
     }
     return {
-      email: identity.email,
-      accountId: identity.account_id ?? null,
-      plan: identity.plan_type ?? null,
-      binding: decodeCodexActivationIdentity(token, parsed?.tokens?.account_id),
+      identity: {
+        email: identity.email,
+        accountId: identity.account_id ?? null,
+        plan: identity.plan_type ?? null,
+        binding: decodeCodexActivationIdentity(token, parsed?.tokens?.account_id),
+      },
+      bytes,
     };
   } catch {
     // Parser messages can contain token fragments; nothing is reported.
@@ -106,6 +134,14 @@ export function sameCodexIdentity(
   meta: Pick<CodexProfileMetadata, 'email' | 'account_id'>,
   fresh: CodexLoginIdentity
 ): boolean {
+  const native = signInCallback(getCcsDir(), {
+    action: 'codex-same-identity',
+    saved,
+    metaEmail: meta.email ?? null,
+    metaAccount: meta.account_id ?? null,
+    fresh,
+  });
+  if (native?.status === 'ok' && typeof native.same === 'boolean') return native.same;
   const binding = fresh.binding;
   if (!binding) return false;
   const knownEmail = saved?.email ?? meta.email ?? null;

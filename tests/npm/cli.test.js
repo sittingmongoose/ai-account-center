@@ -5,7 +5,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const packageRoot = path.resolve(__dirname, '../..');
-const cliSource = path.join(packageRoot, 'src/ccs.ts');
+const suffix = process.platform === 'win32' ? '.exe' : '';
+const nativeBin = (name) => path.join(packageRoot, 'dist/native', name + suffix);
 let testHome;
 let configDir;
 let credentialFiles;
@@ -34,7 +35,7 @@ afterEach(() => {
   fs.rmSync(testHome, { recursive: true, force: true });
 });
 
-function runCli(args) {
+function runCli(args, bin = nativeBin('ai-account-center')) {
   const env = {
     ...process.env,
     CCS_HOME: testHome,
@@ -43,7 +44,7 @@ function runCli(args) {
     NO_COLOR: '1',
   };
   delete env.CCS_DIR;
-  return spawnSync(process.execPath, [cliSource, ...args], {
+  return spawnSync(bin, args, {
     cwd: packageRoot,
     env,
     encoding: 'utf8',
@@ -142,27 +143,16 @@ describe('AI Account Center CLI', () => {
     }
   });
 
-  it('legacy launcher bins point to a migration-only stub with no shell output', () => {
+  it('retired launcher names run native migration guidance with no shell output', () => {
     const pkg = require('../../package.json');
     for (const alias of ['ccsx', 'ccs-codex', 'ccsd', 'ccs-droid', 'ccsxp']) {
-      expect(pkg.bin[alias]).toBe('dist/bin/compat-cli.js');
+      expect(pkg.bin[alias]).toBe(`dist/native/${alias}`);
+      const result = runCli(['auth', 'use', 'saved'], nativeBin(alias));
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain(`${alias} is a retired upstream CCS launcher`);
+      expect(result.stderr).toContain('codex-auth activate <saved-login>');
     }
-    const env = { ...process.env, CCS_HOME: testHome, CODEX_HOME: path.join(testHome, '.codex') };
-    delete env.CCS_DIR;
-    const result = spawnSync(
-      process.execPath,
-      [path.join(packageRoot, 'src/bin/compat-cli.ts'), 'auth', 'use', 'saved'],
-      {
-        cwd: packageRoot,
-        env,
-        encoding: 'utf8',
-        timeout: 10000,
-      }
-    );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('retired upstream CCS launcher');
-    expect(result.stderr).toContain('codex-auth activate <saved-login>');
   });
 
   it('retired self-update cannot invoke package installation for any old flag variant', () => {

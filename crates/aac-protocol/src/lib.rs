@@ -22,6 +22,37 @@ pub fn frame_cap(verb: &str) -> usize {
 }
 /// Largest allowed per-request relative deadline in milliseconds.
 pub const MAX_DEADLINE_MS: u64 = 600_000;
+/// Interactive sign-in sessions keep the CLI's own 15-minute window plus the install and
+/// cleanup margin; every other verb keeps the ten-minute cap.
+pub const MAX_SIGNIN_SESSION_DEADLINE_MS: u64 = 960_000;
+
+/// The deadline cap for one verb.
+pub fn max_deadline_ms(verb: &str) -> u64 {
+    if verb == "signin-session" {
+        MAX_SIGNIN_SESSION_DEADLINE_MS
+    } else {
+        MAX_DEADLINE_MS
+    }
+}
+
+/// Time a single application update call may spend on its host.
+pub const APP_UPDATE_DEADLINE_MS: u64 = 31 * 60_000;
+/// Time the dashboard may spend on connection, update and cleanup for one host.
+pub const APP_UPDATE_HOST_TIMEOUT_MS: u64 = 33 * 60_000;
+
+/// The host progress event that requests permission to begin an app update.
+pub const APP_UPDATE_ADMISSION: &str = "admission";
+/// The one control line that grants a prepared app update.
+pub const APP_UPDATE_ADMIT: &str = r#"{"admit":true}"#;
+
+/// Long-running app updates have their own bound. Other agent verbs keep the short bound.
+pub fn deadline_cap(verb: &str, args: &Value) -> u64 {
+    if verb == "apps" && matches!(args["action"].as_str(), Some("update" | "prepare-update")) {
+        APP_UPDATE_DEADLINE_MS
+    } else {
+        max_deadline_ms(verb)
+    }
+}
 
 /// Exactly one request starts an agent process; later stdin lines carry controls.
 /// Argument values deliberately cannot be formatted with Debug.
@@ -66,7 +97,7 @@ impl Request {
                 .bytes()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
             || self.deadline_ms == 0
-            || self.deadline_ms > MAX_DEADLINE_MS
+            || self.deadline_ms > deadline_cap(&self.verb, &self.args)
             || !self.args.is_object()
         {
             return Err(Failure::new(Cause::Refused, "invalid request envelope"));

@@ -459,12 +459,14 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     const end = START + 90 * 24 * HOUR;
     let server: Server | null = null;
     try {
-      // 11 series with a reading every hour for 90 days: 23,760 hourly points, over 20,000.
+      // Keep 23,760 hourly points across 11 series to cross the 20,000-point cap.
+      // Usage changes daily. Hourly sightings between changes still produce rollups
+      // without projecting a changed quota reading every hour.
       const [first] = accountsAt(START);
       for (let account = 0; account < 11; account++) {
         const observations = [];
         for (let t = START; t < end; t += HOUR) {
-          const used = Math.floor((t - START) / HOUR) % 90;
+          const used = Math.floor((t - START) / (24 * HOUR));
           const observation = storeObservationFromAccount(
             {
               ...first,
@@ -483,6 +485,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       }
       const capped = await store.seriesPoints({ fromMs: START, toMs: end - 1, resolution: 'hour' });
       expect(capped.truncated).toBe(true);
+      expect(capped.series.length).toBeLessThan(11);
       const exports = await buildRollupExports(store, [], [], end - 1);
       expect(exports.hourly.series).toHaveLength(11);
       expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(23_760);
@@ -501,10 +504,15 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       if (!address || typeof address === 'string') throw new Error('No test listener');
       const response = await fetch(`http://127.0.0.1:${address.port}/api/usage/burn?span=90d`);
       expect(response.status).toBe(200);
-      const body = (await response.json()) as { series: Array<{ accountId: string }> };
+      const body = (await response.json()) as {
+        series: Array<{ accountId: string; spans: Array<{ span: string; consumed: number }> }>;
+      };
       expect(body.series.map((s) => s.accountId).sort()).toEqual(
         Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
       );
+      for (const series of body.series) {
+        expect(series.spans).toEqual([expect.objectContaining({ span: '90d', consumed: 89 })]);
+      }
     } finally {
       const open = server as Server | null;
       if (open) await new Promise<void>((resolve) => open.close(() => resolve()));

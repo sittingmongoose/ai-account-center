@@ -8,8 +8,19 @@
  * private file is ever read.
  */
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from 'bun:test';
 import bcrypt from 'bcrypt';
+import express from 'express';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -17,13 +28,9 @@ import type { AddressInfo } from 'net';
 
 import { startServer } from '../../../src/web-server';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
+import { apiRoutes } from '../../../src/web-server/routes';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
-import * as claudeOpen from '../../../src/web-server/services/claude-desktop-open-service';
-import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
-import * as claudeUsage from '../../../src/web-server/services/claude-desktop-usage-service';
-import * as codexDashboard from '../../../src/codex-auth/codex-auth-dashboard-service';
-import * as codexQuotas from '../../../src/web-server/services/codex-profile-quota-service';
 
 const FIXTURE_ENVIRONMENT = [
   'CCS_HOME',
@@ -109,11 +116,14 @@ let passwordHash = '';
 let originalEnvironment: Record<string, string | undefined> = {};
 let tempHome = '';
 let staticDir = '';
-let instance: Awaited<ReturnType<typeof startServer>> | undefined;
+let instance:
+  (Awaited<ReturnType<typeof startServer>> & { restartPublic?: () => Promise<void> }) | undefined;
 let baseUrl = '';
 let processFailures: unknown[] = [];
 const recordProcessFailure = (reason: unknown) => processFailures.push(reason);
 let serviceStubs: Array<ReturnType<typeof spyOn>> = [];
+let retiredFixtureLayer: unknown;
+let retiredFixtureCalls = 0;
 
 function resetLoginLimiter(): void {
   for (const key of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) loginRateLimiter.resetKey(key);
@@ -121,6 +131,25 @@ function resetLoginLimiter(): void {
 
 beforeAll(async () => {
   passwordHash = await bcrypt.hash(PASSWORD, 4);
+  // These data routes moved to Rust. Keep their canonical and mixed-case authentication
+  // probes by attaching harmless fixture handlers after the API's live guards.
+  const movedFamilies = new Set(['app-updates', 'claude', 'codex', 'antigravity']);
+  const fixtures = express.Router({ caseSensitive: true });
+  for (const route of ROUTES.filter(({ family }) => movedFamilies.has(family))) {
+    const method = route.method === 'GET' ? 'get' : 'post';
+    fixtures[method](route.path.slice('/api'.length), (_request, response) => {
+      retiredFixtureCalls++;
+      response.setHeader('Cache-Control', 'no-store');
+      response.status(route.status).json({ fixture: true });
+    });
+  }
+  apiRoutes.use(fixtures);
+  retiredFixtureLayer = apiRoutes.stack.at(-1);
+});
+
+afterAll(() => {
+  const index = apiRoutes.stack.indexOf(retiredFixtureLayer);
+  if (index !== -1) apiRoutes.stack.splice(index, 1);
 });
 
 beforeEach(async () => {
@@ -130,7 +159,10 @@ beforeEach(async () => {
   tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-auth-hardening-'));
   staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-auth-hardening-ui-'));
   fs.mkdirSync(path.join(staticDir, 'app'));
-  fs.writeFileSync(path.join(staticDir, 'app', 'index.html'), '<main id="aac-frame-fixture"></main>');
+  fs.writeFileSync(
+    path.join(staticDir, 'app', 'index.html'),
+    '<main id="aac-frame-fixture"></main>'
+  );
   fs.writeFileSync(path.join(staticDir, 'dashboard.wasm'), Buffer.from([0, 97, 115, 109]));
   process.env.CCS_HOME = tempHome;
   process.env.CCS_DIR = path.join(tempHome, '.ccs');
@@ -152,13 +184,6 @@ beforeEach(async () => {
   serviceStubs = [
     spyOn(accountDashboard, 'getAccountDashboard').mockResolvedValue({ stub: true } as never),
     spyOn(accountAnalytics, 'getAccountAnalytics').mockResolvedValue({ stub: true } as never),
-    spyOn(claudeProfiles, 'listClaudeDesktopProfileMetadata').mockResolvedValue([] as never),
-    spyOn(claudeUsage, 'getClaudeDesktopUsage').mockResolvedValue({ stub: true } as never),
-    spyOn(claudeOpen, 'openClaudeDesktopProfile').mockResolvedValue(undefined as never),
-    spyOn(codexDashboard, 'getCodexAuthProfilesSummary').mockResolvedValue({
-      stub: true,
-    } as never),
-    spyOn(codexQuotas, 'getCodexProfileQuotas').mockResolvedValue({ stub: true } as never),
   ];
 
   const realFetch = globalThis.fetch;
@@ -173,6 +198,10 @@ beforeEach(async () => {
 
   instance = await startServer({ port: 0, host: '127.0.0.1', staticDir });
   baseUrl = `http://127.0.0.1:${(instance.server.address() as AddressInfo).port}`;
+  // The composed listener primes its offline cache before accepting public HTTP.
+  // Measure the route calls and refusals after the listener is ready.
+  if (instance.restartPublic) for (const stub of serviceStubs) stub.mockClear();
+  retiredFixtureCalls = 0;
 });
 
 afterEach(async () => {
@@ -232,7 +261,7 @@ async function signIn(): Promise<string> {
 }
 
 function stubCalls(): number {
-  return serviceStubs.reduce((total, stub) => total + stub.mock.calls.length, 0);
+  return serviceStubs.reduce((total, stub) => total + stub.mock.calls.length, retiredFixtureCalls);
 }
 
 async function expectServerUp(): Promise<void> {
@@ -308,6 +337,7 @@ describe('F1: API session guard whatever the URL letter case', () => {
 
   it('keeps localhost access without auth on canonical paths only', async () => {
     process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+    await instance?.restartPublic?.();
     const canonical = await send('GET', '/api/codex/profiles');
     expect(canonical.status).toBe(200);
     for (const variant of caseVariants('/api/codex/profiles')) {
@@ -395,10 +425,18 @@ describe('F2: malformed login requests stay inside the request', () => {
   });
 
   it('turns a bcrypt failure into a 401', async () => {
-    const compare = spyOn(bcrypt, 'compare').mockImplementation((() =>
-      Promise.reject(new Error('PRIVATE_BCRYPT_FAILURE'))) as never);
+    const compare = instance?.restartPublic
+      ? undefined
+      : spyOn(bcrypt, 'compare').mockImplementation((() =>
+          Promise.reject(new Error('PRIVATE_BCRYPT_FAILURE'))) as never);
+    if (instance?.restartPublic) {
+      // A hash with valid framing and invalid bcrypt encoding reaches the real verifier.
+      process.env.CCS_DASHBOARD_PASSWORD_HASH =
+        '$2b$04$' + 'PRIVATE_BCRYPT_FAILURE'.padEnd(53, '!');
+      await instance.restartPublic();
+    }
     const response = await login({ username: USERNAME, password: PASSWORD });
-    expect(compare).toHaveBeenCalledTimes(1);
+    if (compare) expect(compare).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(401);
     const text = await response.text();
     expect(JSON.parse(text)).toEqual({

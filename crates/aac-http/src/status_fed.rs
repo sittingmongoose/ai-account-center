@@ -139,9 +139,8 @@ fn etag(key: String, identity: &[u8]) -> String {
     {
         return tag.clone();
     }
-    let digest = Sha256::digest(identity);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    let tag = format!("W/\"{hex}\"");
+    let digest: [u8; 32] = Sha256::digest(identity).into();
+    let tag = format!("W/\"{}\"", crate::view_reply::hex_digest(&digest));
     if let Ok(mut held) = ETAG.lock() {
         *held = Some((key, identity.to_vec(), tag.clone()));
     }

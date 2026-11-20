@@ -43,12 +43,17 @@ export function scrubLoggedUrl(url: string): string {
   return redacted === decoded ? scrubbed : redacted;
 }
 
-export function requestLoggingMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const requestId = randomUUID();
+export function requestLoggingMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  composed = false
+): void {
+  const requestId = (composed && req.get('x-ccs-request-id')) || randomUUID();
   const startTime = Date.now();
   res.locals.ccsRequestId = requestId;
   res.setHeader('x-ccs-request-id', requestId);
-  const shouldSkipLogging = req.originalUrl.startsWith('/api/logs');
+  const shouldSkipLogging = composed || req.originalUrl.startsWith('/api/logs');
 
   res.on('finish', () => {
     if (shouldSkipLogging) {

@@ -6,6 +6,8 @@
 //! (`aac_status::read_context`), or, for Home's fed path (R1), from the page's zone and the facts of a fed
 //! generation. The specs: the M3 parity corpora, and `tests/spec/views/home` for Home.
 pub mod analytics;
+pub mod analytics_activity;
+pub mod analytics_owned;
 pub mod antigravity;
 pub mod claude_desktop;
 pub mod codex_profiles;
@@ -13,5 +15,6 @@ pub mod decline;
 pub mod home;
 pub mod js;
 pub mod js_json;
+pub mod pricing;
 pub mod registry;
 pub mod spread;

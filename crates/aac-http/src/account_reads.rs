@@ -3,84 +3,28 @@
 //! Rust answers only a read it can prove equal to the TS reader, side effects included: every
 //! case where TS logs (corrupt or migrated preferences), answers an error (an unsafe or invalid
 //! visibility file), or could parse what strict JSON refuses returns `None`, and the bridge
-//! serves the TS reader. TS remains both files' only writer.
+//! serves the TS reader.
 use serde_json::{Map, Value, json};
 
 type Object = Map<String, Value>;
 use aac_files::read::{Leaf, Mode, Read};
-use std::{fs, os::unix::fs::MetadataExt, path::Path};
+#[cfg(unix)]
+use std::fs;
+use std::path::Path;
 // The dashboard providers, usage-log tools, field-mapping keys and the frozen legacy storage
 // hosts are the shared tables' (config/tables, `aac-providers`), which TS reads too.
 use aac_providers::{LEGACY_STORAGE_HOSTS, USAGE_LOG_FIELD_MAPPING, is_dashboard_provider};
 
 pub(crate) const COMPUTERS: &str = include_str!("../../../web-dashboard/public/computers.json");
 
-/// IANA zones Rust admits for the saved display zone. `tests/spec/account-read-parity.ts`
-/// requires the running TS `isAccountAnalyticsTimeZone` to accept every one; any other zone
-/// (valid or not) is decided by the TS reader, whose answer depends on the engine's zone data.
-pub(crate) const ADMITTED_TIME_ZONES: &[&str] = &[
-    "UTC",
-    "Africa/Cairo",
-    "Africa/Johannesburg",
-    "Africa/Lagos",
-    "Africa/Nairobi",
-    "America/Anchorage",
-    "America/Argentina/Buenos_Aires",
-    "America/Bogota",
-    "America/Chicago",
-    "America/Denver",
-    "America/Halifax",
-    "America/Los_Angeles",
-    "America/Mexico_City",
-    "America/New_York",
-    "America/Phoenix",
-    "America/Sao_Paulo",
-    "America/St_Johns",
-    "America/Toronto",
-    "America/Vancouver",
-    "Asia/Bangkok",
-    "Asia/Dubai",
-    "Asia/Hong_Kong",
-    "Asia/Jakarta",
-    "Asia/Jerusalem",
-    "Asia/Karachi",
-    "Asia/Kathmandu",
-    "Asia/Manila",
-    "Asia/Seoul",
-    "Asia/Shanghai",
-    "Asia/Singapore",
-    "Asia/Taipei",
-    "Asia/Tehran",
-    "Asia/Tokyo",
-    "Atlantic/Reykjavik",
-    "Australia/Adelaide",
-    "Australia/Brisbane",
-    "Australia/Melbourne",
-    "Australia/Perth",
-    "Australia/Sydney",
-    "Europe/Amsterdam",
-    "Europe/Athens",
-    "Europe/Berlin",
-    "Europe/Dublin",
-    "Europe/Helsinki",
-    "Europe/Istanbul",
-    "Europe/Lisbon",
-    "Europe/London",
-    "Europe/Madrid",
-    "Europe/Moscow",
-    "Europe/Paris",
-    "Europe/Rome",
-    "Europe/Stockholm",
-    "Europe/Warsaw",
-    "Europe/Zurich",
-    "Pacific/Auckland",
-    "Pacific/Honolulu",
-];
-
 /// Whether the private-store folder logs its group-writable line, or refuses (`None`).
 /// The boot root is canonical, so it is never the symlinked-folder case (the bridge sends a
 /// symlinked or other folder to TS before forwarding).
-fn store_folder(root: &Path) -> Option<Vec<Value>> {
+/// Windows reports synthetic permission bits and owns the folder by its profile ACL, so the
+/// TS reader treats every folder as private there; so does this one.
+#[cfg(unix)]
+pub(crate) fn store_folder(root: &Path) -> Option<Vec<Value>> {
+    use std::os::unix::fs::MetadataExt;
     let meta = fs::symlink_metadata(root).ok()?;
     if !meta.is_dir() || meta.file_type().is_symlink() || meta.mode() & 0o002 != 0 {
         return None;
@@ -92,12 +36,17 @@ fn store_folder(root: &Path) -> Option<Vec<Value>> {
     })
 }
 
+#[cfg(not(unix))]
+pub(crate) fn store_folder(_root: &Path) -> Option<Vec<Value>> {
+    Some(Vec::new())
+}
+
 fn record(value: &Value) -> Option<&Object> {
     value.as_object()
 }
 
 /// `^[a-z0-9][a-z0-9-]{0,31}(?::[A-Za-z0-9@._+-]{1,128}){1,2}$` or the console wallet id.
-fn public_account_id(value: &Value) -> bool {
+pub(crate) fn public_account_id(value: &Value) -> bool {
     let Some(id) = value.as_str() else {
         return false;
     };
@@ -149,12 +98,12 @@ fn provider_list(values: Vec<Value>) -> Option<Vec<Value>> {
 }
 
 /// `parseIdList`.
-fn id_list(value: &Value) -> Option<Vec<Value>> {
+pub(crate) fn id_list(value: &Value) -> Option<Vec<Value>> {
     let values = value.as_array()?;
     (values.len() <= 128 && values.iter().all(public_account_id)).then(|| unique(values.clone()))
 }
 
-fn known_providers(value: &Value) -> Option<Vec<Value>> {
+pub(crate) fn known_providers(value: &Value) -> Option<Vec<Value>> {
     let values = value.as_array()?;
     if !values.iter().all(|v| v.as_str().is_some()) {
         return None;
@@ -241,7 +190,7 @@ pub(crate) fn machine_ids_in(table: &str) -> Option<Vec<String>> {
 }
 
 /// The computers an extra usage-log folder can sit on, and each one's OS.
-fn hosts() -> Option<Vec<(String, String)>> {
+pub(crate) fn usage_hosts() -> Option<Vec<(String, String)>> {
     let table: Value = serde_json::from_str(COMPUTERS).ok()?;
     table
         .as_object()?
@@ -253,9 +202,10 @@ fn hosts() -> Option<Vec<(String, String)>> {
         .collect()
 }
 
-/// `isAccountAnalyticsTimeZone`: `Some(false)` where TS decides without zone data, `None`
-/// where only the engine's zone data could decide.
-fn time_zone(value: Option<&Value>) -> Option<bool> {
+/// `isAccountAnalyticsTimeZone`: the shape, then the IANA table. TS asks `Intl` for the same
+/// database; every zone the Settings page can name is here, and a zone the table lacks is
+/// one the engine would refuse as well.
+pub(crate) fn time_zone(value: Option<&Value>) -> Option<bool> {
     let Some(Value::String(zone)) = value else {
         return Some(false);
     };
@@ -276,10 +226,20 @@ fn time_zone(value: Option<&Value>) -> Option<bool> {
     if !shaped || zone.len() > 64 {
         return Some(false);
     }
-    ADMITTED_TIME_ZONES.contains(&zone.as_str()).then_some(true)
+    Some(admits_zone(zone))
 }
 
-fn source_id(id: &str) -> bool {
+/// One IANA name, by the same table `Intl` is built from. The engine also resolves a case
+/// variant (`utc`, `america/new_york`) to the table's spelling, so a case-folded match counts.
+/// A backward-compatibility link the table omits (`US/Eastern`) is still refused.
+fn admits_zone(zone: &str) -> bool {
+    zone.parse::<chrono_tz::Tz>().is_ok()
+        || chrono_tz::TZ_VARIANTS
+            .iter()
+            .any(|tz| tz.name().eq_ignore_ascii_case(zone))
+}
+
+pub(crate) fn public_source_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 32
@@ -299,7 +259,11 @@ fn field_path(path: &str) -> bool {
 }
 
 /// `isUsageLogSource(value, allowRemoteJsonl)`.
-fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, String)]) -> bool {
+pub(crate) fn usage_log_source(
+    value: &Value,
+    allow_remote_jsonl: bool,
+    hosts: &[(String, String)],
+) -> bool {
     let Some(source) = record(value) else {
         return false;
     };
@@ -331,7 +295,7 @@ fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, S
             && b[1] == b':'
             && (b[2] == b'\\' || b[2] == b'/')
     };
-    if !source_id(id)
+    if !public_source_id(id)
         || !aac_providers::is_usage_log_tool(tool)
         || length == 0
         || length > 1024
@@ -369,7 +333,7 @@ fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, S
 }
 
 /// `isDashboardPreferences`; `None` when the zone needs the engine's zone data.
-fn preferences_valid(prefs: &Object, hosts: &[(String, String)]) -> Option<bool> {
+pub(crate) fn preferences_valid(prefs: &Object, hosts: &[(String, String)]) -> Option<bool> {
     let keys = ["timeZone", "snapshotCleanup", "usageLogSources"];
     if !prefs.keys().all(|key| keys.contains(&key.as_str())) {
         return Some(false);
@@ -405,7 +369,7 @@ fn preferences_valid(prefs: &Object, hosts: &[(String, String)]) -> Option<bool>
     Some(true)
 }
 
-fn defaults() -> Object {
+pub(crate) fn defaults() -> Object {
     let mut defaults = Object::new();
     defaults.insert("timeZone".into(), json!("America/New_York"));
     defaults.insert("snapshotCleanup".into(), json!({ "auto": true }));
@@ -461,9 +425,51 @@ fn primary(root: &Path, hosts: &[(String, String)]) -> Option<Object> {
     )
 }
 
+/// Recompose the persisted reply for a write already validated by the TS route.
+pub(crate) fn prepared_preferences(primary: Value, companion: &mut Vec<Value>) -> Option<Value> {
+    let hosts = usage_hosts()?;
+    let mut proof = primary.as_object()?.clone();
+    let zone = proof.get("timeZone")?.as_str()?;
+    if zone.is_empty() || zone.len() > 128 {
+        return None;
+    }
+    // TS validates the time zone against its Intl tables before preparing the
+    // documents. Check all remaining fields against the shared Rust schema.
+    proof.insert("timeZone".into(), json!("UTC"));
+    if !preferences_valid(&proof, &hosts)? {
+        return None;
+    }
+    let primary_sources = proof.get("usageLogSources")?.as_array()?;
+    let legacy = |source: &Value| {
+        source
+            .get("host")
+            .and_then(Value::as_str)
+            .is_some_and(|host| LEGACY_STORAGE_HOSTS.contains(&host))
+    };
+    if primary_sources.iter().any(|source| !legacy(source)) || companion.iter().any(legacy) {
+        return None;
+    }
+    let mut sources = primary_sources.clone();
+    sources.append(companion);
+    proof.insert("usageLogSources".into(), json!(sources));
+    if !preferences_valid(&proof, &hosts)? {
+        return None;
+    }
+    Some(json!({
+        "timeZone": primary["timeZone"],
+        "snapshotCleanup": primary["snapshotCleanup"],
+        "usageLogSources": proof["usageLogSources"],
+    }))
+}
+
 /// The preferences reply, or `None` for the TS reader.
 pub(crate) fn preferences(root: &Path) -> Option<Value> {
-    let hosts = hosts()?;
+    let (transaction, policy) =
+        crate::registered::file(root, crate::preferences_write::TRANSACTION)?;
+    if !matches!(aac_files::read::read(&transaction, &policy), Read::Absent) {
+        return None;
+    }
+    let hosts = usage_hosts()?;
     let primary = primary(root, &hosts)?;
     // TS keeps the primary for an absent, symlinked or oversized companion; a non-file or an
     // unexpected open error is left to the TS reader.
@@ -538,6 +544,24 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
     }
 }
 
+/// R5/A2: the owned Analytics envelope (`data.owned: true`) composes from the hosted Engine in
+/// process. `None` keeps the shared dispatch (the part-3 composition); a missing engine declines.
+pub(crate) fn owned_analytics(
+    store: Option<&std::sync::Arc<crate::store_host::StoreHost>>,
+    bytes: &[u8],
+) -> Option<Result<Value, aac_views::decline::Decline>> {
+    let envelope: aac_status::read_context::Envelope =
+        crate::json_object::from_slice(bytes, &["data", "presentation"]).ok()?;
+    if envelope.data.get("owned") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    let Some(engine) = store.and_then(|host| host.analytics_engine()) else {
+        return Some(Err(aac_views::decline::Decline::Unsupported));
+    };
+    let mut reads = crate::analytics_route::EngineStore::new(engine);
+    Some(aac_views::analytics_owned::compose(envelope, &mut reads))
+}
+
 #[cfg(test)]
 mod table_tests {
     //! The shared tables reach these readers (DESIGN-M3-COMPLETE 2.4). Under
@@ -604,5 +628,49 @@ mod table_tests {
             false,
             &hosts
         ));
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+
+    #[test]
+    fn every_zone_the_settings_page_offers_is_admitted() {
+        // `web-dashboard/public/accounts-view.mjs` TIME_ZONE_OPTIONS.
+        for zone in [
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles",
+            "America/Anchorage",
+            "Pacific/Honolulu",
+            "Europe/London",
+            "Europe/Paris",
+            "Asia/Tokyo",
+            "Australia/Sydney",
+            "UTC",
+        ] {
+            assert_eq!(time_zone(Some(&json!(zone))), Some(true), "{zone}");
+        }
+        // A modern IANA name the old hand list lacked, and the engine's own spelling.
+        assert_eq!(time_zone(Some(&json!("Europe/Kyiv"))), Some(true));
+        assert_eq!(time_zone(Some(&json!("Etc/GMT+5"))), Some(true));
+        assert_eq!(
+            time_zone(Some(&json!("America/Argentina/Ushuaia"))),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_zone_the_engine_refuses_is_refused() {
+        for zone in ["", "Not/AZone", "Europe/", "/Europe/Paris", "Europe Paris"] {
+            assert_eq!(time_zone(Some(&json!(zone))), Some(false), "{zone}");
+        }
+        assert_eq!(time_zone(None), Some(false));
+        assert_eq!(time_zone(Some(&json!(1))), Some(false));
+        // The engine resolves a case variant; so does this.
+        assert_eq!(time_zone(Some(&json!("utc"))), Some(true));
+        assert_eq!(time_zone(Some(&json!("america/new_york"))), Some(true));
     }
 }

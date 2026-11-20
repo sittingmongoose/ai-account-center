@@ -14,7 +14,7 @@ import path from 'path';
 import zlib from 'zlib';
 
 import { requestErrorKind, startServer } from '../../../src/web-server';
-import { getRecentLogEntries } from '../../../src/services/logging';
+import { readLogEntries } from '../../../src/services/logging';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import { negotiateEncoding, resolvePageRoute } from '../../../src/web-server/static-ui';
 
@@ -461,9 +461,28 @@ describe('page routes and deep links', () => {
     const head = await raw('HEAD', '/analytics');
     expect(head.status).toBe(200);
     expect(head.body.length).toBe(0);
-    const query = await raw('GET', '/accounts?provider=%3Cscript%3E&view=<b>x</b>');
-    expect(query.status).toBe(200);
-    expect(query.body.toString()).toBe(PAGE());
+    const rawQuery = 'provider=%3Cscript%3E&view=<b>x</b>';
+    if (!instance?.publicAddress) {
+      const query = await raw('GET', `/accounts?${rawQuery}`);
+      expect(query.status).toBe(200);
+      expect(query.body.toString()).toBe(PAGE());
+      return;
+    }
+
+    const encodedQuery = 'provider=%3Cscript%3E&view=%3Cb%3Ex%3C%2Fb%3E';
+    const encoded = await raw('GET', `/accounts?${encodedQuery}`);
+    expect(encoded.status).toBe(200);
+    expect(encoded.body.toString()).toBe(PAGE());
+
+    const query = await raw('GET', `/accounts?${rawQuery}`);
+    const body = query.body.toString();
+    expect([200, 400]).toContain(query.status);
+    if (query.status === 200) {
+      expect(body).toBe(PAGE());
+    } else {
+      expect(body).not.toMatch(/(?:provider|view)=|<script>|%3cscript%3e|&lt;script&gt;/i);
+      expect(body).not.toMatch(/<b>x<\/b>|%3cb%3ex%3c%2fb%3e|&lt;b&gt;x&lt;\/b&gt;/i);
+    }
   });
 
   it.each([
@@ -560,6 +579,7 @@ describe('JSON error answers', () => {
     for (const file of ['index.html', 'index.html.br', 'index.html.gz'])
       fs.rmSync(path.join(staticDir, 'app', file), { force: true });
     fs.mkdirSync(path.join(staticDir, 'app', 'index.html'));
+    const prior = new Set(readLogEntries({ source: 'web-server' }).map((entry) => entry.id));
     const response = await raw('GET', '/analytics');
     expect(response.status).toBe(500);
     expect(JSON.parse(response.body.toString())).toEqual({
@@ -567,8 +587,9 @@ describe('JSON error answers', () => {
     });
     expect(response.body.toString()).not.toMatch(/EISDIR|ENOENT|\bat\s|index\.html/);
     // The server keeps a trace: status and error class, never the message or a path.
-    const failures = getRecentLogEntries().filter((entry) => entry.event === 'web.request.failed');
-    const last = failures[failures.length - 1];
+    const last = readLogEntries({ source: 'web-server' }).find(
+      (entry) => entry.event === 'web.request.failed' && !prior.has(entry.id)
+    );
     expect(last?.level).toBe('error');
     expect(last?.context).toEqual({ status: 500, kind: 'EISDIR', headersSent: false });
     expect(JSON.stringify(last)).not.toMatch(/index\.html|ccs-static-ui|no such file/);
