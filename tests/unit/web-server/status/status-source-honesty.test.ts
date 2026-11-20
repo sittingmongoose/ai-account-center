@@ -138,6 +138,14 @@ function setup(options: { registryDir?: string } = {}) {
               drained: false,
               lastSeenAt: START,
             },
+            // The real gateway also lists Nas1's Android worker: a null phone count there is a problem.
+            {
+              id: 'nas1',
+              label: 'nas1',
+              connection: 'connected',
+              drained: false,
+              lastSeenAt: START,
+            },
           ],
         };
   const service = new StatusService({

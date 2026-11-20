@@ -2,6 +2,7 @@ import {
   COMPUTERS,
   DASHBOARD_HOSTS,
   HOST_OS,
+  exactComputer,
   namedComputer,
   localComputer,
   isSafeUsageSshAlias,
@@ -12,10 +13,10 @@ import {
  * - the pm-mail registry (threads that do not report yet);
  * - `browser-check slots --json` (browsers, recordings, GPU on every machine);
  * - `simlock status --json` (phone capacity and leases; never tokens);
- * - a machine reading (CPU, memory, system disk): the local computer from /proc and statfs, the
- *   Mac, Windows and Nas1 with one short read-only command over the dashboard's existing ssh
- *   aliases (the app-update hosts);
- * - the Mac's, Windows' and Nas1's pinned T3 threads: one short read-only `sqlite3 -json`
+ * - a machine reading (CPU, memory, system disk): the local computer from /proc and statfs, every
+ *   other registered computer (Mac, Windows, Nas1, Alexis, Odroid, 1070ti) with one short read-only
+ *   command over the dashboard's existing ssh aliases (the app-update hosts);
+ * - the other computers' pinned T3 threads: one short read-only `sqlite3 -json`
  *   command over the same ssh aliases (the VM's own pins are read from its database directly,
  *   in the aac-status native module). The native module checks the answer's shape; this file
  *   only runs the command.
@@ -401,17 +402,49 @@ export function sessionUrl(value: unknown): string | null {
   }
 }
 
-/** `browser-check slots --json` -> one row per known machine. */
-export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
+/**
+ * The machines that may run a Simlock worker when the gateway has not said which do: every
+ * non-Windows computer. Odroid runs none, so the gateway's own list replaces this once it answers.
+ */
+const SIMLOCK_MACHINES = DASHBOARD_HOSTS.filter((id) => HOST_OS[id] !== 'windows').map(
+  (id) => COMPUTERS[id].machineId
+);
+
+/**
+ * A browser-check fleet entry -> the registered machine it is, or null. Its fleet name when that is a
+ * machine id, else the computer its name or one of its hostnames spells exactly (the fleet calls the
+ * 1070ti `gtx1070ti`, hostname `1070ti`). Never a partial match.
+ */
+export function browserMachine(machine: Record<string, unknown>): MachineId | null {
+  const hostnames = Array.isArray(machine.hostnames) ? machine.hostnames : [];
+  for (const value of [machine.name, ...hostnames]) {
+    if (typeof value !== 'string' || !value) continue;
+    if ((MACHINES as readonly string[]).includes(value)) return value as MachineId;
+    const known = exactComputer(value);
+    if (known) return COMPUTERS[known].machineId;
+  }
+  return null;
+}
+
+/**
+ * `browser-check slots --json` -> one row per known machine. `workerMachines` are the machines that run
+ * a Simlock worker (the gateway's workers when it answered); elsewhere `phones: null` is the normal answer.
+ */
+export function parseBrowserSlots(
+  raw: unknown,
+  workerMachines: readonly MachineId[] = SIMLOCK_MACHINES
+): BrowserMachine[] {
   const rows = (raw as { rows?: unknown } | null)?.rows;
   if (!Array.isArray(rows))
     throw new ValidationError('browser-check answered in an unknown shape.');
   const result: BrowserMachine[] = [];
+  const seen = new Set<MachineId>();
   for (const row of rows) {
     const rec = (row ?? {}) as Record<string, unknown>;
     const machine = (rec.machine ?? {}) as Record<string, unknown>;
-    const name = machine.name;
-    if (typeof name !== 'string' || !(MACHINES as readonly string[]).includes(name)) continue;
+    const name = browserMachine(machine);
+    if (name === null || seen.has(name)) continue;
+    seen.add(name);
     const state = (rec.state ?? {}) as Record<string, unknown>;
     // browser-check answers a host it could not read with `state: { error }` (and `free: null`), exit 0.
     if (state.error !== undefined && state.error !== null) {
@@ -437,7 +470,7 @@ export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
     // backend was busy. It carries no time: the counts are this reading's, so the read time stands.
     const snapshot = shortText(state.snapshot, 200);
     if (snapshot) notes.push(snapshot);
-    if (phones === null && SIMLOCK_MACHINES.includes(name as MachineId))
+    if (phones === null && workerMachines.includes(name))
       notes.push('reported no phone count (phones: null), so phones here are unknown');
     result.push({
       machine: name as MachineId,
@@ -464,10 +497,21 @@ export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
   return result;
 }
 
-/** The machines that run a Simlock worker; elsewhere browser-check's `phones: null` is the normal answer. */
-const SIMLOCK_MACHINES = DASHBOARD_HOSTS.filter((id) => HOST_OS[id] !== 'windows').map(
-  (id) => COMPUTERS[id].machineId
-);
+/**
+ * The gateway's `workers` -> the registered machines that run a Simlock worker, connected or not (a
+ * label names its machine). Null when the answer lists no workers array (a lone worker's own reading).
+ */
+export function simlockWorkerMachines(raw: unknown): MachineId[] | null {
+  const workers = (raw as { workers?: unknown } | null)?.workers;
+  if (!Array.isArray(workers)) return null;
+  const machines = new Set<MachineId>();
+  for (const worker of workers) {
+    const label = ((worker ?? {}) as Record<string, unknown>).label;
+    const known = typeof label === 'string' && label ? exactComputer(label) : null;
+    if (known) machines.add(COMPUTERS[known].machineId);
+  }
+  return [...machines];
+}
 
 /** browser-check's `phones`: null stays null and a missing count stays null, never zero. */
 function parseSlotPhones(value: unknown): BrowserMachine['phones'] {

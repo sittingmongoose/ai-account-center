@@ -3,6 +3,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import {
+  browserMachine,
   busyBetween,
   machineProbeCommand,
   parseBrowserSlots,
@@ -14,6 +15,7 @@ import {
   readRemoteMachine,
   registryMachine,
   sessionUrl,
+  simlockWorkerMachines,
   type CommandRunner,
 } from '../../../../src/web-server/status/status-collectors';
 import { PERSISTENT_SHARE_ERROR } from '../../../../src/web-server/status/agent-reports-reader';
@@ -24,6 +26,51 @@ const dirs = tempDirs();
 afterEach(() => dirs.cleanup());
 
 describe('status collectors', () => {
+  it('names browser-check rows by the registry: gtx1070ti is the 1070ti, Odroid by name', () => {
+    expect(browserMachine({ name: 'odroid', hostnames: ['Odroid'] })).toBe('odroid');
+    expect(browserMachine({ name: 'gtx1070ti', hostnames: ['1070ti'] })).toBe('1070ti');
+    expect(browserMachine({ name: 'vm', hostnames: ['ubuntuserver'] })).toBe('vm');
+    expect(browserMachine({ name: 'nas1', hostnames: ['ubuntu-agent-nas1'] })).toBe('nas1');
+    // Never a partial match, and an unregistered machine is left out.
+    expect(browserMachine({ name: 'gtx1070', hostnames: ['gtx1070'] })).toBeNull();
+    expect(browserMachine({ name: 'future', hostnames: ['future'] })).toBeNull();
+    const rows = parseBrowserSlots({
+      rows: [
+        {
+          machine: { name: 'odroid', label: 'Odroid H2+', hostnames: ['Odroid'] },
+          state: { error: 'no backend' },
+        },
+        {
+          machine: { name: 'gtx1070ti', label: '1070ti (GTX 1070 Ti)', hostnames: ['1070ti'] },
+          state: { error: 'no backend' },
+        },
+        { machine: { name: '1070ti', label: 'again' }, state: { error: 'twice' } },
+        { machine: { name: 'future', label: 'Future' }, state: { error: 'no backend' } },
+      ],
+    });
+    expect(rows.map((r) => [r.machine, r.error])).toEqual([
+      ['odroid', 'no backend'],
+      ['1070ti', 'no backend'],
+    ]);
+  });
+
+  it("reads the Simlock gateway's workers as machines, connected or not", () => {
+    expect(
+      simlockWorkerMachines({
+        workers: [
+          { label: 'nas1', connection: 'connected' },
+          { label: 'vm', connection: 'connected' },
+          { label: 'mac', connection: 'disconnected' },
+          { label: '1070ti', connection: 'connected' },
+          { label: 'somewhere-else', connection: 'connected' },
+          { id: 'no-label' },
+        ],
+      })
+    ).toEqual(['nas1', 'vm', 'mac', '1070ti']);
+    expect(simlockWorkerMachines({ capacity: {} })).toBeNull();
+    expect(simlockWorkerMachines(null)).toBeNull();
+  });
+
   it('reads browser-check phones, display_problem and snapshot without turning null into zero', () => {
     const state = { caps: { max_browsers: 4 }, browsers: 1, recordings: 0, sessions: [] };
     const rows = parseBrowserSlots({
