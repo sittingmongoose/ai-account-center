@@ -331,7 +331,7 @@ export const tests = {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         const response = await route.fetch();
         view = await response.json();
-        if (view.sources.find((s) => s.id === 'agent-reports')?.detail.includes(writer)) break;
+        if (view.sources?.find((s) => s.id === 'agent-reports')?.detail.includes(writer)) break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       view.pinned = {
@@ -578,7 +578,7 @@ export const tests = {
       const response = await fetch('/api/status', { cache: 'reload' });
       return { status: response.status, view: response.headers.get('x-aac-view') };
     });
-    await t.equal('Rust served the Status view', view, { status: 200, view: 'status@1' });
+    await t.check('Rust served the Status view', view.status === 200 && view.view === 'status@1', JSON.stringify(view));
   },
 
   async 'status desktop'(t) {

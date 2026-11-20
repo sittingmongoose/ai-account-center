@@ -657,7 +657,7 @@ async fn status(
                 let reason = decline_reason(&reply).unwrap_or("");
                 tracing::warn!(reason, "the owned Status read declined");
                 eprintln!("aac-http: owned Status read declined ({reason})");
-                if !matches!(reason, "unsupported" | "stale" | "busy") {
+                if !matches!(reason, "unsupported" | "stale" | "busy" | "deadline") {
                     return decline_because("status");
                 }
                 if attempt < 5 {

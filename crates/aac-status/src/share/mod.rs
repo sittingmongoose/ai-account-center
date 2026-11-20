@@ -325,6 +325,18 @@ fn normalize_absolute(path: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
+/// The mounted Cursor share on this platform.
+#[must_use]
+pub fn machine_share_root() -> &'static Path {
+    Path::new(if cfg!(windows) {
+        r"\\TRUENAS\Cursor"
+    } else if cfg!(target_os = "macos") {
+        "/Volumes/Cursor"
+    } else {
+        "/mnt/Cursor"
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,15 +395,4 @@ mod tests {
         assert_eq!(share_local_path("/mnt/Cursor/../etc/passwd", root), None);
         assert_eq!(share_local_path("relative.md", root), None);
     }
-}
-/// The mounted Cursor share on this platform.
-#[must_use]
-pub fn machine_share_root() -> &'static Path {
-    Path::new(if cfg!(windows) {
-        r"\\TRUENAS\Cursor"
-    } else if cfg!(target_os = "macos") {
-        "/Volumes/Cursor"
-    } else {
-        "/mnt/Cursor"
-    })
 }

@@ -139,7 +139,7 @@ export const tests = {
 			const response = await fetch('/api/scoreboard', { cache: 'reload' });
 			return { status: response.status, view: response.headers.get('x-aac-view') };
 		});
-		await t.equal('Rust served the Scoreboard view', result, { status: 200, view: 'scoreboard@1' });
+		await t.check('Rust served the Scoreboard view', result.status === 200 && result.view === 'scoreboard@1', JSON.stringify(result));
 	},
 
 	async 'scoreboard desktop'(t) {
