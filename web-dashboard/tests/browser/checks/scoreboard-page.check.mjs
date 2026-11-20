@@ -31,8 +31,9 @@ async function openBoard(t, query = '', change) {
 	await t.page.waitForSelector('.picks');
 }
 
-// The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 4 + 12 + 3 + 23 + 6.
-const UNSCORED_LINE = '48 runs not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model';
+// The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 4 + 12 + 3 + 23 + 6. The 4 unreadable
+// are run files, so the head says "runs and run files" (scoreboard.rs `unscored_unit`).
+const UNSCORED_LINE = '48 runs and run files not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model';
 const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored summary')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
 /** The list under the line: whether it shows, floats (a hover) or sits in the flow (open), and its box. */
 const listState = (t) => t.page.evaluate(() => {
@@ -303,11 +304,11 @@ export const tests = {
 		// A mouse hover shows the list floating under the line, over the page; it goes when the pointer leaves.
 		const box = await t.page.locator('.sb-unscored summary').boundingBox();
 		await t.page.mouse.move(box.x + 20, box.y + box.height / 2);
-		await t.until('a hover shows the list', () => document.querySelector('.sbu-list').innerText.includes('48 runs not scored'), null, { timeout: 3000 });
+		await t.until('a hover shows the list', () => document.querySelector('.sbu-list').innerText.includes('48 runs and run files not scored'), null, { timeout: 3000 });
 		let list = await listState(t);
 		await t.check('the hovered list floats and moves nothing', list.floating && (await stackTop(t)) === before);
 		await t.check('the hovered list hangs under the line, inside the window', list.top >= box.y + box.height - 8 && list.top - (box.y + box.height) < 16 && list.right <= 1440);
-		await t.text('.sbu-list .sbu-head', '48 runs not scored');
+		await t.text('.sbu-list .sbu-head', '48 runs and run files not scored');
 		const lines = (sel) => t.page.$$eval(sel, (l) => l.map((e) => e.textContent.trim()));
 		const why = await lines('.sbu-list .sbu-why');
 		await t.equal('five reasons, each with its runs', why.map((w) => w.split(' · ')[0]), ['Unreadable: 4 runs', 'Unknown model: 12 runs', 'Unknown task type: 3 runs', 'No task type: 23 runs', 'No model: 6 runs']);

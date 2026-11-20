@@ -26,9 +26,9 @@ async function statusFixture(t, name) {
     sections: [{ type: 'text', title: 'Fixture details', body: 'Some details.', fold: true }],
   });
   const missing = { data: null, asOf: null, error: null };
-  const machines = Object.fromEntries(
-    ['vm', 'mac', 'windows', 'nas1', 'alexis'].map((id) => [id, missing])
-  );
+  // Every computer the product lists (the built list, so a new computer never breaks this fixture again).
+  const { MACHINE_IDS } = require(path.resolve(t.args.repo ?? root, 'dist/web-server/services/dashboard-hosts.js'));
+  const machines = Object.fromEntries(MACHINE_IDS.map((id) => [id, missing]));
   const done = { state: 'done', at: new Date(now).toISOString(), detail: null, attempts: 1 };
   const recorded = {
     id: 'recorded-answer',
