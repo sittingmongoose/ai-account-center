@@ -916,6 +916,29 @@ impl FailoverCoordinator {
         )
     }
 
+    fn uses_primary_selector(target: &UsageFailoverTarget, candidate: &UsageCandidate) -> bool {
+        target
+            .primary_sources
+            .iter()
+            .any(|source| candidate.selectors.contains(&source.selector))
+    }
+
+    fn other_claude_login_works(target: &UsageFailoverTarget, state: &State) -> bool {
+        target.provider == "claude"
+            && state.saved.as_ref().is_some_and(|saved| {
+                same_identity(state.identity.as_ref(), Some(&saved.candidate.identity))
+                    && email_matches(
+                        target.expected_email.as_deref(),
+                        saved.reading.email.as_deref(),
+                    )
+                    && !Self::uses_primary_selector(target, &saved.candidate)
+            })
+    }
+
+    pub(super) fn claude_login_covers(&self, target: &UsageFailoverTarget) -> bool {
+        Self::other_claude_login_works(target, &self.state(target))
+    }
+
     /// Display-only quota recovery; never changes which account a program uses.
     pub fn peek(&self, target: &UsageFailoverTarget, template: &Value) -> Value {
         let state = self.state(target);
@@ -930,7 +953,7 @@ impl FailoverCoordinator {
         let same_cached = template.get("status").and_then(Value::as_str) == Some("cached")
             && template.get("sampledAt") == saved_sampled_value.as_ref();
         if has_usage_value(template) && (state.saved.is_none() || newer || same_cached) {
-            return self.with_sign_in(template.clone(), &state);
+            return self.with_sign_in(target, template.clone(), &state);
         }
         self.project(target, template, &state, state.fresh != Some(true))
     }
@@ -987,7 +1010,7 @@ impl FailoverCoordinator {
                     && self.now() < state.fresh_until
                     && template.get("sampledAt") == saved_sampled_value.as_ref()));
         if keep_template {
-            return self.with_sign_in(template.clone(), &state);
+            return self.with_sign_in(target, template.clone(), &state);
         }
         self.project(target, template, &state, state.fresh != Some(true))
     }
@@ -1087,6 +1110,41 @@ impl FailoverCoordinator {
             primaries.push((source.host.clone(), candidate));
             break;
         }
+        let mut peer_lists = None;
+        let signed_out_peer = if target.provider == "claude"
+            && primaries.is_empty()
+            && target.expected_identity.is_none()
+            && (missing_primary || state.identity.is_none())
+            && !state.primary_sign_in.is_empty()
+            && let Some(email) = target
+                .expected_email
+                .as_deref()
+                .filter(|email| !email.is_empty())
+        {
+            let lists = self.peer_lists(target, state).await;
+            let mut matching = lists
+                .iter()
+                .filter_map(|(_, candidates)| candidates.as_ref())
+                .flatten()
+                .filter(|candidate| {
+                    candidate
+                        .email
+                        .as_deref()
+                        .is_some_and(|actual| email_matches(Some(email), Some(actual)))
+                        && !Self::uses_primary_selector(target, candidate)
+                })
+                .map(|candidate| &candidate.identity);
+            // Multiple logins can name the same identity, but an email shared by
+            // distinct accounts or organizations cannot establish the binding.
+            let identity = matching
+                .next()
+                .filter(|first| matching.all(|other| same_identity(Some(first), Some(other))))
+                .cloned();
+            peer_lists = Some(lists);
+            identity
+        } else {
+            None
+        };
         if primaries.is_empty() && target.provider == "cursor" && target.expected_identity.is_none()
         {
             let (chosen, conflict, configured_unreadable) =
@@ -1120,6 +1178,14 @@ impl FailoverCoordinator {
             } else if cached.is_none() {
                 return Ok(());
             }
+        } else if let Some(identity) = signed_out_peer {
+            if !same_identity(state.identity.as_ref(), Some(&identity)) {
+                state.saved = None;
+                state.observed_plan = None;
+                state.observed_plan_at = None;
+                state.observed_plan_peer = None;
+            }
+            state.identity = Some(identity);
         } else if primaries.is_empty() && missing_primary && target.expected_identity.is_none() {
             state.identity = None;
             state.primary = None;
@@ -1214,7 +1280,11 @@ impl FailoverCoordinator {
                 tried.push(json_text(&json!([host.key(), candidate.locator])));
             }
         }
-        for (host, candidates) in self.peer_lists(target, state).await {
+        let peer_lists = match peer_lists {
+            Some(lists) => lists,
+            None => self.peer_lists(target, state).await,
+        };
+        for (host, candidates) in peer_lists {
             for candidate in candidates.unwrap_or_default() {
                 if self
                     .attempt(
@@ -1602,14 +1672,14 @@ impl FailoverCoordinator {
             {
                 template["plan"] = json!(state.observed_plan);
             }
-            return self.with_sign_in(template, &state);
+            return self.with_sign_in(target, template, &state);
         };
         if identity_unbound {
-            return self.with_sign_in(template, &state);
+            return self.with_sign_in(target, template, &state);
         }
         let reading = &saved.reading;
         if !email_matches(target.expected_email.as_deref(), reading.email.as_deref()) {
-            return self.with_sign_in(template, &state);
+            return self.with_sign_in(target, template, &state);
         }
         let now = self.now();
         let refresh_due = state.fresh == Some(true) && now >= state.fresh_until;
@@ -1712,10 +1782,10 @@ impl FailoverCoordinator {
         } else {
             result.as_object_mut().map(|m| m.remove("host"));
         }
-        self.with_sign_in(result, &state)
+        self.with_sign_in(target, result, &state)
     }
 
-    fn with_sign_in(&self, account: Value, state: &State) -> Value {
+    fn with_sign_in(&self, target: &UsageFailoverTarget, account: Value, state: &State) -> Value {
         let mut account = account;
         let message_for = |code: &str| -> Option<&'static str> {
             match code {
@@ -1799,20 +1869,15 @@ impl FailoverCoordinator {
         if account.get("provider").and_then(Value::as_str) != Some("claude") {
             return account;
         }
-        let mut sign_in_needed: Vec<String> = account
-            .get("signInNeeded")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|s| s.as_str().map(str::to_owned))
-                    .collect()
+        let signed_out: Vec<_> = ["mac", "windows"]
+            .into_iter()
+            .filter(|host| {
+                state.primary_sign_in.iter().any(|held| held == host)
+                    || account["signInNeeded"]
+                        .as_array()
+                        .is_some_and(|list| list.iter().any(|held| held == host))
             })
-            .unwrap_or_default();
-        for host in &state.primary_sign_in {
-            if !sign_in_needed.contains(host) {
-                sign_in_needed.push(host.clone());
-            }
-        }
+            .collect();
         let reading = UsageReading {
             status: account
                 .get("status")
@@ -1841,10 +1906,17 @@ impl FailoverCoordinator {
         };
         let projected = contract::project_claude_extras(&reading, self.now());
         account["windows"] = Value::Array(projected.windows);
-        if !sign_in_needed.is_empty() {
-            account["signInNeeded"] = json!(sign_in_needed);
-        } else {
-            account.as_object_mut().map(|m| m.remove("signInNeeded"));
+        if let Some(fields) = account.as_object_mut() {
+            fields.remove("signInNeeded");
+            fields.remove("claudeDesktopSignedOut");
+            if !signed_out.is_empty() {
+                let field = if Self::other_claude_login_works(target, state) {
+                    "claudeDesktopSignedOut"
+                } else {
+                    "signInNeeded"
+                };
+                fields.insert(field.into(), json!(signed_out));
+            }
         }
         account
     }

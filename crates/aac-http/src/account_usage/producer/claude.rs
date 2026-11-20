@@ -93,7 +93,13 @@ impl Producer {
             // same verified reading from the coordinator's state, as the TS service did for
             // a second dashboard.
             let row = self.failover().collect(&target, &template).await;
-            out[index] = Some(super::signin_state::with_mac_sign_in(row, mac_signed_out));
+            let covered = row.get("claudeDesktopSignedOut").is_some()
+                || (mac_signed_out && self.failover().claude_login_covers(&target));
+            out[index] = Some(super::signin_state::with_mac_sign_in(
+                row,
+                mac_signed_out,
+                covered,
+            ));
         }
         out
     }
@@ -181,6 +187,15 @@ mod tests {
     /// A fake Mac probe also verifies that the same profile supplies the private SSH alias.
     #[tokio::test]
     async fn the_claude_manifest_collects_the_saved_windows_quota_and_mac_sign_in() {
+        assert_saved_windows_quota_and_mac_sign_in(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_verified_code_read_covers_both_signed_out_desktops() {
+        assert_saved_windows_quota_and_mac_sign_in(true).await;
+    }
+
+    async fn assert_saved_windows_quota_and_mac_sign_in(code_login: bool) {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         fixture_file(&root, "config.yaml", json!({"agentTransport":"off"}));
@@ -219,11 +234,14 @@ mod tests {
         let target = super::super::failover::claude_target(root.as_path(), &profile).unwrap();
         let key = producer.failover().key(&target);
         let at = stamp(now - 1_000);
-        let candidate = json!({
+        let mut candidate = json!({
             "locator":"a".repeat(64),"selectors":["claude-desktop-profile:default"],
             "identity":{"kind":"claude-oauth","key":"b".repeat(64)},"revision":"c".repeat(64),
             "email":"owner@example.com","plan":"Max"
         });
+        if code_login {
+            candidate["selectors"] = json!(["t3"]);
+        }
         let reading = json!({
             "status":"ok","email":"owner@example.com","plan":"Max",
             "sampledAt":at,"fetchedAt":at,
@@ -231,9 +249,9 @@ mod tests {
         });
         let observation = json!({
             "version":1,"key":key,"identity":candidate["identity"].clone(),
-            "primary":candidate,"saved":{"reading":reading,"candidate":candidate,"host":"windows","fallback":false},
+            "primary":candidate,"saved":{"reading":reading,"candidate":candidate,"host":"windows","fallback":code_login},
             "nextAttempt":(now + 600_000) as f64,"fresh":true,"freshUntil":(now + 600_000) as f64,
-            "primaryFailure":null,"primarySignIn":[],"observedPlan":null,"observedPlanAt":null,
+            "primaryFailure":null,"primarySignIn":if code_login { vec!["windows"] } else { vec![] },"observedPlan":null,"observedPlanAt":null,
             "observedPlanPeer":null
         });
         collection_cache::write(
@@ -256,11 +274,22 @@ mod tests {
                 .iter()
                 .find(|row| row["id"] == "claude:livia")
                 .unwrap();
-            assert_eq!(row["source"], "Verified quota on Windows");
+            if code_login {
+                assert!(row.get("signInNeeded").is_none(), "{row}");
+                assert_eq!(row["claudeDesktopSignedOut"], json!(["mac", "windows"]));
+                assert!(
+                    row["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("Claude Desktop is signed out on Mac and Windows.")
+                );
+            } else {
+                assert_eq!(row["source"], "Verified quota on Windows");
+                assert_eq!(row["signInNeeded"], json!(["mac"]));
+            }
             assert_eq!(row["status"], "ok");
             assert_eq!(row["plan"], "Max");
             assert_eq!(row["windows"][0]["usedPercent"], 42.0);
-            assert_eq!(row["signInNeeded"], json!(["mac"]));
             assert_eq!(
                 row["capabilities"]["claudePlatforms"],
                 json!(["mac", "windows"])
