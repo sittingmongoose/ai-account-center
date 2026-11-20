@@ -48,6 +48,7 @@ impl Sidecar {
         root: &Path,
         public: SocketAddr,
         native_collection: bool,
+        #[cfg(windows)] store_host: Option<std::sync::Arc<super::owner_host::OwnerHost>>,
     ) -> io::Result<Option<Self>> {
         let explicit = std::env::var_os("AAC_TS_SIDECAR");
         if explicit.as_deref() == Some(std::ffi::OsStr::new("off")) {
@@ -65,8 +66,15 @@ impl Sidecar {
             .then(|| aac_files::OwnedStore::claim_collection(root).map_err(io::Error::other))
             .transpose()?;
         let proof = storage::hex(&storage::random::<32>().map_err(|_| invalid())?);
-        let collection = if native_collection {
-            Some(CollectionFeed::start(&proof).await?)
+        let collection = if native_collection || cfg!(windows) {
+            Some(
+                CollectionFeed::start(
+                    &proof,
+                    #[cfg(windows)]
+                    store_host,
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -85,7 +93,8 @@ impl Sidecar {
         } else {
             "aac-http"
         });
-        let mut child = Command::new("node")
+        let mut child = Command::new("node");
+        child
             .arg(script)
             .env("CCS_DIR", root)
             .env("AAC_RUST_CUT_WORKER", "1")
@@ -115,11 +124,16 @@ impl Sidecar {
                 "AAC_CUT_COLLECTION_FEED",
                 collection
                     .as_ref()
+                    .filter(|_| native_collection)
                     .map(CollectionFeed::address)
                     .unwrap_or_default(),
             )
-            .env("AAC_CUT_COLLECTION_PROOF", &proof)
-            .spawn()?;
+            .env("AAC_CUT_COLLECTION_PROOF", &proof);
+        #[cfg(windows)]
+        if let Some(feed) = &collection {
+            child.env("AAC_CUT_STORE_FEED", feed.address());
+        }
+        let mut child = child.spawn()?;
         let mut input = child.stdin.take().ok_or_else(invalid)?;
         input.write_all(format!("{proof}\n").as_bytes()).await?;
         let mut output = BufReader::new(child.stdout.take().ok_or_else(invalid)?);

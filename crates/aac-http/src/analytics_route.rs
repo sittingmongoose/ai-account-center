@@ -18,6 +18,25 @@ const RETAINED_MS: f64 = 31.0 * DAY_MS;
 /// The free answer: the whole body, or a named decline.
 pub(crate) type Answer = Result<Value, Decline>;
 
+pub(crate) const INVALID_RANGE: &str = "Select whole days from the oldest stored day through today, with the start date on or before the end date.";
+
+pub(crate) fn encode(result: Answer, query: Option<&str>) -> Result<(u16, Vec<u8>), Decline> {
+    let (status, value) = match result {
+        Ok(value) => (200, value),
+        Err(Decline::Unsupported)
+            if url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
+                .any(|(key, value)| key == "range" && value == "custom") =>
+        {
+            (
+                400,
+                json!({"error": INVALID_RANGE, "code": "invalid_range"}),
+            )
+        }
+        Err(reason) => return Err(reason),
+    };
+    Ok((status, aac_views::js_json::write(&value)))
+}
+
 /// One parsed route query with the service defaults, in the route's own object order.
 fn query_object(raw: Option<&str>) -> Result<Map<String, Value>, Decline> {
     let mut pairs: Vec<(String, String)> = Vec::new();
@@ -220,7 +239,7 @@ pub(crate) fn compose(
         }
     };
     let tz = approved_time_zone(requested)
-        .and_then(aac_files::zoneinfo::canonical_name)
+        .map(crate::zone_facts::canonical_name)
         .ok_or(Decline::Zone)?;
     // The query object the answer carries: the route object, with the resolved tz in its place.
     query.insert("tz".into(), json!(tz.clone()));
@@ -235,7 +254,10 @@ pub(crate) fn compose(
         #[allow(clippy::cast_possible_truncation)]
         let (window_from, window_now) = (oldest.min(now - RETAINED_MS).max(0.0) as i64, now as i64);
         let zone = (tz != "UTC")
-            .then(|| aac_files::zoneinfo::zone_for_window(&tz, window_from, window_now))
+            .then(|| {
+                aac_files::zoneinfo::zone_for_window(&tz, window_from, window_now)
+                    .or_else(|| crate::zone_facts::analytics_zone(&tz, window_from, window_now))
+            })
             .flatten();
         let models = aac_store::activity::models(&store_engine).unwrap_or_else(|_| json!({}));
         let names = |key: &str| -> Vec<String> {

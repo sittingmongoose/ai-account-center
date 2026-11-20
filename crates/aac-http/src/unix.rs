@@ -1482,18 +1482,24 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             match shared
                 .limits
                 .blocking(row.pool, move || {
-                    crate::analytics_route::compose(
+                    let answer = crate::analytics_route::compose(
                         engine,
                         &root,
                         snapshot.as_ref(),
                         &live,
                         query.as_deref(),
                         aac_store::engine::now_ms() as i64,
-                    )
+                    );
+                    crate::analytics_route::encode(answer, query.as_deref())
                 })
                 .await
             {
-                Ok(value) => Json(value).into_response(),
+                Ok((status, bytes)) => (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    bytes,
+                )
+                    .into_response(),
                 Err(reason) => decline(row.handler, reason),
             }
         }
@@ -1975,7 +1981,7 @@ async fn serve_inner(
         tokio::task::spawn_blocking(move || opener.open_at_boot());
         let jobs = Arc::clone(host);
         let stop = Arc::clone(&jobs_stop);
-        tokio::spawn(async move { store_jobs(jobs, stop).await });
+        tokio::spawn(crate::store_host::jobs(jobs, stop));
         // G14: the quota sampler and activity scheduler run when the front door feeds them on.
         let writers_host = Arc::clone(host);
         let writers_stop = Arc::clone(&jobs_stop);
@@ -2117,22 +2123,6 @@ async fn serve_inner(
         let _ = task.await;
     }
     served
-}
-
-/// R3: the store jobs loop â€” the first pass minutes after start, then every 15 minutes,
-/// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
-/// when the service ends.
-async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBool>) {
-    tokio::time::sleep(Duration::from_millis(crate::store_host::FIRST_PASS_MS)).await;
-    loop {
-        if stop.load(Ordering::Acquire) {
-            return;
-        }
-        let pass = Arc::clone(&host);
-        let _ =
-            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
-        tokio::time::sleep(Duration::from_millis(crate::store_host::MAINTAIN_EVERY_MS)).await;
-    }
 }
 
 #[cfg(test)]

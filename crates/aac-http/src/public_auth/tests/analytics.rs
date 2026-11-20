@@ -1,7 +1,6 @@
 use super::*;
 use std::{fs, path::Path};
 
-#[cfg(unix)]
 const ANALYTICS: &str = "/api/accounts/analytics";
 const CAPTURE: &str = "/api/accounts/analytics/capture";
 const CACHE: &str = "cache/analytics-remote-v1/mac.json";
@@ -107,7 +106,6 @@ async fn analytics_capture_opposite_writes_wait_for_the_file_lease_and_keep_thei
     handle.abort();
 }
 
-#[cfg(unix)]
 fn real_analytics_owner(root: &Path, populate: bool) -> (analytics_routes::Hop, i64) {
     let store = root.join("store");
     let engine =
@@ -159,17 +157,13 @@ fn real_analytics_owner(root: &Path, populate: bool) -> (analytics_routes::Hop, 
             uri.split_once('?').map(|(_, query)| query),
             now,
         );
-        Box::pin(async move {
-            Some(match result {
-                Ok(value) => (200, aac_views::js_json::write(&value)),
-                Err(decline) => (503, format!("{decline:?}").into_bytes()),
-            })
-        })
+        let answer =
+            crate::analytics_route::encode(result, uri.split_once('?').map(|(_, query)| query));
+        Box::pin(async move { answer.ok() })
     });
     (hop, now)
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn analytics_named_account_reads_hourly_and_daily_ranges_from_the_real_store() {
     let owner_home = tempfile::tempdir().unwrap();
@@ -195,7 +189,6 @@ async fn analytics_named_account_reads_hourly_and_daily_ranges_from_the_real_sto
     handle.abort();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn analytics_admits_canonical_linked_and_case_variant_zones_and_refuses_unknown_zones() {
     let owner_home = tempfile::tempdir().unwrap();
@@ -222,5 +215,15 @@ async fn analytics_admits_canonical_linked_and_case_variant_zones_and_refuses_un
     )
     .await;
     assert_eq!(body(&invalid, 400)["code"], "invalid_tz");
+    let path = format!("{ANALYTICS}?range=custom&from=2000-01-01&to=2000-01-02");
+    assert_eq!(
+        body(&request(addr, &path, "GET", &headers, "").await, 400)["code"],
+        "invalid_range"
+    );
+    let head = request(addr, ANALYTICS, "HEAD", &headers, "").await;
+    assert!(head.starts_with("HTTP/1.1 200"));
+    assert!(head.contains("cache-control: no-store"));
+    assert!(head.contains("etag: W/"));
+    assert_eq!(head.split_once("\r\n\r\n").unwrap().1, "");
     handle.abort();
 }

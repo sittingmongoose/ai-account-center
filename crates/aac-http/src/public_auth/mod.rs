@@ -326,8 +326,6 @@ impl DashboardAuth {
                     )
                     .await;
                 }
-                // The request itself stays here: a declined composed read still reaches the
-                // worker with its headers and body untouched.
                 let access = request.extensions().get::<DashboardAccess>().cloned();
                 let query = request.uri().query().map(str::to_owned);
                 let cross_site = request
@@ -336,18 +334,14 @@ impl DashboardAuth {
                     .and_then(|value| value.to_str().ok())
                     == Some("cross-site");
                 let head = request.method() == Method::HEAD;
-                if let Some(reply) = analytics_routes::analytics(
+                return analytics_routes::analytics(
                     access,
                     query,
                     head,
                     cross_site,
-                    root.to_owned(),
                     analytics_hop.clone(),
                 )
-                .await
-                {
-                    return reply;
-                }
+                .await;
             }
             let worker_collection = backend.as_ref().is_some_and(|worker| {
                 worker.collection_fallback
@@ -537,8 +531,17 @@ pub(crate) async fn run_public_at(
         }
         groups
     });
+    #[cfg(windows)]
+    let windows_host = (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), false));
     let mut worker = if cut {
-        sidecar::Sidecar::start(&root, address, native_collection).await?
+        sidecar::Sidecar::start(
+            &root,
+            address,
+            native_collection,
+            #[cfg(windows)]
+            windows_host.clone(),
+        )
+        .await?
     } else {
         None
     };
@@ -555,8 +558,11 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    let owner_host = (enabled || cut)
-        .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
+    #[cfg(not(windows))]
+    let owner_host =
+        (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    #[cfg(windows)]
+    let owner_host = windows_host;
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
         let worker_directory = snapshot
@@ -597,24 +603,18 @@ pub(crate) async fn run_public_at(
     });
     // The group's one hop to the owner host: the running service's descriptor, or the
     // in-process service a worker-less boot starts. No second link.
-    #[cfg(unix)]
     let analytics_hop: Option<analytics_routes::Hop> =
         owner_host
             .as_ref()
-            .filter(|_| enabled)
+            .filter(|_| cut)
             .map(|host| -> analytics_routes::Hop {
                 let host = std::sync::Arc::clone(host);
                 std::sync::Arc::new(move |uri: String, principal: String| {
                     let host = std::sync::Arc::clone(&host);
-                    Box::pin(async move {
-                        host.request("GET", &uri, &principal, &[], None)
-                            .await
-                            .map(|reply| (reply.status, reply.body))
-                    }) as analytics_routes::HopFuture
+                    Box::pin(async move { host.analytics(&uri, &principal).await })
+                        as analytics_routes::HopFuture
                 })
             });
-    #[cfg(not(unix))]
-    let analytics_hop: Option<analytics_routes::Hop> = None;
     let (profiles, app_updates) = if let Some(native) = native.as_ref() {
         let (agents, cache) = native.profile_inputs();
         let rows: profile_routes::RowsSource = Arc::new(move || {

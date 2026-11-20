@@ -26,14 +26,35 @@ pub(crate) struct ZoneOffsets {
 /// The offsets of `time_zone` from `from` to `to`, as `[start, minutes west of UTC]` rows.
 /// `None` for a name the zone database does not hold (the reference's `Intl` throw).
 pub(crate) fn server_zone_facts(time_zone: &str, now: i64) -> Option<ZoneOffsets> {
+    let day = now.div_euclid(ZONE_DAY) * ZONE_DAY;
+    let from = day - PAST_DAYS * ZONE_DAY;
+    let to = day + FUTURE_DAYS * ZONE_DAY;
+    window_facts(time_zone, from, to)
+}
+
+pub(crate) fn canonical_name(name: &str) -> String {
+    aac_files::zoneinfo::canonical_name(name).unwrap_or_else(|| match name {
+        "US/Eastern" => "America/New_York".to_owned(),
+        "US/Central" => "America/Chicago".to_owned(),
+        "US/Mountain" => "America/Denver".to_owned(),
+        "US/Pacific" => "America/Los_Angeles".to_owned(),
+        _ => name.to_owned(),
+    })
+}
+
+/// Use the bundled IANA rules when the host has no TZif database.
+pub(crate) fn analytics_zone(time_zone: &str, from: i64, now: i64) -> Option<Zone> {
+    let from = from.div_euclid(ZONE_DAY) * ZONE_DAY - ZONE_DAY;
+    let to = now.div_euclid(ZONE_DAY) * ZONE_DAY + 2 * ZONE_DAY;
+    window_facts(time_zone, from, to).map(|facts| facts.zone)
+}
+
+fn window_facts(time_zone: &str, from: i64, to: i64) -> Option<ZoneOffsets> {
     let zone: chrono_tz::Tz = time_zone.parse().ok()?;
     let offset = |ms: i64| -> Option<i64> {
         let at = chrono::DateTime::from_timestamp_millis(ms)?;
         Some(i64::from(at.with_timezone(&zone).offset().fix().local_minus_utc()) / 60)
     };
-    let day = now.div_euclid(ZONE_DAY) * ZONE_DAY;
-    let from = day - PAST_DAYS * ZONE_DAY;
-    let to = day + FUTURE_DAYS * ZONE_DAY;
     let mut offsets: Vec<[i64; 2]> = vec![[from, offset(from)?]];
     let mut t = from;
     while t < to {
@@ -53,6 +74,9 @@ pub(crate) fn server_zone_facts(time_zone: &str, now: i64) -> Option<ZoneOffsets
             }
         }
         offsets.push([hi * 1000, offset(hi * 1000)?]);
+        if offsets.len() > 64 {
+            return None;
+        }
         t = hi * 1000;
     }
     let zone = Zone::proven(from, to, &offsets)?;

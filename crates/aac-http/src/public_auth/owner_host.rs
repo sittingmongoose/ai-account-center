@@ -57,6 +57,8 @@ pub(super) struct OwnerHost {
     local: tokio::sync::Mutex<Option<std::sync::Arc<crate::owners::Owners>>>,
     #[cfg(not(unix))]
     local_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(not(unix))]
+    analytics_live: std::sync::Arc<crate::analytics_live::Live>,
 }
 
 struct PublicOwners {
@@ -98,6 +100,8 @@ impl OwnerHost {
             local: tokio::sync::Mutex::new(None),
             #[cfg(not(unix))]
             local_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(not(unix))]
+            analytics_live: std::sync::Arc::default(),
         })
     }
 
@@ -142,7 +146,9 @@ impl OwnerHost {
             }
             let ccs = self.root.canonicalize().ok()?;
             // The explicit switch is the user's: with it off, no store is opened here either.
-            let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off");
+            let store_off = std::env::var("AAC_RUST_STORE").as_deref() == Ok("off")
+                || std::env::var("AAC_STORE")
+                    .is_ok_and(|value| value.trim().eq_ignore_ascii_case("off"));
             let (reports, registry_dir) = share_roots(
                 std::env::var("AAC_AGENT_REPORTS_DIR").ok().as_deref(),
                 std::env::var("AAC_PM_MAIL_REGISTRY_DIR").ok().as_deref(),
@@ -173,7 +179,10 @@ impl OwnerHost {
             // The hosted store opens once, before any route reads it (the service does this in
             // its boot); a request must never wait behind an unopened Engine.
             if let Some(store) = owners.store.clone() {
-                let _ = tokio::task::spawn_blocking(move || store.open_at_boot()).await;
+                let opener = store.clone();
+                let _ = tokio::task::spawn_blocking(move || opener.open_at_boot()).await;
+                let stop = self.local_stop.clone();
+                tokio::spawn(crate::store_host::jobs(store, stop));
             }
             if let Some(owner) = &owners.scoreboard_owned {
                 // The first request sees a catalog and runs from the same prepared generation.
@@ -321,6 +330,38 @@ impl OwnerHost {
         {
             let _ = (method, uri, principal, headers, body);
             None
+        }
+    }
+
+    pub(super) async fn analytics(&self, uri: &str, principal: &str) -> Option<(u16, Vec<u8>)> {
+        #[cfg(unix)]
+        {
+            self.request("GET", uri, principal, &[], None)
+                .await
+                .map(|reply| (reply.status, reply.body))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = principal;
+            let engine = self.local().await?.store.as_ref()?.analytics_engine()?;
+            let query = uri.split_once('?').map(|(_, query)| query.to_owned());
+            let root = self.root.clone();
+            let live = self.analytics_live.clone();
+            let cache = self.public_owners().and_then(|owner| owner.usage_cache());
+            tokio::task::spawn_blocking(move || {
+                let now = super::now();
+                let snapshot = cache.and_then(|cache| {
+                    let timestamp = super::storage::iso(now)?;
+                    Some(serde_json::json!({"dashboards": cache.labeled_dashboards(&timestamp, now)}))
+                });
+                let answer = crate::analytics_route::compose(
+                    engine, &root, snapshot.as_ref(), &live, query.as_deref(), now,
+                );
+                crate::analytics_route::encode(answer, query.as_deref()).ok()
+            })
+            .await
+            .ok()
+            .flatten()
         }
     }
 

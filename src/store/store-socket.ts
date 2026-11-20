@@ -51,10 +51,15 @@ function takeIdle(pool: Pool): net.Socket | null {
   return null;
 }
 
+function connect(socketPath: string): net.Socket {
+  const address = /^tcp:127\.0\.0\.1:(\d+)$/.exec(socketPath);
+  return address ? net.connect(Number(address[1]), '127.0.0.1') : net.connect(socketPath);
+}
+
 function connectFresh(pool: Pool, socketPath: string): Promise<net.Socket> {
   pool.busy++;
   return new Promise((resolve, reject) => {
-    const socket = net.connect(socketPath);
+    const socket = connect(socketPath);
     socket.setNoDelay(true);
     const fail = (error: Error) => {
       pool.busy--;
@@ -97,7 +102,7 @@ function drain(pool: Pool, socketPath: string): void {
     if (pool.busy < MAX_SOCKETS) {
       const waiter = pool.waiters.shift() as (socket: net.Socket) => void;
       pool.busy++;
-      const fresh = net.connect(socketPath);
+      const fresh = connect(socketPath);
       fresh.setNoDelay(true);
       const fail = () => {
         pool.busy--;

@@ -22,6 +22,8 @@ struct Source {
     local: Arc<OnceLock<AccountUsageCache>>,
     #[cfg(unix)]
     adopted: Arc<OnceLock<super::service_link::ServiceLink>>,
+    #[cfg(windows)]
+    store_host: Option<Arc<super::owner_host::OwnerHost>>,
 }
 
 pub(super) struct CollectionFeed {
@@ -31,7 +33,10 @@ pub(super) struct CollectionFeed {
 }
 
 impl CollectionFeed {
-    pub(super) async fn start(proof: &str) -> io::Result<Self> {
+    pub(super) async fn start(
+        proof: &str,
+        #[cfg(windows)] store_host: Option<Arc<super::owner_host::OwnerHost>>,
+    ) -> io::Result<Self> {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
         let source = Source {
@@ -39,10 +44,14 @@ impl CollectionFeed {
             local: Arc::default(),
             #[cfg(unix)]
             adopted: Arc::default(),
+            #[cfg(windows)]
+            store_host,
         };
         let router = Router::new().route("/dashboard", get(dashboard));
         #[cfg(windows)]
-        let router = router.route("/sample", get(sample));
+        let router = router
+            .route("/sample", get(sample))
+            .route("/internal/store/{method}", axum::routing::post(store));
         let router = router.with_state(source.clone());
         let task = tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
@@ -66,6 +75,64 @@ impl CollectionFeed {
     pub(super) fn set_adopted(&self, link: super::service_link::ServiceLink) {
         let _ = self.source.adopted.set(link);
     }
+}
+
+/// The retained worker's store adapter shares the Windows listener's existing Engine.
+#[cfg(windows)]
+async fn store(
+    State(source): State<Source>,
+    axum::extract::Path(method): axum::extract::Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    use axum::{Json, body::to_bytes};
+    use serde_json::json;
+    let allowed = request
+        .headers()
+        .get("x-aac-boot-secret")
+        .is_some_and(|proof| bool::from(source.proof.as_bytes().ct_eq(proof.as_bytes())));
+    if !allowed {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let error = |message: &str| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":message})),
+        )
+            .into_response()
+    };
+    let Some(host) = &source.store_host else {
+        return error("service_down: the store host is not available");
+    };
+    let mut response = if method == "close" {
+        // Close this client's handle. The front door closes the shared Engine on shutdown.
+        Json(json!({"closed":true})).into_response()
+    } else {
+        let args = to_bytes(request.into_body(), crate::store_host::STORE_INPUT_CAP)
+            .await
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok());
+        match (
+            args,
+            host.local().await.and_then(|owner| owner.store.clone()),
+        ) {
+            (Some(args), Some(store))
+                if method.len() <= 32 && method.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+            {
+                match store.call(method, args).await {
+                    Ok(text) => (
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        text,
+                    )
+                        .into_response(),
+                    Err(reason) => error(&reason),
+                }
+            }
+            (_, None) => error("service_down: the store host is not available"),
+            _ => error("invalid: invalid store method or body"),
+        }
+    };
+    super::set_header(&mut response, "x-aac-service-boot", &source.proof[..24]);
+    response
 }
 
 impl Drop for CollectionFeed {

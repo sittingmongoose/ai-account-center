@@ -1,7 +1,6 @@
 //! The Analytics route group served by the native front door: the capture setting on both
-//! platforms (its file and admission are platform-free) and the composed analytics answer, which
-//! the Unix front door asks the private service for and Windows still forwards to the retained
-//! worker. The admission order, the error bodies and the JSON encoding are the TypeScript route's
+//! platforms (its file and admission are platform-free) and the composed analytics answer.
+//! The admission order, the error bodies and the JSON encoding preserve the original route's
 //! (`account-analytics-routes.ts`), so the recorded M0 contracts stay byte-equal: a browser or bar
 //! session only, the dashboard origin for the analytics read and for a capture write, the exact
 //! query keys, and the capture body `{"cwd": <boolean>}`.
@@ -36,7 +35,7 @@ const MAX_CUSTOM_DAYS: i64 = 36_525;
 
 const INVALID_QUERY: &str =
     "Select a valid platform, time range, provider, account, and refresh flag.";
-const INVALID_RANGE: &str = "Select whole days from the oldest stored day through today, with the start date on or before the end date.";
+use crate::analytics_route::INVALID_RANGE;
 const INVALID_TZ: &str = "Select a valid IANA time zone.";
 const INVALID_PROVIDER: &str = "Select a provider that this server reports.";
 
@@ -397,24 +396,21 @@ pub(super) async fn capture(
     headless(reply, head)
 }
 
-/// The composed read: `None` hands the request back to the caller's worker fallback. The caller
-/// passes only its admitted facts, so no request reference is held across the service call.
+/// The composed read, including the public receipt when the native owner is unavailable.
 pub(super) async fn analytics(
     access: Option<DashboardAccess>,
     raw_query: Option<String>,
     head: bool,
     cross_site: bool,
-    root: PathBuf,
     hop: Option<Hop>,
-) -> Option<Reply> {
+) -> Reply {
     let Some(access) = access else {
-        return Some(super::service_error());
+        return super::service_error();
     };
-    match composed(access, raw_query.as_deref(), root, head, cross_site, hop).await {
-        Ok(Some(reply)) => Some(reply),
-        Ok(None) => None,
-        Err(reply) => Some(reply),
-    }
+    headless(
+        composed(access, raw_query.as_deref(), cross_site, hop).await,
+        head,
+    )
 }
 
 /// The exact one-field body `{"cwd": <boolean>}`. Like `JSON.parse`, a repeated key keeps the
@@ -429,23 +425,18 @@ fn exact_cwd(body: &[u8]) -> Option<bool> {
 async fn composed(
     access: super::DashboardAccess,
     raw_query: Option<&str>,
-    _root: PathBuf,
-    head: bool,
     cross_site: bool,
     hop: Option<Hop>,
-) -> Result<Option<Reply>, Reply> {
+) -> Reply {
     if let Err(reply) = session(&access) {
-        return Err(headless(reply, head));
+        return reply;
     }
     if !access.same_origin || cross_site {
-        return Err(headless(
-            refused(
-                403,
-                "origin_required",
-                "Account analytics requires the dashboard origin.",
-            ),
-            head,
-        ));
+        return refused(
+            403,
+            "origin_required",
+            "Account analytics requires the dashboard origin.",
+        );
     }
     let providers: Vec<&str> = aac_providers::analytics_provider_table()
         .into_iter()
@@ -453,12 +444,7 @@ async fn composed(
         .collect();
     let query = match admitted_analytics(raw_query, &providers) {
         Ok(query) => query,
-        Err(reply) => return Err(headless(reply, head)),
-    };
-    let Some(hop) = hop else {
-        // No owner host this boot (switch off, or Windows until the service compiles there):
-        // the retained worker answers a composed read, as before.
-        return Ok(None);
+        Err(reply) => return reply,
     };
     let principal = json!({
         "kind":"session",
@@ -470,12 +456,17 @@ async fn composed(
         Some(query) => format!("/api/accounts/analytics?{query}"),
         None => "/api/accounts/analytics".to_owned(),
     };
-    match hop(uri, principal).await {
-        // The service's named decline is "the TS computation answers": with the retained
-        // worker it does; without it the front door's own unmounted-path decline.
-        Some((503, _)) | None => Ok(None),
-        Some((status, body)) => Ok(Some(headless(super::json_bytes(status, body), head))),
+    if let Some(hop) = hop
+        && let Some((status, body)) = hop(uri, principal).await
+        && status != 503
+    {
+        return no_store(super::json_bytes(status, body));
     }
+    refused(
+        500,
+        "analytics_unavailable",
+        "Account analytics could not be read safely.",
+    )
 }
 
 #[cfg(test)]
