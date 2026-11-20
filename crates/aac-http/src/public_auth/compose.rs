@@ -44,14 +44,6 @@ const ACCOUNT_LITERALS: &[&str] = &[
 // the complete legacy router, including its handling of unknown methods.
 const CUT_ROUTES: &[(&str, &[&str])] = &[
     ("/api/accounts/analytics", &["GET"]),
-    ("/api/scoreboard", &["GET"]),
-    ("/api/status", &["GET"]),
-    ("/api/status/answers", &["GET", "POST"]),
-    (
-        "/api/status/deliverable",
-        &["GET", "POST", "PUT", "PATCH", "DELETE"],
-    ),
-    ("/api/status/files/:owner/*relative", &["GET"]),
     ("/api/store/status", &["GET"]),
     ("/api/usage/history", &["GET"]),
     ("/api/usage/at", &["GET"]),
@@ -127,10 +119,17 @@ mod tests {
             &Method::POST,
             "/api/accounts/example/reset-claims/prepare"
         ));
-        assert!(cut_route(
-            &Method::GET,
-            "/api/status/files/example/nested/file.md"
-        ));
+        for path in [
+            "/api/status",
+            "/api/scoreboard",
+            "/api/status/answers",
+            "/api/status/files/example/nested/file.md",
+            "/api/status/deliverable",
+        ] {
+            for method in [Method::GET, Method::HEAD, Method::POST, Method::OPTIONS] {
+                assert!(!cut_route(&method, path), "{method} {path}");
+            }
+        }
         assert!(!cut_route(&Method::GET, "/api/status/files/example"));
         assert!(!cut_route(&Method::POST, "/api/accounts//recheck"));
         assert!(!cut_route(&Method::GET, "/api/accounts/unknown"));

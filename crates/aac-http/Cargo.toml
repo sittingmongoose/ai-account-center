@@ -36,7 +36,8 @@ libc.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json = { workspace = true, features = ["raw_value", "preserve_order", "float_roundtrip"] }
-tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "net", "signal", "sync", "time"] }
+tokio-util = { workspace = true, features = ["io"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
@@ -66,6 +67,9 @@ tempfile.workspace = true
 [dev-dependencies]
 aac-renewal = { workspace = true, features = ["parity-fixtures"] }
 tokio-tungstenite = "0.29"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_SystemInformation"] }
 
 [build-dependencies]
 serde_json.workspace = true

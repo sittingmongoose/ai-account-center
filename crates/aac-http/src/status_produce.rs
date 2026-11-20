@@ -77,7 +77,7 @@ fn clamp_i64(value: u64) -> i64 {
 }
 
 /// One machine's pin state across collects (`PinnedThreadsCollector`'s `MachineState`).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct PinMachine {
     last_good: Option<aac_status::pins::PinsRead>,
     not_shown: usize,
@@ -335,7 +335,8 @@ impl Produce {
         let simlock = find_executable("simlock");
         let (browsers_result, simlock_result) =
             tokio::join!(read_browsers(), read_simlock(&simlock));
-        let pins = read_pins(&rows, local).await;
+        let previous_pins = self.lock().pins.machines.clone();
+        let pins = read_pins(&rows, local, previous_pins).await;
         let now_i64 = clamp_i64(now);
         {
             let mut inner = self.lock();
@@ -686,6 +687,9 @@ fn computers_rows() -> Vec<(String, String, Option<String>)> {
 }
 
 fn hostname() -> String {
+    if cfg!(windows) {
+        return std::env::var("COMPUTERNAME").unwrap_or_default();
+    }
     // Linux keeps the name in procfs; macOS has `uname -n`. (No unsafe call for one word.)
     if let Some(name) = read_file("/proc/sys/kernel/hostname") {
         return name.trim().to_owned();
@@ -700,7 +704,11 @@ fn hostname() -> String {
 }
 
 fn local_machine() -> String {
-    aac_status::computers::local_computer(&hostname(), std::env::consts::OS).to_owned()
+    let computer = aac_status::computers::local_computer(&hostname(), std::env::consts::OS);
+    aac_status::computers::computer(computer)
+        .and_then(|row| row["machineId"].as_str())
+        .unwrap_or(computer)
+        .to_owned()
 }
 
 fn read_file(path: &str) -> Option<String> {
@@ -709,6 +717,7 @@ fn read_file(path: &str) -> Option<String> {
 
 /// `statfs('/')`: `(free bytes, total bytes)` as Node's `bavail*bsize` and `blocks*bsize`,
 /// from `df -Pk /` (the same 1 KiB blocks and the same filesystem the probe reads).
+#[cfg(not(windows))]
 fn statfs_root(_path: &str) -> Option<(f64, f64)> {
     let output = std::process::Command::new("df")
         .args(["-Pk", "/"])
@@ -725,6 +734,7 @@ fn statfs_root(_path: &str) -> Option<(f64, f64)> {
     Some((available * 1024.0, total * 1024.0))
 }
 
+#[cfg(not(windows))]
 fn linux_cpus() -> usize {
     read_file("/proc/cpuinfo")
         .map(|text| {
@@ -736,6 +746,7 @@ fn linux_cpus() -> usize {
         .unwrap_or(0)
 }
 
+#[cfg(not(windows))]
 fn linux_total_memory() -> (Option<f64>, Option<f64>) {
     let Some(text) = read_file("/proc/meminfo") else {
         return (None, None);
@@ -764,6 +775,7 @@ fn linux_total_memory() -> (Option<f64>, Option<f64>) {
 }
 
 /// A synchronous Mac probe with the same 5 s deadline the reference gives it.
+#[cfg(not(windows))]
 fn mac_probe(command: &str, timeout: Duration) -> Option<String> {
     use std::io::Read;
     let mut child = std::process::Command::new("/bin/sh")
@@ -793,6 +805,51 @@ fn mac_probe(command: &str, timeout: Duration) -> Option<String> {
 
 /// `readLocalMachine`: this computer, from the host facts the way Node read them.
 fn local_sample() -> Result<Sample, String> {
+    #[cfg(windows)]
+    {
+        Ok(windows_sample())
+    }
+    #[cfg(not(windows))]
+    {
+        unix_sample()
+    }
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn windows_sample() -> Sample {
+    use windows_sys::Win32::{
+        Storage::FileSystem::GetDiskFreeSpaceExW,
+        System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX},
+    };
+    let mut memory = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: the writable structure has the size required by GlobalMemoryStatusEx.
+    let has_memory = unsafe { GlobalMemoryStatusEx(&mut memory) } != 0;
+    machines_produce::local_sample(&machines_produce::LocalReads {
+        platform: Platform::Windows,
+        cpus: std::thread::available_parallelism().map_or(0, usize::from),
+        total_mem: has_memory.then_some(memory.ullTotalPhys as f64),
+        free_mem: has_memory.then_some(memory.ullAvailPhys as f64),
+        load1: None,
+        read_file: &|_| None,
+        statfs: &|_| {
+            let root = [u16::from(b'\\'), 0];
+            let (mut free, mut total) = (0u64, 0u64);
+            // SAFETY: root is NUL-terminated and the two requested outputs are live u64s.
+            let ok = unsafe {
+                GetDiskFreeSpaceExW(root.as_ptr(), &mut free, &mut total, std::ptr::null_mut())
+            };
+            (ok != 0).then_some((free as f64, total as f64))
+        },
+        mac_memory: None,
+    })
+}
+
+#[cfg(not(windows))]
+fn unix_sample() -> Result<Sample, String> {
     let platform = if cfg!(target_os = "macos") {
         Platform::Mac
     } else {
@@ -1079,9 +1136,16 @@ mod simlock_tests {
 // ---------------------------------------------------------------------------------------------
 // Pinned threads
 
-/// The machines in panel order, with `vm`'s own database read here and the others over ssh.
-async fn read_pins(rows: &[(String, String, Option<String>)], local: String) -> Pins {
-    let mut pins = Pins::default();
+/// The machines in panel order, with the local database read here and the others over ssh.
+async fn read_pins(
+    rows: &[(String, String, Option<String>)],
+    local: String,
+    machines: BTreeMap<String, PinMachine>,
+) -> Pins {
+    let mut pins = Pins {
+        machines,
+        ..Pins::default()
+    };
     let now = now_ms();
     let mut pending = Vec::with_capacity(rows.len());
     for (machine, os, alias) in rows {
@@ -1117,10 +1181,6 @@ async fn read_pins(rows: &[(String, String, Option<String>)], local: String) -> 
                 state.not_shown = read.not_shown;
                 state.failures = 0;
                 state.problem = None;
-                lists.push(aac_status::pins::MachinePins {
-                    name: machine.clone(),
-                    pinned: read.pinned.clone(),
-                });
             }
             Err(code) => {
                 if state.last_good.is_some() && state.failures == 0 {
@@ -1137,6 +1197,12 @@ async fn read_pins(rows: &[(String, String, Option<String>)], local: String) -> 
                     state.problem = Some((code.clone(), since));
                 }
             }
+        }
+        if let Some(read) = &state.last_good {
+            lists.push(aac_status::pins::MachinePins {
+                name: machine.clone(),
+                pinned: read.pinned.clone(),
+            });
         }
     }
     pins.merged = aac_status::pins::merge_pins(&lists);

@@ -52,6 +52,8 @@ pub(crate) struct Config {
 
 /// The owners, built once.
 pub(crate) struct Owners {
+    #[cfg(not(unix))]
+    pub(crate) feeds: Feeds,
     pub(crate) store: Option<Arc<StoreHost>>,
     pub(crate) status_owned: Option<Arc<StatusOwned>>,
     pub(crate) status_produce: Option<Arc<Produce>>,
@@ -68,6 +70,24 @@ impl Owners {
         let rows = registry::rows().map_err(invalid)?;
         let registry = match &config.files {
             Some(files) => Registry::from_boot(rows, files).map_err(invalid)?,
+            None if config
+                .owned
+                .as_ref()
+                .is_some_and(|owned| owned.status && owned.scoreboard) =>
+            {
+                let files = rows
+                    .iter()
+                    .map(|row| {
+                        let role = if row.id == "readers-check" {
+                            registry::Role::RustService
+                        } else {
+                            row.owner
+                        };
+                        (row.id.clone(), role.word().to_owned())
+                    })
+                    .collect();
+                Registry::from_boot(rows, &files).map_err(invalid)?
+            }
             None => Registry::defaults(rows),
         };
         let store = config.store.map(StoreHost::new);
@@ -106,7 +126,7 @@ impl Owners {
         let scoreboard_feeds = feeds.clone();
         let status_produce = match (&config.owned, &answers_owned) {
             (Some(owned), Some(answers)) if owned.status => {
-                Some(Produce::new(feeds, Arc::clone(answers)))
+                Some(Produce::new(feeds.clone(), Arc::clone(answers)))
             }
             _ => None,
         };
@@ -122,6 +142,8 @@ impl Owners {
             _ => None,
         };
         Ok(Self {
+            #[cfg(not(unix))]
+            feeds,
             store,
             status_owned,
             status_produce,

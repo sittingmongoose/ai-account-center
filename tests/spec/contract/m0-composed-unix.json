@@ -2976,6 +2976,7 @@
     "response": {
       "status": 404,
       "headers": {
+        "cache-control": "no-store",
         "content-type": "application/json; charset=utf-8",
         "etag": "<etag>",
         "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
@@ -3014,6 +3015,7 @@
     "response": {
       "status": 404,
       "headers": {
+        "cache-control": "no-store",
         "content-type": "application/json; charset=utf-8",
         "etag": "<etag>",
         "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"

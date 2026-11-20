@@ -1,4 +1,6 @@
 //! The public dashboard event contract and the private producer pipe.
+use axum::body::Body;
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::{
@@ -193,6 +195,25 @@ impl DashboardEvents {
     /// Malformed frames are skipped. An oversized or unterminated frame closes this feed.
     /// The caller supplies a private stream, such as the child's inherited stdin.
     pub async fn read_feed(&self, input: impl AsyncRead + Unpin) -> io::Result<()> {
+        self.read_frames(input, |frame| serde_json::from_slice(frame).ok())
+            .await
+    }
+
+    /// Bridge only the Status hint from the existing private service feeds.
+    pub(super) async fn read_status_feed(&self, body: Body) -> io::Result<()> {
+        let stream = body.into_data_stream().map_err(io::Error::other);
+        self.read_frames(tokio_util::io::StreamReader::new(stream), |frame| {
+            let event = serde_json::from_slice::<serde_json::Value>(frame).ok()?;
+            (event["event"] == "status-changed").then_some(DashboardEvent::StatusChanged {})
+        })
+        .await
+    }
+
+    async fn read_frames(
+        &self,
+        input: impl AsyncRead + Unpin,
+        parse: impl Fn(&[u8]) -> Option<DashboardEvent>,
+    ) -> io::Result<()> {
         let mut input = BufReader::new(input);
         let mut frame = Vec::new();
         loop {
@@ -210,7 +231,7 @@ impl DashboardEvents {
                     "invalid event frame boundary",
                 ));
             }
-            if let Ok(event) = serde_json::from_slice::<DashboardEvent>(&frame) {
+            if let Some(event) = parse(&frame) {
                 self.publish(event);
             }
         }

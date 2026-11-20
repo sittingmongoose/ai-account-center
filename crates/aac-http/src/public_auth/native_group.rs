@@ -17,29 +17,47 @@ use super::{DashboardAccess, DashboardPrincipal, Reply, owner_host::ServiceReply
 use crate::scoreboard_owned::ScoreboardOwned;
 use aac_views::decline::Decline;
 use axum::{
-    body::to_bytes,
+    body::{Body, to_bytes},
     extract::Request,
     http::{Method, StatusCode},
     response::IntoResponse,
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value as Json, json};
 use std::path::Path;
+use tokio::io::AsyncReadExt;
 
 /// This group's admission and encoding, over the one owner host.
 pub(super) struct Routes {
     host: std::sync::Arc<super::owner_host::OwnerHost>,
+    cut: bool,
+    legacy_switch: bool,
 }
 
 impl Routes {
-    pub(super) fn new(host: std::sync::Arc<super::owner_host::OwnerHost>) -> Self {
-        Self { host }
+    pub(super) fn new(
+        host: std::sync::Arc<super::owner_host::OwnerHost>,
+        cut: bool,
+        legacy_switch: bool,
+    ) -> Self {
+        Self {
+            host,
+            cut,
+            legacy_switch,
+        }
     }
 
-    /// Whether this boot answers `method path` itself: the switch is on and the pattern is one
-    /// of the worker-removal routes.
+    /// Status and Scoreboard always use Rust on a cut boot. Store and history retain their switch.
     pub(super) fn owns(&self, method: &Method, path: &str) -> bool {
-        super::owner_host::enabled() && owns_route(method, path)
+        let path = path.strip_suffix('/').unwrap_or(path);
+        if owns_route(method, path) {
+            return self.cut || self.legacy_switch;
+        }
+        self.legacy_switch
+            && matches!(*method, Method::GET | Method::HEAD)
+            && matches!(
+                path,
+                "/api/store/status" | "/api/usage/history" | "/api/usage/at" | "/api/usage/burn"
+            )
     }
 
     fn root(&self) -> &Path {
@@ -99,9 +117,6 @@ fn decline_because(reason: &'static str) -> Reply {
 
 /// `MAX_STATUS_BODY_BYTES`, the answer set's own limit.
 const ANSWER_BODY_CAP: usize = 64 * 1024;
-/// The file envelope's largest base64 body (`rust-file-response.ts`).
-const FILE_REPLY_CAP: usize = 1_400_000;
-
 const INVALID_BODY: (u16, &str, &str) = (
     400,
     "invalid_body",
@@ -121,16 +136,12 @@ fn owns_route(method: &Method, path: &str) -> bool {
     if path == "/api/status/answers" && method == Method::POST {
         return true;
     }
-    if !matches!(*method, Method::GET | Method::HEAD) {
+    if !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
         return false;
     }
     path == "/api/status"
         || path == "/api/status/answers"
         || path == "/api/scoreboard"
-        || path == "/api/store/status"
-        || path == "/api/usage/history"
-        || path == "/api/usage/at"
-        || path == "/api/usage/burn"
         || media(path).is_some()
 }
 
@@ -318,8 +329,17 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
     let path = req.uri().path().to_owned();
     let path = path.strip_suffix('/').unwrap_or(&path).to_owned();
     let raw = req.uri().query().map(str::to_owned);
-    let raw = raw.as_deref().filter(|query| !query.is_empty());
+    let raw = raw.as_deref();
     let facts = Facts::of(access, &req);
+    if req.method() == Method::OPTIONS && path != "/api/status/deliverable" {
+        return browser_only(access).unwrap_or_else(|| {
+            no_store(if path == "/api/status/answers" {
+                super::lifecycle::options("GET, HEAD, POST", "15")
+            } else {
+                super::lifecycle::options("GET, HEAD", "9")
+            })
+        });
+    }
     match path.as_str() {
         "/api/store/status" => store_status(routes, access, &facts).await,
         "/api/usage/history" | "/api/usage/at" | "/api/usage/burn" => {
@@ -342,11 +362,9 @@ pub(super) async fn handle(routes: &Routes, access: &DashboardAccess, req: Reque
         "/api/status/answers" => answers_read(routes, access, raw).await,
         "/api/status" => status(routes, access, raw, &facts).await,
         "/api/scoreboard" => scoreboard(routes, access, raw, &facts).await,
-        "/api/status/deliverable" => deliverable(routes, access, req, &facts, raw).await,
+        "/api/status/deliverable" => deliverable(access, req, &facts, raw).await,
         _ => match media(&path) {
-            Some((writer, relative)) => {
-                card_media(routes, access, &facts, writer, relative, raw).await
-            }
+            Some((writer, relative)) => card_media(access, &facts, writer, relative, raw).await,
             None => super::decline(),
         },
     }
@@ -495,7 +513,12 @@ async fn answers_post(
             return invalid();
         };
         return match answer_store.submit(submit.to_string().as_bytes()).await {
-            Ok(reply) => no_store(json_reply(200, &reply)),
+            Ok(reply) => {
+                if let Some(produce) = &owners.status_produce {
+                    produce.mark_answers();
+                }
+                no_store(json_reply(200, &reply))
+            }
             Err("shape") => invalid(),
             Err(_) => no_store(super::error(
                 500,
@@ -515,7 +538,13 @@ async fn answers_post(
             "POST",
             "/api/status/answers",
             &principal,
-            &[("content-type", content_type.as_str())],
+            &[
+                ("content-type", content_type.as_str()),
+                (
+                    "user-agent",
+                    facts.user_agent.as_deref().unwrap_or_default(),
+                ),
+            ],
             Some(&body),
         )
         .await
@@ -993,7 +1022,6 @@ fn reports_root() -> String {
 /// `GET|HEAD /api/status/files/<writer>/<path>`: the file envelope from the service, checked and
 /// written with the route's own headers (`rust-file-response.ts`).
 async fn card_media(
-    routes: &Routes,
     access: &DashboardAccess,
     facts: &Facts,
     writer: &str,
@@ -1010,8 +1038,15 @@ async fn card_media(
             UNEXPECTED_QUERY_STATUS,
         ));
     }
-    let Some(principal) = access.service_principal() else {
-        return super::decline();
+    let (Some(writer), Some(relative)) = (
+        super::decode_component(writer),
+        super::decode_component(relative),
+    ) else {
+        return no_store(super::error(
+            404,
+            "not_found",
+            "This file is not available.",
+        ));
     };
     let input = json!({
         "kind": "media",
@@ -1021,28 +1056,7 @@ async fn card_media(
         "range": facts.range.as_deref(),
         "head": facts.head,
     });
-    let body = input.to_string();
-    if !routes.hosted().await {
-        // No private service here: the shipped reader answers in this process, with the same
-        // descriptor proof it uses behind the service.
-        return match crate::read_files::answer("/api/status/files/{*path}", body.as_bytes()) {
-            Some(refusal) => local_file_reply(&refusal, facts.head, true),
-            None => super::decline(),
-        };
-    }
-    match routes
-        .request(
-            "GET",
-            "/api/status/files/{*path}",
-            &principal,
-            &[("content-type", "application/json")],
-            Some(body.as_bytes()),
-        )
-        .await
-    {
-        Some(reply) => file_reply(&reply, facts.head, true),
-        None => super::service_error(),
-    }
+    read_file("/api/status/files/{*path}", input).await
 }
 
 /// The share route's own headers, on every reply including refusals.
@@ -1061,14 +1075,20 @@ fn share_headers(mut reply: Reply) -> Reply {
 
 /// `GET|HEAD /api/status/deliverable?path=...`: the share route's own refusals, then one file.
 async fn deliverable(
-    routes: &Routes,
     access: &DashboardAccess,
     req: Request,
     facts: &Facts,
     raw: Option<&str>,
 ) -> Reply {
     if let Some(refusal) = browser_only(access) {
-        return share_headers(refusal);
+        return refusal;
+    }
+    if !facts.same_origin {
+        return share_headers(super::error(
+            403,
+            "wrong_origin",
+            "Use the dashboard origin.",
+        ));
     }
     if req.method() != Method::GET && req.method() != Method::HEAD {
         let mut refusal = super::error(405, "read_only", "Only GET and HEAD are supported.");
@@ -1082,9 +1102,6 @@ async fn deliverable(
             "Use a share-relative file path.",
         ));
     };
-    let Some(principal) = access.service_principal() else {
-        return share_headers(super::decline());
-    };
     let input = json!({
         "kind": "deliverable",
         "root": machine_share_root(),
@@ -1093,26 +1110,7 @@ async fn deliverable(
         "range": facts.range.as_deref(),
         "head": facts.head,
     });
-    let body = input.to_string();
-    if !routes.hosted().await {
-        return match crate::read_files::answer("/api/status/deliverable", body.as_bytes()) {
-            Some(reply) => share_headers(local_file_reply(&reply, facts.head, false)),
-            None => share_headers(super::decline()),
-        };
-    }
-    match routes
-        .request(
-            "GET",
-            "/api/status/deliverable",
-            &principal,
-            &[("content-type", "application/json")],
-            Some(body.as_bytes()),
-        )
-        .await
-    {
-        Some(reply) => share_headers(file_reply(&reply, facts.head, false)),
-        None => share_headers(super::service_error()),
-    }
+    share_headers(read_file("/api/status/deliverable", input).await)
 }
 
 /// The share route's query: exactly `path`, a safe relative path under one allowed base.
@@ -1179,213 +1177,46 @@ fn machine_share_root() -> &'static str {
     }
 }
 
-const FILE_HEADERS: [&str; 8] = [
-    "content-type",
-    "content-length",
-    "content-range",
-    "accept-ranges",
-    "cache-control",
-    "content-disposition",
-    "x-content-type-options",
-    "content-security-policy",
-];
-const FILE_TYPES: [&str; 11] = [
-    "image/png",
-    "image/jpeg",
-    "image/webp",
-    "image/gif",
-    "image/svg+xml",
-    "video/mp4",
-    "video/webm",
-    "application/pdf",
-    "application/json",
-    "text/html; charset=utf-8",
-    "text/plain; charset=utf-8",
-];
-
-/// One server reply with these bytes and no derived headers (the file envelope owns its own).
-fn raw_reply(status: u16, body: Vec<u8>) -> Reply {
-    (
-        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        body,
-    )
-        .into_response()
-}
-
-/// The service's file envelope, checked and written (`rust-file-response.ts`): only these
-/// header names, the route's own refusal sentences, and a body whose length matches.
-/// The shipped reader's envelope, handed to the same reply check the service's answer gets.
-fn local_file_reply(value: &Json, head: bool, media: bool) -> Reply {
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        "content-type",
-        "application/json".parse().expect("static header"),
-    );
-    file_reply(
-        &ServiceReply {
-            status: 200,
-            headers,
-            body: value.to_string().into_bytes(),
-        },
-        head,
-        media,
-    )
-}
-
-fn file_reply(reply: &ServiceReply, head: bool, media: bool) -> Reply {
-    let Some(value) = json_of(reply) else {
+/// Serve the checked descriptor directly, including ranges larger than the private JSON cap.
+async fn read_file(route: &'static str, input: Json) -> Reply {
+    let body = input.to_string();
+    let Ok(Some((prepared, file))) =
+        tokio::task::spawn_blocking(move || crate::read_files::prepare(route, body.as_bytes()))
+            .await
+    else {
         return super::service_error();
     };
-    let Some(status) = value.get("status").and_then(Json::as_u64) else {
+    let Some(status) = prepared["status"]
+        .as_u64()
+        .and_then(|status| u16::try_from(status).ok())
+    else {
         return super::service_error();
     };
-    let Ok(status) = u16::try_from(status) else {
-        return super::service_error();
-    };
-    let Some(headers) = value.get("headers").and_then(Json::as_object) else {
-        return super::service_error();
-    };
-    if !matches!(status, 200 | 206 | 400 | 404 | 413 | 415 | 416) {
-        return super::service_error();
-    }
-    let mut out_headers: Vec<(&'static str, String)> = Vec::new();
-    for (key, header_value) in headers {
-        let Some(known) = FILE_HEADERS.iter().find(|held| **held == key.as_str()) else {
-            return super::service_error();
-        };
-        let Some(text) = header_value.as_str() else {
-            return super::service_error();
-        };
-        if text.len() > 256 || text.contains(['\r', '\n', '\0']) {
-            return super::service_error();
-        }
-        match *known {
-            "content-type" if !FILE_TYPES.contains(&text) => return super::service_error(),
-            "content-security-policy" if media && text != "default-src 'none'; sandbox" => {
-                return super::service_error();
-            }
-            "x-content-type-options" if text != "nosniff" => return super::service_error(),
-            "cache-control" if media && text != "private, max-age=300" => {
-                return super::service_error();
-            }
-            "content-disposition" if text != "attachment" => return super::service_error(),
-            "accept-ranges" if text != "bytes" => return super::service_error(),
-            _ => {}
-        }
-        out_headers.push((*known, text.to_owned()));
-    }
-    if let Some(range) = headers.get("content-range").and_then(Json::as_str)
-        && !valid_content_range(range)
-    {
-        return super::service_error();
-    }
-    let mut out = if status == 200 || status == 206 {
-        let Some(bytes) = value.get("bytes").and_then(Json::as_str) else {
-            return super::service_error();
-        };
-        let kind = headers.get("content-type").and_then(Json::as_str);
-        if value.get("json").is_some_and(|json| !json.is_null())
-            || bytes.len() > FILE_REPLY_CAP
-            || !kind.is_some_and(|kind| FILE_TYPES.contains(&kind))
-        {
-            return super::service_error();
-        }
-        if media
-            && (!matches!(
-                kind,
-                Some("image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "video/webm")
-            ) || headers.get("x-content-type-options").and_then(Json::as_str)
-                != Some("nosniff")
-                || headers
-                    .get("content-security-policy")
-                    .and_then(Json::as_str)
-                    != Some("default-src 'none'; sandbox")
-                || headers.get("accept-ranges").and_then(Json::as_str) != Some("bytes")
-                || headers.get("cache-control").and_then(Json::as_str)
-                    != Some("private, max-age=300"))
-        {
-            return super::service_error();
-        }
-        if !media
-            && kind == Some("image/svg+xml")
-            && headers.get("content-disposition").and_then(Json::as_str) != Some("attachment")
-        {
-            return super::service_error();
-        }
-        if status == 206 && !headers.contains_key("content-range") {
-            return super::service_error();
-        }
-        let decoded = match STANDARD.decode(bytes) {
-            Ok(decoded) if STANDARD.encode(&decoded) == bytes => decoded,
-            _ => return super::service_error(),
-        };
-        let length = headers
-            .get("content-length")
-            .and_then(Json::as_str)
-            .and_then(|text| text.parse::<usize>().ok())
-            .filter(|length| *length <= 100 * 1024 * 1024);
-        let Some(length) = length else {
-            return super::service_error();
-        };
-        if (head && !decoded.is_empty()) || (!head && length != decoded.len()) {
-            return super::service_error();
-        }
-        raw_reply(status, if head { Vec::new() } else { decoded })
+    let mut reply = if prepared["json"].is_object() {
+        no_store(json_reply(status, &prepared["json"]))
     } else {
-        let Some(json_body) = value.get("json").filter(|json| json.is_object()) else {
+        let Ok(status) = StatusCode::from_u16(status) else {
             return super::service_error();
         };
-        let code = json_body.get("code").and_then(Json::as_str).unwrap_or("");
-        let error = json_body.get("error").and_then(Json::as_str).unwrap_or("");
-        let (expected_status, sentence) = match (media, code) {
-            (true, "not_found") => (404, "This file is not available."),
-            (true, "too_large") => (
-                413,
-                "This file is larger than its limit (images 2 MB, videos 50 MB).",
-            ),
-            (true, "not_media") => (
-                415,
-                "This file is not a PNG, JPEG or WebP image or an MP4 or WebM video.",
-            ),
-            (true, "range_not_satisfiable") => (416, "The requested range is outside this file."),
-            (false, "invalid_path") => (400, "Use a share-relative file path."),
-            (false, "not_found") => (404, "This file is not available."),
-            (false, "too_large") => (413, "This file exceeds the 100 MB limit."),
-            (false, "unsupported_type") => (415, "This file type is not supported."),
-            (false, "invalid_range") => (416, "The requested range is outside this file."),
-            _ => return super::service_error(),
-        };
-        if status != expected_status || error != sentence {
-            return super::service_error();
-        }
-        let body = if media {
-            json!({"error": sentence, "code": code})
+        let body = if let Some((file, length)) = file {
+            let reader = tokio::fs::File::from_std(file).take(length);
+            Body::from_stream(tokio_util::io::ReaderStream::new(reader))
         } else {
-            json!({"code": code, "error": sentence})
+            Body::empty()
         };
-        super::json_bytes(status, body.to_string().into_bytes())
+        (status, body).into_response()
     };
-    for (name, value) in out_headers {
-        set_header(&mut out, name, &value);
+    if let Some(headers) = prepared["headers"].as_object() {
+        for (name, value) in headers {
+            if let (Ok(name), Some(value)) =
+                (axum::http::HeaderName::try_from(name), value.as_str())
+                && let Ok(value) = axum::http::HeaderValue::from_str(value)
+            {
+                reply.headers_mut().insert(name, value);
+            }
+        }
     }
-    out
-}
-
-fn valid_content_range(text: &str) -> bool {
-    let Some(rest) = text.strip_prefix("bytes ") else {
-        return false;
-    };
-    let Some((range, size)) = rest.split_once('/') else {
-        return false;
-    };
-    let digits = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
-    if !digits(size) {
-        return false;
-    }
-    range == "*"
-        || range
-            .split_once('-')
-            .is_some_and(|(start, end)| digits(start) && digits(end))
+    reply
 }
 
 #[cfg(test)]
@@ -1398,9 +1229,17 @@ mod tests {
         assert!(owns_route(&Method::HEAD, "/api/status"));
         assert!(owns_route(&Method::GET, "/api/status/answers"));
         assert!(owns_route(&Method::POST, "/api/status/answers"));
-        assert!(owns_route(&Method::GET, "/api/store/status"));
-        for path in ["/api/usage/history", "/api/usage/at", "/api/usage/burn"] {
-            assert!(owns_route(&Method::GET, path), "{path}");
+        let host = super::super::owner_host::OwnerHost::new(Default::default(), false);
+        let cut = Routes::new(host.clone(), true, false);
+        let optional = Routes::new(host, false, true);
+        for path in [
+            "/api/store/status",
+            "/api/usage/history",
+            "/api/usage/at",
+            "/api/usage/burn",
+        ] {
+            assert!(!cut.owns(&Method::GET, path), "{path}");
+            assert!(optional.owns(&Method::GET, path), "{path}");
         }
         assert!(owns_route(
             &Method::GET,

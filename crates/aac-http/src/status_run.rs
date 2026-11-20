@@ -25,25 +25,35 @@ pub(crate) struct Run {
 /// The allowlist of the environment a child sees; `CLAUDE_*`/`T3*` session variables never
 /// reach it.
 fn child_env() -> Vec<(String, String)> {
-    let allowed = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"];
+    let allowed = [
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "SSH_AUTH_SOCK",
+        "USERPROFILE",
+        "SystemRoot",
+        "ComSpec",
+        "PATHEXT",
+    ];
     let mut env: Vec<(String, String)> = std::env::vars()
-        .filter(|(name, _)| allowed.contains(&name.as_str()))
+        .filter(|(name, _)| allowed.iter().any(|key| key.eq_ignore_ascii_case(name)))
         .collect();
-    let mut dirs: Vec<String> = std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .filter(|dir| !dir.is_empty())
-        .map(str::to_owned)
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
         .collect();
     if let Some(home) = std::env::var_os("HOME") {
         let local = Path::new(&home).join(".local/bin");
-        let text = local.to_string_lossy().into_owned();
-        if !dirs.contains(&text) {
-            dirs.push(text);
+        if !dirs.contains(&local) {
+            dirs.push(local);
         }
     }
-    env.retain(|(name, _)| name != "PATH");
-    env.push(("PATH".to_owned(), dirs.join(":")));
+    if let Ok(path) = std::env::join_paths(dirs) {
+        env.retain(|(name, _)| !name.eq_ignore_ascii_case("PATH"));
+        env.push(("PATH".to_owned(), path.to_string_lossy().into_owned()));
+    }
     env
 }
 
@@ -51,19 +61,27 @@ fn child_env() -> Vec<(String, String)> {
 /// holds an executable `name`; the bare name when none does.
 #[must_use]
 pub(crate) fn find_executable(name: &str) -> PathBuf {
-    if name.contains('/') {
+    if name.contains(['/', '\\']) {
         return PathBuf::from(name);
     }
     let path = child_env()
         .into_iter()
-        .find(|(key, _)| key == "PATH")
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
         .map(|(_, value)| value)
         .unwrap_or_default();
-    let separator = if cfg!(windows) { ';' } else { ':' };
-    for dir in path.split(separator).filter(|dir| !dir.is_empty()) {
-        let candidate = Path::new(dir).join(name);
+    for dir in std::env::split_paths(&path).filter(|dir| !dir.as_os_str().is_empty()) {
+        let candidate = dir.join(name);
         if is_executable(&candidate) {
             return candidate;
+        }
+        #[cfg(windows)]
+        if candidate.extension().is_none() {
+            for extension in ["exe", "cmd", "bat", "com"] {
+                let executable = candidate.with_extension(extension);
+                if is_executable(&executable) {
+                    return executable;
+                }
+            }
         }
     }
     PathBuf::from(name)
@@ -187,6 +205,7 @@ mod tests {
         assert_eq!(&args[args.len() - 3..], ["--", "nas1-agent", "true"]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_missing_program_is_named_and_a_slow_one_times_out() {
         let missing = run(Path::new("/definitely/not/a/program"), &[], 1_000, 1024).await;

@@ -555,8 +555,8 @@ pub(crate) async fn run_public_at(
     };
     let hub = HubCache::default();
     let composed = backend.is_some();
-    let owner_host = (enabled || cut)
-        .then(|| owner_host::OwnerHost::new(root.clone(), enabled && cut && !composed));
+    let owner_host =
+        (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
         let worker_directory = snapshot
@@ -586,8 +586,7 @@ pub(crate) async fn run_public_at(
     let snapshot = snapshot.filter(|_| !groups.is_some_and(|groups| groups.collection));
     let group_routes = owner_host
         .as_ref()
-        .filter(|_| enabled)
-        .map(|host| Arc::new(native_group::Routes::new(host.clone())));
+        .map(|host| Arc::new(native_group::Routes::new(host.clone(), cut, enabled)));
     let lifecycle_routes = owner_host.as_ref().filter(|_| cut).map(|host| {
         let routes = lifecycle_host::Routes::new(host);
         #[cfg(unix)]
@@ -749,10 +748,17 @@ pub(crate) async fn run_public_at(
         println!("aac-http public TLS listening on {address}");
     }
     println!("aac-http public listening on {address}");
-    if let Some(host) = &owner_host {
+    let status_event_task = if let Some(host) = &owner_host
+        && (cut || enabled)
+    {
         let host = host.clone();
-        tokio::spawn(async move { host.warm().await });
-    }
+        let events = auth.events();
+        Some(tokio::spawn(
+            async move { host.status_events(events).await },
+        ))
+    } else {
+        None
+    };
     if cut {
         record_public_build(&root);
     }
@@ -832,6 +838,9 @@ pub(crate) async fn run_public_at(
         plain.await
     };
     signal_task.abort();
+    if let Some(task) = status_event_task {
+        task.abort();
+    }
     if let Some(feed) = feed_task {
         feed.abort();
     }

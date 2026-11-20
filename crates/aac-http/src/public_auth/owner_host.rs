@@ -11,8 +11,7 @@
 //!   readers run once; no group copies a collector, a cache or a journal.
 //!
 //! A group registers with [`OwnerHost::request`] (and its own admission/encoding), never with a
-//! second copy of an owner. `AAC_RUST_CUT_NATIVE_ROUTES=off` makes the host absent, so the cut's
-//! shipped worker keeps answering.
+//! second copy of an owner. The cut always uses this host for migrated routes.
 
 #[cfg(unix)]
 use super::service_link::ServiceLink;
@@ -185,6 +184,10 @@ impl OwnerHost {
                 let stop = self.local_stop.clone();
                 tokio::spawn(async move { crate::status_owned::jobs(owner, produce, stop).await });
             }
+            if let Some(produce) = owners.status_produce.clone() {
+                let stop = self.local_stop.clone();
+                tokio::spawn(produce.jobs(stop));
+            }
             if let Some(owner) = &owners.scoreboard_owned {
                 let catalog = owner.clone();
                 let stop = self.local_stop.clone();
@@ -324,12 +327,19 @@ impl OwnerHost {
         }
     }
 
-    /// Start the private service before the first request, so a cold boot never spends the
-    /// first request's budget on the service's own start.
-    pub(super) async fn warm(&self) {
+    /// Forward the Status producer's hints without another producer or a worker subscriber.
+    pub(super) async fn status_events(&self, events: DashboardEvents) {
         #[cfg(unix)]
-        {
-            let _ = self.link().await;
+        loop {
+            if let Some(link) = self.link().await {
+                link.follow_status(&events).await;
+                *self.link.lock().unwrap_or_else(|p| p.into_inner()) = None;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        #[cfg(not(unix))]
+        if let Some(owner) = self.local().await {
+            let _ = events.read_status_feed(owner.feeds.stream()).await;
         }
     }
 

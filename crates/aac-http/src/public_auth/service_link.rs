@@ -142,12 +142,7 @@ impl ServiceLink {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Option<ServiceReply> {
-        let mut builder = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header("host", "localhost")
-            .header("x-aac-boot-secret", &self.secret)
-            .header("x-aac-principal", principal);
+        let mut builder = self.request_builder(method, uri, principal);
         for (name, value) in headers {
             builder = builder.header(*name, *value);
         }
@@ -162,27 +157,7 @@ impl ServiceLink {
             DEADLINE
         };
         tokio::time::timeout(deadline, async {
-            let stream = UnixStream::connect(&self.socket).await.ok()?;
-            let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.ok()?;
-            // The connection future drives the reply body; dropping it would stall the read.
-            let drive = tokio::spawn(async move {
-                let _ = connection.await;
-            });
-            let reply = match sender.send_request(request).await {
-                Ok(reply) => reply,
-                Err(_) => {
-                    drive.abort();
-                    return None;
-                }
-            };
-            let boot = reply
-                .headers()
-                .get(ENDPOINT_HEADER)
-                .and_then(|value| value.to_str().ok());
-            if boot != Some(self.boot_id.as_str()) {
-                drive.abort();
-                return None;
-            }
+            let (reply, drive) = self.send(request).await?;
             let status = reply.status().as_u16();
             let headers = reply.headers().clone();
             let body = to_bytes(Body::new(reply.into_body()), REPLY_CAP).await.ok();
@@ -197,5 +172,66 @@ impl ServiceLink {
         .await
         .ok()
         .flatten()
+    }
+
+    pub(super) async fn follow_status(&self, events: &super::DashboardEvents) {
+        let principal = r#"{"kind":"session","id":"front-door","role":"service"}"#;
+        let Ok(request) = self
+            .request_builder("GET", "/internal/events", principal)
+            .body(Body::empty())
+        else {
+            return;
+        };
+        if let Ok(Some((reply, drive))) = tokio::time::timeout(DEADLINE, self.send(request)).await {
+            if reply.status() == 200
+                && reply
+                    .headers()
+                    .get("content-type")
+                    .is_some_and(|type_| type_ == "application/x-ndjson")
+            {
+                let _ = events.read_status_feed(Body::new(reply.into_body())).await;
+            }
+            drive.abort();
+        }
+    }
+
+    fn request_builder(
+        &self,
+        method: &str,
+        uri: &str,
+        principal: &str,
+    ) -> axum::http::request::Builder {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "localhost")
+            .header("x-aac-boot-secret", &self.secret)
+            .header("x-aac-principal", principal)
+    }
+
+    async fn send(
+        &self,
+        request: Request<Body>,
+    ) -> Option<(
+        axum::http::Response<hyper::body::Incoming>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        let stream = UnixStream::connect(&self.socket).await.ok()?;
+        let (mut sender, connection) = http1::handshake(TokioIo::new(stream)).await.ok()?;
+        // The connection future drives the reply body.
+        let drive = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        if let Ok(reply) = sender.send_request(request).await
+            && reply
+                .headers()
+                .get(ENDPOINT_HEADER)
+                .and_then(|value| value.to_str().ok())
+                == Some(self.boot_id.as_str())
+        {
+            return Some((reply, drive));
+        }
+        drive.abort();
+        None
     }
 }
