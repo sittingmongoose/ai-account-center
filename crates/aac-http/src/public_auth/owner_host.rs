@@ -138,14 +138,6 @@ impl OwnerHost {
         Ok(())
     }
 
-    #[cfg(not(unix))]
-    pub(super) async fn start_cut(&self) -> std::io::Result<()> {
-        self.local()
-            .await
-            .map(|_| ())
-            .ok_or_else(|| std::io::Error::other("could not start the local dashboard owners"))
-    }
-
     /// An adopted owner keeps its own process and lease. Losing it shuts down the public
     /// listener so the next boot can reselect both the store and collection generations.
     #[cfg(unix)]
@@ -535,7 +527,9 @@ impl OwnerHost {
         if let Some(embedded) = embedded {
             let _ = embedded.stop.send(());
             let _ = embedded.task.await;
-            remove_descriptor(&embedded.descriptor, &self.root, &embedded.boot_id);
+            if let Some(root) = embedded.descriptor.parent().and_then(Path::parent) {
+                remove_descriptor(&embedded.descriptor, root, &embedded.boot_id);
+            }
         }
         #[cfg(not(unix))]
         {
@@ -584,12 +578,14 @@ impl OwnerHost {
 
     #[cfg(unix)]
     async fn start_embedded(&self, renewal: bool) -> Option<Embedded> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
         let mut config = self.boot_config()?;
         if renewal && let Some(home) = renewal_home() {
             config["renewal"] = json!({"codexHome": home.join(".codex"), "homeDir": home});
         }
         let socket = PathBuf::from(config.get("socketPath")?.as_str()?);
         let ccs = PathBuf::from(config.get("ccsDir")?.as_str()?);
+        let uid = std::fs::metadata(&ccs).ok()?.uid();
         let secret = config.get("secret")?.as_str()?.to_owned();
         let boot_id = config.get("bootId")?.as_str()?.to_owned();
         let boot = crate::unix::Boot::from_json(config.to_string().as_bytes()).ok()?;
@@ -609,9 +605,15 @@ impl OwnerHost {
             }
         }));
         let link = ServiceLink::embedded(socket.clone(), secret.clone(), boot_id.clone());
+        // Binding proves the owner started. Optional Status and Scoreboard share reads must
+        // not hold the public listener's readiness behind their filesystem latency.
         let ready = tokio::time::timeout(Duration::from_secs(10), async {
             while !task.is_finished() {
-                if socket.exists() && link.healthy().await {
+                if std::fs::symlink_metadata(&socket).is_ok_and(|meta| {
+                    meta.file_type().is_socket()
+                        && meta.uid() == uid
+                        && meta.mode() & 0o777 == 0o600
+                }) {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;

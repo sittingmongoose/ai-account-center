@@ -514,12 +514,10 @@ pub(crate) async fn run_public_at(
     let composed = backend.is_some();
     let owner_host =
         (enabled || cut).then(|| owner_host::OwnerHost::new(root.clone(), cut && !composed));
+    #[cfg(unix)]
     if let Some(host) = owner_host.as_ref().filter(|_| cut) {
-        #[cfg(unix)]
         host.start_cut(adopted.clone(), groups.is_some_and(|groups| groups.renewal))
             .await?;
-        #[cfg(not(unix))]
-        host.start_cut().await?;
     }
     let native = if let Some((mut groups, host)) = groups.zip(owner_host.as_ref()) {
         groups.lifecycle = !has_external;
