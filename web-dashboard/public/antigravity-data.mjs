@@ -2,8 +2,9 @@ import { timeLabel } from './accounts-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 
 // Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for the
-// Antigravity app. T3's come first: they are what T3 spends. The two are never added together.
-const ANTIGRAVITY_COLUMNS = [
+// Antigravity app. They are never added together. Home shows only T3's (what T3 spends); the app's
+// appear only in the account's Details (Jared, 2026-11-19: "I won't often care about that").
+const ANTIGRAVITY_LABELS = [
   { key: 'cli-gemini-5h', label: 'Gemini 5-hour, in T3 (Antigravity CLI)' },
   { key: 'cli-gemini-weekly', label: 'Gemini weekly, in T3 (Antigravity CLI)' },
   { key: 'cli-3p-5h', label: 'Claude and GPT 5-hour, in T3 (Antigravity CLI)' },
@@ -14,22 +15,25 @@ const ANTIGRAVITY_COLUMNS = [
   { key: '3p-weekly', label: 'Claude and GPT weekly, in the Antigravity app' },
 ];
 const antigravityService = key => (typeof key === 'string' && key.startsWith('cli-') ? 'cli' : 'app');
+/** Home's canonical columns: T3's four (Antigravity CLI). */
+const ANTIGRAVITY_COLUMNS = ANTIGRAVITY_LABELS.filter(column => antigravityService(column.key) === 'cli');
+/** The windows Home shows for an Antigravity account: T3's (CLI) pools only, never the app's. */
+export function antigravityHomeWindows(windows) {
+  return (Array.isArray(windows) ? windows : []).filter(window => antigravityService(window?.key) === 'cli');
+}
 export function antigravityWindowLabel(window) {
   return window?.key === 'google-ai-credits' ? 'AI credits (overage)'
-    : ANTIGRAVITY_COLUMNS.find(column => column.key === window?.key)?.label || window?.label || 'Usage';
+    : ANTIGRAVITY_LABELS.find(column => column.key === window?.key)?.label || window?.label || 'Usage';
 }
 /** Canonical provider bucket IDs identify display columns; extra windows keep their own labels. */
 export function antigravityColumns(accounts) {
-  const windows = accounts.flatMap(account => visibleUsageWindows('antigravity', account.windows))
+  const windows = accounts.flatMap(account => visibleUsageWindows('antigravity', antigravityHomeWindows(account.windows)))
     .filter(window => !['balance', 'spend', 'extra_usage'].includes(window.kind) && window.unlimited !== true);
   const canonical = windows.some(window => ANTIGRAVITY_COLUMNS.some(column => column.key === window.key));
   const columns = canonical ? ANTIGRAVITY_COLUMNS.map(column => ({ ...column })) : [];
-  // Extra pools (such as each service's Gemini 4 Argon): T3's first, then the app's, each in the
-  // order the accounts report them, so a pair never shows app-first.
-  for (const service of ['cli', 'app'])
-    for (const window of windows)
-      if (antigravityService(window.key) === service && !columns.some(column => column.key === window.key))
-        columns.push({ key: window.key, label: antigravityWindowLabel(window) });
+  // Extra T3 pools (such as Gemini 4 Argon), in the order the accounts report them.
+  for (const window of windows)
+    if (!columns.some(column => column.key === window.key)) columns.push({ key: window.key, label: antigravityWindowLabel(window) });
   return columns;
 }
 export function antigravityMissingWindow(account, key) {

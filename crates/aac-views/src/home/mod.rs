@@ -811,9 +811,16 @@ fn antigravity_section(
     inventory: &Value,
 ) -> R<SectionView> {
     let native = antigravity::native(cx, every, Some(inventory))?;
+    // Home shows only T3's (Antigravity CLI) pools; the app's stay in Details
+    // (antigravity-data.mjs `antigravityHomeWindows`).
     let meters: Vec<Vec<Win>> = accounts
         .iter()
-        .map(|a| meters_of(cx, a))
+        .map(|a| {
+            Ok(meters_of(cx, a)?
+                .into_iter()
+                .filter(|w| windows::antigravity_service(w.key()) == "cli")
+                .collect())
+        })
         .collect::<R<_>>()?;
     // antigravity-data.mjs `antigravityColumns`
     let flat: Vec<&Win> = meters.iter().flatten().collect();
@@ -832,16 +839,11 @@ fn antigravity_section(
     } else {
         Vec::new()
     };
-    // Extra pools (such as each service's Gemini 4 Argon): T3's first, then the app's, each in the
-    // order the accounts report them, so a pair never shows app-first.
-    for service in ["cli", "app"] {
-        for w in &flat {
-            let key = w.key().unwrap_or("");
-            if windows::antigravity_service(Some(key)) == service
-                && !cols.iter().any(|(k, _)| k == key)
-            {
-                cols.push((key.into(), windows::antigravity_window_label(w)));
-            }
+    // Extra T3 pools (such as Gemini 4 Argon), in the order the accounts report them.
+    for w in &flat {
+        let key = w.key().unwrap_or("");
+        if !cols.iter().any(|(k, _)| k == key) {
+            cols.push((key.into(), windows::antigravity_window_label(w)));
         }
     }
     let mut columns = Vec::new();

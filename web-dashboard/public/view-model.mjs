@@ -11,6 +11,7 @@ import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
   antigravityView,
   antigravityColumns,
+  antigravityHomeWindows,
   antigravityServiceFacts,
   antigravityWindowLabel,
   antigravityMissingWindow,
@@ -872,13 +873,16 @@ function codexSection(accounts, now, allAccounts = accounts) {
 function antigravitySection(accounts, data, inventory, now) {
   const native = antigravityView(data, inventory);
   const bound = new Map(native.antigravityAccounts.map((row) => [row.id, row]));
+  // Home shows only T3's (Antigravity CLI) pools; the app's stay in Details.
+  const homeMeters = (account) =>
+    visibleMeters({ ...account, windows: antigravityHomeWindows(account.windows) });
   // Columns come from the canonical provider buckets; the short single-line heads ride
   // along, fed by each column's representative window (H3).
   const columns = antigravityColumns(accounts).map((col) => ({
     ...col,
     shortLabel: shortWindowLabel(
       'antigravity',
-      accounts.flatMap((row) => visibleMeters(row)).find((w) => w.key === col.key) || {
+      accounts.flatMap((row) => homeMeters(row)).find((w) => w.key === col.key) || {
         key: col.key,
         label: col.label,
       }
@@ -892,7 +896,7 @@ function antigravitySection(accounts, data, inventory, now) {
     const cells = noQuota
       ? columns.map(({ key }) => emptyCell(account, key))
       : columns.map(({ key, label }) => {
-          const w = visibleMeters(account).find((row) => row.key === key);
+          const w = homeMeters(account).find((row) => row.key === key);
           const cell = meterView(account, w, {
             now,
             label,

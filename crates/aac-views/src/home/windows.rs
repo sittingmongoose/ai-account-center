@@ -435,8 +435,9 @@ pub fn period(w: &Win) -> &'static str {
 }
 
 /// Google keeps separate Antigravity limits for the CLI that T3 runs (keys "cli-...") and for
-/// the Antigravity app. T3's come first: they are what T3 spends. Never added together.
-const ANTIGRAVITY_COLUMNS: [(&str, &str); 8] = [
+/// the Antigravity app. Never added together. Home shows only T3's (what T3 spends); the app's
+/// appear only in the account's Details (Jared, 2026-11-19).
+const ANTIGRAVITY_LABELS: [(&str, &str); 8] = [
     ("cli-gemini-5h", "Gemini 5-hour, in T3 (Antigravity CLI)"),
     (
         "cli-gemini-weekly",
@@ -469,10 +470,7 @@ pub fn antigravity_window_label(w: &Win) -> String {
     if w.key() == Some("google-ai-credits") {
         return "AI credits (overage)".into();
     }
-    if let Some((_, label)) = ANTIGRAVITY_COLUMNS
-        .iter()
-        .find(|(k, _)| Some(*k) == w.key())
-    {
+    if let Some((_, label)) = ANTIGRAVITY_LABELS.iter().find(|(k, _)| Some(*k) == w.key()) {
         return (*label).into();
     }
     let label = w.text("label");
@@ -483,13 +481,15 @@ pub fn antigravity_window_label(w: &Win) -> String {
     }
 }
 
-/// Whether the key is one of the four canonical Antigravity buckets.
+/// Whether the key is one of Home's four canonical Antigravity columns (T3's).
 pub fn antigravity_canonical(key: &str) -> bool {
-    ANTIGRAVITY_COLUMNS.iter().any(|(k, _)| *k == key)
+    antigravity_columns().any(|(k, _)| k == key)
 }
-/// The canonical Antigravity columns, in order.
+/// Home's canonical Antigravity columns, in order: T3's (Antigravity CLI) four.
 pub fn antigravity_columns() -> impl Iterator<Item = (&'static str, &'static str)> {
-    ANTIGRAVITY_COLUMNS.into_iter()
+    ANTIGRAVITY_LABELS
+        .into_iter()
+        .filter(|(k, _)| antigravity_service(Some(k)) == "cli")
 }
 
 fn or_text(first: Option<&str>, rest: &str, last: &str) -> String {
