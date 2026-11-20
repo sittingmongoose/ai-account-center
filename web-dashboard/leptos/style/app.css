@@ -2361,6 +2361,28 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .menu-item { text-align: left; background: none; border: 0; padding: 10px; min-height: 40px; border-radius: 8px; font: inherit; font-size: 13.5px; color: var(--ink); cursor: pointer; }
 .menu-item:hover { background: var(--row-hover); }
 
+/* The loading splash (ui/splash.rs, owner report 2026-11-20): index.html's #aac-boot over the whole page until the
+   frame knows whether this browser is signed in and the first tab has its data, and the same mark, name and quiet bar
+   in a page's content area until that page's first data. In the current theme; it never takes a click once leaving. */
+.boot-splash { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; background: var(--bg-band); color: var(--ink);
+  padding: calc(var(--safe-top) + 24px) calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 16px);
+  transition: opacity 200ms var(--ease-out); }
+.boot-splash.boot-done { opacity: 0; pointer-events: none; }
+:root[data-status-embedded='1'] .boot-splash { display: none; }
+.splash-in { display: grid; justify-items: center; gap: 16px; }
+.splash-brand { display: flex; align-items: center; gap: 12px; color: var(--ink); }
+.splash-brand .logo { width: 34px; height: 34px; }
+.splash-brand .brand-name { font-size: 19px; font-weight: 640; font-variation-settings: 'wght' 640; letter-spacing: -.01em; }
+.splash-bar { position: relative; width: 132px; height: 3px; border-radius: 3px; overflow: hidden; background: var(--track); }
+.splash-bar > i { position: absolute; top: 0; bottom: 0; left: 0; width: 40%; border-radius: 3px; background: var(--ink-3); animation: splash-run 1.3s var(--ease-out) infinite; }
+@keyframes splash-run { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .splash-bar > i { animation: none; left: 30%; } }
+.page-splash { display: grid; place-items: center; min-height: min(56vh, 520px); padding: 24px 16px; }
+.page-splash .splash-brand .logo { width: 28px; height: 28px; }
+.page-splash .splash-brand .brand-name { font-size: 17px; }
+.splash-more { max-width: 34em; text-align: center; color: var(--ink-3); font-size: var(--fs-small); }
+.ld-hosts { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+.ld-hosts .ld-host b { color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
 .signin-page { min-height: 100dvh; display: grid; place-items: center; padding: calc(var(--safe-top) + 24px) calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 16px); }
 .signin-card { width: min(400px, 100%); padding: 24px; display: grid; gap: 14px; }
 /* In the rail's chrome the strip holds the clock and the signal ring (the folded Duo), so the card keeps clear of it. */

@@ -44,7 +44,7 @@ async function stubData(t, { keptDays = 120, gapAll = false } = {}) {
 /** The Analytics tab drawn natively, with its first view. */
 async function openAnalytics(t, safe = '') {
 	await t.goto(`/app/analytics?e2e${safe ? `&safe=${safe}` : ''}`, { settleMs: 300 });
-	await t.until('the frame is drawn, signed in', () => !!document.querySelector('.shell') && !document.querySelector('.signin-page'), null, { timeout: 30000, hard: true });
+	await t.until('the frame is drawn, signed in', () => !!document.querySelector('.shell') && !document.querySelector('.signin-page') && !document.querySelector('.boot-splash'), null, { timeout: 30000, hard: true });
 	await t.until('Analytics drawn from its view', () => {
 		const page = document.querySelector('.ax-page');
 		return !!page && page.querySelectorAll('.kpi').length === 5 && !!page.querySelector('.trend-svg path[d^="M"]') && page.querySelectorAll('.qh-group').length > 0;

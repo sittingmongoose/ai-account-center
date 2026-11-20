@@ -38,7 +38,7 @@ async function routeShown(t, page) {
 
 async function openFrame(t, page, safe = '') {
 	await t.goto(`/app/${page}?e2e${safe ? `&safe=${safe}` : ''}`, { settleMs: 300 });
-	await t.until(`${page}: the frame is drawn, signed in`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-page'), null, { timeout: 30000, hard: true });
+	await t.until(`${page}: the frame is drawn, signed in`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-page') && !document.querySelector('.boot-splash'), null, { timeout: 30000, hard: true });
 	await routeShown(t, page);
 }
 

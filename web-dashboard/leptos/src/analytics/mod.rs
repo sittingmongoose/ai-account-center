@@ -201,6 +201,9 @@ pub fn AnalyticsPage() -> impl IntoView {
     let error = Memo::new(move |_| ax.load.with(|l| l.error.clone()));
     // numbers older than this visit's newest answer are dimmed until current ones land, never shown as current
     let stale = Memo::new(move |_| ax.ready.get() && ax.fresh.with(|f| f.shown && f.stale));
+    crate::frame::mark_ready_when(crate::Page::Analytics, move || {
+        ax.ready.get() || error.with(|e| !e.is_empty())
+    });
     view! {
         <TipLayer>
             <div class="page ax-page" class:ax-stale=move || stale.get() aria-busy=move || ax.load.with(|l| l.loading).to_string()>
@@ -285,7 +288,7 @@ fn listed(names: &[String]) -> String {
     }
 }
 
-/// Before the first useful answer: one row per computer saying how far its scan is, over calm placeholders.
+/// Before the first useful answer: the page's splash, with one quiet line per computer saying how far its scan is.
 #[component]
 fn LoadingCards() -> impl IntoView {
     let ax = expect_context::<Ax>();
@@ -305,19 +308,15 @@ fn LoadingCards() -> impl IntoView {
         }
     };
     view! {
-        <section class="plate ax-card ax-loading">
-            <CardHead title="Reading usage logs"
-                sub=format!("Reading usage logs on {}. The page appears as soon as the first numbers land.", listed(computer_labels()))/>
-            <div class="ax-body">
-                {move || rows().into_iter().map(|h| view! {
-                    <div class="ld-host"><b>{h.name}</b><span class="tnum q3">{h.detail}</span></div>
-                    <div class="skel"></div>
-                }).collect_view()}
-            </div>
-        </section>
-        <section class="plate ax-card ax-loading">
-            <div class="ax-body"><div class="skel tall"></div><div class="skel"></div></div>
-        </section>
+        <div class="ax-loading" title=format!("Reading usage logs on {}. The page appears as soon as the first numbers land.", listed(computer_labels()))>
+            <PageSplash name="Analytics">
+                <div class="ld-hosts">
+                    {move || rows().into_iter().map(|h| view! {
+                        <span class="ld-host"><b>{h.name}</b>" "<span class="tnum">{h.detail}</span></span>
+                    }).collect_view()}
+                </div>
+            </PageSplash>
+        </div>
     }
 }
 

@@ -134,11 +134,13 @@ fn status_words(ctx: FrameCtx) -> impl IntoView {
     view! {
         <span class="status-line">
             {move || {
-                let Some(info) = ctx.info() else { return view! { "Reading..." }.into_any() };
+                // Before a page's first reading the line is empty: the page's own splash says it is loading
+                // (owner report 2026-11-20: no small "loading" words in the corner).
+                let Some(info) = ctx.info() else { return ().into_any() };
                 let updated = info.updated.get();
                 let lead = info.lead.map(|l| l.get()).unwrap_or_else(|| "Updated".into());
                 if updated.is_empty() {
-                    view! { {if lead == "Updated" { "Reading...".to_string() } else { lead }} }.into_any()
+                    view! { {if lead == "Updated" { String::new() } else { lead }} }.into_any()
                 } else {
                     view! { {lead}" "<b>{updated}</b>{if info.live.get() { " · live" } else { " · old reading" }} }.into_any()
                 }

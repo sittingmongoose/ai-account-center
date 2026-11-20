@@ -135,11 +135,12 @@ export default (ctx) => {
 				return t.check('signed in', r.ok, `setup/login answered ${r.status}: ${r.body}`, { hard: true });
 			},
 			// Open a tab of the app frame (home, analytics, accounts, status, scoreboard) with ?e2e; ready when the frame is
-			// drawn signed in (its shell) or, with signIn: false, when the sign-in page is.
+			// drawn signed in (its shell) and the loading splash over it has gone (ui/splash.rs), or, with signIn: false,
+			// when the sign-in page is.
 			async open(t, { page = 'home', signIn = true, query = '' } = {}) {
 				if (signIn) await t.app.signIn();
 				await t.goto(`/app/${page}?e2e${query ? '&' + query : ''}`, { settleMs: 300 });
-				if (signIn) await t.until(`${page} ready (signed in)`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-page'), null, { timeout: 60000, hard: true });
+				if (signIn) await t.until(`${page} ready (signed in)`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-page') && !document.querySelector('.boot-splash'), null, { timeout: 60000, hard: true });
 				else await t.until(`${page} ready (sign-in page)`, () => !!document.querySelector('.signin-page input[name="username"]'), null, { timeout: 60000, hard: true });
 				return true;
 			},

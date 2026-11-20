@@ -18,6 +18,7 @@ mod settings;
 mod update;
 
 use crate::frame::FrameCtx;
+use crate::ui::PageSplash;
 use layout::CardKey;
 use leptos::prelude::*;
 use model::AccountsView;
@@ -148,13 +149,12 @@ pub fn AccountsPage(ctx: FrameCtx) -> impl IntoView {
         let _ = window().request_animation_frame(again.unchecked_ref());
     });
 
+    let waiting = Memo::new(move |_| view.with(|v| v.is_none()) && problem.with(|p| p.is_none()));
+    crate::frame::mark_ready_when(crate::Page::Accounts, move || !waiting.get());
     view! {
         <div class="page ac-page" node_ref=root>
             {move || problem.get().map(|msg| view! { <p class="ac-note crit">{msg}</p> })}
-            {move || {
-                let waiting = view.with(|v| v.is_none()) && problem.with(|p| p.is_none());
-                waiting.then(|| view! { <p class="ac-note q3">"Reading accounts and settings..."</p> })
-            }}
+            <Show when=move || waiting.get()><PageSplash name="Accounts & Settings"/></Show>
             {move || view.with(|v| v.as_ref().map(|v| v.access_message.clone()).filter(|m| !m.is_empty()))
                 .map(|msg| view! { <p class="ac-note">{msg}</p> })}
             <Show when={move || layout::column_count(width.get()) >= 2 && view.with(|v| v.is_some())}>

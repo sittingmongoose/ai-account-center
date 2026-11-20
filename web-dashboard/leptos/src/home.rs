@@ -158,10 +158,13 @@ pub fn HomePage() -> impl IntoView {
         })
     });
     let motion = motion_on();
+    let waiting = Memo::new(move |_| state.with(|s| matches!(s, HomeState::Waiting)));
+    crate::frame::mark_ready_when(Page::Home, move || !waiting.get());
     view! {
         <div class="page home" class:motion=motion>
+            <Show when=move || waiting.get()><PageSplash name="Home"/></Show>
             {move || match state.get() {
-                HomeState::Waiting => Some(view! { <p class="hstate">"Reading your accounts…"</p> }.into_any()),
+                HomeState::Waiting => None,
                 HomeState::Refused(why) => Some(view! { <p class="hstate w-crit">{why}</p> }.into_any()),
                 HomeState::Ready(_) => None,
             }}
@@ -378,7 +381,10 @@ fn Row(id: String, sec: Memo<SectionView>, delay: u32) -> impl IntoView {
                 let view = Signal::derive(move || {
                     row.with(|r| r.cells.get(i).cloned().unwrap_or_default())
                 });
-                let empty = move || view.with(|v| v.key.is_empty());
+                // A Memo, so a new reading reaches the meter through `view` and never rebuilds it: rebuilding made
+                // every meter replay its first sweep from 0 on each refresh (owner report 2026-11-20, the page
+                // "flashes" every 30-60 s). Only a cell turning empty or back rebuilds.
+                let empty = Memo::new(move |_| view.with(|v| v.key.is_empty()));
                 let owner = owner.clone();
                 // The column's name over the cell, shown when a section with many windows stacks (its heads would wrap).
                 let caption = move || {
@@ -397,7 +403,7 @@ fn Row(id: String, sec: Memo<SectionView>, delay: u32) -> impl IntoView {
                 };
                 view! {
                     <div class="hcell" class:empty=empty>
-                        {move || (!empty()).then(|| view! {
+                        {move || (!empty.get()).then(|| view! {
                             <span class="cap hcell-cap">{caption}</span>
                             <UsageMeter view=view delay=delay + i as u32 * 16 owner=owner.clone()/>
                         })}

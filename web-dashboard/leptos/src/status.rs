@@ -74,6 +74,9 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
         };
         Some(view! { <p class="banner" role="status">{error.sentence()}{old}</p> })
     };
+    crate::frame::mark_ready_when(crate::Page::Status, move || {
+        live.view.with(|v| v.is_some()) || live.error.with(|e| e.is_some())
+    });
     view! {
         <PageShell page=crate::Page::Status embedded=embedded info=info>
             <div class="page" data-stale=move || live.error.with(|e| e.is_some()).then_some("1")>
@@ -91,9 +94,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                 {banner}
                 <Show
                     when=move || live.view.with(|v| v.is_some())
-                    fallback=move || view! {
-                        <p class="empty">{move || if live.error.with(|e| e.is_some()) { "" } else { "Reading the status..." }}</p>
-                    }
+                    fallback=move || live.error.with(|e| e.is_none()).then(|| view! { <PageSplash name="Status"/> })
                 >
                     <div class="status-grid">
                         <CardsPanel/>

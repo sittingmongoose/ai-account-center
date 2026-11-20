@@ -48,6 +48,9 @@ pub struct FrameCtx {
     pub dash: DashCtx,
     /// The theme setting (auto, light or dark): the header's button and Settings' Appearance show the same one.
     pub theme: RwSignal<String>,
+    /// The tabs whose page has drawn its first data (or its first failure), one bit per `Page`: the whole-page splash
+    /// waits for the first tab's (`follow_boot`).
+    ready: RwSignal<u8>,
 }
 
 fn push_history(path: &str, replace: bool) {
@@ -70,6 +73,53 @@ fn push_history(path: &str, replace: bool) {
     };
 }
 
+/// A page tells the frame it has drawn its first data (`FrameCtx::mark_ready`) once `drawn` is true. Embedded pages
+/// have no frame, and nothing to tell.
+pub(crate) fn mark_ready_when(page: Page, drawn: impl Fn() -> bool + 'static) {
+    let Some(ctx) = use_context::<FrameCtx>() else {
+        return;
+    };
+    Effect::new(move |done: Option<bool>| {
+        if done == Some(true) {
+            return true;
+        }
+        if drawn() {
+            ctx.mark_ready(page);
+            return true;
+        }
+        false
+    });
+}
+
+/// Until the frame knows whether this browser is signed in, and, signed in, until the tab on screen has its first
+/// data, index.html's splash stays (ui/splash.rs). Signed out, the sign-in form follows it at once. A tab whose first
+/// read takes longer than `BOOT_DATA_WAIT_MS` draws its own splash in its content area instead.
+fn follow_boot(ctx: FrameCtx, view: RwSignal<SessionView>) {
+    let waited = RwSignal::new(false);
+    let _ = set_timeout(
+        move || {
+            let _ = waited.try_set(true);
+        },
+        std::time::Duration::from_millis(crate::ui::splash::BOOT_DATA_WAIT_MS),
+    );
+    Effect::new(move |done: Option<bool>| {
+        if done == Some(true) {
+            return true;
+        }
+        let (signed_in, loading) = view.with(|v| (v.signed_in, v.state == "loading"));
+        let wait = if signed_in {
+            !ctx.is_ready(ctx.route.get()) && !waited.get()
+        } else {
+            loading
+        };
+        if wait {
+            return false;
+        }
+        crate::ui::splash::dismiss_boot(crate::ui::motion_on());
+        true
+    });
+}
+
 impl FrameCtx {
     fn new(initial: Page) -> Self {
         FrameCtx {
@@ -84,7 +134,21 @@ impl FrameCtx {
             next_toast: RwSignal::new(0),
             dash: DashCtx::new(),
             theme: RwSignal::new("auto".into()),
+            ready: RwSignal::new(0),
         }
+    }
+
+    /// The page has drawn its first data, or its first failure (it then says so itself).
+    pub fn mark_ready(&self, page: Page) {
+        let bit = 1u8 << page as u8;
+        if self.ready.try_with_untracked(|r| r & bit == 0) == Some(true) {
+            self.ready.update(|r| *r |= bit);
+        }
+    }
+
+    /// Whether the page has drawn its first data (reactive).
+    pub fn is_ready(&self, page: Page) -> bool {
+        self.ready.with(|r| r & (1u8 << page as u8) != 0)
     }
 
     /// Shows a tab: the address follows, and the page reads at once.
@@ -668,14 +732,27 @@ pub fn Frame(initial: Page) -> impl IntoView {
         ctx.register(page, dash_info);
     }
     reopen_last_page(ctx, view_signal);
+    follow_boot(ctx, view_signal);
     follow_history(ctx);
     warm_offline_copies();
     watch_build(ctx);
     let close_menu = window_event_listener(leptos::ev::click, move |_| ctx.menu_open.set(false));
     on_cleanup(move || close_menu.remove());
     let signed_in = Memo::new(move |_| view_signal.with(|v: &SessionView| v.signed_in));
+    // While the session is still asking the server, the splash is drawn, never the sign-in form (owner report
+    // 2026-11-20). index.html's own splash covers that time; this one only stands in for a page that has none.
+    let checking = Memo::new(move |_| view_signal.with(|v: &SessionView| v.state == "loading"));
+    let signed_out = move || {
+        if checking.get() {
+            (!crate::ui::splash::boot_shown())
+                .then(|| view! { <Splash/> })
+                .into_any()
+        } else {
+            view! { <session::SignIn view=view_signal/> }.into_any()
+        }
+    };
     view! {
-        <Show when=move || signed_in.get() fallback=move || view! { <session::SignIn view=view_signal/> }>
+        <Show when=move || signed_in.get() fallback=move || view! { {signed_out} }>
             <FrameShell ctx=ctx>
                 <HomeRoute ctx=ctx/>
                 <StatusRoute ctx=ctx/>

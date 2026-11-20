@@ -11,7 +11,7 @@ async function open(t, tab) {
 	await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 	await t.app.signIn();
 	await t.goto(`/app/${tab}?e2e`, { settleMs: 300 });
-	await t.until(`${tab}: the frame is drawn, signed in`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-card'), null, { timeout: 30000, hard: true });
+	await t.until(`${tab}: the frame is drawn, signed in`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-card') && !document.querySelector('.boot-splash'), null, { timeout: 30000, hard: true });
 }
 
 /** Whether the server still knows this browser's session. */

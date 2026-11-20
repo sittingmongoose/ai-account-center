@@ -816,6 +816,9 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         pick.set(RowFilter::default());
         server.set(arr::ServerFilter::default());
     });
+    crate::frame::mark_ready_when(crate::Page::Scoreboard, move || {
+        board.view.with(|v| v.is_some()) || board.error.with(|e| e.is_some())
+    });
     view! {
         <PageShell page=crate::Page::Scoreboard embedded=embedded info=info>
             <div class="page" data-stale=move || board.error.with(|e| e.is_some()).then_some("1")>
@@ -835,9 +838,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                 {banner}
                 <Show
                     when=move || board.view.with(|v| v.is_some())
-                    fallback=move || view! {
-                        <p class="empty">{move || if board.error.with(|e| e.is_some()) { "" } else { "Reading the scoreboard..." }}</p>
-                    }
+                    fallback=move || board.error.with(|e| e.is_none()).then(|| view! { <PageSplash name="Model Scoreboard"/> })
                 >
                     <div class="sb-stack">
                         <SbTools board=board sort=sort grouped=grouped pick=pick server=server open=filters_open facets=facets/>

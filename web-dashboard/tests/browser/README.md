@@ -52,6 +52,13 @@ CSS pixels, including the Duo rail.
 
 The other files cover Home, Accounts & Settings, Analytics, Status, the Scoreboard, sign-in, overlays, reset claims and the pages together; each says what it asserts at its top.
 
+**Loading and live updates.** `checks/splash.check.mjs` samples every frame from the navigation's start: signed in,
+the sign-in form never appears before the app (desktop, and a phone in standalone display mode); signed out, the
+splash hands over to the form once; Status, Analytics and the Scoreboard show their own splash on a first load
+(`--set shots=1` adds the splash screenshots). `checks/live-updates.check.mjs` leaves Home (300 s, `idleSeconds=`),
+Status and Analytics open while their numbers change and counts navigations, re-mounts, meters swept back to zero,
+blank frames and scroll or focus resets; its `film` test is the one to record (`--grep film --record <abs.mp4>`).
+
 **Status on the real pins (opt-in).** `checks/status-real-pins.check.mjs` writes every pinned thread's roster row and sheet, plus the page's words, to `real-pins-<format>.json` in the run folder. Two builds can then be compared line by line, for example the tree in `--set repo=<other tree>` against this one:
 
 ```sh

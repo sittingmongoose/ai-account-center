@@ -401,6 +401,8 @@ pub fn start() {
         // Embedded (`?embed=1`): the content only.
         ACTIVE.store(page as u8, Ordering::Relaxed);
         listen_to_shell();
+        // the shell around an embedded page has its own; the page's first read shows its splash in place
+        ui::splash::dismiss_boot(false);
         mount_to_body(move || {
             media::provide_viewer();
             let page_view = match page {
